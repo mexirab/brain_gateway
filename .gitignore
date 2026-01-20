@@ -1,0 +1,30 @@
+# Secrets - NEVER commit these
+.env
+*.env
+*secret*
+*token*
+
+# Backups
+*.backup
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# Docker
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

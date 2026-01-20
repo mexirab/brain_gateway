@@ -1,0 +1,39 @@
+# /opt/voyager/gateway_mvp/litellm-config.yaml
+# Nemotron-Orchestrator as DEFAULT, routes to Helios for heavy tasks
+
+model_list:
+  # ============================================
+  # NEMOTRON - Orchestrator (DEFAULT / FIRST HOP)
+  # ============================================
+  - model_name: brain-orchestrator
+    litellm_params:
+      model: openai/nvidia/Nemotron-Orchestrator-8B
+      api_base: http://10.0.0.173:8001/v1
+      api_key: dummy
+      timeout: 120
+
+  # ============================================
+  # HELIOS - Heavy Reasoning (120B)
+  # ============================================
+  - model_name: helios-ost120b
+    litellm_params:
+      model: openai/ost120b
+      api_base: http://10.0.0.195:8080/v1
+      api_key: dummy
+      timeout: 300
+
+  - model_name: helios
+    litellm_params:
+      model: openai/ost120b
+      api_base: http://10.0.0.195:8080/v1
+      api_key: dummy
+      timeout: 300
+
+router_settings:
+  routing_strategy: simple-shuffle
+  fallbacks:
+    - brain-orchestrator: ["helios-ost120b"]
+  num_retries: 2
+
+general_settings:
+  master_key: SherwoodAndPorchCatHouston2026!

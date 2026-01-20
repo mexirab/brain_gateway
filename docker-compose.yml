@@ -1,0 +1,87 @@
+# Updated docker-compose.yml for /opt/voyager/gateway_mvp/
+# Adds the Brain Orchestrator service
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      - WEBUI_AUTH=False
+      - WEBUI_NAME=Nadim's Brain
+      # Point to orchestrator instead of litellm directly
+      - OPENAI_API_BASE_URL=http://orchestrator:8888/v1
+      - OPENAI_API_KEY=local
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - orchestrator
+      - redis
+    networks:
+      - gateway-net
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: brain-orchestrator
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    volumes:
+      # Mount ChromaDB data
+      - /home/nadim/.local/share/chroma:/chroma:rw
+      # Mount env file
+      - /home/nadim/brain_gateway/.env:/app/.env:ro
+    environment:
+      - NEMOTRON_URL=http://10.0.0.173:8001/v1
+      - HELIOS_URL=http://10.0.0.195:8080/v1
+      - HA_URL=http://10.0.0.106:8123
+      - HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI5YjcwZmQ0YWJmMTY0OWEyOTQ4YjIzYTQ4YjQ1NDlhNCIsImlhdCI6MTc2Nzg5MzE0MSwiZXhwIjoyMDgzMjUzMTQxfQ.7n2TOJrEH1hMGM1e-vlEatj9bnGg13qmcihXU0nbI7o
+      - CHROMA_PERSIST=/chroma/personal_rag
+      - CHROMA_COLLECTION=nadim_rag
+      - MIN_COS=0.30
+      - TOP_K=6
+    networks:
+      - gateway-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: --config /app/config.yaml --port 4000
+    networks:
+      - gateway-net
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - gateway-net
+
+networks:
+  gateway-net:
+    driver: bridge
+
+volumes:
+  open-webui-data:
+  redis-data:
+
