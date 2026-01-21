@@ -92,6 +92,68 @@ volume on office to 30%
 
 **Supported colors:** red, green, blue, yellow, orange, purple, pink, white, cyan, magenta, lavender, coral, teal, turquoise, gold, salmon, lime, violet, indigo, sunset, sunrise, ocean, forest, fire, ice, romantic, party, relax, focus, energize, night, movie
 
+## Voice Assistant Setup
+
+The orchestrator integrates with Home Assistant's voice pipeline for full voice control with personal context.
+
+### Architecture
+
+```
+🎤 Voice → Whisper STT → Home Assistant → Brain Gateway Orchestrator
+                                                    ↓
+                                         RAG (personal context)
+                                         HA commands (device control)
+                                         Smart routing (Nemotron/Helios)
+                                                    ↓
+                                              Piper TTS → 🔊
+```
+
+### Setup with Local LLM Conversation Integration
+
+1. **Install the integration** in Home Assistant:
+   - Settings → Devices & Services → Add Integration
+   - Search for "Local LLM Conversation"
+
+2. **Configure the orchestrator endpoint**:
+   - Host: `10.0.0.186` (Voyager)
+   - Port: `8888`
+   - Model: `brain` (or any name - orchestrator routes automatically)
+
+3. **Set a minimal system prompt** (orchestrator injects its own with RAG context):
+   ```
+   You are Nadim's personal AI assistant.
+   ```
+   - Uncheck "Assist" and "Home Assistant Services" APIs (orchestrator handles HA commands)
+
+4. **Configure Voice Assistant pipeline**:
+   - Settings → Voice assistants → Add/Edit assistant
+   - Speech-to-text: faster-whisper (or your Whisper instance)
+   - Conversation agent: Select the orchestrator you just added
+   - Text-to-speech: Piper (or your TTS)
+
+### Voice Commands
+
+Voice commands work for both personal queries and home control:
+
+**Personal context (via RAG):**
+- "What are my current projects?"
+- "What medications do I take?"
+- "What's my morning routine?"
+
+**Home control (via HA integration):**
+- "Turn on the living room"
+- "Turn off the kitchen lights"
+- "Set the bedroom to 50%"
+
+**Smart routing:**
+- Simple queries → Nemotron 8B (fast)
+- Complex questions → Helios 120B (powerful)
+
+### Notes
+
+- **HTTPS required for browser mic**: Use the HA mobile app, or enable HTTPS, or set Chrome flag `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+- **Mic works in HA Companion App** without HTTPS configuration
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
