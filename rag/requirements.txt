@@ -1,0 +1,5 @@
+chromadb>=1.4.0
+sentence-transformers>=5.0.0
+watchdog>=6.0.0
+tqdm>=4.0.0
+httpx>=0.28.0
