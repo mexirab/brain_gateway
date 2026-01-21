@@ -22,9 +22,14 @@ def iter_text_files(root: Path) -> Iterable[Path]:
             yield p
 
 def split_markdown_by_headers(text: str) -> List[Tuple[str, str]]:
+    """Split markdown by headers, including parent header context in each chunk."""
     matches = list(HEADER_RE.finditer(text))
     if not matches:
         return [("document", text)]
+
+    # Track parent headers at each level
+    parent_headers = {}  # level -> header text
+
     sections = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
@@ -32,7 +37,27 @@ def split_markdown_by_headers(text: str) -> List[Tuple[str, str]]:
         title = m.group(2).strip()
         body = text[m.end():end].strip()
         header_line = text[m.start():m.end()].strip()
-        sections.append((f"h{lvl}:{title}", f"{header_line}\n\n{body}".strip()))
+
+        # Update parent headers: current level and clear deeper levels
+        parent_headers[lvl] = header_line
+        for l in list(parent_headers.keys()):
+            if l > lvl:
+                del parent_headers[l]
+
+        # Build context: include all parent headers
+        context_parts = []
+        for l in sorted(parent_headers.keys()):
+            if l < lvl:  # Only include parents, not self
+                context_parts.append(parent_headers[l])
+
+        # Prepend parent context to chunk
+        if context_parts:
+            context_prefix = "\n".join(context_parts) + "\n\n"
+            chunk_content = f"{context_prefix}{header_line}\n\n{body}".strip()
+        else:
+            chunk_content = f"{header_line}\n\n{body}".strip()
+
+        sections.append((f"h{lvl}:{title}", chunk_content))
     return sections
 
 def chunk_text(text: str, target_chars: int = 2400, overlap_chars: int = 300) -> List[str]:

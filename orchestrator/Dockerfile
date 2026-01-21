@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir \
     httpx \
     python-dotenv \
     chromadb \
-    rapidfuzz
+    rapidfuzz \
+    sentence-transformers
 
 COPY orchestrator.py .
 COPY ha_integration.py .

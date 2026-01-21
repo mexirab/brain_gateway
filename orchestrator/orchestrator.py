@@ -9,13 +9,18 @@ Brain Gateway Orchestrator v4
 import os
 import re
 import json
+import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-
+from sentence_transformers import SentenceTransformer
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 import chromadb
 from chromadb.config import Settings
@@ -48,14 +53,15 @@ chroma = chromadb.PersistentClient(
     settings=Settings(anonymized_telemetry=False),
 )
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
-
+# Use same embedding model as ingest_rag.py
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 # Initialize Home Assistant client (auto-discovers entities!)
 ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 
 # Routing keywords
 CODE_KEYWORDS = ["code", "function", "debug", "python", "javascript", "script", "programming", "algorithm"]
 COMPLEX_KEYWORDS = ["analyze", "explain in detail", "help me think", "pros and cons", "comprehensive", "deep dive", "step by step"]
-RAG_KEYWORDS = ["medication", "meds", "schedule", "routine", "remember", "last time", "my preference", "usually", "nadim"]
+RAG_KEYWORDS = ["medication", "meds", "schedule", "routine", "remember", "last time", "my preference", "usually", "nadim", "project", "projects", "working on", "task", "tasks", "todo", "to-do", "goal", "goals", "plan", "plans"]
 
 # HA keywords - expanded to catch more commands
 HA_KEYWORDS = [
@@ -108,46 +114,77 @@ def detect_intent(text: str) -> Dict[str, Any]:
 
 def rag_context(query: str) -> str:
     """Query ChromaDB for relevant personal context."""
-    if not query.strip():
+    original_query = query
+
+    # Normalize query: strip whitespace, leading/trailing punctuation, lowercase
+    query = query.strip()
+    query = query.strip("\"'`""''?!.,;:()[]{}")
+    query = query.lower()
+
+    if not query:
+        logger.warning(f"[RAG] Empty query after normalization (original: '{original_query}')")
         return ""
-    
+
+    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}')")
+
     try:
+        # Use the same embedding model as ingest_rag.py
+        query_embedding = embedding_model.encode(query, normalize_embeddings=True).tolist()
+
         res = collection.query(
-            query_texts=[query],
+            query_embeddings=[query_embedding],
             n_results=TOP_K,
             include=["documents", "metadatas", "distances"],
         )
     except Exception as e:
-        print(f"RAG query error: {e}")
+        logger.error(f"[RAG] Query error: {e}")
         return ""
-    
+
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
-    
+
+    logger.info(f"[RAG] Retrieved {len(docs)} candidates from ChromaDB")
+
+    # Log all scores for debugging
+    all_scores = [1.0 - float(d) for d in dists]
+    logger.info(f"[RAG] Candidate scores: {[f'{s:.2f}' for s in all_scores]}")
+
+    # Always include all retrieved results when RAG is triggered
+    # (LLM can judge relevance better than embedding thresholds)
+    MIN_RESULTS = TOP_K
+    MIN_CHUNK_LEN = 100  # Skip header-only chunks
+
     chunks = []
-    for doc, meta, dist in zip(docs, metas, dists):
+    for i, (doc, meta, dist) in enumerate(zip(docs, metas, dists)):
+        # Skip very short chunks (likely just headers)
+        if len(doc.strip()) < MIN_CHUNK_LEN:
+            logger.debug(f"[RAG] Skipping short chunk ({len(doc)} chars)")
+            continue
+
         try:
             cos = 1.0 - float(dist)
         except:
             cos = None
-        
-        if cos is not None and cos < MIN_COS:
+
+        # Skip low-scoring results UNLESS we haven't hit MIN_RESULTS yet
+        if cos is not None and cos < MIN_COS and len(chunks) >= MIN_RESULTS:
             continue
-        
+
         src = ""
         if isinstance(meta, dict):
             src = meta.get("file_path") or meta.get("source") or ""
-        
-        entry = f"- {doc[:500]}"
+
+        entry = f"- {doc[:800]}"  # Increased from 500 to show more content
         if src:
             entry += f"\n  (source: {src})"
         if cos:
             entry += f" [relevance: {cos:.2f}]"
         chunks.append(entry)
-    
-    return "\n".join(chunks) if chunks else ""
 
+    logger.info(f"[RAG] Returning {len(chunks)} chunks (filtered by MIN_COS={MIN_COS})")
+
+    return "\n".join(chunks) if chunks else ""
 
 async def call_model(url: str, messages: List[Dict], system: str = "", timeout: int = 180) -> Dict[str, Any]:
     """Call an LLM endpoint."""
@@ -351,14 +388,20 @@ async def chat_completions(req: Request):
     
     # Step 6: Call the model
     try:
+        logger.info(f"[LLM] Calling primary: {target_url}")
         llm_resp = await call_model(target_url, messages, system, timeout=300 if use_helios else 60)
+        logger.info(f"[LLM] Primary succeeded")
     except Exception as e:
         # Fallback: if primary fails, try the other
+        logger.warning(f"[LLM] Primary failed ({e}), trying fallback")
         fallback_url = NEMOTRON_URL if use_helios else HELIOS_URL
         routing_info["fallback"] = True
         try:
+            logger.info(f"[LLM] Calling fallback: {fallback_url}")
             llm_resp = await call_model(fallback_url, messages, system, timeout=180)
+            logger.info(f"[LLM] Fallback succeeded")
         except Exception as e2:
+            logger.error(f"[LLM] Both models failed: {e}, {e2}")
             return JSONResponse({
                 "error": f"Both models failed: {e}, {e2}",
                 "_routing": routing_info,

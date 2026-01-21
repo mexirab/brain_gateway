@@ -43,8 +43,8 @@ services:
       - HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI5YjcwZmQ0YWJmMTY0OWEyOTQ4YjIzYTQ4YjQ1NDlhNCIsImlhdCI6MTc2Nzg5MzE0MSwiZXhwIjoyMDgzMjUzMTQxfQ.7n2TOJrEH1hMGM1e-vlEatj9bnGg13qmcihXU0nbI7o
       - CHROMA_PERSIST=/chroma/personal_rag
       - CHROMA_COLLECTION=nadim_rag
-      - MIN_COS=0.30
-      - TOP_K=6
+      - MIN_COS=0.20
+      - TOP_K=25
     networks:
       - gateway-net
     healthcheck:
