@@ -114,11 +114,15 @@ Set in `docker-compose.yml` or `.env`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `NEMOTRON_URL` | Nemotron LLM endpoint | `http://10.0.0.173:8001/v1` |
+| `NEMOTRON_MODEL` | Nemotron model name (for vLLM) | `nvidia/Nemotron-Orchestrator-8B` |
 | `HELIOS_URL` | Helios LLM endpoint | `http://10.0.0.195:8080/v1` |
+| `HELIOS_MODEL` | Helios model name (for llama.cpp) | `unsloth_gpt-oss-120b-GGUF...` |
 | `HA_URL` | Home Assistant URL | `http://10.0.0.106:8123` |
 | `HA_TOKEN` | Home Assistant long-lived token | (required) |
 | `CHROMA_PERSIST` | ChromaDB storage path | `/chroma/personal_rag` |
 | `CHROMA_COLLECTION` | RAG collection name | `nadim_rag` |
+| `MIN_COS` | Minimum cosine similarity for RAG results | `0.20` |
+| `TOP_K` | Number of RAG candidates to retrieve | `25` |
 
 ## File Structure
 
@@ -151,6 +155,37 @@ nadim_rag/
 ├── 30_projects/    # Project notes
 ├── 40_relationships/ # People, contacts
 └── 90_archive/     # Old/archived content
+```
+
+### RAG Features
+
+The RAG system includes several optimizations for better retrieval:
+
+- **Parent header context**: Each chunk includes its parent markdown headers for better semantic matching (e.g., a "Brain Gateway" project chunk also contains "# Current Projects" context)
+- **Query normalization**: Strips punctuation, quotes, and lowercases queries for consistent matching
+- **Minimum results guarantee**: Always returns at least N results when RAG is triggered, letting the LLM judge relevance
+- **Short chunk filtering**: Skips header-only chunks (<100 chars) that lack meaningful content
+- **Logging**: RAG queries log search terms, candidate scores, and filtered results for debugging
+
+### Re-indexing RAG
+
+After modifying `ingest_rag.py` or to force re-indexing:
+
+```bash
+# Delete existing collection and re-ingest
+python3 -c "
+import chromadb
+from chromadb.config import Settings
+chroma = chromadb.PersistentClient(path='$HOME/.local/share/chroma/personal_rag', settings=Settings(anonymized_telemetry=False))
+chroma.delete_collection('nadim_rag')
+"
+
+# Re-run ingestion
+cd /opt/voyager/gateway_mvp/rag
+python ingest_rag.py --source ~/rag/nadim_rag --persist ~/.local/share/chroma/personal_rag --collection nadim_rag
+
+# Restart orchestrator to pick up new data
+docker-compose restart orchestrator
 ```
 
 ## Development
