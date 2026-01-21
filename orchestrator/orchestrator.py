@@ -188,7 +188,7 @@ def rag_context(query: str) -> str:
 
     return "\n".join(chunks) if chunks else ""
 
-async def call_model(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180) -> Dict[str, Any]:
+async def call_model(url: str, model: str, messages: List[Dict], system: str = "", tools: List = None, timeout: int = 180) -> Dict[str, Any]:
     """Call an LLM endpoint."""
     final_messages = messages.copy()
     if system:
@@ -200,6 +200,10 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
         "temperature": 0.3,
         "max_tokens": 4096,
     }
+
+    # Pass through tools for HA native device control
+    if tools:
+        payload["tools"] = tools
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(f"{url}/chat/completions", json=payload)
@@ -348,21 +352,23 @@ async def chat_completions(req: Request):
     """Main chat endpoint with intelligent routing."""
     body = await req.json()
     messages = body.get("messages", [])
+    tools = body.get("tools")  # HA sends tools for native device control
     user_text = last_user_text(messages)
-    
+
     # Track what we did
     routing_info = {
         "timestamp": datetime.now().isoformat(),
         "user_query_length": len(user_text),
     }
-    
+
     # Step 1: Detect intent
     intent = detect_intent(user_text)
     routing_info["intent"] = intent
-    
-    # Step 2: Check for Home Assistant action (using new smart module!)
+
+    # Step 2: Check for Home Assistant action
+    # Skip orchestrator HA handling if tools are provided (let HA's native system handle it)
     ha_result = ""
-    if intent["needs_ha"]:
+    if intent["needs_ha"] and not tools:
         result = await ha_client.execute_command(user_text)
         if result.success:
             ha_result = result.message
@@ -370,9 +376,12 @@ async def chat_completions(req: Request):
             # Only show error if it seemed like an HA command
             if ha_client.parse_command(user_text):
                 ha_result = f"⚠ {result.message}"
-        
+
         routing_info["ha_attempted"] = True
         routing_info["ha_result"] = ha_result
+    elif tools:
+        routing_info["ha_native_tools"] = True
+        logger.info(f"[HA] Using native tool calling ({len(tools)} tools provided)")
     
     # Step 3: Get RAG context if needed
     rag = ""
@@ -392,7 +401,7 @@ async def chat_completions(req: Request):
     # Step 6: Call the model
     try:
         logger.info(f"[LLM] Calling primary: {target_url} ({target_model})")
-        llm_resp = await call_model(target_url, target_model, messages, system, timeout=300 if use_helios else 60)
+        llm_resp = await call_model(target_url, target_model, messages, system, tools=tools, timeout=300 if use_helios else 60)
         logger.info(f"[LLM] Primary succeeded")
     except Exception as e:
         # Fallback: if primary fails, try the other
@@ -402,7 +411,7 @@ async def chat_completions(req: Request):
         routing_info["fallback"] = True
         try:
             logger.info(f"[LLM] Calling fallback: {fallback_url} ({fallback_model})")
-            llm_resp = await call_model(fallback_url, fallback_model, messages, system, timeout=180)
+            llm_resp = await call_model(fallback_url, fallback_model, messages, system, tools=tools, timeout=180)
             logger.info(f"[LLM] Fallback succeeded")
         except Exception as e2:
             logger.error(f"[LLM] Both models failed: {e}, {e2}")
@@ -412,10 +421,12 @@ async def chat_completions(req: Request):
             }, status_code=503)
     
     # Step 7: Clean response (remove <think> tags if from Nemotron)
+    # Note: content can be None when LLM returns tool_calls
     if not use_helios and "choices" in llm_resp:
         for choice in llm_resp.get("choices", []):
-            if "message" in choice and "content" in choice["message"]:
-                choice["message"]["content"] = clean_response(choice["message"]["content"])
+            content = choice.get("message", {}).get("content")
+            if content:
+                choice["message"]["content"] = clean_response(content)
     
     # Add routing info for debugging (can be removed in production)
     llm_resp["_routing"] = routing_info
