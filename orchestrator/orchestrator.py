@@ -31,9 +31,11 @@ from ha_integration import HomeAssistantClient, ExecutionResult
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
-# Model endpoints
+# Model endpoints and names
 NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.173:8001/v1")
+NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-8B")
 HELIOS_URL = os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1")
+HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "unsloth_gpt-oss-120b-GGUF_Q4_K_S_gpt-oss-120b-Q4_K_S-00001-of-00002.gguf")
 
 # Home Assistant (now handled by ha_integration module)
 HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
@@ -186,19 +188,19 @@ def rag_context(query: str) -> str:
 
     return "\n".join(chunks) if chunks else ""
 
-async def call_model(url: str, messages: List[Dict], system: str = "", timeout: int = 180) -> Dict[str, Any]:
+async def call_model(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180) -> Dict[str, Any]:
     """Call an LLM endpoint."""
     final_messages = messages.copy()
     if system:
         final_messages.insert(0, {"role": "system", "content": system})
-    
+
     payload = {
-        "model": "default",
+        "model": model,
         "messages": final_messages,
         "temperature": 0.3,
         "max_tokens": 4096,
     }
-    
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(f"{url}/chat/completions", json=payload)
         r.raise_for_status()
@@ -381,24 +383,26 @@ async def chat_completions(req: Request):
     # Step 4: Decide routing
     use_helios = should_route_to_helios(intent, user_text)
     target_url = HELIOS_URL if use_helios else NEMOTRON_URL
+    target_model = HELIOS_MODEL if use_helios else NEMOTRON_MODEL
     routing_info["routed_to"] = "helios" if use_helios else "nemotron"
-    
+
     # Step 5: Build system prompt
     system = build_system_prompt(rag, ha_result, routing_info["routed_to"])
-    
+
     # Step 6: Call the model
     try:
-        logger.info(f"[LLM] Calling primary: {target_url}")
-        llm_resp = await call_model(target_url, messages, system, timeout=300 if use_helios else 60)
+        logger.info(f"[LLM] Calling primary: {target_url} ({target_model})")
+        llm_resp = await call_model(target_url, target_model, messages, system, timeout=300 if use_helios else 60)
         logger.info(f"[LLM] Primary succeeded")
     except Exception as e:
         # Fallback: if primary fails, try the other
         logger.warning(f"[LLM] Primary failed ({e}), trying fallback")
         fallback_url = NEMOTRON_URL if use_helios else HELIOS_URL
+        fallback_model = NEMOTRON_MODEL if use_helios else HELIOS_MODEL
         routing_info["fallback"] = True
         try:
-            logger.info(f"[LLM] Calling fallback: {fallback_url}")
-            llm_resp = await call_model(fallback_url, messages, system, timeout=180)
+            logger.info(f"[LLM] Calling fallback: {fallback_url} ({fallback_model})")
+            llm_resp = await call_model(fallback_url, fallback_model, messages, system, timeout=180)
             logger.info(f"[LLM] Fallback succeeded")
         except Exception as e2:
             logger.error(f"[LLM] Both models failed: {e}, {e2}")
