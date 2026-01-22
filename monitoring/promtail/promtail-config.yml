@@ -1,0 +1,73 @@
+# Promtail Configuration for Brain Gateway
+# Ships Docker container logs to Loki
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # ============================================
+  # DOCKER CONTAINER LOGS
+  # ============================================
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Keep only relevant containers (brain-* and monitoring containers)
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(brain-.*|open-webui.*|litellm.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
+        action: keep
+
+      # Extract container name as label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+
+      # Extract compose project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'project'
+
+      # Extract compose service
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+
+    pipeline_stages:
+      # Parse JSON logs if present
+      - json:
+          expressions:
+            level: level
+            message: message
+            timestamp: timestamp
+          source: output
+
+      # Extract tool calls from orchestrator logs
+      - regex:
+          expression: '(?P<tool_type>home_assistant|search_memory|ask_expert)'
+          source: output
+
+      # Label tool calls for easy filtering
+      - labels:
+          tool_type:
+
+      # Extract entity IDs from HA calls
+      - regex:
+          expression: 'entity_id["\s:]+(?P<entity_id>[a-z_]+\.[a-z0-9_]+)'
+          source: output
+
+      - labels:
+          entity_id:
+
+      # Mark log level
+      - regex:
+          expression: '(?i)(?P<level>error|warn|info|debug)'
+          source: output
+
+      - labels:
+          level:

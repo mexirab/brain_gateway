@@ -281,13 +281,69 @@ curl -X POST http://localhost:8888/api/ha/command \
 
 This system runs on a home lab cluster:
 
-| Node | GPU | Role |
-|------|-----|------|
-| Helios | RTX 5090 (32GB) | Large model inference (120B) |
-| Saturn | RTX 5080 (16GB) | Medium models |
-| Uranus | RTX 3080 (10GB) | Nemotron-Orchestrator-8B, Whisper STT |
-| Neptune | RTX 3090 (24GB) | Backup inference |
-| Voyager | None | Gateway, orchestration |
+| Node | IP | GPU | VRAM | RAM | Role |
+|------|-----|-----|------|-----|------|
+| Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large model inference (120B) |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Nemotron-Orchestrator-8B, Whisper STT |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | Batch jobs, backup inference |
+| Jupiter | 10.0.0.248 | None | - | 32GB | Compute |
+| Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration |
+
+## Monitoring
+
+Full observability stack with Grafana, Prometheus, and Loki.
+
+### Quick Start
+
+```bash
+cd /opt/voyager/gateway_mvp/monitoring
+docker-compose -p monitoring up -d
+```
+
+**Access Grafana:** http://localhost:3000 (admin / braingw)
+
+### What's Monitored
+
+| Metric Type | Source | Nodes |
+|-------------|--------|-------|
+| System (CPU, RAM, Disk) | node_exporter | All 5 nodes |
+| GPU (VRAM, Utilization, Temp) | nvidia_gpu_exporter | Helios, Uranus, Saturn |
+| Logs | Promtail → Loki | All Docker containers |
+| LLM Metrics | vLLM /metrics | Nemotron on Uranus |
+
+### Pre-built Dashboard
+
+The "Brain Gateway Overview" dashboard shows:
+- Cluster node status (online/offline)
+- CPU/Memory/Disk usage per node
+- GPU VRAM, utilization, temperature
+- Live orchestrator logs with tool call filtering
+
+### Useful Loki Queries
+
+```
+# All orchestrator logs
+{container="brain-orchestrator"}
+
+# Tool calls only (HA, memory, expert)
+{container="brain-orchestrator"} |~ "tool_call|home_assistant|search_memory|ask_expert"
+
+# Home Assistant commands
+{container="brain-orchestrator"} |~ "\\[HA\\]"
+
+# Errors only
+{container="brain-orchestrator"} |~ "(?i)error|exception|failed"
+```
+
+### Hardware Audit
+
+Run a hardware audit across all nodes:
+
+```bash
+/opt/voyager/gateway_mvp/monitoring/lab_hw_audit.sh
+```
+
+See `monitoring/README.md` for full setup details.
 
 ## License
 

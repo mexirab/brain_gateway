@@ -276,3 +276,110 @@ Check that tool results are being added to conversation correctly. The `<tool_re
 1. Check collection has docs: `curl http://localhost:8888/api/memory/stats`
 2. Test query: `curl "http://localhost:8888/api/memory/search?query=projects"`
 3. Re-ingest if needed (see README)
+
+---
+
+## Monitoring Stack
+
+Full observability with Grafana, Prometheus, and Loki running on Voyager.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        VOYAGER                              │
+│  ┌─────────┐  ┌────────────┐  ┌──────┐  ┌──────────┐       │
+│  │ Grafana │◄─│ Prometheus │◄─│ Loki │◄─│ Promtail │       │
+│  │  :3000  │  │   :9090    │  │:3100 │  │          │       │
+│  └─────────┘  └─────┬──────┘  └──────┘  └────┬─────┘       │
+│                     │                        │              │
+│               scrape metrics            Docker logs         │
+└─────────────────────┼────────────────────────┼──────────────┘
+                      │                        │
+      ┌───────────────┼───────────────┬────────┘
+      ▼               ▼               ▼
+┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
+│  HELIOS   │  │  URANUS   │  │  SATURN   │  │  JUPITER  │
+│ node:9100 │  │ node:9100 │  │ node:9100 │  │ node:9100 │
+│ gpu:9400  │  │ gpu:9400  │  │ gpu:9400  │  │           │
+│ (Expert)  │  │ (Brain)   │  │ (Batch)   │  │ (Compute) │
+└───────────┘  └───────────┘  └───────────┘  └───────────┘
+```
+
+### Components
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| Grafana | 3000 | Dashboard UI (admin/braingw) |
+| Prometheus | 9090 | Metrics collection, 30-day retention |
+| Loki | 3100 | Log aggregation, 30-day retention |
+| Promtail | - | Ships Docker container logs to Loki |
+| node_exporter | 9100 | System metrics (CPU, RAM, disk) |
+| nvidia_gpu_exporter | 9400 | GPU metrics (VRAM, utilization, temp) |
+
+### Prometheus Targets
+
+```
+node-exporter:     voyager, helios, uranus, saturn, jupiter
+gpu-exporter:      helios, uranus, saturn
+llm-services:      nemotron (uranus:8001)
+```
+
+### Key Metrics
+
+**System (node_exporter):**
+- `node_cpu_seconds_total` - CPU usage
+- `node_memory_MemAvailable_bytes` - Available RAM
+- `node_filesystem_avail_bytes` - Disk space
+
+**GPU (nvidia_gpu_exporter):**
+- `nvidia_smi_memory_total_bytes` / `nvidia_smi_memory_free_bytes` - VRAM
+- `nvidia_smi_utilization_gpu_ratio` - GPU utilization (0-1)
+- `nvidia_smi_temperature_gpu` - GPU temperature (Celsius)
+
+### Log Labels
+
+Promtail adds these labels to logs:
+- `container` - Docker container name (e.g., `brain-orchestrator`)
+- `service` - Compose service name
+- `project` - Compose project name
+
+### Files
+
+```
+monitoring/
+├── docker-compose.yml           # Stack definition
+├── README.md                    # Setup instructions
+├── lab_hw_audit.sh              # Hardware audit script
+├── prometheus/
+│   └── prometheus.yml           # Scrape targets
+├── loki/
+│   └── loki-config.yml          # Log storage config
+├── promtail/
+│   └── promtail-config.yml      # Log shipping rules
+└── grafana/
+    └── provisioning/
+        ├── datasources/         # Prometheus + Loki
+        └── dashboards/          # Pre-built dashboards
+```
+
+### Commands
+
+```bash
+# Start monitoring
+cd /opt/voyager/gateway_mvp/monitoring
+docker-compose -p monitoring up -d
+
+# Stop monitoring
+docker-compose -p monitoring down
+
+# View Prometheus targets
+curl http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | "\(.labels.job): \(.health)"'
+
+# Query Loki
+curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
+  --data-urlencode 'query={container="brain-orchestrator"}' | jq .
+
+# Check GPU metrics
+curl -s 'http://localhost:9090/api/v1/query?query=nvidia_smi_temperature_gpu' | jq '.data.result[]'
+```

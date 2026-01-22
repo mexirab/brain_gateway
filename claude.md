@@ -6,13 +6,13 @@
 ## Quick Reference
 
 ### Hardware Cluster
-| Node | GPU | VRAM | Primary Role |
-|------|-----|------|--------------|
-| Helios | RTX 5090 | 32GB | Large models (120B), primary inference |
-| Saturn | RTX 5080 | 16GB | Medium models, batch jobs |
-| Uranus | RTX 3080 | 10GB | **Nemotron-Orchestrator-8B (brain)**, Whisper STT |
-| Neptune | RTX 3090 | 24GB | Backup inference, vision models |
-| Voyager | None | - | Gateway, orchestration, Docker host |
+| Node | IP | GPU | VRAM | RAM | Primary Role |
+|------|-----|-----|------|-----|--------------|
+| Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large models (120B), primary inference |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | **Nemotron-Orchestrator-8B (brain)**, Whisper STT |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | Batch jobs, backup inference |
+| Jupiter | 10.0.0.248 | None | - | 32GB | Compute (no GPU currently) |
+| Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration, Docker host |
 
 ### Key Paths
 - **Orchestrator:** `/opt/voyager/gateway_mvp/`
@@ -28,6 +28,9 @@
 | Home Assistant | `http://10.0.0.106:8123` | Smart home control |
 | Nemotron (8B) | `http://10.0.0.173:8001/v1` | **THE BRAIN** - orchestrates everything |
 | Helios (120B) | `http://10.0.0.195:8080/v1` | Expert model for complex tasks |
+| **Grafana** | `http://localhost:3000` | Monitoring dashboards (admin/braingw) |
+| Prometheus | `http://localhost:9090` | Metrics collection |
+| Loki | `http://localhost:3100` | Log aggregation |
 
 ---
 
@@ -145,6 +148,9 @@ Connect to YNAB budget API for natural language budget queries.
 | `rag/ingest_rag.py` | Index documents into ChromaDB |
 | `docker-compose.yml` | Service stack definition |
 | `.env` | API tokens (HA_TOKEN, YNAB_TOKEN, etc.) |
+| `monitoring/docker-compose.yml` | Grafana/Prometheus/Loki stack |
+| `monitoring/README.md` | Monitoring setup instructions |
+| `monitoring/lab_hw_audit.sh` | Hardware audit script for cluster |
 
 **Important implementation details:**
 - vLLM on Uranus doesn't have `--enable-auto-tool-choice`, so we use `tool_choice: "none"` and parse `<tool_call>` tags from Nemotron's content manually
@@ -209,6 +215,35 @@ docker logs brain-orchestrator --tail 50 -f
 curl http://localhost:8888/api/ha/entities | jq .
 ```
 
+### Start/stop monitoring stack
+```bash
+cd /opt/voyager/gateway_mvp/monitoring
+docker-compose -p monitoring up -d    # Start
+docker-compose -p monitoring down     # Stop
+```
+
+### View logs in Grafana
+1. Open http://localhost:3000 (admin/braingw)
+2. Go to Explore → Select Loki
+3. Query: `{container="brain-orchestrator"}`
+
+### Useful Loki queries
+```
+# All orchestrator logs
+{container="brain-orchestrator"}
+
+# Tool calls only
+{container="brain-orchestrator"} |~ "tool_call|home_assistant|search_memory|ask_expert"
+
+# Errors only
+{container="brain-orchestrator"} |~ "(?i)error|exception|failed"
+```
+
+### Hardware audit across cluster
+```bash
+/opt/voyager/gateway_mvp/monitoring/lab_hw_audit.sh
+```
+
 ---
 
 ## Environment Variables Needed
@@ -252,13 +287,26 @@ OPENWEATHERMAP_KEY=<optional-for-weather>
 
 **Project name:** `brain` (always use `-p brain` with docker-compose)
 
-**Containers:**
+**Brain Gateway Containers:**
 | Container | Port | Purpose |
 |-----------|------|---------|
 | brain-orchestrator | 8888 | Main API |
 | brain-redis-1 | 6379 (internal) | Cache |
 | brain-litellm-1 | 4000 | LLM proxy |
 | brain-open-webui-1 | 80 | Web UI |
+
+**Monitoring Stack** (project name: `monitoring`)
+| Container | Port | Purpose |
+|-----------|------|---------|
+| grafana | 3000 | Dashboards |
+| prometheus | 9090 | Metrics |
+| loki | 3100 | Logs |
+| promtail | - | Log shipper |
+| node-exporter | 9100 | System metrics |
+
+**Remote Node Exporters** (systemd services on each node):
+- `node_exporter` on Helios, Uranus, Saturn, Jupiter (port 9100)
+- `nvidia_gpu_exporter` on Helios, Uranus, Saturn (port 9400)
 
 ---
 
