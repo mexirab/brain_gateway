@@ -1,37 +1,43 @@
-# Brain Gateway 🧠
+# Brain Gateway
 
-Personal AI assistant with intelligent routing, Home Assistant integration, and RAG-based memory.
+Personal AI assistant with Nemotron-Orchestrator-8B as the brain, agentic tool-calling, Home Assistant integration, and RAG-based memory.
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Open WebUI    │────▶│   Orchestrator   │────▶│  Nemotron (8B)  │
-│   (Frontend)    │     │   (Router/HA)    │     │  or Helios(120B)│
-└─────────────────┘     └────────┬─────────┘     └─────────────────┘
-                                 │
-                    ┌────────────┼────────────┐
-                    ▼            ▼            ▼
-              ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │ ChromaDB │ │   Home   │ │  LiteLLM │
-              │   (RAG)  │ │Assistant │ │  (Proxy) │
-              └──────────┘ └──────────┘ └──────────┘
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│   Open WebUI    │────▶│   Orchestrator   │────▶│  Nemotron (8B)   │
+│   (Frontend)    │     │   (v5 Agentic)   │     │   THE BRAIN      │
+└─────────────────┘     └────────┬─────────┘     └────────┬─────────┘
+                                 │                        │
+                                 │              ┌─────────┴─────────┐
+                                 │              │    TOOL CALLS     │
+                    ┌────────────┼──────────────┼───────────────────┤
+                    ▼            ▼              ▼                   ▼
+              ┌──────────┐ ┌──────────┐  ┌──────────┐       ┌──────────┐
+              │ ChromaDB │ │   Home   │  │  Helios  │       │  LiteLLM │
+              │   (RAG)  │ │Assistant │  │  (120B)  │       │  (Proxy) │
+              │          │ │   API    │  │  Expert  │       │          │
+              └──────────┘ └──────────┘  └──────────┘       └──────────┘
 ```
 
 ## Components
 
 ### Orchestrator (`/orchestrator`)
 
-The brain of the system. Routes requests intelligently:
+**Nemotron-Orchestrator-8B is the brain** with agentic tool-calling:
 
-- **Simple queries** → Nemotron 8B (fast)
-- **Complex reasoning/code** → Helios 120B (powerful)
-- **Home automation** → Home Assistant API
-- **Personal context** → ChromaDB RAG
+| Tool | Purpose |
+|------|---------|
+| `home_assistant` | Control smart home - Nemotron outputs structured API calls (`entity_id`, `service`, `data`) |
+| `search_memory` | Query personal RAG knowledge base |
+| `ask_expert` | Delegate complex reasoning/coding to Helios 120B |
+
+Nemotron receives the full HA entity list and handles all NLP parsing internally - no regex matching needed.
 
 **Files:**
-- `orchestrator.py` - Main FastAPI app (v4.0)
-- `ha_integration.py` - Smart Home Assistant integration with auto-discovery
+- `orchestrator.py` - Main FastAPI app (v5.0 agentic)
+- `ha_integration.py` - HA entity discovery + thin API relay
 - `Dockerfile` - Container build config
 
 ### RAG Tools (`/rag`)
@@ -51,7 +57,7 @@ Personal knowledge base tools:
 
 ```bash
 cd /opt/voyager/gateway_mvp
-docker-compose up -d
+docker-compose -p brain up -d
 ```
 
 ### 2. Check health
@@ -64,33 +70,29 @@ curl http://localhost:8888/health
 
 Open http://localhost in your browser (Open WebUI)
 
-## Home Assistant Commands
+## Home Assistant Integration
 
-The orchestrator auto-discovers all HA entities. Supported commands:
+Nemotron has full visibility into your HA entities and outputs structured API calls directly:
 
-**Lights:**
-```
-turn on living room
-turn off the kitchen lights
-dim bedroom to 50%
-turn the office red
-set living room to blue
-```
-
-**Scenes:**
-```
-activate movie scene
-turn on cozy scene
+```json
+{
+  "entity_id": "light.bedroom_fan_lights",
+  "service": "turn_on",
+  "data": {"brightness": 128, "rgb_color": [0, 0, 255]}
+}
 ```
 
-**Media:**
-```
-pause the living room speaker
-play music on bedroom
-volume on office to 30%
-```
+**Example commands:**
+- "Turn on the bedroom lights" → `turn_on light.bedroom_fan_lights`
+- "Set living room to blue at 50%" → `turn_on light.living_room {brightness: 128, rgb_color: [0,0,255]}`
+- "Turn off the kitchen" → `turn_off switch.kitchen`
 
-**Supported colors:** red, green, blue, yellow, orange, purple, pink, white, cyan, magenta, lavender, coral, teal, turquoise, gold, salmon, lime, violet, indigo, sunset, sunrise, ocean, forest, fire, ice, romantic, party, relax, focus, energize, night, movie
+**Supported services:**
+- `light`: turn_on, turn_off, toggle (+ brightness, rgb_color)
+- `switch/fan`: turn_on, turn_off, toggle
+- `climate`: set_temperature
+- `cover`: open_cover, close_cover
+- `scene`: turn_on
 
 ## Voice Assistant Setup
 
@@ -99,13 +101,13 @@ The orchestrator integrates with Home Assistant's voice pipeline for full voice 
 ### Architecture
 
 ```
-🎤 Voice → Whisper STT → Home Assistant → Brain Gateway Orchestrator
-                                                    ↓
-                                         RAG (personal context)
-                                         HA commands (device control)
-                                         Smart routing (Nemotron/Helios)
-                                                    ↓
-                                              Piper TTS → 🔊
+Voice → Whisper STT → Home Assistant → Brain Gateway Orchestrator
+                                               ↓
+                                    RAG (personal context)
+                                    HA commands (device control)
+                                    Smart routing (Nemotron/Helios)
+                                               ↓
+                                         Piper TTS → Speaker
 ```
 
 ### Setup with Local LLM Conversation Integration
@@ -143,11 +145,11 @@ Voice commands work for both personal queries and home control:
 **Home control (via HA integration):**
 - "Turn on the living room"
 - "Turn off the kitchen lights"
-- "Set the bedroom to 50%"
+- "Set the bedroom to blue at 50%"
 
 **Smart routing:**
-- Simple queries → Nemotron 8B (fast)
-- Complex questions → Helios 120B (powerful)
+- Simple queries → Nemotron 8B (fast, handles most requests)
+- Complex questions → Helios 120B via `ask_expert` tool
 
 ### Notes
 
@@ -196,8 +198,8 @@ brain_gateway/
 ├── README.md               # This file
 ├── orchestrator/
 │   ├── Dockerfile          # Orchestrator container
-│   ├── orchestrator.py     # Main routing logic
-│   └── ha_integration.py   # Home Assistant module
+│   ├── orchestrator.py     # v5.0 agentic orchestrator
+│   └── ha_integration.py   # HA entity discovery + API relay
 └── rag/
     ├── ingest_rag.py       # Document ingestion
     ├── query_rag.py        # CLI query tool
@@ -247,7 +249,7 @@ cd /opt/voyager/gateway_mvp/rag
 python ingest_rag.py --source ~/rag/nadim_rag --persist ~/.local/share/chroma/personal_rag --collection nadim_rag
 
 # Restart orchestrator to pick up new data
-docker-compose restart orchestrator
+docker-compose -p brain restart orchestrator
 ```
 
 ## Development
@@ -256,9 +258,9 @@ docker-compose restart orchestrator
 
 ```bash
 cd /opt/voyager/gateway_mvp
-docker-compose down
-docker-compose build --no-cache orchestrator
-docker-compose up -d
+docker-compose -p brain down
+docker-compose -p brain build --no-cache orchestrator
+docker-compose -p brain up -d
 ```
 
 ### View logs
@@ -272,7 +274,7 @@ docker logs brain-orchestrator --tail 50 -f
 ```bash
 curl -X POST http://localhost:8888/api/ha/command \
   -H "Content-Type: application/json" \
-  -d '{"command": "turn on living room"}'
+  -d '{"entity_id": "light.living_room", "service": "turn_on", "data": {"brightness": 255}}'
 ```
 
 ## Hardware
@@ -283,7 +285,7 @@ This system runs on a home lab cluster:
 |------|-----|------|
 | Helios | RTX 5090 (32GB) | Large model inference (120B) |
 | Saturn | RTX 5080 (16GB) | Medium models |
-| Uranus | RTX 3080 (10GB) | Small models, Whisper STT |
+| Uranus | RTX 3080 (10GB) | Nemotron-Orchestrator-8B, Whisper STT |
 | Neptune | RTX 3090 (24GB) | Backup inference |
 | Voyager | None | Gateway, orchestration |
 
