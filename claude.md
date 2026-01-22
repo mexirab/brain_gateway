@@ -9,8 +9,8 @@
 | Node | IP | GPU | VRAM | RAM | Primary Role |
 |------|-----|-----|------|-----|--------------|
 | Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large models (120B), primary inference |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | **Nemotron-Orchestrator-8B (brain)**, Whisper STT |
-| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | Batch jobs, backup inference |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | **Nemotron-Orchestrator-8B (brain)** on RTX 3090 |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Available (Whisper STT) |
 | Jupiter | 10.0.0.248 | None | - | 32GB | Compute (no GPU currently) |
 | Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration, Docker host |
 
@@ -26,7 +26,7 @@
 | Brain Gateway | `http://localhost:8888` | Main orchestrator API |
 | Open WebUI | `http://localhost` | Chat interface |
 | Home Assistant | `http://10.0.0.106:8123` | Smart home control |
-| Nemotron (8B) | `http://10.0.0.173:8001/v1` | **THE BRAIN** - orchestrates everything |
+| Nemotron (8B) | `http://10.0.0.58:8001/v1` | **THE BRAIN** on Saturn RTX 3090 |
 | Helios (120B) | `http://10.0.0.195:8080/v1` | Expert model for complex tasks |
 | **Grafana** | `http://localhost:3000` | Monitoring dashboards (admin/braingw) |
 | Prometheus | `http://localhost:9090` | Metrics collection |
@@ -254,7 +254,7 @@ HA_URL=http://10.0.0.106:8123
 HA_TOKEN=<long-lived-access-token>
 
 # LLM Endpoints
-NEMOTRON_URL=http://10.0.0.173:8001/v1
+NEMOTRON_URL=http://10.0.0.58:8001/v1
 NEMOTRON_MODEL=nvidia/Nemotron-Orchestrator-8B
 HELIOS_URL=http://10.0.0.195:8080/v1
 HELIOS_MODEL=unsloth_gpt-oss-120b-GGUF_Q4_K_S_gpt-oss-120b-Q4_K_S-00001-of-00002.gguf

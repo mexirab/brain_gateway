@@ -36,7 +36,7 @@ Main FastAPI application (v5.0). ~630 lines.
 #### Constants & Configuration
 
 ```python
-NEMOTRON_URL = "http://10.0.0.173:8001/v1"  # Uranus - brain
+NEMOTRON_URL = "http://10.0.0.58:8001/v1"  # Saturn - brain (RTX 3090)
 NEMOTRON_MODEL = "nvidia/Nemotron-Orchestrator-8B"
 HELIOS_URL = "http://10.0.0.195:8080/v1"    # Helios - expert
 HELIOS_MODEL = "unsloth_gpt-oss-120b-GGUF..."
@@ -107,7 +107,7 @@ for round_num in range(MAX_TOOL_ROUNDS):
 
 #### Why `tool_choice: "none"`?
 
-vLLM on Uranus doesn't have `--enable-auto-tool-choice` flag set. Without it, passing `tools` returns a 400 error. Setting `tool_choice: "none"` tells vLLM to ignore native tool calling, but Nemotron still outputs tool calls as `<tool_call>` XML tags in its content, which we parse manually.
+vLLM on Saturn doesn't have `--enable-auto-tool-choice` flag set. Without it, passing `tools` returns a 400 error. Setting `tool_choice: "none"` tells vLLM to ignore native tool calling, but Nemotron still outputs tool calls as `<tool_call>` XML tags in its content, which we parse manually.
 
 ---
 
@@ -322,7 +322,7 @@ Full observability with Grafana, Prometheus, and Loki running on Voyager.
 ```
 node-exporter:     voyager, helios, uranus, saturn, jupiter
 gpu-exporter:      helios, uranus, saturn
-llm-services:      nemotron (uranus:8001)
+llm-services:      nemotron (saturn:8001)
 ```
 
 ### Key Metrics

@@ -177,7 +177,7 @@ Set in `docker-compose.yml` or `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `NEMOTRON_URL` | Nemotron LLM endpoint | `http://10.0.0.173:8001/v1` |
+| `NEMOTRON_URL` | Nemotron LLM endpoint | `http://10.0.0.58:8001/v1` |
 | `NEMOTRON_MODEL` | Nemotron model name (for vLLM) | `nvidia/Nemotron-Orchestrator-8B` |
 | `HELIOS_URL` | Helios LLM endpoint | `http://10.0.0.195:8080/v1` |
 | `HELIOS_MODEL` | Helios model name (for llama.cpp) | `unsloth_gpt-oss-120b-GGUF...` |
@@ -284,8 +284,8 @@ This system runs on a home lab cluster:
 | Node | IP | GPU | VRAM | RAM | Role |
 |------|-----|-----|------|-----|------|
 | Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large model inference (120B) |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Nemotron-Orchestrator-8B, Whisper STT |
-| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | Batch jobs, backup inference |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | **Nemotron-Orchestrator-8B** on RTX 3090 |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Available, Whisper STT |
 | Jupiter | 10.0.0.248 | None | - | 32GB | Compute |
 | Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration |
 
@@ -309,7 +309,7 @@ docker-compose -p monitoring up -d
 | System (CPU, RAM, Disk) | node_exporter | All 5 nodes |
 | GPU (VRAM, Utilization, Temp) | nvidia_gpu_exporter | Helios, Uranus, Saturn |
 | Logs | Promtail → Loki | All Docker containers |
-| LLM Metrics | vLLM /metrics | Nemotron on Uranus |
+| LLM Metrics | vLLM /metrics | Nemotron on Saturn |
 
 ### Pre-built Dashboard
 

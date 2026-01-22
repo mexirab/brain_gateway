@@ -37,7 +37,7 @@ services:
       # Mount env file
       - /home/nadim/brain_gateway/.env:/app/.env:ro
     environment:
-      - NEMOTRON_URL=http://10.0.0.173:8001/v1
+      - NEMOTRON_URL=http://10.0.0.58:8001/v1
       - HELIOS_URL=http://10.0.0.195:8080/v1
       - HA_URL=http://10.0.0.106:8123
       - HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI5YjcwZmQ0YWJmMTY0OWEyOTQ4YjIzYTQ4YjQ1NDlhNCIsImlhdCI6MTc2Nzg5MzE0MSwiZXhwIjoyMDgzMjUzMTQxfQ.7n2TOJrEH1hMGM1e-vlEatj9bnGg13qmcihXU0nbI7o

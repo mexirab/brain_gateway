@@ -2,9 +2,9 @@
 #
 # Node IPs:
 #   Voyager:  10.0.0.186 (gateway, no GPU)
-#   Helios:   10.0.0.195 (RTX 5090)
-#   Uranus:   10.0.0.173 (2x RTX 5080)
-#   Saturn:   10.0.0.58  (RTX 3080 + RTX 3090)
+#   Helios:   10.0.0.195 (RTX 5090 - Expert 120B model)
+#   Uranus:   10.0.0.173 (2x RTX 5080 - available)
+#   Saturn:   10.0.0.58  (RTX 3080 + RTX 3090 - Nemotron brain on 3090)
 #   Jupiter:  10.0.0.248 (no GPU)
 
 global:
@@ -39,18 +39,18 @@ scrape_configs:
           role: 'expert'
           gpu: 'rtx5090'
 
-      # Uranus (Nemotron brain, 2x RTX 5080 16GB each)
+      # Uranus (2x RTX 5080 16GB each - available)
       - targets: ['10.0.0.173:9100']
         labels:
           node: 'uranus'
-          role: 'brain'
+          role: 'available'
           gpu: '2x-rtx5080'
 
-      # Saturn (Batch jobs, RTX 3080 + RTX 3090)
+      # Saturn (Nemotron brain on RTX 3090, RTX 3080 available)
       - targets: ['10.0.0.58:9100']
         labels:
           node: 'saturn'
-          role: 'batch'
+          role: 'brain'
           gpu: 'rtx3080+rtx3090'
 
       # Jupiter (No GPU currently)
@@ -88,11 +88,11 @@ scrape_configs:
   - job_name: 'llm-services'
     metrics_path: /metrics
     static_configs:
-      # Nemotron on Uranus (vLLM exposes metrics)
-      - targets: ['10.0.0.173:8001']
+      # Nemotron on Saturn (vLLM exposes metrics)
+      - targets: ['10.0.0.58:8001']
         labels:
           service: 'nemotron'
-          node: 'uranus'
+          node: 'saturn'
 
   # NOTE: Orchestrator, LiteLLM, and Helios LLM don't expose /metrics
   # Monitor them via logs in Loki instead
