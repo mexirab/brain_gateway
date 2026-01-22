@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -285,6 +285,98 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
         return r.json()
 
 
+async def stream_final_response(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180):
+    """
+    Stream the final response from Nemotron (after tool calls are done).
+    Yields SSE-formatted chunks for OpenAI-compatible streaming.
+    """
+    final_messages = messages.copy()
+    if system:
+        final_messages.insert(0, {"role": "system", "content": system})
+
+    payload = {
+        "model": model,
+        "messages": final_messages,
+        "temperature": 0.3,
+        "max_tokens": 4096,
+        "stream": True,
+    }
+
+    # Buffer to detect and strip <think> tags from streamed content
+    buffer = ""
+    in_think_tag = False
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", f"{url}/chat/completions", json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    data = line[6:]  # Strip "data: " prefix
+                    if data == "[DONE]":
+                        yield "data: [DONE]\n\n"
+                        break
+
+                    try:
+                        chunk = json.loads(data)
+                        # Extract delta content
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
+
+                        if content:
+                            # Buffer content to handle <think> tags
+                            buffer += content
+
+                            # Check for <think> tag start
+                            if "<think>" in buffer and not in_think_tag:
+                                in_think_tag = True
+                                # Output anything before the think tag
+                                pre_think = buffer.split("<think>")[0]
+                                if pre_think:
+                                    chunk["choices"][0]["delta"]["content"] = pre_think
+                                    yield f"data: {json.dumps(chunk)}\n\n"
+                                buffer = "<think>" + buffer.split("<think>", 1)[1]
+
+                            # Check for </think> tag end
+                            if "</think>" in buffer and in_think_tag:
+                                in_think_tag = False
+                                # Skip the think content, keep what's after
+                                buffer = buffer.split("</think>", 1)[1]
+                                continue
+
+                            # If in think tag, don't output
+                            if in_think_tag:
+                                continue
+
+                            # Output buffered content (with small buffer for tag detection)
+                            if len(buffer) > 20:  # Keep small buffer for tag detection
+                                output = buffer[:-20]
+                                buffer = buffer[-20:]
+                                if output:
+                                    chunk["choices"][0]["delta"]["content"] = output
+                                    yield f"data: {json.dumps(chunk)}\n\n"
+                        else:
+                            # Non-content chunk (e.g., finish_reason)
+                            yield f"data: {data}\n\n"
+
+                    except json.JSONDecodeError:
+                        continue
+
+            # Flush remaining buffer
+            if buffer and not in_think_tag:
+                # Clean any remaining think tags
+                buffer = re.sub(r'<think>.*?</think>', '', buffer, flags=re.DOTALL)
+                if buffer.strip():
+                    final_chunk = {
+                        "choices": [{
+                            "delta": {"content": buffer},
+                            "index": 0
+                        }]
+                    }
+                    yield f"data: {json.dumps(final_chunk)}\n\n"
+
+
 # =============================================================================
 # TOOL EXECUTION HANDLERS
 # =============================================================================
@@ -531,16 +623,20 @@ async def execute_ha_command(req: Request):
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
     """
-    Main chat endpoint with agentic tool-calling.
+    Main chat endpoint with agentic tool-calling and streaming support.
 
     Nemotron-Orchestrator is the brain that decides when to use tools:
     - home_assistant: Control smart home devices
     - search_memory: Query personal knowledge base (RAG)
     - ask_expert: Delegate complex tasks to Helios 120B
+
+    Streaming: When stream=true, tool-calling rounds run normally,
+    then the final response is streamed to the client.
     """
     body = await req.json()
     messages = body.get("messages", [])
     external_tools = body.get("tools")  # HA may send its own tools
+    stream = body.get("stream", False)
     user_text = last_user_text(messages)
 
     # Track what we did for debugging
@@ -549,6 +645,7 @@ async def chat_completions(req: Request):
         "user_query_length": len(user_text),
         "tool_calls": [],
         "rounds": 0,
+        "streaming": stream,
     }
 
     # If external tools are provided (e.g., from HA voice pipeline),
@@ -571,7 +668,7 @@ async def chat_completions(req: Request):
 
     # Agentic mode: Nemotron orchestrates with our tools
     routing_info["mode"] = "agentic"
-    logger.info(f"[ORCHESTRATOR] Starting agentic loop for: {user_text[:100]}...")
+    logger.info(f"[ORCHESTRATOR] Starting agentic loop for: {user_text[:100]}... (stream={stream})")
 
     # Build conversation with system prompt
     conversation = messages.copy()
@@ -591,10 +688,14 @@ async def chat_completions(req: Request):
             )
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] Nemotron call failed: {e}")
-            return JSONResponse({
-                "error": f"Orchestrator failed: {e}",
-                "_routing": routing_info,
-            }, status_code=503)
+            error_response = {"error": f"Orchestrator failed: {e}", "_routing": routing_info}
+            if stream:
+                # Return error as streaming format
+                async def error_stream():
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(error_stream(), media_type="text/event-stream")
+            return JSONResponse(error_response, status_code=503)
 
         # Extract the assistant's response
         choice = llm_resp.get("choices", [{}])[0]
@@ -609,16 +710,39 @@ async def chat_completions(req: Request):
             if tool_calls:
                 logger.info(f"[ORCHESTRATOR] Parsed {len(tool_calls)} tool call(s) from content")
 
-        # If no tool calls, we're done - return the response
+        # If no tool calls, we're done - return the response (streaming or not)
         if not tool_calls:
-            logger.info(f"[ORCHESTRATOR] Final response (no tool calls)")
+            logger.info(f"[ORCHESTRATOR] Final response (no tool calls, stream={stream})")
 
-            # Clean up think tags from response
-            if content:
-                message["content"] = clean_response(content)
-
-            llm_resp["_routing"] = routing_info
-            return JSONResponse(llm_resp)
+            if stream:
+                # Stream the final response
+                # If we already have content from a non-streaming call, stream it directly
+                if content:
+                    cleaned_content = clean_response(content)
+                    async def content_stream():
+                        # Send the content in chunks for smoother display
+                        chunk_size = 20
+                        for i in range(0, len(cleaned_content), chunk_size):
+                            chunk = cleaned_content[i:i+chunk_size]
+                            yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}, 'index': 0}]})}\n\n"
+                        yield f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop', 'index': 0}]})}\n\n"
+                        yield "data: [DONE]\n\n"
+                    return StreamingResponse(content_stream(), media_type="text/event-stream")
+                else:
+                    # Make a fresh streaming call for the final response
+                    return StreamingResponse(
+                        stream_final_response(
+                            NEMOTRON_URL, NEMOTRON_MODEL, conversation,
+                            system=system_prompt, timeout=120
+                        ),
+                        media_type="text/event-stream"
+                    )
+            else:
+                # Non-streaming response
+                if content:
+                    message["content"] = clean_response(content)
+                llm_resp["_routing"] = routing_info
+                return JSONResponse(llm_resp)
 
         # Process tool calls
         logger.info(f"[ORCHESTRATOR] Processing {len(tool_calls)} tool call(s)")
@@ -660,11 +784,20 @@ async def chat_completions(req: Request):
 
     # If we exit the loop, we hit max rounds
     logger.warning(f"[ORCHESTRATOR] Hit max tool rounds ({MAX_TOOL_ROUNDS})")
+    error_msg = "I apologize, but I wasn't able to complete the request within the allowed number of steps. Please try rephrasing or breaking down your request."
+
+    if stream:
+        async def max_rounds_stream():
+            yield f"data: {json.dumps({'choices': [{'delta': {'content': error_msg}, 'index': 0}]})}\n\n"
+            yield f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop', 'index': 0}]})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(max_rounds_stream(), media_type="text/event-stream")
+
     return JSONResponse({
         "choices": [{
             "message": {
                 "role": "assistant",
-                "content": "I apologize, but I wasn't able to complete the request within the allowed number of steps. Please try rephrasing or breaking down your request."
+                "content": error_msg
             }
         }],
         "_routing": routing_info,
