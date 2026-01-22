@@ -1,7 +1,7 @@
 """
-Brain Gateway Orchestrator v4
-- Nemotron-8B decides routing
-- Helios-120B for complex tasks
+Brain Gateway Orchestrator v5
+- Nemotron-Orchestrator-8B is the BRAIN with tool-calling
+- Tools: home_assistant, search_memory, ask_expert (Helios-120B)
 - ChromaDB RAG for personal context
 - Home Assistant integration (auto-discovery!)
 """
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 import chromadb
 from chromadb.config import Settings
 
-# Import the new HA integration module
+# Import the HA integration module
 from ha_integration import HomeAssistantClient, ExecutionResult
 
 # Load environment
@@ -37,7 +37,7 @@ NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-
 HELIOS_URL = os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1")
 HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "unsloth_gpt-oss-120b-GGUF_Q4_K_S_gpt-oss-120b-Q4_K_S-00001-of-00002.gguf")
 
-# Home Assistant (now handled by ha_integration module)
+# Home Assistant
 HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
 
@@ -47,7 +47,113 @@ CHROMA_COLLECTION = os.environ.get("CHROMA_COLLECTION", "nadim_rag")
 MIN_COS = float(os.environ.get("MIN_COS", "0.30"))
 TOP_K = int(os.environ.get("TOP_K", "6"))
 
-app = FastAPI(title="Brain Gateway", version="4.0")
+# Agentic settings
+MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # Prevent infinite loops
+
+app = FastAPI(title="Brain Gateway", version="5.0")
+
+
+# =============================================================================
+# TOOLS DEFINITION - These are the capabilities Nemotron can use
+# =============================================================================
+
+def get_ha_tool_definition() -> Dict[str, Any]:
+    """Build the home_assistant tool with current entity list."""
+    entity_lines = []
+    for domain in ["light", "switch", "fan", "climate", "cover", "scene", "lock"]:
+        entities = ha_client.get_entities_by_domain(domain)
+        for e in entities:
+            entity_lines.append(f"  - {e.entity_id} ({e.friendly_name})")
+
+    entity_list = "\n".join(entity_lines[:60]) if entity_lines else "  (entities loading...)"
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "home_assistant",
+            "description": f"""Control smart home via Home Assistant API. Call this ONCE per entity.
+
+ENTITIES:
+{entity_list}
+
+SERVICES:
+- light: turn_on (brightness 0-255, rgb_color [R,G,B]), turn_off, toggle
+- switch/fan: turn_on, turn_off, toggle
+- climate: set_temperature (temperature: int)
+- cover: open_cover, close_cover
+- scene: turn_on
+
+COLORS: rgb_color as [R,G,B]. Blue=[0,0,255], Red=[255,0,0], Green=[0,255,0], Purple=[128,0,128], Yellow=[255,255,0], Orange=[255,165,0], Pink=[255,192,203], White=[255,255,255]
+BRIGHTNESS: 0-255 scale. 50%=128, 75%=191, 100%=255""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "type": "string",
+                        "description": "Entity ID like 'light.bedroom_fan_lights'"
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service: turn_on, turn_off, toggle, set_temperature, etc."
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "Service data, e.g., {\"brightness\": 128, \"rgb_color\": [0,0,255]}"
+                    }
+                },
+                "required": ["entity_id", "service"]
+            }
+        }
+    }
+
+
+# Static tools (non-HA)
+STATIC_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memory",
+            "description": "Search Nadim's personal knowledge base for relevant context. Use this when the user asks about personal information, projects, routines, preferences, medications, schedules, or anything that might be in their notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query to find relevant personal information"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_expert",
+            "description": "Delegate complex reasoning, coding, analysis, or detailed explanations to the expert model (Helios 120B). Use this for: code writing/debugging, detailed technical explanations, complex analysis, math problems, or any task requiring deep reasoning.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The complex question or task to delegate to the expert model"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional additional context to help the expert (e.g., relevant code, background info)"
+                    }
+                },
+                "required": ["question"]
+            }
+        }
+    }
+]
+
+
+def get_orchestrator_tools() -> List[Dict[str, Any]]:
+    """Get all tools including dynamic HA tool with entity list."""
+    return [get_ha_tool_definition()] + STATIC_TOOLS
+
 
 # ChromaDB client
 chroma = chromadb.PersistentClient(
@@ -60,23 +166,9 @@ embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 # Initialize Home Assistant client (auto-discovers entities!)
 ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 
-# Routing keywords
-CODE_KEYWORDS = ["code", "function", "debug", "python", "javascript", "script", "programming", "algorithm"]
-COMPLEX_KEYWORDS = ["analyze", "explain in detail", "help me think", "pros and cons", "comprehensive", "deep dive", "step by step"]
-RAG_KEYWORDS = ["medication", "meds", "schedule", "routine", "remember", "last time", "my preference", "usually", "nadim", "project", "projects", "working on", "task", "tasks", "todo", "to-do", "goal", "goals", "plan", "plans"]
-
-# HA keywords - expanded to catch more commands
-HA_KEYWORDS = [
-    "turn on", "turn off", "switch on", "switch off", "toggle",
-    "lights", "light", "lamp",
-    "dim", "brightness", "brighten",
-    "play", "pause", "stop", "volume", "music",
-    "scene", "activate",
-    "thermostat", "temperature", "temp",
-    "lock", "unlock",
-    "open", "close",
-]
-
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
 
 def last_user_text(messages: List[Dict[str, Any]]) -> str:
     """Extract the most recent user message."""
@@ -91,27 +183,6 @@ def last_user_text(messages: List[Dict[str, Any]]) -> str:
                     if isinstance(part, dict) and part.get("type") == "text":
                         return part.get("text", "").strip()
     return ""
-
-
-def detect_intent(text: str) -> Dict[str, Any]:
-    """Detect what kind of request this is."""
-    t = text.lower()
-    word_count = len(text.split())
-    
-    # Check for HA intent - more comprehensive check
-    needs_ha = any(kw in t for kw in HA_KEYWORDS)
-    
-    return {
-        "needs_code": any(kw in t for kw in CODE_KEYWORDS),
-        "needs_complex": any(kw in t for kw in COMPLEX_KEYWORDS) or word_count > 100,
-        "needs_rag": any(kw in t for kw in RAG_KEYWORDS),
-        "needs_ha": needs_ha,
-        "is_simple": word_count < 20 and not any([
-            any(kw in t for kw in CODE_KEYWORDS),
-            any(kw in t for kw in COMPLEX_KEYWORDS),
-        ]),
-        "word_count": word_count,
-    }
 
 
 def rag_context(query: str) -> str:
@@ -202,8 +273,11 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
     }
 
     # Pass through tools for HA native device control
+    # Use tool_choice: "none" to let Nemotron output tool calls in content
+    # (vLLM requires --enable-auto-tool-choice flag for native tool calling)
     if tools:
         payload["tools"] = tools
+        payload["tool_choice"] = "none"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(f"{url}/chat/completions", json=payload)
@@ -211,67 +285,172 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
         return r.json()
 
 
-def should_route_to_helios(intent: Dict[str, Any], user_text: str) -> bool:
-    """Decide if this request needs Helios (120B) or can be handled by Nemotron (8B)."""
-    
-    # Always route to Helios for:
-    if intent["needs_complex"]:
-        return True
-    if intent["needs_code"]:
-        return True
-    if intent["word_count"] > 50:
-        return True
-    
-    # Questions that need deep reasoning
-    deep_patterns = [
-        r"\bwhy\b.*\?",
-        r"\bhow\s+(?:do|does|can|could|would|should)\b",
-        r"\bexplain\b",
-        r"\bcompare\b",
-        r"\bwhat\s+(?:are|is)\s+the\s+(?:best|difference|pros|cons)\b",
-    ]
-    for pattern in deep_patterns:
-        if re.search(pattern, user_text.lower()):
-            return True
-    
-    return False
+# =============================================================================
+# TOOL EXECUTION HANDLERS
+# =============================================================================
+
+async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+    """Execute a tool and return the result as a string."""
+    logger.info(f"[TOOL] Executing: {tool_name} with args: {arguments}")
+
+    try:
+        if tool_name == "home_assistant":
+            return await tool_home_assistant(
+                arguments.get("entity_id", ""),
+                arguments.get("service", ""),
+                arguments.get("data", {})
+            )
+        elif tool_name == "search_memory":
+            return tool_search_memory(arguments.get("query", ""))
+        elif tool_name == "ask_expert":
+            return await tool_ask_expert(
+                arguments.get("question", ""),
+                arguments.get("context", "")
+            )
+        else:
+            return f"Unknown tool: {tool_name}"
+    except Exception as e:
+        logger.error(f"[TOOL] Error executing {tool_name}: {e}")
+        return f"Error executing {tool_name}: {str(e)}"
+
+
+async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
+    """Execute a Home Assistant service call directly."""
+    if not entity_id or not service:
+        return "Missing entity_id or service"
+
+    logger.info(f"[HA] Calling {service} on {entity_id} with data: {data}")
+    result = await ha_client.call_service(entity_id, service, data or {})
+
+    if result.success:
+        logger.info(f"[HA] Success: {result.message}")
+        return result.message
+    else:
+        logger.warning(f"[HA] Failed: {result.message}")
+        return f"Failed: {result.message}"
+
+
+def tool_search_memory(query: str) -> str:
+    """Search the personal knowledge base (RAG)."""
+    if not query:
+        return "No query provided"
+
+    logger.info(f"[MEMORY] Searching for: {query}")
+    context = rag_context(query)
+
+    if context:
+        return f"Found relevant information:\n{context}"
+    else:
+        return "No relevant information found in memory."
+
+
+async def tool_ask_expert(question: str, context: str = "") -> str:
+    """Delegate a complex question to Helios 120B."""
+    if not question:
+        return "No question provided"
+
+    logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
+
+    # Build the message for Helios
+    messages = []
+    if context:
+        messages.append({
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {question}"
+        })
+    else:
+        messages.append({"role": "user", "content": question})
+
+    system_prompt = """You are an expert assistant helping with complex reasoning, coding, and analysis.
+Provide detailed, thorough answers. Be precise and accurate."""
+
+    try:
+        response = await call_model(
+            HELIOS_URL,
+            HELIOS_MODEL,
+            messages,
+            system=system_prompt,
+            timeout=300  # Helios can be slow
+        )
+
+        # Extract the response text
+        content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if content:
+            logger.info(f"[EXPERT] Helios responded ({len(content)} chars)")
+            return content
+        else:
+            return "Expert model returned empty response"
+    except Exception as e:
+        logger.error(f"[EXPERT] Helios failed: {e}")
+        return f"Expert model unavailable: {str(e)}"
 
 
 def clean_response(text: str) -> str:
-    """Remove <think> tags from Nemotron responses."""
-    # Remove think blocks
+    """Remove <think> and <tool_call> tags from Nemotron responses."""
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL)
     return text.strip()
 
 
-def build_system_prompt(rag_context: str, ha_result: str, routed_to: str) -> str:
-    """Build the system prompt with context."""
-    
-    parts = [
-        "You are Nadim's personal AI assistant.",
-        "",
-        "RULES:",
-        "- Be direct and action-oriented (Nadim has ADHD)",
-        "- Break complex tasks into clear steps",
-        "- If you executed a home action, confirm it first",
-        "- Use personal context when relevant",
-        "- Don't overwhelm with options - suggest ONE next step",
-    ]
-    
-    if rag_context:
-        parts.extend([
-            "",
-            "PERSONAL CONTEXT (from Nadim's notes):",
-            rag_context,
-        ])
-    
-    if ha_result:
-        parts.extend([
-            "",
-            f"HOME AUTOMATION: {ha_result}",
-        ])
-    
-    return "\n".join(parts)
+def parse_tool_calls_from_content(content: str) -> List[Dict[str, Any]]:
+    """Parse <tool_call> tags from Nemotron's content output.
+
+    Nemotron outputs tool calls as:
+    <tool_call>
+    {"name": "tool_name", "arguments": {...}}
+    </tool_call>
+    """
+    tool_calls = []
+    pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+    matches = re.findall(pattern, content, re.DOTALL)
+
+    for i, match in enumerate(matches):
+        try:
+            parsed = json.loads(match)
+            tool_name = parsed.get("name", "")
+            arguments = parsed.get("arguments", {})
+
+            # Convert to standard tool_calls format
+            tool_calls.append({
+                "id": f"call_{i}",
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(arguments) if isinstance(arguments, dict) else arguments
+                }
+            })
+        except json.JSONDecodeError as e:
+            logger.warning(f"[TOOL_PARSE] Failed to parse tool call: {e}")
+            continue
+
+    return tool_calls
+
+
+def get_orchestrator_system_prompt() -> str:
+    """System prompt for Nemotron as the orchestrating brain."""
+    return """You are Nadim's personal AI assistant and orchestrator. You have access to tools to help answer questions and perform actions.
+
+AVAILABLE TOOLS:
+1. home_assistant - Control smart home devices (lights, switches, thermostats, media, scenes)
+2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
+3. ask_expert - Delegate complex reasoning, coding, or analysis to a more powerful model
+
+RULES:
+- Be direct and action-oriented (Nadim has ADHD)
+- Use tools proactively when they would help
+- For home automation requests, ALWAYS use the home_assistant tool
+- For personal questions, use search_memory to find relevant context
+- For complex tasks (coding, detailed analysis), use ask_expert
+- You can use multiple tools in sequence if needed
+- After using tools, synthesize a helpful response
+- Don't overwhelm with options - suggest ONE clear next step
+- Keep responses concise unless detail is requested
+
+EXAMPLES:
+- "Turn off the bedroom lights" → Use home_assistant tool
+- "What projects am I working on?" → Use search_memory tool
+- "Write me a Python function to..." → Use ask_expert tool
+- "Turn off bathroom and kitchen, and what's my morning routine?" → Use home_assistant, then search_memory"""
 
 
 @app.on_event("startup")
@@ -288,9 +467,11 @@ def health():
     """Health check endpoint."""
     return {
         "ok": True,
-        "version": "4.0",
-        "nemotron": NEMOTRON_URL,
-        "helios": HELIOS_URL,
+        "version": "5.0",
+        "architecture": "agentic",
+        "brain": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
+        "expert": f"{HELIOS_URL} ({HELIOS_MODEL})",
+        "tools": ["home_assistant", "search_memory", "ask_expert"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),
@@ -349,89 +530,145 @@ async def execute_ha_command(req: Request):
 
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
-    """Main chat endpoint with intelligent routing."""
+    """
+    Main chat endpoint with agentic tool-calling.
+
+    Nemotron-Orchestrator is the brain that decides when to use tools:
+    - home_assistant: Control smart home devices
+    - search_memory: Query personal knowledge base (RAG)
+    - ask_expert: Delegate complex tasks to Helios 120B
+    """
     body = await req.json()
     messages = body.get("messages", [])
-    tools = body.get("tools")  # HA sends tools for native device control
+    external_tools = body.get("tools")  # HA may send its own tools
     user_text = last_user_text(messages)
 
-    # Track what we did
+    # Track what we did for debugging
     routing_info = {
         "timestamp": datetime.now().isoformat(),
         "user_query_length": len(user_text),
+        "tool_calls": [],
+        "rounds": 0,
     }
 
-    # Step 1: Detect intent
-    intent = detect_intent(user_text)
-    routing_info["intent"] = intent
-
-    # Step 2: Check for Home Assistant action
-    # Skip orchestrator HA handling if tools are provided (let HA's native system handle it)
-    ha_result = ""
-    if intent["needs_ha"] and not tools:
-        result = await ha_client.execute_command(user_text)
-        if result.success:
-            ha_result = result.message
-        else:
-            # Only show error if it seemed like an HA command
-            if ha_client.parse_command(user_text):
-                ha_result = f"⚠ {result.message}"
-
-        routing_info["ha_attempted"] = True
-        routing_info["ha_result"] = ha_result
-    elif tools:
-        routing_info["ha_native_tools"] = True
-        logger.info(f"[HA] Using native tool calling ({len(tools)} tools provided)")
-    
-    # Step 3: Get RAG context if needed
-    rag = ""
-    if intent["needs_rag"] or intent["needs_complex"]:
-        rag = rag_context(user_text)
-        routing_info["rag_retrieved"] = bool(rag)
-    
-    # Step 4: Decide routing
-    use_helios = should_route_to_helios(intent, user_text)
-    target_url = HELIOS_URL if use_helios else NEMOTRON_URL
-    target_model = HELIOS_MODEL if use_helios else NEMOTRON_MODEL
-    routing_info["routed_to"] = "helios" if use_helios else "nemotron"
-
-    # Step 5: Build system prompt
-    system = build_system_prompt(rag, ha_result, routing_info["routed_to"])
-
-    # Step 6: Call the model
-    try:
-        logger.info(f"[LLM] Calling primary: {target_url} ({target_model})")
-        llm_resp = await call_model(target_url, target_model, messages, system, tools=tools, timeout=300 if use_helios else 60)
-        logger.info(f"[LLM] Primary succeeded")
-    except Exception as e:
-        # Fallback: if primary fails, try the other
-        logger.warning(f"[LLM] Primary failed ({e}), trying fallback")
-        fallback_url = NEMOTRON_URL if use_helios else HELIOS_URL
-        fallback_model = NEMOTRON_MODEL if use_helios else HELIOS_MODEL
-        routing_info["fallback"] = True
+    # If external tools are provided (e.g., from HA voice pipeline),
+    # pass through to Nemotron and let it handle natively
+    if external_tools:
+        logger.info(f"[ORCHESTRATOR] External tools provided ({len(external_tools)}), passing through")
+        routing_info["mode"] = "passthrough"
         try:
-            logger.info(f"[LLM] Calling fallback: {fallback_url} ({fallback_model})")
-            llm_resp = await call_model(fallback_url, fallback_model, messages, system, tools=tools, timeout=180)
-            logger.info(f"[LLM] Fallback succeeded")
-        except Exception as e2:
-            logger.error(f"[LLM] Both models failed: {e}, {e2}")
+            llm_resp = await call_model(
+                NEMOTRON_URL, NEMOTRON_MODEL, messages,
+                system=get_orchestrator_system_prompt(),
+                tools=external_tools,
+                timeout=60
+            )
+            llm_resp["_routing"] = routing_info
+            return JSONResponse(llm_resp)
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] Passthrough failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=503)
+
+    # Agentic mode: Nemotron orchestrates with our tools
+    routing_info["mode"] = "agentic"
+    logger.info(f"[ORCHESTRATOR] Starting agentic loop for: {user_text[:100]}...")
+
+    # Build conversation with system prompt
+    conversation = messages.copy()
+    system_prompt = get_orchestrator_system_prompt()
+
+    # Agentic loop: let Nemotron call tools until it responds with content
+    for round_num in range(MAX_TOOL_ROUNDS):
+        routing_info["rounds"] = round_num + 1
+        logger.info(f"[ORCHESTRATOR] Round {round_num + 1}/{MAX_TOOL_ROUNDS}")
+
+        try:
+            llm_resp = await call_model(
+                NEMOTRON_URL, NEMOTRON_MODEL, conversation,
+                system=system_prompt,
+                tools=get_orchestrator_tools(),
+                timeout=60
+            )
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] Nemotron call failed: {e}")
             return JSONResponse({
-                "error": f"Both models failed: {e}, {e2}",
+                "error": f"Orchestrator failed: {e}",
                 "_routing": routing_info,
             }, status_code=503)
-    
-    # Step 7: Clean response (remove <think> tags if from Nemotron)
-    # Note: content can be None when LLM returns tool_calls
-    if not use_helios and "choices" in llm_resp:
-        for choice in llm_resp.get("choices", []):
-            content = choice.get("message", {}).get("content")
+
+        # Extract the assistant's response
+        choice = llm_resp.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        tool_calls = message.get("tool_calls", [])
+        content = message.get("content") or ""
+
+        # Nemotron outputs tool calls as <tool_call> tags in content
+        # Parse them if no native tool_calls were returned
+        if not tool_calls and content:
+            tool_calls = parse_tool_calls_from_content(content)
+            if tool_calls:
+                logger.info(f"[ORCHESTRATOR] Parsed {len(tool_calls)} tool call(s) from content")
+
+        # If no tool calls, we're done - return the response
+        if not tool_calls:
+            logger.info(f"[ORCHESTRATOR] Final response (no tool calls)")
+
+            # Clean up think tags from response
             if content:
-                choice["message"]["content"] = clean_response(content)
-    
-    # Add routing info for debugging (can be removed in production)
-    llm_resp["_routing"] = routing_info
-    
-    return JSONResponse(llm_resp)
+                message["content"] = clean_response(content)
+
+            llm_resp["_routing"] = routing_info
+            return JSONResponse(llm_resp)
+
+        # Process tool calls
+        logger.info(f"[ORCHESTRATOR] Processing {len(tool_calls)} tool call(s)")
+
+        # Add assistant message to conversation (keep original content with tool_call tags)
+        conversation.append({"role": "assistant", "content": content})
+
+        # Execute each tool and collect results
+        tool_results = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            tool_name = function.get("name", "")
+
+            # Parse arguments
+            try:
+                arguments = json.loads(function.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                arguments = {}
+
+            # Execute the tool
+            result = await execute_tool(tool_name, arguments)
+
+            # Track for debugging
+            routing_info["tool_calls"].append({
+                "tool": tool_name,
+                "args": arguments,
+                "result_preview": result[:200] if result else None,
+            })
+
+            tool_results.append(f"[{tool_name}] {result}")
+
+        # Add tool results as a user message (Nemotron understands this format)
+        # Include instruction to respond naturally without more tool calls
+        results_text = "\n".join(tool_results)
+        conversation.append({
+            "role": "user",
+            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nThe tool has completed. Please provide a brief, natural response to the user based on the result above. Do NOT call any more tools."
+        })
+
+    # If we exit the loop, we hit max rounds
+    logger.warning(f"[ORCHESTRATOR] Hit max tool rounds ({MAX_TOOL_ROUNDS})")
+    return JSONResponse({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "I apologize, but I wasn't able to complete the request within the allowed number of steps. Please try rephrasing or breaking down your request."
+            }
+        }],
+        "_routing": routing_info,
+    })
 
 
 @app.post("/api/memory/add")

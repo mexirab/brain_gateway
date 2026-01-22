@@ -147,11 +147,16 @@ class HomeAssistantClient:
     
     # Command patterns - order matters (more specific first)
     COMMAND_PATTERNS = [
+        # COLOR + BRIGHTNESS combined (most specific - must be first!)
+        # "set bedroom to blue at 50%" or "turn living room red at 75%"
+        (rf"(?:turn|set|change|make)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?({COLOR_NAMES})\s+(?:at\s+)?(\d+)\s*%", "set_color_brightness"),
+        (rf"(?:set|change|make)\s+(?:the\s+)?(.+?)\s+(?:color\s+)?(?:to\s+)?({COLOR_NAMES})\s+(?:at\s+)?(\d+)\s*%", "set_color_brightness"),
+
         # COLOR commands (must be before basic on/off to catch "turn living room red")
         (rf"(?:turn|set|change|make)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?({COLOR_NAMES})$", "set_color"),
         (rf"(?:set|change|make)\s+(?:the\s+)?(.+?)\s+(?:color\s+)?(?:to\s+)?({COLOR_NAMES})$", "set_color"),
         (rf"({COLOR_NAMES})\s+(?:for\s+)?(?:the\s+)?(.+)$", "set_color_reversed"),  # "red for living room"
-        
+
         # Brightness commands
         (r"(?:set|dim|change)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?(\d+)\s*%", "set_brightness"),
         (r"(?:dim|brighten)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?(\d+)\s*%?", "set_brightness"),
@@ -414,16 +419,62 @@ class HomeAssistantClient:
         }
         return action_domains.get(action, "light")
     
+    def _split_compound_commands(self, text: str) -> List[str]:
+        """
+        Split compound commands on conjunctions like 'and', 'then', 'also'.
+
+        Examples:
+        - "turn off office and turn off kitchen" -> ["turn off office", "turn off kitchen"]
+        - "turn on living room and set it to 50%" -> ["turn on living room", "set it to 50%"]
+        """
+        # Split on " and ", " then ", " also ", " plus " when followed by a command verb
+        # This pattern looks for conjunction followed by common command verbs
+        command_verbs = r"(?:turn|switch|toggle|set|dim|brighten|activate|play|pause|stop|lock|unlock|open|close)"
+        split_pattern = rf"\s+(?:and|then|also|plus)\s+(?={command_verbs})"
+
+        parts = re.split(split_pattern, text.strip(), flags=re.IGNORECASE)
+        return [p.strip() for p in parts if p.strip()]
+
     async def execute_command(self, text: str) -> ExecutionResult:
         """
-        Parse and execute a natural language command.
-        
+        Parse and execute a natural language command (or multiple commands).
+
         This is the main entry point for the orchestrator.
+        Supports compound commands like "turn off office and turn off kitchen".
         """
         # Ensure entities are loaded
         if not self._entities:
             await self.refresh_entities()
-        
+
+        # Split compound commands
+        commands = self._split_compound_commands(text)
+
+        # If multiple commands, execute each and aggregate results
+        if len(commands) > 1:
+            results = []
+            all_success = True
+            messages = []
+
+            for cmd_text in commands:
+                result = await self._execute_single_command(cmd_text)
+                results.append(result)
+                if not result.success:
+                    all_success = False
+                messages.append(result.message)
+
+            return ExecutionResult(
+                success=all_success,
+                action="multiple",
+                entity_id=", ".join(r.entity_id for r in results if r.entity_id),
+                message=" | ".join(messages),
+                details={"commands": len(commands), "results": [r.message for r in results]},
+            )
+
+        # Single command
+        return await self._execute_single_command(text)
+
+    async def _execute_single_command(self, text: str) -> ExecutionResult:
+        """Execute a single parsed command."""
         # Parse the command
         parsed = self.parse_command(text)
         if not parsed:
@@ -433,14 +484,14 @@ class HomeAssistantClient:
                 entity_id="",
                 message=f"Could not understand command: {text}",
             )
-        
+
         # Find the target entity
         entity = self._fuzzy_match_entity(parsed.target_text, parsed.domain)
-        
+
         # If not found in preferred domain, try others
         if not entity and parsed.domain:
             entity = self._fuzzy_match_entity(parsed.target_text, None)
-        
+
         if not entity:
             return ExecutionResult(
                 success=False,
@@ -448,7 +499,7 @@ class HomeAssistantClient:
                 entity_id="",
                 message=f"Could not find device matching '{parsed.target_text}'",
             )
-        
+
         # Execute the action
         return await self._execute_action(parsed, entity)
     
@@ -564,9 +615,80 @@ class HomeAssistantClient:
         if domain == "scene":
             if action in ("turn_on", "activate_scene"):
                 return "turn_on"
-        
+
         return None
-    
+
+    async def call_service(self, entity_id: str, service: str, data: Dict[str, Any] = None) -> ExecutionResult:
+        """
+        Call a Home Assistant service directly (no NLP parsing).
+
+        This is the simplified interface for when Nemotron provides structured calls.
+
+        Args:
+            entity_id: e.g., "light.bedroom_fan_lights"
+            service: e.g., "turn_on", "turn_off", "toggle"
+            data: Optional service data, e.g., {"brightness": 128, "rgb_color": [0,0,255]}
+        """
+        if not entity_id or not service:
+            return ExecutionResult(
+                success=False,
+                action="unknown",
+                entity_id=entity_id or "",
+                message="Missing entity_id or service",
+            )
+
+        # Extract domain from entity_id
+        domain = entity_id.split(".")[0] if "." in entity_id else "unknown"
+
+        # Build service data
+        service_data = {"entity_id": entity_id}
+        if data:
+            service_data.update(data)
+
+        # Make the API call
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                url = f"{self.url}/api/services/{domain}/{service}"
+                resp = await client.post(url, headers=self._headers, json=service_data)
+                resp.raise_for_status()
+
+                # Build descriptive message
+                entity = self._entities.get(entity_id)
+                friendly_name = entity.friendly_name if entity else entity_id
+
+                if data and "rgb_color" in data:
+                    msg = f"✓ Set {friendly_name} to color {data['rgb_color']}"
+                    if "brightness" in data:
+                        pct = int((data["brightness"] / 255) * 100)
+                        msg += f" at {pct}%"
+                elif data and "brightness" in data:
+                    pct = int((data["brightness"] / 255) * 100)
+                    msg = f"✓ Set {friendly_name} to {pct}%"
+                else:
+                    msg = f"✓ {service.replace('_', ' ')} {friendly_name}"
+
+                return ExecutionResult(
+                    success=True,
+                    action=f"{domain}.{service}",
+                    entity_id=entity_id,
+                    message=msg,
+                    details={"service_data": service_data},
+                )
+        except httpx.HTTPStatusError as e:
+            return ExecutionResult(
+                success=False,
+                action=f"{domain}.{service}",
+                entity_id=entity_id,
+                message=f"HA API error: {e.response.status_code} - {e.response.text[:100]}",
+            )
+        except Exception as e:
+            return ExecutionResult(
+                success=False,
+                action=f"{domain}.{service}",
+                entity_id=entity_id,
+                message=f"Failed: {str(e)}",
+            )
+
     async def get_entity_state(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """Get current state of a specific entity."""
         try:
