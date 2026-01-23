@@ -11,7 +11,7 @@
 | Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large models (120B), primary inference |
 | Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | **Nemotron-Orchestrator-8B (brain)** on RTX 3090 |
 | Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Available (Whisper STT) |
-| Jupiter | 10.0.0.248 | None | - | 32GB | Compute (no GPU currently) |
+| Jupiter | 10.0.0.248 | RX 6900 XT + RX 6800 | 32GB | 32GB | AMD ROCm (image gen, backup LLM) |
 | Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration, Docker host |
 
 ### Key Paths
