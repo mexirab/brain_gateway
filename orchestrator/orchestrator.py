@@ -834,6 +834,153 @@ def memory_stats():
     })
 
 
+# =============================================================================
+# Morning Briefing Endpoint (Phase 4: Proactive Reminders)
+# =============================================================================
+
+TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
+TTS_VOICE = os.environ.get("TTS_VOICE", "jessica")
+
+@app.post("/api/briefing/morning")
+async def morning_briefing(req: Request):
+    """
+    Generate a personalized morning briefing.
+
+    Searches RAG for morning routine, meds, and calendar info,
+    then generates a friendly reminder via Nemotron.
+
+    Optional: generate TTS audio and/or announce on HA speaker.
+
+    Request body (all optional):
+    {
+        "generate_tts": true,
+        "play_on": "media_player.kitchen_display",
+        "include_calendar": true
+    }
+    """
+    try:
+        body = await req.json() if await req.body() else {}
+    except:
+        body = {}
+
+    generate_tts = body.get("generate_tts", False)
+    play_on = body.get("play_on", None)
+
+    # Get current context
+    now = datetime.now()
+    day_name = now.strftime("%A")
+    time_str = now.strftime("%-I:%M %p")
+    date_str = now.strftime("%B %-d")
+
+    # Search RAG for relevant content
+    morning_context = rag_context("morning routine wake up meds")
+    meds_context = rag_context("medications daily schedule")
+
+    # Build the prompt
+    system_prompt = """You are Jessica, Nadim's supportive ADHD coach assistant.
+You speak with warmth, energy, and encouragement - like a caring friend who understands ADHD.
+Keep responses concise (2-4 sentences for the greeting, then a few key reminders).
+Use a conversational, upbeat tone. Celebrate small wins. Be specific and actionable.
+
+IMPORTANT: This will be spoken aloud via text-to-speech, so:
+- Do NOT use emojis, markdown, asterisks, or special formatting
+- Do NOT include thinking tags or internal reasoning
+- Write in plain, natural spoken English
+- Use natural pauses with commas and periods"""
+
+    user_prompt = f"""It's {day_name}, {date_str} at {time_str}. Generate a morning briefing for Nadim.
+
+Based on his routines and preferences:
+{morning_context}
+
+Medication info:
+{meds_context}
+
+Create a brief, encouraging wake-up message that:
+1. Greets him warmly for the day
+2. Reminds about morning meds (Vyvanse 70mg and Wellbutrin 300mg with breakfast, protein, no citrus)
+3. Lists 3-4 key morning routine steps
+4. Ends with an encouraging note
+
+Keep it natural and conversational - this will be spoken aloud."""
+
+    # Generate the briefing via Nemotron
+    messages = [{"role": "user", "content": user_prompt}]
+
+    try:
+        response = await call_model(
+            url=NEMOTRON_URL,
+            model=NEMOTRON_MODEL,
+            messages=messages,
+            system=system_prompt,
+            timeout=60
+        )
+        briefing_text = response.get("choices", [{}])[0].get("message", {}).get("content", "Good morning! Time to start your day.")
+        # Clean up any thinking tags or markdown for TTS
+        briefing_text = re.sub(r'<think>.*?</think>', '', briefing_text, flags=re.DOTALL)
+        briefing_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', briefing_text)  # Remove bold
+        briefing_text = re.sub(r'\*([^*]+)\*', r'\1', briefing_text)  # Remove italic
+        briefing_text = re.sub(r'[🌞🚀💪✅❌📋🎯]+', '', briefing_text)  # Remove common emojis
+        briefing_text = briefing_text.strip()
+    except Exception as e:
+        logger.error(f"Failed to generate briefing: {e}")
+        briefing_text = f"Good morning Nadim! It's {day_name}. Remember to take your morning meds with breakfast - Vyvanse and Wellbutrin. Have a great day!"
+
+    result = {
+        "day": day_name,
+        "date": date_str,
+        "time": time_str,
+        "briefing": briefing_text,
+    }
+
+    # Optionally generate TTS
+    if generate_tts or play_on:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                tts_response = await client.post(
+                    f"{TTS_URL}/tts",
+                    json={"text": briefing_text, "voice": TTS_VOICE}
+                )
+                if tts_response.status_code == 200:
+                    # Save audio to temp file
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                        f.write(tts_response.content)
+                        audio_path = f.name
+                    result["audio_file"] = audio_path
+                    result["tts_generated"] = True
+        except Exception as e:
+            logger.error(f"TTS generation failed: {e}")
+            result["tts_error"] = str(e)
+
+    # Optionally play on HA media player
+    if play_on and result.get("tts_generated"):
+        try:
+            # For now, use HA's built-in TTS to announce
+            # (Playing custom audio files requires media hosting)
+            ha_client = HomeAssistantClient(HA_URL, HA_TOKEN)
+            await ha_client.call_service(
+                "tts", "speak",
+                entity_id=play_on,
+                service_data={"message": briefing_text, "media_player_entity_id": play_on}
+            )
+            result["announced_on"] = play_on
+        except Exception as e:
+            logger.error(f"HA announcement failed: {e}")
+            result["announce_error"] = str(e)
+
+    return JSONResponse(result)
+
+
+@app.get("/api/briefing/morning")
+async def morning_briefing_get():
+    """GET version for easy testing."""
+    from starlette.requests import Request as StarletteRequest
+    from starlette.testclient import TestClient
+    # Simple redirect to POST with empty body
+    return await morning_briefing(Request(scope={"type": "http", "method": "POST"}, receive=lambda: None))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8888)

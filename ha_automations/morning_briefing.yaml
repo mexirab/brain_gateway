@@ -1,0 +1,47 @@
+# Morning Briefing Automation for Home Assistant
+# Add this to your automations.yaml or create via HA UI
+#
+# This calls the Brain Gateway to generate a personalized morning briefing
+# and plays it on your chosen speaker using Jessica's voice.
+
+alias: "Morning Briefing - Weekdays"
+description: "Wake up with a personalized ADHD-friendly morning briefing"
+mode: single
+
+trigger:
+  - platform: time
+    at: "07:30:00"  # Adjust to your wake-up time
+
+condition:
+  - condition: time
+    weekday:
+      - mon
+      - tue
+      - wed
+      - thu
+      - fri
+
+action:
+  # Step 1: Generate the morning briefing via Brain Gateway
+  - service: rest_command.generate_morning_briefing
+    response_variable: briefing_response
+
+  # Step 2: Announce via TTS on your speaker
+  - service: tts.speak
+    target:
+      entity_id: media_player.kitchen_display  # Change to your speaker
+    data:
+      message: "{{ briefing_response.content.briefing }}"
+      media_player_entity_id: media_player.kitchen_display
+
+---
+# Also add this to your configuration.yaml under rest_command:
+
+# rest_command:
+#   generate_morning_briefing:
+#     url: "http://10.0.0.186:8888/api/briefing/morning"
+#     method: POST
+#     headers:
+#       Content-Type: "application/json"
+#     payload: '{"generate_tts": false}'
+#     content_type: "application/json"
