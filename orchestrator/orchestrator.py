@@ -10,6 +10,7 @@ import os
 import re
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
@@ -130,17 +131,17 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_expert",
-            "description": "Delegate complex reasoning, coding, analysis, or detailed explanations to the expert model (Helios 120B). Use this for: code writing/debugging, detailed technical explanations, complex analysis, math problems, or any task requiring deep reasoning.",
+            "description": "Delegate to the expert model (Helios 120B) for ANY question requiring knowledge or reasoning. Use this for: general knowledge (books, movies, history, science), coding, analysis, explanations, factual questions, creative writing, or ANYTHING you're not certain about. The expert has broad knowledge - use it liberally.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "question": {
                         "type": "string",
-                        "description": "The complex question or task to delegate to the expert model"
+                        "description": "The question or task to delegate to the expert model"
                     },
                     "context": {
                         "type": "string",
-                        "description": "Optional additional context to help the expert (e.g., relevant code, background info)"
+                        "description": "Optional additional context to help the expert"
                     }
                 },
                 "required": ["question"]
@@ -288,7 +289,7 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
 async def stream_final_response(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180):
     """
     Stream the final response from Nemotron (after tool calls are done).
-    Yields SSE-formatted chunks for OpenAI-compatible streaming.
+    Pass through SSE chunks directly for minimal latency.
     """
     final_messages = messages.copy()
     if system:
@@ -302,10 +303,6 @@ async def stream_final_response(url: str, model: str, messages: List[Dict], syst
         "stream": True,
     }
 
-    # Buffer to detect and strip <think> tags from streamed content
-    buffer = ""
-    in_think_tag = False
-
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("POST", f"{url}/chat/completions", json=payload) as response:
             response.raise_for_status()
@@ -313,68 +310,8 @@ async def stream_final_response(url: str, model: str, messages: List[Dict], syst
                 if not line:
                     continue
                 if line.startswith("data: "):
-                    data = line[6:]  # Strip "data: " prefix
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        break
-
-                    try:
-                        chunk = json.loads(data)
-                        # Extract delta content
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content", "")
-
-                        if content:
-                            # Buffer content to handle <think> tags
-                            buffer += content
-
-                            # Check for <think> tag start
-                            if "<think>" in buffer and not in_think_tag:
-                                in_think_tag = True
-                                # Output anything before the think tag
-                                pre_think = buffer.split("<think>")[0]
-                                if pre_think:
-                                    chunk["choices"][0]["delta"]["content"] = pre_think
-                                    yield f"data: {json.dumps(chunk)}\n\n"
-                                buffer = "<think>" + buffer.split("<think>", 1)[1]
-
-                            # Check for </think> tag end
-                            if "</think>" in buffer and in_think_tag:
-                                in_think_tag = False
-                                # Skip the think content, keep what's after
-                                buffer = buffer.split("</think>", 1)[1]
-                                continue
-
-                            # If in think tag, don't output
-                            if in_think_tag:
-                                continue
-
-                            # Output buffered content (with small buffer for tag detection)
-                            if len(buffer) > 20:  # Keep small buffer for tag detection
-                                output = buffer[:-20]
-                                buffer = buffer[-20:]
-                                if output:
-                                    chunk["choices"][0]["delta"]["content"] = output
-                                    yield f"data: {json.dumps(chunk)}\n\n"
-                        else:
-                            # Non-content chunk (e.g., finish_reason)
-                            yield f"data: {data}\n\n"
-
-                    except json.JSONDecodeError:
-                        continue
-
-            # Flush remaining buffer
-            if buffer and not in_think_tag:
-                # Clean any remaining think tags
-                buffer = re.sub(r'<think>.*?</think>', '', buffer, flags=re.DOTALL)
-                if buffer.strip():
-                    final_chunk = {
-                        "choices": [{
-                            "delta": {"content": buffer},
-                            "index": 0
-                        }]
-                    }
-                    yield f"data: {json.dumps(final_chunk)}\n\n"
+                    # Pass through directly for minimal latency
+                    yield f"{line}\n\n"
 
 
 # =============================================================================
@@ -525,24 +462,27 @@ def get_orchestrator_system_prompt() -> str:
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, thermostats, media, scenes)
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
-3. ask_expert - Delegate complex reasoning, coding, or analysis to a more powerful model
+3. ask_expert - Delegate to the expert model (120B) for: general knowledge, books, movies, history, science, coding, analysis, or ANY question you're unsure about
 
-RULES:
-- Be direct and action-oriented (Nadim has ADHD)
-- Use tools proactively when they would help
-- For home automation requests, ALWAYS use the home_assistant tool
-- For personal questions, use search_memory to find relevant context
-- For complex tasks (coding, detailed analysis), use ask_expert
-- You can use multiple tools in sequence if needed
-- After using tools, synthesize a helpful response
-- Don't overwhelm with options - suggest ONE clear next step
-- Keep responses concise unless detail is requested
+ROUTING RULES:
+- home_assistant: ONLY when user EXPLICITLY asks to control devices (turn on/off, lights, fan, temperature, etc.)
+- search_memory: ONLY for Nadim's personal info (projects, routines, preferences, medications, schedules)
+- ask_expert: Use for EVERYTHING ELSE - general knowledge, books, movies, coding, analysis, explanations, or anything you're not 100% sure about
+
+CRITICAL:
+- You are a small model - when in doubt, use ask_expert
+- For ANY general knowledge question (books, history, science, etc.) → ask_expert
+- NEVER say "I don't have access to that information" - use ask_expert instead
+- After getting tool results, respond naturally - don't call more tools
+- Be direct and concise (Nadim has ADHD)
 
 EXAMPLES:
-- "Turn off the bedroom lights" → Use home_assistant tool
-- "What projects am I working on?" → Use search_memory tool
-- "Write me a Python function to..." → Use ask_expert tool
-- "Turn off bathroom and kitchen, and what's my morning routine?" → Use home_assistant, then search_memory"""
+- "Turn off the bedroom lights" → home_assistant
+- "What projects am I working on?" → search_memory
+- "Summarize the Stormlight Archive" → ask_expert (general knowledge)
+- "Write a Python function" → ask_expert (coding)
+- "What's the capital of France?" → ask_expert (general knowledge)
+- "Explain quantum computing" → ask_expert (complex topic)"""
 
 
 @app.on_event("startup")
@@ -715,28 +655,21 @@ async def chat_completions(req: Request):
             logger.info(f"[ORCHESTRATOR] Final response (no tool calls, stream={stream})")
 
             if stream:
-                # Stream the final response
-                # If we already have content from a non-streaming call, stream it directly
-                if content:
-                    cleaned_content = clean_response(content)
-                    async def content_stream():
-                        # Send the content in chunks for smoother display
-                        chunk_size = 20
-                        for i in range(0, len(cleaned_content), chunk_size):
-                            chunk = cleaned_content[i:i+chunk_size]
-                            yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}, 'index': 0}]})}\n\n"
-                        yield f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop', 'index': 0}]})}\n\n"
-                        yield "data: [DONE]\n\n"
-                    return StreamingResponse(content_stream(), media_type="text/event-stream")
-                else:
-                    # Make a fresh streaming call for the final response
-                    return StreamingResponse(
-                        stream_final_response(
-                            NEMOTRON_URL, NEMOTRON_MODEL, conversation,
-                            system=system_prompt, timeout=120
-                        ),
-                        media_type="text/event-stream"
-                    )
+                # For true streaming, make a fresh streaming call to Nemotron
+                # This gives real token-by-token output instead of fake chunking
+                logger.info(f"[ORCHESTRATOR] Starting streaming response")
+                return StreamingResponse(
+                    stream_final_response(
+                        NEMOTRON_URL, NEMOTRON_MODEL, conversation,
+                        system=system_prompt, timeout=120
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                        "Connection": "keep-alive",
+                    }
+                )
             else:
                 # Non-streaming response
                 if content:
@@ -752,6 +685,8 @@ async def chat_completions(req: Request):
 
         # Execute each tool and collect results
         tool_results = []
+        expert_response = None  # Track if ask_expert was called
+
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
@@ -773,6 +708,57 @@ async def chat_completions(req: Request):
             })
 
             tool_results.append(f"[{tool_name}] {result}")
+
+            # If ask_expert was called, save the response for potential short-circuit
+            if tool_name == "ask_expert":
+                expert_response = result
+
+        # SHORT-CIRCUIT: If only ask_expert was called, return its response directly
+        # This saves a round-trip to Nemotron and speeds up general knowledge queries
+        if len(tool_calls) == 1 and expert_response:
+            logger.info(f"[ORCHESTRATOR] Short-circuit: returning expert response directly")
+            routing_info["short_circuit"] = True
+
+            if stream:
+                # Stream the expert response
+                chunk_id = f"chatcmpl-{int(time.time())}"
+                async def expert_stream():
+                    chunk_size = 15
+                    for i in range(0, len(expert_response), chunk_size):
+                        chunk_text = expert_response[i:i+chunk_size]
+                        chunk_data = {
+                            "id": chunk_id,
+                            "object": "chat.completion.chunk",
+                            "created": int(time.time()),
+                            "model": NEMOTRON_MODEL,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": chunk_text},
+                                "finish_reason": None
+                            }]
+                        }
+                        yield f"data: {json.dumps(chunk_data)}\n\n"
+                    final_chunk = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": NEMOTRON_MODEL,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    }
+                    yield f"data: {json.dumps(final_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(
+                    expert_stream(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                )
+            else:
+                return JSONResponse({
+                    "choices": [{
+                        "message": {"role": "assistant", "content": expert_response}
+                    }],
+                    "_routing": routing_info,
+                })
 
         # Add tool results as a user message (Nemotron understands this format)
         # Include instruction to respond naturally without more tool calls
