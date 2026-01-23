@@ -47,6 +47,10 @@ executor = ThreadPoolExecutor(max_workers=2)
 # Global model reference
 model = None
 
+# Cached voice clone prompts (voice_name -> prompt_items)
+# These are pre-computed from reference audio for fast repeated generation
+voice_clone_prompts = {}
+
 
 # =============================================================================
 # Pydantic Models
@@ -87,18 +91,13 @@ class VoiceInfo(BaseModel):
 # Available Voices (Qwen3-TTS-CustomVoice preset voices)
 # =============================================================================
 
-VOICES = {
-    # Actual voices from Qwen3-TTS-12Hz-1.7B-CustomVoice
-    "aiden": {"languages": ["English", "Chinese"], "description": "Male, warm and professional"},
-    "dylan": {"languages": ["English", "Chinese"], "description": "Male, energetic and youthful"},
-    "eric": {"languages": ["English", "Chinese"], "description": "Male, confident and clear"},
-    "ryan": {"languages": ["English", "Chinese"], "description": "Male, casual and approachable"},
-    "ono_anna": {"languages": ["Japanese", "English"], "description": "Female, clear and friendly"},
-    "serena": {"languages": ["Chinese", "English"], "description": "Female, elegant and refined"},
-    "sohee": {"languages": ["Korean", "English"], "description": "Female, bright and expressive"},
-    "uncle_fu": {"languages": ["Chinese", "English"], "description": "Male, mature and warm"},
-    "vivian": {"languages": ["Chinese", "English"], "description": "Female, expressive and dynamic"},
-}
+# Loaded voice clones (populated at runtime via /voices/load)
+# Maps voice name -> metadata
+VOICES = {}
+
+# Directory for storing reference audio files and voice configs
+VOICE_SAMPLES_DIR = os.getenv("QWEN_TTS_VOICES_DIR", "/home/nadim/tts-voices")
+VOICES_CONFIG_FILE = os.path.join(VOICE_SAMPLES_DIR, "voices.json")
 
 SUPPORTED_LANGUAGES = [
     "Chinese", "English", "Japanese", "Korean",
@@ -143,10 +142,73 @@ def load_model():
         raise
 
 
+def load_voices_config() -> dict:
+    """Load voice configurations from JSON file."""
+    if os.path.exists(VOICES_CONFIG_FILE):
+        try:
+            import json
+            with open(VOICES_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load voices config: {e}")
+    return {}
+
+
+def save_voices_config(config: dict):
+    """Save voice configurations to JSON file."""
+    try:
+        import json
+        os.makedirs(VOICE_SAMPLES_DIR, exist_ok=True)
+        with open(VOICES_CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Saved voices config to {VOICES_CONFIG_FILE}")
+    except Exception as e:
+        logger.error(f"Failed to save voices config: {e}")
+
+
+def auto_load_voices():
+    """Load all configured voices on startup."""
+    global voice_clone_prompts, VOICES
+
+    config = load_voices_config()
+    if not config:
+        logger.info("No saved voices to load")
+        return
+
+    logger.info(f"Auto-loading {len(config)} saved voice(s)...")
+    for name, voice_info in config.items():
+        try:
+            ref_audio = voice_info.get("ref_audio")
+            ref_text = voice_info.get("ref_text")
+            description = voice_info.get("description", f"Cloned voice: {name}")
+
+            if not os.path.exists(ref_audio):
+                logger.warning(f"Skipping voice '{name}': ref_audio not found at {ref_audio}")
+                continue
+
+            logger.info(f"Loading voice '{name}' from {ref_audio}")
+            prompt_items = model.create_voice_clone_prompt(
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+            )
+            voice_clone_prompts[name] = prompt_items
+            VOICES[name] = {
+                "languages": SUPPORTED_LANGUAGES,
+                "description": description,
+            }
+            logger.info(f"Voice '{name}' loaded successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to load voice '{name}': {e}")
+
+    logger.info(f"Auto-loaded {len(voice_clone_prompts)} voice(s)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage model lifecycle."""
     load_model()
+    auto_load_voices()
     yield
     logger.info("Shutting down TTS server")
 
@@ -173,14 +235,20 @@ def generate_audio_sync(
     language: str,
     emotion: str = ""
 ) -> tuple:
-    """Synchronous audio generation (runs in thread pool)."""
-    wavs, sr = model.generate_custom_voice(
-        text=text,
-        language=language,
-        speaker=voice,
-        instruct=emotion if emotion else None,
-    )
-    return wavs[0], sr
+    """Synchronous audio generation (runs in thread pool).
+
+    With Base model, we use voice cloning with a stored reference audio.
+    """
+    # Check if we have a stored voice clone prompt for this voice
+    if voice in voice_clone_prompts:
+        wavs, sr = model.generate_voice_clone(
+            text=text,
+            language=language,
+            voice_clone_prompt=voice_clone_prompts[voice],
+        )
+        return wavs[0], sr
+    else:
+        raise ValueError(f"No voice clone prompt loaded for '{voice}'. Use /voices/load to load a custom voice.")
 
 
 def generate_clone_sync(
@@ -251,32 +319,112 @@ async def list_languages():
     return {"languages": SUPPORTED_LANGUAGES}
 
 
+class LoadVoiceRequest(BaseModel):
+    """Request to load a voice from reference audio."""
+    name: str = Field(..., description="Name for this voice (e.g., 'jessica')")
+    ref_audio: str = Field(..., description="Path to reference audio file")
+    ref_text: str = Field(..., description="Transcript of reference audio")
+    description: str = Field(default="", description="Description of the voice")
+
+
+def load_voice_sync(name: str, ref_audio: str, ref_text: str) -> None:
+    """Load a voice clone prompt from reference audio (synchronous)."""
+    global voice_clone_prompts, VOICES
+
+    logger.info(f"Loading voice '{name}' from {ref_audio}")
+    prompt_items = model.create_voice_clone_prompt(
+        ref_audio=ref_audio,
+        ref_text=ref_text,
+    )
+    voice_clone_prompts[name] = prompt_items
+    logger.info(f"Voice '{name}' loaded successfully")
+
+
+@app.post("/voices/load")
+async def load_voice(request: LoadVoiceRequest):
+    """
+    Load a voice clone from a reference audio file.
+
+    This pre-computes the voice embedding for fast repeated generation.
+    The voice can then be used with /tts by specifying its name.
+
+    Example:
+    ```
+    curl -X POST http://localhost:8002/voices/load \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "jessica",
+        "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+        "ref_text": "The transcript of what Jessica says in the audio.",
+        "description": "Jessica McCabe - warm, energetic ADHD advocate"
+      }'
+    ```
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    if not os.path.exists(request.ref_audio):
+        raise HTTPException(status_code=400, detail=f"Reference audio not found: {request.ref_audio}")
+
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            executor,
+            load_voice_sync,
+            request.name,
+            request.ref_audio,
+            request.ref_text,
+        )
+
+        # Add to VOICES registry
+        VOICES[request.name] = {
+            "languages": SUPPORTED_LANGUAGES,  # Cloned voices work with all languages
+            "description": request.description or f"Cloned voice: {request.name}",
+        }
+
+        # Save to config file for auto-loading on restart
+        config = load_voices_config()
+        config[request.name] = {
+            "ref_audio": request.ref_audio,
+            "ref_text": request.ref_text,
+            "description": request.description or f"Cloned voice: {request.name}",
+        }
+        save_voices_config(config)
+
+        return {
+            "status": "success",
+            "voice": request.name,
+            "message": f"Voice '{request.name}' loaded and saved for auto-load on restart",
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to load voice '{request.name}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
     """
-    Convert text to speech using a preset voice.
+    Convert text to speech using a loaded voice clone.
+
+    First load a voice with /voices/load, then use it here by name.
 
     Example:
     ```
     curl -X POST http://localhost:8002/tts \
       -H "Content-Type: application/json" \
-      -d '{"text": "Hello Nadim!", "voice": "Ethan", "emotion": "warm and friendly"}' \
+      -d '{"text": "Hello Nadim!", "voice": "jessica"}' \
       --output speech.wav
     ```
     """
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    if request.voice not in VOICES:
+    if request.voice not in voice_clone_prompts:
+        available = list(voice_clone_prompts.keys()) if voice_clone_prompts else ["none - load a voice first with /voices/load"]
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown voice: {request.voice}. Available: {list(VOICES.keys())}"
-        )
-
-    if request.language not in SUPPORTED_LANGUAGES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported language: {request.language}. Supported: {SUPPORTED_LANGUAGES}"
+            detail=f"Voice '{request.voice}' not loaded. Available: {available}"
         )
 
     try:
@@ -376,38 +524,15 @@ async def voice_design(request: TTSDesignRequest):
     """
     Generate speech with a custom voice designed from a text description.
 
-    Example:
-    ```
-    curl -X POST http://localhost:8002/tts/design \
-      -H "Content-Type: application/json" \
-      -d '{"text": "Hello!", "voice_description": "warm female voice with slight British accent"}' \
-      --output designed.wav
-    ```
+    NOTE: This endpoint requires the VoiceDesign model variant.
+    The Base model (currently loaded) only supports voice cloning.
     """
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
-    try:
-        loop = asyncio.get_event_loop()
-        audio_data, sample_rate = await loop.run_in_executor(
-            executor,
-            generate_design_sync,
-            request.text,
-            request.voice_description,
-            request.language,
-        )
-
-        audio_bytes = audio_to_bytes(audio_data, sample_rate, "wav")
-
-        return Response(
-            content=audio_bytes,
-            media_type="audio/wav",
-            headers={"Content-Disposition": "attachment; filename=designed.wav"}
-        )
-
-    except Exception as e:
-        logger.error(f"Voice design failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Base model doesn't support voice design
+    raise HTTPException(
+        status_code=501,
+        detail="Voice design not available. The Base model only supports voice cloning. "
+               "Use /tts/clone or load a voice with /voices/load instead."
+    )
 
 
 # =============================================================================
@@ -418,7 +543,7 @@ class OpenAITTSRequest(BaseModel):
     """OpenAI-compatible TTS request."""
     model: str = Field(default="qwen3-tts", description="Model name (ignored)")
     input: str = Field(..., description="Text to synthesize")
-    voice: str = Field(default="aiden", description="Voice name")
+    voice: str = Field(..., description="Voice name (must be loaded via /voices/load first)")
     response_format: str = Field(default="wav", description="Audio format")
     speed: float = Field(default=1.0, description="Speed (ignored for now)")
 
@@ -428,11 +553,13 @@ async def openai_compatible_tts(request: OpenAITTSRequest):
     """
     OpenAI-compatible TTS endpoint for drop-in replacement.
 
+    Requires a voice to be loaded first via /voices/load.
+
     Example:
     ```
     curl -X POST http://localhost:8002/v1/audio/speech \
       -H "Content-Type: application/json" \
-      -d '{"input": "Hello!", "voice": "Ethan"}' \
+      -d '{"input": "Hello!", "voice": "jessica"}' \
       --output speech.wav
     ```
     """
