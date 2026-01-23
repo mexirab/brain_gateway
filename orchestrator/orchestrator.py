@@ -29,6 +29,9 @@ from chromadb.config import Settings
 # Import the HA integration module
 from ha_integration import HomeAssistantClient, ExecutionResult
 
+# Import the data manager for structured data updates
+from data_manager import handle_update_data
+
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
@@ -145,6 +148,73 @@ STATIC_TOOLS = [
                     }
                 },
                 "required": ["question"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_data",
+            "description": "Update Nadim's structured personal data (medications, projects). Use this when he asks to add, remove, or modify medications or project information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add_medication", "remove_medication", "update_medication",
+                                 "add_project", "update_project_status", "add_project_step", "complete_step"],
+                        "description": "The action to perform"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Medication name or project name"
+                    },
+                    "dose": {
+                        "type": "string",
+                        "description": "Medication dose (e.g., '50mg')"
+                    },
+                    "schedule": {
+                        "type": "string",
+                        "enum": ["morning", "evening", "weekly", "as_needed"],
+                        "description": "When to take the medication"
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "What the medication is for"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Additional notes"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["not_started", "in_progress", "blocked", "done"],
+                        "description": "Project status"
+                    },
+                    "step": {
+                        "type": "string",
+                        "description": "A project step/task to add or complete"
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Project goal description"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "Project priority"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["active", "someday_maybe", "parking_lot"],
+                        "description": "Project category"
+                    },
+                    "completed": {
+                        "type": "boolean",
+                        "description": "Whether to add step as already completed"
+                    }
+                },
+                "required": ["action", "name"]
             }
         }
     }
@@ -336,6 +406,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("question", ""),
                 arguments.get("context", "")
             )
+        elif tool_name == "update_data":
+            return tool_update_data(arguments)
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -414,6 +486,35 @@ Provide detailed, thorough answers. Be precise and accurate."""
         return f"Expert model unavailable: {str(e)}"
 
 
+def tool_update_data(arguments: Dict[str, Any]) -> str:
+    """Update structured personal data (medications, projects)."""
+    action = arguments.get("action", "")
+    name = arguments.get("name", "")
+
+    if not action:
+        return "No action specified"
+    if not name:
+        return "No name specified"
+
+    logger.info(f"[DATA] Updating: action={action}, name={name}")
+
+    # Pass all arguments to the handler
+    return handle_update_data(
+        action=action,
+        name=name,
+        dose=arguments.get("dose"),
+        schedule=arguments.get("schedule"),
+        purpose=arguments.get("purpose"),
+        notes=arguments.get("notes"),
+        status=arguments.get("status"),
+        step=arguments.get("step"),
+        goal=arguments.get("goal"),
+        priority=arguments.get("priority"),
+        category=arguments.get("category"),
+        completed=arguments.get("completed"),
+    )
+
+
 def clean_response(text: str) -> str:
     """Remove <think> and <tool_call> tags from Nemotron responses."""
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -463,10 +564,12 @@ AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, thermostats, media, scenes)
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
 3. ask_expert - Delegate to the expert model (120B) for: general knowledge, books, movies, history, science, coding, analysis, or ANY question you're unsure about
+4. update_data - Update Nadim's personal data (medications, projects). Use when he asks to add, remove, or change medications or project info.
 
 ROUTING RULES:
 - home_assistant: ONLY when user EXPLICITLY asks to control devices (turn on/off, lights, fan, temperature, etc.)
 - search_memory: ONLY for Nadim's personal info (projects, routines, preferences, medications, schedules)
+- update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - ask_expert: Use for EVERYTHING ELSE - general knowledge, books, movies, coding, analysis, explanations, or anything you're not 100% sure about
 
 CRITICAL:
@@ -482,7 +585,12 @@ EXAMPLES:
 - "Summarize the Stormlight Archive" → ask_expert (general knowledge)
 - "Write a Python function" → ask_expert (coding)
 - "What's the capital of France?" → ask_expert (general knowledge)
-- "Explain quantum computing" → ask_expert (complex topic)"""
+- "Explain quantum computing" → ask_expert (complex topic)
+- "Add Adderall 20mg to my morning meds" → update_data(action="add_medication", name="Adderall", dose="20mg", schedule="morning")
+- "Remove Wellbutrin" → update_data(action="remove_medication", name="Wellbutrin")
+- "Change Vyvanse to 50mg" → update_data(action="update_medication", name="Vyvanse", dose="50mg")
+- "Mark voice interface complete on Brain Gateway" → update_data(action="complete_step", name="Brain Gateway", step="voice interface")
+- "Add a project to build a deck" → update_data(action="add_project", name="Build a deck")"""
 
 
 @app.on_event("startup")
@@ -503,7 +611,7 @@ def health():
         "architecture": "agentic",
         "brain": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "expert": f"{HELIOS_URL} ({HELIOS_MODEL})",
-        "tools": ["home_assistant", "search_memory", "ask_expert"],
+        "tools": ["home_assistant", "search_memory", "ask_expert", "update_data"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),

@@ -9,10 +9,12 @@ RUN pip install --no-cache-dir \
     python-dotenv \
     chromadb \
     rapidfuzz \
-    sentence-transformers
+    sentence-transformers \
+    pyyaml
 
 COPY orchestrator.py .
 COPY ha_integration.py .
+COPY data_manager.py .
 
 EXPOSE 8888
 

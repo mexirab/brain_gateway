@@ -46,6 +46,8 @@ services:
       - /home/nadim/.local/share/chroma:/chroma:rw
       # Mount env file
       - /home/nadim/brain_gateway/.env:/app/.env:ro
+      # Mount RAG data for write access (medications, projects)
+      - /home/nadim/rag/nadim_rag:/rag:rw
     environment:
       - NEMOTRON_URL=http://10.0.0.58:8001/v1
       - HELIOS_URL=http://10.0.0.195:8080/v1
@@ -55,6 +57,7 @@ services:
       - CHROMA_COLLECTION=nadim_rag
       - MIN_COS=0.20
       - TOP_K=25
+      - RAG_BASE=/rag
     networks:
       - gateway-net
     healthcheck:
