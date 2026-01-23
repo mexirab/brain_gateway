@@ -94,21 +94,42 @@ Nemotron has full visibility into your HA entities and outputs structured API ca
 - `cover`: open_cover, close_cover
 - `scene`: turn_on
 
-## Voice Assistant Setup
+## Voice Pipeline
 
-The orchestrator integrates with Home Assistant's voice pipeline for full voice control with personal context.
+The system includes a complete voice pipeline with custom TTS using voice cloning.
 
 ### Architecture
 
 ```
-Voice → Whisper STT → Home Assistant → Brain Gateway Orchestrator
-                                               ↓
-                                    RAG (personal context)
-                                    HA commands (device control)
-                                    Smart routing (Nemotron/Helios)
-                                               ↓
-                                         Piper TTS → Speaker
+                          URANUS (10.0.0.173)
+                    ┌─────────────────────────────────┐
+                    │  GPU 0: Qwen3-TTS (port 8002)   │
+                    │  GPU 1: Whisper STT (port 8003) │
+                    └─────────────────────────────────┘
+                                    │
+       ┌────────────────────────────┼────────────────────────────┐
+       ▼                            ▼                            ▼
+  Open WebUI               Orchestrator                    HA Speakers
+  (voice chat)         /api/briefing/morning         (morning briefings)
+                       /api/audio/{id}.wav
 ```
+
+### Voice Cloning (Jessica McCabe)
+The TTS uses Jessica McCabe's voice from "How to ADHD" - warm, energetic, ADHD-friendly.
+- Voice prompts cached for fast generation
+- Auto-loads from `~/tts-voices/voices.json` on Uranus
+
+### Morning Briefing (Phase 4)
+Personalized morning announcements via Jessica's voice on HA speakers:
+1. HA automation triggers at 7:30 AM weekdays
+2. Orchestrator searches RAG for routine/meds info
+3. Nemotron generates personalized briefing
+4. TTS generates audio, hosted at `/api/audio/{id}.wav`
+5. HA speaker plays audio via `media_player.play_media`
+
+## Voice Assistant Setup (Open WebUI)
+
+Open WebUI integrates with the voice pipeline for voice chat.
 
 ### Setup with Local LLM Conversation Integration
 
@@ -168,6 +189,8 @@ Voice commands work for both personal queries and home control:
 | `/api/memory/add` | POST | Add memory to RAG |
 | `/api/memory/search` | GET | Search RAG memory |
 | `/api/memory/stats` | GET | RAG statistics |
+| `/api/briefing/morning` | POST | Generate morning briefing (optionally with TTS) |
+| `/api/audio/{id}.wav` | GET | Serve generated audio files to HA speakers |
 
 ## Configuration
 
@@ -200,11 +223,21 @@ brain_gateway/
 │   ├── Dockerfile          # Orchestrator container
 │   ├── orchestrator.py     # v5.0 agentic orchestrator
 │   └── ha_integration.py   # HA entity discovery + API relay
-└── rag/
-    ├── ingest_rag.py       # Document ingestion
-    ├── query_rag.py        # CLI query tool
-    ├── watch_and_ingest.py # File watcher daemon
-    └── rag_chat_llamacpp.py # Standalone RAG chat
+├── rag/
+│   ├── ingest_rag.py       # Document ingestion
+│   ├── query_rag.py        # CLI query tool
+│   ├── watch_and_ingest.py # File watcher daemon
+│   └── rag_chat_llamacpp.py # Standalone RAG chat
+├── tts/
+│   ├── server.py           # Qwen3-TTS server with voice cloning
+│   ├── stt_server.py       # Whisper STT server
+│   ├── qwen-tts.service    # Systemd service for TTS
+│   ├── whisper-stt.service # Systemd service for STT
+│   └── README.md           # TTS documentation
+├── scripts/
+│   └── morning_briefing.sh # Morning briefing trigger script
+└── ha_automations/
+    └── morning_briefing.yaml # HA automation template
 ```
 
 ## RAG Document Structure
@@ -285,8 +318,8 @@ This system runs on a home lab cluster:
 |------|-----|-----|------|-----|------|
 | Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large model inference (120B) |
 | Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | **Nemotron-Orchestrator-8B** on RTX 3090 |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Available, Whisper STT |
-| Jupiter | 10.0.0.248 | None | - | 32GB | Compute |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | **Qwen3-TTS (GPU 0)** + **Whisper STT (GPU 1)** |
+| Jupiter | 10.0.0.248 | RX 6900 XT + RX 6800 | 32GB | 32GB | AMD ROCm (image gen, backup LLM) |
 | Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration |
 
 ## Monitoring

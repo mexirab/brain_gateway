@@ -279,6 +279,112 @@ Check that tool results are being added to conversation correctly. The `<tool_re
 
 ---
 
+## Voice Pipeline
+
+Full voice synthesis and speech recognition on Uranus (both GPUs utilized).
+
+### Architecture
+
+```
+                          URANUS (10.0.0.173)
+         ┌──────────────────────────────────────────────┐
+         │  GPU 0 (cuda:0)          GPU 1 (cuda:1)      │
+         │  ┌─────────────────┐     ┌────────────────┐  │
+         │  │   Qwen3-TTS     │     │  Whisper STT   │  │
+         │  │   port 8002     │     │   port 8003    │  │
+         │  │ Jessica voice   │     │ OpenAI compat  │  │
+         │  └─────────────────┘     └────────────────┘  │
+         └──────────────────────────────────────────────┘
+                    │                        │
+       ┌────────────┼────────────┬───────────┼──────────┐
+       ▼            ▼            ▼           ▼          ▼
+  Orchestrator  Open WebUI   HA Speakers  Open WebUI  Any STT
+  (briefings)   (TTS chat)   (play_media) (voice in)  client
+```
+
+### TTS Server (`tts/server.py`)
+
+Qwen3-TTS with voice cloning capability.
+
+**Key endpoints:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/tts` | POST | Generate speech with preset or cloned voice |
+| `/voices` | GET | List available voices (preset + cloned) |
+| `/voices/load` | POST | Load a cloned voice from audio sample |
+| `/v1/audio/speech` | POST | OpenAI-compatible endpoint |
+
+**Voice cloning flow:**
+1. Reference audio + transcript stored in `~/tts-voices/voices.json`
+2. On startup, server auto-loads voices from config
+3. First use generates voice prompt (cached for future requests)
+4. Subsequent requests use cached prompt for fast generation
+
+**Important:** Requires `Qwen3-TTS-1.7B-Base` model (not CustomVoice) for voice cloning.
+
+### STT Server (`tts/stt_server.py`)
+
+Whisper-based speech recognition with OpenAI-compatible API.
+
+**Endpoints:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/audio/transcriptions` | POST | Transcribe audio file |
+| `/health` | GET | Health check |
+
+**Configuration:**
+```bash
+WHISPER_MODEL=base      # Model size (tiny, base, small, medium, large)
+WHISPER_DEVICE=cuda:1   # Use GPU 1 (GPU 0 is TTS)
+WHISPER_PORT=8003
+```
+
+### Morning Briefing Flow
+
+```
+1. HA Automation (7:30 AM weekdays)
+        │
+        ▼
+2. POST /api/briefing/morning
+   {generate_tts: true, play_on: "media_player.kitchen_display"}
+        │
+        ▼
+3. Orchestrator searches RAG for morning routine/meds
+        │
+        ▼
+4. Nemotron generates personalized briefing text
+        │
+        ▼
+5. POST to TTS server with Jessica voice
+        │
+        ▼
+6. Audio saved to /tmp/brain_audio/{uuid}.wav
+   Registered in audio_cache dict
+        │
+        ▼
+7. HA call: media_player.play_media
+   media_content_id: http://10.0.0.186:8888/api/audio/{uuid}.wav
+        │
+        ▼
+8. HA speaker fetches and plays audio
+```
+
+### Systemd Services
+
+Both services run on Uranus as systemd units:
+
+```bash
+# TTS service
+sudo systemctl status qwen-tts
+# Config: /etc/systemd/system/qwen-tts.service
+
+# STT service
+sudo systemctl status whisper-stt
+# Config: /etc/systemd/system/whisper-stt.service
+```
+
+---
+
 ## Monitoring Stack
 
 Full observability with Grafana, Prometheus, and Loki running on Voyager.
@@ -302,7 +408,7 @@ Full observability with Grafana, Prometheus, and Loki running on Voyager.
 │  HELIOS   │  │  URANUS   │  │  SATURN   │  │  JUPITER  │
 │ node:9100 │  │ node:9100 │  │ node:9100 │  │ node:9100 │
 │ gpu:9400  │  │ gpu:9400  │  │ gpu:9400  │  │           │
-│ (Expert)  │  │ (Brain)   │  │ (Batch)   │  │ (Compute) │
+│ (Expert)  │  │(TTS+STT)  │  │ (Brain)   │  │(AMD ROCm) │
 └───────────┘  └───────────┘  └───────────┘  └───────────┘
 ```
 

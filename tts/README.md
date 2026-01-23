@@ -1,16 +1,24 @@
-# Qwen3-TTS Server
+# Voice Pipeline (TTS + STT)
 
-FastAPI server for Qwen3-TTS, providing natural voice synthesis for Brain Gateway.
+FastAPI servers for Qwen3-TTS and Whisper STT, running on Uranus (10.0.0.173).
 
-**Target deployment:** Uranus (10.0.0.173) with RTX 5080 GPUs
+**Deployment:**
+- GPU 0 (cuda:0): Qwen3-TTS on port 8002
+- GPU 1 (cuda:1): Whisper STT on port 8003
 
-## Features
+## TTS Features
 
 - **49 preset voices** with emotion/style control
-- **Voice cloning** from 3-second audio samples
-- **Voice design** from text descriptions
+- **Voice cloning** from audio samples (requires Base model, not CustomVoice)
+- **Auto-load voices** from `~/tts-voices/voices.json` on startup
 - **OpenAI-compatible endpoint** (`/v1/audio/speech`)
-- **Low latency** with FlashAttention 2
+- **Jessica McCabe voice** pre-configured for ADHD-friendly announcements
+
+## STT Features
+
+- **Whisper-based** speech recognition
+- **OpenAI-compatible API** (`/v1/audio/transcriptions`)
+- **Configurable model size** (tiny, base, small, medium, large)
 
 ## Quick Start (Uranus)
 
@@ -20,62 +28,81 @@ FastAPI server for Qwen3-TTS, providing natural voice synthesis for Brain Gatewa
 # SSH to Uranus
 ssh nadim@10.0.0.173
 
-# Create conda environment
-conda create -n qwen3-tts python=3.12 -y
-conda activate qwen3-tts
+# Create virtual environment
+python -m venv ~/qwen-tts-env
+source ~/qwen-tts-env/bin/activate
 
 # Install requirements
-cd /opt/voyager/gateway_mvp/tts
-pip install -r requirements.txt
+pip install torch torchaudio transformers fastapi uvicorn python-multipart pydub soundfile openai-whisper
 
-# Install FlashAttention 2 (recommended)
-pip install -U flash-attn --no-build-isolation
+# FlashAttention is optional - disable if not working
+# pip install -U flash-attn --no-build-isolation
 ```
 
 ### 2. Download Model
 
-```bash
-# Option A: Hugging Face
-huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
-  --local-dir ~/models/Qwen3-TTS-1.7B-CustomVoice
+**IMPORTANT:** Use the Base model for voice cloning (CustomVoice doesn't support cloning):
 
-# Option B: ModelScope (faster in China)
-modelscope download --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
-  --local_dir ~/models/Qwen3-TTS-1.7B-CustomVoice
+```bash
+huggingface-cli download Qwen/Qwen3-TTS-1.7B-Base \
+  --local-dir ~/models/Qwen3-TTS-1.7B-Base
 ```
 
-### 3. Run Server
+### 3. Set Up Voice Cloning
+
+Create voice config directory and add voice samples:
 
 ```bash
-# Direct run
-cd /opt/voyager/gateway_mvp/tts
-QWEN_TTS_MODEL=~/models/Qwen3-TTS-1.7B-CustomVoice python server.py
+mkdir -p ~/tts-voices
 
-# Or with uvicorn
-QWEN_TTS_MODEL=~/models/Qwen3-TTS-1.7B-CustomVoice \
-  uvicorn server:app --host 0.0.0.0 --port 8002
+# Create voices.json with your cloned voices
+cat > ~/tts-voices/voices.json << 'EOF'
+{
+  "jessica": {
+    "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+    "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
+    "description": "Jessica McCabe - warm, energetic ADHD advocate"
+  }
+}
+EOF
 ```
 
-### 4. Install as Service
+### 4. Install Services
 
 ```bash
+# Copy service files
 sudo cp qwen-tts.service /etc/systemd/system/
+sudo cp whisper-stt.service /etc/systemd/system/
+
+# Copy server files to home directory
+cp server.py ~/server.py
+cp stt_server.py ~/stt_server.py
+
+# Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable qwen-tts
-sudo systemctl start qwen-tts
+sudo systemctl enable qwen-tts whisper-stt
+sudo systemctl start qwen-tts whisper-stt
 ```
 
 ## Configuration
 
-Environment variables:
+### TTS Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `QWEN_TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | Model path or HF repo |
+| `QWEN_TTS_MODEL` | (required) | Model path (use Base for cloning) |
 | `QWEN_TTS_DEVICE` | `cuda:0` | GPU device |
 | `QWEN_TTS_PORT` | `8002` | Server port |
 | `QWEN_TTS_DTYPE` | `bfloat16` | Model dtype |
-| `QWEN_TTS_FLASH_ATTN` | `true` | Use FlashAttention 2 |
+| `QWEN_TTS_FLASH_ATTN` | `false` | Use FlashAttention 2 (disabled by default) |
+
+### STT Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WHISPER_MODEL` | `base` | Model size (tiny, base, small, medium, large) |
+| `WHISPER_DEVICE` | `cuda:1` | GPU device (use GPU 1 alongside TTS on GPU 0) |
+| `WHISPER_PORT` | `8003` | Server port |
 
 ## API Endpoints
 
@@ -101,13 +128,25 @@ curl -X POST http://10.0.0.173:8002/tts \
   --output speech.wav
 ```
 
-### Voice Cloning
+### Voice Cloning (One-Time Setup)
 ```bash
-curl -X POST http://10.0.0.173:8002/tts/clone \
-  -F "text=Hello from my cloned voice!" \
-  -F "ref_text=This is the transcript of my reference audio." \
-  -F "ref_audio=@my_voice_sample.wav" \
-  --output cloned.wav
+# Load a cloned voice (saves to voices.json automatically)
+curl -X POST http://10.0.0.173:8002/voices/load \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jessica",
+    "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+    "ref_text": "And trying to get my brain to focus...",
+    "description": "Jessica McCabe voice"
+  }'
+```
+
+### Use Cloned Voice
+```bash
+curl -X POST http://10.0.0.173:8002/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Good morning!", "voice": "jessica"}' \
+  --output speech.wav
 ```
 
 ### Voice Design
@@ -121,12 +160,26 @@ curl -X POST http://10.0.0.173:8002/tts/design \
   --output designed.wav
 ```
 
-### OpenAI-Compatible
+### OpenAI-Compatible TTS
 ```bash
 curl -X POST http://10.0.0.173:8002/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{"input": "Hello world!", "voice": "Olivia"}' \
   --output speech.wav
+```
+
+## STT API Endpoints
+
+### Transcribe Audio
+```bash
+curl -X POST http://10.0.0.173:8003/v1/audio/transcriptions \
+  -F "file=@audio.wav" \
+  -F "model=whisper-1"
+```
+
+### Health Check
+```bash
+curl http://10.0.0.173:8003/health
 ```
 
 ## Available Voices
@@ -152,50 +205,71 @@ curl -X POST http://10.0.0.173:8002/v1/audio/speech \
 
 ## Integration with Brain Gateway
 
-### Option 1: Direct Call from Orchestrator
+### Morning Briefing Endpoint
 
-Add to `orchestrator.py`:
+The orchestrator has a `/api/briefing/morning` endpoint that:
+1. Searches RAG for morning routine/meds info
+2. Generates personalized briefing via Nemotron
+3. Synthesizes audio with Jessica's voice
+4. Plays on HA speaker via `media_player.play_media`
 
-```python
-import httpx
-
-QWEN_TTS_URL = "http://10.0.0.173:8002"
-
-async def synthesize_speech(text: str, voice: str = "Ethan") -> bytes:
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{QWEN_TTS_URL}/tts",
-            json={"text": text, "voice": voice, "emotion": "warm and helpful"}
-        )
-        return response.content
+```bash
+curl -X POST http://localhost:8888/api/briefing/morning \
+  -H "Content-Type: application/json" \
+  -d '{"generate_tts": true, "play_on": "media_player.kitchen_display"}'
 ```
 
-### Option 2: Home Assistant Wyoming Protocol
+### Open WebUI Integration
 
-For integration with HA voice pipeline, you'd need to implement the Wyoming protocol wrapper. This is more complex but allows using Qwen3-TTS as a drop-in Piper replacement.
+Configure Open WebUI to use TTS/STT in `docker-compose.yml`:
+
+```yaml
+environment:
+  # TTS
+  - AUDIO_TTS_ENGINE=openai
+  - AUDIO_TTS_OPENAI_API_BASE_URL=http://10.0.0.173:8002/v1
+  - AUDIO_TTS_OPENAI_API_KEY=local
+  - AUDIO_TTS_VOICE=jessica
+  # STT
+  - AUDIO_STT_ENGINE=openai
+  - AUDIO_STT_OPENAI_API_BASE_URL=http://10.0.0.173:8003/v1
+  - AUDIO_STT_OPENAI_API_KEY=local
+  - AUDIO_STT_MODEL=whisper-1
+```
 
 ## Troubleshooting
 
-### CUDA Out of Memory
-Try the 0.6B model instead:
+### Voice cloning fails with "model does not support generate_voice_clone"
+You're using the CustomVoice model. Switch to Base model:
 ```bash
-QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice python server.py
+QWEN_TTS_MODEL=~/models/Qwen3-TTS-1.7B-Base
 ```
 
-### FlashAttention Not Working
-Disable it:
+### FlashAttention ImportError
+Disable FlashAttention in the service config:
 ```bash
-QWEN_TTS_FLASH_ATTN=false python server.py
+QWEN_TTS_FLASH_ATTN=false
 ```
 
 ### Slow First Request
-First request loads the model. Subsequent requests are fast (~200ms).
+First request for a cloned voice generates the voice prompt (cached afterward).
+Preset voices are faster on first use.
+
+### Service Status
+```bash
+# Check both services
+sudo systemctl status qwen-tts whisper-stt
+
+# View logs
+journalctl -u qwen-tts -f
+journalctl -u whisper-stt -f
+```
 
 ## Hardware Requirements
 
-| Model | VRAM | RAM |
-|-------|------|-----|
-| 0.6B | ~2GB | 8GB |
-| 1.7B | ~4GB | 16GB |
+| Service | Model | VRAM | GPU |
+|---------|-------|------|-----|
+| TTS | Qwen3-TTS-1.7B-Base | ~4GB | cuda:0 |
+| STT | Whisper base | ~1GB | cuda:1 |
 
-Uranus (2x RTX 5080, 32GB VRAM) handles the 1.7B model easily.
+Uranus (2x RTX 5080, 32GB total VRAM) handles both services easily with room to spare.

@@ -10,7 +10,7 @@
 |------|-----|-----|------|-----|--------------|
 | Helios | 10.0.0.195 | RTX 5090 | 32GB | 124GB | Large models (120B), primary inference |
 | Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | 34GB | 62GB | **Nemotron-Orchestrator-8B (brain)** on RTX 3090 |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | Available (Whisper STT) |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | 32GB | 62GB | **TTS (GPU 0)** + **STT (GPU 1)** |
 | Jupiter | 10.0.0.248 | RX 6900 XT + RX 6800 | 32GB | 32GB | AMD ROCm (image gen, backup LLM) |
 | Voyager | 10.0.0.186 | None | - | 32GB | Gateway, orchestration, Docker host |
 
@@ -28,6 +28,8 @@
 | Home Assistant | `http://10.0.0.106:8123` | Smart home control |
 | Nemotron (8B) | `http://10.0.0.58:8001/v1` | **THE BRAIN** on Saturn RTX 3090 |
 | Helios (120B) | `http://10.0.0.195:8080/v1` | Expert model for complex tasks |
+| **Qwen3-TTS** | `http://10.0.0.173:8002` | Voice synthesis with Jessica clone (Uranus GPU 0) |
+| **Whisper STT** | `http://10.0.0.173:8003/v1` | Speech-to-text (Uranus GPU 1) |
 | **Grafana** | `http://localhost:3000` | Monitoring dashboards (admin/braingw) |
 | Prometheus | `http://localhost:9090` | Metrics collection |
 | Loki | `http://localhost:3100` | Log aggregation |
@@ -70,12 +72,64 @@ User → Open WebUI → Brain Gateway Orchestrator (v5)
 
 ---
 
+## Voice Pipeline (Phase 3 + 4)
+
+### Architecture
+```
+                          URANUS (10.0.0.173)
+                    ┌─────────────────────────────────┐
+                    │  GPU 0: Qwen3-TTS (port 8002)   │
+User Voice ─────────│  GPU 1: Whisper STT (port 8003) │─────────► HA Speaker
+                    └─────────────────────────────────┘
+                                    │
+                                    ▼
+                         Orchestrator (Voyager)
+                          /api/briefing/morning
+                          /api/audio/{id}.wav
+```
+
+### Voice Cloning (Jessica McCabe)
+The TTS server uses Jessica McCabe's voice (from "How to ADHD") for a warm, ADHD-friendly experience.
+
+**Voice prompt stored in:** `~/tts-voices/voices.json` on Uranus
+```json
+{
+  "jessica": {
+    "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+    "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
+    "description": "Jessica McCabe - warm, energetic ADHD advocate"
+  }
+}
+```
+
+**Important:** Uses `Qwen3-TTS-1.7B-Base` model (not CustomVoice) - only Base supports voice cloning.
+
+### Morning Briefing (Phase 4)
+Personalized morning announcement via Jessica's voice on HA speakers.
+
+**Flow:**
+1. HA automation triggers at 7:30 AM (weekdays)
+2. Calls `POST /api/briefing/morning` with `generate_tts: true, play_on: media_player.kitchen_display`
+3. Orchestrator searches RAG for morning routine/meds info
+4. Nemotron generates personalized briefing
+5. TTS generates audio with Jessica's voice
+6. Audio saved to `/tmp/brain_audio/{uuid}.wav`
+7. HA speaker plays audio via `media_player.play_media` service
+
+**Endpoints:**
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/briefing/morning` | Generate and optionally play morning briefing |
+| `GET /api/audio/{id}.wav` | Serve generated audio files to HA speakers |
+
+---
+
 ## Current State (What's Working)
 
 ✅ **Phase 1:** RAG with markdown/text files
 ✅ **Phase 2:** Home Assistant integration (lights, scenes, media, colors, brightness)
-✅ **Phase 3:** Voice interface (Whisper STT + Piper TTS via HA voice pipeline)
-⬜ **Phase 4:** Proactive reminders (meds, calendar, briefings)
+✅ **Phase 3:** Voice interface (Qwen3-TTS with Jessica voice clone + Whisper STT on Uranus)
+✅ **Phase 4:** Morning briefing with personalized content (Jessica's voice on HA speakers)
 ⬜ **Phase 5:** Mobile access
 ⬜ **Phase 6:** Fine-tuning
 
@@ -151,6 +205,12 @@ Connect to YNAB budget API for natural language budget queries.
 | `monitoring/docker-compose.yml` | Grafana/Prometheus/Loki stack |
 | `monitoring/README.md` | Monitoring setup instructions |
 | `monitoring/lab_hw_audit.sh` | Hardware audit script for cluster |
+| `tts/server.py` | Qwen3-TTS server with voice cloning (runs on Uranus) |
+| `tts/stt_server.py` | Whisper STT server (runs on Uranus GPU 1) |
+| `tts/qwen-tts.service` | Systemd service for TTS |
+| `tts/whisper-stt.service` | Systemd service for STT |
+| `scripts/morning_briefing.sh` | Shell script to trigger morning briefing |
+| `ha_automations/morning_briefing.yaml` | HA automation template for morning briefing |
 
 **Important implementation details:**
 - vLLM on Uranus doesn't have `--enable-auto-tool-choice`, so we use `tool_choice: "none"` and parse `<tool_call>` tags from Nemotron's content manually
@@ -242,6 +302,46 @@ docker-compose -p monitoring down     # Stop
 ### Hardware audit across cluster
 ```bash
 /opt/voyager/gateway_mvp/monitoring/lab_hw_audit.sh
+```
+
+### Test morning briefing
+```bash
+curl -X POST http://localhost:8888/api/briefing/morning \
+  -H "Content-Type: application/json" \
+  -d '{"generate_tts": true, "play_on": "media_player.kitchen_display"}'
+```
+
+### Test TTS with Jessica voice
+```bash
+curl -X POST http://10.0.0.173:8002/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Good morning Nadim!", "voice": "jessica"}' \
+  --output test.wav
+```
+
+### Manage TTS/STT services on Uranus
+```bash
+# Check status
+ssh nadim@10.0.0.173 "sudo systemctl status qwen-tts whisper-stt"
+
+# Restart services
+ssh nadim@10.0.0.173 "sudo systemctl restart qwen-tts whisper-stt"
+
+# View logs
+ssh nadim@10.0.0.173 "journalctl -u qwen-tts -f"
+ssh nadim@10.0.0.173 "journalctl -u whisper-stt -f"
+```
+
+### Load a new voice clone
+```bash
+curl -X POST http://10.0.0.173:8002/voices/load \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jessica",
+    "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+    "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
+    "description": "Jessica McCabe - warm, energetic ADHD advocate"
+  }'
 ```
 
 ---
