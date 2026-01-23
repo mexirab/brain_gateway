@@ -32,12 +32,14 @@ Personal AI assistant with Nemotron-Orchestrator-8B as the brain, agentic tool-c
 | `home_assistant` | Control smart home - Nemotron outputs structured API calls (`entity_id`, `service`, `data`) |
 | `search_memory` | Query personal RAG knowledge base |
 | `ask_expert` | Delegate complex reasoning/coding to Helios 120B |
+| `update_data` | Add, update, or remove medications and projects via natural language |
 
 Nemotron receives the full HA entity list and handles all NLP parsing internally - no regex matching needed.
 
 **Files:**
 - `orchestrator.py` - Main FastAPI app (v5.0 agentic)
 - `ha_integration.py` - HA entity discovery + thin API relay
+- `data_manager.py` - YAML-based data management for medications/projects
 - `Dockerfile` - Container build config
 
 ### RAG Tools (`/rag`)
@@ -93,6 +95,39 @@ Nemotron has full visibility into your HA entities and outputs structured API ca
 - `climate`: set_temperature
 - `cover`: open_cover, close_cover
 - `scene`: turn_on
+
+## AI-Editable Structured Data
+
+The `update_data` tool allows natural language updates to medications and projects:
+
+**Example commands:**
+- "Add Adderall 20mg to my morning meds"
+- "Remove Wellbutrin from my medications"
+- "Change Vyvanse to 50mg"
+- "Mark voice interface complete on Brain Gateway"
+- "Add a project to build a deck"
+
+**Architecture:**
+- **YAML files** = source of truth (easy to parse/update programmatically)
+- **Markdown files** = auto-generated for RAG indexing
+- When YAML is updated → markdown regenerates → `watch_and_ingest.py` auto-reindexes
+
+**Data files:**
+| File | Purpose |
+|------|---------|
+| `~/rag/nadim_rag/10_profile/medications.yaml` | Medications (daily, weekly, as-needed) |
+| `~/rag/nadim_rag/30_projects/projects.yaml` | Projects (active, on-hold, completed) |
+
+**Medication actions:**
+- `add_medication` - Add to morning/evening/weekly/as_needed
+- `remove_medication` - Remove by name
+- `update_medication` - Change dose, purpose, or notes
+
+**Project actions:**
+- `add_project` - Create new project (active, someday_maybe, parking_lot)
+- `update_project_status` - Set to not_started/in_progress/blocked/done
+- `add_project_step` - Add a next step or completed item
+- `complete_step` - Move step from next_steps to completed
 
 ## Voice Pipeline
 

@@ -47,7 +47,7 @@ MAX_TOOL_ROUNDS = 5  # Prevent infinite loops
 
 **`get_ha_tool_definition()`** - Builds the home_assistant tool dynamically with current entity list injected into the description. This gives Nemotron visibility into available devices.
 
-**`STATIC_TOOLS`** - Contains `search_memory` and `ask_expert` tool definitions.
+**`STATIC_TOOLS`** - Contains `search_memory`, `ask_expert`, and `update_data` tool definitions.
 
 **`get_orchestrator_tools()`** - Returns `[get_ha_tool_definition()] + STATIC_TOOLS`
 
@@ -68,6 +68,7 @@ MAX_TOOL_ROUNDS = 5  # Prevent infinite loops
 | `tool_home_assistant(entity_id, service, data)` | Calls `ha_client.call_service()` with structured params |
 | `tool_search_memory(query)` | Calls `rag_context()` to search ChromaDB |
 | `tool_ask_expert(question, context)` | Forwards to Helios 120B for complex reasoning |
+| `tool_update_data(arguments)` | Routes to `data_manager.handle_update_data()` for YAML updates |
 
 #### RAG Functions
 
@@ -174,6 +175,74 @@ The file still contains regex-based command parsing (`COMMAND_PATTERNS`, `parse_
 
 ---
 
+### `orchestrator/data_manager.py`
+
+YAML-based data management for structured personal data. ~350 lines.
+
+#### Overview
+
+Provides read/write operations for medications and projects stored as YAML files. When data is modified, markdown files are auto-regenerated for RAG indexing.
+
+```
+YAML (source of truth)  ──────▶  Markdown (for RAG)
+~/rag/.../medications.yaml  ──▶  ~/rag/.../medications.md
+~/rag/.../projects.yaml     ──▶  ~/rag/.../current.md
+                                        │
+                                        ▼
+                              watch_and_ingest.py
+                              (auto-reindexes ChromaDB)
+```
+
+#### Configuration
+
+```python
+RAG_BASE = os.environ.get("RAG_BASE", "/home/nadim/rag/nadim_rag")
+MEDICATIONS_YAML = os.path.join(RAG_BASE, "10_profile", "medications.yaml")
+PROJECTS_YAML = os.path.join(RAG_BASE, "30_projects", "projects.yaml")
+```
+
+#### Medication Functions
+
+| Function | Purpose |
+|----------|---------|
+| `get_medications()` | Load YAML to dict |
+| `save_medications(data)` | Save dict to YAML + regenerate markdown |
+| `add_medication(name, dose, schedule, purpose, notes)` | Add to morning/evening/weekly/as_needed |
+| `remove_medication(name)` | Remove from any schedule |
+| `update_medication(name, dose, purpose, notes)` | Update existing medication |
+| `_generate_medications_md(data)` | Regenerate markdown from YAML |
+
+#### Project Functions
+
+| Function | Purpose |
+|----------|---------|
+| `get_projects()` | Load YAML to dict |
+| `save_projects(data)` | Save dict to YAML + regenerate markdown |
+| `add_project(name, goal, priority, category)` | Add to active/someday_maybe/parking_lot |
+| `update_project_status(name, status)` | Set not_started/in_progress/blocked/done |
+| `add_project_step(project_name, step, completed)` | Add step to next_steps or completed |
+| `complete_step(project_name, step)` | Move step from next_steps to completed |
+| `_generate_projects_md(data)` | Regenerate markdown from YAML |
+
+#### Unified Handler
+
+```python
+def handle_update_data(action: str, name: str, **kwargs) -> str:
+    """Routes action to appropriate function."""
+    action_handlers = {
+        "add_medication": lambda: add_medication(...),
+        "remove_medication": lambda: remove_medication(name),
+        "update_medication": lambda: update_medication(...),
+        "add_project": lambda: add_project(...),
+        "update_project_status": lambda: update_project_status(...),
+        "add_project_step": lambda: add_project_step(...),
+        "complete_step": lambda: complete_step(...),
+    }
+    return action_handlers[action]()
+```
+
+---
+
 ## Data Flow Examples
 
 ### Example 1: "Turn on bedroom lights and set to blue at 50%"
@@ -220,6 +289,39 @@ The file still contains regex-based command parsing (`COMMAND_PATTERNS`, `parse_
 5. Final response with project summary
 ```
 
+### Example 3: "Add Adderall 20mg to my morning meds"
+
+```
+1. Nemotron responds with:
+   <tool_call>
+   {"name": "update_data", "arguments": {
+     "action": "add_medication",
+     "name": "Adderall",
+     "dose": "20mg",
+     "schedule": "morning"
+   }}
+   </tool_call>
+
+2. Orchestrator calls:
+   data_manager.handle_update_data(
+       action="add_medication", name="Adderall",
+       dose="20mg", schedule="morning"
+   )
+
+3. data_manager:
+   - Loads ~/rag/.../medications.yaml
+   - Appends Adderall to daily.morning
+   - Saves YAML
+   - Regenerates medications.md
+
+4. Result: "Added Adderall (20mg) to morning medications."
+
+5. watch_and_ingest.py detects change, re-indexes ChromaDB
+
+6. Nemotron final response:
+   "Done! I've added Adderall 20mg to your morning medications."
+```
+
 ---
 
 ## ChromaDB / RAG
@@ -252,6 +354,7 @@ results = collection.query(query_embeddings=[query_embedding], n_results=TOP_K)
 **Volumes:**
 - ChromaDB: `/home/nadim/.local/share/chroma:/chroma:rw`
 - Env file: `/home/nadim/brain_gateway/.env:/app/.env:ro`
+- RAG data: `/home/nadim/rag/nadim_rag:/rag:rw` (for `update_data` tool)
 
 ---
 
