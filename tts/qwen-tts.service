@@ -6,17 +6,17 @@ After=network.target
 Type=simple
 User=nadim
 Group=nadim
-WorkingDirectory=/opt/voyager/gateway_mvp/tts
+WorkingDirectory=/home/nadim
 
-# Conda environment activation
-Environment="PATH=/home/nadim/miniconda3/envs/qwen3-tts/bin:/usr/local/bin:/usr/bin:/bin"
+# Virtual environment
+Environment="PATH=/home/nadim/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="QWEN_TTS_MODEL=/home/nadim/models/Qwen3-TTS-1.7B-Base"
 Environment="QWEN_TTS_DEVICE=cuda:0"
 Environment="QWEN_TTS_PORT=8002"
 Environment="QWEN_TTS_DTYPE=bfloat16"
-Environment="QWEN_TTS_FLASH_ATTN=true"
+Environment="QWEN_TTS_FLASH_ATTN=false"
 
-ExecStart=/home/nadim/miniconda3/envs/qwen3-tts/bin/python server.py
+ExecStart=/home/nadim/qwen-tts-env/bin/python /home/nadim/server.py
 
 Restart=on-failure
 RestartSec=10
