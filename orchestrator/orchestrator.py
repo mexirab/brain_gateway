@@ -841,6 +841,20 @@ def memory_stats():
 TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
 TTS_VOICE = os.environ.get("TTS_VOICE", "jessica")
 
+# Store generated audio files for serving to speakers
+import uuid
+from fastapi.responses import FileResponse
+audio_cache = {}  # id -> filepath
+
+@app.get("/api/audio/{audio_id}.wav")
+async def serve_audio(audio_id: str):
+    """Serve generated audio files for playback on speakers."""
+    if audio_id in audio_cache:
+        filepath = audio_cache[audio_id]
+        if os.path.exists(filepath):
+            return FileResponse(filepath, media_type="audio/wav")
+    return JSONResponse({"error": "Audio not found"}, status_code=404)
+
 @app.post("/api/briefing/morning")
 async def morning_briefing(req: Request):
     """
@@ -942,29 +956,41 @@ Keep it natural and conversational - this will be spoken aloud."""
                     json={"text": briefing_text, "voice": TTS_VOICE}
                 )
                 if tts_response.status_code == 200:
-                    # Save audio to temp file
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    # Save audio with UUID for serving
+                    audio_id = str(uuid.uuid4())[:8]
+                    audio_dir = "/tmp/brain_audio"
+                    os.makedirs(audio_dir, exist_ok=True)
+                    audio_path = f"{audio_dir}/{audio_id}.wav"
+                    with open(audio_path, "wb") as f:
                         f.write(tts_response.content)
-                        audio_path = f.name
+                    audio_cache[audio_id] = audio_path
                     result["audio_file"] = audio_path
+                    result["audio_id"] = audio_id
+                    result["audio_url"] = f"http://10.0.0.186:8888/api/audio/{audio_id}.wav"
                     result["tts_generated"] = True
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")
             result["tts_error"] = str(e)
 
-    # Optionally play on HA media player
-    if play_on and result.get("tts_generated"):
+    # Optionally play on HA media player using Jessica's voice
+    if play_on and result.get("audio_url"):
         try:
-            # For now, use HA's built-in TTS to announce
-            # (Playing custom audio files requires media hosting)
-            ha_client = HomeAssistantClient(HA_URL, HA_TOKEN)
-            await ha_client.call_service(
-                "tts", "speak",
-                entity_id=play_on,
-                service_data={"message": briefing_text, "media_player_entity_id": play_on}
-            )
-            result["announced_on"] = play_on
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Use media_player.play_media to play our custom audio
+                ha_response = await client.post(
+                    f"{HA_URL}/api/services/media_player/play_media",
+                    headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                    json={
+                        "entity_id": play_on,
+                        "media_content_id": result["audio_url"],
+                        "media_content_type": "audio/wav"
+                    }
+                )
+                if ha_response.status_code == 200:
+                    result["announced_on"] = play_on
+                    result["voice"] = "jessica"
+                else:
+                    result["announce_error"] = f"HA returned {ha_response.status_code}"
         except Exception as e:
             logger.error(f"HA announcement failed: {e}")
             result["announce_error"] = str(e)
