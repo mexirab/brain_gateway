@@ -1,0 +1,30 @@
+[Unit]
+Description=Qwen3-TTS Server for Brain Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=nadim
+Group=nadim
+WorkingDirectory=/opt/voyager/gateway_mvp/tts
+
+# Conda environment activation
+Environment="PATH=/home/nadim/miniconda3/envs/qwen3-tts/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="QWEN_TTS_MODEL=/home/nadim/models/Qwen3-TTS-1.7B-CustomVoice"
+Environment="QWEN_TTS_DEVICE=cuda:0"
+Environment="QWEN_TTS_PORT=8002"
+Environment="QWEN_TTS_DTYPE=bfloat16"
+Environment="QWEN_TTS_FLASH_ATTN=true"
+
+ExecStart=/home/nadim/miniconda3/envs/qwen3-tts/bin/python server.py
+
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qwen-tts
+
+[Install]
+WantedBy=multi-user.target
