@@ -1,11 +1,17 @@
 # Prometheus Configuration for Brain Gateway Cluster
 #
-# Node IPs:
-#   Voyager:  10.0.0.186 (gateway, no GPU)
-#   Helios:   10.0.0.195 (RTX 5090 - Expert 120B model)
-#   Uranus:   10.0.0.173 (2x RTX 5080 - available)
-#   Saturn:   10.0.0.58  (RTX 3080 + RTX 3090 - Nemotron brain on 3090)
-#   Jupiter:  10.0.0.248 (no GPU)
+# Optimized Architecture (Voice-First ADHD Support):
+#
+# ALWAYS-ON:
+#   Voyager:  10.0.0.186 (Orchestrator, no GPU)
+#   Saturn:   10.0.0.58  (Nemotron-8B brain on RTX 3090)
+#   Uranus:   10.0.0.173 (TTS on GPU 0, STT on GPU 1 - 2x RTX 5080)
+#
+# OFF BY DEFAULT (saves ~150W):
+#   Helios:   10.0.0.195 (Expert 120B on RTX 5090 + RAM)
+#
+# FUTURE USE:
+#   Jupiter:  10.0.0.248 (AMD GPUs - potential image gen)
 
 global:
   scrape_interval: 15s
@@ -93,6 +99,47 @@ scrape_configs:
         labels:
           service: 'nemotron'
           node: 'saturn'
+
+  # ============================================
+  # HTTP HEALTH PROBES (Blackbox Exporter)
+  # ============================================
+  # Requires blackbox exporter running in monitoring stack
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      # Brain Gateway Orchestrator
+      - targets: ['http://10.0.0.186:8888/health']
+        labels:
+          service: 'orchestrator'
+          node: 'voyager'
+
+      # TTS (Qwen3-TTS on Uranus GPU 0)
+      - targets: ['http://10.0.0.173:8002/health']
+        labels:
+          service: 'tts'
+          node: 'uranus'
+
+      # STT (Whisper on Uranus GPU 1)
+      - targets: ['http://10.0.0.173:8003/health']
+        labels:
+          service: 'stt'
+          node: 'uranus'
+
+      # Helios Expert Model (OFF by default)
+      - targets: ['http://10.0.0.195:8080/health']
+        labels:
+          service: 'helios'
+          node: 'helios'
+
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115  # Blackbox exporter address
 
   # NOTE: Orchestrator, LiteLLM, and Helios LLM don't expose /metrics
   # Monitor them via logs in Loki instead

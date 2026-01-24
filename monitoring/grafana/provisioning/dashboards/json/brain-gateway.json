@@ -98,14 +98,185 @@
     },
     {
       "type": "row",
-      "title": "GPU Metrics",
+      "title": "Voice Pipeline (Always-On)",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Nemotron (Brain)",
+      "description": "Saturn - 8B model for daily ADHD support",
+      "gridPos": { "h": 3, "w": 4, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [
+        {
+          "expr": "up{job=\"llm-services\", service=\"nemotron\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OFFLINE", "color": "red" }, "1": { "text": "ONLINE", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "TTS (Jessica)",
+      "description": "Uranus GPU 0 - Qwen3-TTS voice synthesis",
+      "gridPos": { "h": 3, "w": 4, "x": 4, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [
+        {
+          "expr": "probe_success{job=\"blackbox\", instance=\"http://10.0.0.173:8002/health\"} or vector(1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OFFLINE", "color": "red" }, "1": { "text": "ONLINE", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "STT (Whisper)",
+      "description": "Uranus GPU 1 - Speech recognition",
+      "gridPos": { "h": 3, "w": 4, "x": 8, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [
+        {
+          "expr": "probe_success{job=\"blackbox\", instance=\"http://10.0.0.173:8003/health\"} or vector(1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OFFLINE", "color": "red" }, "1": { "text": "ONLINE", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Helios (Expert)",
+      "description": "120B model - OFF by default to save 150W",
+      "gridPos": { "h": 3, "w": 4, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [
+        {
+          "expr": "probe_success{job=\"blackbox\", instance=\"http://10.0.0.195:8080/health\"} or vector(0)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OFF (saves 150W)", "color": "blue" }, "1": { "text": "RUNNING", "color": "orange" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Estimated Power (Active GPUs)",
+      "description": "Power consumption of active inference nodes",
+      "gridPos": { "h": 3, "w": 8, "x": 16, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [
+        {
+          "expr": "sum(nvidia_smi_power_draw_watts{node=~\"saturn|uranus\"})",
+          "legendFormat": "Active Power",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 200 },
+              { "color": "orange", "value": 300 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "title": "GPU Metrics",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
       "collapsed": false
     },
     {
       "type": "gauge",
       "title": "GPU VRAM Usage",
-      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 6 },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {
@@ -133,7 +304,7 @@
     {
       "type": "timeseries",
       "title": "GPU Utilization",
-      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 6 },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {
@@ -153,7 +324,7 @@
     {
       "type": "timeseries",
       "title": "GPU Temperature",
-      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 6 },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {
@@ -179,13 +350,13 @@
     {
       "type": "row",
       "title": "Orchestrator Logs",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 11 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
       "collapsed": false
     },
     {
       "type": "logs",
       "title": "Brain Orchestrator - All Logs",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
       "targets": [
         {
@@ -207,7 +378,7 @@
     {
       "type": "logs",
       "title": "Tool Calls (HA / Memory / Expert)",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
       "targets": [
         {
@@ -229,13 +400,13 @@
     {
       "type": "row",
       "title": "Memory & Disk",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
       "collapsed": false
     },
     {
       "type": "timeseries",
       "title": "Memory Usage by Node",
-      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 21 },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {
@@ -255,7 +426,7 @@
     {
       "type": "timeseries",
       "title": "Disk Usage by Node",
-      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 21 },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 25 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {

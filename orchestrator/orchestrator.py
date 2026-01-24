@@ -445,12 +445,71 @@ def tool_search_memory(query: str) -> str:
         return "No relevant information found in memory."
 
 
+async def check_helios_health() -> bool:
+    """Check if Helios is running and responsive."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{HELIOS_URL.replace('/v1', '')}/health")
+            return r.status_code == 200
+    except:
+        return False
+
+
+async def start_helios() -> bool:
+    """Start Helios via SSH (paramiko) and wait for it to be ready."""
+    import asyncio
+    import paramiko
+
+    logger.info("[EXPERT] Helios is offline, attempting to start...")
+
+    # Start the service via SSH using paramiko
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(
+            hostname="10.0.0.195",
+            username="labadmin",
+            key_filename="/root/.ssh/id_ed25519",  # Mounted from host
+            timeout=30
+        )
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl start llama-server", timeout=30)
+        exit_code = stdout.channel.recv_exit_status()
+        ssh.close()
+
+        if exit_code != 0:
+            error_msg = stderr.read().decode()
+            logger.error(f"[EXPERT] Failed to start Helios: {error_msg}")
+            return False
+        logger.info("[EXPERT] SSH command succeeded, waiting for model to load...")
+    except Exception as e:
+        logger.error(f"[EXPERT] SSH to Helios failed: {e}")
+        return False
+
+    # Wait for Helios to become ready (up to 3 minutes)
+    logger.info("[EXPERT] Waiting for Helios to load model...")
+    for i in range(36):  # 36 * 5 seconds = 3 minutes
+        await asyncio.sleep(5)
+        if await check_helios_health():
+            logger.info(f"[EXPERT] Helios ready after ~{(i+1)*5} seconds")
+            return True
+        logger.debug(f"[EXPERT] Still waiting... ({(i+1)*5}s)")
+
+    logger.error("[EXPERT] Helios failed to start within 3 minutes")
+    return False
+
+
 async def tool_ask_expert(question: str, context: str = "") -> str:
-    """Delegate a complex question to Helios 120B."""
+    """Delegate a complex question to Helios 120B. Auto-starts if offline."""
     if not question:
         return "No question provided"
 
     logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
+
+    # Check if Helios is available, start if needed
+    if not await check_helios_health():
+        started = await start_helios()
+        if not started:
+            return "Expert model is offline and could not be started. Please try again later or start Helios manually."
 
     # Build the message for Helios
     messages = []
@@ -474,11 +533,19 @@ Provide detailed, thorough answers. Be precise and accurate."""
             timeout=300  # Helios can be slow
         )
 
-        # Extract the response text
-        content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Extract the response text - check both content and reasoning_content for reasoning models
+        msg = response.get("choices", [{}])[0].get("message", {})
+        content = msg.get("content", "")
+        reasoning = msg.get("reasoning_content", "")
+
+        # For reasoning models, content may be empty while reasoning_content has the thought process
+        # Return content if available, otherwise return reasoning
         if content:
             logger.info(f"[EXPERT] Helios responded ({len(content)} chars)")
             return content
+        elif reasoning:
+            logger.info(f"[EXPERT] Helios responded with reasoning ({len(reasoning)} chars)")
+            return reasoning
         else:
             return "Expert model returned empty response"
     except Exception as e:
@@ -603,14 +670,18 @@ async def startup_event():
 
 
 @app.get("/health")
-def health():
+async def health():
     """Health check endpoint."""
+    # Check Helios status
+    helios_online = await check_helios_health()
+
     return {
         "ok": True,
-        "version": "5.0",
+        "version": "5.1",
         "architecture": "agentic",
         "brain": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "expert": f"{HELIOS_URL} ({HELIOS_MODEL})",
+        "expert_status": "online" if helios_online else "offline (auto-starts on demand)",
         "tools": ["home_assistant", "search_memory", "ask_expert", "update_data"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
@@ -1044,6 +1115,12 @@ Keep it natural and conversational - this will be spoken aloud."""
         briefing_text = re.sub(r'\*([^*]+)\*', r'\1', briefing_text)  # Remove italic
         briefing_text = re.sub(r'[🌞🚀💪✅❌📋🎯]+', '', briefing_text)  # Remove common emojis
         briefing_text = briefing_text.strip()
+
+        # Add pauses between sentences for more natural TTS pacing
+        # Replace period-space with period-ellipsis-space for longer pauses
+        briefing_text = re.sub(r'\.\s+', '... ', briefing_text)
+        briefing_text = re.sub(r'!\s+', '!... ', briefing_text)
+        briefing_text = re.sub(r'\?\s+', '?... ', briefing_text)
     except Exception as e:
         logger.error(f"Failed to generate briefing: {e}")
         briefing_text = f"Good morning Nadim! It's {day_name}. Remember to take your morning meds with breakfast - Vyvanse and Wellbutrin. Have a great day!"

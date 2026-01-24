@@ -1,0 +1,190 @@
+# Voice Conversation Automation for Brain Gateway
+# ===============================================
+# This automation handles voice commands when the built-in conversation
+# agent integration doesn't work with your custom API.
+#
+# Add this to your automations.yaml
+
+# -----------------------------------------------------------------------------
+# Main Conversation Handler
+# -----------------------------------------------------------------------------
+- alias: "Brain Gateway Voice Conversation"
+  id: brain_gateway_voice_conversation
+  description: "Route voice commands to Brain Gateway and play TTS response"
+  mode: queued
+  max: 5
+
+  trigger:
+    - platform: conversation
+      command:
+        - "{query}"  # Catch-all for any voice command
+
+  action:
+    # Call Brain Gateway
+    - service: rest_command.brain_gateway_chat
+      data:
+        text: "{{ trigger.sentence }}"
+      response_variable: brain_response
+
+    # Extract the response text
+    - variables:
+        response_text: >
+          {{ brain_response.content.choices[0].message.content
+             | default('Sorry, I could not process that. Please try again.') }}
+
+    # Play TTS response on the originating device (or default speaker)
+    - service: tts.speak
+      target:
+        entity_id: "{{ trigger.device_id | default('media_player.voice_pe') }}"
+      data:
+        message: "{{ response_text }}"
+
+# -----------------------------------------------------------------------------
+# ADHD Support Quick Commands
+# -----------------------------------------------------------------------------
+- alias: "ADHD Medication Reminder Request"
+  id: adhd_medication_reminder
+  description: "Handle medication reminder requests"
+  mode: single
+
+  trigger:
+    - platform: conversation
+      command:
+        - "remind me to take my [medication|meds|medicine|adderall|vyvanse|ritalin]"
+        - "medication reminder"
+        - "set a medication reminder"
+
+  action:
+    - service: rest_command.brain_gateway_chat
+      data:
+        text: "I need help setting up a medication reminder. Can you encourage me and help me remember?"
+      response_variable: brain_response
+
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "{{ brain_response.content.choices[0].message.content }}"
+
+- alias: "ADHD Spiral Help"
+  id: adhd_spiral_help
+  description: "Help get out of ADHD spirals"
+  mode: single
+
+  trigger:
+    - platform: conversation
+      command:
+        - "[i'm|im|i am] stuck [in a spiral|spiraling|in a loop]"
+        - "help me [get out|escape] [of|from] [this|a] spiral"
+        - "[i'm|im] spiraling"
+        - "spiral help"
+
+  action:
+    - service: rest_command.brain_gateway_chat
+      data:
+        text: "I'm stuck in an ADHD spiral and need help getting out. Can you give me one simple, concrete step to take right now?"
+      response_variable: brain_response
+
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "{{ brain_response.content.choices[0].message.content }}"
+
+- alias: "ADHD Task Motivation"
+  id: adhd_task_motivation
+  description: "Get motivation for tasks"
+  mode: single
+
+  trigger:
+    - platform: conversation
+      command:
+        - "[i need|give me] motivation [to|for] {task}"
+        - "help me [start|do|begin] {task}"
+        - "[i can't|i cant|i don't want to] [start|do] {task}"
+
+  action:
+    - service: rest_command.brain_gateway_chat
+      data:
+        text: "I need motivation to {{ trigger.slots.task }}. Can you help me get started with encouragement and maybe break it into smaller steps?"
+      response_variable: brain_response
+
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "{{ brain_response.content.choices[0].message.content }}"
+
+- alias: "ADHD Body Doubling Request"
+  id: adhd_body_doubling
+  description: "Virtual body doubling support"
+  mode: single
+
+  trigger:
+    - platform: conversation
+      command:
+        - "[i need|can you be] [a|my] body double"
+        - "body double [with me|for me]"
+        - "work with me"
+
+  action:
+    - service: rest_command.brain_gateway_chat
+      data:
+        text: "I need some virtual body doubling support. Can you check in with me while I work on something? Just be a supportive presence."
+      response_variable: brain_response
+
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "{{ brain_response.content.choices[0].message.content }}"
+
+# -----------------------------------------------------------------------------
+# Helios Expert Mode Toggle
+# -----------------------------------------------------------------------------
+- alias: "Activate Helios Expert Mode"
+  id: activate_helios_expert
+  description: "Start the 120B expert model for deep conversations"
+  mode: single
+
+  trigger:
+    - platform: conversation
+      command:
+        - "[activate|start|enable] [helios|expert mode|deep thinking]"
+        - "[i need|let's have] [a deep|an expert] conversation"
+
+  action:
+    - service: shell_command.start_helios
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "Starting Helios expert mode. This will take a minute or two to warm up. I'll let you know when it's ready for deep conversations."
+
+    - delay:
+        minutes: 2
+
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "Helios is now ready. The 120 billion parameter model is at your service for deep, thoughtful conversations."
+
+- alias: "Deactivate Helios Expert Mode"
+  id: deactivate_helios_expert
+  description: "Stop the 120B expert model to save power"
+  mode: single
+
+  trigger:
+    - platform: conversation
+      command:
+        - "[deactivate|stop|disable] [helios|expert mode|deep thinking]"
+        - "save power"
+
+  action:
+    - service: shell_command.stop_helios
+    - service: tts.speak
+      target:
+        entity_id: media_player.voice_pe
+      data:
+        message: "Helios is shutting down. This saves about 150 watts of power. I'll still be here with the regular brain for your daily support."

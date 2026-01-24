@@ -1,0 +1,100 @@
+# Voice PE Integration for Brain Gateway
+# Add these configurations to your Home Assistant
+#
+# Voice Pipeline: Voice PE -> Wyoming STT -> Brain Gateway -> Wyoming TTS -> Voice PE
+#
+# Services:
+#   - STT (Whisper): Uranus 10.0.0.173:8003
+#   - TTS (Jessica/Qwen3): Uranus 10.0.0.173:8002
+#   - Brain Gateway: Voyager 10.0.0.186:8888
+
+# =============================================================================
+# STEP 1: Add to configuration.yaml
+# =============================================================================
+
+# Wyoming Protocol Integration (STT & TTS)
+# -----------------------------------------
+# Add this section to enable Wyoming protocol for Voice PE
+
+wyoming:
+
+# REST Commands for Brain Gateway
+# --------------------------------
+rest_command:
+  brain_gateway_chat:
+    url: "http://10.0.0.186:8888/v1/chat/completions"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: >
+      {
+        "model": "nemotron",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a supportive ADHD assistant. Be warm, encouraging, and concise. Help with medication reminders, motivation, and getting out of spirals. Keep responses brief for voice."
+          },
+          {
+            "role": "user",
+            "content": "{{ text }}"
+          }
+        ],
+        "max_tokens": 300
+      }
+    content_type: "application/json"
+
+  generate_morning_briefing:
+    url: "http://10.0.0.186:8888/api/briefing/morning"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"generate_tts": false}'
+    content_type: "application/json"
+
+# =============================================================================
+# STEP 2: Add Wyoming integrations via UI or YAML
+# =============================================================================
+
+# Go to Settings > Devices & Services > Add Integration > Wyoming Protocol
+# Add two integrations:
+#
+# 1. STT (Speech-to-Text):
+#    Host: 10.0.0.173
+#    Port: 8003
+#
+# 2. TTS (Text-to-Speech):
+#    Host: 10.0.0.173
+#    Port: 8002
+
+# =============================================================================
+# STEP 3: Create Voice Pipeline
+# =============================================================================
+
+# Go to Settings > Voice Assistants > Add Assistant
+#
+# Name: Brain Gateway
+# Conversation agent: Brain Gateway (see intent_script below)
+# Speech-to-text: Wyoming (Whisper on 10.0.0.173:8003)
+# Text-to-speech: Wyoming (Qwen3-TTS on 10.0.0.173:8002)
+#
+# Set as default for Voice PE in the device settings
+
+# =============================================================================
+# STEP 4: Intent Script for Conversation Routing
+# =============================================================================
+
+# Add to configuration.yaml:
+
+intent_script:
+  BrainGatewayIntent:
+    speech:
+      text: "{{ response }}"
+    action:
+      - service: rest_command.brain_gateway_chat
+        data:
+          text: "{{ query }}"
+        response_variable: brain_response
+      - variables:
+          response: >
+            {{ brain_response.content.choices[0].message.content
+               | default('Sorry, I couldn\'t process that. Let me try again.') }}

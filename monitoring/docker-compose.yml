@@ -76,6 +76,22 @@ services:
       - loki
 
   # ============================================
+  # BLACKBOX EXPORTER - HTTP Health Probes
+  # ============================================
+  blackbox-exporter:
+    image: prom/blackbox-exporter:latest
+    container_name: blackbox-exporter
+    restart: unless-stopped
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    command:
+      - '--config.file=/etc/blackbox_exporter/config.yml'
+    networks:
+      - monitoring-net
+
+  # ============================================
   # NODE EXPORTER - System Metrics for Voyager
   # ============================================
   node-exporter:

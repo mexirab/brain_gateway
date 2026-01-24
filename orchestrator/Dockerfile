@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir \
     chromadb \
     rapidfuzz \
     sentence-transformers \
-    pyyaml
+    pyyaml \
+    paramiko
 
 COPY orchestrator.py .
 COPY ha_integration.py .

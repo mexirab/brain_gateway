@@ -1,0 +1,24 @@
+# Main brain interface
+http://voyager:3000 {
+    reverse_proxy open-webui:8080
+}
+
+# Or if you want to use port 80 directly
+http://:80 {
+    reverse_proxy open-webui:8080
+}
+
+# Monitoring
+http://:3001 {
+    reverse_proxy uptime-kuma:3001
+}
+
+# Portainer
+http://:9000 {
+    reverse_proxy portainer:9000
+}
+
+# Grafana
+http://:3002 {
+    reverse_proxy grafana:3000
+}

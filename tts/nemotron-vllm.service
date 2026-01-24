@@ -1,0 +1,54 @@
+# Nemotron-8B vLLM Service for Saturn
+# ====================================
+# Copy to Saturn: /etc/systemd/system/nemotron-vllm.service
+#
+# Installation:
+#   scp nemotron-vllm.service nadim@10.0.0.58:/tmp/
+#   ssh nadim@10.0.0.58 'sudo mv /tmp/nemotron-vllm.service /etc/systemd/system/'
+#   ssh nadim@10.0.0.58 'sudo systemctl daemon-reload'
+#   ssh nadim@10.0.0.58 'sudo systemctl enable nemotron-vllm'
+#   ssh nadim@10.0.0.58 'sudo systemctl start nemotron-vllm'
+
+[Unit]
+Description=Nemotron-8B Brain Model (vLLM on RTX 3090)
+Documentation=https://github.com/vllm-project/vllm
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nadim
+Group=nadim
+WorkingDirectory=/home/nadim
+
+# Environment
+Environment="CUDA_VISIBLE_DEVICES=1"
+Environment="HF_HOME=/home/nadim/.cache/huggingface"
+
+# vLLM server command
+# Adjust model path and parameters as needed
+ExecStart=/home/nadim/.local/bin/vllm serve nvidia/Nemotron-Orchestrator-8B \
+    --host 0.0.0.0 \
+    --port 8001 \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 8192 \
+    --dtype auto
+
+# Restart policy
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nemotron-vllm
+
+# Resource limits
+Nice=-5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

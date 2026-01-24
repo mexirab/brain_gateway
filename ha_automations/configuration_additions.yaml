@@ -1,0 +1,111 @@
+# Home Assistant Configuration Additions for Voice PE
+# ==================================================
+# Add these sections to your configuration.yaml
+#
+# Voice Pipeline: Voice PE -> STT (Uranus) -> Brain Gateway -> TTS (Uranus) -> Voice PE
+
+# -----------------------------------------------------------------------------
+# REST Commands - Brain Gateway Integration
+# -----------------------------------------------------------------------------
+rest_command:
+  brain_gateway_chat:
+    url: "http://10.0.0.186:8888/v1/chat/completions"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: >
+      {
+        "model": "nemotron",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a supportive ADHD assistant named Brain. Be warm, encouraging, and concise. Help with medication reminders, motivation, and getting out of spirals. Keep responses brief and conversational for voice interaction. Speak naturally like a supportive friend."
+          },
+          {
+            "role": "user",
+            "content": "{{ text }}"
+          }
+        ],
+        "max_tokens": 200
+      }
+    content_type: "application/json"
+    timeout: 30
+
+  generate_morning_briefing:
+    url: "http://10.0.0.186:8888/api/briefing/morning"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"generate_tts": false}'
+    content_type: "application/json"
+
+# -----------------------------------------------------------------------------
+# Shell Commands - For Helios Control via Voice
+# -----------------------------------------------------------------------------
+shell_command:
+  start_helios: "ssh nadim@10.0.0.186 '/opt/voyager/gateway_mvp/scripts/start-helios.sh'"
+  stop_helios: "ssh nadim@10.0.0.186 '/opt/voyager/gateway_mvp/scripts/stop-helios.sh'"
+
+# -----------------------------------------------------------------------------
+# Input Helpers - For Voice Assistant State
+# -----------------------------------------------------------------------------
+input_boolean:
+  helios_expert_mode:
+    name: Helios Expert Mode
+    icon: mdi:brain
+
+# -----------------------------------------------------------------------------
+# Template Sensors - Brain Gateway Status
+# -----------------------------------------------------------------------------
+template:
+  - sensor:
+      - name: "Brain Gateway Status"
+        unique_id: brain_gateway_status
+        state: >
+          {% if is_state('binary_sensor.brain_gateway_health', 'on') %}
+            Online
+          {% else %}
+            Offline
+          {% endif %}
+        icon: mdi:brain
+
+      - name: "Helios Expert Status"
+        unique_id: helios_expert_status
+        state: >
+          {% if is_state('binary_sensor.helios_health', 'on') %}
+            Running
+          {% else %}
+            Stopped (saves 150W)
+          {% endif %}
+        icon: mdi:chip
+
+# -----------------------------------------------------------------------------
+# Binary Sensors - Health Monitoring
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: ping
+    host: 10.0.0.186
+    name: Brain Gateway Health
+    count: 2
+    scan_interval: 60
+
+  - platform: ping
+    host: 10.0.0.195
+    name: Helios Health
+    count: 2
+    scan_interval: 60
+
+# -----------------------------------------------------------------------------
+# RESTful Sensors - Detailed Health
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: rest
+    name: Brain Gateway Details
+    resource: http://10.0.0.186:8888/health
+    json_attributes:
+      - status
+      - nemotron
+      - chromadb
+      - home_assistant
+    value_template: "{{ value_json.status }}"
+    scan_interval: 300

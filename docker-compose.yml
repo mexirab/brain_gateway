@@ -48,6 +48,9 @@ services:
       - /home/nadim/brain_gateway/.env:/app/.env:ro
       # Mount RAG data for write access (medications, projects)
       - /home/nadim/rag/nadim_rag:/rag:rw
+      # Mount SSH keys for Helios auto-start
+      - /home/nadim/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+      - /home/nadim/.ssh/known_hosts:/root/.ssh/known_hosts:ro
     environment:
       - NEMOTRON_URL=http://10.0.0.58:8001/v1
       - HELIOS_URL=http://10.0.0.195:8080/v1

@@ -1,25 +1,34 @@
 # Brain Gateway
 
-Personal AI assistant with Nemotron-Orchestrator-8B as the brain, agentic tool-calling, Home Assistant integration, and RAG-based memory.
+Personal AI assistant optimized for ADHD support via voice. Features Nemotron-Orchestrator-8B as the brain, agentic tool-calling, Home Assistant integration, and RAG-based memory.
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Open WebUI    │────▶│   Orchestrator   │────▶│  Nemotron (8B)   │
-│   (Frontend)    │     │   (v5 Agentic)   │     │   THE BRAIN      │
-└─────────────────┘     └────────┬─────────┘     └────────┬─────────┘
-                                 │                        │
-                                 │              ┌─────────┴─────────┐
-                                 │              │    TOOL CALLS     │
-                    ┌────────────┼──────────────┼───────────────────┤
-                    ▼            ▼              ▼                   ▼
-              ┌──────────┐ ┌──────────┐  ┌──────────┐       ┌──────────┐
-              │ ChromaDB │ │   Home   │  │  Helios  │       │  LiteLLM │
-              │   (RAG)  │ │Assistant │  │  (120B)  │       │  (Proxy) │
-              │          │ │   API    │  │  Expert  │       │          │
-              └──────────┘ └──────────┘  └──────────┘       └──────────┘
+┌─ ALWAYS-ON (~200W) ──────────────────────────────────────────────────┐
+│                                                                       │
+│  Voyager ──► Orchestrator (v5.1) ──► Nemotron-8B (Saturn)            │
+│                    │                                                  │
+│                    ├──► ChromaDB (RAG)                               │
+│                    ├──► Home Assistant                                │
+│                    ├──► TTS/Jessica (Uranus GPU 0)                   │
+│                    └──► Whisper STT (Uranus GPU 1)                   │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ OFF BY DEFAULT (saves ~150W) ───────────────────────────────────────┐
+│                                                                       │
+│  Helios (120B Expert) ◄── Auto-starts when ask_expert is called      │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
 ```
+
+### Power Optimization
+
+The system is optimized for voice-first ADHD support:
+- **Always-on:** Nemotron-8B handles 95%+ of daily tasks (reminders, motivation, spirals)
+- **On-demand:** Helios 120B auto-starts via SSH when expert knowledge is needed
+- **Savings:** ~150W continuous, ~$10-15/month electricity
 
 ## Components
 
@@ -37,10 +46,22 @@ Personal AI assistant with Nemotron-Orchestrator-8B as the brain, agentic tool-c
 Nemotron receives the full HA entity list and handles all NLP parsing internally - no regex matching needed.
 
 **Files:**
-- `orchestrator.py` - Main FastAPI app (v5.0 agentic)
+- `orchestrator.py` - Main FastAPI app (v5.1 agentic with Helios auto-start)
 - `ha_integration.py` - HA entity discovery + thin API relay
 - `data_manager.py` - YAML-based data management for medications/projects
 - `Dockerfile` - Container build config
+
+### Helios Control Scripts (`/scripts`)
+
+Manual control of the 120B expert model:
+
+| Script | Purpose |
+|--------|---------|
+| `start-helios.sh` | Start Helios for deep conversations |
+| `stop-helios.sh` | Stop Helios to save ~150W |
+| `helios-status.sh` | Check if Helios is running |
+
+The orchestrator auto-starts Helios when needed, but these scripts allow manual control.
 
 ### RAG Tools (`/rag`)
 
@@ -249,30 +270,49 @@ Set in `docker-compose.yml` or `.env`:
 ## File Structure
 
 ```
-brain_gateway/
-├── docker-compose.yml      # Docker stack config
-├── litellm-config.yaml     # LiteLLM proxy config
-├── .gitignore              # Git ignore rules
-├── README.md               # This file
+gateway_mvp/
+├── docker-compose.yml        # Docker stack config
+├── litellm-config.yaml       # LiteLLM proxy config
+├── Caddyfile                 # Reverse proxy config
+├── README.md                 # This file
+├── COMMANDS.md               # Quick reference commands
 ├── orchestrator/
-│   ├── Dockerfile          # Orchestrator container
-│   ├── orchestrator.py     # v5.0 agentic orchestrator
-│   └── ha_integration.py   # HA entity discovery + API relay
+│   ├── Dockerfile            # Orchestrator container
+│   ├── orchestrator.py       # v5.1 agentic orchestrator (Helios auto-start)
+│   ├── ha_integration.py     # HA entity discovery + API relay
+│   └── data_manager.py       # YAML-based data management
 ├── rag/
-│   ├── ingest_rag.py       # Document ingestion
-│   ├── query_rag.py        # CLI query tool
-│   ├── watch_and_ingest.py # File watcher daemon
-│   └── rag_chat_llamacpp.py # Standalone RAG chat
+│   ├── ingest_rag.py         # Document ingestion
+│   ├── query_rag.py          # CLI query tool
+│   ├── watch_and_ingest.py   # File watcher daemon
+│   └── rag_chat_llamacpp.py  # Standalone RAG chat
 ├── tts/
-│   ├── server.py           # Qwen3-TTS server with voice cloning
-│   ├── stt_server.py       # Whisper STT server
-│   ├── qwen-tts.service    # Systemd service for TTS
-│   ├── whisper-stt.service # Systemd service for STT
-│   └── README.md           # TTS documentation
+│   ├── server.py             # Qwen3-TTS server with voice cloning
+│   ├── stt_server.py         # Whisper STT server
+│   ├── qwen-tts.service      # Systemd service for TTS
+│   ├── whisper-stt.service   # Systemd service for STT
+│   ├── nemotron-vllm.service # Systemd service for Saturn
+│   └── README.md             # TTS documentation
 ├── scripts/
-│   └── morning_briefing.sh # Morning briefing trigger script
-└── ha_automations/
-    └── morning_briefing.yaml # HA automation template
+│   ├── morning_briefing.sh   # Morning briefing trigger script
+│   ├── start-helios.sh       # Start 120B expert model
+│   ├── stop-helios.sh        # Stop to save power
+│   ├── helios-status.sh      # Check Helios status
+│   ├── HELIOS_SETUP.md       # Helios setup instructions
+│   └── DEPLOYMENT_CHECKLIST.md # Full deployment guide
+├── ha_automations/
+│   ├── morning_briefing.yaml           # Morning briefing automation
+│   ├── voice_pe_integration.yaml       # Voice PE setup
+│   ├── configuration_additions.yaml    # HA config additions
+│   ├── voice_conversation_automation.yaml # ADHD voice commands
+│   └── voice_assistant_setup.md        # Voice PE setup guide
+└── monitoring/
+    ├── docker-compose.yml    # Grafana/Prometheus/Loki stack
+    ├── prometheus/           # Prometheus config
+    ├── grafana/              # Dashboards
+    ├── loki/                 # Log aggregation
+    ├── promtail/             # Log shipping
+    └── blackbox/             # HTTP health probes
 ```
 
 ## RAG Document Structure
