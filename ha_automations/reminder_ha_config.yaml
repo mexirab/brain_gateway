@@ -1,0 +1,41 @@
+# Home Assistant Configuration for Brain Gateway Reminders
+#
+# NO CONFIGURATION REQUIRED!
+#
+# Brain Gateway automatically creates HA automations via the REST API.
+# These automations use native HA services that work out of the box:
+#
+# - media_player.play_media: Plays pre-generated TTS audio on speakers
+# - notify.mobile_app_*: Sends push notifications to mobile devices
+#
+# Example automation created by Brain Gateway when you say
+# "Hey Jess, remind me to call mom at 3pm":
+#
+# automation:
+#   - id: reminder_abc12345
+#     alias: "Reminder: call mom"
+#     trigger:
+#       - platform: time
+#         at: "15:00:00"
+#     condition:
+#       - condition: template
+#         value_template: "{{ now().strftime('%Y-%m-%d') == '2026-01-27' }}"
+#     actions:
+#       - service: media_player.play_media
+#         target:
+#           entity_id: media_player.all_speakers
+#         data:
+#           media_content_id: "http://10.0.0.186:8888/api/audio/reminders/abc12345.wav"
+#           media_content_type: "audio/wav"
+#       - service: notify.mobile_app_nadims_iphone
+#         data:
+#           title: "Reminder from Jess"
+#           message: "call mom"
+#           data:
+#             push:
+#               sound: "default"
+#               interruption-level: "time-sensitive"
+#     mode: single
+#
+# The TTS audio is pre-generated with Jessica's voice when the reminder is set,
+# so playback is instant and doesn't require the TTS service at reminder time.

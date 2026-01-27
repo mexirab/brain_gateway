@@ -32,6 +32,18 @@ from ha_integration import HomeAssistantClient, ExecutionResult
 # Import the data manager for structured data updates
 from data_manager import handle_update_data
 
+# Import the reminder manager for voice reminders
+from reminder_manager import (
+    parse_time_expression,
+    format_time_friendly,
+    add_reminder,
+    list_pending_reminders,
+    create_ha_automation,
+    deliver_reminder,
+    generate_reminder_audio,
+    mark_reminder_completed,
+)
+
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
@@ -215,6 +227,32 @@ STATIC_TOOLS = [
                     }
                 },
                 "required": ["action", "name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_reminder",
+            "description": "Set a reminder for Nadim. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reminder_text": {
+                        "type": "string",
+                        "description": "What to remind about (e.g., 'take your Vyvanse', 'call mom', 'check the laundry')"
+                    },
+                    "time": {
+                        "type": "string",
+                        "description": "When to remind. Accepts: 'in 5 minutes', 'in 2 hours', 'at 3pm', 'at 14:30'"
+                    },
+                    "target": {
+                        "type": "string",
+                        "enum": ["voice", "phone", "both"],
+                        "description": "Where to deliver the reminder: voice=all speakers, phone=mobile notification, both=all (default: both)"
+                    }
+                },
+                "required": ["reminder_text", "time"]
             }
         }
     }
@@ -408,6 +446,12 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             )
         elif tool_name == "update_data":
             return tool_update_data(arguments)
+        elif tool_name == "set_reminder":
+            return await tool_set_reminder(
+                arguments.get("reminder_text", ""),
+                arguments.get("time", ""),
+                arguments.get("target", "both")
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -582,6 +626,81 @@ def tool_update_data(arguments: Dict[str, Any]) -> str:
     )
 
 
+async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:
+    """
+    Set a reminder that will be delivered via voice and/or mobile notification.
+
+    Parses the time expression, generates TTS audio, stores the reminder, and creates
+    an HA automation to trigger it at the scheduled time.
+    """
+    if not reminder_text:
+        return "Please tell me what to remind you about."
+    if not time_str:
+        return "Please tell me when to remind you. Try 'in 5 minutes' or 'at 3pm'."
+
+    # Validate target
+    if target not in ["voice", "phone", "both"]:
+        target = "both"
+
+    logger.info(f"[REMINDER] Setting reminder: '{reminder_text}' at '{time_str}' via {target}")
+
+    # Parse the time
+    trigger_time, error = parse_time_expression(time_str)
+    if error:
+        return error
+
+    # Generate a unique ID first
+    import uuid
+    reminder_id = str(uuid.uuid4())[:8]
+
+    # Pre-generate TTS audio if voice is enabled
+    audio_url = None
+    if target in ["voice", "both"]:
+        audio_url = await generate_reminder_audio(reminder_text, reminder_id)
+        if not audio_url:
+            logger.warning("[REMINDER] TTS generation failed, will use notification only")
+            if target == "voice":
+                target = "phone"  # Fallback to phone-only
+
+    # Store the reminder (use the pre-generated ID)
+    reminder = {
+        "id": reminder_id,
+        "text": reminder_text,
+        "time": trigger_time.strftime("%Y-%m-%d %H:%M"),
+        "time_display": trigger_time.strftime("%-I:%M %p"),
+        "target": target,
+        "created": datetime.now().isoformat(),
+        "status": "pending",
+    }
+    if audio_url:
+        reminder["audio_url"] = audio_url
+
+    # Save to YAML
+    from reminder_manager import get_reminders, save_reminders
+    data = get_reminders()
+    data["reminders"].append(reminder)
+    if not save_reminders(data):
+        return "Failed to save the reminder. Please try again."
+
+    logger.info(f"[REMINDER] Added reminder {reminder_id}: '{reminder_text}' at {trigger_time}")
+
+    # Create HA automation
+    success, result = await create_ha_automation(reminder, audio_url)
+    if not success:
+        logger.warning(f"[REMINDER] HA automation failed: {result}")
+        # Even if HA automation fails, the reminder is stored
+
+    # Build friendly confirmation
+    time_friendly = format_time_friendly(trigger_time)
+    target_desc = {
+        "voice": "on all speakers",
+        "phone": "on your phone",
+        "both": "on all speakers and your phone"
+    }.get(target, "")
+
+    return f"Got it! I'll remind you to {reminder_text} {time_friendly} {target_desc}."
+
+
 def clean_response(text: str) -> str:
     """Remove <think> and <tool_call> tags from Nemotron responses."""
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -632,11 +751,13 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
 3. ask_expert - Delegate to the expert model (120B) for: general knowledge, books, movies, history, science, coding, analysis, or ANY question you're unsure about
 4. update_data - Update Nadim's personal data (medications, projects). Use when he asks to add, remove, or change medications or project info.
+5. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone at a specific time.
 
 ROUTING RULES:
 - home_assistant: ONLY when user EXPLICITLY asks to control devices (turn on/off, lights, fan, temperature, etc.)
 - search_memory: ONLY for Nadim's personal info (projects, routines, preferences, medications, schedules)
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
+- set_reminder: When user says "remind me to..." or asks for a reminder at a specific time
 - ask_expert: Use for EVERYTHING ELSE - general knowledge, books, movies, coding, analysis, explanations, or anything you're not 100% sure about
 
 CRITICAL:
@@ -657,7 +778,10 @@ EXAMPLES:
 - "Remove Wellbutrin" → update_data(action="remove_medication", name="Wellbutrin")
 - "Change Vyvanse to 50mg" → update_data(action="update_medication", name="Vyvanse", dose="50mg")
 - "Mark voice interface complete on Brain Gateway" → update_data(action="complete_step", name="Brain Gateway", step="voice interface")
-- "Add a project to build a deck" → update_data(action="add_project", name="Build a deck")"""
+- "Add a project to build a deck" → update_data(action="add_project", name="Build a deck")
+- "Remind me to call mom in 30 minutes" → set_reminder(reminder_text="call mom", time="in 30 minutes", target="both")
+- "Remind me to take my meds at 7am" → set_reminder(reminder_text="take your meds", time="at 7am", target="both")
+- "Set a reminder to check the laundry in 1 hour" → set_reminder(reminder_text="check the laundry", time="in 1 hour", target="voice")"""
 
 
 @app.on_event("startup")
@@ -682,7 +806,7 @@ async def health():
         "brain": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "expert": f"{HELIOS_URL} ({HELIOS_MODEL})",
         "expert_status": "online" if helios_online else "offline (auto-starts on demand)",
-        "tools": ["home_assistant", "search_memory", "ask_expert", "update_data"],
+        "tools": ["home_assistant", "search_memory", "ask_expert", "update_data", "set_reminder"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),
@@ -1014,6 +1138,55 @@ def memory_stats():
 
 
 # =============================================================================
+# Reminder System Endpoints
+# =============================================================================
+
+@app.post("/api/reminder/trigger")
+async def trigger_reminder(req: Request):
+    """
+    Trigger a reminder - called by HA automation at the scheduled time.
+
+    Request body:
+    {
+        "reminder_id": "abc12345"
+    }
+    """
+    try:
+        body = await req.json()
+    except:
+        body = {}
+
+    reminder_id = body.get("reminder_id")
+    if not reminder_id:
+        return JSONResponse({"error": "Missing reminder_id"}, status_code=400)
+
+    logger.info(f"[REMINDER] Triggering reminder: {reminder_id}")
+
+    result = await deliver_reminder(reminder_id)
+
+    return JSONResponse(result)
+
+
+@app.get("/api/reminders")
+async def get_reminders_api():
+    """List all pending reminders."""
+    pending = list_pending_reminders()
+    return JSONResponse({
+        "count": len(pending),
+        "reminders": pending
+    })
+
+
+@app.post("/api/reminder/complete/{reminder_id}")
+async def complete_reminder_api(reminder_id: str):
+    """Mark a reminder as completed (triggered)."""
+    success = mark_reminder_completed(reminder_id)
+    if success:
+        return JSONResponse({"success": True, "reminder_id": reminder_id})
+    return JSONResponse({"error": "Reminder not found"}, status_code=404)
+
+
+# =============================================================================
 # Morning Briefing Endpoint (Phase 4: Proactive Reminders)
 # =============================================================================
 
@@ -1033,6 +1206,15 @@ async def serve_audio(audio_id: str):
         if os.path.exists(filepath):
             return FileResponse(filepath, media_type="audio/wav")
     return JSONResponse({"error": "Audio not found"}, status_code=404)
+
+
+@app.get("/api/audio/reminders/{reminder_id}.wav")
+async def serve_reminder_audio(reminder_id: str):
+    """Serve pre-generated reminder audio files."""
+    filepath = f"/tmp/brain_audio/reminders/{reminder_id}.wav"
+    if os.path.exists(filepath):
+        return FileResponse(filepath, media_type="audio/wav")
+    return JSONResponse({"error": "Reminder audio not found"}, status_code=404)
 
 @app.post("/api/briefing/morning")
 async def morning_briefing(req: Request):

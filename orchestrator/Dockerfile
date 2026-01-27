@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
 COPY orchestrator.py .
 COPY ha_integration.py .
 COPY data_manager.py .
+COPY reminder_manager.py .
 
 EXPOSE 8888
 
