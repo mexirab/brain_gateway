@@ -20,14 +20,23 @@
 - **ChromaDB:** `~/.local/share/chroma/personal_rag`
 - **Brain Gateway .env:** `~/brain_gateway/.env`
 
+### SSH Access
+Use `labadmin@[node]` to SSH to any cluster server:
+```bash
+ssh labadmin@10.0.0.195   # Helios
+ssh labadmin@10.0.0.58    # Saturn
+ssh labadmin@10.0.0.173   # Uranus
+ssh labadmin@10.0.0.248   # Jupiter
+```
+
 ### Services & Ports
 | Service | URL | Purpose |
 |---------|-----|---------|
-| Brain Gateway | `http://localhost:8888` | Main orchestrator API |
+| Brain Gateway | `http://localhost:8888` | Main orchestrator API (v6 hybrid) |
 | Open WebUI | `http://localhost` | Chat interface |
 | Home Assistant | `http://10.0.0.106:8123` | Smart home control |
-| Nemotron (8B) | `http://10.0.0.58:8001/v1` | **THE BRAIN** on Saturn RTX 3090 |
-| Helios (120B) | `http://10.0.0.195:8080/v1` | Expert model for complex tasks |
+| Helios (120B) | `http://10.0.0.195:8080/v1` | **PRIMARY** - Jessica conversational AI |
+| Nemotron (8B) | `http://10.0.0.58:8001/v1` | **TOOL ORCHESTRATOR** - HA, RAG, reminders |
 | **Qwen3-TTS** | `http://10.0.0.173:8002` | Voice synthesis with Jessica clone (Uranus GPU 0) |
 | **Whisper STT** | `http://10.0.0.173:8003/v1` | Speech-to-text (Uranus GPU 1) |
 | **Grafana** | `http://localhost:3000` | Monitoring dashboards (admin/braingw) |
@@ -36,39 +45,67 @@
 
 ---
 
-## Architecture Overview (v5 Agentic)
+## Architecture Overview (v6 Hybrid)
 
 ```
-User → Open WebUI → Brain Gateway Orchestrator (v5)
+User → Open WebUI → Brain Gateway Orchestrator (v6)
                            │
                            ▼
-                   Nemotron-Orchestrator-8B
-                      (THE BRAIN)
+                    Helios (120B) - "Jessica"
+                  Primary Conversational AI
                            │
-                    AGENTIC TOOL CALLS
-         ┌─────────────────┼─────────────────┐
-         ▼                 ▼                 ▼
-    search_memory     home_assistant     ask_expert
-         │                 │                 │
-    ChromaDB (RAG)    HA REST API      Helios (120B)
-    Personal context  Structured calls  Complex reasoning
+              ┌────────────┴────────────┐
+              │                         │
+        Direct Response          ask_orchestrator
+     (greetings, chat,              (tool call)
+      general knowledge)                │
+                                       ▼
+                              Nemotron (8B) - Tool Orchestrator
+                                       │
+                         ┌─────────────┼─────────────┐
+                         ▼             ▼             ▼
+                   home_assistant  search_memory  set_reminder
+                         │             │         update_data
+                    HA REST API   ChromaDB RAG     │
+                                                   │
+                         └─────────────┴───────────┘
+                                       │
+                                       ▼
+                              Result back to Helios
+                                       │
+                                       ▼
+                              Natural response to user
 ```
 
-**How it works:**
+**How it works (Hybrid Flow):**
 1. User sends request to orchestrator
-2. Orchestrator forwards to Nemotron with system prompt + tools
-3. Nemotron decides which tools to call and outputs `<tool_call>` tags
-4. Orchestrator parses tool calls, executes them, feeds results back
-5. Loop continues until Nemotron responds without tool calls (max 5 rounds)
+2. RAG context pre-fetched (unless simple greeting)
+3. Helios (Jessica) receives request with personal context
+4. For greetings/chat/general knowledge → Helios responds directly
+5. For actions (HA, reminders, memory search) → Helios calls `ask_orchestrator`
+6. Nemotron receives command, executes tools (HA, RAG, reminders)
+7. Result returned to Helios
+8. Helios formulates natural response to user
 
-**Available Tools:**
+**Why Hybrid?**
+- **Problem solved:** Nemotron (8B) was misinterpreting greetings as requests for help
+- **Solution:** Helios handles conversation naturally; Nemotron focuses on tool execution
+- Each model does what it's best at
+
+**Helios Tool (single tool):**
 | Tool | Purpose |
 |------|---------|
-| `home_assistant` | Nemotron outputs structured API calls: `{entity_id, service, data}` |
-| `search_memory` | Query ChromaDB RAG for personal context |
-| `ask_expert` | Delegate complex reasoning/coding to Helios 120B |
+| `ask_orchestrator` | Delegate actions to Nemotron: device control, memory search, reminders, data updates |
 
-**Key insight:** Nemotron receives the full HA entity list in the tool description, so it handles all NLP parsing internally. No regex matching needed - it outputs exact entity IDs and service calls.
+**Nemotron Tools (called via ask_orchestrator):**
+| Tool | Purpose |
+|------|---------|
+| `home_assistant` | Structured HA API calls: `{entity_id, service, data}` |
+| `search_memory` | Query ChromaDB RAG for personal context |
+| `set_reminder` | Set voice/phone reminders for specific times |
+| `update_data` | Update medications or projects |
+
+**Key insight:** Helios receives relevant RAG context pre-fetched in its system prompt, so it can answer personal questions without tools. Only actions require the orchestrator.
 
 ---
 
@@ -130,8 +167,108 @@ Personalized morning announcement via Jessica's voice on HA speakers.
 ✅ **Phase 2:** Home Assistant integration (lights, scenes, media, colors, brightness)
 ✅ **Phase 3:** Voice interface (Qwen3-TTS with Jessica voice clone + Whisper STT on Uranus)
 ✅ **Phase 4:** Morning briefing with personalized content (Jessica's voice on HA speakers)
+✅ **Phase 4.6:** Hybrid architecture - Helios converses, Nemotron orchestrates tools
+🔄 **Phase 4.5:** ATOM Echo with "Hey Jess" wake word (IN PROGRESS - see below)
 ⬜ **Phase 5:** Mobile access
 ⬜ **Phase 6:** Fine-tuning
+
+---
+
+## 🔄 WORK IN PROGRESS: ATOM Echo "Hey Jess" Wake Word (2026-01-26)
+
+### Goal
+M5Stack ATOM Echo as voice input device with custom "Hey Jess" wake word → Brain Gateway → response on Google speakers via Jessica TTS.
+
+### What's Done
+1. ✅ **Trained "hey_jess" wake word model** on Saturn (RTX 3080) using microWakeWord Docker
+   - Model: `/opt/voyager/gateway_mvp/ha_automations/hey_jess.tflite`
+   - Also copied to HA: `/config/esphome/hey_jess.tflite`
+   - JSON manifest: `/config/esphome/hey_jess.json`
+
+2. ✅ **Flashed ATOM Echo** with ESPHome config
+   - Device name: `atom-echo-jess`
+   - Device IP: `10.0.0.226`
+   - Config: `/config/esphome/atom-echo-jess.yaml`
+
+3. ✅ **Wyoming services running on Uranus** (for HA voice pipeline)
+   - Wyoming Faster-Whisper STT: `tcp://10.0.0.173:10300`
+   - Wyoming Piper TTS: `tcp://10.0.0.173:10301`
+   - Started manually (not systemd yet):
+     ```bash
+     ssh labadmin@10.0.0.173
+     nohup ~/.local/bin/wyoming-faster-whisper --model base --language en --device cuda --data-dir ~/wyoming-data --uri tcp://0.0.0.0:10300 > /tmp/wyoming-stt.log 2>&1 &
+     nohup ~/.local/bin/wyoming-piper --voice en_US-lessac-medium --data-dir ~/wyoming-piper-data --download-dir ~/wyoming-piper-data --uri tcp://0.0.0.0:10301 --use-cuda > /tmp/wyoming-tts.log 2>&1 &
+     ```
+
+4. ✅ **openWakeWord add-on installed** in HA with "Hey Jess" wake word
+   - Model copied to `/share/openwakeword/hey_jess.tflite`
+
+5. ✅ **Voice Assistant pipeline configured** in HA
+   - Wake word: Hey Jess (openWakeWord)
+   - STT: Wyoming Faster-Whisper (10.0.0.173:10300)
+   - TTS: Wyoming Piper (10.0.0.173:10301)
+   - Conversation agent: OpenAI Conversation → Brain Gateway (10.0.0.186:8888)
+
+### Current Issue
+**Audio buffer overflow crashes HA** when ATOM Echo sends audio:
+```
+[E][voice_assistant:855]: Cannot receive audio, buffer is full
+```
+
+The ATOM Echo sends audio faster than HA can consume it. Possible causes:
+- Network latency between ATOM Echo (10.0.0.226) and HA (10.0.0.106)
+- ESPHome config needs buffer tuning
+- WiFi signal strength issues
+
+### Next Steps (Resume Here)
+
+1. **Flash updated ESPHome config** with buffer improvements:
+   - Added `bits_per_sample: 16bit` to microphone
+   - Added `buffer_duration: 100ms` to speaker
+   - Fixed YAML indentation (no leading spaces on top-level keys!)
+   - Updated config ready to paste - see `ha_automations/atom_echo.yaml` or ask Claude for it
+
+2. **Check WiFi signal strength** on ATOM Echo device page in HA
+   - If below -70 dBm, relocate device or add WiFi extender
+
+3. **Create systemd services** for Wyoming STT/TTS on Uranus (so they auto-start)
+
+4. **Integrate Jessica TTS** instead of Piper
+   - Need to create Wyoming wrapper for Qwen3-TTS, or
+   - Use HA automation to route TTS to Jessica via REST API
+
+5. **Route TTS to Google speakers** instead of ATOM Echo's weak speaker
+   - Use `voice_conversation_automation.yaml` template
+
+### Key Files
+| File | Location | Purpose |
+|------|----------|---------|
+| `hey_jess.tflite` | `/config/esphome/` on HA | Trained wake word model |
+| `hey_jess.json` | `/config/esphome/` on HA | Wake word manifest |
+| `atom-echo-jess.yaml` | `/config/esphome/` on HA | ESPHome device config |
+| `atom_echo_setup.md` | `ha_automations/` | Full setup guide |
+| `hey_jess_training.md` | `ha_automations/` | Wake word training guide |
+
+### Services to Check
+```bash
+# Wyoming STT on Uranus (manually started)
+ssh labadmin@10.0.0.173 "ps aux | grep wyoming"
+
+# TTS/STT health
+curl http://10.0.0.173:8002/health  # Qwen3-TTS (Jessica)
+curl http://10.0.0.173:8003/health  # Whisper STT (OpenAI-compatible)
+curl http://10.0.0.173:10300        # Wyoming STT (won't respond to HTTP, use nc)
+curl http://10.0.0.173:10301        # Wyoming TTS (won't respond to HTTP, use nc)
+```
+
+### Docker on Saturn
+Docker was installed on Saturn for wake word training:
+```bash
+ssh labadmin@10.0.0.58
+# microWakeWord container may still be running
+docker ps
+docker stop microwakeword  # if needed
+```
 
 ---
 
@@ -197,7 +334,7 @@ Connect to YNAB budget API for natural language budget queries.
 |------|---------|
 | `README.md` | High-level overview, quick start, config |
 | `ARCHITECTURE.md` | **Detailed internals** - functions, data flow, troubleshooting |
-| `orchestrator/orchestrator.py` | Main FastAPI app (v5.0 agentic), tool parsing, agentic loop |
+| `orchestrator/orchestrator.py` | Main FastAPI app (v6.0 hybrid), Helios+Nemotron routing |
 | `orchestrator/ha_integration.py` | HA entity discovery + `call_service()` API relay |
 | `rag/ingest_rag.py` | Index documents into ChromaDB |
 | `docker-compose.yml` | Service stack definition |
@@ -213,8 +350,10 @@ Connect to YNAB budget API for natural language budget queries.
 | `ha_automations/morning_briefing.yaml` | HA automation template for morning briefing |
 
 **Important implementation details:**
-- vLLM on Uranus doesn't have `--enable-auto-tool-choice`, so we use `tool_choice: "none"` and parse `<tool_call>` tags from Nemotron's content manually
-- Tool results are fed back as user messages with `<tool_response>` wrapper
+- **Hybrid architecture (v6):** Helios uses native tool calling (`tool_choice: "auto"`), Nemotron uses XML-style (`tool_choice: "none"`)
+- Helios gets RAG context pre-fetched in system prompt for personal questions
+- Tool results from Nemotron are fed back to Helios for natural response formatting
+- Fallback: If Helios is offline, orchestrator falls back to Nemotron-only mode
 - `ha_integration.py` still has legacy NLP parsing code but it's unused - `call_service()` is the active method
 
 ---
@@ -292,8 +431,11 @@ docker-compose -p monitoring down     # Stop
 # All orchestrator logs
 {container="brain-orchestrator"}
 
+# Hybrid flow logs (Helios → Nemotron)
+{container="brain-orchestrator"} |~ "HYBRID|NEMOTRON|TOOL"
+
 # Tool calls only
-{container="brain-orchestrator"} |~ "tool_call|home_assistant|search_memory|ask_expert"
+{container="brain-orchestrator"} |~ "home_assistant|search_memory|ask_orchestrator|set_reminder|update_data"
 
 # Errors only
 {container="brain-orchestrator"} |~ "(?i)error|exception|failed"
@@ -322,14 +464,14 @@ curl -X POST http://10.0.0.173:8002/tts \
 ### Manage TTS/STT services on Uranus
 ```bash
 # Check status
-ssh nadim@10.0.0.173 "sudo systemctl status qwen-tts whisper-stt"
+ssh labadmin@10.0.0.173 "sudo systemctl status qwen-tts whisper-stt"
 
 # Restart services
-ssh nadim@10.0.0.173 "sudo systemctl restart qwen-tts whisper-stt"
+ssh labadmin@10.0.0.173 "sudo systemctl restart qwen-tts whisper-stt"
 
 # View logs
-ssh nadim@10.0.0.173 "journalctl -u qwen-tts -f"
-ssh nadim@10.0.0.173 "journalctl -u whisper-stt -f"
+ssh labadmin@10.0.0.173 "journalctl -u qwen-tts -f"
+ssh labadmin@10.0.0.173 "journalctl -u whisper-stt -f"
 ```
 
 ### Load a new voice clone

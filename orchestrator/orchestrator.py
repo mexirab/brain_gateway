@@ -1,7 +1,8 @@
 """
-Brain Gateway Orchestrator v5
-- Nemotron-Orchestrator-8B is the BRAIN with tool-calling
-- Tools: home_assistant, search_memory, ask_expert (Helios-120B)
+Brain Gateway Orchestrator v6 - Hybrid Architecture
+- Helios (120B) is the primary conversational assistant (Jessica)
+- Nemotron (8B) is the tool orchestrator (HA, RAG, reminders, update_data)
+- Flow: User → Helios → (ask_orchestrator) → Nemotron → tools → result → Helios → User
 - ChromaDB RAG for personal context
 - Home Assistant integration (auto-discovery!)
 """
@@ -261,7 +262,82 @@ STATIC_TOOLS = [
 
 def get_orchestrator_tools() -> List[Dict[str, Any]]:
     """Get all tools including dynamic HA tool with entity list."""
-    return [get_ha_tool_definition()] + STATIC_TOOLS
+    # For Nemotron orchestrator, exclude ask_expert (Helios IS the expert now)
+    nemotron_tools = [t for t in STATIC_TOOLS if t["function"]["name"] != "ask_expert"]
+    return [get_ha_tool_definition()] + nemotron_tools
+
+
+def is_greeting(text: str) -> bool:
+    """Check if text is a simple greeting (skip RAG for these)."""
+    greetings = ["hi", "hello", "hey", "good morning", "good afternoon",
+                 "good evening", "good night", "what's up", "howdy", "yo"]
+    text_lower = text.lower().strip().rstrip("!?.,")
+    # Check exact match or starts with greeting
+    if text_lower in greetings:
+        return True
+    for g in greetings:
+        if text_lower.startswith(g + " ") or text_lower.startswith(g + ","):
+            return True
+    return False
+
+
+def get_helios_system_prompt(personal_context: str = "") -> str:
+    """System prompt for Helios as the primary conversational assistant (Jessica)."""
+    context_section = ""
+    if personal_context:
+        context_section = f"""
+PERSONAL CONTEXT (from Nadim's notes):
+{personal_context}
+"""
+
+    return f"""You are Jessica, Nadim's personal AI assistant and ADHD coach.
+
+PERSONALITY:
+- Warm, friendly, and supportive - like a caring friend
+- Understand ADHD challenges (task initiation, time blindness, overwhelm)
+- Keep responses concise and natural for voice conversations
+- Celebrate small wins, be encouraging without being patronizing
+{context_section}
+YOU HAVE ONE TOOL: ask_orchestrator
+Use it ONLY when you need to:
+- Control smart home devices (lights, fans, switches, thermostats)
+- Search Nadim's personal notes/memory for specific info
+- Set reminders for specific times
+- Update personal data (medications, projects)
+
+IMPORTANT RULES:
+- For greetings (hi, hello, good morning) - just respond warmly, NO tools
+- For general chat/questions - respond naturally using your knowledge + context above
+- For device control, reminders, or personal data updates - use ask_orchestrator
+- After getting a tool result, respond naturally to the user (don't just repeat the raw result)
+
+RESPONSE STYLE:
+- Brief and natural (2-3 sentences typical)
+- Conversational, not robotic
+- For voice: avoid markdown, bullets, or formatting
+- No emojis unless Nadim uses them first"""
+
+
+# Tool definition for Helios - just one simple tool
+HELIOS_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_orchestrator",
+            "description": "Delegate an action to the smart home/personal assistant orchestrator. Use for: controlling devices (lights, fans, switches), searching personal notes, setting reminders, or updating medications/projects.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Natural language command (e.g., 'turn off bedroom lights', 'what are my morning meds', 'remind me to call mom in 30 minutes')"
+                    }
+                },
+                "required": ["command"]
+            }
+        }
+    }
+]
 
 
 # ChromaDB client
@@ -339,8 +415,8 @@ def rag_context(query: str) -> str:
 
     chunks = []
     for i, (doc, meta, dist) in enumerate(zip(docs, metas, dists)):
-        # Skip very short chunks (likely just headers)
-        if len(doc.strip()) < MIN_CHUNK_LEN:
+        # Skip None or very short chunks (likely just headers)
+        if doc is None or len(doc.strip()) < MIN_CHUNK_LEN:
             logger.debug(f"[RAG] Skipping short chunk ({len(doc)} chars)")
             continue
 
@@ -368,8 +444,12 @@ def rag_context(query: str) -> str:
 
     return "\n".join(chunks) if chunks else ""
 
-async def call_model(url: str, model: str, messages: List[Dict], system: str = "", tools: List = None, timeout: int = 180) -> Dict[str, Any]:
-    """Call an LLM endpoint."""
+async def call_model(url: str, model: str, messages: List[Dict], system: str = "", tools: List = None, tool_choice: str = "auto", timeout: int = 180) -> Dict[str, Any]:
+    """Call an LLM endpoint.
+
+    Args:
+        tool_choice: "auto" for native tool calling (Helios), "none" for XML-style (Nemotron)
+    """
     final_messages = messages.copy()
     if system:
         final_messages.insert(0, {"role": "system", "content": system})
@@ -381,12 +461,12 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
         "max_tokens": 4096,
     }
 
-    # Pass through tools for HA native device control
-    # Use tool_choice: "none" to let Nemotron output tool calls in content
-    # (vLLM requires --enable-auto-tool-choice flag for native tool calling)
+    # Pass through tools with specified tool_choice
+    # - "auto": Enable native tool calling (for Helios/llama.cpp)
+    # - "none": Disable native tool calling, model outputs <tool_call> tags (for Nemotron/vLLM)
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "none"
+        payload["tool_choice"] = tool_choice
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(f"{url}/chat/completions", json=payload)
@@ -701,6 +781,78 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     return f"Got it! I'll remind you to {reminder_text} {time_friendly} {target_desc}."
 
 
+async def call_nemotron_orchestrator(command: str) -> str:
+    """
+    Send a command to Nemotron for tool execution.
+    Nemotron has access to HA, RAG, reminders, update_data.
+    Returns the final result after executing any necessary tools.
+    """
+    logger.info(f"[NEMOTRON] Orchestrating command: {command[:100]}...")
+
+    messages = [{"role": "user", "content": command}]
+    system_prompt = get_nemotron_system_prompt()
+
+    # Agentic loop: let Nemotron call tools until it responds with content
+    for round_num in range(MAX_TOOL_ROUNDS):
+        logger.info(f"[NEMOTRON] Round {round_num + 1}/{MAX_TOOL_ROUNDS}")
+
+        try:
+            llm_resp = await call_model(
+                NEMOTRON_URL, NEMOTRON_MODEL, messages,
+                system=system_prompt,
+                tools=get_orchestrator_tools(),
+                tool_choice="none",  # Nemotron uses XML-style tool calls in content
+                timeout=60
+            )
+        except Exception as e:
+            logger.error(f"[NEMOTRON] Call failed: {e}")
+            return f"Sorry, I couldn't complete that action: {e}"
+
+        # Extract the assistant's response
+        choice = llm_resp.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        tool_calls = message.get("tool_calls", [])
+        content = message.get("content") or ""
+
+        # Parse tool calls from content (Nemotron outputs <tool_call> tags)
+        if not tool_calls and content:
+            tool_calls = parse_tool_calls_from_content(content)
+
+        # If no tool calls, we're done
+        if not tool_calls:
+            result = clean_response(content)
+            logger.info(f"[NEMOTRON] Final result: {result[:100]}...")
+            return result
+
+        # Process tool calls
+        logger.info(f"[NEMOTRON] Processing {len(tool_calls)} tool call(s)")
+        messages.append({"role": "assistant", "content": content})
+
+        tool_results = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            tool_name = function.get("name", "")
+
+            try:
+                arguments = json.loads(function.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                arguments = {}
+
+            result = await execute_tool(tool_name, arguments)
+            tool_results.append(f"[{tool_name}] {result}")
+
+        # Add tool results for next round
+        results_text = "\n".join(tool_results)
+        messages.append({
+            "role": "user",
+            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nProvide a brief summary of what was done."
+        })
+
+    # Hit max rounds
+    logger.warning(f"[NEMOTRON] Hit max tool rounds")
+    return "I tried to complete that but ran into some complexity. Please try a simpler request."
+
+
 def clean_response(text: str) -> str:
     """Remove <think> and <tool_call> tags from Nemotron responses."""
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -743,45 +895,62 @@ def parse_tool_calls_from_content(content: str) -> List[Dict[str, Any]]:
 
 
 def get_orchestrator_system_prompt() -> str:
-    """System prompt for Nemotron as the orchestrating brain."""
-    return """You are Nadim's personal AI assistant and orchestrator. You have access to tools to help answer questions and perform actions.
+    """System prompt for Nemotron when used in fallback mode (Helios unavailable)."""
+    return """You are Jessica, Nadim's personal AI assistant. You have access to tools to help with actions.
 
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, thermostats, media, scenes)
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
-3. ask_expert - Delegate to the expert model (120B) for: general knowledge, books, movies, history, science, coding, analysis, or ANY question you're unsure about
-4. update_data - Update Nadim's personal data (medications, projects). Use when he asks to add, remove, or change medications or project info.
-5. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone at a specific time.
+3. update_data - Update Nadim's personal data (medications, projects)
+4. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone
 
-ROUTING RULES:
-- home_assistant: ONLY when user EXPLICITLY asks to control devices (turn on/off, lights, fan, temperature, etc.)
-- search_memory: ONLY for Nadim's personal info (projects, routines, preferences, medications, schedules)
+WHEN TO USE TOOLS:
+- home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
+- search_memory: For personal info (projects, routines, preferences, medications, schedules)
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
-- set_reminder: When user says "remind me to..." or asks for a reminder at a specific time
-- ask_expert: Use for EVERYTHING ELSE - general knowledge, books, movies, coding, analysis, explanations, or anything you're not 100% sure about
+- set_reminder: When user says "remind me to..." or asks for a reminder
 
-CRITICAL:
-- You are a small model - when in doubt, use ask_expert
-- For ANY general knowledge question (books, history, science, etc.) → ask_expert
-- NEVER say "I don't have access to that information" - use ask_expert instead
-- After getting tool results, respond naturally - don't call more tools
+CONVERSATION STYLE:
+- Be warm, friendly, and conversational
+- For greetings (good morning, hi, hello), respond naturally WITHOUT using any tools
+- Keep responses brief and natural for voice conversations
+- Only use tools when actually needed for the request
+
+IMPORTANT:
+- After getting tool results, summarize naturally in 1-2 sentences
 - Be direct and concise (Nadim has ADHD)
+- DON'T dump raw data from tools - synthesize it into a natural response
 
 EXAMPLES:
+- "Good morning" → "Good morning! How can I help you today?"
 - "Turn off the bedroom lights" → home_assistant
 - "What projects am I working on?" → search_memory
-- "Summarize the Stormlight Archive" → ask_expert (general knowledge)
-- "Write a Python function" → ask_expert (coding)
-- "What's the capital of France?" → ask_expert (general knowledge)
-- "Explain quantum computing" → ask_expert (complex topic)
-- "Add Adderall 20mg to my morning meds" → update_data(action="add_medication", name="Adderall", dose="20mg", schedule="morning")
-- "Remove Wellbutrin" → update_data(action="remove_medication", name="Wellbutrin")
-- "Change Vyvanse to 50mg" → update_data(action="update_medication", name="Vyvanse", dose="50mg")
-- "Mark voice interface complete on Brain Gateway" → update_data(action="complete_step", name="Brain Gateway", step="voice interface")
-- "Add a project to build a deck" → update_data(action="add_project", name="Build a deck")
-- "Remind me to call mom in 30 minutes" → set_reminder(reminder_text="call mom", time="in 30 minutes", target="both")
-- "Remind me to take my meds at 7am" → set_reminder(reminder_text="take your meds", time="at 7am", target="both")
-- "Set a reminder to check the laundry in 1 hour" → set_reminder(reminder_text="check the laundry", time="in 1 hour", target="voice")"""
+- "Add Adderall 20mg to my morning meds" → update_data
+- "Remind me to call mom in 30 minutes" → set_reminder"""
+
+
+def get_nemotron_system_prompt() -> str:
+    """System prompt for Nemotron as the tool orchestrator (called by Helios)."""
+    return """You are a tool orchestrator. Execute the requested action using your available tools.
+
+AVAILABLE TOOLS:
+1. home_assistant - Control smart home devices (lights, switches, fans, thermostats, scenes)
+2. search_memory - Search Nadim's personal notes for context (projects, routines, medications)
+3. update_data - Update Nadim's medications or projects
+4. set_reminder - Set a reminder for a specific time
+
+YOUR JOB:
+- Understand the command and use the appropriate tool(s)
+- Return a brief, factual summary of what was done
+- If the command is ambiguous, make a reasonable interpretation
+
+EXAMPLES:
+- "turn off bedroom lights" → home_assistant(entity_id="light.bedroom...", service="turn_off")
+- "what are my morning meds" → search_memory(query="morning medications")
+- "remind me to call mom in 30 minutes" → set_reminder(reminder_text="call mom", time="in 30 minutes")
+- "add Adderall to my meds" → update_data(action="add_medication", name="Adderall", ...)
+
+Be direct and efficient. Execute the tool and summarize the result."""
 
 
 @app.on_event("startup")
@@ -801,12 +970,14 @@ async def health():
 
     return {
         "ok": True,
-        "version": "5.1",
-        "architecture": "agentic",
-        "brain": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
-        "expert": f"{HELIOS_URL} ({HELIOS_MODEL})",
-        "expert_status": "online" if helios_online else "offline (auto-starts on demand)",
-        "tools": ["home_assistant", "search_memory", "ask_expert", "update_data", "set_reminder"],
+        "version": "6.0",
+        "architecture": "hybrid",
+        "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
+        "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
+        "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
+        "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
+        "helios_tools": ["ask_orchestrator"],
+        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),
@@ -815,11 +986,24 @@ async def health():
 
 @app.get("/v1/models")
 def list_models():
-    """List available models."""
+    """List available models in OpenAI-compatible format."""
     return {
+        "object": "list",
         "data": [
-            {"id": "brain", "object": "model"},
-            {"id": "brain-orchestrator", "object": "model"},
+            {
+                "id": "jessica",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "brain-gateway",
+                "name": "Jessica (Hybrid)",
+            },
+            {
+                "id": "brain",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "brain-gateway",
+                "name": "Brain Gateway",
+            },
         ]
     }
 
@@ -866,15 +1050,17 @@ async def execute_ha_command(req: Request):
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
     """
-    Main chat endpoint with agentic tool-calling and streaming support.
+    Main chat endpoint - Hybrid Architecture v6.
 
-    Nemotron-Orchestrator is the brain that decides when to use tools:
-    - home_assistant: Control smart home devices
-    - search_memory: Query personal knowledge base (RAG)
-    - ask_expert: Delegate complex tasks to Helios 120B
+    Flow: User → Helios (conversation) → ask_orchestrator → Nemotron (tools) → Helios → User
 
-    Streaming: When stream=true, tool-calling rounds run normally,
-    then the final response is streamed to the client.
+    Helios (120B) handles:
+    - Natural conversation, greetings, general knowledge
+    - Deciding when to delegate actions to the orchestrator
+
+    Nemotron (8B) handles:
+    - Tool execution: HA, RAG, reminders, update_data
+    - Called via ask_orchestrator when Helios needs actions performed
     """
     body = await req.json()
     messages = body.get("messages", [])
@@ -886,15 +1072,15 @@ async def chat_completions(req: Request):
     routing_info = {
         "timestamp": datetime.now().isoformat(),
         "user_query_length": len(user_text),
+        "architecture": "hybrid_v6",
         "tool_calls": [],
-        "rounds": 0,
         "streaming": stream,
     }
 
     # If external tools are provided (e.g., from HA voice pipeline),
-    # pass through to Nemotron and let it handle natively
+    # pass through to Nemotron for native handling
     if external_tools:
-        logger.info(f"[ORCHESTRATOR] External tools provided ({len(external_tools)}), passing through")
+        logger.info(f"[HYBRID] External tools provided ({len(external_tools)}), passing to Nemotron")
         routing_info["mode"] = "passthrough"
         try:
             llm_resp = await call_model(
@@ -906,189 +1092,244 @@ async def chat_completions(req: Request):
             llm_resp["_routing"] = routing_info
             return JSONResponse(llm_resp)
         except Exception as e:
-            logger.error(f"[ORCHESTRATOR] Passthrough failed: {e}")
+            logger.error(f"[HYBRID] Passthrough failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=503)
 
-    # Agentic mode: Nemotron orchestrates with our tools
-    routing_info["mode"] = "agentic"
-    logger.info(f"[ORCHESTRATOR] Starting agentic loop for: {user_text[:100]}... (stream={stream})")
+    # === HYBRID MODE: Helios first, Nemotron for tools ===
+    routing_info["mode"] = "hybrid"
+    logger.info(f"[HYBRID] Processing: {user_text[:100]}... (stream={stream})")
 
-    # Build conversation with system prompt
+    # 1. Pre-fetch relevant personal context from RAG (skip for greetings)
+    personal_context = ""
+    if not is_greeting(user_text):
+        personal_context = rag_context(user_text)
+        if personal_context:
+            logger.info(f"[HYBRID] Pre-fetched RAG context ({len(personal_context)} chars)")
+            routing_info["rag_prefetch"] = True
+
+    # 2. Build Helios system prompt with personal context
+    helios_system = get_helios_system_prompt(personal_context)
+
+    # 3. Check if Helios is available, start if needed
+    if not await check_helios_health():
+        logger.info("[HYBRID] Helios offline, attempting to start...")
+        started = await start_helios()
+        if not started:
+            # Fallback to Nemotron-only mode
+            logger.warning("[HYBRID] Helios unavailable, falling back to Nemotron")
+            routing_info["fallback"] = "nemotron"
+            return await _nemotron_fallback(messages, stream, routing_info)
+
+    # 4. Call Helios
+    logger.info("[HYBRID] Calling Helios...")
+    try:
+        helios_resp = await call_model(
+            HELIOS_URL, HELIOS_MODEL, messages,
+            system=helios_system,
+            tools=HELIOS_TOOLS,
+            timeout=180  # Helios can be slow
+        )
+    except Exception as e:
+        logger.error(f"[HYBRID] Helios call failed: {e}")
+        # Fallback to Nemotron
+        routing_info["fallback"] = "nemotron"
+        routing_info["helios_error"] = str(e)
+        return await _nemotron_fallback(messages, stream, routing_info)
+
+    # 5. Check for tool calls (ask_orchestrator)
+    choice = helios_resp.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    tool_calls = message.get("tool_calls", [])
+    content = message.get("content") or ""
+
+    # Parse tool calls from content if needed
+    if not tool_calls and content:
+        tool_calls = parse_tool_calls_from_content(content)
+
+    # 6. If no tool calls, return Helios response directly
+    if not tool_calls:
+        logger.info("[HYBRID] Helios responded directly (no orchestrator needed)")
+        routing_info["helios_direct"] = True
+
+        if stream:
+            return _stream_text_response(clean_response(content), HELIOS_MODEL)
+        else:
+            if content:
+                message["content"] = clean_response(content)
+            helios_resp["_routing"] = routing_info
+            return JSONResponse(helios_resp)
+
+    # 7. Execute ask_orchestrator via Nemotron
+    logger.info(f"[HYBRID] Helios called orchestrator, delegating to Nemotron")
+    conversation = messages.copy()
+
+    for tool_call in tool_calls:
+        function = tool_call.get("function", {})
+        tool_name = function.get("name", "")
+
+        if tool_name != "ask_orchestrator":
+            logger.warning(f"[HYBRID] Unexpected tool from Helios: {tool_name}")
+            continue
+
+        try:
+            arguments = json.loads(function.get("arguments", "{}"))
+        except json.JSONDecodeError:
+            arguments = {}
+
+        command = arguments.get("command", "")
+        if not command:
+            continue
+
+        logger.info(f"[HYBRID] Orchestrator command: {command[:100]}...")
+        routing_info["tool_calls"].append({"tool": "ask_orchestrator", "command": command})
+
+        # Send to Nemotron orchestrator
+        orchestrator_result = await call_nemotron_orchestrator(command)
+
+        # Add to conversation for Helios follow-up
+        conversation.append({
+            "role": "assistant",
+            "content": f"I used the orchestrator to: {command}"
+        })
+        conversation.append({
+            "role": "user",
+            "content": f"Orchestrator result: {orchestrator_result}\n\nPlease respond naturally to me based on this result. Keep it brief and conversational."
+        })
+
+    # 8. Get final response from Helios
+    logger.info("[HYBRID] Getting final response from Helios...")
+    try:
+        final_resp = await call_model(
+            HELIOS_URL, HELIOS_MODEL, conversation,
+            system=helios_system,
+            timeout=120
+        )
+    except Exception as e:
+        logger.error(f"[HYBRID] Helios final response failed: {e}")
+        # Return the orchestrator result directly
+        if stream:
+            return _stream_text_response(orchestrator_result, NEMOTRON_MODEL)
+        return JSONResponse({
+            "choices": [{"message": {"role": "assistant", "content": orchestrator_result}}],
+            "_routing": routing_info,
+        })
+
+    final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+    final_content = clean_response(final_content)
+
+    if stream:
+        return _stream_text_response(final_content, HELIOS_MODEL)
+
+    final_resp["_routing"] = routing_info
+    if final_content:
+        final_resp["choices"][0]["message"]["content"] = final_content
+    return JSONResponse(final_resp)
+
+
+def _stream_text_response(text: str, model: str):
+    """Helper to stream a text response in SSE format."""
+    chunk_id = f"chatcmpl-{int(time.time())}"
+
+    async def generate():
+        chunk_size = 20
+        for i in range(0, len(text), chunk_size):
+            chunk_text = text[i:i+chunk_size]
+            chunk_data = {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": chunk_text},
+                    "finish_reason": None
+                }]
+            }
+            yield f"data: {json.dumps(chunk_data)}\n\n"
+        # Final chunk
+        final_chunk = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        }
+        yield f"data: {json.dumps(final_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+
+async def _nemotron_fallback(messages: List[Dict], stream: bool, routing_info: Dict):
+    """Fallback to Nemotron-only mode when Helios is unavailable."""
+    logger.info("[FALLBACK] Using Nemotron-only mode")
+
     conversation = messages.copy()
     system_prompt = get_orchestrator_system_prompt()
 
-    # Agentic loop: let Nemotron call tools until it responds with content
     for round_num in range(MAX_TOOL_ROUNDS):
-        routing_info["rounds"] = round_num + 1
-        logger.info(f"[ORCHESTRATOR] Round {round_num + 1}/{MAX_TOOL_ROUNDS}")
-
         try:
             llm_resp = await call_model(
                 NEMOTRON_URL, NEMOTRON_MODEL, conversation,
                 system=system_prompt,
                 tools=get_orchestrator_tools(),
+                tool_choice="none",  # Nemotron uses XML-style tool calls
                 timeout=60
             )
         except Exception as e:
-            logger.error(f"[ORCHESTRATOR] Nemotron call failed: {e}")
-            error_response = {"error": f"Orchestrator failed: {e}", "_routing": routing_info}
+            logger.error(f"[FALLBACK] Nemotron failed: {e}")
+            error_msg = f"Sorry, I'm having trouble right now: {e}"
             if stream:
-                # Return error as streaming format
-                async def error_stream():
-                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                    yield "data: [DONE]\n\n"
-                return StreamingResponse(error_stream(), media_type="text/event-stream")
-            return JSONResponse(error_response, status_code=503)
+                return _stream_text_response(error_msg, NEMOTRON_MODEL)
+            return JSONResponse({"error": str(e)}, status_code=503)
 
-        # Extract the assistant's response
         choice = llm_resp.get("choices", [{}])[0]
         message = choice.get("message", {})
         tool_calls = message.get("tool_calls", [])
         content = message.get("content") or ""
 
-        # Nemotron outputs tool calls as <tool_call> tags in content
-        # Parse them if no native tool_calls were returned
         if not tool_calls and content:
             tool_calls = parse_tool_calls_from_content(content)
-            if tool_calls:
-                logger.info(f"[ORCHESTRATOR] Parsed {len(tool_calls)} tool call(s) from content")
 
-        # If no tool calls, we're done - return the response (streaming or not)
         if not tool_calls:
-            logger.info(f"[ORCHESTRATOR] Final response (no tool calls, stream={stream})")
-
+            final_content = clean_response(content)
             if stream:
-                # For true streaming, make a fresh streaming call to Nemotron
-                # This gives real token-by-token output instead of fake chunking
-                logger.info(f"[ORCHESTRATOR] Starting streaming response")
-                return StreamingResponse(
-                    stream_final_response(
-                        NEMOTRON_URL, NEMOTRON_MODEL, conversation,
-                        system=system_prompt, timeout=120
-                    ),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "X-Accel-Buffering": "no",
-                        "Connection": "keep-alive",
-                    }
-                )
-            else:
-                # Non-streaming response
-                if content:
-                    message["content"] = clean_response(content)
-                llm_resp["_routing"] = routing_info
-                return JSONResponse(llm_resp)
+                return _stream_text_response(final_content, NEMOTRON_MODEL)
+            llm_resp["_routing"] = routing_info
+            if content:
+                message["content"] = final_content
+            return JSONResponse(llm_resp)
 
-        # Process tool calls
-        logger.info(f"[ORCHESTRATOR] Processing {len(tool_calls)} tool call(s)")
-
-        # Add assistant message to conversation (keep original content with tool_call tags)
+        # Process tools
         conversation.append({"role": "assistant", "content": content})
-
-        # Execute each tool and collect results
         tool_results = []
-        expert_response = None  # Track if ask_expert was called
 
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
-
-            # Parse arguments
             try:
                 arguments = json.loads(function.get("arguments", "{}"))
-            except json.JSONDecodeError:
+            except:
                 arguments = {}
 
-            # Execute the tool
             result = await execute_tool(tool_name, arguments)
-
-            # Track for debugging
-            routing_info["tool_calls"].append({
-                "tool": tool_name,
-                "args": arguments,
-                "result_preview": result[:200] if result else None,
-            })
-
             tool_results.append(f"[{tool_name}] {result}")
 
-            # If ask_expert was called, save the response for potential short-circuit
-            if tool_name == "ask_expert":
-                expert_response = result
-
-        # SHORT-CIRCUIT: If only ask_expert was called, return its response directly
-        # This saves a round-trip to Nemotron and speeds up general knowledge queries
-        if len(tool_calls) == 1 and expert_response:
-            logger.info(f"[ORCHESTRATOR] Short-circuit: returning expert response directly")
-            routing_info["short_circuit"] = True
-
-            if stream:
-                # Stream the expert response
-                chunk_id = f"chatcmpl-{int(time.time())}"
-                async def expert_stream():
-                    chunk_size = 15
-                    for i in range(0, len(expert_response), chunk_size):
-                        chunk_text = expert_response[i:i+chunk_size]
-                        chunk_data = {
-                            "id": chunk_id,
-                            "object": "chat.completion.chunk",
-                            "created": int(time.time()),
-                            "model": NEMOTRON_MODEL,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": chunk_text},
-                                "finish_reason": None
-                            }]
-                        }
-                        yield f"data: {json.dumps(chunk_data)}\n\n"
-                    final_chunk = {
-                        "id": chunk_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": NEMOTRON_MODEL,
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
-                    }
-                    yield f"data: {json.dumps(final_chunk)}\n\n"
-                    yield "data: [DONE]\n\n"
-                return StreamingResponse(
-                    expert_stream(),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-                )
-            else:
-                return JSONResponse({
-                    "choices": [{
-                        "message": {"role": "assistant", "content": expert_response}
-                    }],
-                    "_routing": routing_info,
-                })
-
-        # Add tool results as a user message (Nemotron understands this format)
-        # Include instruction to respond naturally without more tool calls
         results_text = "\n".join(tool_results)
         conversation.append({
             "role": "user",
-            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nThe tool has completed. Please provide a brief, natural response to the user based on the result above. Do NOT call any more tools."
+            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nProvide a brief response."
         })
 
-    # If we exit the loop, we hit max rounds
-    logger.warning(f"[ORCHESTRATOR] Hit max tool rounds ({MAX_TOOL_ROUNDS})")
-    error_msg = "I apologize, but I wasn't able to complete the request within the allowed number of steps. Please try rephrasing or breaking down your request."
-
+    error_msg = "I couldn't complete that request. Please try again."
     if stream:
-        async def max_rounds_stream():
-            yield f"data: {json.dumps({'choices': [{'delta': {'content': error_msg}, 'index': 0}]})}\n\n"
-            yield f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop', 'index': 0}]})}\n\n"
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(max_rounds_stream(), media_type="text/event-stream")
-
+        return _stream_text_response(error_msg, NEMOTRON_MODEL)
     return JSONResponse({
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": error_msg
-            }
-        }],
+        "choices": [{"message": {"role": "assistant", "content": error_msg}}],
         "_routing": routing_info,
     })
 

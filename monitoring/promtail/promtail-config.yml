@@ -49,7 +49,7 @@ scrape_configs:
 
       # Extract tool calls from orchestrator logs
       - regex:
-          expression: '(?P<tool_type>home_assistant|search_memory|ask_expert)'
+          expression: '(?P<tool_type>home_assistant|search_memory|ask_expert|ask_orchestrator|set_reminder|update_data)'
           source: output
 
       # Label tool calls for easy filtering

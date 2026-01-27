@@ -377,12 +377,12 @@
     },
     {
       "type": "logs",
-      "title": "Tool Calls (HA / Memory / Expert)",
+      "title": "Tool Calls (Hybrid: Helios → Nemotron)",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
       "targets": [
         {
-          "expr": "{container=\"brain-orchestrator\"} |~ \"tool_call|home_assistant|search_memory|ask_expert\"",
+          "expr": "{container=\"brain-orchestrator\"} |~ \"HYBRID|NEMOTRON|TOOL|home_assistant|search_memory|ask_orchestrator|set_reminder|update_data\"",
           "refId": "A"
         }
       ],
