@@ -3,6 +3,9 @@
 # This automation handles voice commands when the built-in conversation
 # agent integration doesn't work with your custom API.
 #
+# ATOM Echo devices capture wake words and stream audio to HA.
+# TTS responses are routed to Google speakers for better audio quality.
+#
 # Add this to your automations.yaml
 
 # -----------------------------------------------------------------------------
@@ -10,7 +13,7 @@
 # -----------------------------------------------------------------------------
 - alias: "Brain Gateway Voice Conversation"
   id: brain_gateway_voice_conversation
-  description: "Route voice commands to Brain Gateway and play TTS response"
+  description: "Route voice commands to Brain Gateway and play TTS response on Google speakers"
   mode: queued
   max: 5
 
@@ -26,22 +29,48 @@
         text: "{{ trigger.sentence }}"
       response_variable: brain_response
 
-    # Extract the response text
+    # Extract the response text and determine target speaker
     - variables:
         response_text: >
           {{ brain_response.content.choices[0].message.content
              | default('Sorry, I could not process that. Please try again.') }}
+        # Map ATOM Echo device to nearest Google speaker, or use default
+        target_speaker: >
+          {% set device = trigger.device_id | default('') %}
+          {% set room_map = {
+            'atom_echo_jess': states('input_select.jess_default_speaker'),
+            'atom_echo_office': 'media_player.office_speaker',
+            'atom_echo_bedroom': 'media_player.bedroom_speaker',
+            'atom_echo_kitchen': 'media_player.kitchen_speaker',
+            'atom_echo_living': 'media_player.living_room_speaker'
+          } %}
+          {% if device in room_map %}
+            {{ room_map[device] }}
+          {% else %}
+            {{ states('input_select.jess_default_speaker') }}
+          {% endif %}
 
-    # Play TTS response on the originating device (or default speaker)
+    # Store last response for debugging
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.last_voice_response
+      data:
+        value: "{{ response_text[:500] }}"
+
+    # Play TTS response on Google speaker
     - service: tts.speak
       target:
-        entity_id: "{{ trigger.device_id | default('media_player.voice_pe') }}"
+        entity_id: "{{ target_speaker }}"
       data:
         message: "{{ response_text }}"
+        media_player_entity_id: "{{ target_speaker }}"
 
 # -----------------------------------------------------------------------------
 # ADHD Support Quick Commands
 # -----------------------------------------------------------------------------
+# TTS output goes to Google speakers for better audio quality.
+# ATOM Echo serves as wake word detector and microphone only.
+
 - alias: "ADHD Medication Reminder Request"
   id: adhd_medication_reminder
   description: "Handle medication reminder requests"
@@ -54,6 +83,9 @@
         - "medication reminder"
         - "set a medication reminder"
 
+  variables:
+    target_speaker: "{{ states('input_select.jess_default_speaker') }}"
+
   action:
     - service: rest_command.brain_gateway_chat
       data:
@@ -62,9 +94,10 @@
 
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "{{ brain_response.content.choices[0].message.content }}"
+        media_player_entity_id: "{{ target_speaker }}"
 
 - alias: "ADHD Spiral Help"
   id: adhd_spiral_help
@@ -78,6 +111,11 @@
         - "help me [get out|escape] [of|from] [this|a] spiral"
         - "[i'm|im] spiraling"
         - "spiral help"
+        - "help me get unstuck"
+        - "[i'm|im|i am] [stuck|frozen]"
+
+  variables:
+    target_speaker: "{{ states('input_select.jess_default_speaker') }}"
 
   action:
     - service: rest_command.brain_gateway_chat
@@ -87,9 +125,10 @@
 
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "{{ brain_response.content.choices[0].message.content }}"
+        media_player_entity_id: "{{ target_speaker }}"
 
 - alias: "ADHD Task Motivation"
   id: adhd_task_motivation
@@ -103,6 +142,9 @@
         - "help me [start|do|begin] {task}"
         - "[i can't|i cant|i don't want to] [start|do] {task}"
 
+  variables:
+    target_speaker: "{{ states('input_select.jess_default_speaker') }}"
+
   action:
     - service: rest_command.brain_gateway_chat
       data:
@@ -111,9 +153,10 @@
 
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "{{ brain_response.content.choices[0].message.content }}"
+        media_player_entity_id: "{{ target_speaker }}"
 
 - alias: "ADHD Body Doubling Request"
   id: adhd_body_doubling
@@ -127,6 +170,9 @@
         - "body double [with me|for me]"
         - "work with me"
 
+  variables:
+    target_speaker: "{{ states('input_select.jess_default_speaker') }}"
+
   action:
     - service: rest_command.brain_gateway_chat
       data:
@@ -135,9 +181,10 @@
 
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "{{ brain_response.content.choices[0].message.content }}"
+        media_player_entity_id: "{{ target_speaker }}"
 
 # -----------------------------------------------------------------------------
 # Helios Expert Mode Toggle
@@ -153,22 +200,30 @@
         - "[activate|start|enable] [helios|expert mode|deep thinking]"
         - "[i need|let's have] [a deep|an expert] conversation"
 
+  variables:
+    target_speaker: "{{ states('input_select.jess_default_speaker') }}"
+
   action:
     - service: shell_command.start_helios
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.helios_expert_mode
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "Starting Helios expert mode. This will take a minute or two to warm up. I'll let you know when it's ready for deep conversations."
+        media_player_entity_id: "{{ target_speaker }}"
 
     - delay:
         minutes: 2
 
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "Helios is now ready. The 120 billion parameter model is at your service for deep, thoughtful conversations."
+        media_player_entity_id: "{{ target_speaker }}"
 
 - alias: "Deactivate Helios Expert Mode"
   id: deactivate_helios_expert
@@ -181,10 +236,17 @@
         - "[deactivate|stop|disable] [helios|expert mode|deep thinking]"
         - "save power"
 
+  variables:
+    target_speaker: "{{ states('input_select.jess_default_speaker') }}"
+
   action:
     - service: shell_command.stop_helios
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.helios_expert_mode
     - service: tts.speak
       target:
-        entity_id: media_player.voice_pe
+        entity_id: "{{ target_speaker }}"
       data:
         message: "Helios is shutting down. This saves about 150 watts of power. I'll still be here with the regular brain for your daily support."
+        media_player_entity_id: "{{ target_speaker }}"

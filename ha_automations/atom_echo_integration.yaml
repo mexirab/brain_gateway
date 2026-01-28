@@ -1,0 +1,156 @@
+# ATOM Echo Integration for Brain Gateway
+# ========================================
+# Configuration for M5Stack ATOM Echo with "Hey Jess" wake word
+#
+# Architecture:
+#   "Hey Jess" → ATOM Echo (microWakeWord on-device)
+#             → Home Assistant (Wyoming)
+#             → Whisper STT (Uranus:8003)
+#             → Brain Gateway (:8888)
+#             → Nemotron-8B (Saturn:8001)
+#             → Jessica TTS (Uranus:8002)
+#             → ATOM Echo speaker
+#
+# Prerequisites:
+# 1. ATOM Echo flashed with ESPHome (atom_echo.yaml)
+# 2. hey_jess.tflite trained and deployed
+# 3. Wyoming integrations added to HA (STT & TTS)
+# 4. Voice assistant created in HA Settings
+
+# =============================================================================
+# STEP 1: Add Wyoming Integration (via Home Assistant UI)
+# =============================================================================
+#
+# Go to Settings > Devices & Services > Add Integration > Wyoming Protocol
+#
+# Add TWO integrations:
+#
+# 1. Speech-to-Text (Whisper):
+#    - Host: 10.0.0.173
+#    - Port: 8003
+#    - Name: Whisper STT (Uranus)
+#
+# 2. Text-to-Speech (Jessica/Qwen3):
+#    - Host: 10.0.0.173
+#    - Port: 8002
+#    - Name: Jessica TTS (Uranus)
+
+# =============================================================================
+# STEP 2: Create Voice Assistant Pipeline (via Home Assistant UI)
+# =============================================================================
+#
+# Go to Settings > Voice Assistants > Add Assistant
+#
+# Configuration:
+#   Name: Jess (Brain Gateway)
+#   Language: English
+#   Conversation agent: Home Assistant (or Brain Gateway custom agent)
+#   Speech-to-text: Whisper STT (Uranus)
+#   Text-to-speech: Jessica TTS (Uranus)
+#
+# After saving:
+# 1. Go to Settings > Devices & Services
+# 2. Find "atom-echo-jess" device
+# 3. Click Configure
+# 4. Select "Jess (Brain Gateway)" as the voice assistant
+
+# =============================================================================
+# STEP 3: Add to configuration.yaml
+# =============================================================================
+
+# Wyoming Protocol (enables the integration)
+wyoming:
+
+# REST Commands for Brain Gateway
+rest_command:
+  brain_gateway_chat:
+    url: "http://10.0.0.186:8888/v1/chat/completions"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: >
+      {
+        "model": "nemotron",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Jess, a supportive ADHD assistant with a warm, encouraging voice. Be concise for voice responses (1-2 sentences). Help with medication reminders, motivation, and getting unstuck. Speak naturally like a caring friend."
+          },
+          {
+            "role": "user",
+            "content": "{{ text }}"
+          }
+        ],
+        "max_tokens": 200
+      }
+    content_type: "application/json"
+    timeout: 30
+
+  brain_gateway_expert:
+    url: "http://10.0.0.186:8888/v1/chat/completions"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: >
+      {
+        "model": "nemotron",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Jess with access to the Helios expert (120B model). For this complex question, take your time and provide a thorough, thoughtful response. Use the ask_expert tool if needed."
+          },
+          {
+            "role": "user",
+            "content": "{{ text }}"
+          }
+        ],
+        "max_tokens": 500
+      }
+    content_type: "application/json"
+    timeout: 120
+
+  generate_morning_briefing:
+    url: "http://10.0.0.186:8888/api/briefing/morning"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: '{"generate_tts": false}'
+    content_type: "application/json"
+
+# Shell Commands for Helios Control
+shell_command:
+  start_helios: "/opt/voyager/gateway_mvp/scripts/start-helios.sh"
+  stop_helios: "/opt/voyager/gateway_mvp/scripts/stop-helios.sh"
+  helios_status: "/opt/voyager/gateway_mvp/scripts/helios-status.sh"
+
+# Input Helpers
+input_boolean:
+  helios_expert_mode:
+    name: Helios Expert Mode
+    icon: mdi:brain
+
+input_text:
+  last_voice_response:
+    name: Last Voice Response
+    max: 500
+
+# Speaker Selection - Update options to match your Google speaker entity IDs
+input_select:
+  jess_default_speaker:
+    name: Jess Default Speaker
+    icon: mdi:speaker
+    options:
+      - media_player.living_room_speaker
+      - media_player.bedroom_speaker
+      - media_player.office_speaker
+      - media_player.kitchen_speaker
+      - media_player.bathroom_speaker
+    initial: media_player.living_room_speaker
+
+# =============================================================================
+# STEP 4: Add to automations.yaml
+# =============================================================================
+
+# NOTE: These automations route voice commands to Brain Gateway
+# The conversation agent integration handles most cases, but these
+# provide ADHD-specific quick commands with specialized prompts.

@@ -1,5 +1,7 @@
 # Voice PE Integration Setup Guide
 
+> **Note:** For the recommended ATOM Echo setup with custom "Hey Jess" wake word, see `atom_echo_setup.md` instead. This guide is for Voice PE as an alternative.
+
 This guide sets up the Home Assistant Voice PE to use your Brain Gateway for ADHD support.
 
 ## Architecture

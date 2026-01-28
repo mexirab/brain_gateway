@@ -1,0 +1,15 @@
+{
+  "type": "micro",
+  "wake_word": "hey_jess",
+  "author": "nadim",
+  "model": "http://10.0.0.186:8080/hey_jess.tflite",
+  "trained_languages": ["en"],
+  "version": 1,
+  "micro": {
+    "probability_cutoff": 0.5,
+    "sliding_window_size": 5,
+    "feature_step_size": 20,
+    "tensor_arena_size": 45000,
+    "minimum_esphome_version": "2024.2.0"
+  }
+}

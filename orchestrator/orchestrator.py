@@ -10,6 +10,7 @@ Brain Gateway Orchestrator v6 - Hybrid Architecture
 import os
 import re
 import json
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,8 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.memory import MemoryJobStore
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,11 +41,14 @@ from reminder_manager import (
     parse_time_expression,
     format_time_friendly,
     add_reminder,
+    get_reminders,
+    save_reminders,
     list_pending_reminders,
-    create_ha_automation,
-    deliver_reminder,
+    remove_reminder,
     generate_reminder_audio,
     mark_reminder_completed,
+    _announce_voice,
+    _send_notification,
 )
 
 # Load environment
@@ -68,6 +74,13 @@ TOP_K = int(os.environ.get("TOP_K", "6"))
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # Prevent infinite loops
 
 app = FastAPI(title="Brain Gateway", version="5.0")
+
+# APScheduler for reminder scheduling (single source of truth: YAML)
+TIMEZONE = os.environ.get("TZ", "America/New_York")
+scheduler = AsyncIOScheduler(
+    jobstores={'default': MemoryJobStore()},
+    timezone=TIMEZONE
+)
 
 
 # =============================================================================
@@ -254,6 +267,23 @@ STATIC_TOOLS = [
                     }
                 },
                 "required": ["reminder_text", "time"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_reminder",
+            "description": "Cancel a pending reminder by its ID. Use list_reminders to see pending reminders first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reminder_id": {
+                        "type": "string",
+                        "description": "The ID of the reminder to cancel (e.g., 'abc12345')"
+                    }
+                },
+                "required": ["reminder_id"]
             }
         }
     }
@@ -532,6 +562,10 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("time", ""),
                 arguments.get("target", "both")
             )
+        elif tool_name == "cancel_reminder":
+            return await tool_cancel_reminder(
+                arguments.get("reminder_id", "")
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -706,12 +740,74 @@ def tool_update_data(arguments: Dict[str, Any]) -> str:
     )
 
 
+async def deliver_reminder_job(reminder_id: str):
+    """
+    Called by APScheduler at the scheduled time to deliver a reminder.
+
+    Fetches the reminder from YAML, delivers via HA services, and updates status.
+    """
+    logger.info(f"[REMINDER] Triggering: {reminder_id}")
+
+    # Get reminder from YAML
+    data = get_reminders()
+    reminder = next((r for r in data["reminders"] if r["id"] == reminder_id), None)
+
+    if not reminder:
+        logger.warning(f"[REMINDER] {reminder_id} not found in YAML")
+        return
+
+    if reminder.get("status") != "pending":
+        logger.warning(f"[REMINDER] {reminder_id} already completed, skipping")
+        return
+
+    text = reminder.get("text", "You have a reminder")
+    target = reminder.get("target", "both")
+    audio_url = reminder.get("audio_url")
+
+    # ADHD-friendly message format
+    spoken_text = f"Hey Nadim! Quick reminder: {text}"
+
+    results = {"voice": None, "phone": None}
+
+    # Deliver via HA services (not automations)
+    if target in ["voice", "both"]:
+        if audio_url:
+            # Use pre-generated audio
+            from reminder_manager import REMINDER_SPEAKER, HA_URL, HA_TOKEN
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.post(
+                        f"{HA_URL}/api/services/media_player/play_media",
+                        headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                        json={
+                            "entity_id": REMINDER_SPEAKER,
+                            "media_content_id": audio_url,
+                            "media_content_type": "audio/wav"
+                        }
+                    )
+                    results["voice"] = {"success": response.status_code == 200}
+                    logger.info(f"[REMINDER] Played audio on {REMINDER_SPEAKER}")
+            except Exception as e:
+                logger.error(f"[REMINDER] Voice delivery failed: {e}")
+                results["voice"] = {"success": False, "error": str(e)}
+        else:
+            # Generate audio on-the-fly
+            results["voice"] = await _announce_voice(spoken_text)
+
+    if target in ["phone", "both"]:
+        results["phone"] = await _send_notification(text)
+
+    # Update status in YAML
+    mark_reminder_completed(reminder_id)
+    logger.info(f"[REMINDER] Completed: {reminder_id}")
+
+
 async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:
     """
     Set a reminder that will be delivered via voice and/or mobile notification.
 
-    Parses the time expression, generates TTS audio, stores the reminder, and creates
-    an HA automation to trigger it at the scheduled time.
+    Parses the time expression, generates TTS audio, stores the reminder, and
+    schedules it with APScheduler (no HA automations).
     """
     if not reminder_text:
         return "Please tell me what to remind you about."
@@ -755,8 +851,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     if audio_url:
         reminder["audio_url"] = audio_url
 
-    # Save to YAML
-    from reminder_manager import get_reminders, save_reminders
+    # Save to YAML (single source of truth)
     data = get_reminders()
     data["reminders"].append(reminder)
     if not save_reminders(data):
@@ -764,11 +859,16 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
 
     logger.info(f"[REMINDER] Added reminder {reminder_id}: '{reminder_text}' at {trigger_time}")
 
-    # Create HA automation
-    success, result = await create_ha_automation(reminder, audio_url)
-    if not success:
-        logger.warning(f"[REMINDER] HA automation failed: {result}")
-        # Even if HA automation fails, the reminder is stored
+    # Schedule with APScheduler (NO HA automation)
+    scheduler.add_job(
+        deliver_reminder_job,
+        trigger='date',
+        run_date=trigger_time,
+        args=[reminder_id],
+        id=f"reminder_{reminder_id}",
+        replace_existing=True
+    )
+    logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}")
 
     # Build friendly confirmation
     time_friendly = format_time_friendly(trigger_time)
@@ -779,6 +879,21 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     }.get(target, "")
 
     return f"Got it! I'll remind you to {reminder_text} {time_friendly} {target_desc}."
+
+
+async def tool_cancel_reminder(reminder_id: str) -> str:
+    """Cancel a pending reminder."""
+    # Remove from scheduler
+    try:
+        scheduler.remove_job(f"reminder_{reminder_id}")
+        logger.info(f"[SCHEDULER] Removed job reminder_{reminder_id}")
+    except Exception as e:
+        logger.debug(f"[SCHEDULER] Job not found: {e}")
+
+    # Remove from YAML
+    if remove_reminder(reminder_id):
+        return f"Reminder {reminder_id} cancelled."
+    return f"Reminder {reminder_id} not found."
 
 
 async def call_nemotron_orchestrator(command: str) -> str:
@@ -824,19 +939,29 @@ async def call_nemotron_orchestrator(command: str) -> str:
             logger.info(f"[NEMOTRON] Final result: {result[:100]}...")
             return result
 
-        # Process tool calls
+        # Process tool calls (deduplicate identical calls)
         logger.info(f"[NEMOTRON] Processing {len(tool_calls)} tool call(s)")
         messages.append({"role": "assistant", "content": content})
 
         tool_results = []
+        seen_calls = set()  # Track (tool_name, args_json) to prevent duplicates
+
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
+            args_str = function.get("arguments", "{}")
 
             try:
-                arguments = json.loads(function.get("arguments", "{}"))
+                arguments = json.loads(args_str)
             except json.JSONDecodeError:
                 arguments = {}
+
+            # Deduplicate: skip if we've already executed this exact call
+            call_key = (tool_name, json.dumps(arguments, sort_keys=True))
+            if call_key in seen_calls:
+                logger.info(f"[NEMOTRON] Skipping duplicate tool call: {tool_name}")
+                continue
+            seen_calls.add(call_key)
 
             result = await execute_tool(tool_name, arguments)
             tool_results.append(f"[{tool_name}] {result}")
@@ -961,6 +1086,44 @@ async def startup_event():
     count = await ha_client.refresh_entities()
     print(f"[orchestrator] Loaded {count} HA entities")
 
+    # Reload pending reminders into scheduler
+    pending = list_pending_reminders()
+    now = datetime.now()
+    scheduled_count = 0
+    delivered_count = 0
+
+    for reminder in pending:
+        reminder_id = reminder.get("id")
+        time_str = reminder.get("time")
+        if not reminder_id or not time_str:
+            continue
+
+        try:
+            trigger_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+        except ValueError:
+            logger.warning(f"[SCHEDULER] Invalid time format for reminder {reminder_id}: {time_str}")
+            continue
+
+        if trigger_time <= now:
+            # Missed reminder - deliver immediately
+            logger.info(f"[REMINDER] Delivering missed: {reminder_id}")
+            asyncio.create_task(deliver_reminder_job(reminder_id))
+            delivered_count += 1
+        else:
+            # Future reminder - schedule it
+            scheduler.add_job(
+                deliver_reminder_job,
+                trigger='date',
+                run_date=trigger_time,
+                args=[reminder_id],
+                id=f"reminder_{reminder_id}",
+                replace_existing=True
+            )
+            scheduled_count += 1
+
+    scheduler.start()
+    logger.info(f"[SCHEDULER] Started with {scheduled_count} scheduled, {delivered_count} missed reminders delivered")
+
 
 @app.get("/health")
 async def health():
@@ -968,19 +1131,27 @@ async def health():
     # Check Helios status
     helios_online = await check_helios_health()
 
+    # Get scheduled reminder count
+    scheduled_jobs = len(scheduler.get_jobs())
+
     return {
         "ok": True,
-        "version": "6.0",
+        "version": "6.1",
         "architecture": "hybrid",
         "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
         "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
         "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
         "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "helios_tools": ["ask_orchestrator"],
-        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder"],
+        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),
+        "scheduler": {
+            "running": scheduler.running,
+            "scheduled_reminders": scheduled_jobs,
+            "timezone": str(scheduler.timezone),
+        },
     }
 
 
@@ -1385,7 +1556,7 @@ def memory_stats():
 @app.post("/api/reminder/trigger")
 async def trigger_reminder(req: Request):
     """
-    Trigger a reminder - called by HA automation at the scheduled time.
+    Manually trigger a reminder (for testing or legacy HA automation callbacks).
 
     Request body:
     {
@@ -1401,19 +1572,28 @@ async def trigger_reminder(req: Request):
     if not reminder_id:
         return JSONResponse({"error": "Missing reminder_id"}, status_code=400)
 
-    logger.info(f"[REMINDER] Triggering reminder: {reminder_id}")
+    logger.info(f"[REMINDER] Manual trigger: {reminder_id}")
 
-    result = await deliver_reminder(reminder_id)
+    # Use the same delivery function as APScheduler
+    await deliver_reminder_job(reminder_id)
 
-    return JSONResponse(result)
+    return JSONResponse({"success": True, "reminder_id": reminder_id})
 
 
 @app.get("/api/reminders")
 async def get_reminders_api():
-    """List all pending reminders."""
+    """List all pending reminders with scheduler status."""
     pending = list_pending_reminders()
+
+    # Enrich with scheduler info
+    scheduled_job_ids = {job.id for job in scheduler.get_jobs()}
+    for reminder in pending:
+        job_id = f"reminder_{reminder.get('id')}"
+        reminder["scheduled"] = job_id in scheduled_job_ids
+
     return JSONResponse({
         "count": len(pending),
+        "scheduler_jobs": len(scheduled_job_ids),
         "reminders": pending
     })
 

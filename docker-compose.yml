@@ -1,11 +1,19 @@
 # Updated docker-compose.yml for /opt/voyager/gateway_mvp/
 # Adds the Brain Orchestrator service
 
+# Shared logging config to reduce disk I/O
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:8080"
     volumes:
@@ -39,6 +47,7 @@ services:
       dockerfile: Dockerfile
     container_name: brain-orchestrator
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "8888:8888"
     volumes:
@@ -51,6 +60,8 @@ services:
       # Mount SSH keys for Helios auto-start
       - /home/nadim/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
       - /home/nadim/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      # Persistent storage for reminder audio files
+      - brain-audio:/tmp/brain_audio:rw
     environment:
       - NEMOTRON_URL=http://10.0.0.58:8001/v1
       - HELIOS_URL=http://10.0.0.195:8080/v1
@@ -76,6 +87,7 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: litellm
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "4000:4000"
     volumes:
@@ -90,9 +102,22 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - gateway-net
+
+  model-server:
+    image: nginx:alpine
+    container_name: model-server
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "8080:80"
+    volumes:
+      - /opt/voyager/gateway_mvp/models:/usr/share/nginx/html:ro
     networks:
       - gateway-net
 
@@ -103,4 +128,5 @@ networks:
 volumes:
   open-webui-data:
   redis-data:
+  brain-audio:
 

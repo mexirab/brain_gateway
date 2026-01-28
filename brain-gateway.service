@@ -1,0 +1,15 @@
+[Unit]
+Description=Brain Gateway Stack (Open WebUI + Orchestrator)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/voyager/gateway_mvp
+ExecStart=/usr/bin/docker compose -p brain up -d
+ExecStop=/usr/bin/docker compose -p brain down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

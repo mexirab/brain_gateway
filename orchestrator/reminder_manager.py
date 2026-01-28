@@ -26,8 +26,8 @@ HA_TOKEN = os.environ.get("HA_TOKEN", "")
 # Orchestrator URL (for HA to call back)
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.186:8888")
 
-# Delivery targets
-ALL_SPEAKERS = "media_player.all_speakers"
+# Delivery targets (configurable via env)
+REMINDER_SPEAKER = os.environ.get("REMINDER_SPEAKER", "media_player.office_speaker")
 MOBILE_NOTIFY = "notify.mobile_app_nadims_iphone"
 
 
@@ -274,107 +274,8 @@ def _generate_reminders_md(data: Dict[str, Any]) -> None:
 
 
 # =============================================================================
-# HOME ASSISTANT AUTOMATION
+# TTS AUDIO GENERATION
 # =============================================================================
-
-async def create_ha_automation(reminder: Dict[str, Any], audio_url: str = None) -> Tuple[bool, str]:
-    """
-    Create a Home Assistant automation to trigger the reminder.
-
-    Uses native HA services:
-    - media_player.play_media for voice (with pre-generated TTS audio)
-    - notify.mobile_app_nadims_iphone for mobile notifications
-    """
-    reminder_id = reminder.get("id")
-    reminder_text = reminder.get("text", "You have a reminder")
-    target = reminder.get("target", "both")
-    trigger_time = datetime.strptime(reminder.get("time"), "%Y-%m-%d %H:%M")
-
-    automation_id = f"reminder_{reminder_id}"
-
-    # Build actions based on target
-    actions = []
-
-    # Voice announcement via pre-generated audio
-    if target in ["voice", "both"] and audio_url:
-        actions.append({
-            "service": "media_player.play_media",
-            "target": {
-                "entity_id": ALL_SPEAKERS
-            },
-            "data": {
-                "media_content_id": audio_url,
-                "media_content_type": "audio/wav"
-            }
-        })
-
-    # Mobile notification
-    if target in ["phone", "both"]:
-        actions.append({
-            "service": "notify.mobile_app_nadims_iphone",
-            "data": {
-                "title": "Reminder from Jess",
-                "message": reminder_text,
-                "data": {
-                    "push": {
-                        "sound": "default",
-                        "interruption-level": "time-sensitive"
-                    }
-                }
-            }
-        })
-
-    if not actions:
-        return (False, "No actions to perform")
-
-    # Build automation config
-    automation = {
-        "id": automation_id,
-        "alias": f"Reminder: {reminder_text[:30]}",
-        "description": f"Auto-generated reminder - {reminder_text}",
-        "trigger": [
-            {
-                "platform": "time",
-                "at": trigger_time.strftime("%H:%M:%S")
-            }
-        ],
-        "condition": [
-            {
-                # Only trigger on the correct date
-                "condition": "template",
-                "value_template": f"{{{{ now().strftime('%Y-%m-%d') == '{trigger_time.strftime('%Y-%m-%d')}' }}}}"
-            }
-        ],
-        "action": actions,
-        "mode": "single"
-    }
-
-    headers = {
-        "Authorization": f"Bearer {HA_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            # Create the automation via HA API
-            url = f"{HA_URL}/api/config/automation/config/{automation_id}"
-            response = await client.post(url, json=automation, headers=headers)
-
-            if response.status_code in [200, 201]:
-                # Reload automations
-                await client.post(
-                    f"{HA_URL}/api/services/automation/reload",
-                    headers=headers
-                )
-                logger.info(f"Created HA automation: {automation_id}")
-                return (True, automation_id)
-            else:
-                error = response.text
-                logger.error(f"Failed to create automation: {response.status_code} - {error}")
-                return (False, f"HA API error: {response.status_code}")
-    except Exception as e:
-        logger.error(f"Error creating HA automation: {e}")
-        return (False, str(e))
 
 
 async def generate_reminder_audio(reminder_text: str, reminder_id: str) -> Optional[str]:
@@ -417,89 +318,9 @@ async def generate_reminder_audio(reminder_text: str, reminder_id: str) -> Optio
         return None
 
 
-async def delete_ha_automation(reminder_id: str) -> bool:
-    """Delete an HA automation for a reminder."""
-    automation_id = f"reminder_{reminder_id}"
-
-    headers = {
-        "Authorization": f"Bearer {HA_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            url = f"{HA_URL}/api/config/automation/config/{automation_id}"
-            response = await client.delete(url, headers=headers)
-
-            if response.status_code in [200, 204]:
-                await client.post(
-                    f"{HA_URL}/api/services/automation/reload",
-                    headers=headers
-                )
-                logger.info(f"Deleted HA automation: {automation_id}")
-                return True
-            else:
-                logger.warning(f"Could not delete automation {automation_id}: {response.status_code}")
-                return False
-    except Exception as e:
-        logger.error(f"Error deleting HA automation: {e}")
-        return False
-
-
 # =============================================================================
-# REMINDER DELIVERY
+# REMINDER DELIVERY HELPERS
 # =============================================================================
-
-async def deliver_reminder(reminder_id: str) -> Dict[str, Any]:
-    """
-    Deliver a reminder via voice and/or mobile notification.
-
-    Called by HA automation at the scheduled time.
-    """
-    data = get_reminders()
-    reminder = None
-
-    for r in data["reminders"]:
-        if r.get("id") == reminder_id:
-            reminder = r
-            break
-
-    if not reminder:
-        logger.error(f"Reminder {reminder_id} not found")
-        return {"success": False, "error": "Reminder not found"}
-
-    text = reminder.get("text", "You have a reminder")
-    target = reminder.get("target", "both")
-
-    results = {
-        "reminder_id": reminder_id,
-        "text": text,
-        "voice": None,
-        "phone": None,
-    }
-
-    # ADHD-friendly message format
-    spoken_text = f"Hey Nadim! Quick reminder: {text}"
-
-    # Voice announcement
-    if target in ["voice", "both"]:
-        voice_result = await _announce_voice(spoken_text)
-        results["voice"] = voice_result
-
-    # Mobile notification
-    if target in ["phone", "both"]:
-        phone_result = await _send_notification(text)
-        results["phone"] = phone_result
-
-    # Mark as completed
-    mark_reminder_completed(reminder_id)
-
-    # Delete the HA automation (one-time reminders)
-    await delete_ha_automation(reminder_id)
-
-    results["success"] = True
-    return results
-
 
 async def _announce_voice(text: str) -> Dict[str, Any]:
     """
@@ -543,15 +364,15 @@ async def _announce_voice(text: str) -> Dict[str, Any]:
                 f"{HA_URL}/api/services/media_player/play_media",
                 headers=headers,
                 json={
-                    "entity_id": ALL_SPEAKERS,
+                    "entity_id": REMINDER_SPEAKER,
                     "media_content_id": audio_url,
                     "media_content_type": "audio/wav"
                 }
             )
 
             if ha_response.status_code == 200:
-                logger.info(f"Played reminder on {ALL_SPEAKERS}")
-                return {"success": True, "speaker": ALL_SPEAKERS}
+                logger.info(f"Played reminder on {REMINDER_SPEAKER}")
+                return {"success": True, "speaker": REMINDER_SPEAKER}
             else:
                 return {"success": False, "error": f"HA returned {ha_response.status_code}"}
 
