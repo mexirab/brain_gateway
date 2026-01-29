@@ -54,6 +54,7 @@ open http://localhost
 - **Morning Briefing:** Personalized daily briefing on HA speakers
 - **Reminders:** Voice + mobile notifications via HA
 - **Data Management:** Natural language updates to meds/projects
+- **Focus Timer:** Pomodoro with Endel ambient audio and Pi-hole site blocking
 
 ## Configuration
 

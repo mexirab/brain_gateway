@@ -22,6 +22,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | Helios | 8080 | http://10.0.0.195:8080/v1 |
 | TTS | 8002 | http://10.0.0.173:8002 |
 | STT | 8003 | http://10.0.0.173:8003 |
+| Pi-hole | 53/8053 | http://localhost:8053/admin |
 | Grafana | 3000 | http://localhost:3000 (admin/braingw) |
 
 ## Architecture (v6 Hybrid)
@@ -50,6 +51,9 @@ User → Open WebUI → Orchestrator → Helios (conversation)
 | search_memory | Nemotron | ChromaDB RAG query |
 | set_reminder | Nemotron | Voice/phone reminders |
 | update_data | Nemotron | Update meds/projects YAML |
+| start_focus | Nemotron | Pomodoro timer + Endel audio + Pi-hole blocking |
+| stop_focus | Nemotron | Stop focus timer early |
+| focus_status | Nemotron | Check remaining focus time |
 
 ## Key Paths
 
@@ -90,6 +94,7 @@ cd monitoring && docker-compose --env-file ../.env -p monitoring up -d
 | orchestrator/orchestrator.py | Main FastAPI, hybrid Helios+Nemotron routing |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/reminder_manager.py | APScheduler reminders |
+| orchestrator/pihole_client.py | Pi-hole v6 API client for focus blocking |
 | docker-compose.yml | Service stack |
 | .env | Environment config (from .env.example) |
 | litellm-config.yaml | LLM proxy config |
@@ -100,6 +105,49 @@ cd monitoring && docker-compose --env-file ../.env -p monitoring up -d
 - **COMMANDS.md** - Command quick reference
 - **TECHNICAL_REFERENCE.md** - API specs, schemas
 - **monitoring/README.md** - Monitoring setup
+
+## Focus Timer (Pomodoro)
+
+ADHD-friendly focus timer with ambient audio and site blocking:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Timer + voice break | Done | `start_focus`, `stop_focus`, `focus_status` tools |
+| Endel audio | Done | Streams HLS from Endel Pacific API |
+| Pi-hole blocking | Code done | **Needs Pi-hole setup (see TODO)** |
+
+**Usage:**
+- `"start focus on coding for 30 minutes"` - starts timer + audio + blocking
+- `"start focus on emails without blocking"` - no site blocking
+- `"stop focus"` or timer expires → unblocks sites, announces break
+
+## TODO: Pi-hole Setup (Next Session)
+
+Pi-hole integration code is complete but needs deployment and configuration:
+
+- [ ] Add `PIHOLE_PASSWORD=<secure-password>` to `.env`
+- [ ] Deploy Pi-hole: `docker compose up -d pihole`
+- [ ] Access Pi-hole admin: `http://10.0.0.248:8053/admin`
+- [ ] Create group: Groups → Add `focus_blocklist`
+- [ ] Add domains to block (assign to focus_blocklist group):
+  - facebook.com, instagram.com, twitter.com, x.com, reddit.com, tiktok.com
+  - youtube.com, netflix.com, twitch.tv
+  - news.google.com, cnn.com, bbc.com
+- [ ] Keep group **disabled** by default (focus timer enables it)
+- [ ] Configure Orbi router DNS: Set primary DNS to `10.0.0.248`
+- [ ] Test: `"start focus on testing for 2 minutes"` → try accessing blocked site
+- [ ] Rebuild orchestrator: `docker compose up -d --build orchestrator`
+
+## TODO: Speaker Setup (for Endel audio)
+
+Speakers need reconfiguration in Google Home before Endel audio works:
+
+- [ ] Re-add missing speakers in Google Home app
+- [ ] Rename mislabeled speakers (Office Max → Office Speaker, etc.)
+- [ ] Create speaker groups as needed
+- [ ] Reload Cast integration in Home Assistant
+- [ ] Update `FOCUS_AUDIO_PLAYER` in `.env` with correct entity ID
+- [ ] Test: `"start focus on testing on the office speaker"`
 
 ## Notes
 
