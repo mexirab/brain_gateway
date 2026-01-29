@@ -9,7 +9,7 @@ ALWAYS-ON (~200W):
 ├── Saturn: Nemotron-8B (brain, 95%+ of tasks)
 ├── Uranus GPU 0: TTS/Jessica (voice output)
 ├── Uranus GPU 1: Whisper STT (voice input)
-└── Voyager: Orchestrator + Home Assistant
+└── Jupiter: Orchestrator + Home Assistant
 
 OFF BY DEFAULT (saves ~150W):
 └── Helios: 120B Expert (manual start for deep dives)
@@ -33,9 +33,9 @@ sudo systemctl disable llama-server
 sudo systemctl is-enabled llama-server  # Should show "disabled"
 ```
 
-**Test from Voyager:**
+**Test from Jupiter:**
 ```bash
-cd /opt/voyager/gateway_mvp/scripts
+cd /opt/jupiter/gateway_mvp/scripts
 ./helios-status.sh  # Should show "STOPPED"
 ```
 
@@ -47,7 +47,7 @@ Run on **Saturn (10.0.0.58)**:
 
 ```bash
 # Copy systemd service file
-scp /opt/voyager/gateway_mvp/tts/nemotron-vllm.service nadim@10.0.0.58:/tmp/
+scp /opt/jupiter/gateway_mvp/tts/nemotron-vllm.service nadim@10.0.0.58:/tmp/
 ssh nadim@10.0.0.58 'sudo mv /tmp/nemotron-vllm.service /etc/systemd/system/'
 
 # Enable and start
@@ -85,10 +85,10 @@ ssh nadim@10.0.0.173 'sudo systemctl enable qwen-tts whisper-stt'
 
 ## Phase 4: Update Monitoring Stack
 
-On **Voyager**:
+On **Jupiter**:
 
 ```bash
-cd /opt/voyager/gateway_mvp/monitoring
+cd /opt/jupiter/gateway_mvp/monitoring
 
 # Restart monitoring to pick up new config
 docker-compose -p monitoring down
@@ -98,7 +98,7 @@ docker-compose -p monitoring up -d
 docker logs blackbox-exporter
 
 # Check Grafana dashboard
-# Open http://voyager:3000 (admin/braingw)
+# Open http://jupiter:3000 (admin/braingw)
 # The "Voice Pipeline (Always-On)" row should show service status
 ```
 
@@ -109,18 +109,18 @@ docker logs blackbox-exporter
 1. Copy configuration to Home Assistant:
    ```bash
    # Review and add to HA configuration.yaml:
-   cat /opt/voyager/gateway_mvp/ha_automations/configuration_additions.yaml
+   cat /opt/jupiter/gateway_mvp/ha_automations/configuration_additions.yaml
    ```
 
 2. Add conversation automations:
    ```bash
    # Review and add to HA automations.yaml:
-   cat /opt/voyager/gateway_mvp/ha_automations/voice_conversation_automation.yaml
+   cat /opt/jupiter/gateway_mvp/ha_automations/voice_conversation_automation.yaml
    ```
 
 3. Follow the setup guide:
    ```bash
-   cat /opt/voyager/gateway_mvp/ha_automations/voice_assistant_setup.md
+   cat /opt/jupiter/gateway_mvp/ha_automations/voice_assistant_setup.md
    ```
 
 4. Restart Home Assistant and configure Voice PE device.
@@ -130,7 +130,7 @@ docker logs blackbox-exporter
 ## Verification Checklist
 
 ### Always-On Services
-- [ ] `curl http://10.0.0.186:8888/health` - Orchestrator OK
+- [ ] `curl http://10.0.0.248:8888/health` - Orchestrator OK
 - [ ] `curl http://10.0.0.58:8001/health` - Nemotron OK
 - [ ] `curl http://10.0.0.173:8002/health` - TTS OK
 - [ ] `curl http://10.0.0.173:8003/health` - STT OK
@@ -157,7 +157,7 @@ docker logs blackbox-exporter
 
 | Service | Host | Port | Check Command |
 |---------|------|------|---------------|
-| Orchestrator | Voyager | 8888 | `curl http://10.0.0.186:8888/health` |
+| Orchestrator | Jupiter | 8888 | `curl http://10.0.0.248:8888/health` |
 | Nemotron | Saturn | 8001 | `curl http://10.0.0.58:8001/health` |
 | TTS | Uranus | 8002 | `curl http://10.0.0.173:8002/health` |
 | STT | Uranus | 8003 | `curl http://10.0.0.173:8003/health` |

@@ -27,7 +27,7 @@ sudo systemctl is-enabled llama-server  # Should show "disabled"
 
 ### Step 2: Configure Passwordless Sudo (Optional but Recommended)
 
-To allow the start/stop scripts to work from Voyager without password prompts:
+To allow the start/stop scripts to work from Jupiter without password prompts:
 
 ```bash
 # On Helios, create a sudoers rule
@@ -45,7 +45,7 @@ If you skip this step, you'll need to SSH to Helios manually to start/stop the s
 
 ## Daily Usage
 
-From Voyager, use these scripts:
+From Jupiter, use these scripts:
 
 ```bash
 # Check if Helios is running

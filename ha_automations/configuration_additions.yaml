@@ -9,7 +9,7 @@
 # -----------------------------------------------------------------------------
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.186:8888/v1/chat/completions"
+    url: "http://10.0.0.248:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -32,7 +32,7 @@ rest_command:
     timeout: 30
 
   generate_morning_briefing:
-    url: "http://10.0.0.186:8888/api/briefing/morning"
+    url: "http://10.0.0.248:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -43,8 +43,8 @@ rest_command:
 # Shell Commands - For Helios Control via Voice
 # -----------------------------------------------------------------------------
 shell_command:
-  start_helios: "ssh nadim@10.0.0.186 '/opt/voyager/gateway_mvp/scripts/start-helios.sh'"
-  stop_helios: "ssh nadim@10.0.0.186 '/opt/voyager/gateway_mvp/scripts/stop-helios.sh'"
+  start_helios: "ssh nadim@10.0.0.248 '/opt/jupiter/gateway_mvp/scripts/start-helios.sh'"
+  stop_helios: "ssh nadim@10.0.0.248 '/opt/jupiter/gateway_mvp/scripts/stop-helios.sh'"
 
 # -----------------------------------------------------------------------------
 # Input Helpers - For Voice Assistant State
@@ -84,7 +84,7 @@ template:
 # -----------------------------------------------------------------------------
 binary_sensor:
   - platform: ping
-    host: 10.0.0.186
+    host: 10.0.0.248
     name: Brain Gateway Health
     count: 2
     scan_interval: 60
@@ -101,7 +101,7 @@ binary_sensor:
 sensor:
   - platform: rest
     name: Brain Gateway Details
-    resource: http://10.0.0.186:8888/health
+    resource: http://10.0.0.248:8888/health
     json_attributes:
       - status
       - nemotron

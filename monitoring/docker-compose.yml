@@ -19,7 +19,7 @@ services:
     ports:
       - "${MONITORING_GRAFANA_PORT:-3000}:3000"
     volumes:
-      - grafana-data:/var/lib/grafana
+      - /mnt/logging/grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     environment:
       - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
@@ -40,7 +40,7 @@ services:
       - "${MONITORING_PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - /mnt/logging/prometheus:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -60,7 +60,7 @@ services:
       - "${MONITORING_LOKI_PORT:-3100}:3100"
     volumes:
       - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
-      - loki-data:/loki
+      - /mnt/logging/loki:/loki
     command: -config.file=/etc/loki/local-config.yaml
     networks:
       - monitoring-net
@@ -98,32 +98,10 @@ services:
     networks:
       - monitoring-net
 
-  # ============================================
-  # NODE EXPORTER - System Metrics for Jupiter
-  # ============================================
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: node-exporter
-    restart: unless-stopped
-    ports:
-      - "${MONITORING_NODE_EXPORTER_PORT:-9100}:9100"
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - '--path.rootfs=/rootfs'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    networks:
-      - monitoring-net
+  # NODE EXPORTER runs on host (systemd), not in container
 
 networks:
   monitoring-net:
     driver: bridge
 
-volumes:
-  grafana-data:
-  prometheus-data:
-  loki-data:
+# Data stored on /mnt/logging (sdb1 - 931GB HDD)

@@ -1,5 +1,5 @@
 # Main brain interface
-http://voyager:3000 {
+http://jupiter:3000 {
     reverse_proxy open-webui:8080
 }
 

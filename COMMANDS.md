@@ -8,7 +8,7 @@ Quick reference for common operations. See `claude.md` for architecture overview
 
 ### Rebuild orchestrator after code changes
 ```bash
-cd /opt/voyager/gateway_mvp
+cd /opt/jupiter/gateway_mvp
 docker-compose -p brain down
 docker-compose -p brain build --no-cache orchestrator
 docker-compose -p brain up -d
@@ -35,7 +35,7 @@ docker logs brain-orchestrator --tail 50 -f
 
 ### Re-index RAG after adding documents
 ```bash
-cd /opt/voyager/gateway_mvp/rag
+cd /opt/jupiter/gateway_mvp/rag
 python ingest_rag.py \
   --source ~/rag/nadim_rag \
   --persist ~/.local/share/chroma/personal_rag \
@@ -74,7 +74,7 @@ curl http://localhost:8888/api/ha/entities | jq .
 
 ### Start/stop monitoring stack
 ```bash
-cd /opt/voyager/gateway_mvp/monitoring
+cd /opt/jupiter/gateway_mvp/monitoring
 docker-compose -p monitoring up -d    # Start
 docker-compose -p monitoring down     # Stop
 ```
@@ -98,7 +98,7 @@ docker-compose -p monitoring down     # Stop
 
 ### Hardware audit across cluster
 ```bash
-/opt/voyager/gateway_mvp/monitoring/lab_hw_audit.sh
+/opt/jupiter/gateway_mvp/monitoring/lab_hw_audit.sh
 ```
 
 ---

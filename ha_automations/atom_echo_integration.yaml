@@ -64,7 +64,7 @@ wyoming:
 # REST Commands for Brain Gateway
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.186:8888/v1/chat/completions"
+    url: "http://10.0.0.248:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -87,7 +87,7 @@ rest_command:
     timeout: 30
 
   brain_gateway_expert:
-    url: "http://10.0.0.186:8888/v1/chat/completions"
+    url: "http://10.0.0.248:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -110,7 +110,7 @@ rest_command:
     timeout: 120
 
   generate_morning_briefing:
-    url: "http://10.0.0.186:8888/api/briefing/morning"
+    url: "http://10.0.0.248:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -119,9 +119,9 @@ rest_command:
 
 # Shell Commands for Helios Control
 shell_command:
-  start_helios: "/opt/voyager/gateway_mvp/scripts/start-helios.sh"
-  stop_helios: "/opt/voyager/gateway_mvp/scripts/stop-helios.sh"
-  helios_status: "/opt/voyager/gateway_mvp/scripts/helios-status.sh"
+  start_helios: "/opt/jupiter/gateway_mvp/scripts/start-helios.sh"
+  stop_helios: "/opt/jupiter/gateway_mvp/scripts/stop-helios.sh"
+  helios_status: "/opt/jupiter/gateway_mvp/scripts/helios-status.sh"
 
 # Input Helpers
 input_boolean:
