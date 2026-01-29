@@ -14,7 +14,8 @@ import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+import random
 from sentence_transformers import SentenceTransformer
 import httpx
 from dotenv import load_dotenv
@@ -77,6 +78,16 @@ app = FastAPI(title="Brain Gateway", version="5.0")
 
 # Helios idle tracking for auto-shutdown
 _last_helios_request: float = 0.0
+
+# Focus timer state (Pomodoro)
+current_focus_session = {
+    "active": False,
+    "task": None,
+    "started": None,
+    "duration": None,
+    "break_duration": None,
+    "job_id": None
+}
 
 # APScheduler for reminder scheduling (single source of truth: YAML)
 TIMEZONE = os.environ.get("TZ", "America/New_York")
@@ -287,6 +298,53 @@ STATIC_TOOLS = [
                     }
                 },
                 "required": ["reminder_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_focus",
+            "description": "Start a focus timer (Pomodoro). Announces break time via voice when timer ends. Helps with ADHD time blindness and hyperfocus protection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What you're focusing on (e.g., 'writing report', 'coding', 'emails')"
+                    },
+                    "duration": {
+                        "type": "integer",
+                        "description": "Focus duration in minutes (default 25)"
+                    },
+                    "break_duration": {
+                        "type": "integer",
+                        "description": "Break duration in minutes (default 5)"
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stop_focus",
+            "description": "Stop the current focus timer early.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "focus_status",
+            "description": "Check how much time is left in the current focus session.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
             }
         }
     }
@@ -569,6 +627,16 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_cancel_reminder(
                 arguments.get("reminder_id", "")
             )
+        elif tool_name == "start_focus":
+            return await tool_start_focus(
+                arguments.get("task", "your task"),
+                arguments.get("duration", 25),
+                arguments.get("break_duration", 5)
+            )
+        elif tool_name == "stop_focus":
+            return await tool_stop_focus()
+        elif tool_name == "focus_status":
+            return await tool_focus_status()
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -892,6 +960,23 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     if error:
         return error
 
+    # Deduplication: Check for recent identical reminders
+    DEDUP_WINDOW_SECONDS = 60  # Reject duplicates within 60 seconds
+    data = get_reminders()
+    now = datetime.now()
+
+    for existing in data.get("reminders", []):
+        if existing.get("text", "").lower().strip() == reminder_text.lower().strip():
+            if existing.get("status") == "pending":
+                try:
+                    created = datetime.fromisoformat(existing.get("created", ""))
+                    age = (now - created).total_seconds()
+                    if age < DEDUP_WINDOW_SECONDS:
+                        logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing reminder {existing.get('id')} created {age:.0f}s ago)")
+                        return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."
+                except (ValueError, TypeError):
+                    pass  # Skip if created timestamp is invalid
+
     # Generate a unique ID first
     import uuid
     reminder_id = str(uuid.uuid4())[:8]
@@ -961,6 +1046,120 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
     if remove_reminder(reminder_id):
         return f"Reminder {reminder_id} cancelled."
     return f"Reminder {reminder_id} not found."
+
+
+# =============================================================================
+# Focus Timer (Pomodoro) Tools
+# =============================================================================
+
+async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 5) -> str:
+    """Start a focus timer with voice announcement at end."""
+    global current_focus_session
+
+    if current_focus_session["active"]:
+        elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+        remaining = current_focus_session["duration"] - elapsed
+        return f"You're already focusing on '{current_focus_session['task']}' with {remaining:.0f} minutes left. Say 'stop focus' to end early."
+
+    # Schedule break announcement
+    end_time = datetime.now() + timedelta(minutes=duration)
+    job_id = f"focus_{datetime.now().strftime('%H%M%S')}"
+
+    scheduler.add_job(
+        deliver_focus_break,
+        trigger='date',
+        run_date=end_time,
+        args=[task, break_duration],
+        id=job_id,
+        replace_existing=True
+    )
+
+    current_focus_session = {
+        "active": True,
+        "task": task,
+        "started": datetime.now(),
+        "duration": duration,
+        "break_duration": break_duration,
+        "job_id": job_id
+    }
+
+    logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}")
+    return f"Focus timer started! You have {duration} minutes to work on '{task}'. I'll let you know when it's break time."
+
+
+async def tool_stop_focus() -> str:
+    """Stop the current focus timer."""
+    global current_focus_session
+
+    if not current_focus_session["active"]:
+        return "No focus timer is running."
+
+    task = current_focus_session["task"]
+    elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+
+    # Cancel scheduled break
+    try:
+        scheduler.remove_job(current_focus_session["job_id"])
+    except Exception:
+        pass
+
+    current_focus_session = {
+        "active": False,
+        "task": None,
+        "started": None,
+        "duration": None,
+        "break_duration": None,
+        "job_id": None
+    }
+
+    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'")
+    return f"Focus timer stopped. You worked on '{task}' for {elapsed:.0f} minutes. Nice work!"
+
+
+async def tool_focus_status() -> str:
+    """Check current focus timer status."""
+    global current_focus_session
+
+    if not current_focus_session["active"]:
+        return "No focus timer is running. Say 'start focus on [task]' to begin."
+
+    elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+    remaining = current_focus_session["duration"] - elapsed
+
+    if remaining <= 0:
+        return f"Your focus session on '{current_focus_session['task']}' just ended!"
+
+    return f"You're focusing on '{current_focus_session['task']}'. {remaining:.0f} minutes left, {elapsed:.0f} minutes in."
+
+
+async def deliver_focus_break(task: str, break_duration: int):
+    """Called by scheduler when focus time ends."""
+    global current_focus_session
+
+    # Generate encouraging break message
+    messages = [
+        f"Great focus session on {task}! Take a {break_duration} minute break. Stretch, grab water, rest your eyes.",
+        f"Time's up! You crushed it working on {task}. {break_duration} minute break - you've earned it!",
+        f"Focus session complete! Step away from {task} for {break_duration} minutes. Move around, breathe.",
+        f"Nice work on {task}! Your brain needs a {break_duration} minute reset. Get up and stretch!",
+        f"Pomodoro done! Great job on {task}. Take {break_duration} minutes to recharge."
+    ]
+    message = random.choice(messages)
+
+    # Announce via voice
+    await _announce_voice(message)
+
+    # Reset state
+    current_focus_session = {
+        "active": False,
+        "task": None,
+        "started": None,
+        "duration": None,
+        "break_duration": None,
+        "job_id": None
+    }
+
+    logger.info(f"[FOCUS] Break announced for '{task}'")
 
 
 async def call_nemotron_orchestrator(command: str) -> str:
@@ -1095,12 +1294,18 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
 3. update_data - Update Nadim's personal data (medications, projects)
 4. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone
+5. start_focus - Start a Pomodoro focus timer (announces break time via voice)
+6. stop_focus - Stop the current focus timer early
+7. focus_status - Check how much time is left in the current focus session
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
 - search_memory: For personal info (projects, routines, preferences, medications, schedules)
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
+- start_focus: When user wants to start a focus timer, pomodoro, or work session
+- stop_focus: When user wants to stop/cancel/end the current focus timer
+- focus_status: When user asks how much time is left or checks focus timer status
 
 CONVERSATION STYLE:
 - Be warm, friendly, and conversational
@@ -1118,7 +1323,10 @@ EXAMPLES:
 - "Turn off the bedroom lights" → home_assistant
 - "What projects am I working on?" → search_memory
 - "Add Adderall 20mg to my morning meds" → update_data
-- "Remind me to call mom in 30 minutes" → set_reminder"""
+- "Remind me to call mom in 30 minutes" → set_reminder
+- "Start a 25 minute focus timer on writing" → start_focus
+- "How much time left on my focus?" → focus_status
+- "Stop the focus timer" → stop_focus"""
 
 
 def get_nemotron_system_prompt() -> str:
@@ -1130,6 +1338,9 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, medications)
 3. update_data - Update Nadim's medications or projects
 4. set_reminder - Set a reminder for a specific time
+5. start_focus - Start a Pomodoro focus timer (task, duration=25, break_duration=5)
+6. stop_focus - Stop the current focus timer early
+7. focus_status - Check how much time is left in the current focus session
 
 YOUR JOB:
 - Understand the command and use the appropriate tool(s)
@@ -1141,6 +1352,9 @@ EXAMPLES:
 - "what are my morning meds" → search_memory(query="morning medications")
 - "remind me to call mom in 30 minutes" → set_reminder(reminder_text="call mom", time="in 30 minutes")
 - "add Adderall to my meds" → update_data(action="add_medication", name="Adderall", ...)
+- "start focus on coding for 30 minutes" → start_focus(task="coding", duration=30)
+- "how much time left?" → focus_status()
+- "stop the focus timer" → stop_focus()
 
 Be direct and efficient. Execute the tool and summarize the result."""
 
@@ -1230,7 +1444,7 @@ async def health():
         "helios_idle": idle_info,
         "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "helios_tools": ["ask_orchestrator"],
-        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder"],
+        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder", "start_focus", "stop_focus", "focus_status"],
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),
@@ -1239,6 +1453,14 @@ async def health():
             "scheduled_reminders": scheduled_jobs,
             "timezone": str(scheduler.timezone),
         },
+        "focus_timer": {
+            "active": current_focus_session["active"],
+            "task": current_focus_session["task"],
+            "remaining_minutes": (
+                current_focus_session["duration"] -
+                (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+            ) if current_focus_session["active"] else None,
+        } if current_focus_session["active"] else {"active": False},
     }
 
 
@@ -1695,6 +1917,79 @@ async def complete_reminder_api(reminder_id: str):
     if success:
         return JSONResponse({"success": True, "reminder_id": reminder_id})
     return JSONResponse({"error": "Reminder not found"}, status_code=404)
+
+
+# =============================================================================
+# Focus Timer (Pomodoro) Endpoints
+# =============================================================================
+
+@app.get("/api/focus")
+async def get_focus_status_api():
+    """Get current focus timer status (for dashboards/widgets)."""
+    if not current_focus_session["active"]:
+        return JSONResponse({
+            "active": False,
+            "task": None,
+            "elapsed_minutes": None,
+            "remaining_minutes": None,
+            "duration": None,
+            "break_duration": None,
+            "started": None,
+        })
+
+    elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+    remaining = current_focus_session["duration"] - elapsed
+
+    return JSONResponse({
+        "active": True,
+        "task": current_focus_session["task"],
+        "elapsed_minutes": round(elapsed, 1),
+        "remaining_minutes": round(max(0, remaining), 1),
+        "duration": current_focus_session["duration"],
+        "break_duration": current_focus_session["break_duration"],
+        "started": current_focus_session["started"].isoformat(),
+    })
+
+
+@app.post("/api/focus/start")
+async def start_focus_api(req: Request):
+    """
+    Start a focus timer via REST API.
+
+    Request body:
+    {
+        "task": "writing report",
+        "duration": 25,
+        "break_duration": 5
+    }
+    """
+    try:
+        body = await req.json()
+    except:
+        body = {}
+
+    task = body.get("task", "focus session")
+    duration = body.get("duration", 25)
+    break_duration = body.get("break_duration", 5)
+
+    result = await tool_start_focus(task, duration, break_duration)
+    return JSONResponse({
+        "success": current_focus_session["active"],
+        "message": result,
+        "task": task,
+        "duration": duration,
+        "break_duration": break_duration,
+    })
+
+
+@app.post("/api/focus/stop")
+async def stop_focus_api():
+    """Stop the current focus timer via REST API."""
+    result = await tool_stop_focus()
+    return JSONResponse({
+        "success": True,
+        "message": result,
+    })
 
 
 # =============================================================================
