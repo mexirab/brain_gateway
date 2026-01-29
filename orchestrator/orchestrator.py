@@ -86,8 +86,15 @@ current_focus_session = {
     "started": None,
     "duration": None,
     "break_duration": None,
-    "job_id": None
+    "job_id": None,
+    "audio_player": None
 }
+
+# Endel focus audio configuration
+ENDEL_API_URL = "https://app.endel.io/api/pacific"
+ENDEL_MODES = ["focus", "deeper-focus", "study", "colored-noises"]
+FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", "media_player.office_speaker")
+ENDEL_ENABLED = os.environ.get("ENDEL_ENABLED", "true").lower() == "true"
 
 # APScheduler for reminder scheduling (single source of truth: YAML)
 TIMEZONE = os.environ.get("TZ", "America/New_York")
@@ -305,7 +312,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "start_focus",
-            "description": "Start a focus timer (Pomodoro). Announces break time via voice when timer ends. Helps with ADHD time blindness and hyperfocus protection.",
+            "description": "Start a focus timer (Pomodoro) with Endel focus audio. Announces break time via voice when timer ends. Helps with ADHD time blindness and hyperfocus protection.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -320,6 +327,15 @@ STATIC_TOOLS = [
                     "break_duration": {
                         "type": "integer",
                         "description": "Break duration in minutes (default 5)"
+                    },
+                    "speaker": {
+                        "type": "string",
+                        "description": "Media player for audio (e.g., 'office speaker', 'bedroom', 'kitchen'). Uses default if not specified."
+                    },
+                    "soundscape": {
+                        "type": "string",
+                        "enum": ["focus", "deeper-focus", "study", "colored-noises", "none"],
+                        "description": "Endel soundscape to play (default: focus, 'none' to disable)"
                     }
                 },
                 "required": ["task"]
@@ -631,7 +647,9 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_start_focus(
                 arguments.get("task", "your task"),
                 arguments.get("duration", 25),
-                arguments.get("break_duration", 5)
+                arguments.get("break_duration", 5),
+                arguments.get("speaker"),
+                arguments.get("soundscape", "focus")
             )
         elif tool_name == "stop_focus":
             return await tool_stop_focus()
@@ -1052,14 +1070,94 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
 # Focus Timer (Pomodoro) Tools
 # =============================================================================
 
-async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 5) -> str:
-    """Start a focus timer with voice announcement at end."""
+def resolve_speaker_entity(speaker_name: str) -> Optional[str]:
+    """Map friendly speaker names to entity IDs."""
+    # Common aliases
+    aliases = {
+        "office": "media_player.office_speaker",
+        "office speaker": "media_player.office_speaker",
+        "bedroom": "media_player.bedroom_pair",
+        "kitchen": "media_player.kitchen_display",
+        "all": "media_player.all_speakers",
+        "everywhere": "media_player.all_speakers",
+    }
+    name_lower = speaker_name.lower().strip()
+    if name_lower in aliases:
+        return aliases[name_lower]
+    # Check if it's already an entity ID
+    if speaker_name.startswith("media_player."):
+        return speaker_name
+    # Try to match against HA entities
+    for entity in ha_client.get_entities_by_domain("media_player"):
+        if name_lower in entity.friendly_name.lower():
+            return entity.entity_id
+    return None
+
+
+async def get_endel_focus_url(duration_minutes: int, mode: str = "focus") -> Optional[str]:
+    """Build Endel HLS playlist URL for focus audio."""
+    if mode not in ENDEL_MODES:
+        mode = "focus"
+    hour = datetime.now().hour
+    # Return the URL directly - HLS playlists work as media URLs
+    return f"{ENDEL_API_URL}?mode={mode}&hour={hour}&hlsjs=1&duration={duration_minutes}"
+
+
+async def start_focus_audio(duration_minutes: int, player: str, soundscape: str = "focus") -> bool:
+    """Start Endel focus audio on specified media player."""
+    if not ENDEL_ENABLED:
+        logger.info("[FOCUS] Endel audio disabled via ENDEL_ENABLED=false")
+        return False
+
+    url = await get_endel_focus_url(duration_minutes, soundscape)
+    if not url:
+        return False
+
+    logger.info(f"[FOCUS] Starting Endel {soundscape} audio on {player}: {url}")
+
+    # Play via Home Assistant
+    result = await ha_client.call_service(
+        player,
+        "play_media",
+        {"media_content_id": url, "media_content_type": "music"}
+    )
+    return result.success
+
+
+async def stop_focus_audio(player: str = None) -> bool:
+    """Stop audio playback on media player."""
+    player = player or FOCUS_AUDIO_PLAYER
+    logger.info(f"[FOCUS] Stopping audio on {player}")
+    result = await ha_client.call_service(player, "media_stop", {})
+    return result.success
+
+
+async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 5,
+                           speaker: str = None, soundscape: str = "focus") -> str:
+    """Start a focus timer with voice announcement at end and optional Endel audio."""
     global current_focus_session
 
     if current_focus_session["active"]:
         elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
         remaining = current_focus_session["duration"] - elapsed
         return f"You're already focusing on '{current_focus_session['task']}' with {remaining:.0f} minutes left. Say 'stop focus' to end early."
+
+    # Resolve speaker (use parameter, env default, or None)
+    player = None
+    if speaker:
+        player = resolve_speaker_entity(speaker)
+        if not player:
+            return f"I couldn't find a speaker matching '{speaker}'. Try 'office', 'bedroom', or 'kitchen'."
+    else:
+        player = FOCUS_AUDIO_PLAYER  # env var default
+
+    # Start Endel focus audio (if soundscape != "none")
+    audio_started = False
+    if soundscape != "none" and player:
+        audio_started = await start_focus_audio(duration, player, soundscape)
+        if audio_started:
+            current_focus_session["audio_player"] = player
+            logger.info(f"[FOCUS] Started Endel {soundscape} audio on {player}")
 
     # Schedule break announcement
     end_time = datetime.now() + timedelta(minutes=duration)
@@ -1080,11 +1178,18 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         "started": datetime.now(),
         "duration": duration,
         "break_duration": break_duration,
-        "job_id": job_id
+        "job_id": job_id,
+        "audio_player": player if audio_started else None
     }
 
     logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}")
-    return f"Focus timer started! You have {duration} minutes to work on '{task}'. I'll let you know when it's break time."
+
+    # Build response message
+    if audio_started:
+        speaker_name = player.replace("media_player.", "").replace("_", " ")
+        return f"Focus timer started with Endel {soundscape} sounds on the {speaker_name}! You have {duration} minutes to work on '{task}'. I'll let you know when it's break time."
+    else:
+        return f"Focus timer started! You have {duration} minutes to work on '{task}'. I'll let you know when it's break time."
 
 
 async def tool_stop_focus() -> str:
@@ -1096,6 +1201,11 @@ async def tool_stop_focus() -> str:
 
     task = current_focus_session["task"]
     elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+
+    # Stop audio if playing
+    if current_focus_session.get("audio_player"):
+        await stop_focus_audio(current_focus_session["audio_player"])
+        logger.info("[FOCUS] Stopped Endel audio")
 
     # Cancel scheduled break
     try:
@@ -1109,7 +1219,8 @@ async def tool_stop_focus() -> str:
         "started": None,
         "duration": None,
         "break_duration": None,
-        "job_id": None
+        "job_id": None,
+        "audio_player": None
     }
 
     logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'")
@@ -1136,6 +1247,11 @@ async def deliver_focus_break(task: str, break_duration: int):
     """Called by scheduler when focus time ends."""
     global current_focus_session
 
+    # Stop Endel audio first (before announcement)
+    if current_focus_session.get("audio_player"):
+        await stop_focus_audio(current_focus_session["audio_player"])
+        logger.info("[FOCUS] Stopped Endel audio before break announcement")
+
     # Generate encouraging break message
     messages = [
         f"Great focus session on {task}! Take a {break_duration} minute break. Stretch, grab water, rest your eyes.",
@@ -1156,7 +1272,8 @@ async def deliver_focus_break(task: str, break_duration: int):
         "started": None,
         "duration": None,
         "break_duration": None,
-        "job_id": None
+        "job_id": None,
+        "audio_player": None
     }
 
     logger.info(f"[FOCUS] Break announced for '{task}'")
@@ -1294,7 +1411,7 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
 3. update_data - Update Nadim's personal data (medications, projects)
 4. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone
-5. start_focus - Start a Pomodoro focus timer (announces break time via voice)
+5. start_focus - Start a Pomodoro focus timer with Endel audio (task, duration, speaker, soundscape)
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 
@@ -1303,7 +1420,7 @@ WHEN TO USE TOOLS:
 - search_memory: For personal info (projects, routines, preferences, medications, schedules)
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
-- start_focus: When user wants to start a focus timer, pomodoro, or work session
+- start_focus: When user wants to start a focus timer, pomodoro, or work session (with optional speaker/soundscape)
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
 
@@ -1324,7 +1441,9 @@ EXAMPLES:
 - "What projects am I working on?" → search_memory
 - "Add Adderall 20mg to my morning meds" → update_data
 - "Remind me to call mom in 30 minutes" → set_reminder
-- "Start a 25 minute focus timer on writing" → start_focus
+- "Start a 25 minute focus timer on writing" → start_focus(task="writing", duration=25)
+- "Start focus on emails on the kitchen speaker" → start_focus(task="emails", speaker="kitchen")
+- "Start focus with study sounds" → start_focus(task="work", soundscape="study")
 - "How much time left on my focus?" → focus_status
 - "Stop the focus timer" → stop_focus"""
 
@@ -1338,7 +1457,7 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, medications)
 3. update_data - Update Nadim's medications or projects
 4. set_reminder - Set a reminder for a specific time
-5. start_focus - Start a Pomodoro focus timer (task, duration=25, break_duration=5)
+5. start_focus - Start a Pomodoro focus timer with Endel audio (task, duration=25, break_duration=5, speaker=optional, soundscape=focus|deeper-focus|study|colored-noises|none)
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 
@@ -1353,6 +1472,8 @@ EXAMPLES:
 - "remind me to call mom in 30 minutes" → set_reminder(reminder_text="call mom", time="in 30 minutes")
 - "add Adderall to my meds" → update_data(action="add_medication", name="Adderall", ...)
 - "start focus on coding for 30 minutes" → start_focus(task="coding", duration=30)
+- "start focus on emails on the kitchen speaker" → start_focus(task="emails", speaker="kitchen")
+- "start focus with study sounds" → start_focus(task="work", soundscape="study")
 - "how much time left?" → focus_status()
 - "stop the focus timer" → stop_focus()
 
@@ -1460,7 +1581,13 @@ async def health():
                 current_focus_session["duration"] -
                 (datetime.now() - current_focus_session["started"]).total_seconds() / 60
             ) if current_focus_session["active"] else None,
+            "audio_player": current_focus_session.get("audio_player"),
         } if current_focus_session["active"] else {"active": False},
+        "endel": {
+            "enabled": ENDEL_ENABLED,
+            "default_player": FOCUS_AUDIO_PLAYER,
+            "modes": ENDEL_MODES,
+        },
     }
 
 
@@ -1960,7 +2087,9 @@ async def start_focus_api(req: Request):
     {
         "task": "writing report",
         "duration": 25,
-        "break_duration": 5
+        "break_duration": 5,
+        "speaker": "office",  // optional: speaker for Endel audio
+        "soundscape": "focus"  // optional: focus, deeper-focus, study, colored-noises, none
     }
     """
     try:
@@ -1971,14 +2100,19 @@ async def start_focus_api(req: Request):
     task = body.get("task", "focus session")
     duration = body.get("duration", 25)
     break_duration = body.get("break_duration", 5)
+    speaker = body.get("speaker")
+    soundscape = body.get("soundscape", "focus")
 
-    result = await tool_start_focus(task, duration, break_duration)
+    result = await tool_start_focus(task, duration, break_duration, speaker, soundscape)
     return JSONResponse({
         "success": current_focus_session["active"],
         "message": result,
         "task": task,
         "duration": duration,
         "break_duration": break_duration,
+        "speaker": speaker,
+        "soundscape": soundscape,
+        "audio_player": current_focus_session.get("audio_player"),
     })
 
 
