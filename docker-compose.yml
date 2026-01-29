@@ -88,9 +88,12 @@ services:
       - TTS_VOICE=${TTS_VOICE:-jessica}
       # Callback URL
       - ORCHESTRATOR_URL=http://${NODE_JUPITER_IP:-10.0.0.248}:${SERVICE_ORCHESTRATOR_PORT:-8888}
-      # SSH for Helios auto-start
+      # SSH for Helios auto-start/stop
       - NODE_HELIOS_IP=${NODE_HELIOS_IP:-10.0.0.195}
       - HELIOS_SSH_USER=${HELIOS_SSH_USER:-labadmin}
+      # Helios power management - auto-shutdown after idle
+      - HELIOS_IDLE_TIMEOUT=${HELIOS_IDLE_TIMEOUT:-1800}
+      - HELIOS_IDLE_CHECK_INTERVAL=${HELIOS_IDLE_CHECK_INTERVAL:-300}
       # Reminders
       - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.office_speaker}
       - TZ=${TZ:-America/New_York}

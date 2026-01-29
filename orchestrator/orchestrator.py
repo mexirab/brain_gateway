@@ -75,6 +75,9 @@ MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # Prevent infinit
 
 app = FastAPI(title="Brain Gateway", version="5.0")
 
+# Helios idle tracking for auto-shutdown
+_last_helios_request: float = 0.0
+
 # APScheduler for reminder scheduling (single source of truth: YAML)
 TIMEZONE = os.environ.get("TZ", "America/New_York")
 scheduler = AsyncIOScheduler(
@@ -661,12 +664,71 @@ async def start_helios() -> bool:
     return False
 
 
+async def stop_helios() -> bool:
+    """Stop Helios via SSH to save power."""
+    import paramiko
+
+    logger.info("[EXPERT] Stopping Helios to save power...")
+
+    # Get SSH config from environment
+    helios_ip = os.environ.get("NODE_HELIOS_IP", "10.0.0.195")
+    ssh_user = os.environ.get("HELIOS_SSH_USER", "labadmin")
+    ssh_key = os.environ.get("HELIOS_SSH_KEY", "/root/.ssh/id_ed25519")
+
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(
+            hostname=helios_ip,
+            username=ssh_user,
+            key_filename=ssh_key,
+            timeout=30
+        )
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl stop llama-server", timeout=30)
+        exit_code = stdout.channel.recv_exit_status()
+        ssh.close()
+
+        if exit_code != 0:
+            error_msg = stderr.read().decode()
+            logger.error(f"[EXPERT] Failed to stop Helios: {error_msg}")
+            return False
+
+        logger.info("[EXPERT] Helios stopped successfully")
+        return True
+    except Exception as e:
+        logger.error(f"[EXPERT] SSH to Helios failed: {e}")
+        return False
+
+
+async def check_helios_idle():
+    """Check if Helios should be stopped due to inactivity."""
+    global _last_helios_request
+
+    # Skip if Helios is already offline
+    if not await check_helios_health():
+        return
+
+    # Skip if no requests have been made yet (Helios was started manually)
+    if _last_helios_request == 0.0:
+        return
+
+    idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
+    idle_time = time.time() - _last_helios_request
+
+    if idle_time > idle_timeout:
+        logger.info(f"[EXPERT] Helios idle for {idle_time:.0f}s (threshold: {idle_timeout}s), stopping to save power...")
+        await stop_helios()
+
+
 async def tool_ask_expert(question: str, context: str = "") -> str:
     """Delegate a complex question to Helios 120B. Auto-starts if offline."""
+    global _last_helios_request
+
     if not question:
         return "No question provided"
 
     logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
+    _last_helios_request = time.time()
 
     # Check if Helios is available, start if needed
     if not await check_helios_health():
@@ -1126,6 +1188,17 @@ async def startup_event():
             )
             scheduled_count += 1
 
+    # Schedule Helios idle check job
+    idle_check_interval = int(os.environ.get("HELIOS_IDLE_CHECK_INTERVAL", 300))
+    scheduler.add_job(
+        lambda: asyncio.create_task(check_helios_idle()),
+        'interval',
+        seconds=idle_check_interval,
+        id='helios_idle_check'
+    )
+    idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
+    logger.info(f"[SCHEDULER] Helios idle check: every {idle_check_interval}s, timeout {idle_timeout}s")
+
     scheduler.start()
     logger.info(f"[SCHEDULER] Started with {scheduled_count} scheduled, {delivered_count} missed reminders delivered")
 
@@ -1139,13 +1212,22 @@ async def health():
     # Get scheduled reminder count
     scheduled_jobs = len(scheduler.get_jobs())
 
+    # Calculate Helios idle time
+    idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
+    if _last_helios_request > 0:
+        idle_time = int(time.time() - _last_helios_request)
+        idle_info = f"{idle_time}s (timeout: {idle_timeout}s)"
+    else:
+        idle_info = "no requests yet"
+
     return {
         "ok": True,
-        "version": "6.1",
+        "version": "6.2",
         "architecture": "hybrid",
         "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
         "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
         "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
+        "helios_idle": idle_info,
         "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "helios_tools": ["ask_orchestrator"],
         "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder"],
@@ -1297,6 +1379,7 @@ async def chat_completions(req: Request):
             return await _nemotron_fallback(messages, stream, routing_info)
 
     # 4. Call Helios
+    global _last_helios_request
     logger.info("[HYBRID] Calling Helios...")
     try:
         helios_resp = await call_model(
@@ -1305,6 +1388,7 @@ async def chat_completions(req: Request):
             tools=HELIOS_TOOLS,
             timeout=180  # Helios can be slow
         )
+        _last_helios_request = time.time()  # Track for auto-shutdown
     except Exception as e:
         logger.error(f"[HYBRID] Helios call failed: {e}")
         # Fallback to Nemotron
@@ -1380,6 +1464,7 @@ async def chat_completions(req: Request):
             system=helios_system,
             timeout=120
         )
+        _last_helios_request = time.time()  # Track for auto-shutdown
     except Exception as e:
         logger.error(f"[HYBRID] Helios final response failed: {e}")
         # Return the orchestrator result directly
