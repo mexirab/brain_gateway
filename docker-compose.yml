@@ -99,6 +99,11 @@ services:
       - TZ=${TZ:-America/New_York}
       # Agentic settings
       - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}
+      # Pi-hole focus blocking
+      - PIHOLE_URL=${PIHOLE_URL:-http://pihole:80}
+      - PIHOLE_PASSWORD=${PIHOLE_PASSWORD:-}
+      - PIHOLE_FOCUS_GROUP=${PIHOLE_FOCUS_GROUP:-focus_blocklist}
+      - FOCUS_BLOCKING_ENABLED=${FOCUS_BLOCKING_ENABLED:-true}
     networks:
       - gateway-net
     healthcheck:
@@ -138,6 +143,27 @@ services:
     networks:
       - gateway-net
 
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "${PIHOLE_WEB_PORT:-8053}:80/tcp"
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - FTLCONF_webserver_api_password=${PIHOLE_PASSWORD:-}
+      - FTLCONF_dns_listeningMode=all
+    volumes:
+      - pihole-etc:/etc/pihole
+      - pihole-dnsmasq:/etc/dnsmasq.d
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - gateway-net
+
   model-server:
     image: nginx:alpine
     container_name: model-server
@@ -158,4 +184,6 @@ volumes:
   open-webui-data:
   redis-data:
   brain-audio:
+  pihole-etc:
+  pihole-dnsmasq:
 

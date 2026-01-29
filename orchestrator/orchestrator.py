@@ -52,6 +52,9 @@ from reminder_manager import (
     _send_notification,
 )
 
+# Import the Pi-hole client for focus blocking
+from pihole_client import get_pihole_client
+
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
@@ -87,7 +90,8 @@ current_focus_session = {
     "duration": None,
     "break_duration": None,
     "job_id": None,
-    "audio_player": None
+    "audio_player": None,
+    "block_sites": False
 }
 
 # Endel focus audio configuration
@@ -312,7 +316,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "start_focus",
-            "description": "Start a focus timer (Pomodoro) with Endel focus audio. Announces break time via voice when timer ends. Helps with ADHD time blindness and hyperfocus protection.",
+            "description": "Start a focus timer (Pomodoro) with Endel focus audio and distraction blocking. Announces break time via voice when timer ends. Helps with ADHD time blindness and hyperfocus protection.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -336,6 +340,10 @@ STATIC_TOOLS = [
                         "type": "string",
                         "enum": ["focus", "deeper-focus", "study", "colored-noises", "none"],
                         "description": "Endel soundscape to play (default: focus, 'none' to disable)"
+                    },
+                    "block_sites": {
+                        "type": "boolean",
+                        "description": "Block distracting websites during focus (default: true, set false to disable)"
                     }
                 },
                 "required": ["task"]
@@ -649,7 +657,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("duration", 25),
                 arguments.get("break_duration", 5),
                 arguments.get("speaker"),
-                arguments.get("soundscape", "focus")
+                arguments.get("soundscape", "focus"),
+                arguments.get("block_sites", True)
             )
         elif tool_name == "stop_focus":
             return await tool_stop_focus()
@@ -1133,8 +1142,9 @@ async def stop_focus_audio(player: str = None) -> bool:
 
 
 async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 5,
-                           speaker: str = None, soundscape: str = "focus") -> str:
-    """Start a focus timer with voice announcement at end and optional Endel audio."""
+                           speaker: str = None, soundscape: str = "focus",
+                           block_sites: bool = True) -> str:
+    """Start a focus timer with voice announcement at end, optional Endel audio, and distraction blocking."""
     global current_focus_session
 
     if current_focus_session["active"]:
@@ -1159,6 +1169,18 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
             current_focus_session["audio_player"] = player
             logger.info(f"[FOCUS] Started Endel {soundscape} audio on {player}")
 
+    # Enable site blocking if requested
+    blocking_enabled = False
+    if block_sites:
+        pihole = get_pihole_client()
+        result = await pihole.enable_focus_blocking()
+        if result.success:
+            blocking_enabled = True
+            logger.info("[FOCUS] Enabled Pi-hole distraction blocking")
+        else:
+            logger.warning(f"[FOCUS] Could not enable blocking: {result.message}")
+            # Continue anyway - blocking is optional enhancement
+
     # Schedule break announcement
     end_time = datetime.now() + timedelta(minutes=duration)
     job_id = f"focus_{datetime.now().strftime('%H%M%S')}"
@@ -1179,17 +1201,28 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         "duration": duration,
         "break_duration": break_duration,
         "job_id": job_id,
-        "audio_player": player if audio_started else None
+        "audio_player": player if audio_started else None,
+        "block_sites": blocking_enabled
     }
 
     logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}")
 
     # Build response message
+    parts = []
     if audio_started:
         speaker_name = player.replace("media_player.", "").replace("_", " ")
-        return f"Focus timer started with Endel {soundscape} sounds on the {speaker_name}! You have {duration} minutes to work on '{task}'. I'll let you know when it's break time."
+        parts.append(f"Focus timer started with Endel {soundscape} sounds on the {speaker_name}!")
     else:
-        return f"Focus timer started! You have {duration} minutes to work on '{task}'. I'll let you know when it's break time."
+        parts.append("Focus timer started!")
+
+    parts.append(f"You have {duration} minutes to work on '{task}'.")
+
+    if blocking_enabled:
+        parts.append("Distracting sites are blocked.")
+
+    parts.append("I'll let you know when it's break time.")
+
+    return " ".join(parts)
 
 
 async def tool_stop_focus() -> str:
@@ -1207,6 +1240,15 @@ async def tool_stop_focus() -> str:
         await stop_focus_audio(current_focus_session["audio_player"])
         logger.info("[FOCUS] Stopped Endel audio")
 
+    # Disable site blocking if it was enabled
+    if current_focus_session.get("block_sites"):
+        pihole = get_pihole_client()
+        result = await pihole.disable_focus_blocking()
+        if result.success:
+            logger.info("[FOCUS] Disabled Pi-hole distraction blocking")
+        else:
+            logger.warning(f"[FOCUS] Could not disable blocking: {result.message}")
+
     # Cancel scheduled break
     try:
         scheduler.remove_job(current_focus_session["job_id"])
@@ -1220,7 +1262,8 @@ async def tool_stop_focus() -> str:
         "duration": None,
         "break_duration": None,
         "job_id": None,
-        "audio_player": None
+        "audio_player": None,
+        "block_sites": False
     }
 
     logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'")
@@ -1252,6 +1295,15 @@ async def deliver_focus_break(task: str, break_duration: int):
         await stop_focus_audio(current_focus_session["audio_player"])
         logger.info("[FOCUS] Stopped Endel audio before break announcement")
 
+    # Disable site blocking during break
+    if current_focus_session.get("block_sites"):
+        pihole = get_pihole_client()
+        result = await pihole.disable_focus_blocking()
+        if result.success:
+            logger.info("[FOCUS] Disabled Pi-hole blocking for break")
+        else:
+            logger.warning(f"[FOCUS] Could not disable blocking for break: {result.message}")
+
     # Generate encouraging break message
     messages = [
         f"Great focus session on {task}! Take a {break_duration} minute break. Stretch, grab water, rest your eyes.",
@@ -1273,7 +1325,8 @@ async def deliver_focus_break(task: str, break_duration: int):
         "duration": None,
         "break_duration": None,
         "job_id": None,
-        "audio_player": None
+        "audio_player": None,
+        "block_sites": False
     }
 
     logger.info(f"[FOCUS] Break announced for '{task}'")
@@ -1411,7 +1464,7 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
 3. update_data - Update Nadim's personal data (medications, projects)
 4. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone
-5. start_focus - Start a Pomodoro focus timer with Endel audio (task, duration, speaker, soundscape)
+5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration, speaker, soundscape, block_sites)
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 
@@ -1457,7 +1510,7 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, medications)
 3. update_data - Update Nadim's medications or projects
 4. set_reminder - Set a reminder for a specific time
-5. start_focus - Start a Pomodoro focus timer with Endel audio (task, duration=25, break_duration=5, speaker=optional, soundscape=focus|deeper-focus|study|colored-noises|none)
+5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration=25, break_duration=5, speaker=optional, soundscape, block_sites=true)
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 
