@@ -1,5 +1,11 @@
-# Updated docker-compose.yml for /opt/voyager/gateway_mvp/
-# Adds the Brain Orchestrator service
+# Brain Gateway Docker Compose
+# ============================
+# Environment variables loaded from .env file (create from .env.example)
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env with your values
+#   docker compose up -d
 
 # Shared logging config to reduce disk I/O
 x-logging: &default-logging
@@ -15,24 +21,24 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "80:8080"
+      - "${SERVICE_WEBUI_PORT:-80}:8080"
     volumes:
       - open-webui-data:/app/backend/data
     environment:
       - WEBUI_AUTH=False
       - WEBUI_NAME=Nadim's Brain
       # Point to orchestrator instead of litellm directly
-      - OPENAI_API_BASE_URL=http://orchestrator:8888/v1
+      - OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
       - OPENAI_API_KEY=local
       - REDIS_URL=redis://redis:6379/0
-      # TTS configuration - Qwen3-TTS on Uranus GPU 0
+      # TTS configuration - Qwen3-TTS on Uranus
       - AUDIO_TTS_ENGINE=openai
-      - AUDIO_TTS_OPENAI_API_BASE_URL=http://10.0.0.173:8002/v1
+      - AUDIO_TTS_OPENAI_API_BASE_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}/v1
       - AUDIO_TTS_OPENAI_API_KEY=local
-      - AUDIO_TTS_VOICE=jessica
-      # STT configuration - Whisper on Uranus GPU 1
+      - AUDIO_TTS_VOICE=${TTS_VOICE:-jessica}
+      # STT configuration - Whisper on Uranus
       - AUDIO_STT_ENGINE=openai
-      - AUDIO_STT_OPENAI_API_BASE_URL=http://10.0.0.173:8003/v1
+      - AUDIO_STT_OPENAI_API_BASE_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_STT_PORT:-8003}/v1
       - AUDIO_STT_OPENAI_API_KEY=local
       - AUDIO_STT_MODEL=whisper-1
     depends_on:
@@ -49,32 +55,47 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "8888:8888"
+      - "${SERVICE_ORCHESTRATOR_PORT:-8888}:8888"
     volumes:
       # Mount ChromaDB data
-      - /home/nadim/.local/share/chroma:/chroma:rw
+      - ${USER_HOME:-/home/nadim}/.local/share/chroma:/chroma:rw
       # Mount env file
-      - /home/nadim/brain_gateway/.env:/app/.env:ro
+      - ${USER_HOME:-/home/nadim}/brain_gateway/.env:/app/.env:ro
       # Mount RAG data for write access (medications, projects)
-      - /home/nadim/rag/nadim_rag:/rag:rw
+      - ${RAG_BASE:-/home/nadim/rag/nadim_rag}:/rag:rw
       # Mount SSH keys for Helios auto-start
-      - /home/nadim/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
-      - /home/nadim/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      - ${USER_HOME:-/home/nadim}/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+      - ${USER_HOME:-/home/nadim}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
     environment:
-      - NEMOTRON_URL=http://10.0.0.58:8001/v1
-      - HELIOS_URL=http://10.0.0.195:8080/v1
-      - HA_URL=http://10.0.0.106:8123
-      - HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI5YjcwZmQ0YWJmMTY0OWEyOTQ4YjIzYTQ4YjQ1NDlhNCIsImlhdCI6MTc2Nzg5MzE0MSwiZXhwIjoyMDgzMjUzMTQxfQ.7n2TOJrEH1hMGM1e-vlEatj9bnGg13qmcihXU0nbI7o
+      # Model endpoints
+      - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
+      - NEMOTRON_MODEL=${NEMOTRON_MODEL:-nvidia/Nemotron-Orchestrator-8B}
+      - HELIOS_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
+      - HELIOS_MODEL=${HELIOS_MODEL:-unsloth_gpt-oss-120b-GGUF_Q4_K_S_gpt-oss-120b-Q4_K_S-00001-of-00002.gguf}
+      # Home Assistant
+      - HA_URL=http://${NODE_HA_IP:-10.0.0.106}:8123
+      - HA_TOKEN=${HA_TOKEN:?HA_TOKEN must be set in .env}
+      # ChromaDB / RAG
       - CHROMA_PERSIST=/chroma/personal_rag
-      - CHROMA_COLLECTION=nadim_rag
-      - MIN_COS=0.20
-      - TOP_K=25
+      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-nadim_rag}
+      - MIN_COS=${MIN_COS:-0.20}
+      - TOP_K=${TOP_K:-25}
       - RAG_BASE=/rag
-      - TTS_URL=http://10.0.0.173:8002
-      - TTS_VOICE=jessica
-      - ORCHESTRATOR_URL=http://10.0.0.186:8888
+      # TTS
+      - TTS_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}
+      - TTS_VOICE=${TTS_VOICE:-jessica}
+      # Callback URL
+      - ORCHESTRATOR_URL=http://${NODE_JUPITER_IP:-10.0.0.248}:${SERVICE_ORCHESTRATOR_PORT:-8888}
+      # SSH for Helios auto-start
+      - NODE_HELIOS_IP=${NODE_HELIOS_IP:-10.0.0.195}
+      - HELIOS_SSH_USER=${HELIOS_SSH_USER:-labadmin}
+      # Reminders
+      - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.office_speaker}
+      - TZ=${TZ:-America/New_York}
+      # Agentic settings
+      - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}
     networks:
       - gateway-net
     healthcheck:
@@ -89,9 +110,14 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "4000:4000"
+      - "${SERVICE_LITELLM_PORT:-4000}:4000"
     volumes:
       - ./litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      # Derived URLs for litellm-config.yaml os.environ/ references
+      - NEMOTRON_API_BASE=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
+      - HELIOS_API_BASE=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
     command: --config /app/config.yaml --port 4000
     networks:
       - gateway-net
@@ -115,9 +141,9 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "8080:80"
+      - "${SERVICE_MODEL_SERVER_PORT:-8080}:80"
     volumes:
-      - /opt/voyager/gateway_mvp/models:/usr/share/nginx/html:ro
+      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/models:/usr/share/nginx/html:ro
     networks:
       - gateway-net
 

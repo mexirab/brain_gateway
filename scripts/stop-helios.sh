@@ -2,15 +2,29 @@
 # Stop Helios Expert Model (120B)
 # Saves ~150W of power
 #
-# Helios: 10.0.0.195 - RTX 5090 (32GB VRAM) + RAM offload
+# Helios: RTX 5090 (32GB VRAM) + RAM offload
 # Uses llama.cpp for inference
 #
 # Usage: ./stop-helios.sh
 
-HELIOS_HOST="helios"
-HELIOS_PORT="8080"
-HELIOS_USER="labadmin"
-HELIOS_IP="10.0.0.195"
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source environment file if it exists
+if [[ -f "${PROJECT_DIR}/.env" ]]; then
+    # shellcheck source=/dev/null
+    set -a
+    source "${PROJECT_DIR}/.env"
+    set +a
+fi
+
+# Configuration with defaults (can be overridden via .env)
+HELIOS_HOST="${HELIOS_HOST:-helios}"
+HELIOS_PORT="${SERVICE_HELIOS_PORT:-8080}"
+HELIOS_USER="${HELIOS_SSH_USER:-labadmin}"
+HELIOS_IP="${NODE_HELIOS_IP:-10.0.0.195}"
 SERVICE_NAME="llama-server"
 
 echo "[$(date)] Stopping Helios Expert Model..."

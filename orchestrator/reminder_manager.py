@@ -24,7 +24,8 @@ HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
 
 # Orchestrator URL (for HA to call back)
-ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.186:8888")
+# Default matches NODE_JUPITER_IP from .env.example
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.248:8888")
 
 # Delivery targets (configurable via env)
 REMINDER_SPEAKER = os.environ.get("REMINDER_SPEAKER", "media_player.office_speaker")

@@ -28,3 +28,32 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Generated configs (created from templates by generate-configs.sh)
+# Keep the template, ignore the generated file
+monitoring/prometheus/prometheus.yml
+
+# Temporary/runtime files
+*.tmp
+
+# Personal data - user-specific, not part of project
+# RAG source documents
+rag_data/
+personal_rag/
+*_rag/
+
+# ChromaDB vector database
+chroma/
+*.chroma
+
+# Generated audio files (TTS reminders, etc.)
+audio/
+*.wav
+*.mp3
+
+# Model files (too large for git)
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth

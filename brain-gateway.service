@@ -6,7 +6,9 @@ After=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/voyager/gateway_mvp
+WorkingDirectory=/opt/jupiter/gateway_mvp
+# Load environment variables from .env file
+EnvironmentFile=-/opt/jupiter/gateway_mvp/.env
 ExecStart=/usr/bin/docker compose -p brain up -d
 ExecStop=/usr/bin/docker compose -p brain down
 TimeoutStartSec=300

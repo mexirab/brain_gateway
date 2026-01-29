@@ -11,12 +11,12 @@
 # Network Architecture (Voice-First ADHD Support):
 #
 # ALWAYS-ON:
-#   Jupiter:  10.0.0.248 (Orchestrator, no GPU)
-#   Saturn:   10.0.0.58  (Nemotron-8B brain on RTX 3090)
-#   Uranus:   10.0.0.173  (TTS on GPU 0, STT on GPU 1 - 2x RTX 5080)
+#   Jupiter:  ${NODE_JUPITER_IP} (Orchestrator, no GPU)
+#   Saturn:   ${NODE_SATURN_IP}  (Nemotron-8B brain on RTX 3090)
+#   Uranus:   ${NODE_URANUS_IP}  (TTS on GPU 0, STT on GPU 1 - 2x RTX 5080)
 #
 # OFF BY DEFAULT (saves ~150W):
-#   Helios:   10.0.0.195  (Expert 120B on RTX 5090 + RAM)
+#   Helios:   ${NODE_HELIOS_IP}  (Expert 120B on RTX 5090 + RAM)
 
 global:
   scrape_interval: 15s
@@ -44,28 +44,28 @@ scrape_configs:
           role: 'gateway'
 
       # Helios (Large models, RTX 5090 32GB)
-      - targets: ['10.0.0.195:9100']
+      - targets: ['${NODE_HELIOS_IP}:9100']
         labels:
           node: 'helios'
           role: 'expert'
           gpu: 'rtx5090'
 
       # Uranus (2x RTX 5080 16GB each - available)
-      - targets: ['10.0.0.173:9100']
+      - targets: ['${NODE_URANUS_IP}:9100']
         labels:
           node: 'uranus'
           role: 'available'
           gpu: '2x-rtx5080'
 
       # Saturn (Nemotron brain on RTX 3090, RTX 3080 available)
-      - targets: ['10.0.0.58:9100']
+      - targets: ['${NODE_SATURN_IP}:9100']
         labels:
           node: 'saturn'
           role: 'brain'
           gpu: 'rtx3080+rtx3090'
 
       # Jupiter (No GPU currently)
-      - targets: ['10.0.0.248:9100']
+      - targets: ['${NODE_JUPITER_IP}:9100']
         labels:
           node: 'jupiter'
           role: 'compute'
@@ -76,19 +76,19 @@ scrape_configs:
   - job_name: 'gpu-exporter'
     static_configs:
       # Helios GPU (Expert model - RTX 5090)
-      - targets: ['10.0.0.195:9400']
+      - targets: ['${NODE_HELIOS_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'helios'
           gpu: 'rtx5090'
 
       # Uranus GPUs (Nemotron - 2x RTX 5080)
-      - targets: ['10.0.0.173:9400']
+      - targets: ['${NODE_URANUS_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'uranus'
           gpu: '2x-rtx5080'
 
       # Saturn GPUs (RTX 3080 + RTX 3090)
-      - targets: ['10.0.0.58:9400']
+      - targets: ['${NODE_SATURN_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'saturn'
           gpu: 'rtx3080+rtx3090'
@@ -100,7 +100,7 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       # Nemotron on Saturn (vLLM exposes metrics)
-      - targets: ['10.0.0.58:8001']
+      - targets: ['${NODE_SATURN_IP}:${SERVICE_NEMOTRON_PORT}']
         labels:
           service: 'nemotron'
           node: 'saturn'
@@ -115,25 +115,25 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       # Brain Gateway Orchestrator
-      - targets: ['http://10.0.0.248:8888/health']
+      - targets: ['http://${NODE_JUPITER_IP}:${SERVICE_ORCHESTRATOR_PORT}/health']
         labels:
           service: 'orchestrator'
           node: 'jupiter'
 
       # TTS (Qwen3-TTS on Uranus GPU 0)
-      - targets: ['http://10.0.0.173:8002/health']
+      - targets: ['http://${NODE_URANUS_IP}:${SERVICE_TTS_PORT}/health']
         labels:
           service: 'tts'
           node: 'uranus'
 
       # STT (Whisper on Uranus GPU 1)
-      - targets: ['http://10.0.0.173:8003/health']
+      - targets: ['http://${NODE_URANUS_IP}:${SERVICE_STT_PORT}/health']
         labels:
           service: 'stt'
           node: 'uranus'
 
       # Helios Expert Model (OFF by default)
-      - targets: ['http://10.0.0.195:8080/health']
+      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_HELIOS_PORT}/health']
         labels:
           service: 'helios'
           node: 'helios'

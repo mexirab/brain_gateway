@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# lab_hw_audit.sh  (run this on Voyager)
+# lab_hw_audit.sh  (run this on Jupiter)
 #
 # SSH into each node and print:
 #  - GPU(s): NVIDIA (nvidia-smi), AMD (rocm-smi), fallback lspci
@@ -8,11 +8,23 @@
 #  - CPU: model + cores/threads
 #
 # Modified to work with SSH config aliases (no domain suffix)
+# Environment variables loaded from .env if available.
 # ============================================================
 
 set -euo pipefail
 
-NODES_DEFAULT=(voyager helios jupiter saturn uranus)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source environment file if it exists
+if [[ -f "${PROJECT_DIR}/.env" ]]; then
+    # shellcheck source=/dev/null
+    set -a
+    source "${PROJECT_DIR}/.env"
+    set +a
+fi
+
+NODES_DEFAULT=(jupiter helios saturn uranus)
 NODES=("${NODES_DEFAULT[@]}")
 
 SSH_OPTS=(
@@ -139,7 +151,7 @@ printf "%-12s | %-60s | %-7s | %-40s | %-5s | %-7s | %-7s\n" \
 printf "%s\n" "$(printf -- '-%.0s' {1..150})"
 
 for node in "${NODES[@]}"; do
-  if [[ "${node}" == "voyager" ]] || [[ "$(hostname 2>/dev/null || true)" == "${node}"* ]]; then
+  if [[ "${node}" == "jupiter" ]] || [[ "$(hostname 2>/dev/null || true)" == "${node}"* ]]; then
     line="$(bash -c "$REMOTE_SCRIPT" 2>/dev/null || true)"
   else
     # Use SSH config alias directly

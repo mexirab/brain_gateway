@@ -620,14 +620,19 @@ async def start_helios() -> bool:
 
     logger.info("[EXPERT] Helios is offline, attempting to start...")
 
+    # Get SSH config from environment
+    helios_ip = os.environ.get("NODE_HELIOS_IP", "10.0.0.195")
+    ssh_user = os.environ.get("HELIOS_SSH_USER", "labadmin")
+    ssh_key = os.environ.get("HELIOS_SSH_KEY", "/root/.ssh/id_ed25519")
+
     # Start the service via SSH using paramiko
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(
-            hostname="10.0.0.195",
-            username="labadmin",
-            key_filename="/root/.ssh/id_ed25519",  # Mounted from host
+            hostname=helios_ip,
+            username=ssh_user,
+            key_filename=ssh_key,  # Mounted from host
             timeout=30
         )
         stdin, stdout, stderr = ssh.exec_command("sudo systemctl start llama-server", timeout=30)

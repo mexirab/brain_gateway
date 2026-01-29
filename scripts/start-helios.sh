@@ -2,19 +2,32 @@
 # Start Helios Expert Model (120B)
 # Manual start script for deep conversation mode
 #
-# Helios: 10.0.0.195 - RTX 5090 (32GB VRAM) + RAM offload
+# Helios: RTX 5090 (32GB VRAM) + RAM offload
 # Model: unsloth_gpt-oss-120b-GGUF_Q4_K_S via llama.cpp
-# Port: 8080
 #
 # Usage: ./start-helios.sh
 #
 # This saves ~150W of power when not in use.
 # Start it when you need deep, thoughtful conversations.
 
-HELIOS_HOST="helios"
-HELIOS_PORT="8080"
-HELIOS_USER="labadmin"
-HELIOS_IP="10.0.0.195"
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source environment file if it exists
+if [[ -f "${PROJECT_DIR}/.env" ]]; then
+    # shellcheck source=/dev/null
+    set -a
+    source "${PROJECT_DIR}/.env"
+    set +a
+fi
+
+# Configuration with defaults (can be overridden via .env)
+HELIOS_HOST="${HELIOS_HOST:-helios}"
+HELIOS_PORT="${SERVICE_HELIOS_PORT:-8080}"
+HELIOS_USER="${HELIOS_SSH_USER:-labadmin}"
+HELIOS_IP="${NODE_HELIOS_IP:-10.0.0.195}"
 SERVICE_NAME="llama-server"
 
 echo "[$(date)] Starting Helios Expert Model..."
