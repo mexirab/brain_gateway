@@ -104,6 +104,11 @@ services:
       - PIHOLE_PASSWORD=${PIHOLE_PASSWORD:-}
       - PIHOLE_FOCUS_GROUP=${PIHOLE_FOCUS_GROUP:-focus_blocklist}
       - FOCUS_BLOCKING_ENABLED=${FOCUS_BLOCKING_ENABLED:-true}
+      # Focus audio
+      - FOCUS_AUDIO_PLAYER=${FOCUS_AUDIO_PLAYER:-media_player.office_speaker}
+      # SearXNG web search
+      - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      - SEARXNG_MAX_RESULTS=${SEARXNG_MAX_RESULTS:-5}
     networks:
       - gateway-net
     healthcheck:
@@ -149,8 +154,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
+      - "${NODE_JUPITER_IP:-10.0.0.248}:53:53/tcp"
+      - "${NODE_JUPITER_IP:-10.0.0.248}:53:53/udp"
       - "${PIHOLE_WEB_PORT:-8053}:80/tcp"
     environment:
       - TZ=${TZ:-America/New_York}
@@ -161,6 +166,21 @@ services:
       - pihole-dnsmasq:/etc/dnsmasq.d
     cap_add:
       - NET_ADMIN
+    networks:
+      - gateway-net
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "${SEARXNG_PORT:-8090}:8080"
+    volumes:
+      - searxng-data:/etc/searxng
+      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8090}/
     networks:
       - gateway-net
 
@@ -186,4 +206,5 @@ volumes:
   brain-audio:
   pihole-etc:
   pihole-dnsmasq:
+  searxng-data:
 

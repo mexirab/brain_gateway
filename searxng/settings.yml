@@ -1,0 +1,17 @@
+# SearXNG settings for Brain Gateway
+# Enables JSON API access for the orchestrator
+
+use_default_settings: true
+
+server:
+  # Bind to all interfaces inside container
+  bind_address: "0.0.0.0"
+  secret_key: "brain-gateway-searxng-key"
+  limiter: false
+  image_proxy: false
+
+search:
+  # Enable JSON output format (disabled by default)
+  formats:
+    - html
+    - json

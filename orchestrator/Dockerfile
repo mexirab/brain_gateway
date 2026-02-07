@@ -21,6 +21,7 @@ COPY ha_integration.py .
 COPY data_manager.py .
 COPY reminder_manager.py .
 COPY pihole_client.py .
+COPY web_search.py .
 
 EXPOSE 8888
 

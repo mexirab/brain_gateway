@@ -55,6 +55,9 @@ from reminder_manager import (
 # Import the Pi-hole client for focus blocking
 from pihole_client import get_pihole_client
 
+# Import the web search client for SearXNG
+from web_search import get_search_client
+
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
@@ -78,6 +81,14 @@ TOP_K = int(os.environ.get("TOP_K", "6"))
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # Prevent infinite loops
 
 app = FastAPI(title="Brain Gateway", version="5.0")
+
+# Shared httpx client for connection reuse
+_http: httpx.AsyncClient = None
+
+# HA tool definition cache (avoids rebuilding entity list every Nemotron round)
+_ha_tool_cache: Optional[Dict[str, Any]] = None
+_ha_tool_cache_time: float = 0.0
+_HA_TOOL_CACHE_TTL: float = 300.0  # 5 minutes
 
 # Helios idle tracking for auto-shutdown
 _last_helios_request: float = 0.0
@@ -113,7 +124,12 @@ scheduler = AsyncIOScheduler(
 # =============================================================================
 
 def get_ha_tool_definition() -> Dict[str, Any]:
-    """Build the home_assistant tool with current entity list."""
+    """Build the home_assistant tool with current entity list (cached)."""
+    global _ha_tool_cache, _ha_tool_cache_time
+
+    if _ha_tool_cache and (time.time() - _ha_tool_cache_time) < _HA_TOOL_CACHE_TTL:
+        return _ha_tool_cache
+
     entity_lines = []
     for domain in ["light", "switch", "fan", "climate", "cover", "scene", "lock"]:
         entities = ha_client.get_entities_by_domain(domain)
@@ -122,7 +138,7 @@ def get_ha_tool_definition() -> Dict[str, Any]:
 
     entity_list = "\n".join(entity_lines[:60]) if entity_lines else "  (entities loading...)"
 
-    return {
+    _ha_tool_cache = {
         "type": "function",
         "function": {
             "name": "home_assistant",
@@ -160,6 +176,8 @@ BRIGHTNESS: 0-255 scale. 50%=128, 75%=191, 100%=255""",
             }
         }
     }
+    _ha_tool_cache_time = time.time()
+    return _ha_tool_cache
 
 
 # Static tools (non-HA)
@@ -343,7 +361,7 @@ STATIC_TOOLS = [
                     },
                     "block_sites": {
                         "type": "boolean",
-                        "description": "Block distracting websites during focus (default: true, set false to disable)"
+                        "description": "ALWAYS true unless user explicitly says 'without blocking' or 'no blocking'. Do not set to false unless explicitly requested."
                     }
                 },
                 "required": ["task"]
@@ -369,6 +387,33 @@ STATIC_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for real-world information. Use for: current events, news, weather, restaurants, sports, businesses, or any factual question about the real world that isn't in Nadim's personal notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g., 'Houston events this weekend', 'weather in Houston today')"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["general", "news"],
+                        "description": "Search category (default: general)"
+                    },
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["day", "week", "month", "year"],
+                        "description": "Optional time filter for recent results"
+                    }
+                },
+                "required": ["query"]
             }
         }
     }
@@ -419,11 +464,13 @@ Use it ONLY when you need to:
 - Search Nadim's personal notes/memory for specific info
 - Set reminders for specific times
 - Update personal data (medications, projects)
+- Look up real-world information (events, news, weather, restaurants, sports, businesses)
 
 IMPORTANT RULES:
 - For greetings (hi, hello, good morning) - just respond warmly, NO tools
 - For general chat/questions - respond naturally using your knowledge + context above
 - For device control, reminders, or personal data updates - use ask_orchestrator
+- For real-world questions (events, news, weather, businesses, sports) - use ask_orchestrator to search the web
 - After getting a tool result, respond naturally to the user (don't just repeat the raw result)
 
 RESPONSE STYLE:
@@ -439,7 +486,7 @@ HELIOS_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_orchestrator",
-            "description": "Delegate an action to the smart home/personal assistant orchestrator. Use for: controlling devices (lights, fans, switches), searching personal notes, setting reminders, or updating medications/projects.",
+            "description": "Delegate an action to the smart home/personal assistant orchestrator. Use for: controlling devices (lights, fans, switches), searching personal notes, setting reminders, updating medications/projects, or searching the web for real-world information.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -583,10 +630,9 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(f"{url}/chat/completions", json=payload)
-        r.raise_for_status()
-        return r.json()
+    r = await _http.post(f"{url}/chat/completions", json=payload, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
 
 async def stream_final_response(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180):
@@ -606,15 +652,14 @@ async def stream_final_response(url: str, model: str, messages: List[Dict], syst
         "stream": True,
     }
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream("POST", f"{url}/chat/completions", json=payload) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                if line.startswith("data: "):
-                    # Pass through directly for minimal latency
-                    yield f"{line}\n\n"
+    async with _http.stream("POST", f"{url}/chat/completions", json=payload, timeout=timeout) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line:
+                continue
+            if line.startswith("data: "):
+                # Pass through directly for minimal latency
+                yield f"{line}\n\n"
 
 
 # =============================================================================
@@ -664,6 +709,12 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_stop_focus()
         elif tool_name == "focus_status":
             return await tool_focus_status()
+        elif tool_name == "web_search":
+            return await tool_web_search(
+                arguments.get("query", ""),
+                arguments.get("category", "general"),
+                arguments.get("time_range")
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -701,12 +752,40 @@ def tool_search_memory(query: str) -> str:
         return "No relevant information found in memory."
 
 
+async def tool_web_search(query: str, category: str = "general", time_range: str = None) -> str:
+    """Search the web via SearXNG and return formatted results."""
+    if not query:
+        return "No search query provided"
+
+    logger.info(f"[WEB_SEARCH] Searching: '{query}' (category={category}, time_range={time_range})")
+    client = get_search_client(http_client=_http)
+    response = await client.search(query=query, category=category, time_range=time_range)
+
+    if not response.success:
+        logger.error(f"[WEB_SEARCH] Failed for '{query}': {response.error}")
+        return f"Web search failed: {response.error}"
+
+    if not response.results:
+        logger.warning(f"[WEB_SEARCH] No results for '{query}'")
+        return f"No results found for '{query}'"
+
+    # Format results as numbered text for the LLM to synthesize
+    lines = [f"Web search results for '{query}':"]
+    for i, r in enumerate(response.results, 1):
+        lines.append(f"\n{i}. {r.title}")
+        if r.content:
+            lines.append(f"   {r.content}")
+        lines.append(f"   URL: {r.url}")
+
+    logger.info(f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'")
+    return "\n".join(lines)
+
+
 async def check_helios_health() -> bool:
     """Check if Helios is running and responsive."""
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{HELIOS_URL.replace('/v1', '')}/health")
-            return r.status_code == 200
+        r = await _http.get(f"{HELIOS_URL.replace('/v1', '')}/health", timeout=5)
+        return r.status_code == 200
     except:
         return False
 
@@ -808,6 +887,9 @@ async def check_helios_idle():
         return
 
     idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
+    if idle_timeout <= 0:
+        return  # Auto-shutdown disabled
+
     idle_time = time.time() - _last_helios_request
 
     if idle_time > idle_timeout:
@@ -937,18 +1019,18 @@ async def deliver_reminder_job(reminder_id: str):
             # Use pre-generated audio
             from reminder_manager import REMINDER_SPEAKER, HA_URL, HA_TOKEN
             try:
-                async with httpx.AsyncClient(timeout=30) as client:
-                    response = await client.post(
-                        f"{HA_URL}/api/services/media_player/play_media",
-                        headers={"Authorization": f"Bearer {HA_TOKEN}"},
-                        json={
-                            "entity_id": REMINDER_SPEAKER,
-                            "media_content_id": audio_url,
-                            "media_content_type": "audio/wav"
-                        }
-                    )
-                    results["voice"] = {"success": response.status_code == 200}
-                    logger.info(f"[REMINDER] Played audio on {REMINDER_SPEAKER}")
+                response = await _http.post(
+                    f"{HA_URL}/api/services/media_player/play_media",
+                    headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                    json={
+                        "entity_id": REMINDER_SPEAKER,
+                        "media_content_id": audio_url,
+                        "media_content_type": "audio/wav"
+                    },
+                    timeout=30,
+                )
+                results["voice"] = {"success": response.status_code == 200}
+                logger.info(f"[REMINDER] Played audio on {REMINDER_SPEAKER}")
             except Exception as e:
                 logger.error(f"[REMINDER] Voice delivery failed: {e}")
                 results["voice"] = {"success": False, "error": str(e)}
@@ -1104,12 +1186,34 @@ def resolve_speaker_entity(speaker_name: str) -> Optional[str]:
 
 
 async def get_endel_focus_url(duration_minutes: int, mode: str = "focus") -> Optional[str]:
-    """Build Endel HLS playlist URL for focus audio."""
+    """Fetch Endel HLS playlist and extract direct audio URL for Cast devices."""
     if mode not in ENDEL_MODES:
         mode = "focus"
     hour = datetime.now().hour
-    # Return the URL directly - HLS playlists work as media URLs
-    return f"{ENDEL_API_URL}?mode={mode}&hour={hour}&hlsjs=1&duration={duration_minutes}"
+    playlist_url = f"{ENDEL_API_URL}?mode={mode}&hour={hour}&hlsjs=1&duration={duration_minutes}"
+
+    try:
+        # Fetch the HLS playlist and extract direct audio URLs
+        resp = await _http.get(playlist_url, timeout=10)
+        resp.raise_for_status()
+
+        # Parse M3U8 playlist to get direct audio URLs
+        audio_urls = []
+        for line in resp.text.split('\n'):
+            line = line.strip()
+            if line and not line.startswith('#'):
+                audio_urls.append(line)
+
+        if audio_urls:
+            # Return the first audio segment URL (Cast can play .aac directly)
+            logger.info(f"[ENDEL] Extracted {len(audio_urls)} audio URLs from playlist")
+            return audio_urls[0]
+        else:
+            logger.warning("[ENDEL] No audio URLs found in playlist")
+            return None
+    except Exception as e:
+        logger.error(f"[ENDEL] Failed to fetch playlist: {e}")
+        return None
 
 
 async def start_focus_audio(duration_minutes: int, player: str, soundscape: str = "focus") -> bool:
@@ -1130,6 +1234,8 @@ async def start_focus_audio(duration_minutes: int, player: str, soundscape: str 
         "play_media",
         {"media_content_id": url, "media_content_type": "music"}
     )
+    if not result.success:
+        logger.error(f"[FOCUS] Failed to start audio on {player}: {result.message}")
     return result.success
 
 
@@ -1138,6 +1244,8 @@ async def stop_focus_audio(player: str = None) -> bool:
     player = player or FOCUS_AUDIO_PLAYER
     logger.info(f"[FOCUS] Stopping audio on {player}")
     result = await ha_client.call_service(player, "media_stop", {})
+    if not result.success:
+        logger.error(f"[FOCUS] Failed to stop audio on {player}: {result.message}")
     return result.success
 
 
@@ -1168,6 +1276,8 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         if audio_started:
             current_focus_session["audio_player"] = player
             logger.info(f"[FOCUS] Started Endel {soundscape} audio on {player}")
+        else:
+            logger.warning(f"[FOCUS] Endel {soundscape} audio failed to start on {player}")
 
     # Enable site blocking if requested
     blocking_enabled = False
@@ -1332,20 +1442,17 @@ async def deliver_focus_break(task: str, break_duration: int):
     logger.info(f"[FOCUS] Break announced for '{task}'")
 
 
-async def call_nemotron_orchestrator(command: str) -> str:
+async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, label: str = "NEMOTRON") -> str:
     """
-    Send a command to Nemotron for tool execution.
-    Nemotron has access to HA, RAG, reminders, update_data.
-    Returns the final result after executing any necessary tools.
+    Shared Nemotron agentic tool loop.
+
+    Runs Nemotron in a loop, parsing tool calls, deduplicating across rounds,
+    executing tools, and returning the final text result.
     """
-    logger.info(f"[NEMOTRON] Orchestrating command: {command[:100]}...")
+    executed_calls = set()  # Cross-round deduplication
 
-    messages = [{"role": "user", "content": command}]
-    system_prompt = get_nemotron_system_prompt()
-
-    # Agentic loop: let Nemotron call tools until it responds with content
     for round_num in range(MAX_TOOL_ROUNDS):
-        logger.info(f"[NEMOTRON] Round {round_num + 1}/{MAX_TOOL_ROUNDS}")
+        logger.info(f"[{label}] Round {round_num + 1}/{MAX_TOOL_ROUNDS}")
 
         try:
             llm_resp = await call_model(
@@ -1356,7 +1463,7 @@ async def call_nemotron_orchestrator(command: str) -> str:
                 timeout=60
             )
         except Exception as e:
-            logger.error(f"[NEMOTRON] Call failed: {e}")
+            logger.error(f"[{label}] Call failed: {e}")
             return f"Sorry, I couldn't complete that action: {e}"
 
         # Extract the assistant's response
@@ -1372,32 +1479,61 @@ async def call_nemotron_orchestrator(command: str) -> str:
         # If no tool calls, we're done
         if not tool_calls:
             result = clean_response(content)
-            logger.info(f"[NEMOTRON] Final result: {result[:100]}...")
+            logger.info(f"[{label}] Final result: {result[:100]}...")
             return result
 
-        # Process tool calls (deduplicate identical calls)
-        logger.info(f"[NEMOTRON] Processing {len(tool_calls)} tool call(s)")
-        messages.append({"role": "assistant", "content": content})
-
-        tool_results = []
-        seen_calls = set()  # Track (tool_name, args_json) to prevent duplicates
-
+        # Filter out calls we've already executed in previous rounds
+        new_tool_calls = []
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
             args_str = function.get("arguments", "{}")
+            try:
+                arguments = json.loads(args_str)
+            except json.JSONDecodeError:
+                arguments = {}
+            call_key = (tool_name, json.dumps(arguments, sort_keys=True))
+            if call_key in executed_calls:
+                logger.info(f"[{label}] Skipping repeat tool call: {tool_name} (already executed)")
+            else:
+                new_tool_calls.append(tool_call)
 
+        # If all calls are repeats, force a final response
+        if not new_tool_calls:
+            logger.info(f"[{label}] All tool calls are repeats, forcing final response")
+            messages.append({"role": "assistant", "content": content})
+            messages.append({
+                "role": "user",
+                "content": "You already have the results above. Do NOT call any tools again. Summarize the information in a brief, natural response."
+            })
+            try:
+                final_resp = await call_model(
+                    NEMOTRON_URL, NEMOTRON_MODEL, messages,
+                    system=system_prompt,
+                    timeout=60
+                )
+                final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return clean_response(final_content)
+            except Exception as e:
+                logger.error(f"[{label}] Final response failed: {e}")
+                return "I found some results but couldn't summarize them. Please try again."
+
+        # Process new tool calls
+        logger.info(f"[{label}] Processing {len(new_tool_calls)} tool call(s)")
+        messages.append({"role": "assistant", "content": content})
+
+        tool_results = []
+        for tool_call in new_tool_calls:
+            function = tool_call.get("function", {})
+            tool_name = function.get("name", "")
+            args_str = function.get("arguments", "{}")
             try:
                 arguments = json.loads(args_str)
             except json.JSONDecodeError:
                 arguments = {}
 
-            # Deduplicate: skip if we've already executed this exact call
             call_key = (tool_name, json.dumps(arguments, sort_keys=True))
-            if call_key in seen_calls:
-                logger.info(f"[NEMOTRON] Skipping duplicate tool call: {tool_name}")
-                continue
-            seen_calls.add(call_key)
+            executed_calls.add(call_key)
 
             result = await execute_tool(tool_name, arguments)
             tool_results.append(f"[{tool_name}] {result}")
@@ -1406,12 +1542,24 @@ async def call_nemotron_orchestrator(command: str) -> str:
         results_text = "\n".join(tool_results)
         messages.append({
             "role": "user",
-            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nProvide a brief summary of what was done."
+            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nThe action is complete. Summarize the result in a brief, natural response. Do NOT call any more tools."
         })
 
     # Hit max rounds
-    logger.warning(f"[NEMOTRON] Hit max tool rounds")
+    logger.warning(f"[{label}] Hit max tool rounds")
     return "I tried to complete that but ran into some complexity. Please try a simpler request."
+
+
+async def call_nemotron_orchestrator(command: str) -> str:
+    """
+    Send a command to Nemotron for tool execution.
+    Nemotron has access to HA, RAG, reminders, update_data.
+    Returns the final result after executing any necessary tools.
+    """
+    logger.info(f"[NEMOTRON] Orchestrating command: {command[:100]}...")
+    messages = [{"role": "user", "content": command}]
+    system_prompt = get_nemotron_system_prompt()
+    return await _run_nemotron_tool_loop(messages, system_prompt, label="NEMOTRON")
 
 
 def clean_response(text: str) -> str:
@@ -1467,6 +1615,7 @@ AVAILABLE TOOLS:
 5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration, speaker, soundscape, block_sites)
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
+8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses)
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -1476,6 +1625,7 @@ WHEN TO USE TOOLS:
 - start_focus: When user wants to start a focus timer, pomodoro, or work session (with optional speaker/soundscape)
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
+- web_search: For real-world questions - events, news, weather, restaurants, sports scores, businesses, or anything NOT in personal notes
 
 CONVERSATION STYLE:
 - Be warm, friendly, and conversational
@@ -1498,7 +1648,10 @@ EXAMPLES:
 - "Start focus on emails on the kitchen speaker" → start_focus(task="emails", speaker="kitchen")
 - "Start focus with study sounds" → start_focus(task="work", soundscape="study")
 - "How much time left on my focus?" → focus_status
-- "Stop the focus timer" → stop_focus"""
+- "Stop the focus timer" → stop_focus
+- "What's happening in Houston this weekend?" → web_search(query="Houston events this weekend")
+- "What's the weather like today?" → web_search(query="weather Houston today")
+- "Any good Thai restaurants nearby?" → web_search(query="best Thai restaurants Houston")"""
 
 
 def get_nemotron_system_prompt() -> str:
@@ -1510,35 +1663,60 @@ AVAILABLE TOOLS:
 2. search_memory - Search Nadim's personal notes for context (projects, routines, medications)
 3. update_data - Update Nadim's medications or projects
 4. set_reminder - Set a reminder for a specific time
-5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration=25, break_duration=5, speaker=optional, soundscape, block_sites=true)
+5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration=25, break_duration=5, speaker=optional, soundscape). ALWAYS enables site blocking unless user explicitly says "without blocking" or "no blocking".
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
+8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses). NOT for personal notes - use search_memory for that.
 
 YOUR JOB:
 - Understand the command and use the appropriate tool(s)
 - Return a brief, factual summary of what was done
 - If the command is ambiguous, make a reasonable interpretation
+- IMPORTANT: After a tool succeeds, do NOT call additional tools to verify. Trust the result and respond.
 
 EXAMPLES:
 - "turn off bedroom lights" → home_assistant(entity_id="light.bedroom...", service="turn_off")
 - "what are my morning meds" → search_memory(query="morning medications")
 - "remind me to call mom in 30 minutes" → set_reminder(reminder_text="call mom", time="in 30 minutes")
 - "add Adderall to my meds" → update_data(action="add_medication", name="Adderall", ...)
-- "start focus on coding for 30 minutes" → start_focus(task="coding", duration=30)
-- "start focus on emails on the kitchen speaker" → start_focus(task="emails", speaker="kitchen")
-- "start focus with study sounds" → start_focus(task="work", soundscape="study")
+- "start focus on coding for 30 minutes" → start_focus(task="coding", duration=30) [blocking enabled automatically]
+- "start focus on emails on the kitchen speaker" → start_focus(task="emails", speaker="kitchen") [blocking enabled]
+- "start focus without blocking" → start_focus(task="work", block_sites=false) [only if user explicitly says no blocking]
 - "how much time left?" → focus_status()
 - "stop the focus timer" → stop_focus()
+- "what events are happening in Houston this weekend" → web_search(query="Houston events this weekend")
+- "what's the weather today" → web_search(query="weather Houston today")
+- "latest news" → web_search(query="latest news today", category="news", time_range="day")
 
 Be direct and efficient. Execute the tool and summarize the result."""
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources on shutdown."""
+    global _http
+    if _http:
+        await _http.aclose()
+        _http = None
+        logger.info("[orchestrator] Closed shared HTTP client")
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
+    global _http
+    _http = httpx.AsyncClient(
+        timeout=httpx.Timeout(60, connect=10),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    )
+    logger.info("[orchestrator] Initialized shared HTTP client")
+
     # Load HA entities at startup
+    global _ha_tool_cache, _ha_tool_cache_time
     print("[orchestrator] Loading Home Assistant entities...")
     count = await ha_client.refresh_entities()
+    _ha_tool_cache = None  # Invalidate cache after entity refresh
+    _ha_tool_cache_time = 0.0
     print(f"[orchestrator] Loaded {count} HA entities")
 
     # Reload pending reminders into scheduler
@@ -1575,17 +1753,6 @@ async def startup_event():
                 replace_existing=True
             )
             scheduled_count += 1
-
-    # Schedule Helios idle check job
-    idle_check_interval = int(os.environ.get("HELIOS_IDLE_CHECK_INTERVAL", 300))
-    scheduler.add_job(
-        lambda: asyncio.create_task(check_helios_idle()),
-        'interval',
-        seconds=idle_check_interval,
-        id='helios_idle_check'
-    )
-    idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
-    logger.info(f"[SCHEDULER] Helios idle check: every {idle_check_interval}s, timeout {idle_timeout}s")
 
     scheduler.start()
     logger.info(f"[SCHEDULER] Started with {scheduled_count} scheduled, {delivered_count} missed reminders delivered")
@@ -1847,6 +2014,7 @@ async def chat_completions(req: Request):
 
         # Send to Nemotron orchestrator
         orchestrator_result = await call_nemotron_orchestrator(command)
+        logger.info(f"[HYBRID] Orchestrator result: {orchestrator_result[:200]}...")
 
         # Add to conversation for Helios follow-up
         conversation.append({
@@ -1894,7 +2062,7 @@ def _stream_text_response(text: str, model: str):
     chunk_id = f"chatcmpl-{int(time.time())}"
 
     async def generate():
-        chunk_size = 20
+        chunk_size = 80
         for i in range(0, len(text), chunk_size):
             chunk_text = text[i:i+chunk_size]
             chunk_data = {
@@ -1933,66 +2101,12 @@ async def _nemotron_fallback(messages: List[Dict], stream: bool, routing_info: D
 
     conversation = messages.copy()
     system_prompt = get_orchestrator_system_prompt()
+    result = await _run_nemotron_tool_loop(conversation, system_prompt, label="FALLBACK")
 
-    for round_num in range(MAX_TOOL_ROUNDS):
-        try:
-            llm_resp = await call_model(
-                NEMOTRON_URL, NEMOTRON_MODEL, conversation,
-                system=system_prompt,
-                tools=get_orchestrator_tools(),
-                tool_choice="none",  # Nemotron uses XML-style tool calls
-                timeout=60
-            )
-        except Exception as e:
-            logger.error(f"[FALLBACK] Nemotron failed: {e}")
-            error_msg = f"Sorry, I'm having trouble right now: {e}"
-            if stream:
-                return _stream_text_response(error_msg, NEMOTRON_MODEL)
-            return JSONResponse({"error": str(e)}, status_code=503)
-
-        choice = llm_resp.get("choices", [{}])[0]
-        message = choice.get("message", {})
-        tool_calls = message.get("tool_calls", [])
-        content = message.get("content") or ""
-
-        if not tool_calls and content:
-            tool_calls = parse_tool_calls_from_content(content)
-
-        if not tool_calls:
-            final_content = clean_response(content)
-            if stream:
-                return _stream_text_response(final_content, NEMOTRON_MODEL)
-            llm_resp["_routing"] = routing_info
-            if content:
-                message["content"] = final_content
-            return JSONResponse(llm_resp)
-
-        # Process tools
-        conversation.append({"role": "assistant", "content": content})
-        tool_results = []
-
-        for tool_call in tool_calls:
-            function = tool_call.get("function", {})
-            tool_name = function.get("name", "")
-            try:
-                arguments = json.loads(function.get("arguments", "{}"))
-            except:
-                arguments = {}
-
-            result = await execute_tool(tool_name, arguments)
-            tool_results.append(f"[{tool_name}] {result}")
-
-        results_text = "\n".join(tool_results)
-        conversation.append({
-            "role": "user",
-            "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nProvide a brief response."
-        })
-
-    error_msg = "I couldn't complete that request. Please try again."
     if stream:
-        return _stream_text_response(error_msg, NEMOTRON_MODEL)
+        return _stream_text_response(result, NEMOTRON_MODEL)
     return JSONResponse({
-        "choices": [{"message": {"role": "assistant", "content": error_msg}}],
+        "choices": [{"message": {"role": "assistant", "content": result}}],
         "_routing": routing_info,
     })
 
@@ -2180,26 +2294,10 @@ async def stop_focus_api():
 
 
 # =============================================================================
-# Morning Briefing Endpoint (Phase 4: Proactive Reminders)
+# Audio serving for reminder TTS
 # =============================================================================
 
-TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
-TTS_VOICE = os.environ.get("TTS_VOICE", "jessica")
-
-# Store generated audio files for serving to speakers
-import uuid
 from fastapi.responses import FileResponse
-audio_cache = {}  # id -> filepath
-
-@app.get("/api/audio/{audio_id}.wav")
-async def serve_audio(audio_id: str):
-    """Serve generated audio files for playback on speakers."""
-    if audio_id in audio_cache:
-        filepath = audio_cache[audio_id]
-        if os.path.exists(filepath):
-            return FileResponse(filepath, media_type="audio/wav")
-    return JSONResponse({"error": "Audio not found"}, status_code=404)
-
 
 @app.get("/api/audio/reminders/{reminder_id}.wav")
 async def serve_reminder_audio(reminder_id: str):
@@ -2208,163 +2306,6 @@ async def serve_reminder_audio(reminder_id: str):
     if os.path.exists(filepath):
         return FileResponse(filepath, media_type="audio/wav")
     return JSONResponse({"error": "Reminder audio not found"}, status_code=404)
-
-@app.post("/api/briefing/morning")
-async def morning_briefing(req: Request):
-    """
-    Generate a personalized morning briefing.
-
-    Searches RAG for morning routine, meds, and calendar info,
-    then generates a friendly reminder via Nemotron.
-
-    Optional: generate TTS audio and/or announce on HA speaker.
-
-    Request body (all optional):
-    {
-        "generate_tts": true,
-        "play_on": "media_player.kitchen_display",
-        "include_calendar": true
-    }
-    """
-    try:
-        body = await req.json() if await req.body() else {}
-    except:
-        body = {}
-
-    generate_tts = body.get("generate_tts", False)
-    play_on = body.get("play_on", None)
-
-    # Get current context
-    now = datetime.now()
-    day_name = now.strftime("%A")
-    time_str = now.strftime("%-I:%M %p")
-    date_str = now.strftime("%B %-d")
-
-    # Search RAG for relevant content
-    morning_context = rag_context("morning routine wake up meds")
-    meds_context = rag_context("medications daily schedule")
-
-    # Build the prompt
-    system_prompt = """You are Jessica, Nadim's supportive ADHD coach assistant.
-You speak with warmth, energy, and encouragement - like a caring friend who understands ADHD.
-Keep responses concise (2-4 sentences for the greeting, then a few key reminders).
-Use a conversational, upbeat tone. Celebrate small wins. Be specific and actionable.
-
-IMPORTANT: This will be spoken aloud via text-to-speech, so:
-- Do NOT use emojis, markdown, asterisks, or special formatting
-- Do NOT include thinking tags or internal reasoning
-- Write in plain, natural spoken English
-- Use natural pauses with commas and periods"""
-
-    user_prompt = f"""It's {day_name}, {date_str} at {time_str}. Generate a morning briefing for Nadim.
-
-Based on his routines and preferences:
-{morning_context}
-
-Medication info:
-{meds_context}
-
-Create a brief, encouraging wake-up message that:
-1. Greets him warmly for the day
-2. Reminds about morning meds (Vyvanse 70mg and Wellbutrin 300mg with breakfast, protein, no citrus)
-3. Lists 3-4 key morning routine steps
-4. Ends with an encouraging note
-
-Keep it natural and conversational - this will be spoken aloud."""
-
-    # Generate the briefing via Nemotron
-    messages = [{"role": "user", "content": user_prompt}]
-
-    try:
-        response = await call_model(
-            url=NEMOTRON_URL,
-            model=NEMOTRON_MODEL,
-            messages=messages,
-            system=system_prompt,
-            timeout=60
-        )
-        briefing_text = response.get("choices", [{}])[0].get("message", {}).get("content", "Good morning! Time to start your day.")
-        # Clean up any thinking tags or markdown for TTS
-        briefing_text = re.sub(r'<think>.*?</think>', '', briefing_text, flags=re.DOTALL)
-        briefing_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', briefing_text)  # Remove bold
-        briefing_text = re.sub(r'\*([^*]+)\*', r'\1', briefing_text)  # Remove italic
-        briefing_text = re.sub(r'[🌞🚀💪✅❌📋🎯]+', '', briefing_text)  # Remove common emojis
-        briefing_text = briefing_text.strip()
-
-        # Add pauses between sentences for more natural TTS pacing
-        # Replace period-space with period-ellipsis-space for longer pauses
-        briefing_text = re.sub(r'\.\s+', '... ', briefing_text)
-        briefing_text = re.sub(r'!\s+', '!... ', briefing_text)
-        briefing_text = re.sub(r'\?\s+', '?... ', briefing_text)
-    except Exception as e:
-        logger.error(f"Failed to generate briefing: {e}")
-        briefing_text = f"Good morning Nadim! It's {day_name}. Remember to take your morning meds with breakfast - Vyvanse and Wellbutrin. Have a great day!"
-
-    result = {
-        "day": day_name,
-        "date": date_str,
-        "time": time_str,
-        "briefing": briefing_text,
-    }
-
-    # Optionally generate TTS
-    if generate_tts or play_on:
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                tts_response = await client.post(
-                    f"{TTS_URL}/tts",
-                    json={"text": briefing_text, "voice": TTS_VOICE}
-                )
-                if tts_response.status_code == 200:
-                    # Save audio with UUID for serving
-                    audio_id = str(uuid.uuid4())[:8]
-                    audio_dir = "/tmp/brain_audio"
-                    os.makedirs(audio_dir, exist_ok=True)
-                    audio_path = f"{audio_dir}/{audio_id}.wav"
-                    with open(audio_path, "wb") as f:
-                        f.write(tts_response.content)
-                    audio_cache[audio_id] = audio_path
-                    result["audio_file"] = audio_path
-                    result["audio_id"] = audio_id
-                    result["audio_url"] = f"http://10.0.0.186:8888/api/audio/{audio_id}.wav"
-                    result["tts_generated"] = True
-        except Exception as e:
-            logger.error(f"TTS generation failed: {e}")
-            result["tts_error"] = str(e)
-
-    # Optionally play on HA media player using Jessica's voice
-    if play_on and result.get("audio_url"):
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # Use media_player.play_media to play our custom audio
-                ha_response = await client.post(
-                    f"{HA_URL}/api/services/media_player/play_media",
-                    headers={"Authorization": f"Bearer {HA_TOKEN}"},
-                    json={
-                        "entity_id": play_on,
-                        "media_content_id": result["audio_url"],
-                        "media_content_type": "audio/wav"
-                    }
-                )
-                if ha_response.status_code == 200:
-                    result["announced_on"] = play_on
-                    result["voice"] = "jessica"
-                else:
-                    result["announce_error"] = f"HA returned {ha_response.status_code}"
-        except Exception as e:
-            logger.error(f"HA announcement failed: {e}")
-            result["announce_error"] = str(e)
-
-    return JSONResponse(result)
-
-
-@app.get("/api/briefing/morning")
-async def morning_briefing_get():
-    """GET version for easy testing."""
-    from starlette.requests import Request as StarletteRequest
-    from starlette.testclient import TestClient
-    # Simple redirect to POST with empty body
-    return await morning_briefing(Request(scope={"type": "http", "method": "POST"}, receive=lambda: None))
 
 
 if __name__ == "__main__":

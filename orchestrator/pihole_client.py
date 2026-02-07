@@ -95,7 +95,10 @@ class PiHoleClient:
 
     async def set_focus_group_enabled(self, enabled: bool) -> PiHoleResult:
         """
-        Enable or disable the focus blocking group.
+        Enable or disable focus blocking by toggling domain enabled state.
+
+        Pi-hole v6 approach: domains in focus_blocklist group are toggled
+        directly since group membership requires client assignment.
 
         Args:
             enabled: True to enable blocking (block distracting sites),
@@ -118,32 +121,77 @@ class PiHoleClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                # PUT to update group enabled status
-                resp = await client.put(
-                    f"{self.url}/api/groups/{self.focus_group}",
-                    headers={
-                        "Content-Type": "application/json",
-                        "sid": self._sid
-                    },
-                    json={"enabled": enabled}
+            async with httpx.AsyncClient(timeout=30) as client:
+                # First, get all domains in the focus group
+                resp = await client.get(
+                    f"{self.url}/api/domains/deny/exact",
+                    headers={"sid": self._sid}
                 )
+                resp.raise_for_status()
+                domains_data = resp.json()
 
-                if resp.status_code == 404:
+                # Find focus group ID
+                groups_resp = await client.get(
+                    f"{self.url}/api/groups",
+                    headers={"sid": self._sid}
+                )
+                groups_resp.raise_for_status()
+                groups = groups_resp.json().get("groups", [])
+                focus_group_id = None
+                for g in groups:
+                    if g.get("name") == self.focus_group:
+                        focus_group_id = g.get("id")
+                        break
+
+                if focus_group_id is None:
                     return PiHoleResult(
                         success=False,
-                        message=f"Focus group '{self.focus_group}' not found in Pi-hole"
+                        message=f"Focus group '{self.focus_group}' not found"
                     )
 
-                resp.raise_for_status()
+                # Filter domains that belong to focus group
+                focus_domains = [
+                    d for d in domains_data.get("domains", [])
+                    if focus_group_id in d.get("groups", [])
+                ]
+
+                if not focus_domains:
+                    return PiHoleResult(
+                        success=True,
+                        message="No domains in focus group to toggle"
+                    )
+
+                # Toggle each domain's enabled state and add to Default group (0) when enabling
+                toggled = 0
+                for domain in focus_domains:
+                    domain_name = domain.get("domain")
+                    current_groups = domain.get("groups", [])
+
+                    if enabled:
+                        # Add to Default group (0) so it applies to all clients
+                        new_groups = list(set(current_groups + [0]))
+                    else:
+                        # Remove from Default group (0)
+                        new_groups = [g for g in current_groups if g != 0]
+
+                    update_resp = await client.put(
+                        f"{self.url}/api/domains/deny/exact/{domain_name}",
+                        headers={
+                            "Content-Type": "application/json",
+                            "sid": self._sid
+                        },
+                        json={"groups": new_groups}
+                    )
+                    if update_resp.status_code == 200:
+                        toggled += 1
 
                 action = "enabled" if enabled else "disabled"
-                logger.info(f"[PIHOLE] Focus blocking {action}")
+                logger.info(f"[PIHOLE] Focus blocking {action} for {toggled} domains")
 
                 return PiHoleResult(
                     success=True,
-                    message=f"Focus blocking {action}",
-                    details={"group": self.focus_group, "enabled": enabled}
+                    message=f"Focus blocking {action} ({toggled} domains)",
+                    details={"group": self.focus_group, "enabled": enabled, "domains_toggled": toggled}
                 )
 
         except httpx.HTTPStatusError as e:
@@ -153,7 +201,7 @@ class PiHoleClient:
                 message=f"Pi-hole API error: {e.response.status_code}"
             )
         except Exception as e:
-            logger.error(f"[PIHOLE] Error setting group status: {e}")
+            logger.error(f"[PIHOLE] Error setting blocking status: {e}")
             return PiHoleResult(
                 success=False,
                 message=f"Pi-hole error: {str(e)}"

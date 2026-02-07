@@ -23,6 +23,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | TTS | 8002 | http://10.0.0.173:8002 |
 | STT | 8003 | http://10.0.0.173:8003 |
 | Pi-hole | 53/8053 | http://localhost:8053/admin |
+| SearXNG | 8090 | http://localhost:8090 |
 | Grafana | 3000 | http://localhost:3000 (admin/braingw) |
 
 ## Architecture (v6 Hybrid)
@@ -35,9 +36,9 @@ User → Open WebUI → Orchestrator → Helios (conversation)
                                                    │
                                             Nemotron (tools)
                                                    │
-                              ┌────────────────────┼────────────────────┐
-                              ▼                    ▼                    ▼
-                        home_assistant      search_memory        set_reminder
+                              ┌──────────────┬──────┼──────┬─────────────┐
+                              ▼              ▼      ▼      ▼             ▼
+                        home_assistant  search_memory  set_reminder  web_search
 ```
 
 **Flow:** Helios handles conversation naturally. For actions (HA, reminders, RAG search), calls `ask_orchestrator` → Nemotron executes tools → result back to Helios.
@@ -54,6 +55,7 @@ User → Open WebUI → Orchestrator → Helios (conversation)
 | start_focus | Nemotron | Pomodoro timer + Endel audio + Pi-hole blocking |
 | stop_focus | Nemotron | Stop focus timer early |
 | focus_status | Nemotron | Check remaining focus time |
+| web_search | Nemotron | Search the web via SearXNG (events, news, weather, etc.) |
 
 ## Key Paths
 
@@ -68,8 +70,8 @@ User → Open WebUI → Orchestrator → Helios (conversation)
 
 ```bash
 # Start/rebuild
-docker-compose -p brain up -d
-docker-compose -p brain up -d --build orchestrator
+docker compose up -d
+docker compose up -d --build orchestrator
 
 # Logs
 docker logs brain-orchestrator --tail 50 -f
@@ -95,6 +97,7 @@ cd monitoring && docker-compose --env-file ../.env -p monitoring up -d
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/reminder_manager.py | APScheduler reminders |
 | orchestrator/pihole_client.py | Pi-hole v6 API client for focus blocking |
+| orchestrator/web_search.py | SearXNG client for web search |
 | docker-compose.yml | Service stack |
 | .env | Environment config (from .env.example) |
 | litellm-config.yaml | LLM proxy config |
@@ -113,45 +116,42 @@ ADHD-friendly focus timer with ambient audio and site blocking:
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Timer + voice break | Done | `start_focus`, `stop_focus`, `focus_status` tools |
-| Endel audio | Done | Streams HLS from Endel Pacific API |
-| Pi-hole blocking | Code done | **Needs Pi-hole setup (see TODO)** |
+| Endel audio | Done | Streams HLS from Endel Pacific API to Office speaker |
+| Pi-hole blocking | Done | 19 focus domains + 72 always-blocked adult domains |
 
 **Usage:**
 - `"start focus on coding for 30 minutes"` - starts timer + audio + blocking
-- `"start focus on emails without blocking"` - no site blocking
+- `"start focus without blocking"` - no site blocking
 - `"stop focus"` or timer expires → unblocks sites, announces break
 
-## TODO: Pi-hole Setup (Next Session)
+## Pi-hole DNS (whole-house)
 
-Pi-hole integration code is complete but needs deployment and configuration:
+Pi-hole v6 runs on Jupiter as the network DNS server.
 
-- [ ] Add `PIHOLE_PASSWORD=<secure-password>` to `.env`
-- [ ] Deploy Pi-hole: `docker compose up -d pihole`
-- [ ] Access Pi-hole admin: `http://10.0.0.248:8053/admin`
-- [ ] Create group: Groups → Add `focus_blocklist`
-- [ ] Add domains to block (assign to focus_blocklist group):
-  - facebook.com, instagram.com, twitter.com, x.com, reddit.com, tiktok.com
-  - youtube.com, netflix.com, twitch.tv
-  - news.google.com, cnn.com, bbc.com
-- [ ] Keep group **disabled** by default (focus timer enables it)
-- [ ] Configure Orbi router DNS: Set primary DNS to `10.0.0.248`
-- [ ] Test: `"start focus on testing for 2 minutes"` → try accessing blocked site
-- [ ] Rebuild orchestrator: `docker compose up -d --build orchestrator`
+| Item | Value |
+|------|-------|
+| Admin UI | http://10.0.0.248:8053/admin |
+| DNS | 10.0.0.248:53 |
+| Upstream | 8.8.8.8, 8.8.4.4 |
+| Docker project | `gateway_mvp` (same as all services) |
 
-## TODO: Speaker Setup (for Endel audio)
+**Blocking groups:**
+- **Default (group 0):** 72 adult domains — always blocked for all clients
+- **focus_blocklist (group 1):** 19 distraction domains (reddit, twitter, youtube, etc.) — toggled by `start_focus`/`stop_focus`
 
-Speakers need reconfiguration in Google Home before Endel audio works:
+**TODO:** Set router DHCP DNS to 10.0.0.248 + add DHCP reservation for Jupiter
 
-- [ ] Re-add missing speakers in Google Home app
-- [ ] Rename mislabeled speakers (Office Max → Office Speaker, etc.)
-- [ ] Create speaker groups as needed
-- [ ] Reload Cast integration in Home Assistant
-- [ ] Update `FOCUS_AUDIO_PLAYER` in `.env` with correct entity ID
-- [ ] Test: `"start focus on testing on the office speaker"`
+## DONE: Speaker Setup (for Endel audio)
+
+- [x] Re-add missing speakers in Google Home app
+- [x] Rename mislabeled speakers
+- [x] Reload Cast integration in Home Assistant
+- [x] Update `FOCUS_AUDIO_PLAYER` in `.env` (`media_player.dining_room_max` = Office speaker)
+- [x] TTS tested working on Office speaker
 
 ## Notes
 
 - Owner: Nadim (ADHD - prefers step-by-step with verification)
-- Docker project: always use `-p brain`
+- Docker project: `gateway_mvp` (default from directory name, no `-p` flag needed)
 - Helios auto-starts when needed, stops to save ~150W
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS)
