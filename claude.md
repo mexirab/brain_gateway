@@ -141,13 +141,12 @@ Pi-hole v6 runs on Jupiter as the network DNS server.
 
 **TODO:** Set router DHCP DNS to 10.0.0.248 + add DHCP reservation for Jupiter
 
-## DONE: Speaker Setup (for Endel audio)
+## Performance Notes
 
-- [x] Re-add missing speakers in Google Home app
-- [x] Rename mislabeled speakers
-- [x] Reload Cast integration in Home Assistant
-- [x] Update `FOCUS_AUDIO_PLAYER` in `.env` (`media_player.dining_room_max` = Office speaker)
-- [x] TTS tested working on Office speaker
+- Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown
+- HA tool definition cached 300s (`_ha_tool_cache`) — invalidated on entity refresh
+- Nemotron agentic loop deduplicated into `_run_nemotron_tool_loop()` — both `call_nemotron_orchestrator()` and `_nemotron_fallback()` call it
+- Streaming chunk size: 80 chars (was 20)
 
 ## Notes
 

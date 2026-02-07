@@ -33,6 +33,9 @@ User Request → Orchestrator
 | Function | Purpose |
 |----------|---------|
 | `call_model()` | Generic LLM caller, adds `tool_choice: "none"` for vLLM |
+| `_run_nemotron_tool_loop()` | Shared agentic loop (dedup, tool exec, force-final) |
+| `call_nemotron_orchestrator()` | Thin wrapper: builds messages, calls loop |
+| `_nemotron_fallback()` | Fallback wrapper: calls loop, returns HTTP response |
 | `parse_tool_calls_from_content()` | Extract `<tool_call>` XML from response |
 | `execute_tool()` | Route to tool handler |
 | `rag_context()` | Query ChromaDB, return formatted chunks |
@@ -45,6 +48,9 @@ User Request → Orchestrator
 | `tool_search_memory()` | → `rag_context()` |
 | `tool_ask_expert()` | → Helios 120B (auto-starts if needed) |
 | `tool_update_data()` | → `data_manager.handle_update_data()` |
+| `tool_set_reminder()` | → APScheduler + TTS + HA notification |
+| `tool_start_focus()` | → Endel audio + Pi-hole blocking + timer |
+| `tool_web_search()` | → `web_search.SearXNGClient.search()` |
 
 **Why `tool_choice: "none"`?** vLLM lacks `--enable-auto-tool-choice`. Nemotron outputs `<tool_call>` XML in content instead.
 
@@ -102,8 +108,6 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 GPU 0: Qwen3-TTS (port 8002) - Jessica voice clone
 GPU 1: Whisper STT (port 8003) - OpenAI-compatible
 ```
-
-**Morning Briefing:** HA automation → `/api/briefing/morning` → RAG search → Nemotron generates → TTS → HA speaker plays audio
 
 ## Monitoring (Jupiter)
 

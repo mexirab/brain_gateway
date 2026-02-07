@@ -15,8 +15,7 @@ API specs and schemas for implementation.
 | `/api/ha/command` | POST | Direct HA service call |
 | `/api/memory/search` | GET | RAG search |
 | `/api/memory/stats` | GET | RAG stats |
-| `/api/briefing/morning` | POST | Generate morning briefing |
-| `/api/audio/{id}.wav` | GET | Serve generated audio |
+| `/api/audio/reminders/{id}.wav` | GET | Serve reminder audio |
 
 ### HA Command Format
 
@@ -60,6 +59,16 @@ API specs and schemas for implementation.
 ```
 
 **Actions:** add_medication, remove_medication, update_medication, add_project, update_project_status, add_project_step, complete_step
+
+### set_reminder
+```json
+{"reminder_text": "call mom", "time": "in 30 minutes", "target": "both"}
+```
+
+### web_search
+```json
+{"query": "weather Houston today", "category": "general", "time_range": "day"}
+```
 
 ## ChromaDB Schema
 

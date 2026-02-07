@@ -51,8 +51,8 @@ open http://localhost
 - **Home Assistant:** Natural language control of lights, switches, climate, scenes
 - **RAG Memory:** Personal knowledge base from markdown files
 - **Voice:** Jessica McCabe voice clone (TTS) + Whisper (STT)
-- **Morning Briefing:** Personalized daily briefing on HA speakers
 - **Reminders:** Voice + mobile notifications via HA
+- **Web Search:** Real-time info via SearXNG (weather, news, events)
 - **Data Management:** Natural language updates to meds/projects
 - **Focus Timer:** Pomodoro with Endel ambient audio and Pi-hole site blocking
 
@@ -103,7 +103,6 @@ cd monitoring && docker-compose --env-file ../.env -p monitoring up -d
 | POST /v1/chat/completions | OpenAI-compatible chat |
 | GET /api/ha/entities | List HA devices |
 | POST /api/ha/command | Direct HA control |
-| POST /api/briefing/morning | Morning briefing |
 
 ## License
 

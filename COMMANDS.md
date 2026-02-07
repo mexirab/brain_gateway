@@ -132,13 +132,6 @@ curl -s http://localhost:8888/health | jq .expert_status
 
 ## Voice / TTS / STT
 
-### Test morning briefing
-```bash
-curl -X POST http://localhost:8888/api/briefing/morning \
-  -H "Content-Type: application/json" \
-  -d '{"generate_tts": true, "play_on": "media_player.kitchen_display"}'
-```
-
 ### Test TTS with Jessica voice
 ```bash
 curl -X POST http://10.0.0.173:8002/tts \
