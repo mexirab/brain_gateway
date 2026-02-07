@@ -1522,7 +1522,12 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
         logger.info(f"[{label}] Processing {len(new_tool_calls)} tool call(s)")
         messages.append({"role": "assistant", "content": content})
 
+        # Tools that mutate state — return result directly, don't let Nemotron loop
+        TERMINAL_TOOLS = {"start_focus", "stop_focus", "set_reminder", "cancel_reminder",
+                          "home_assistant", "update_data"}
+
         tool_results = []
+        has_terminal = False
         for tool_call in new_tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
@@ -1538,8 +1543,17 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
             result = await execute_tool(tool_name, arguments)
             tool_results.append(f"[{tool_name}] {result}")
 
-        # Add tool results for next round
+            if tool_name in TERMINAL_TOOLS:
+                has_terminal = True
+
         results_text = "\n".join(tool_results)
+
+        # For state-changing tools, return immediately — don't risk Nemotron undoing them
+        if has_terminal:
+            logger.info(f"[{label}] Terminal tool executed, returning result directly")
+            return results_text
+
+        # Add tool results for next round
         messages.append({
             "role": "user",
             "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nThe action is complete. Summarize the result in a brief, natural response. Do NOT call any more tools."
