@@ -100,7 +100,7 @@ services:
       # Agentic settings
       - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}
       # Pi-hole focus blocking
-      - PIHOLE_URL=${PIHOLE_URL:-http://pihole:80}
+      - PIHOLE_URL=${PIHOLE_URL:-http://10.0.0.248:${PIHOLE_WEB_PORT:-8053}}
       - PIHOLE_PASSWORD=${PIHOLE_PASSWORD:-}
       - PIHOLE_FOCUS_GROUP=${PIHOLE_FOCUS_GROUP:-focus_blocklist}
       - FOCUS_BLOCKING_ENABLED=${FOCUS_BLOCKING_ENABLED:-true}
@@ -153,22 +153,23 @@ services:
     container_name: pihole
     restart: unless-stopped
     logging: *default-logging
-    ports:
-      - "${NODE_JUPITER_IP:-10.0.0.248}:53:53/tcp"
-      - "${NODE_JUPITER_IP:-10.0.0.248}:53:53/udp"
-      - "${PIHOLE_WEB_PORT:-8053}:80/tcp"
+
+    network_mode: "host"
+
     environment:
-      - TZ=${TZ:-America/New_York}
+      - TZ=${TZ:-America/Chicago}
       - FTLCONF_webserver_api_password=${PIHOLE_PASSWORD:-}
       - FTLCONF_dns_listeningMode=all
+      # keep your UI on 8053
+      - FTLCONF_webserver_port=${PIHOLE_WEB_PORT:-8053}
+
     volumes:
       - pihole-etc:/etc/pihole
       - pihole-dnsmasq:/etc/dnsmasq.d
+
     cap_add:
       - NET_ADMIN
-    networks:
-      - gateway-net
-
+      - NET_RAW
   searxng:
     image: searxng/searxng:latest
     container_name: searxng

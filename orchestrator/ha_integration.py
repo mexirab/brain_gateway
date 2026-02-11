@@ -368,7 +368,17 @@ class HomeAssistantClient:
                         value=color,
                         raw_text=text,
                     )
-                
+
+                # Handle color + brightness combo ("set bedroom to blue at 50%")
+                if action == "set_color_brightness":
+                    return ParsedCommand(
+                        action="set_color_brightness",
+                        domain="light",
+                        target_text=groups[0].strip(),
+                        value={"color": groups[1], "brightness": int(groups[2])},
+                        raw_text=text,
+                    )
+
                 # Extract target and optional value
                 target = groups[0] if groups else ""
                 value = None
@@ -404,6 +414,7 @@ class HomeAssistantClient:
             "toggle": "light",
             "set_brightness": "light",
             "set_color": "light",
+            "set_color_brightness": "light",
             "set_temperature": "climate",
             "set_volume": "media_player",
             "media_play": "media_player",
@@ -525,6 +536,18 @@ class HomeAssistantClient:
             # HA uses 0-255 for brightness
             brightness = int((cmd.value / 100) * 255)
             service_data["brightness"] = brightness
+        elif cmd.action == "set_color_brightness" and isinstance(cmd.value, dict):
+            color_name = cmd.value["color"].lower()
+            if color_name in COLOR_MAP:
+                service_data["rgb_color"] = COLOR_MAP[color_name]
+            else:
+                return ExecutionResult(
+                    success=False,
+                    action=cmd.action,
+                    entity_id=entity.entity_id,
+                    message=f"Unknown color: {cmd.value['color']}",
+                )
+            service_data["brightness"] = int((cmd.value["brightness"] / 100) * 255)
         elif cmd.action == "set_color" and cmd.value is not None:
             # Get RGB from color name
             color_name = cmd.value.lower()
@@ -551,7 +574,9 @@ class HomeAssistantClient:
                 resp.raise_for_status()
                 
                 # Build descriptive message
-                if cmd.action == "set_color":
+                if cmd.action == "set_color_brightness" and isinstance(cmd.value, dict):
+                    msg = f"✓ Set {entity.friendly_name} to {cmd.value['color']} at {cmd.value['brightness']}%"
+                elif cmd.action == "set_color":
                     msg = f"✓ Set {entity.friendly_name} to {cmd.value}"
                 elif cmd.action == "set_brightness":
                     msg = f"✓ Set {entity.friendly_name} to {cmd.value}%"
@@ -596,6 +621,8 @@ class HomeAssistantClient:
                 return "turn_on"  # Brightness is a parameter of turn_on
             if action == "set_color":
                 return "turn_on"  # Color is also a parameter of turn_on
+            if action == "set_color_brightness":
+                return "turn_on"  # Color + brightness are parameters of turn_on
         
         if domain == "climate":
             if action == "set_temperature":
