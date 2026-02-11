@@ -34,6 +34,9 @@ from chromadb.config import Settings
 # Import the HA integration module
 from ha_integration import HomeAssistantClient, ExecutionResult
 
+# Import fast-path for simple device commands (bypasses LLMs)
+from fast_path import try_fast_path
+
 # Import the data manager for structured data updates
 from data_manager import handle_update_data
 
@@ -42,11 +45,9 @@ from reminder_manager import (
     parse_time_expression,
     format_time_friendly,
     add_reminder,
-    get_reminders,
-    save_reminders,
+    get_reminder,
     list_pending_reminders,
     remove_reminder,
-    generate_reminder_audio,
     mark_reminder_completed,
     _announce_voice,
     _send_notification,
@@ -985,19 +986,12 @@ def tool_update_data(arguments: Dict[str, Any]) -> str:
 
 
 async def deliver_reminder_job(reminder_id: str):
-    """
-    Called by APScheduler at the scheduled time to deliver a reminder.
-
-    Fetches the reminder from YAML, delivers via HA services, and updates status.
-    """
+    """Called by APScheduler at the scheduled time to deliver a reminder."""
     logger.info(f"[REMINDER] Triggering: {reminder_id}")
 
-    # Get reminder from YAML
-    data = get_reminders()
-    reminder = next((r for r in data["reminders"] if r["id"] == reminder_id), None)
-
+    reminder = get_reminder(reminder_id)
     if not reminder:
-        logger.warning(f"[REMINDER] {reminder_id} not found in YAML")
+        logger.warning(f"[REMINDER] {reminder_id} not found")
         return
 
     if reminder.get("status") != "pending":
@@ -1006,42 +1000,14 @@ async def deliver_reminder_job(reminder_id: str):
 
     text = reminder.get("text", "You have a reminder")
     target = reminder.get("target", "both")
-    audio_url = reminder.get("audio_url")
-
-    # ADHD-friendly message format
     spoken_text = f"Hey Nadim! Quick reminder: {text}"
 
-    results = {"voice": None, "phone": None}
-
-    # Deliver via HA services (not automations)
     if target in ["voice", "both"]:
-        if audio_url:
-            # Use pre-generated audio
-            from reminder_manager import REMINDER_SPEAKER, HA_URL, HA_TOKEN
-            try:
-                response = await _http.post(
-                    f"{HA_URL}/api/services/media_player/play_media",
-                    headers={"Authorization": f"Bearer {HA_TOKEN}"},
-                    json={
-                        "entity_id": REMINDER_SPEAKER,
-                        "media_content_id": audio_url,
-                        "media_content_type": "audio/wav"
-                    },
-                    timeout=30,
-                )
-                results["voice"] = {"success": response.status_code == 200}
-                logger.info(f"[REMINDER] Played audio on {REMINDER_SPEAKER}")
-            except Exception as e:
-                logger.error(f"[REMINDER] Voice delivery failed: {e}")
-                results["voice"] = {"success": False, "error": str(e)}
-        else:
-            # Generate audio on-the-fly
-            results["voice"] = await _announce_voice(spoken_text)
+        await _announce_voice(spoken_text)
 
     if target in ["phone", "both"]:
-        results["phone"] = await _send_notification(text)
+        await _send_notification(text)
 
-    # Update status in YAML
     mark_reminder_completed(reminder_id)
     logger.info(f"[REMINDER] Completed: {reminder_id}")
 
@@ -1050,77 +1016,40 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     """
     Set a reminder that will be delivered via voice and/or mobile notification.
 
-    Parses the time expression, generates TTS audio, stores the reminder, and
-    schedules it with APScheduler (no HA automations).
+    Parses the time expression, stores in memory, and schedules with APScheduler.
     """
     if not reminder_text:
         return "Please tell me what to remind you about."
     if not time_str:
         return "Please tell me when to remind you. Try 'in 5 minutes' or 'at 3pm'."
 
-    # Validate target
     if target not in ["voice", "phone", "both"]:
         target = "both"
 
     logger.info(f"[REMINDER] Setting reminder: '{reminder_text}' at '{time_str}' via {target}")
 
-    # Parse the time
     trigger_time, error = parse_time_expression(time_str)
     if error:
         return error
 
-    # Deduplication: Check for recent identical reminders
-    DEDUP_WINDOW_SECONDS = 60  # Reject duplicates within 60 seconds
-    data = get_reminders()
+    # Deduplication: reject identical pending reminders created within 60s
+    DEDUP_WINDOW_SECONDS = 60
     now = datetime.now()
-
-    for existing in data.get("reminders", []):
+    for existing in list_pending_reminders():
         if existing.get("text", "").lower().strip() == reminder_text.lower().strip():
-            if existing.get("status") == "pending":
-                try:
-                    created = datetime.fromisoformat(existing.get("created", ""))
-                    age = (now - created).total_seconds()
-                    if age < DEDUP_WINDOW_SECONDS:
-                        logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing reminder {existing.get('id')} created {age:.0f}s ago)")
-                        return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."
-                except (ValueError, TypeError):
-                    pass  # Skip if created timestamp is invalid
+            try:
+                created = datetime.fromisoformat(existing.get("created", ""))
+                if (now - created).total_seconds() < DEDUP_WINDOW_SECONDS:
+                    logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing {existing.get('id')})")
+                    return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."
+            except (ValueError, TypeError):
+                pass
 
-    # Generate a unique ID first
     import uuid
     reminder_id = str(uuid.uuid4())[:8]
 
-    # Pre-generate TTS audio if voice is enabled
-    audio_url = None
-    if target in ["voice", "both"]:
-        audio_url = await generate_reminder_audio(reminder_text, reminder_id)
-        if not audio_url:
-            logger.warning("[REMINDER] TTS generation failed, will use notification only")
-            if target == "voice":
-                target = "phone"  # Fallback to phone-only
+    add_reminder(reminder_id, reminder_text, trigger_time, target)
 
-    # Store the reminder (use the pre-generated ID)
-    reminder = {
-        "id": reminder_id,
-        "text": reminder_text,
-        "time": trigger_time.strftime("%Y-%m-%d %H:%M"),
-        "time_display": trigger_time.strftime("%-I:%M %p"),
-        "target": target,
-        "created": datetime.now().isoformat(),
-        "status": "pending",
-    }
-    if audio_url:
-        reminder["audio_url"] = audio_url
-
-    # Save to YAML (single source of truth)
-    data = get_reminders()
-    data["reminders"].append(reminder)
-    if not save_reminders(data):
-        return "Failed to save the reminder. Please try again."
-
-    logger.info(f"[REMINDER] Added reminder {reminder_id}: '{reminder_text}' at {trigger_time}")
-
-    # Schedule with APScheduler (NO HA automation)
     scheduler.add_job(
         deliver_reminder_job,
         trigger='date',
@@ -1131,7 +1060,6 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     )
     logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}")
 
-    # Build friendly confirmation
     time_friendly = format_time_friendly(trigger_time)
     target_desc = {
         "voice": "on all speakers",
@@ -1151,7 +1079,6 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
     except Exception as e:
         logger.debug(f"[SCHEDULER] Job not found: {e}")
 
-    # Remove from YAML
     if remove_reminder(reminder_id):
         return f"Reminder {reminder_id} cancelled."
     return f"Reminder {reminder_id} not found."
@@ -1733,43 +1660,8 @@ async def startup_event():
     _ha_tool_cache_time = 0.0
     print(f"[orchestrator] Loaded {count} HA entities")
 
-    # Reload pending reminders into scheduler
-    pending = list_pending_reminders()
-    now = datetime.now()
-    scheduled_count = 0
-    delivered_count = 0
-
-    for reminder in pending:
-        reminder_id = reminder.get("id")
-        time_str = reminder.get("time")
-        if not reminder_id or not time_str:
-            continue
-
-        try:
-            trigger_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-        except ValueError:
-            logger.warning(f"[SCHEDULER] Invalid time format for reminder {reminder_id}: {time_str}")
-            continue
-
-        if trigger_time <= now:
-            # Missed reminder - deliver immediately
-            logger.info(f"[REMINDER] Delivering missed: {reminder_id}")
-            asyncio.create_task(deliver_reminder_job(reminder_id))
-            delivered_count += 1
-        else:
-            # Future reminder - schedule it
-            scheduler.add_job(
-                deliver_reminder_job,
-                trigger='date',
-                run_date=trigger_time,
-                args=[reminder_id],
-                id=f"reminder_{reminder_id}",
-                replace_existing=True
-            )
-            scheduled_count += 1
-
     scheduler.start()
-    logger.info(f"[SCHEDULER] Started with {scheduled_count} scheduled, {delivered_count} missed reminders delivered")
+    logger.info("[SCHEDULER] Started (in-memory, no reminders to reload)")
 
 
 @app.get("/health")
@@ -1939,6 +1831,31 @@ async def chat_completions(req: Request):
     # === HYBRID MODE: Helios first, Nemotron for tools ===
     routing_info["mode"] = "hybrid"
     logger.info(f"[HYBRID] Processing: {user_text[:100]}... (stream={stream})")
+
+    # Fast-path: intercept simple device commands before any LLM call
+    try:
+        fast_result = await try_fast_path(user_text, ha_client)
+        if fast_result.handled:
+            routing_info["mode"] = "fast_path"
+            routing_info["fast_path_action"] = fast_result.action
+            routing_info["fast_path_entity"] = fast_result.entity_name
+            logger.info(f"[FAST-PATH] Handled: {fast_result.action} -> {fast_result.entity_name}")
+            if stream:
+                return _stream_text_response(fast_result.response_text, "fast-path")
+            return JSONResponse({
+                "id": f"chatcmpl-fp-{int(time.time())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": "fast-path",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": fast_result.response_text},
+                    "finish_reason": "stop",
+                }],
+                "_routing": routing_info,
+            })
+    except Exception as e:
+        logger.warning(f"[FAST-PATH] Error, falling through to Helios: {e}")
 
     # 1. Pre-fetch relevant personal context from RAG (skip for greetings)
     personal_context = ""
@@ -2313,13 +2230,13 @@ async def stop_focus_api():
 
 from fastapi.responses import FileResponse
 
-@app.get("/api/audio/reminders/{reminder_id}.wav")
-async def serve_reminder_audio(reminder_id: str):
-    """Serve pre-generated reminder audio files."""
-    filepath = f"/tmp/brain_audio/reminders/{reminder_id}.wav"
+@app.get("/api/audio/{filename}")
+async def serve_audio(filename: str):
+    """Serve audio files from /tmp/brain_audio/."""
+    filepath = f"/tmp/brain_audio/{filename}"
     if os.path.exists(filepath):
         return FileResponse(filepath, media_type="audio/wav")
-    return JSONResponse({"error": "Reminder audio not found"}, status_code=404)
+    return JSONResponse({"error": "Audio file not found"}, status_code=404)
 
 
 if __name__ == "__main__":

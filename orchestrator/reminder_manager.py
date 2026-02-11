@@ -5,7 +5,6 @@ Handles voice reminder scheduling, storage, and delivery via Home Assistant.
 
 import os
 import re
-import yaml
 import uuid
 import logging
 import httpx
@@ -14,17 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Paths
-RAG_BASE = os.environ.get("RAG_BASE", "/home/nadim/rag/nadim_rag")
-REMINDERS_YAML = os.path.join(RAG_BASE, "20_routines", "reminders.yaml")
-REMINDERS_MD = os.path.join(RAG_BASE, "20_routines", "reminders.md")
-
 # Home Assistant config
 HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
 
 # Orchestrator URL (for HA to call back)
-# Default matches NODE_JUPITER_IP from .env.example
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.248:8888")
 
 # Delivery targets (configurable via env)
@@ -137,55 +130,14 @@ def format_time_friendly(dt: datetime) -> str:
 
 
 # =============================================================================
-# REMINDER STORAGE
+# IN-MEMORY REMINDER STORAGE
 # =============================================================================
 
-def get_reminders() -> Dict[str, Any]:
-    """Load reminders from YAML."""
-    try:
-        with open(REMINDERS_YAML, 'r') as f:
-            data = yaml.safe_load(f)
-            return data if data else {"reminders": []}
-    except FileNotFoundError:
-        logger.info(f"Creating new reminders file: {REMINDERS_YAML}")
-        return {"reminders": []}
-    except Exception as e:
-        logger.error(f"Error loading reminders: {e}")
-        return {"reminders": []}
+_reminders: Dict[str, Dict[str, Any]] = {}
 
 
-def save_reminders(data: Dict[str, Any]) -> bool:
-    """Save reminders to YAML and regenerate markdown."""
-    try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(REMINDERS_YAML), exist_ok=True)
-
-        with open(REMINDERS_YAML, 'w') as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        _generate_reminders_md(data)
-        return True
-    except Exception as e:
-        logger.error(f"Error saving reminders: {e}")
-        return False
-
-
-def add_reminder(text: str, trigger_time: datetime, target: str = "both",
-                 audio_url: str = None) -> Dict[str, Any]:
-    """
-    Add a new reminder.
-
-    Args:
-        text: What to remind about
-        trigger_time: When to trigger the reminder
-        target: "voice", "phone", or "both"
-        audio_url: Pre-generated TTS audio URL
-
-    Returns:
-        The created reminder dict with id
-    """
-    data = get_reminders()
-
-    reminder_id = str(uuid.uuid4())[:8]
+def add_reminder(reminder_id: str, text: str, trigger_time: datetime, target: str = "both") -> Dict[str, Any]:
+    """Add a new reminder to in-memory storage."""
     reminder = {
         "id": reminder_id,
         "text": text,
@@ -195,128 +147,34 @@ def add_reminder(text: str, trigger_time: datetime, target: str = "both",
         "created": datetime.now().isoformat(),
         "status": "pending",
     }
+    _reminders[reminder_id] = reminder
+    logger.info(f"Added reminder {reminder_id}: '{text}' at {trigger_time}")
+    return reminder
 
-    if audio_url:
-        reminder["audio_url"] = audio_url
 
-    data["reminders"].append(reminder)
-
-    if save_reminders(data):
-        logger.info(f"Added reminder {reminder_id}: '{text}' at {trigger_time}")
-        return reminder
-
-    return {}
+def get_reminder(reminder_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single reminder by ID."""
+    return _reminders.get(reminder_id)
 
 
 def remove_reminder(reminder_id: str) -> bool:
     """Remove a reminder by ID."""
-    data = get_reminders()
-    original_len = len(data["reminders"])
-
-    data["reminders"] = [r for r in data["reminders"] if r.get("id") != reminder_id]
-
-    if len(data["reminders"]) < original_len:
-        save_reminders(data)
-        return True
-    return False
+    return _reminders.pop(reminder_id, None) is not None
 
 
 def mark_reminder_completed(reminder_id: str) -> bool:
-    """Mark a reminder as completed (triggered)."""
-    data = get_reminders()
-
-    for reminder in data["reminders"]:
-        if reminder.get("id") == reminder_id:
-            reminder["status"] = "completed"
-            reminder["completed_at"] = datetime.now().isoformat()
-            save_reminders(data)
-            return True
+    """Mark a reminder as completed."""
+    reminder = _reminders.get(reminder_id)
+    if reminder:
+        reminder["status"] = "completed"
+        reminder["completed_at"] = datetime.now().isoformat()
+        return True
     return False
 
 
 def list_pending_reminders() -> List[Dict[str, Any]]:
     """Get all pending reminders."""
-    data = get_reminders()
-    return [r for r in data["reminders"] if r.get("status") == "pending"]
-
-
-def _generate_reminders_md(data: Dict[str, Any]) -> None:
-    """Regenerate reminders.md from YAML data."""
-    lines = ["# Active Reminders", ""]
-
-    pending = [r for r in data.get("reminders", []) if r.get("status") == "pending"]
-    completed = [r for r in data.get("reminders", []) if r.get("status") == "completed"]
-
-    if pending:
-        lines.append("## Pending")
-        lines.append("")
-        for r in pending:
-            lines.append(f"- **{r.get('time_display', r.get('time', 'Unknown'))}**: {r.get('text', '')}")
-            lines.append(f"  - Target: {r.get('target', 'both')} | ID: {r.get('id', 'N/A')}")
-        lines.append("")
-    else:
-        lines.append("*No pending reminders*")
-        lines.append("")
-
-    if completed:
-        lines.append("## Recently Completed")
-        lines.append("")
-        # Show only last 10 completed
-        for r in completed[-10:]:
-            lines.append(f"- ~~{r.get('text', '')}~~ at {r.get('time_display', r.get('time', ''))}")
-        lines.append("")
-
-    try:
-        with open(REMINDERS_MD, 'w') as f:
-            f.write("\n".join(lines))
-        logger.info(f"Regenerated {REMINDERS_MD}")
-    except Exception as e:
-        logger.error(f"Error writing reminders markdown: {e}")
-
-
-# =============================================================================
-# TTS AUDIO GENERATION
-# =============================================================================
-
-
-async def generate_reminder_audio(reminder_text: str, reminder_id: str) -> Optional[str]:
-    """
-    Pre-generate TTS audio for the reminder.
-
-    Returns the audio URL that can be played by HA at the scheduled time.
-    """
-    TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
-    TTS_VOICE = os.environ.get("TTS_VOICE", "jessica")
-
-    spoken_text = f"Hey Nadim! Quick reminder: {reminder_text}"
-
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            tts_response = await client.post(
-                f"{TTS_URL}/tts",
-                json={"text": spoken_text, "voice": TTS_VOICE}
-            )
-
-            if tts_response.status_code != 200:
-                logger.error(f"TTS generation failed: {tts_response.status_code}")
-                return None
-
-            # Save audio with reminder ID for persistence
-            audio_dir = "/tmp/brain_audio/reminders"
-            os.makedirs(audio_dir, exist_ok=True)
-            audio_path = f"{audio_dir}/{reminder_id}.wav"
-
-            with open(audio_path, "wb") as f:
-                f.write(tts_response.content)
-
-            # Return URL that HA can access
-            audio_url = f"{ORCHESTRATOR_URL}/api/audio/reminders/{reminder_id}.wav"
-            logger.info(f"Generated TTS audio: {audio_url}")
-            return audio_url
-
-    except Exception as e:
-        logger.error(f"Failed to generate TTS audio: {e}")
-        return None
+    return [r for r in _reminders.values() if r.get("status") == "pending"]
 
 
 # =============================================================================
