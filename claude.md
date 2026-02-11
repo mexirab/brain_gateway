@@ -146,6 +146,7 @@ Pi-hole v6 runs on Jupiter as the network DNS server.
 - Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown
 - HA tool definition cached 300s (`_ha_tool_cache`) — invalidated on entity refresh
 - Nemotron agentic loop deduplicated into `_run_nemotron_tool_loop()` — both `call_nemotron_orchestrator()` and `_nemotron_fallback()` call it
+- `TERMINAL_TOOLS` set in the loop short-circuits after state-changing tools (start_focus, stop_focus, home_assistant, set_reminder, cancel_reminder, update_data) — prevents Nemotron from undoing its own actions in subsequent rounds
 - Streaming chunk size: 80 chars (was 20)
 
 ## Notes
