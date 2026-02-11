@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir \
     apscheduler
 
 COPY orchestrator.py .
+COPY fast_path.py .
 COPY ha_integration.py .
 COPY data_manager.py .
 COPY reminder_manager.py .
