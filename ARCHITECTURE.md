@@ -197,6 +197,30 @@ GPU 0: Qwen3-TTS (port 8002) - Jessica voice clone
 GPU 1: Whisper STT (port 8003) - OpenAI-compatible
 ```
 
+**TTS pacing pipeline:**
+```
+Open WebUI → split on paragraph (\n\n) → TTS server
+                                           │
+                                    inject_sentence_pauses()
+                                    (regex: [.!?] → [.!?] ...)
+                                           │
+                                    Qwen3-TTS → audio
+```
+
+The sentence pause injection (`/home/nadim/server.py` on Uranus) inserts `...` between sentences before Qwen3-TTS processes the text. This produces calmer, more natural speech. Service: `qwen-tts` (systemd).
+
+## HTTPS (Tailscale Serve)
+
+```
+Phone/Browser → https://jupiter-amds.tail74fc4a.ts.net (port 443)
+                    │
+              Tailscale Serve (TLS termination, auto-cert)
+                    │
+              Open WebUI (port 80)
+```
+
+Required for browser microphone access (Web Audio API mandates HTTPS). No nginx or reverse proxy container needed — Tailscale handles cert issuance and renewal automatically.
+
 ## Monitoring (Jupiter)
 
 ```

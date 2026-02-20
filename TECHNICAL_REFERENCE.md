@@ -15,7 +15,7 @@ API specs and schemas for implementation.
 | `/api/ha/command` | POST | Direct HA service call |
 | `/api/memory/search` | GET | RAG search |
 | `/api/memory/stats` | GET | RAG stats |
-| `/api/memory/add` | POST | Add document to RAG |
+| `/api/memory/add` | POST | Add document to RAG (optional `tags` array) |
 | `/api/reminder/trigger` | POST | Trigger a reminder |
 | `/api/reminders` | GET | List pending reminders |
 | `/api/reminder/complete/{id}` | POST | Mark reminder completed |
@@ -113,6 +113,20 @@ API specs and schemas for implementation.
 - `description` (string, optional): Event description
 - `location` (string, optional): Event location
 
+### memory/add
+```json
+{
+  "content": "Document text to store",
+  "category": "personal",
+  "source": "api",
+  "tags": ["adhd", "pattern"]
+}
+```
+- `content` (string, required): Text to embed and store
+- `category` (string, optional): Category label
+- `source` (string, optional): Source identifier
+- `tags` (array of strings, optional): Stored as comma-separated string in ChromaDB metadata
+
 ## ChromaDB Schema
 
 **Chunk ID:** `chunk::{path}::{section}::{index}::{hash[:12]}`
@@ -123,7 +137,8 @@ API specs and schemas for implementation.
     "file_path": "path/to/file.md",
     "section": "h2:Section Name",
     "chunk_index": 0,
-    "kind": "chunk"
+    "kind": "chunk",
+    "tags": "adhd,pattern"
   }
 }
 ```

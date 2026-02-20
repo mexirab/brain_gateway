@@ -31,22 +31,6 @@ docker logs brain-orchestrator --tail 50 -f
 
 ---
 
-## RAG
-
-### Re-index RAG after adding documents
-```bash
-cd /opt/jupiter/gateway_mvp/rag
-python ingest_rag.py \
-  --source ~/rag/nadim_rag \
-  --persist ~/.local/share/chroma/personal_rag \
-  --collection nadim_rag
-
-# Restart orchestrator to pick up changes
-docker compose restart orchestrator
-```
-
----
-
 ## Home Assistant
 
 ### Test HA command (structured)
@@ -175,15 +159,17 @@ curl -X POST http://10.0.0.173:8002/tts \
 
 ### Manage TTS/STT services on Uranus
 ```bash
-# Check status
-ssh nadim@10.0.0.173 "sudo systemctl status qwen-tts whisper-stt"
+# SSH to Uranus (from Jupiter, not direct)
+ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 '<command>'"
 
-# Restart services
-ssh nadim@10.0.0.173 "sudo systemctl restart qwen-tts whisper-stt"
+# Check status
+ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl status qwen-tts'"
+
+# Restart TTS (e.g., after pacing changes)
+ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen-tts'"
 
 # View logs
-ssh nadim@10.0.0.173 "journalctl -u qwen-tts -f"
-ssh nadim@10.0.0.173 "journalctl -u whisper-stt -f"
+ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'journalctl -u qwen-tts --no-pager -n 50'"
 ```
 
 ### Load a new voice clone
@@ -196,6 +182,51 @@ curl -X POST http://10.0.0.173:8002/voices/load \
     "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
     "description": "Jessica McCabe - warm, energetic ADHD advocate"
   }'
+```
+
+---
+
+## HTTPS (Tailscale Serve)
+
+### Check status
+```bash
+ssh labadmin@100.102.29.14 "tailscale serve status"
+```
+
+### Enable HTTPS (already running, persists across reboots)
+```bash
+ssh labadmin@100.102.29.14 "sudo tailscale serve --bg http://localhost:80"
+```
+
+### Disable HTTPS
+```bash
+ssh labadmin@100.102.29.14 "sudo tailscale serve --https=443 off"
+```
+
+### Access URL
+```
+https://jupiter-amds.tail74fc4a.ts.net/
+```
+
+---
+
+## RAG
+
+### Re-index RAG after adding documents
+```bash
+# Copy new docs to Jupiter first, then run inside the orchestrator container:
+ssh labadmin@100.102.29.14 "docker exec brain-orchestrator python /app/ingest_rag.py \
+  --source /rag \
+  --persist /chroma/personal_rag \
+  --collection nadim_rag"
+
+# Restart orchestrator to pick up changes
+ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && docker compose restart orchestrator"
+```
+
+### Check RAG doc count
+```bash
+curl -s http://localhost:8888/health | jq '.rag_documents'
 ```
 
 ---

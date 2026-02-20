@@ -12,12 +12,15 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Home automation | "Turn off the lights" → fast-path or Nemotron tool call | Working |
 | Focus timer | "Start focus for 30 minutes" → Pomodoro + Endel audio + Pi-hole blocking | Working |
 | Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers | Working |
-| Personal memory (RAG) | ChromaDB with personal docs, meds, projects | Working |
+| Personal memory (RAG) | ChromaDB with 154 docs: profile, patterns, meds, projects | Working |
 | Web search | "What's the weather?" → SearXNG | Working |
 | Hybrid LLM | Helios 120B for conversation, Nemotron 8B for tools | Working |
 | Google Calendar | "What's on my calendar?" → check/create events, proactive alerts | Working |
 | Morning briefing | 7:30 AM daily → today's events + pending reminders via TTS | Working |
 | Calendar polling | Every 15 min → announce events starting within 2 hours | Working |
+| Mode router | Intent-based coaching: explainer/mirror/counterbalance/challenge/baseline | Working |
+| HTTPS access | Tailscale Serve → valid TLS cert → mobile mic support | Working |
+| TTS pacing | Sentence pause injection + paragraph splitting for calmer speech | Working |
 
 ## Known Issues / TODOs
 
@@ -26,7 +29,6 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Voice pipeline routes to Nemotron directly | High | Should route through orchestrator :8888 for hybrid Helios+Nemotron. Requires HA UI access to change conversation agent. |
 | TTS output on ATOM Echo tiny speaker | High | Should route to Google speakers group ("all speakers"). Requires HA UI. |
 | ATOM Echo S3R has no LED feedback | Low | S3R variant has no programmable RGB LED (GPIO35 conflicts with PSRAM). Hardware limitation. |
-| RAG docs count is 0 on Jupiter | Medium | ChromaDB may need reindexing after recent changes |
 | Calendar only reads Google Calendar | Medium | Outlook/Exchange (work) and Apple Calendar not integrated yet |
 
 ## Phase 2: Calendar & Email Awareness
@@ -128,10 +130,14 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 
 ## Priority Order
 
-1. ~~**Calendar integration**~~ — ✅ DONE (Google Calendar read/write + proactive alerts)
-2. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
-3. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
-4. **Gmail integration** — Email awareness, auto-reminders from invites
-5. **Document ingestion** — builds on existing RAG, immediate utility
-6. **Proactive agent** — transforms from reactive to anticipatory
-7. **Vision/multimodal** — nice to have, depends on model capabilities
+1. ~~**Calendar integration**~~ — ✅ DONE
+2. ~~**Mode-aware coaching**~~ — ✅ DONE (intent router + personalized system prompts)
+3. ~~**Personal RAG knowledge**~~ — ✅ DONE (154 docs: identity, patterns, preferences)
+4. ~~**HTTPS + mobile mic**~~ — ✅ DONE (Tailscale Serve)
+5. ~~**TTS pacing**~~ — ✅ DONE (paragraph splitting + sentence pause injection)
+6. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
+7. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
+8. **Gmail integration** — Email awareness, auto-reminders from invites
+9. **Document ingestion** — builds on existing RAG, immediate utility
+10. **Proactive agent** — transforms from reactive to anticipatory
+11. **Vision/multimodal** — nice to have, depends on model capabilities

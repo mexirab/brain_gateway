@@ -16,8 +16,9 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 
 | Service | Port | URL |
 |---------|------|-----|
+| Open WebUI (HTTPS) | 443 | https://jupiter-amds.tail74fc4a.ts.net (Tailscale) |
+| Open WebUI (HTTP) | 80 | http://localhost |
 | Orchestrator | 8888 | http://localhost:8888 |
-| Open WebUI | 80 | http://localhost |
 | Nemotron | 8001 | http://10.0.0.58:8001/v1 |
 | Helios | 8080 | http://10.0.0.195:8080/v1 |
 | TTS | 8002 | http://10.0.0.173:8002 |
@@ -66,11 +67,12 @@ User → Open WebUI → Orchestrator → Mode Router → Helios (conversation)
 ## Key Paths
 
 ```
-/opt/jupiter/gateway_mvp/     # Project root on Jupiter
-~/.env                        # Secrets (HA_TOKEN, LITELLM_KEY)
-~/rag/nadim_rag/             # RAG source documents
-~/.local/share/chroma/        # ChromaDB persistence
+/opt/jupiter/gateway_mvp/           # Project root on Jupiter
+~/.env                              # Secrets (HA_TOKEN, LITELLM_KEY)
+~/rag/nadim_rag/                    # RAG source documents (154 docs indexed)
+~/.local/share/chroma/personal_rag/ # ChromaDB persistence
 /opt/jupiter/gateway_mvp/credentials/  # Google OAuth2 creds (gitignored)
+/opt/jupiter/gateway_mvp/certs/     # Tailscale TLS certs (gitignored)
 ```
 
 ## Common Commands
@@ -256,6 +258,47 @@ Deterministic v1 intent classifier. Adapts Jess's system prompt based on what Na
 
 **Routing logged in `_routing`:** `intent_mode`, `intent_intensity`, `intent_tags` — visible in API response for debugging.
 
+## HTTPS Access (Tailscale Serve)
+
+Mobile mic access requires HTTPS. Handled by Tailscale Serve (no nginx needed).
+
+```bash
+# Already running — persists across reboots
+sudo tailscale serve --bg http://localhost:80
+
+# Disable
+sudo tailscale serve --https=443 off
+
+# Cert renewal (auto-managed, but manual if needed)
+sudo tailscale cert --cert-file /opt/jupiter/gateway_mvp/certs/jupiter.crt \
+  --key-file /opt/jupiter/gateway_mvp/certs/jupiter.key jupiter-amds.tail74fc4a.ts.net
+```
+
+**URL:** `https://jupiter-amds.tail74fc4a.ts.net/` (must use domain, not IP, for valid cert)
+
+## TTS Pacing
+
+Jessica voice clone uses Qwen3-TTS on Uranus. Two pacing controls:
+
+1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
+2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/nadim/server.py` on Uranus — inserts `...` between sentences for calmer delivery
+
+```bash
+# Restart TTS after pacing changes
+ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen-tts'"
+```
+
+## RAG Personal Knowledge
+
+154 documents indexed in ChromaDB (`nadim_rag` collection). Source docs organized by category:
+
+| Path | Content |
+|------|---------|
+| `rag/nadim_rag/10_profile/` | Identity, personality models, AI preferences, Pisces symbolism |
+| `rag/nadim_rag/50_patterns/` | Strengths/frictions, triggers/distortions, rejection-shame loop, social frequency plan |
+| `rag/nadim_rag/20_meds/` | Medication data (auto-generated from YAML) |
+| `rag/nadim_rag/30_projects/` | Project data (auto-generated from YAML) |
+
 ## Performance Notes
 
 - Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown
@@ -269,5 +312,6 @@ Deterministic v1 intent classifier. Adapts Jess's system prompt based on what Na
 - Owner: Nadim (ADHD - prefers step-by-step with verification)
 - Docker project: `gateway_mvp` (default from directory name, no `-p` flag needed)
 - Helios auto-starts on demand via SSH, auto-stops after 30 min idle (~150W savings)
-- TTS uses Jessica McCabe voice clone (Qwen3-TTS)
+- TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
+- Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
