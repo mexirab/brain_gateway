@@ -36,6 +36,7 @@ services:
       - AUDIO_TTS_OPENAI_API_BASE_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}/v1
       - AUDIO_TTS_OPENAI_API_KEY=local
       - AUDIO_TTS_VOICE=${TTS_VOICE:-jessica}
+      - AUDIO_TTS_SPLIT_ON=none
       # STT configuration - Whisper on Uranus
       - AUDIO_STT_ENGINE=openai
       - AUDIO_STT_OPENAI_API_BASE_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_STT_PORT:-8003}/v1
