@@ -97,6 +97,22 @@ API specs and schemas for implementation.
 {"query": "weather Houston today", "category": "general", "time_range": "day"}
 ```
 
+### check_calendar
+```json
+{"days_ahead": 7}
+```
+- `days_ahead` (int, optional): Number of days to look ahead. Default: 7. Use 1 for today, 2 for tomorrow.
+
+### create_calendar_event
+```json
+{"title": "Pickleball at Honcho", "start_time": "2026-02-26T19:00:00", "duration_minutes": 60, "location": "Honcho"}
+```
+- `title` (string, required): Event title
+- `start_time` (string, required): ISO 8601 datetime
+- `duration_minutes` (int, optional): Default 60
+- `description` (string, optional): Event description
+- `location` (string, optional): Event location
+
 ## ChromaDB Schema
 
 **Chunk ID:** `chunk::{path}::{section}::{index}::{hash[:12]}`
@@ -123,11 +139,16 @@ See `.env.example` for full list. Key vars:
 | LITELLM_MASTER_KEY | LiteLLM auth |
 | CHROMA_PERSIST | ChromaDB path |
 | MIN_COS, TOP_K | RAG params |
+| GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |
+| GOOGLE_TOKEN_PATH | OAuth2 token JSON path |
+| CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 15) |
+| MORNING_BRIEFING_TIME | HH:MM for morning briefing (default: 07:30) |
+| MORNING_BRIEFING_ENABLED | true/false (default: true) |
 
 ## External APIs
 
 | API | Base URL | Auth |
 |-----|----------|------|
 | Home Assistant | http://10.0.0.106:8123/api | Bearer token |
-| Open-Meteo | https://api.open-meteo.com/v1 | None |
-| YNAB | https://api.ynab.com/v1 | Bearer token |
+| Google Calendar | https://www.googleapis.com/calendar/v3 | OAuth2 bearer token |
+| SearXNG | http://searxng:8080 (internal) | None |

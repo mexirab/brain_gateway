@@ -4,13 +4,13 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 
 ## Cluster
 
-| Node | IP | GPU | Role |
-|------|-----|-----|------|
-| Jupiter | 10.0.0.248 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
-| Helios | 10.0.0.195 | RTX 5090 | 120B expert (off by default) |
-| HA | 10.0.0.106 | - | Home Assistant |
+| Node | IP (LAN) | IP (Tailscale) | GPU | Role |
+|------|----------|----------------|-----|------|
+| Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
+| Saturn | 10.0.0.58 | - | RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
+| Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
+| Helios | 10.0.0.195 | - | RTX 5090 | 120B conversational (auto-starts on demand) |
+| HA | 10.0.0.106 | - | - | Home Assistant |
 
 ## Services
 
@@ -39,37 +39,38 @@ User → Open WebUI → Orchestrator → Helios (conversation)
                                                    │
                                             Nemotron (tools)
                                                    │
-                              ┌──────────────┬──────┼──────┬─────────────┐
-                              ▼              ▼      ▼      ▼             ▼
-                        home_assistant  search_memory  set_reminder  web_search
+                    ┌──────────┬──────────┬────┼────┬──────────┬──────────┐
+                    ▼          ▼          ▼    ▼    ▼          ▼          ▼
+              home_assistant  search_memory  set_reminder  web_search  check_calendar
 ```
 
-**Flow:** Helios handles conversation naturally. For actions (HA, reminders, RAG search), calls `ask_orchestrator` → Nemotron executes tools → result back to Helios.
+**Flow:** Helios handles conversation naturally. For actions (HA, reminders, RAG, calendar), calls `ask_orchestrator` → Nemotron executes tools → result back to Helios.
 
 ## Tools
 
-| Tool | Model | Purpose |
-|------|-------|---------|
-| ask_orchestrator | Helios | Delegate to Nemotron for actions |
-| home_assistant | Nemotron | HA API: `{entity_id, service, data}` |
-| search_memory | Nemotron | ChromaDB RAG query |
-| set_reminder | Nemotron | Voice/phone reminders |
-| update_data | Nemotron | Update meds/projects YAML |
-| start_focus | Nemotron | Pomodoro timer + Endel audio + Pi-hole blocking |
-| stop_focus | Nemotron | Stop focus timer early |
-| focus_status | Nemotron | Check remaining focus time |
-| cancel_reminder | Nemotron | Cancel a pending reminder by ID |
-| web_search | Nemotron | Search the web via SearXNG (events, news, weather, etc.) |
-| check_calendar | Nemotron | Check Google Calendar for upcoming events |
-| create_calendar_event | Nemotron | Create a new Google Calendar event |
+| Tool | Model | Purpose | Status |
+|------|-------|---------|--------|
+| ask_orchestrator | Helios | Delegate to Nemotron for actions | Working |
+| home_assistant | Nemotron | HA API: `{entity_id, service, data}` | Working |
+| search_memory | Nemotron | ChromaDB RAG query | Working |
+| set_reminder | Nemotron | Voice/phone reminders | Working |
+| cancel_reminder | Nemotron | Cancel a pending reminder by ID | Working |
+| update_data | Nemotron | Update meds/projects YAML | Working |
+| start_focus | Nemotron | Pomodoro timer + Endel audio + Pi-hole blocking | Working |
+| stop_focus | Nemotron | Stop focus timer early | Working |
+| focus_status | Nemotron | Check remaining focus time | Working |
+| web_search | Nemotron | Search the web via SearXNG | Working |
+| check_calendar | Nemotron | Check Google Calendar for upcoming events | Working |
+| create_calendar_event | Nemotron | Create a new Google Calendar event | Working |
 
 ## Key Paths
 
 ```
-/opt/jupiter/gateway_mvp/     # Project root
+/opt/jupiter/gateway_mvp/     # Project root on Jupiter
 ~/.env                        # Secrets (HA_TOKEN, LITELLM_KEY)
 ~/rag/nadim_rag/             # RAG source documents
 ~/.local/share/chroma/        # ChromaDB persistence
+/opt/jupiter/gateway_mvp/credentials/  # Google OAuth2 creds (gitignored)
 ```
 
 ## Common Commands
@@ -98,6 +99,9 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 ./saturn/deploy-pihole.sh           # deploy and start
 ./saturn/deploy-pihole.sh logs      # tail logs
 ./saturn/deploy-pihole.sh stop      # stop
+
+# Remote deploy from Mac (via Tailscale)
+ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker compose up -d --build orchestrator"
 ```
 
 ## Key Files
@@ -119,6 +123,7 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 | litellm-config.yaml | LLM proxy config |
 | ha_automations/atom_echo.yaml | ESPHome config for ATOM Echo S3R voice satellite |
 | ha_automations/hey_jess.tflite | On-device "Hey Jess" wake word model (microWakeWord) |
+| ha_automations/hey_jess.json | Wake word JSON manifest for ESPHome |
 | tts/wyoming_jessica_bridge.py | Wyoming-to-HTTP bridge for Jessica TTS |
 | tts/Dockerfile.wyoming-jessica | Docker image for Wyoming Jessica bridge |
 
@@ -127,6 +132,7 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 - **ARCHITECTURE.md** - Internals, data flow, troubleshooting
 - **COMMANDS.md** - Command quick reference
 - **TECHNICAL_REFERENCE.md** - API specs, schemas
+- **ROADMAP.md** - Feature roadmap and what's done/planned
 - **monitoring/README.md** - Monitoring setup
 
 ## Focus Timer (Pomodoro)
@@ -175,11 +181,18 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
     → Wyoming Whisper STT (Docker on Jupiter :10300)
     → HA Conversation Agent → Brain Gateway :8888
     → Wyoming Jessica TTS bridge (:10301) → Uranus TTS :8002
-    → ATOM Echo S3R speaker
+    → ATOM Echo S3R speaker (or Google speakers group)
 ```
+
+**Current status:**
+- Office ATOM Echo S3R: flashed, online, wake word working
+- Voice pipeline: currently routed to Nemotron directly (TODO: route through orchestrator for hybrid LLM)
+- TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
+- No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
 
 **Key components:**
 - **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
+- **Wake word manifest:** `hey_jess.json` served via nginx model-server at http://10.0.0.248:8080/hey_jess.json
 - **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Jupiter)
 - **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol → HTTP Jessica TTS on Uranus
 - **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions
@@ -194,11 +207,26 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar_event`.
 
+**Status:** Fully deployed and configured on Jupiter. OAuth2 token generated and mounted.
+
 **Setup (one-time on dev machine):**
 1. Google Cloud Console → create project → enable Calendar API → create OAuth2 Desktop credentials
-2. Download `credentials.json` → `credentials/google_credentials.json`
-3. `pip install google-auth google-auth-oauthlib && python orchestrator/google_setup.py`
-4. Copy `credentials/` to Jupiter, mount into orchestrator container
+2. Add your Google account as a test user (OAuth consent screen → Test users)
+3. Download `credentials.json` → `credentials/google_credentials.json`
+4. Run consent flow:
+   ```bash
+   python3 -m venv /tmp/google-auth-venv
+   /tmp/google-auth-venv/bin/pip install google-auth google-auth-oauthlib
+   /tmp/google-auth-venv/bin/python orchestrator/google_setup.py \
+     --credentials credentials/google_credentials.json \
+     --token-output credentials/google_token.json
+   ```
+5. Copy credentials to Jupiter:
+   ```bash
+   scp credentials/google_credentials.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
+   scp credentials/google_token.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
+   ```
+6. Restart orchestrator: `docker compose restart orchestrator`
 
 **Proactive features (APScheduler):**
 - Calendar polling: every 15 min, announces events starting within 2 hours via TTS
@@ -221,5 +249,6 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 
 - Owner: Nadim (ADHD - prefers step-by-step with verification)
 - Docker project: `gateway_mvp` (default from directory name, no `-p` flag needed)
-- Helios auto-starts when needed, stops to save ~150W
+- Helios auto-starts on demand via SSH, auto-stops after 30 min idle (~150W savings)
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS)
+- Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)

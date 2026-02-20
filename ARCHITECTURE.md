@@ -22,7 +22,7 @@ User Request → Orchestrator
 
 ## Key Files
 
-### orchestrator/orchestrator.py (~2200 lines)
+### orchestrator/orchestrator.py (~2500 lines)
 
 **Configuration:**
 - `NEMOTRON_URL`, `HELIOS_URL` - LLM endpoints
@@ -53,8 +53,39 @@ User Request → Orchestrator
 | `tool_start_focus()` | → Endel audio + Pi-hole blocking + timer |
 | `tool_focus_status()` | → Check remaining focus time |
 | `tool_web_search()` | → `web_search.SearXNGClient.search()` |
+| `tool_check_calendar()` | → `google_calendar.GoogleCalendarClient.list_events()` |
+| `tool_create_calendar_event()` | → `google_calendar.GoogleCalendarClient.create_event()` |
+
+**Proactive Background Jobs:**
+
+| Job | Trigger | Action |
+|-----|---------|--------|
+| `poll_calendar()` | interval, every 15 min | TTS announce events starting within 2 hours |
+| `morning_briefing()` | cron, 7:30 AM daily | TTS announce today's events + pending reminders |
 
 **Why `tool_choice: "none"`?** vLLM lacks `--enable-auto-tool-choice`. Nemotron outputs `<tool_call>` XML in content instead.
+
+### orchestrator/google_calendar.py (~295 lines)
+
+Google Calendar API v3 client. Follows `web_search.py` pattern: dataclasses + client class + singleton.
+
+```python
+# Dataclasses
+CalendarEvent(id, title, start, end, location, description, all_day)
+CalendarResponse(success, events, error)
+
+# Client methods
+GoogleCalendarClient.list_events(days_ahead=7) → CalendarResponse
+GoogleCalendarClient.create_event(title, start_time, duration_minutes=60, ...) → CalendarResponse
+GoogleCalendarClient.get_upcoming(hours_ahead=2) → CalendarResponse  # for proactive polling
+
+# Singleton
+get_calendar_client(http_client=_http) → GoogleCalendarClient
+```
+
+### orchestrator/google_auth.py (~75 lines)
+
+OAuth2 token management. Loads token from file, auto-refreshes if expired, returns None if not configured.
 
 ### orchestrator/ha_integration.py (~820 lines)
 
@@ -89,6 +120,17 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 6. Result → Nemotron → natural response → Helios → User
 ```
 
+### "What's on my calendar this week?"
+
+```
+1. User → Orchestrator → Helios
+2. Helios: <tool_call>{"name":"ask_orchestrator","arguments":{"command":"check calendar this week"}}</tool_call>
+3. Orchestrator → Nemotron with command
+4. Nemotron: <tool_call>{"name":"check_calendar","arguments":{"days_ahead":7}}</tool_call>
+5. Execute → Google Calendar API → list of events
+6. Result → Nemotron → natural summary → Helios → User
+```
+
 ### "Add Adderall 20mg to morning meds"
 
 ```
@@ -98,13 +140,36 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 4. watch_and_ingest.py auto-reindexes ChromaDB
 ```
 
+### Proactive calendar alert (background)
+
+```
+1. APScheduler triggers poll_calendar() every 15 min
+2. GoogleCalendarClient.get_upcoming(hours_ahead=2)
+3. For each event not yet announced:
+   "Heads up Nadim: Pickleball at Honcho in 2 hours"
+4. TTS via _announce_voice() → HA media_player
+```
+
 ## ChromaDB / RAG
 
 - **Collection:** `nadim_rag`
 - **Embedding:** `sentence-transformers/all-MiniLM-L6-v2`
 - **Params:** `TOP_K=25`, `MIN_COS=0.20`
 
-## Voice Pipeline (Uranus)
+## Voice Pipeline
+
+```
+"Hey Jess" (on-device wake word, ATOM Echo S3R)
+    → ESPHome voice_assistant → Home Assistant
+    → Wyoming Whisper STT (Jupiter :10300)
+    → HA Conversation Agent → Orchestrator :8888
+    → Wyoming Jessica TTS bridge (:10301) → Uranus TTS :8002
+    → Speaker output
+```
+
+**Current limitation:** Voice pipeline routes to Nemotron directly. Should route through orchestrator for hybrid Helios+Nemotron quality. Requires HA UI change.
+
+## TTS / STT (Uranus)
 
 ```
 GPU 0: Qwen3-TTS (port 8002) - Jessica voice clone
@@ -128,3 +193,6 @@ Grafana ← Prometheus ← node_exporter (all nodes)
 | HA commands fail | `curl localhost:8888/api/ha/entities`, check logs |
 | RAG empty | `curl localhost:8888/health`, re-run ingest_rag.py |
 | Helios offline | Auto-starts on demand, or `./scripts/start-helios.sh` |
+| Calendar not configured | Check `/health` → `calendar.configured`, re-run google_setup.py |
+| Calendar token expired | Token auto-refreshes. If fails, re-run google_setup.py and copy to Jupiter |
+| Morning briefing not firing | Check `MORNING_BRIEFING_ENABLED=true`, verify scheduler has 2+ jobs |

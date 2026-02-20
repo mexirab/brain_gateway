@@ -6,40 +6,54 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 
 ## What Works Today (v1)
 
-| Feature | How it works |
-|---------|-------------|
-| Voice control | "Hey Jess" wake word → ATOM Echo S3R → HA voice pipeline |
-| Home automation | "Turn off the lights" → fast-path or Nemotron tool call |
-| Focus timer | "Start focus for 30 minutes" → Pomodoro + Endel audio + Pi-hole blocking |
-| Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers |
-| Personal memory (RAG) | ChromaDB with personal docs, meds, projects |
-| Web search | "What's the weather?" → SearXNG |
-| Hybrid LLM | Helios 120B for conversation, Nemotron 8B for tools |
+| Feature | How it works | Status |
+|---------|-------------|--------|
+| Voice control | "Hey Jess" wake word → ATOM Echo S3R → HA voice pipeline | Working (office) |
+| Home automation | "Turn off the lights" → fast-path or Nemotron tool call | Working |
+| Focus timer | "Start focus for 30 minutes" → Pomodoro + Endel audio + Pi-hole blocking | Working |
+| Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers | Working |
+| Personal memory (RAG) | ChromaDB with personal docs, meds, projects | Working |
+| Web search | "What's the weather?" → SearXNG | Working |
+| Hybrid LLM | Helios 120B for conversation, Nemotron 8B for tools | Working |
+| Google Calendar | "What's on my calendar?" → check/create events, proactive alerts | Working |
+| Morning briefing | 7:30 AM daily → today's events + pending reminders via TTS | Working |
+| Calendar polling | Every 15 min → announce events starting within 2 hours | Working |
+
+## Known Issues / TODOs
+
+| Issue | Priority | Notes |
+|-------|----------|-------|
+| Voice pipeline routes to Nemotron directly | High | Should route through orchestrator :8888 for hybrid Helios+Nemotron. Requires HA UI access to change conversation agent. |
+| TTS output on ATOM Echo tiny speaker | High | Should route to Google speakers group ("all speakers"). Requires HA UI. |
+| ATOM Echo S3R has no LED feedback | Low | S3R variant has no programmable RGB LED (GPIO35 conflicts with PSRAM). Hardware limitation. |
+| RAG docs count is 0 on Jupiter | Medium | ChromaDB may need reindexing after recent changes |
+| Calendar only reads Google Calendar | Medium | Outlook/Exchange (work) and Apple Calendar not integrated yet |
 
 ## Phase 2: Calendar & Email Awareness
 
 **Goal:** Jess knows what's on my schedule without me telling her.
 
-### Google Calendar sync ✓
-- ✓ Poll Google Calendar API on a schedule (every 15 min, configurable)
-- ✓ New tools: `check_calendar`, `create_calendar_event`
-- ✓ Morning briefing: proactive announcement at 7:30 AM with today's events + pending reminders
-- ✓ Pre-event reminders: "Nadim, your Honcho pickleball game is in 2 hours"
-- TODO: Unify with Outlook/Exchange (ICS subscription or iPhone Shortcuts bridge)
+### Google Calendar sync — DONE
+- ✅ OAuth2 setup (Google Cloud project, Desktop credentials, consent flow)
+- ✅ `check_calendar` tool — "Hey Jess, what's on my calendar this week?"
+- ✅ `create_calendar_event` tool — "Add pickleball Thursday at 7pm"
+- ✅ Proactive polling: every 15 min, TTS announcement for events within 2 hours
+- ✅ Morning briefing: 7:30 AM, today's events + pending reminders
+- ✅ Deployed and configured on Jupiter
 
-### Gmail monitoring
+### Calendar unification — NOT STARTED
+- Outlook/Exchange (Cisco work calendar) → ICS subscription into Google Calendar
+- If corporate ICS blocked → iPhone Shortcuts bridge as fallback
+- Apple Calendar events → already sync to Google if using Google account
+
+### Gmail monitoring — NOT STARTED
 - Watch for calendar invites, flight confirmations, bill due dates
 - Parse and extract: event name, date, location, deadlines
 - Auto-create reminders or calendar entries
 - "Hey Jess, did I get any important emails today?"
+- Requires adding Gmail API scopes to OAuth2
 
-### Implementation notes
-- Google OAuth2 service account or app credentials
-- New `google_integration.py` module in orchestrator
-- New tools: `check_calendar`, `add_calendar_event`, `check_email`
-- Background scheduler (APScheduler, already used for reminders)
-
-## Phase 3: Document Memory
+## Phase 3: Document Memory — NOT STARTED
 
 **Goal:** Upload anything important → ask about it later by voice.
 
@@ -57,19 +71,18 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 
 ### Implementation notes
 - PDF parsing: PyMuPDF or pdfplumber
-- OCR: Tesseract or the existing Whisper model's multimodal capabilities
-- Image understanding: Could route to Helios or a vision model
+- OCR: Tesseract or vision model
 - Extend existing `ingest_rag.py` with format handlers
 - New tool: `ingest_document` (or auto-ingest on upload)
 
-## Phase 4: Proactive Agent (OpenClaw Integration)
+## Phase 4: Proactive Agent — NOT STARTED
 
 **Goal:** Jess doesn't just respond — she anticipates.
 
 ### Background agent loop
 - Runs continuously, checks various sources on schedules
 - Gmail → new important emails → summarize and notify
-- Calendar → upcoming events → pre-reminders
+- Calendar → upcoming events → pre-reminders (✅ done)
 - Bills/deadlines from ingested documents → warning notifications
 - Medication schedule → daily reminders at set times
 
@@ -82,19 +95,20 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - "Hey Jess, I need to call the insurance company" → stored as task
 - Jess follows up: "You mentioned calling the insurance company yesterday. Want me to remind you at a good time today?"
 - Gentle nagging with escalation for overdue items (ADHD-friendly, not guilt-inducing)
+- ClickUp integration for task visibility on phone
 
 ### Context awareness
 - Track focus sessions → "What was I working on before lunch?"
 - Time-of-day awareness → suggest dinner ideas in the evening
 - Location awareness (future) → remind about errands when leaving
 
-### OpenClaw as agent framework
-- OpenClaw provides the multi-step agent loop and tool orchestration
-- Brain Gateway tools become OpenClaw "skills"
-- OpenClaw handles complex multi-turn tasks that single Nemotron loop can't
-- Example: "Plan my week" → checks calendar, pending tasks, reminders → creates a summary
+### OpenClaw consideration
+- Researched extensively — NOT recommended as orchestrator replacement
+- Better as multi-channel frontend (WhatsApp/Telegram) alongside existing system
+- Security concerns (3 CVEs, exposed instances), unreliable memory, high API costs
+- Current custom orchestrator is more deterministic and reliable for tool execution
 
-## Phase 5: Vision & Multimodal
+## Phase 5: Vision & Multimodal — NOT STARTED
 
 **Goal:** See the world, not just hear it.
 
@@ -105,16 +119,19 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 
 ## Hardware Roadmap
 
-| Device | Location | Purpose |
-|--------|----------|---------|
-| ATOM Echo S3R | Office (done) | Wake word + mic |
-| ATOM Echo S3R #2 | Bedroom | Wake word + mic |
-| ATOM Echo S3R #3 | Kitchen | Wake word + mic (meal planning, timers) |
-| Google speakers | Whole house | TTS output |
+| Device | Location | Status |
+|--------|----------|--------|
+| ATOM Echo S3R | Office | Flashed, online, wake word working |
+| ATOM Echo S3R #2 | Bedroom | Not purchased |
+| ATOM Echo S3R #3 | Kitchen | Not purchased |
+| Google speakers | Whole house (office, bedroom, kitchen) | Existing, TTS output target |
 
 ## Priority Order
 
-1. **Calendar/Gmail integration** — highest impact, unlocks morning briefings and proactive reminders
-2. **Document ingestion** — builds on existing RAG, immediate utility
-3. **Proactive agent** — transforms from reactive to anticipatory
-4. **Vision/multimodal** — nice to have, depends on model capabilities
+1. ~~**Calendar integration**~~ — ✅ DONE (Google Calendar read/write + proactive alerts)
+2. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
+3. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
+4. **Gmail integration** — Email awareness, auto-reminders from invites
+5. **Document ingestion** — builds on existing RAG, immediate utility
+6. **Proactive agent** — transforms from reactive to anticipatory
+7. **Vision/multimodal** — nice to have, depends on model capabilities

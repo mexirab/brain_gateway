@@ -103,9 +103,42 @@ docker compose -p monitoring down     # Stop
 
 ---
 
+## Google Calendar
+
+### Run OAuth2 setup (one-time, on Mac)
+```bash
+python3 -m venv /tmp/google-auth-venv
+/tmp/google-auth-venv/bin/pip install google-auth google-auth-oauthlib
+/tmp/google-auth-venv/bin/python orchestrator/google_setup.py \
+  --credentials credentials/google_credentials.json \
+  --token-output credentials/google_token.json
+```
+
+### Copy credentials to Jupiter
+```bash
+scp credentials/google_credentials.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
+scp credentials/google_token.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
+ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && docker compose restart orchestrator"
+```
+
+### Check calendar status
+```bash
+curl -s http://localhost:8888/health | jq '.calendar'
+# {"configured": true, "poll_interval_min": 15, "morning_briefing": "07:30"}
+```
+
+### Test calendar via API
+```bash
+curl -s http://localhost:8888/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "brain", "messages": [{"role": "user", "content": "What is on my calendar this week?"}]}' | jq .
+```
+
+---
+
 ## Helios (120B Expert Model)
 
-Helios is OFF by default to save ~150W. The orchestrator auto-starts it when needed.
+Helios auto-starts on demand and stops after 30 min idle to save ~150W.
 
 ### Check status
 ```bash
@@ -124,8 +157,8 @@ Helios is OFF by default to save ~150W. The orchestrator auto-starts it when nee
 
 ### Check via API
 ```bash
-curl -s http://localhost:8888/health | jq .expert_status
-# "offline (auto-starts on demand)" or "online"
+curl -s http://localhost:8888/health | jq .primary_status
+# "online" or "offline (auto-starts on demand)"
 ```
 
 ---
