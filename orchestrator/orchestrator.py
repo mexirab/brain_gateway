@@ -87,6 +87,18 @@ MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # Prevent infinit
 
 app = FastAPI(title="Brain Gateway", version="5.0")
 
+# CORS middleware for frontend access
+from fastapi.middleware.cors import CORSMiddleware
+
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3001").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Shared httpx client for connection reuse
 _http: httpx.AsyncClient = None
 
