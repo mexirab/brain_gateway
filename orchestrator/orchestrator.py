@@ -61,6 +61,7 @@ from web_search import get_search_client
 
 # Import the Google Calendar client
 from google_calendar import get_calendar_client
+from mode_router import get_mode_router, MODE_PROMPTS, TONE_CONSTRAINT
 
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
@@ -495,7 +496,7 @@ def is_greeting(text: str) -> bool:
     return False
 
 
-def get_helios_system_prompt(personal_context: str = "") -> str:
+def get_helios_system_prompt(personal_context: str = "", mode: str = "explainer", intensity: str = "low") -> str:
     """System prompt for Helios as the primary conversational assistant (Jessica)."""
     context_section = ""
     if personal_context:
@@ -504,6 +505,8 @@ PERSONAL CONTEXT (from Nadim's notes):
 {personal_context}
 """
 
+    mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
+
     return f"""You are Jessica, Nadim's personal AI assistant and ADHD coach.
 
 PERSONALITY:
@@ -511,6 +514,10 @@ PERSONALITY:
 - Understand ADHD challenges (task initiation, time blindness, overwhelm)
 - Keep responses concise and natural for voice conversations
 - Celebrate small wins, be encouraging without being patronizing
+
+{TONE_CONSTRAINT}
+
+{mode_block}
 {context_section}
 YOU HAVE ONE TOOL: ask_orchestrator
 Use it ONLY when you need to:
@@ -1683,9 +1690,14 @@ def parse_tool_calls_from_content(content: str) -> List[Dict[str, Any]]:
     return tool_calls
 
 
-def get_orchestrator_system_prompt() -> str:
+def get_orchestrator_system_prompt(mode: str = "explainer", intensity: str = "low") -> str:
     """System prompt for Nemotron when used in fallback mode (Helios unavailable)."""
-    return """You are Jessica, Nadim's personal AI assistant. You have access to tools to help with actions.
+    mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
+    return f"""You are Jessica, Nadim's personal AI assistant. You have access to tools to help with actions.
+
+{TONE_CONSTRAINT}
+
+{mode_block}
 
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, thermostats, media, scenes)
@@ -2095,6 +2107,13 @@ async def chat_completions(req: Request):
         "streaming": stream,
     }
 
+    # Route user intent (mode + emotional intensity)
+    intent = get_mode_router().route(user_text)
+    routing_info["intent_mode"] = intent.mode
+    routing_info["intent_intensity"] = intent.intensity
+    routing_info["intent_tags"] = intent.tags
+    logger.info(f"[MODE_ROUTER] mode={intent.mode} intensity={intent.intensity} tags={intent.tags}")
+
     # If external tools are provided (e.g., from HA voice pipeline),
     # pass through to Nemotron for native handling
     if external_tools:
@@ -2103,7 +2122,7 @@ async def chat_completions(req: Request):
         try:
             llm_resp = await call_model(
                 NEMOTRON_URL, NEMOTRON_MODEL, messages,
-                system=get_orchestrator_system_prompt(),
+                system=get_orchestrator_system_prompt(mode=intent.mode, intensity=intent.intensity),
                 tools=external_tools,
                 timeout=60
             )
@@ -2150,8 +2169,8 @@ async def chat_completions(req: Request):
             logger.info(f"[HYBRID] Pre-fetched RAG context ({len(personal_context)} chars)")
             routing_info["rag_prefetch"] = True
 
-    # 2. Build Helios system prompt with personal context
-    helios_system = get_helios_system_prompt(personal_context)
+    # 2. Build Helios system prompt with personal context + mode
+    helios_system = get_helios_system_prompt(personal_context, mode=intent.mode, intensity=intent.intensity)
 
     # 3. Check if Helios is available, start if needed
     if not await check_helios_health():
@@ -2161,7 +2180,8 @@ async def chat_completions(req: Request):
             # Fallback to Nemotron-only mode
             logger.warning("[HYBRID] Helios unavailable, falling back to Nemotron")
             routing_info["fallback"] = "nemotron"
-            return await _nemotron_fallback(messages, stream, routing_info)
+            return await _nemotron_fallback(messages, stream, routing_info,
+                                            mode=intent.mode, intensity=intent.intensity)
 
     # 4. Call Helios
     global _last_helios_request
@@ -2179,7 +2199,8 @@ async def chat_completions(req: Request):
         # Fallback to Nemotron
         routing_info["fallback"] = "nemotron"
         routing_info["helios_error"] = str(e)
-        return await _nemotron_fallback(messages, stream, routing_info)
+        return await _nemotron_fallback(messages, stream, routing_info,
+                                        mode=intent.mode, intensity=intent.intensity)
 
     # 5. Check for tool calls (ask_orchestrator)
     choice = helios_resp.get("choices", [{}])[0]
@@ -2311,12 +2332,13 @@ def _stream_text_response(text: str, model: str):
     )
 
 
-async def _nemotron_fallback(messages: List[Dict], stream: bool, routing_info: Dict):
+async def _nemotron_fallback(messages: List[Dict], stream: bool, routing_info: Dict,
+                             mode: str = "explainer", intensity: str = "low"):
     """Fallback to Nemotron-only mode when Helios is unavailable."""
     logger.info("[FALLBACK] Using Nemotron-only mode")
 
     conversation = messages.copy()
-    system_prompt = get_orchestrator_system_prompt()
+    system_prompt = get_orchestrator_system_prompt(mode=mode, intensity=intensity)
     result = await _run_nemotron_tool_loop(conversation, system_prompt, label="FALLBACK")
 
     if stream:
@@ -2334,23 +2356,29 @@ async def add_memory(req: Request):
     text = body.get("text", "").strip()
     category = body.get("category", "general")
     source = body.get("source", "manual")
-    
+    tags = body.get("tags", [])
+
     if not text:
         return JSONResponse({"error": "No text provided"}, status_code=400)
-    
+
     doc_id = f"{category}_{datetime.now().timestamp()}"
-    
+
+    metadata = {
+        "category": category,
+        "source": source,
+        "kind": "chunk",
+        "created_at": datetime.now().isoformat(),
+    }
+    # ChromaDB metadata supports only scalars; store tags as comma-separated string
+    if tags and isinstance(tags, list):
+        metadata["tags"] = ",".join(str(t) for t in tags)
+
     collection.add(
         documents=[text],
-        metadatas=[{
-            "category": category,
-            "source": source,
-            "kind": "chunk",
-            "created_at": datetime.now().isoformat(),
-        }],
+        metadatas=[metadata],
         ids=[doc_id],
     )
-    
+
     return JSONResponse({"ok": True, "id": doc_id})
 
 

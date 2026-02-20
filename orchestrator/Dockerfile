@@ -27,6 +27,7 @@ COPY pihole_client.py .
 COPY web_search.py .
 COPY google_auth.py .
 COPY google_calendar.py .
+COPY mode_router.py .
 
 EXPOSE 8888
 

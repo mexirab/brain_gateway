@@ -32,19 +32,19 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 ## Architecture (v6 Hybrid)
 
 ```
-User → Open WebUI → Orchestrator → Helios (conversation)
-                                      │
-                         ┌────────────┴────────────┐
-                    Direct response          ask_orchestrator
-                                                   │
-                                            Nemotron (tools)
-                                                   │
+User → Open WebUI → Orchestrator → Mode Router → Helios (conversation)
+                                   (intent+intensity)      │
+                                                ┌──────────┴──────────┐
+                                           Direct response      ask_orchestrator
+                                                                      │
+                                                               Nemotron (tools)
+                                                                      │
                     ┌──────────┬──────────┬────┼────┬──────────┬──────────┐
                     ▼          ▼          ▼    ▼    ▼          ▼          ▼
               home_assistant  search_memory  set_reminder  web_search  check_calendar
 ```
 
-**Flow:** Helios handles conversation naturally. For actions (HA, reminders, RAG, calendar), calls `ask_orchestrator` → Nemotron executes tools → result back to Helios.
+**Flow:** Mode router classifies intent (explainer/mirror/counterbalance/challenge/baseline) + emotional intensity (low/medium/high). System prompt adapts accordingly. Helios handles conversation. For actions, calls `ask_orchestrator` → Nemotron executes tools → result back to Helios.
 
 ## Tools
 
@@ -116,6 +116,7 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 | orchestrator/google_auth.py | Google OAuth2 token management |
 | orchestrator/google_calendar.py | Google Calendar API v3 client |
 | orchestrator/google_setup.py | One-time OAuth2 consent flow script |
+| orchestrator/mode_router.py | Intent-based mode router (explainer/mirror/counterbalance/challenge/baseline) |
 | docker-compose.yml | Service stack |
 | saturn/docker-compose.pihole.yml | Saturn Pi-hole secondary deployment |
 | saturn/deploy-pihole.sh | Deploy/manage Pi-hole on Saturn via SSH |
@@ -236,6 +237,24 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 - `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 15)
 - `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:30)
 - `MORNING_BRIEFING_ENABLED` — true/false (default: true)
+
+## Mode Router (Personalized Coaching)
+
+Deterministic v1 intent classifier. Adapts Jess's system prompt based on what Nadim needs.
+
+**Modes:**
+
+| Mode | When | Behavior |
+|------|------|----------|
+| explainer | Curiosity/mechanism questions, default for low intensity | Analytical, structured, no coaching language |
+| mirror | "Analyze me", "reflect", "behavioral tendencies" | Pattern identification, ends with one question |
+| counterbalance | Medium emotional intensity (lonely, shame, spiral) | Names distortions, small actions, no shame |
+| challenge | "Hold me accountable", "push me", "no excuses" | Firm, one specific action, time-bound |
+| baseline | High emotional intensity (panic, hopeless, can't breathe) | Low cognitive load, 2-3 options, grounding allowed |
+
+**Global tone constraint:** Never default to grounding techniques unless intensity is high or explicitly requested.
+
+**Routing logged in `_routing`:** `intent_mode`, `intent_intensity`, `intent_tags` — visible in API response for debugging.
 
 ## Performance Notes
 

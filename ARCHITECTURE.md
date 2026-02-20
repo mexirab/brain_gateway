@@ -7,9 +7,13 @@ Deep dive into Brain Gateway internals. See `CLAUDE.md` for quick reference.
 ```
 User Request → Orchestrator
                   │
+           Mode Router
+      (intent + intensity)
+                  │
     ┌─────────────┴─────────────┐
     │       AGENTIC LOOP        │
     │  1. Send to Helios        │
+    │     (mode-adapted prompt) │
     │  2. Parse tool calls      │
     │  3. Execute tools         │
     │  4. Feed results back     │
@@ -39,6 +43,7 @@ User Request → Orchestrator
 | `parse_tool_calls_from_content()` | Extract `<tool_call>` XML from response |
 | `execute_tool()` | Route to tool handler |
 | `rag_context()` | Query ChromaDB, return formatted chunks |
+| `get_mode_router().route()` | Classify intent → mode + intensity (from `mode_router.py`) |
 
 **Tool Handlers:**
 
@@ -81,6 +86,22 @@ GoogleCalendarClient.get_upcoming(hours_ahead=2) → CalendarResponse  # for pro
 
 # Singleton
 get_calendar_client(http_client=_http) → GoogleCalendarClient
+```
+
+### orchestrator/mode_router.py (~150 lines)
+
+Deterministic intent classifier. Adapts Jess's personality per-request.
+
+```python
+# Routing flow:
+# 1. Explicit intent overrides (phrases → mirror or challenge)
+# 2. Emotional intensity classification (high/medium/low keywords)
+# 3. Curiosity detection (mechanism language + low intensity → explainer)
+# 4. Default: high→baseline, medium→counterbalance, low→explainer
+
+RoutingResult(mode, intensity, tags)  # returned to orchestrator
+MODE_PROMPTS[mode]                     # injected into system prompt
+TONE_CONSTRAINT                        # always injected (no default grounding)
 ```
 
 ### orchestrator/google_auth.py (~75 lines)
