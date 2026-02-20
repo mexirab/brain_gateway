@@ -27,6 +27,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
 | Wyoming Whisper (STT) | 10300 | tcp://10.0.0.248:10300 |
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
+| Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
 | Grafana | 3000 | http://localhost:3000 (admin/braingw) |
 

@@ -30,6 +30,29 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | TTS output on ATOM Echo tiny speaker | High | Should route to Google speakers group ("all speakers"). Requires HA UI. |
 | ATOM Echo S3R has no LED feedback | Low | S3R variant has no programmable RGB LED (GPIO35 conflicts with PSRAM). Hardware limitation. |
 | Calendar only reads Google Calendar | Medium | Outlook/Exchange (work) and Apple Calendar not integrated yet |
+| TTS pacing not yet user-verified | Low | Sentence pause injection deployed on Uranus but Nadim hasn't tested voice output yet |
+
+## In Progress: Frontend Dashboard (ConvivialProphet.com)
+
+**Goal:** Custom dashboard + chat at ConvivialProphet.com. Hybrid: public showcase + private daily-driver.
+
+**Tech:** Next.js 14, Tailwind dark theme, Docker on Jupiter (port 3001), Cloudflare Tunnel for public access.
+
+| Phase | What | Status |
+|-------|------|--------|
+| 1 | Project scaffold, Docker, auth middleware, login, placeholder pages | ✅ Done |
+| 2 | Public pages: landing ("Meet Jess"), architecture SVG diagram, live cluster status | Not started |
+| 3 | Private dashboard: calendar widget, reminders, focus timer, quick actions | Not started |
+| 4 | Chat interface: streaming SSE, voice input (Web Speech API) | Not started |
+| 5 | Home controls: HA entity cards, toggles, brightness/climate controls | Not started |
+| 6 | DNS + Cloudflare Tunnel: ConvivialProphet.com → Jupiter | Not started |
+| 7 | Polish: animations, PWA, mobile optimization, toasts | Not started |
+
+**Remaining orchestrator changes needed:**
+- `GET /api/calendar/today` endpoint (for dashboard calendar widget)
+- CORS origins updated when Cloudflare domain is live
+
+**Plan file:** `.claude/plans/snug-nibbling-rossum.md` has full implementation details.
 
 ## Phase 2: Calendar & Email Awareness
 
@@ -135,9 +158,11 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 3. ~~**Personal RAG knowledge**~~ — ✅ DONE (154 docs: identity, patterns, preferences)
 4. ~~**HTTPS + mobile mic**~~ — ✅ DONE (Tailscale Serve)
 5. ~~**TTS pacing**~~ — ✅ DONE (paragraph splitting + sentence pause injection)
-6. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
-7. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
-8. **Gmail integration** — Email awareness, auto-reminders from invites
-9. **Document ingestion** — builds on existing RAG, immediate utility
-10. **Proactive agent** — transforms from reactive to anticipatory
-11. **Vision/multimodal** — nice to have, depends on model capabilities
+6. **Frontend dashboard** — IN PROGRESS (Phase 1 deployed, Phases 2-7 pending)
+7. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
+8. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
+9. **Gmail integration** — Email awareness, auto-reminders from invites
+10. **Document ingestion** — builds on existing RAG, immediate utility
+11. **Proactive agent** — transforms from reactive to anticipatory
+12. **Vision/multimodal** — nice to have, depends on model capabilities
+13. **Jess avatar** — Animated talking head synced to TTS output
