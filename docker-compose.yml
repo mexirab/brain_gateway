@@ -198,7 +198,7 @@ services:
       - gateway-net
 
   wyoming-whisper:
-    image: rhasspy/wyoming-faster-whisper
+    image: rhasspy/wyoming-whisper
     container_name: wyoming-whisper
     restart: unless-stopped
     logging: *default-logging
