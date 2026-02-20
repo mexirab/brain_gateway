@@ -87,7 +87,7 @@ speaker:
 # On-device wake word detection (ESP32-S3 only)
 micro_wake_word:
   models:
-    - model: http://10.0.0.248:8080/hey_jess.tflite
+    - model: http://10.0.0.248:8080/hey_jess.json
   on_wake_word_detected:
     - light.turn_on:
         id: led
