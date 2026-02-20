@@ -14,7 +14,9 @@ RUN pip install --no-cache-dir \
     sentence-transformers \
     pyyaml \
     paramiko \
-    apscheduler
+    apscheduler \
+    google-auth \
+    google-auth-oauthlib
 
 COPY orchestrator.py .
 COPY fast_path.py .
@@ -23,6 +25,8 @@ COPY data_manager.py .
 COPY reminder_manager.py .
 COPY pihole_client.py .
 COPY web_search.py .
+COPY google_auth.py .
+COPY google_calendar.py .
 
 EXPOSE 8888
 

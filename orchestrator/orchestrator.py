@@ -59,6 +59,9 @@ from pihole_client import get_pihole_client
 # Import the web search client for SearXNG
 from web_search import get_search_client
 
+# Import the Google Calendar client
+from google_calendar import get_calendar_client
+
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
@@ -417,6 +420,56 @@ STATIC_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_calendar",
+            "description": "Check Nadim's Google Calendar for upcoming events. Use when he asks about his schedule, what's on his calendar, or what's happening today/tomorrow/this week.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days_ahead": {
+                        "type": "integer",
+                        "description": "Number of days to look ahead (default: 7). Use 1 for today, 2 for tomorrow, 7 for this week."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_calendar_event",
+            "description": "Create a new event on Nadim's Google Calendar. Use when he asks to add, schedule, or create a calendar event.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Event title (e.g., 'Pickleball at Honcho')"
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "Event start time in ISO 8601 format (e.g., '2026-02-21T19:00:00')"
+                    },
+                    "duration_minutes": {
+                        "type": "integer",
+                        "description": "Duration in minutes (default: 60)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional event description"
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Optional event location"
+                    }
+                },
+                "required": ["title", "start_time"]
+            }
+        }
     }
 ]
 
@@ -716,6 +769,18 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("category", "general"),
                 arguments.get("time_range")
             )
+        elif tool_name == "check_calendar":
+            return await tool_check_calendar(
+                arguments.get("days_ahead", 7)
+            )
+        elif tool_name == "create_calendar_event":
+            return await tool_create_calendar_event(
+                arguments.get("title", ""),
+                arguments.get("start_time", ""),
+                arguments.get("duration_minutes", 60),
+                arguments.get("description", ""),
+                arguments.get("location", "")
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -780,6 +845,77 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
 
     logger.info(f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'")
     return "\n".join(lines)
+
+
+async def tool_check_calendar(days_ahead: int = 7) -> str:
+    """Check Google Calendar for upcoming events."""
+    client = get_calendar_client(http_client=_http)
+    if not client.is_configured:
+        return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
+
+    logger.info(f"[CALENDAR] Checking calendar for next {days_ahead} days")
+    response = await client.list_events(days_ahead=days_ahead)
+
+    if not response.success:
+        return f"Calendar error: {response.error}"
+
+    if not response.events:
+        if days_ahead == 1:
+            return "No events on the calendar for today."
+        return f"No events on the calendar for the next {days_ahead} days."
+
+    lines = []
+    if days_ahead == 1:
+        lines.append(f"Today's calendar ({len(response.events)} events):")
+    else:
+        lines.append(f"Calendar for the next {days_ahead} days ({len(response.events)} events):")
+
+    for event in response.events:
+        if event.all_day:
+            date_str = event.start.strftime("%A %b %d")
+            lines.append(f"\n- {event.title} (all day, {date_str})")
+        else:
+            time_str = event.start.strftime("%A %b %d, %I:%M %p")
+            end_str = event.end.strftime("%I:%M %p")
+            lines.append(f"\n- {event.title} — {time_str} to {end_str}")
+        if event.location:
+            lines.append(f"  Location: {event.location}")
+
+    return "\n".join(lines)
+
+
+async def tool_create_calendar_event(
+    title: str, start_time: str, duration_minutes: int = 60,
+    description: str = "", location: str = ""
+) -> str:
+    """Create a new Google Calendar event."""
+    if not title:
+        return "Missing event title."
+    if not start_time:
+        return "Missing event start time. Provide an ISO 8601 datetime like '2026-02-21T19:00:00'."
+
+    client = get_calendar_client(http_client=_http)
+    if not client.is_configured:
+        return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
+
+    logger.info(f"[CALENDAR] Creating event: {title} at {start_time}")
+    response = await client.create_event(
+        title=title,
+        start_time=start_time,
+        duration_minutes=duration_minutes,
+        description=description,
+        location=location,
+    )
+
+    if not response.success:
+        return f"Failed to create event: {response.error}"
+
+    event = response.events[0]
+    time_str = event.start.strftime("%A %b %d, %I:%M %p")
+    result = f"Created event: {event.title} on {time_str}"
+    if location:
+        result += f" at {location}"
+    return result
 
 
 async def check_helios_health() -> bool:
@@ -1454,7 +1590,7 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
 
         # Tools that mutate state — return result directly, don't let Nemotron loop
         TERMINAL_TOOLS = {"start_focus", "stop_focus", "set_reminder", "cancel_reminder",
-                          "home_assistant", "update_data"}
+                          "home_assistant", "update_data", "create_calendar_event"}
 
         tool_results = []
         has_terminal = False
@@ -1560,6 +1696,8 @@ AVAILABLE TOOLS:
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses)
+9. check_calendar - Check Nadim's Google Calendar for upcoming events
+10. create_calendar_event - Create a new event on Nadim's Google Calendar
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -1570,6 +1708,8 @@ WHEN TO USE TOOLS:
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
 - web_search: For real-world questions - events, news, weather, restaurants, sports scores, businesses, or anything NOT in personal notes
+- check_calendar: When user asks about their schedule, calendar, or upcoming events
+- create_calendar_event: When user wants to add, schedule, or create a calendar event
 
 CONVERSATION STYLE:
 - Be warm, friendly, and conversational
@@ -1595,7 +1735,10 @@ EXAMPLES:
 - "Stop the focus timer" → stop_focus
 - "What's happening in Houston this weekend?" → web_search(query="Houston events this weekend")
 - "What's the weather like today?" → web_search(query="weather Houston today")
-- "Any good Thai restaurants nearby?" → web_search(query="best Thai restaurants Houston")"""
+- "Any good Thai restaurants nearby?" → web_search(query="best Thai restaurants Houston")
+- "What's on my calendar this week?" → check_calendar(days_ahead=7)
+- "What's tomorrow look like?" → check_calendar(days_ahead=2)
+- "Add pickleball Thursday at 7pm" → create_calendar_event(title="Pickleball", start_time="2026-02-26T19:00:00")"""
 
 
 def get_nemotron_system_prompt() -> str:
@@ -1611,6 +1754,8 @@ AVAILABLE TOOLS:
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses). NOT for personal notes - use search_memory for that.
+9. check_calendar - Check Nadim's Google Calendar for upcoming events (days_ahead=7)
+10. create_calendar_event - Create a new event on Nadim's Google Calendar (title, start_time, duration_minutes, description, location)
 
 YOUR JOB:
 - Understand the command and use the appropriate tool(s)
@@ -1631,6 +1776,8 @@ EXAMPLES:
 - "what events are happening in Houston this weekend" → web_search(query="Houston events this weekend")
 - "what's the weather today" → web_search(query="weather Houston today")
 - "latest news" → web_search(query="latest news today", category="news", time_range="day")
+- "what's on my calendar this week" → check_calendar(days_ahead=7)
+- "add pickleball Thursday at 7pm" → create_calendar_event(title="Pickleball", start_time="2026-02-26T19:00:00")
 
 Be direct and efficient. Execute the tool and summarize the result."""
 
@@ -1643,6 +1790,104 @@ async def shutdown_event():
         await _http.aclose()
         _http = None
         logger.info("[orchestrator] Closed shared HTTP client")
+
+
+# =============================================================================
+# PROACTIVE CALENDAR NOTIFICATIONS
+# =============================================================================
+
+# Track which events we've already announced (in-memory, resets on restart)
+_notified_events: set = set()
+
+CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "15"))
+MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:30")
+MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
+
+
+async def poll_calendar():
+    """Every N minutes: check for events starting within 2 hours, announce via TTS."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(TIMEZONE)
+
+    client = get_calendar_client()
+    if not client or not client.is_configured:
+        return
+
+    try:
+        response = await client.get_upcoming(hours_ahead=2)
+        if not response.success:
+            logger.warning(f"[CALENDAR_POLL] Failed: {response.error}")
+            return
+
+        now = datetime.now(tz)
+        for event in response.events:
+            if event.id in _notified_events:
+                continue
+            minutes = int((event.start - now).total_seconds() / 60)
+            if minutes < 0:
+                continue  # Already started
+            if event.all_day:
+                continue  # Don't announce all-day events
+
+            if minutes <= 120:
+                if minutes <= 1:
+                    time_str = "now"
+                elif minutes < 60:
+                    time_str = f"in {minutes} minutes"
+                else:
+                    hours = minutes // 60
+                    remaining = minutes % 60
+                    time_str = f"in {hours} hour{'s' if hours > 1 else ''}"
+                    if remaining > 0:
+                        time_str += f" and {remaining} minutes"
+
+                message = f"Heads up Nadim: {event.title} {time_str}"
+                if event.location:
+                    message += f" at {event.location}"
+                await _announce_voice(message)
+                _notified_events.add(event.id)
+                logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}")
+
+    except Exception as e:
+        logger.error(f"[CALENDAR_POLL] Error: {e}")
+
+
+async def morning_briefing():
+    """Morning announcement: today's events summary via TTS."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(TIMEZONE)
+
+    client = get_calendar_client()
+    if not client or not client.is_configured:
+        return
+
+    try:
+        response = await client.list_events(days_ahead=1)
+        events = response.events if response.success else []
+
+        parts = ["Good morning Nadim!"]
+
+        if events:
+            parts.append(f"You have {len(events)} event{'s' if len(events) > 1 else ''} today.")
+            for event in events[:5]:
+                if event.all_day:
+                    parts.append(f"All day: {event.title}")
+                else:
+                    time_str = event.start.strftime("%I:%M %p").lstrip("0")
+                    parts.append(f"At {time_str}: {event.title}")
+        else:
+            parts.append("Your calendar is clear today.")
+
+        # Check pending reminders
+        pending = list_pending_reminders()
+        if pending:
+            parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
+
+        await _announce_voice(" ".join(parts))
+        logger.info(f"[MORNING_BRIEFING] Delivered: {len(events)} events, {len(pending)} reminders")
+
+    except Exception as e:
+        logger.error(f"[MORNING_BRIEFING] Error: {e}")
 
 
 @app.on_event("startup")
@@ -1663,8 +1908,40 @@ async def startup_event():
     _ha_tool_cache_time = 0.0
     print(f"[orchestrator] Loaded {count} HA entities")
 
+    # Initialize Google Calendar client
+    cal_client = get_calendar_client(http_client=_http)
+    if cal_client.is_configured:
+        logger.info("[orchestrator] Google Calendar configured — tools enabled")
+    else:
+        logger.info("[orchestrator] Google Calendar not configured — tools disabled (run google_setup.py)")
+
     scheduler.start()
     logger.info("[SCHEDULER] Started (in-memory, no reminders to reload)")
+
+    # Schedule proactive calendar polling (if calendar is configured)
+    if cal_client.is_configured:
+        scheduler.add_job(
+            poll_calendar,
+            trigger="interval",
+            minutes=CALENDAR_POLL_INTERVAL,
+            id="calendar_poll",
+            name="Calendar event polling",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Calendar polling every {CALENDAR_POLL_INTERVAL} min")
+
+        if MORNING_BRIEFING_ENABLED:
+            hour, minute = map(int, MORNING_BRIEFING_TIME.split(":"))
+            scheduler.add_job(
+                morning_briefing,
+                trigger="cron",
+                hour=hour,
+                minute=minute,
+                id="morning_briefing",
+                name="Morning briefing",
+                replace_existing=True,
+            )
+            logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
 
 
 @app.get("/health")
@@ -1694,7 +1971,12 @@ async def health():
         "helios_idle": idle_info,
         "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "helios_tools": ["ask_orchestrator"],
-        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder", "start_focus", "stop_focus", "focus_status"],
+        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder", "start_focus", "stop_focus", "focus_status", "check_calendar", "create_calendar_event"],
+        "calendar": {
+            "configured": get_calendar_client().is_configured,
+            "poll_interval_min": CALENDAR_POLL_INTERVAL if get_calendar_client().is_configured else None,
+            "morning_briefing": MORNING_BRIEFING_TIME if MORNING_BRIEFING_ENABLED and get_calendar_client().is_configured else None,
+        },
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
         "ha_entities": len(ha_client._entities),

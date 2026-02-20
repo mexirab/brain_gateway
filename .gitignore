@@ -51,6 +51,9 @@ audio/
 *.wav
 *.mp3
 
+# Google OAuth2 credentials
+credentials/
+
 # Model files (too large for git)
 *.gguf
 *.safetensors

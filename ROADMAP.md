@@ -20,12 +20,12 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 
 **Goal:** Jess knows what's on my schedule without me telling her.
 
-### Google Calendar sync
-- Poll Google Calendar API on a schedule (every 5-15 min)
-- Store upcoming events in a local cache
-- New tool: `check_calendar` — "Hey Jess, what's my day look like?"
-- Morning briefing: proactive announcement at configurable time with today's events, weather, reminders
-- Pre-event reminders: "Nadim, your Honcho pickleball game is in 2 hours"
+### Google Calendar sync ✓
+- ✓ Poll Google Calendar API on a schedule (every 15 min, configurable)
+- ✓ New tools: `check_calendar`, `create_calendar_event`
+- ✓ Morning briefing: proactive announcement at 7:30 AM with today's events + pending reminders
+- ✓ Pre-event reminders: "Nadim, your Honcho pickleball game is in 2 hours"
+- TODO: Unify with Outlook/Exchange (ICS subscription or iPhone Shortcuts bridge)
 
 ### Gmail monitoring
 - Watch for calendar invites, flight confirmations, bill due dates

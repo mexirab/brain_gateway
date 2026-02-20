@@ -60,6 +60,8 @@ User → Open WebUI → Orchestrator → Helios (conversation)
 | focus_status | Nemotron | Check remaining focus time |
 | cancel_reminder | Nemotron | Cancel a pending reminder by ID |
 | web_search | Nemotron | Search the web via SearXNG (events, news, weather, etc.) |
+| check_calendar | Nemotron | Check Google Calendar for upcoming events |
+| create_calendar_event | Nemotron | Create a new Google Calendar event |
 
 ## Key Paths
 
@@ -107,6 +109,9 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 | orchestrator/reminder_manager.py | APScheduler reminders |
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client for focus blocking |
 | orchestrator/web_search.py | SearXNG client for web search |
+| orchestrator/google_auth.py | Google OAuth2 token management |
+| orchestrator/google_calendar.py | Google Calendar API v3 client |
+| orchestrator/google_setup.py | One-time OAuth2 consent flow script |
 | docker-compose.yml | Service stack |
 | saturn/docker-compose.pihole.yml | Saturn Pi-hole secondary deployment |
 | saturn/deploy-pihole.sh | Deploy/manage Pi-hole on Saturn via SSH |
@@ -185,12 +190,31 @@ esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jes
 esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
 ```
 
+## Google Calendar Integration
+
+Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar_event`.
+
+**Setup (one-time on dev machine):**
+1. Google Cloud Console → create project → enable Calendar API → create OAuth2 Desktop credentials
+2. Download `credentials.json` → `credentials/google_credentials.json`
+3. `pip install google-auth google-auth-oauthlib && python orchestrator/google_setup.py`
+4. Copy `credentials/` to Jupiter, mount into orchestrator container
+
+**Proactive features (APScheduler):**
+- Calendar polling: every 15 min, announces events starting within 2 hours via TTS
+- Morning briefing: 7:30 AM, announces today's events + pending reminders via TTS
+
+**Config (env vars):**
+- `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 15)
+- `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:30)
+- `MORNING_BRIEFING_ENABLED` — true/false (default: true)
+
 ## Performance Notes
 
 - Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown
 - HA tool definition cached 300s (`_ha_tool_cache`) — invalidated on entity refresh
 - Nemotron agentic loop deduplicated into `_run_nemotron_tool_loop()` — both `call_nemotron_orchestrator()` and `_nemotron_fallback()` call it
-- `TERMINAL_TOOLS` set in the loop short-circuits after state-changing tools (start_focus, stop_focus, home_assistant, set_reminder, cancel_reminder, update_data) — prevents Nemotron from undoing its own actions in subsequent rounds
+- `TERMINAL_TOOLS` set in the loop short-circuits after state-changing tools (start_focus, stop_focus, home_assistant, set_reminder, cancel_reminder, update_data, create_calendar_event) — prevents Nemotron from undoing its own actions in subsequent rounds
 - Streaming chunk size: 80 chars (was 20)
 
 ## Notes
