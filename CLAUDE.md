@@ -24,6 +24,8 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | STT | 8003 | http://10.0.0.173:8003 |
 | Pi-hole (Jupiter) | 53/8053 | http://10.0.0.248:8053/admin |
 | Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
+| Wyoming Whisper (STT) | 10300 | tcp://10.0.0.248:10300 |
+| Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
 | SearXNG | 8090 | http://localhost:8090 |
 | Grafana | 3000 | http://localhost:3000 (admin/braingw) |
 
@@ -110,6 +112,10 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 | saturn/deploy-pihole.sh | Deploy/manage Pi-hole on Saturn via SSH |
 | .env | Environment config (from .env.example) |
 | litellm-config.yaml | LLM proxy config |
+| ha_automations/atom_echo.yaml | ESPHome config for ATOM Echo S3R voice satellite |
+| ha_automations/hey_jess.tflite | On-device "Hey Jess" wake word model (microWakeWord) |
+| tts/wyoming_jessica_bridge.py | Wyoming-to-HTTP bridge for Jessica TTS |
+| tts/Dockerfile.wyoming-jessica | Docker image for Wyoming Jessica bridge |
 
 ## Detailed Docs
 
@@ -152,6 +158,32 @@ Redundant Pi-hole v6 pair synced via Nebula Sync. Jupiter is primary, Saturn is 
 - **focus_blocklist (group 1):** 19 distraction domains (reddit, twitter, youtube, etc.) — toggled by `start_focus`/`stop_focus`
 
 **Focus blocking:** Orchestrator applies focus blocking to both instances concurrently via `PIHOLE_URLS`. If one is down, the other still blocks.
+
+## Voice Assistant (ATOM Echo S3R)
+
+Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
+
+```
+"Hey Jess" (on-device microWakeWord)
+    → ATOM Echo S3R (ESPHome voice_assistant)
+    → Home Assistant voice pipeline
+    → Wyoming Whisper STT (Docker on Jupiter :10300)
+    → HA Conversation Agent → Brain Gateway :8888
+    → Wyoming Jessica TTS bridge (:10301) → Uranus TTS :8002
+    → ATOM Echo S3R speaker
+```
+
+**Key components:**
+- **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
+- **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Jupiter)
+- **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol → HTTP Jessica TTS on Uranus
+- **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions
+
+**Multi-room deployment:**
+```bash
+esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jess"
+esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
+```
 
 ## Performance Notes
 

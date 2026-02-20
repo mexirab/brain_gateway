@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir wyoming httpx
+
+COPY wyoming_jessica_bridge.py .
+
+ENTRYPOINT ["python", "wyoming_jessica_bridge.py"]

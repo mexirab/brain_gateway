@@ -197,6 +197,39 @@ services:
     networks:
       - gateway-net
 
+  wyoming-whisper:
+    image: rhasspy/wyoming-faster-whisper
+    container_name: wyoming-whisper
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "${WYOMING_WHISPER_PORT:-10300}:10300"
+    environment:
+      - TZ=${TZ:-America/Chicago}
+    command: --model base-int8 --language en --uri tcp://0.0.0.0:10300
+    volumes:
+      - wyoming-whisper-data:/data
+    networks:
+      - gateway-net
+
+  wyoming-jessica-tts:
+    build:
+      context: ./tts
+      dockerfile: Dockerfile.wyoming-jessica
+    container_name: wyoming-jessica-tts
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "${WYOMING_JESSICA_PORT:-10301}:10301"
+    environment:
+      - TZ=${TZ:-America/Chicago}
+    command: >-
+      --uri tcp://0.0.0.0:10301
+      --tts-url http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}
+      --voice ${TTS_VOICE:-jessica}
+    networks:
+      - gateway-net
+
   model-server:
     image: nginx:alpine
     container_name: model-server
@@ -219,5 +252,6 @@ volumes:
   brain-audio:
   pihole-etc:
   pihole-dnsmasq:
+  wyoming-whisper-data:
   searxng-data:
 
