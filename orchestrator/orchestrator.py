@@ -1092,10 +1092,13 @@ def resolve_speaker_entity(speaker_name: str) -> Optional[str]:
     """Map friendly speaker names to entity IDs."""
     # Common aliases
     aliases = {
-        "office": "media_player.office_speaker",
-        "office speaker": "media_player.office_speaker",
+        "office": "media_player.dining_room_max",
+        "office speaker": "media_player.dining_room_max",
         "bedroom": "media_player.bedroom_pair",
         "kitchen": "media_player.kitchen_display",
+        "living room": "media_player.living_room_speakers",
+        "laundry": "media_player.laundry_room",
+        "closet": "media_player.laundry_room",
         "all": "media_player.all_speakers",
         "everywhere": "media_player.all_speakers",
     }
