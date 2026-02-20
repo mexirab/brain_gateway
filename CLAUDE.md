@@ -55,6 +55,7 @@ User → Open WebUI → Orchestrator → Helios (conversation)
 | start_focus | Nemotron | Pomodoro timer + Endel audio + Pi-hole blocking |
 | stop_focus | Nemotron | Stop focus timer early |
 | focus_status | Nemotron | Check remaining focus time |
+| cancel_reminder | Nemotron | Cancel a pending reminder by ID |
 | web_search | Nemotron | Search the web via SearXNG (events, news, weather, etc.) |
 
 ## Key Paths
@@ -86,7 +87,7 @@ cd /opt/jupiter/gateway_mvp/rag && python ingest_rag.py \
   --collection nadim_rag
 
 # Monitoring
-cd monitoring && docker-compose --env-file ../.env -p monitoring up -d
+cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 ```
 
 ## Key Files

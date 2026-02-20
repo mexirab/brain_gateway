@@ -15,7 +15,14 @@ API specs and schemas for implementation.
 | `/api/ha/command` | POST | Direct HA service call |
 | `/api/memory/search` | GET | RAG search |
 | `/api/memory/stats` | GET | RAG stats |
-| `/api/audio/reminders/{id}.wav` | GET | Serve reminder audio |
+| `/api/memory/add` | POST | Add document to RAG |
+| `/api/reminder/trigger` | POST | Trigger a reminder |
+| `/api/reminders` | GET | List pending reminders |
+| `/api/reminder/complete/{id}` | POST | Mark reminder completed |
+| `/api/focus` | GET | Current focus session status |
+| `/api/focus/start` | POST | Start focus session via API |
+| `/api/focus/stop` | POST | Stop focus session via API |
+| `/api/audio/{filename}` | GET | Serve audio files (reminders, TTS) |
 
 ### HA Command Format
 
@@ -63,6 +70,26 @@ API specs and schemas for implementation.
 ### set_reminder
 ```json
 {"reminder_text": "call mom", "time": "in 30 minutes", "target": "both"}
+```
+
+### cancel_reminder
+```json
+{"reminder_id": "abc123"}
+```
+
+### start_focus
+```json
+{"duration_minutes": 30, "blocking": true}
+```
+
+### stop_focus
+```json
+{}
+```
+
+### focus_status
+```json
+{}
 ```
 
 ### web_search

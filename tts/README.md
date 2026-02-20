@@ -205,18 +205,16 @@ curl http://10.0.0.173:8003/health
 
 ## Integration with Brain Gateway
 
-### Morning Briefing Endpoint
+### Morning Briefing Script
 
-The orchestrator has a `/api/briefing/morning` endpoint that:
+A shell script (`scripts/morning_briefing.sh`) handles morning briefings:
 1. Searches RAG for morning routine/meds info
 2. Generates personalized briefing via Nemotron
 3. Synthesizes audio with Jessica's voice
 4. Plays on HA speaker via `media_player.play_media`
 
 ```bash
-curl -X POST http://localhost:8888/api/briefing/morning \
-  -H "Content-Type: application/json" \
-  -d '{"generate_tts": true, "play_on": "media_player.kitchen_display"}'
+/opt/jupiter/gateway_mvp/scripts/morning_briefing.sh
 ```
 
 ### Open WebUI Integration

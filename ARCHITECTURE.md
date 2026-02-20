@@ -1,6 +1,6 @@
 # Architecture
 
-Deep dive into Brain Gateway internals. See `claude.md` for quick reference.
+Deep dive into Brain Gateway internals. See `CLAUDE.md` for quick reference.
 
 ## Agentic Loop
 
@@ -22,7 +22,7 @@ User Request → Orchestrator
 
 ## Key Files
 
-### orchestrator/orchestrator.py (~700 lines)
+### orchestrator/orchestrator.py (~2200 lines)
 
 **Configuration:**
 - `NEMOTRON_URL`, `HELIOS_URL` - LLM endpoints
@@ -49,12 +49,14 @@ User Request → Orchestrator
 | `tool_ask_expert()` | → Helios 120B (auto-starts if needed) |
 | `tool_update_data()` | → `data_manager.handle_update_data()` |
 | `tool_set_reminder()` | → APScheduler + TTS + HA notification |
+| `tool_cancel_reminder()` | → Remove pending reminder by ID |
 | `tool_start_focus()` | → Endel audio + Pi-hole blocking + timer |
+| `tool_focus_status()` | → Check remaining focus time |
 | `tool_web_search()` | → `web_search.SearXNGClient.search()` |
 
 **Why `tool_choice: "none"`?** vLLM lacks `--enable-auto-tool-choice`. Nemotron outputs `<tool_call>` XML in content instead.
 
-### orchestrator/ha_integration.py (~720 lines)
+### orchestrator/ha_integration.py (~820 lines)
 
 **Key Method:** `call_service(entity_id, service, data)` - Direct HA API relay.
 
@@ -66,7 +68,7 @@ User Request → Orchestrator
 
 Legacy NLP parsing exists but is unused.
 
-### orchestrator/data_manager.py (~350 lines)
+### orchestrator/data_manager.py (~560 lines)
 
 YAML-based data for meds/projects. Changes auto-regenerate markdown for RAG.
 

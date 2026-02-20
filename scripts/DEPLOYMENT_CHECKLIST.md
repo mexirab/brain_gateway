@@ -91,8 +91,8 @@ On **Jupiter**:
 cd /opt/jupiter/gateway_mvp/monitoring
 
 # Restart monitoring to pick up new config
-docker-compose -p monitoring down
-docker-compose -p monitoring up -d
+docker compose -p monitoring down
+docker compose -p monitoring up -d
 
 # Verify blackbox exporter is running
 docker logs blackbox-exporter

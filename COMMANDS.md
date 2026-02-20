@@ -1,6 +1,6 @@
 # Brain Gateway - Common Commands & Scripts
 
-Quick reference for common operations. See `claude.md` for architecture overview.
+Quick reference for common operations. See `CLAUDE.md` for architecture overview.
 
 ---
 
@@ -9,14 +9,14 @@ Quick reference for common operations. See `claude.md` for architecture overview
 ### Rebuild orchestrator after code changes
 ```bash
 cd /opt/jupiter/gateway_mvp
-docker-compose -p brain down
-docker-compose -p brain build --no-cache orchestrator
-docker-compose -p brain up -d
+docker compose down
+docker compose build --no-cache orchestrator
+docker compose up -d
 ```
 
 ### Quick rebuild (if pip deps unchanged)
 ```bash
-docker-compose -p brain up -d --build orchestrator
+docker compose up -d --build orchestrator
 ```
 
 ### Check orchestrator health
@@ -42,7 +42,7 @@ python ingest_rag.py \
   --collection nadim_rag
 
 # Restart orchestrator to pick up changes
-docker-compose -p brain restart orchestrator
+docker compose restart orchestrator
 ```
 
 ---
@@ -75,8 +75,8 @@ curl http://localhost:8888/api/ha/entities | jq .
 ### Start/stop monitoring stack
 ```bash
 cd /opt/jupiter/gateway_mvp/monitoring
-docker-compose -p monitoring up -d    # Start
-docker-compose -p monitoring down     # Stop
+docker compose -p monitoring up -d    # Start
+docker compose -p monitoring down     # Stop
 ```
 
 ### View logs in Grafana

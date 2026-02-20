@@ -11,7 +11,7 @@ vim .env  # Set HA_TOKEN, LITELLM_MASTER_KEY
 
 # Start services
 cd /opt/jupiter/gateway_mvp
-docker-compose -p brain up -d
+docker compose up -d
 
 # Check health
 curl http://localhost:8888/health
@@ -71,7 +71,7 @@ All settings in `.env` (see `.env.example` for full list):
 
 ```bash
 # Rebuild after code changes
-docker-compose -p brain up -d --build orchestrator
+docker compose up -d --build orchestrator
 
 # View logs
 docker logs brain-orchestrator --tail 50 -f
@@ -83,7 +83,7 @@ cd rag && python ingest_rag.py \
   --collection nadim_rag
 
 # Start monitoring
-cd monitoring && docker-compose --env-file ../.env -p monitoring up -d
+cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 ```
 
 ## Documentation

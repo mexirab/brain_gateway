@@ -6,7 +6,7 @@ Grafana + Prometheus + Loki for Brain Gateway cluster.
 
 ```bash
 cd /opt/jupiter/gateway_mvp/monitoring
-docker-compose --env-file ../.env -p monitoring up -d
+docker compose --env-file ../.env -p monitoring up -d
 ```
 
 **Grafana:** http://localhost:3000 (admin / see GF_SECURITY_ADMIN_PASSWORD in .env)
@@ -50,7 +50,7 @@ sudo systemctl enable --now node_exporter nvidia_gpu_exporter
 Configured in `prometheus/prometheus.yml.template`. After editing, run:
 ```bash
 ../scripts/generate-configs.sh
-docker-compose -p monitoring restart prometheus
+docker compose -p monitoring restart prometheus
 ```
 
 ## Architecture
