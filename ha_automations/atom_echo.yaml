@@ -85,16 +85,12 @@ speaker:
     bits_per_sample: 16bit
 
 # On-device wake word detection (ESP32-S3 only)
+# Note: ATOM Echo S3R has no programmable RGB LED (green LED behind
+# reset button is not GPIO-accessible). Uses audio feedback instead.
 micro_wake_word:
   models:
     - model: http://10.0.0.248:8080/hey_jess.json
   on_wake_word_detected:
-    - light.turn_on:
-        id: led
-        red: 0%
-        green: 100%
-        blue: 100%
-        brightness: 100%
     - voice_assistant.start
 
 voice_assistant:
@@ -104,52 +100,13 @@ voice_assistant:
   noise_suppression_level: 2
   auto_gain: 31dBFS
   volume_multiplier: 2.0
-  on_listening:
-    - light.turn_on:
-        id: led
-        blue: 100%
-        red: 0%
-        green: 0%
-        brightness: 100%
-  on_stt_vad_end:
-    - light.turn_on:
-        id: led
-        blue: 0%
-        red: 0%
-        green: 100%
-        brightness: 100%
-  on_tts_start:
-    - light.turn_on:
-        id: led
-        blue: 50%
-        red: 0%
-        green: 50%
-        brightness: 100%
   on_tts_end:
-    - light.turn_off: led
     - micro_wake_word.start
   on_end:
-    - light.turn_off: led
     - micro_wake_word.start
   on_error:
-    - light.turn_on:
-        id: led
-        red: 100%
-        green: 0%
-        blue: 0%
-        brightness: 100%
     - delay: 2s
-    - light.turn_off: led
     - micro_wake_word.start
-
-light:
-  - platform: esp32_rmt_led_strip
-    id: led
-    name: "Status LED"
-    pin: GPIO35
-    num_leds: 1
-    chipset: WS2812
-    rgb_order: GRB
 
 binary_sensor:
   - platform: gpio
