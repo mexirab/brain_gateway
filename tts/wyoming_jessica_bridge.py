@@ -124,6 +124,7 @@ async def main():
                     url="https://github.com/ConvivialProphet/brain",
                 ),
                 installed=True,
+                version="1.0.0",
                 voices=[
                     TtsVoice(
                         name="jessica",
@@ -134,6 +135,7 @@ async def main():
                             url="https://github.com/ConvivialProphet/brain",
                         ),
                         installed=True,
+                        version="1.0.0",
                     )
                 ],
             )
