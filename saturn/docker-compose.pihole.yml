@@ -1,0 +1,36 @@
+# Pi-hole secondary instance for Saturn (10.0.0.58)
+# Synced from Jupiter primary via Gravity Sync
+#
+# Deploy: scp to Saturn, then docker compose -f docker-compose.pihole.yml up -d
+
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    restart: unless-stopped
+
+    network_mode: "host"
+
+    environment:
+      - TZ=America/Chicago
+      - FTLCONF_webserver_api_password=${PIHOLE_PASSWORD}
+      - FTLCONF_dns_listeningMode=all
+      - FTLCONF_webserver_port=8053
+
+    volumes:
+      - pihole-etc:/etc/pihole
+      - pihole-dnsmasq:/etc/dnsmasq.d
+
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pihole-etc:
+  pihole-dnsmasq:

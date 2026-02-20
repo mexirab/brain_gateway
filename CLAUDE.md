@@ -7,7 +7,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
 | Jupiter | 10.0.0.248 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | RTX 3090 | Nemotron-8B (brain) |
+| Saturn | 10.0.0.58 | RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
 | Uranus | 10.0.0.173 | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
 | Helios | 10.0.0.195 | RTX 5090 | 120B expert (off by default) |
 | HA | 10.0.0.106 | - | Home Assistant |
@@ -22,7 +22,8 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | Helios | 8080 | http://10.0.0.195:8080/v1 |
 | TTS | 8002 | http://10.0.0.173:8002 |
 | STT | 8003 | http://10.0.0.173:8003 |
-| Pi-hole | 53/8053 | http://localhost:8053/admin |
+| Pi-hole (Jupiter) | 53/8053 | http://10.0.0.248:8053/admin |
+| Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
 | SearXNG | 8090 | http://localhost:8090 |
 | Grafana | 3000 | http://localhost:3000 (admin/braingw) |
 
@@ -88,6 +89,11 @@ cd /opt/jupiter/gateway_mvp/rag && python ingest_rag.py \
 
 # Monitoring
 cd monitoring && docker compose --env-file ../.env -p monitoring up -d
+
+# Saturn Pi-hole
+./saturn/deploy-pihole.sh           # deploy and start
+./saturn/deploy-pihole.sh logs      # tail logs
+./saturn/deploy-pihole.sh stop      # stop
 ```
 
 ## Key Files
@@ -97,9 +103,11 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 | orchestrator/orchestrator.py | Main FastAPI, hybrid Helios+Nemotron routing |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/reminder_manager.py | APScheduler reminders |
-| orchestrator/pihole_client.py | Pi-hole v6 API client for focus blocking |
+| orchestrator/pihole_client.py | Pi-hole v6 multi-instance client for focus blocking |
 | orchestrator/web_search.py | SearXNG client for web search |
 | docker-compose.yml | Service stack |
+| saturn/docker-compose.pihole.yml | Saturn Pi-hole secondary deployment |
+| saturn/deploy-pihole.sh | Deploy/manage Pi-hole on Saturn via SSH |
 | .env | Environment config (from .env.example) |
 | litellm-config.yaml | LLM proxy config |
 
@@ -118,7 +126,7 @@ ADHD-friendly focus timer with ambient audio and site blocking:
 |---------|--------|-------|
 | Timer + voice break | Done | `start_focus`, `stop_focus`, `focus_status` tools |
 | Endel audio | Done | Streams HLS from Endel Pacific API to Office speaker |
-| Pi-hole blocking | Done | 19 focus domains + 72 always-blocked adult domains |
+| Pi-hole blocking | Done | 24 focus domains + 72 always-blocked adult domains |
 
 **Usage:**
 - `"start focus on coding for 30 minutes"` - starts timer + audio + blocking
@@ -127,20 +135,23 @@ ADHD-friendly focus timer with ambient audio and site blocking:
 
 ## Pi-hole DNS (whole-house)
 
-Pi-hole v6 runs on Jupiter as the network DNS server.
+Redundant Pi-hole v6 pair synced via Nebula Sync. Jupiter is primary, Saturn is secondary.
 
-| Item | Value |
-|------|-------|
-| Admin UI | http://10.0.0.248:8053/admin |
-| DNS | 10.0.0.248:53 |
-| Upstream | 8.8.8.8, 8.8.4.4 |
-| Docker project | `gateway_mvp` (same as all services) |
+| Item | Jupiter (primary) | Saturn (secondary) |
+|------|-------------------|-------------------|
+| Admin UI | http://10.0.0.248:8053/admin | http://10.0.0.58:8053/admin |
+| DNS | 10.0.0.248:53 | 10.0.0.58:53 |
+| Upstream | 8.8.8.8, 8.8.4.4 | 8.8.8.8, 8.8.4.4 |
+| Docker project | `gateway_mvp` | `pihole` |
+| Compose file | `docker-compose.yml` | `saturn/docker-compose.pihole.yml` |
+
+**Nebula Sync:** Runs as a Docker container on Jupiter (`nebula-sync` service). Uses Pi-hole v6 Teleporter API to sync config from Jupiter → Saturn every 15 min. No SSH needed.
 
 **Blocking groups:**
 - **Default (group 0):** 72 adult domains — always blocked for all clients
 - **focus_blocklist (group 1):** 19 distraction domains (reddit, twitter, youtube, etc.) — toggled by `start_focus`/`stop_focus`
 
-**TODO:** Set router DHCP DNS to 10.0.0.248 + add DHCP reservation for Jupiter
+**Focus blocking:** Orchestrator applies focus blocking to both instances concurrently via `PIHOLE_URLS`. If one is down, the other still blocks.
 
 ## Performance Notes
 
