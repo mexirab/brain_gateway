@@ -16,7 +16,8 @@ RUN pip install --no-cache-dir \
     paramiko \
     apscheduler \
     google-auth \
-    google-auth-oauthlib
+    google-auth-oauthlib \
+    prometheus-client
 
 COPY orchestrator.py .
 COPY fast_path.py .
@@ -28,6 +29,8 @@ COPY web_search.py .
 COPY google_auth.py .
 COPY google_calendar.py .
 COPY mode_router.py .
+COPY metrics.py .
+COPY log_config.py .
 
 EXPOSE 8888
 

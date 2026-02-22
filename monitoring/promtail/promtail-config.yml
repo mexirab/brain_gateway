@@ -39,24 +39,43 @@ scrape_configs:
         target_label: 'service'
 
     pipeline_stages:
-      # Parse JSON logs if present
+      # Step 1: Parse JSON logs from structured logging
       - json:
           expressions:
             level: level
-            message: message
-            timestamp: timestamp
-          source: output
+            message: msg
+            timestamp: ts
+            request_id: request_id
+            component: component
+            tool_name: tool_name
+            mode: mode
+            intensity: intensity
+            model: model
+            entity_id: entity_id
+            error_type: error_type
+            latency_ms: latency_ms
+            result_count: result_count
 
-      # Extract tool calls from orchestrator logs
+      # Step 2: Apply labels from JSON fields
+      - labels:
+          level:
+          component:
+          tool_name:
+          mode:
+          intensity:
+          model:
+          entity_id:
+          error_type:
+
+      # Step 3: Fallback regex for non-JSON logs (other containers)
       - regex:
-          expression: '(?P<tool_type>home_assistant|search_memory|ask_expert|ask_orchestrator|set_reminder|update_data)'
+          expression: '(?P<tool_type>home_assistant|search_memory|ask_expert|ask_orchestrator|set_reminder|cancel_reminder|update_data|web_search|check_calendar|create_calendar_event|start_focus|stop_focus|focus_status)'
           source: output
 
-      # Label tool calls for easy filtering
       - labels:
           tool_type:
 
-      # Extract entity IDs from HA calls
+      # Step 4: Extract entity IDs from HA calls (fallback for non-JSON)
       - regex:
           expression: 'entity_id["\s:]+(?P<entity_id>[a-z_]+\.[a-z0-9_]+)'
           source: output
@@ -64,7 +83,7 @@ scrape_configs:
       - labels:
           entity_id:
 
-      # Mark log level
+      # Step 5: Level detection for non-JSON logs
       - regex:
           expression: '(?i)(?P<level>error|warn|info|debug)'
           source: output

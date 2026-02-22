@@ -22,6 +22,9 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
 scrape_configs:
   # ============================================
   # PROMETHEUS SELF-MONITORING
@@ -37,8 +40,8 @@ scrape_configs:
   # ============================================
   - job_name: 'node-exporter'
     static_configs:
-      # Jupiter (Docker host, no GPU)
-      - targets: ['node-exporter:9100']
+      # Jupiter (Docker host, gateway, no GPU)
+      - targets: ['10.0.0.248:9100']
         labels:
           node: 'jupiter'
           role: 'gateway'
@@ -50,11 +53,11 @@ scrape_configs:
           role: 'expert'
           gpu: 'rtx5090'
 
-      # Uranus (2x RTX 5080 16GB each - available)
+      # Uranus (2x RTX 5080 16GB each - TTS + STT)
       - targets: ['10.0.0.173:9100']
         labels:
           node: 'uranus'
-          role: 'available'
+          role: 'tts-stt'
           gpu: '2x-rtx5080'
 
       # Saturn (Nemotron brain on RTX 3090, RTX 3080 available)
@@ -63,12 +66,6 @@ scrape_configs:
           node: 'saturn'
           role: 'brain'
           gpu: 'rtx3080+rtx3090'
-
-      # Jupiter (No GPU currently)
-      - targets: ['10.0.0.248:9100']
-        labels:
-          node: 'jupiter'
-          role: 'compute'
 
   # ============================================
   # GPU EXPORTERS - NVIDIA Metrics
@@ -146,5 +143,41 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115  # Blackbox exporter address
 
-  # NOTE: Orchestrator, LiteLLM, and Helios LLM don't expose /metrics
-  # Monitor them via logs in Loki instead
+  # ============================================
+  # BRAIN GATEWAY ORCHESTRATOR METRICS
+  # ============================================
+  - job_name: 'orchestrator'
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['10.0.0.248:8888']
+        labels:
+          service: 'orchestrator'
+          node: 'jupiter'
+
+  # ============================================
+  # NETDATA - Detailed System Metrics
+  # ============================================
+  - job_name: 'netdata'
+    metrics_path: /api/v1/allmetrics
+    params:
+      format: [prometheus]
+    honor_labels: true
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['10.0.0.248:19999']
+        labels:
+          node: 'jupiter'
+          source: 'netdata'
+      - targets: ['10.0.0.58:19999']
+        labels:
+          node: 'saturn'
+          source: 'netdata'
+      - targets: ['10.0.0.173:19999']
+        labels:
+          node: 'uranus'
+          source: 'netdata'
+      - targets: ['10.0.0.195:19999']
+        labels:
+          node: 'helios'
+          source: 'netdata'

@@ -24,9 +24,26 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.memory import MemoryJobStore
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure structured JSON logging
+from log_config import configure_logging, set_request_id, get_request_id
+configure_logging()
 logger = logging.getLogger(__name__)
+
+# Prometheus metrics
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from metrics import (
+    REQUEST_COUNT, REQUEST_LATENCY, REQUEST_ERRORS, ACTIVE_REQUESTS,
+    LLM_CALL_COUNT, LLM_CALL_LATENCY, LLM_CALL_ERRORS,
+    TOOL_CALL_COUNT, TOOL_CALL_LATENCY, TOOL_CALL_ERRORS, TOOL_ROUNDS,
+    MODE_ROUTE_COUNT, RAG_QUERY_COUNT, RAG_QUERY_LATENCY, RAG_RESULTS_RETURNED,
+    FOCUS_SESSIONS_STARTED, FOCUS_SESSIONS_COMPLETED, FOCUS_SESSIONS_STOPPED_EARLY,
+    FOCUS_SESSION_DURATION, FOCUS_ACTIVE,
+    HELIOS_ONLINE, HELIOS_START_COUNT, HELIOS_STOP_COUNT, HELIOS_START_LATENCY, HELIOS_IDLE_SECONDS,
+    REMINDERS_SET, REMINDERS_DELIVERED, REMINDERS_PENDING,
+    CALENDAR_API_CALLS, CALENDAR_API_LATENCY, CALENDAR_API_ERRORS, CALENDAR_POLL_EVENTS_FOUND,
+    PIHOLE_BLOCKING_TOGGLES, WEB_SEARCH_COUNT, WEB_SEARCH_LATENCY, WEB_SEARCH_RESULTS,
+    FAST_PATH_COUNT, FAST_PATH_BYPASS, BUILD_INFO,
+)
 
 import chromadb
 from chromadb.config import Settings
@@ -536,7 +553,7 @@ Use it ONLY when you need to:
 - Control smart home devices (lights, fans, switches, thermostats)
 - Search Nadim's personal notes/memory for specific info
 - Set reminders for specific times
-- Update personal data (medications, projects)
+- Update personal data (add/remove/update medications or projects)
 - Look up real-world information (events, news, weather, restaurants, sports, businesses)
 
 IMPORTANT RULES:
@@ -545,6 +562,7 @@ IMPORTANT RULES:
 - For device control, reminders, or personal data updates - use ask_orchestrator
 - For real-world questions (events, news, weather, businesses, sports) - use ask_orchestrator to search the web
 - After getting a tool result, respond naturally to the user (don't just repeat the raw result)
+- NEVER mention internal tool names (ask_orchestrator, update_data, etc.) to the user. Just do the action or say you'll handle it.
 
 RESPONSE STYLE:
 - Brief and natural (2-3 sentences typical)
@@ -608,6 +626,8 @@ def last_user_text(messages: List[Dict[str, Any]]) -> str:
 def rag_context(query: str) -> str:
     """Query ChromaDB for relevant personal context."""
     original_query = query
+    RAG_QUERY_COUNT.inc()
+    _rag_t0 = time.time()
 
     # Normalize query: strip whitespace, leading/trailing punctuation, lowercase
     query = query.strip()
@@ -618,7 +638,8 @@ def rag_context(query: str) -> str:
         logger.warning(f"[RAG] Empty query after normalization (original: '{original_query}')")
         return ""
 
-    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}')")
+    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}')",
+                extra={"component": "rag"})
 
     try:
         # Use the same embedding model as ingest_rag.py
@@ -630,7 +651,8 @@ def rag_context(query: str) -> str:
             include=["documents", "metadatas", "distances"],
         )
     except Exception as e:
-        logger.error(f"[RAG] Query error: {e}")
+        logger.error(f"[RAG] Query error: {e}", extra={"component": "rag", "error_type": type(e).__name__})
+        RAG_QUERY_LATENCY.observe(time.time() - _rag_t0)
         return ""
 
     docs = res.get("documents", [[]])[0]
@@ -675,7 +697,11 @@ def rag_context(query: str) -> str:
             entry += f" [relevance: {cos:.2f}]"
         chunks.append(entry)
 
-    logger.info(f"[RAG] Returning {len(chunks)} chunks (filtered by MIN_COS={MIN_COS})")
+    RAG_QUERY_LATENCY.observe(time.time() - _rag_t0)
+    RAG_RESULTS_RETURNED.observe(len(chunks))
+    logger.info(f"[RAG] Returning {len(chunks)} chunks (filtered by MIN_COS={MIN_COS})",
+                extra={"component": "rag", "result_count": len(chunks),
+                       "latency_ms": int((time.time() - _rag_t0) * 1000)})
 
     return "\n".join(chunks) if chunks else ""
 
@@ -703,9 +729,38 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
 
-    r = await _http.post(f"{url}/chat/completions", json=payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    _model_label = "helios" if "195" in url else "nemotron"
+    _llm_t0 = time.time()
+    try:
+        r = await _http.post(f"{url}/chat/completions", json=payload, timeout=timeout)
+        r.raise_for_status()
+        _elapsed = time.time() - _llm_t0
+        LLM_CALL_COUNT.labels(model=_model_label, purpose="call").inc()
+        LLM_CALL_LATENCY.labels(model=_model_label, purpose="call").observe(_elapsed)
+        logger.info(f"[LLM] {_model_label} responded in {_elapsed:.1f}s",
+                    extra={"component": "llm", "model": _model_label,
+                           "latency_ms": int(_elapsed * 1000)})
+        data = r.json()
+        # Clean up Qwen3 thinking from response
+        for choice in data.get("choices", []):
+            msg = choice.get("message", {})
+            # Remove reasoning_content (llama-server thinking field)
+            msg.pop("reasoning_content", None)
+            # Fallback: strip <think>...</think> tags if present in content
+            content = msg.get("content")
+            if content and "<think>" in content:
+                content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
+                msg["content"] = content.strip()
+        return data
+    except httpx.TimeoutException:
+        LLM_CALL_ERRORS.labels(model=_model_label, error_type="timeout").inc()
+        raise
+    except httpx.HTTPStatusError:
+        LLM_CALL_ERRORS.labels(model=_model_label, error_type="http_error").inc()
+        raise
+    except Exception:
+        LLM_CALL_ERRORS.labels(model=_model_label, error_type="connection_error").inc()
+        raise
 
 
 async def stream_final_response(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180):
@@ -741,7 +796,10 @@ async def stream_final_response(url: str, model: str, messages: List[Dict], syst
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     """Execute a tool and return the result as a string."""
-    logger.info(f"[TOOL] Executing: {tool_name} with args: {arguments}")
+    TOOL_CALL_COUNT.labels(tool=tool_name).inc()
+    _tool_t0 = time.time()
+    logger.info(f"[TOOL] Executing: {tool_name} with args: {arguments}",
+                extra={"component": "tool", "tool_name": tool_name})
 
     try:
         if tool_name == "home_assistant":
@@ -803,8 +861,12 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
-        logger.error(f"[TOOL] Error executing {tool_name}: {e}")
+        TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
+        logger.error(f"[TOOL] Error executing {tool_name}: {e}",
+                     extra={"component": "tool", "tool_name": tool_name, "error_type": type(e).__name__})
         return f"Error executing {tool_name}: {str(e)}"
+    finally:
+        TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
 
 
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
@@ -812,7 +874,8 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
     if not entity_id or not service:
         return "Missing entity_id or service"
 
-    logger.info(f"[HA] Calling {service} on {entity_id} with data: {data}")
+    logger.info(f"[HA] Calling {service} on {entity_id} with data: {data}",
+                extra={"component": "ha", "entity_id": entity_id})
     result = await ha_client.call_service(entity_id, service, data or {})
 
     if result.success:
@@ -842,9 +905,13 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
     if not query:
         return "No search query provided"
 
-    logger.info(f"[WEB_SEARCH] Searching: '{query}' (category={category}, time_range={time_range})")
+    WEB_SEARCH_COUNT.inc()
+    _ws_t0 = time.time()
+    logger.info(f"[WEB_SEARCH] Searching: '{query}' (category={category}, time_range={time_range})",
+                extra={"component": "web_search"})
     client = get_search_client(http_client=_http)
     response = await client.search(query=query, category=category, time_range=time_range)
+    WEB_SEARCH_LATENCY.observe(time.time() - _ws_t0)
 
     if not response.success:
         logger.error(f"[WEB_SEARCH] Failed for '{query}': {response.error}")
@@ -862,7 +929,9 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
             lines.append(f"   {r.content}")
         lines.append(f"   URL: {r.url}")
 
-    logger.info(f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'")
+    WEB_SEARCH_RESULTS.observe(len(response.results))
+    logger.info(f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'",
+                extra={"component": "web_search", "result_count": len(response.results)})
     return "\n".join(lines)
 
 
@@ -872,10 +941,15 @@ async def tool_check_calendar(days_ahead: int = 7) -> str:
     if not client.is_configured:
         return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
 
-    logger.info(f"[CALENDAR] Checking calendar for next {days_ahead} days")
+    CALENDAR_API_CALLS.labels(operation="list_events").inc()
+    _cal_t0 = time.time()
+    logger.info(f"[CALENDAR] Checking calendar for next {days_ahead} days",
+                extra={"component": "calendar"})
     response = await client.list_events(days_ahead=days_ahead)
+    CALENDAR_API_LATENCY.labels(operation="list_events").observe(time.time() - _cal_t0)
 
     if not response.success:
+        CALENDAR_API_ERRORS.labels(operation="list_events").inc()
         return f"Calendar error: {response.error}"
 
     if not response.events:
@@ -917,7 +991,10 @@ async def tool_create_calendar_event(
     if not client.is_configured:
         return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
 
-    logger.info(f"[CALENDAR] Creating event: {title} at {start_time}")
+    CALENDAR_API_CALLS.labels(operation="create_event").inc()
+    _cal_t0 = time.time()
+    logger.info(f"[CALENDAR] Creating event: {title} at {start_time}",
+                extra={"component": "calendar"})
     response = await client.create_event(
         title=title,
         start_time=start_time,
@@ -926,7 +1003,9 @@ async def tool_create_calendar_event(
         location=location,
     )
 
+    CALENDAR_API_LATENCY.labels(operation="create_event").observe(time.time() - _cal_t0)
     if not response.success:
+        CALENDAR_API_ERRORS.labels(operation="create_event").inc()
         return f"Failed to create event: {response.error}"
 
     event = response.events[0]
@@ -951,7 +1030,10 @@ async def start_helios() -> bool:
     import asyncio
     import paramiko
 
-    logger.info("[EXPERT] Helios is offline, attempting to start...")
+    HELIOS_START_COUNT.inc()
+    _helios_t0 = time.time()
+    logger.info("[EXPERT] Helios is offline, attempting to start...",
+                extra={"component": "helios"})
 
     # Get SSH config from environment
     helios_ip = os.environ.get("NODE_HELIOS_IP", "10.0.0.195")
@@ -986,7 +1068,9 @@ async def start_helios() -> bool:
     for i in range(36):  # 36 * 5 seconds = 3 minutes
         await asyncio.sleep(5)
         if await check_helios_health():
-            logger.info(f"[EXPERT] Helios ready after ~{(i+1)*5} seconds")
+            HELIOS_START_LATENCY.observe(time.time() - _helios_t0)
+            logger.info(f"[EXPERT] Helios ready after ~{(i+1)*5} seconds",
+                        extra={"component": "helios", "latency_ms": int((time.time() - _helios_t0) * 1000)})
             return True
         logger.debug(f"[EXPERT] Still waiting... ({(i+1)*5}s)")
 
@@ -998,7 +1082,8 @@ async def stop_helios() -> bool:
     """Stop Helios via SSH to save power."""
     import paramiko
 
-    logger.info("[EXPERT] Stopping Helios to save power...")
+    HELIOS_STOP_COUNT.inc()
+    logger.info("[EXPERT] Stopping Helios to save power...", extra={"component": "helios"})
 
     # Get SSH config from environment
     helios_ip = os.environ.get("NODE_HELIOS_IP", "10.0.0.195")
@@ -1163,8 +1248,9 @@ async def deliver_reminder_job(reminder_id: str):
     if target in ["phone", "both"]:
         await _send_notification(text)
 
+    REMINDERS_DELIVERED.inc()
     mark_reminder_completed(reminder_id)
-    logger.info(f"[REMINDER] Completed: {reminder_id}")
+    logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
 
 
 async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:
@@ -1213,7 +1299,9 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
         id=f"reminder_{reminder_id}",
         replace_existing=True
     )
-    logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}")
+    REMINDERS_SET.labels(target=target).inc()
+    logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}",
+                extra={"component": "reminder"})
 
     time_friendly = format_time_friendly(trigger_time)
     target_desc = {
@@ -1371,6 +1459,7 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         result = await pihole.enable_focus_blocking()
         if result.success:
             blocking_enabled = True
+            PIHOLE_BLOCKING_TOGGLES.labels(action="enable").inc()
             logger.info("[FOCUS] Enabled Pi-hole distraction blocking")
         else:
             logger.warning(f"[FOCUS] Could not enable blocking: {result.message}")
@@ -1400,7 +1489,10 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         "block_sites": blocking_enabled
     }
 
-    logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}")
+    FOCUS_SESSIONS_STARTED.labels(soundscape=soundscape).inc()
+    FOCUS_ACTIVE.set(1)
+    logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}",
+                extra={"component": "focus"})
 
     # Build response message
     parts = []
@@ -1440,6 +1532,7 @@ async def tool_stop_focus() -> str:
         pihole = get_pihole_client()
         result = await pihole.disable_focus_blocking()
         if result.success:
+            PIHOLE_BLOCKING_TOGGLES.labels(action="disable").inc()
             logger.info("[FOCUS] Disabled Pi-hole distraction blocking")
         else:
             logger.warning(f"[FOCUS] Could not disable blocking: {result.message}")
@@ -1461,7 +1554,11 @@ async def tool_stop_focus() -> str:
         "block_sites": False
     }
 
-    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'")
+    FOCUS_SESSIONS_STOPPED_EARLY.inc()
+    FOCUS_SESSION_DURATION.observe(elapsed)
+    FOCUS_ACTIVE.set(0)
+    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'",
+                extra={"component": "focus"})
     return f"Focus timer stopped. You worked on '{task}' for {elapsed:.0f} minutes. Nice work!"
 
 
@@ -1495,6 +1592,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         pihole = get_pihole_client()
         result = await pihole.disable_focus_blocking()
         if result.success:
+            PIHOLE_BLOCKING_TOGGLES.labels(action="disable").inc()
             logger.info("[FOCUS] Disabled Pi-hole blocking for break")
         else:
             logger.warning(f"[FOCUS] Could not disable blocking for break: {result.message}")
@@ -1524,7 +1622,12 @@ async def deliver_focus_break(task: str, break_duration: int):
         "block_sites": False
     }
 
-    logger.info(f"[FOCUS] Break announced for '{task}'")
+    FOCUS_SESSIONS_COMPLETED.inc()
+    FOCUS_ACTIVE.set(0)
+    # Record the planned duration as actual (session completed normally)
+    if current_focus_session.get("duration"):
+        FOCUS_SESSION_DURATION.observe(current_focus_session["duration"])
+    logger.info(f"[FOCUS] Break announced for '{task}'", extra={"component": "focus"})
 
 
 async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, label: str = "NEMOTRON") -> str:
@@ -1563,6 +1666,7 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
 
         # If no tool calls, we're done
         if not tool_calls:
+            TOOL_ROUNDS.observe(round_num + 1)
             result = clean_response(content)
             logger.info(f"[{label}] Final result: {result[:100]}...")
             return result
@@ -1635,6 +1739,7 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
 
         # For state-changing tools, return immediately — don't risk Nemotron undoing them
         if has_terminal:
+            TOOL_ROUNDS.observe(round_num + 1)
             logger.info(f"[{label}] Terminal tool executed, returning result directly")
             return results_text
 
@@ -1645,6 +1750,7 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
         })
 
     # Hit max rounds
+    TOOL_ROUNDS.observe(MAX_TOOL_ROUNDS)
     logger.warning(f"[{label}] Hit max tool rounds")
     return "I tried to complete that but ran into some complexity. Please try a simpler request."
 
@@ -1786,6 +1892,8 @@ YOUR JOB:
 - Return a brief, factual summary of what was done
 - If the command is ambiguous, make a reasonable interpretation
 - IMPORTANT: After a tool succeeds, do NOT call additional tools to verify. Trust the result and respond.
+- NEVER use update_data, set_reminder, create_calendar_event, or home_assistant unless the user EXPLICITLY asked to create, add, update, remove, or change something. Informational queries (details, prices, directions, "tell me about") should NEVER trigger state-changing tools.
+- When the command is purely informational (e.g. "search for X", "look up Y", "details about Z"), use ONLY read-only tools (web_search, search_memory, check_calendar, focus_status). Do NOT add projects, set reminders, or create events as a side effect.
 
 EXAMPLES:
 - "turn off bedroom lights" → home_assistant(entity_id="light.bedroom...", service="turn_off")
@@ -1870,7 +1978,9 @@ async def poll_calendar():
                     message += f" at {event.location}"
                 await _announce_voice(message)
                 _notified_events.add(event.id)
-                logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}")
+                CALENDAR_POLL_EVENTS_FOUND.inc()
+                logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}",
+                            extra={"component": "calendar"})
 
     except Exception as e:
         logger.error(f"[CALENDAR_POLL] Error: {e}")
@@ -1939,6 +2049,7 @@ async def startup_event():
     else:
         logger.info("[orchestrator] Google Calendar not configured — tools disabled (run google_setup.py)")
 
+    BUILD_INFO.info({"version": "6.2", "architecture": "hybrid"})
     scheduler.start()
     logger.info("[SCHEDULER] Started (in-memory, no reminders to reload)")
 
@@ -2026,6 +2137,19 @@ async def health():
     }
 
 
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Prometheus metrics endpoint."""
+    from starlette.responses import Response
+    # Update gauges that need polling
+    HELIOS_ONLINE.set(1 if await check_helios_health() else 0)
+    FOCUS_ACTIVE.set(1 if current_focus_session["active"] else 0)
+    REMINDERS_PENDING.set(len(list_pending_reminders()))
+    if _last_helios_request > 0:
+        HELIOS_IDLE_SECONDS.set(time.time() - _last_helios_request)
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/v1/models")
 def list_models():
     """List available models in OpenAI-compatible format."""
@@ -2104,6 +2228,11 @@ async def chat_completions(req: Request):
     - Tool execution: HA, RAG, reminders, update_data
     - Called via ask_orchestrator when Helios needs actions performed
     """
+    ACTIVE_REQUESTS.inc()
+    _req_t0 = time.time()
+    _req_mode = "hybrid"  # will be updated below
+    rid = set_request_id()
+
     body = await req.json()
     messages = body.get("messages", [])
     external_tools = body.get("tools")  # HA may send its own tools
@@ -2113,6 +2242,7 @@ async def chat_completions(req: Request):
     # Track what we did for debugging
     routing_info = {
         "timestamp": datetime.now().isoformat(),
+        "request_id": rid,
         "user_query_length": len(user_text),
         "architecture": "hybrid_v6",
         "tool_calls": [],
@@ -2124,12 +2254,15 @@ async def chat_completions(req: Request):
     routing_info["intent_mode"] = intent.mode
     routing_info["intent_intensity"] = intent.intensity
     routing_info["intent_tags"] = intent.tags
-    logger.info(f"[MODE_ROUTER] mode={intent.mode} intensity={intent.intensity} tags={intent.tags}")
+    MODE_ROUTE_COUNT.labels(mode=intent.mode, intensity=intent.intensity).inc()
+    logger.info(f"[MODE_ROUTER] mode={intent.mode} intensity={intent.intensity} tags={intent.tags}",
+                extra={"component": "mode_router", "mode": intent.mode, "intensity": intent.intensity})
 
     # If external tools are provided (e.g., from HA voice pipeline),
     # pass through to Nemotron for native handling
     if external_tools:
         logger.info(f"[HYBRID] External tools provided ({len(external_tools)}), passing to Nemotron")
+        _req_mode = "passthrough"
         routing_info["mode"] = "passthrough"
         try:
             llm_resp = await call_model(
@@ -2138,9 +2271,14 @@ async def chat_completions(req: Request):
                 tools=external_tools,
                 timeout=60
             )
+            REQUEST_COUNT.labels(mode="passthrough").inc()
+            REQUEST_LATENCY.labels(mode="passthrough").observe(time.time() - _req_t0)
+            ACTIVE_REQUESTS.dec()
             llm_resp["_routing"] = routing_info
             return JSONResponse(llm_resp)
         except Exception as e:
+            REQUEST_ERRORS.labels(mode="passthrough", error_type=type(e).__name__).inc()
+            ACTIVE_REQUESTS.dec()
             logger.error(f"[HYBRID] Passthrough failed: {e}")
             return JSONResponse({"error": str(e)}, status_code=503)
 
@@ -2152,10 +2290,16 @@ async def chat_completions(req: Request):
     try:
         fast_result = await try_fast_path(user_text, ha_client)
         if fast_result.handled:
+            _req_mode = "fast_path"
             routing_info["mode"] = "fast_path"
             routing_info["fast_path_action"] = fast_result.action
             routing_info["fast_path_entity"] = fast_result.entity_name
-            logger.info(f"[FAST-PATH] Handled: {fast_result.action} -> {fast_result.entity_name}")
+            FAST_PATH_COUNT.labels(action=fast_result.action or "unknown").inc()
+            REQUEST_COUNT.labels(mode="fast_path").inc()
+            REQUEST_LATENCY.labels(mode="fast_path").observe(time.time() - _req_t0)
+            ACTIVE_REQUESTS.dec()
+            logger.info(f"[FAST-PATH] Handled: {fast_result.action} -> {fast_result.entity_name}",
+                        extra={"component": "fast_path"})
             if stream:
                 return _stream_text_response(fast_result.response_text, "fast-path")
             return JSONResponse({
@@ -2171,6 +2315,7 @@ async def chat_completions(req: Request):
                 "_routing": routing_info,
             })
     except Exception as e:
+        FAST_PATH_BYPASS.inc()
         logger.warning(f"[FAST-PATH] Error, falling through to Helios: {e}")
 
     # 1. Pre-fetch relevant personal context from RAG (skip for greetings)
@@ -2190,10 +2335,15 @@ async def chat_completions(req: Request):
         started = await start_helios()
         if not started:
             # Fallback to Nemotron-only mode
+            _req_mode = "fallback"
             logger.warning("[HYBRID] Helios unavailable, falling back to Nemotron")
             routing_info["fallback"] = "nemotron"
-            return await _nemotron_fallback(messages, stream, routing_info,
-                                            mode=intent.mode, intensity=intent.intensity)
+            result = await _nemotron_fallback(messages, stream, routing_info,
+                                              mode=intent.mode, intensity=intent.intensity)
+            REQUEST_COUNT.labels(mode="fallback").inc()
+            REQUEST_LATENCY.labels(mode="fallback").observe(time.time() - _req_t0)
+            ACTIVE_REQUESTS.dec()
+            return result
 
     # 4. Call Helios
     global _last_helios_request
@@ -2207,12 +2357,18 @@ async def chat_completions(req: Request):
         )
         _last_helios_request = time.time()  # Track for auto-shutdown
     except Exception as e:
-        logger.error(f"[HYBRID] Helios call failed: {e}")
+        logger.error(f"[HYBRID] Helios call failed: {e}",
+                     extra={"component": "hybrid", "error_type": type(e).__name__})
         # Fallback to Nemotron
+        _req_mode = "fallback"
         routing_info["fallback"] = "nemotron"
         routing_info["helios_error"] = str(e)
-        return await _nemotron_fallback(messages, stream, routing_info,
-                                        mode=intent.mode, intensity=intent.intensity)
+        result = await _nemotron_fallback(messages, stream, routing_info,
+                                          mode=intent.mode, intensity=intent.intensity)
+        REQUEST_COUNT.labels(mode="fallback").inc()
+        REQUEST_LATENCY.labels(mode="fallback").observe(time.time() - _req_t0)
+        ACTIVE_REQUESTS.dec()
+        return result
 
     # 5. Check for tool calls (ask_orchestrator)
     choice = helios_resp.get("choices", [{}])[0]
@@ -2226,8 +2382,12 @@ async def chat_completions(req: Request):
 
     # 6. If no tool calls, return Helios response directly
     if not tool_calls:
-        logger.info("[HYBRID] Helios responded directly (no orchestrator needed)")
+        logger.info("[HYBRID] Helios responded directly (no orchestrator needed)",
+                    extra={"component": "hybrid"})
         routing_info["helios_direct"] = True
+        REQUEST_COUNT.labels(mode="hybrid").inc()
+        REQUEST_LATENCY.labels(mode="hybrid").observe(time.time() - _req_t0)
+        ACTIVE_REQUESTS.dec()
 
         if stream:
             return _stream_text_response(clean_response(content), HELIOS_MODEL)
@@ -2285,7 +2445,11 @@ async def chat_completions(req: Request):
         )
         _last_helios_request = time.time()  # Track for auto-shutdown
     except Exception as e:
-        logger.error(f"[HYBRID] Helios final response failed: {e}")
+        logger.error(f"[HYBRID] Helios final response failed: {e}",
+                     extra={"component": "hybrid", "error_type": type(e).__name__})
+        REQUEST_COUNT.labels(mode="hybrid").inc()
+        REQUEST_LATENCY.labels(mode="hybrid").observe(time.time() - _req_t0)
+        ACTIVE_REQUESTS.dec()
         # Return the orchestrator result directly
         if stream:
             return _stream_text_response(orchestrator_result, NEMOTRON_MODEL)
@@ -2296,6 +2460,10 @@ async def chat_completions(req: Request):
 
     final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
     final_content = clean_response(final_content)
+
+    REQUEST_COUNT.labels(mode="hybrid").inc()
+    REQUEST_LATENCY.labels(mode="hybrid").observe(time.time() - _req_t0)
+    ACTIVE_REQUESTS.dec()
 
     if stream:
         return _stream_text_response(final_content, HELIOS_MODEL)

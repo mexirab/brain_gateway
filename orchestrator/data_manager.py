@@ -309,6 +309,31 @@ def add_project(name: str, goal: str = "", priority: str = "medium",
     return f"Failed to save project '{name}'."
 
 
+def remove_project(name: str) -> str:
+    """Remove a project entirely from any category (active, on_hold, someday_maybe, parking_lot)."""
+    data = get_projects()
+    found = False
+
+    for category in ["active", "on_hold", "someday_maybe", "parking_lot", "completed"]:
+        items = data.get(category, [])
+        original_len = len(items)
+        data[category] = [
+            p for p in items
+            if not (
+                (isinstance(p, dict) and p.get("name", "").lower() == name.lower())
+                or (isinstance(p, str) and p.lower() == name.lower())
+            )
+        ]
+        if len(data[category]) < original_len:
+            found = True
+
+    if found:
+        if save_projects(data):
+            return f"Removed project '{name}'."
+        return f"Found '{name}' but failed to save changes."
+    return f"Project '{name}' not found."
+
+
 def update_project_status(name: str, status: str) -> str:
     """Update a project's status (not_started, in_progress, blocked, done)."""
     data = get_projects()
@@ -525,6 +550,7 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
             purpose=kwargs.get("purpose"),
             notes=kwargs.get("notes"),
         ),
+        "remove_project": lambda: remove_project(name),
         "add_project": lambda: add_project(
             name=name,
             goal=kwargs.get("goal", ""),
