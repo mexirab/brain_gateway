@@ -1,6 +1,6 @@
 # Brain Gateway
 
-Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-120B handles conversation.
+Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (Qwen3-32B) handles conversation.
 
 ## Cluster
 
@@ -9,7 +9,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
 | Saturn | 10.0.0.58 | - | RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
-| Helios | 10.0.0.195 | - | RTX 5090 | 120B conversational (auto-starts on demand) |
+| Helios | 10.0.0.195 | - | RTX 5090 | Qwen3-32B conversational (auto-starts on demand) |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 
 ## Services
@@ -29,7 +29,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios-1
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
 | Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
-| Grafana | 3000 | http://localhost:3000 (admin/braingw) |
+| Grafana | 3000 | http://localhost:3000 (admin/testpassword123) |
 
 ## Architecture (v6 Hybrid)
 
