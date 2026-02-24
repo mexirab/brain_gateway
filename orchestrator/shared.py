@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Model endpoints
 # ---------------------------------------------------------------------------
-NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.173:8001/v1")
+NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.58:8001/v1")
 NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-8B")
 HELIOS_URL = os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1")
-HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "unsloth_gpt-oss-120b-GGUF_Q4_K_S_gpt-oss-120b-Q4_K_S-00001-of-00002.gguf")
+HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M.gguf")
 
 # ---------------------------------------------------------------------------
 # Home Assistant
