@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Brain Gateway",
+        "description": "Connect to your Brain Gateway orchestrator for hybrid LLM voice control.",
+        "data": {
+          "url": "Orchestrator URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Brain Gateway. Check the URL and ensure the orchestrator is running."
+    }
+  }
+}

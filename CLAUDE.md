@@ -11,6 +11,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
 | Helios | 10.0.0.195 | - | RTX 5090 | Qwen3-32B conversational (auto-starts on demand) |
 | HA | 10.0.0.106 | - | - | Home Assistant |
+| Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
 ## Services
 
@@ -105,6 +106,12 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 
 # Remote deploy from Mac (via Tailscale)
 ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker compose up -d --build orchestrator"
+
+# Callisto kiosk (monitoring display)
+./pi-kiosk/deploy.sh                # deploy and start
+./pi-kiosk/deploy.sh restart        # restart kiosk display
+./pi-kiosk/deploy.sh status         # check status
+./pi-kiosk/deploy.sh stop           # stop kiosk
 ```
 
 ## Key Files
@@ -123,6 +130,8 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 | docker-compose.yml | Service stack |
 | saturn/docker-compose.pihole.yml | Saturn Pi-hole secondary deployment |
 | saturn/deploy-pihole.sh | Deploy/manage Pi-hole on Saturn via SSH |
+| pi-kiosk/deploy.sh | Deploy/manage Grafana kiosk on Callisto (Pi) via SSH |
+| pi-kiosk/kiosk.sh | Chromium kiosk launcher (runs on Pi) |
 | .env | Environment config (from .env.example) |
 | litellm-config.yaml | LLM proxy config |
 | ha_automations/atom_echo.yaml | ESPHome config for ATOM Echo S3R voice satellite |

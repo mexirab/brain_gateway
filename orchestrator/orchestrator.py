@@ -2235,6 +2235,10 @@ async def chat_completions(req: Request):
 
     body = await req.json()
     messages = body.get("messages", [])
+    # Strip incoming system messages — orchestrator builds its own mode-aware
+    # system prompt via get_helios_system_prompt(). HA's OpenAI Conversation
+    # integration sends its own system prompt which would conflict.
+    messages = [m for m in messages if m.get("role") != "system"]
     external_tools = body.get("tools")  # HA may send its own tools
     stream = body.get("stream", False)
     user_text = last_user_text(messages)

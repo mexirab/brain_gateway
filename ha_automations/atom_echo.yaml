@@ -24,10 +24,15 @@ esphome:
       - micro_wake_word.start
 
 esp32:
-  board: esp32-s3-devkitc-1
+  board: esp32s3box
   framework:
     type: esp-idf
     version: recommended
+    sdkconfig_options:
+      CONFIG_SPIRAM: "y"
+      CONFIG_SPIRAM_MODE_OCT: "y"
+      CONFIG_SPIRAM_SPEED_80M: "y"
+      CONFIG_SPIRAM_BOOT_INIT: "y"
   flash_size: 8MB
 
 psram:
@@ -87,10 +92,13 @@ speaker:
 # On-device wake word detection (ESP32-S3 only)
 # Note: ATOM Echo S3R has no programmable RGB LED (green LED behind
 # reset button is not GPIO-accessible). Uses audio feedback instead.
+# On-device wake word — stop wake word before starting pipeline
+# to free I2S bus for speaker playback
 micro_wake_word:
   models:
-    - model: http://10.0.0.248:8080/hey_jess.json
+    - model: okay_nabu
   on_wake_word_detected:
+    - micro_wake_word.stop
     - voice_assistant.start
 
 voice_assistant:
@@ -101,6 +109,7 @@ voice_assistant:
   auto_gain: 31dBFS
   volume_multiplier: 2.0
   on_tts_end:
+    - voice_assistant.stop
     - micro_wake_word.start
   on_end:
     - micro_wake_word.start
@@ -116,4 +125,5 @@ binary_sensor:
       number: GPIO41
       inverted: true
     on_press:
+      - micro_wake_word.stop
       - voice_assistant.start

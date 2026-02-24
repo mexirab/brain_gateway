@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(printf:*)",
+      "Bash(sudo tailscale serve:*)",
+      "Bash(sudo tailscale status:*)",
+      "Bash(ss:*)",
+      "Read(//home/labadmin/**)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ],
+    "flags": [
+      "dangerously-skip-permissions"
+    ],
+    "env": [
+      "TAILSCALE_AUTHKEY",
+      "TAILSCALE_HOSTNAME",
+      "TAILSCALE_IP",
+      "TAILSCALE_USER",
+      "TAILSCALE_USER_ID",
+      "TAILSCALE_USER_LOGIN_NAME",
+      "TAILSCALE_USER_DISPLAY_NAME",
+      "TAILSCALE_USER_EMAIL",
+      "TAILSCALE_USER_PROFILE_PICTURE",
+      "TAILSCALE_USER_IS_ADMIN",
+      "TAILSCALE_USER_IS_BOT",
+      "TAILSCALE_USER_IS_EXPIRED",
+      "CLAUDE_CODE_EXPERIMENTAL_AGENTS"
+    ]
+  }
+}

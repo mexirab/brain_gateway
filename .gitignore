@@ -54,6 +54,9 @@ audio/
 # Google OAuth2 credentials
 credentials/
 
+# TLS certificates
+certs/
+
 # Model files (too large for git)
 *.gguf
 *.safetensors
