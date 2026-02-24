@@ -20,8 +20,8 @@ from sentence_transformers import SentenceTransformer
 
 from ha_integration import HomeAssistantClient
 
-# Load environment
-load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
+# Load environment (fallback for local dev; Docker passes env vars directly)
+load_dotenv("/app/.env", override=False)
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +94,13 @@ current_focus_session = {
 # Endel focus audio configuration
 ENDEL_API_URL = "https://app.endel.io/api/pacific"
 ENDEL_MODES = ["focus", "deeper-focus", "study", "colored-noises"]
-FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", "media_player.office_speaker")
+FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", "media_player.dining_room_max")
 ENDEL_ENABLED = os.environ.get("ENDEL_ENABLED", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # APScheduler
 # ---------------------------------------------------------------------------
-TIMEZONE = os.environ.get("TZ", "America/New_York")
+TIMEZONE = os.environ.get("TZ", "America/Chicago")
 scheduler = AsyncIOScheduler(
     jobstores={"default": MemoryJobStore()},
     timezone=TIMEZONE,
