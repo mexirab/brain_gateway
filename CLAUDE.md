@@ -118,7 +118,16 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 
 | File | Purpose |
 |------|---------|
-| orchestrator/orchestrator.py | Main FastAPI, hybrid Helios+Nemotron routing |
+| orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
+| orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
+| orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HELIOS_TOOLS, HA tool builder) |
+| orchestrator/prompt_builder.py | System prompts for Helios/Nemotron, RAG context, helpers |
+| orchestrator/helios_manager.py | Helios health check, SSH start/stop, idle tracking |
+| orchestrator/nemotron_loop.py | Agentic tool loop, XML parsing, dedup |
+| orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
+| orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
+| orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
+| orchestrator/background_jobs.py | Calendar polling, morning briefing |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/reminder_manager.py | APScheduler reminders |
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client for focus blocking |

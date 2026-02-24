@@ -1,0 +1,439 @@
+"""
+Tool execution handlers: dispatcher + all tool_* functions.
+"""
+
+import logging
+import time
+import uuid
+from typing import Any, Dict
+from datetime import datetime
+
+import shared
+from shared import (
+    ha_client, scheduler,
+    HELIOS_URL, HELIOS_MODEL,
+)
+from prompt_builder import rag_context
+from data_manager import handle_update_data
+from reminder_manager import (
+    parse_time_expression,
+    format_time_friendly,
+    add_reminder,
+    get_reminder,
+    list_pending_reminders,
+    remove_reminder,
+    mark_reminder_completed,
+    _announce_voice,
+    _send_notification,
+)
+from web_search import get_search_client
+from google_calendar import get_calendar_client
+from helios_manager import check_helios_health, start_helios
+from focus_manager import tool_start_focus, tool_stop_focus, tool_focus_status
+from metrics import (
+    TOOL_CALL_COUNT, TOOL_CALL_LATENCY, TOOL_CALL_ERRORS,
+    WEB_SEARCH_COUNT, WEB_SEARCH_LATENCY, WEB_SEARCH_RESULTS,
+    CALENDAR_API_CALLS, CALENDAR_API_LATENCY, CALENDAR_API_ERRORS,
+    REMINDERS_SET, REMINDERS_DELIVERED,
+    LLM_CALL_COUNT, LLM_CALL_LATENCY,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+    """Execute a tool and return the result as a string."""
+    TOOL_CALL_COUNT.labels(tool=tool_name).inc()
+    _tool_t0 = time.time()
+    logger.info(f"[TOOL] Executing: {tool_name} with args: {arguments}",
+                extra={"component": "tool", "tool_name": tool_name})
+
+    try:
+        if tool_name == "home_assistant":
+            return await tool_home_assistant(
+                arguments.get("entity_id", ""),
+                arguments.get("service", ""),
+                arguments.get("data", {})
+            )
+        elif tool_name == "search_memory":
+            return tool_search_memory(arguments.get("query", ""))
+        elif tool_name == "ask_expert":
+            return await tool_ask_expert(
+                arguments.get("question", ""),
+                arguments.get("context", "")
+            )
+        elif tool_name == "update_data":
+            return tool_update_data(arguments)
+        elif tool_name == "set_reminder":
+            return await tool_set_reminder(
+                arguments.get("reminder_text", ""),
+                arguments.get("time", ""),
+                arguments.get("target", "both")
+            )
+        elif tool_name == "cancel_reminder":
+            return await tool_cancel_reminder(
+                arguments.get("reminder_id", "")
+            )
+        elif tool_name == "start_focus":
+            return await tool_start_focus(
+                arguments.get("task", "your task"),
+                arguments.get("duration", 25),
+                arguments.get("break_duration", 5),
+                arguments.get("speaker"),
+                arguments.get("soundscape", "focus"),
+                arguments.get("block_sites", True)
+            )
+        elif tool_name == "stop_focus":
+            return await tool_stop_focus()
+        elif tool_name == "focus_status":
+            return await tool_focus_status()
+        elif tool_name == "web_search":
+            return await tool_web_search(
+                arguments.get("query", ""),
+                arguments.get("category", "general"),
+                arguments.get("time_range")
+            )
+        elif tool_name == "check_calendar":
+            return await tool_check_calendar(
+                arguments.get("days_ahead", 7)
+            )
+        elif tool_name == "create_calendar_event":
+            return await tool_create_calendar_event(
+                arguments.get("title", ""),
+                arguments.get("start_time", ""),
+                arguments.get("duration_minutes", 60),
+                arguments.get("description", ""),
+                arguments.get("location", "")
+            )
+        else:
+            return f"Unknown tool: {tool_name}"
+    except Exception as e:
+        TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
+        logger.error(f"[TOOL] Error executing {tool_name}: {e}",
+                     extra={"component": "tool", "tool_name": tool_name, "error_type": type(e).__name__})
+        return f"Error executing {tool_name}: {str(e)}"
+    finally:
+        TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
+
+
+async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
+    """Execute a Home Assistant service call directly."""
+    if not entity_id or not service:
+        return "Missing entity_id or service"
+
+    logger.info(f"[HA] Calling {service} on {entity_id} with data: {data}",
+                extra={"component": "ha", "entity_id": entity_id})
+    result = await ha_client.call_service(entity_id, service, data or {})
+
+    if result.success:
+        logger.info(f"[HA] Success: {result.message}")
+        return result.message
+    else:
+        logger.warning(f"[HA] Failed: {result.message}")
+        return f"Failed: {result.message}"
+
+
+def tool_search_memory(query: str) -> str:
+    """Search the personal knowledge base (RAG)."""
+    if not query:
+        return "No query provided"
+
+    logger.info(f"[MEMORY] Searching for: {query}")
+    context = rag_context(query)
+
+    if context:
+        return f"Found relevant information:\n{context}"
+    else:
+        return "No relevant information found in memory."
+
+
+async def tool_web_search(query: str, category: str = "general", time_range: str = None) -> str:
+    """Search the web via SearXNG and return formatted results."""
+    if not query:
+        return "No search query provided"
+
+    WEB_SEARCH_COUNT.inc()
+    _ws_t0 = time.time()
+    logger.info(f"[WEB_SEARCH] Searching: '{query}' (category={category}, time_range={time_range})",
+                extra={"component": "web_search"})
+    client = get_search_client(http_client=shared._http)
+    response = await client.search(query=query, category=category, time_range=time_range)
+    WEB_SEARCH_LATENCY.observe(time.time() - _ws_t0)
+
+    if not response.success:
+        logger.error(f"[WEB_SEARCH] Failed for '{query}': {response.error}")
+        return f"Web search failed: {response.error}"
+
+    if not response.results:
+        logger.warning(f"[WEB_SEARCH] No results for '{query}'")
+        return f"No results found for '{query}'"
+
+    lines = [f"Web search results for '{query}':"]
+    for i, r in enumerate(response.results, 1):
+        lines.append(f"\n{i}. {r.title}")
+        if r.content:
+            lines.append(f"   {r.content}")
+        lines.append(f"   URL: {r.url}")
+
+    WEB_SEARCH_RESULTS.observe(len(response.results))
+    logger.info(f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'",
+                extra={"component": "web_search", "result_count": len(response.results)})
+    return "\n".join(lines)
+
+
+async def tool_check_calendar(days_ahead: int = 7) -> str:
+    """Check Google Calendar for upcoming events."""
+    client = get_calendar_client(http_client=shared._http)
+    if not client.is_configured:
+        return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
+
+    CALENDAR_API_CALLS.labels(operation="list_events").inc()
+    _cal_t0 = time.time()
+    logger.info(f"[CALENDAR] Checking calendar for next {days_ahead} days",
+                extra={"component": "calendar"})
+    response = await client.list_events(days_ahead=days_ahead)
+    CALENDAR_API_LATENCY.labels(operation="list_events").observe(time.time() - _cal_t0)
+
+    if not response.success:
+        CALENDAR_API_ERRORS.labels(operation="list_events").inc()
+        return f"Calendar error: {response.error}"
+
+    if not response.events:
+        if days_ahead == 1:
+            return "No events on the calendar for today."
+        return f"No events on the calendar for the next {days_ahead} days."
+
+    lines = []
+    if days_ahead == 1:
+        lines.append(f"Today's calendar ({len(response.events)} events):")
+    else:
+        lines.append(f"Calendar for the next {days_ahead} days ({len(response.events)} events):")
+
+    for event in response.events:
+        if event.all_day:
+            date_str = event.start.strftime("%A %b %d")
+            lines.append(f"\n- {event.title} (all day, {date_str})")
+        else:
+            time_str = event.start.strftime("%A %b %d, %I:%M %p")
+            end_str = event.end.strftime("%I:%M %p")
+            lines.append(f"\n- {event.title} — {time_str} to {end_str}")
+        if event.location:
+            lines.append(f"  Location: {event.location}")
+
+    return "\n".join(lines)
+
+
+async def tool_create_calendar_event(
+    title: str, start_time: str, duration_minutes: int = 60,
+    description: str = "", location: str = ""
+) -> str:
+    """Create a new Google Calendar event."""
+    if not title:
+        return "Missing event title."
+    if not start_time:
+        return "Missing event start time. Provide an ISO 8601 datetime like '2026-02-21T19:00:00'."
+
+    client = get_calendar_client(http_client=shared._http)
+    if not client.is_configured:
+        return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
+
+    CALENDAR_API_CALLS.labels(operation="create_event").inc()
+    _cal_t0 = time.time()
+    logger.info(f"[CALENDAR] Creating event: {title} at {start_time}",
+                extra={"component": "calendar"})
+    response = await client.create_event(
+        title=title,
+        start_time=start_time,
+        duration_minutes=duration_minutes,
+        description=description,
+        location=location,
+    )
+
+    CALENDAR_API_LATENCY.labels(operation="create_event").observe(time.time() - _cal_t0)
+    if not response.success:
+        CALENDAR_API_ERRORS.labels(operation="create_event").inc()
+        return f"Failed to create event: {response.error}"
+
+    event = response.events[0]
+    time_str = event.start.strftime("%A %b %d, %I:%M %p")
+    result = f"Created event: {event.title} on {time_str}"
+    if location:
+        result += f" at {location}"
+    return result
+
+
+async def tool_ask_expert(question: str, context: str = "") -> str:
+    """Delegate a complex question to Helios 120B. Auto-starts if offline."""
+    from orchestrator import call_model
+
+    if not question:
+        return "No question provided"
+
+    logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
+    shared._last_helios_request = time.time()
+
+    if not await check_helios_health():
+        started = await start_helios()
+        if not started:
+            return "Expert model is offline and could not be started. Please try again later or start Helios manually."
+
+    messages = []
+    if context:
+        messages.append({
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {question}"
+        })
+    else:
+        messages.append({"role": "user", "content": question})
+
+    system_prompt = """You are an expert assistant helping with complex reasoning, coding, and analysis.
+Provide detailed, thorough answers. Be precise and accurate."""
+
+    try:
+        response = await call_model(
+            HELIOS_URL,
+            HELIOS_MODEL,
+            messages,
+            system=system_prompt,
+            timeout=300,
+        )
+
+        msg = response.get("choices", [{}])[0].get("message", {})
+        content = msg.get("content", "")
+        reasoning = msg.get("reasoning_content", "")
+
+        if content:
+            logger.info(f"[EXPERT] Helios responded ({len(content)} chars)")
+            return content
+        elif reasoning:
+            logger.info(f"[EXPERT] Helios responded with reasoning ({len(reasoning)} chars)")
+            return reasoning
+        else:
+            return "Expert model returned empty response"
+    except Exception as e:
+        logger.error(f"[EXPERT] Helios failed: {e}")
+        return f"Expert model unavailable: {str(e)}"
+
+
+def tool_update_data(arguments: Dict[str, Any]) -> str:
+    """Update structured personal data (medications, projects)."""
+    action = arguments.get("action", "")
+    name = arguments.get("name", "")
+
+    if not action:
+        return "No action specified"
+    if not name:
+        return "No name specified"
+
+    logger.info(f"[DATA] Updating: action={action}, name={name}")
+
+    return handle_update_data(
+        action=action,
+        name=name,
+        dose=arguments.get("dose"),
+        schedule=arguments.get("schedule"),
+        purpose=arguments.get("purpose"),
+        notes=arguments.get("notes"),
+        status=arguments.get("status"),
+        step=arguments.get("step"),
+        goal=arguments.get("goal"),
+        priority=arguments.get("priority"),
+        category=arguments.get("category"),
+        completed=arguments.get("completed"),
+    )
+
+
+async def deliver_reminder_job(reminder_id: str):
+    """Called by APScheduler at the scheduled time to deliver a reminder."""
+    logger.info(f"[REMINDER] Triggering: {reminder_id}")
+
+    reminder = get_reminder(reminder_id)
+    if not reminder:
+        logger.warning(f"[REMINDER] {reminder_id} not found")
+        return
+
+    if reminder.get("status") != "pending":
+        logger.warning(f"[REMINDER] {reminder_id} already completed, skipping")
+        return
+
+    text = reminder.get("text", "You have a reminder")
+    target = reminder.get("target", "both")
+    spoken_text = f"Hey Nadim! Quick reminder: {text}"
+
+    if target in ["voice", "both"]:
+        await _announce_voice(spoken_text)
+
+    if target in ["phone", "both"]:
+        await _send_notification(text)
+
+    REMINDERS_DELIVERED.inc()
+    mark_reminder_completed(reminder_id)
+    logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
+
+
+async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:
+    """Set a reminder that will be delivered via voice and/or mobile notification."""
+    if not reminder_text:
+        return "Please tell me what to remind you about."
+    if not time_str:
+        return "Please tell me when to remind you. Try 'in 5 minutes' or 'at 3pm'."
+
+    if target not in ["voice", "phone", "both"]:
+        target = "both"
+
+    logger.info(f"[REMINDER] Setting reminder: '{reminder_text}' at '{time_str}' via {target}")
+
+    trigger_time, error = parse_time_expression(time_str)
+    if error:
+        return error
+
+    # Deduplication
+    DEDUP_WINDOW_SECONDS = 60
+    now = datetime.now()
+    for existing in list_pending_reminders():
+        if existing.get("text", "").lower().strip() == reminder_text.lower().strip():
+            try:
+                created = datetime.fromisoformat(existing.get("created", ""))
+                if (now - created).total_seconds() < DEDUP_WINDOW_SECONDS:
+                    logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing {existing.get('id')})")
+                    return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."
+            except (ValueError, TypeError):
+                pass
+
+    reminder_id = str(uuid.uuid4())[:8]
+
+    add_reminder(reminder_id, reminder_text, trigger_time, target)
+
+    scheduler.add_job(
+        deliver_reminder_job,
+        trigger='date',
+        run_date=trigger_time,
+        args=[reminder_id],
+        id=f"reminder_{reminder_id}",
+        replace_existing=True,
+    )
+    REMINDERS_SET.labels(target=target).inc()
+    logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}",
+                extra={"component": "reminder"})
+
+    time_friendly = format_time_friendly(trigger_time)
+    target_desc = {
+        "voice": "on all speakers",
+        "phone": "on your phone",
+        "both": "on all speakers and your phone"
+    }.get(target, "")
+
+    return f"Got it! I'll remind you to {reminder_text} {time_friendly} {target_desc}."
+
+
+async def tool_cancel_reminder(reminder_id: str) -> str:
+    """Cancel a pending reminder."""
+    try:
+        scheduler.remove_job(f"reminder_{reminder_id}")
+        logger.info(f"[SCHEDULER] Removed job reminder_{reminder_id}")
+    except Exception as e:
+        logger.debug(f"[SCHEDULER] Job not found: {e}")
+
+    if remove_reminder(reminder_id):
+        return f"Reminder {reminder_id} cancelled."
+    return f"Reminder {reminder_id} not found."
