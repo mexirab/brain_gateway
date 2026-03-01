@@ -39,12 +39,15 @@ from shared import (
     ha_client, scheduler, current_focus_session, collection,
     CHROMA_COLLECTION,
     CALENDAR_POLL_INTERVAL, MORNING_BRIEFING_TIME, MORNING_BRIEFING_ENABLED,
+    EMAIL_POLL_INTERVAL, EMAIL_POLL_ENABLED,
+    EMAIL_TO_CALENDAR_ENABLED, EMAIL_TO_CALENDAR_INTERVAL,
 )
 
 # Module imports
 from fast_path import try_fast_path
 from mode_router import get_mode_router
 from google_calendar import get_calendar_client
+from google_gmail import get_gmail_client
 from prompt_builder import (
     is_greeting, last_user_text, rag_context,
     get_helios_system_prompt, get_orchestrator_system_prompt,
@@ -55,7 +58,7 @@ from nemotron_loop import (
     call_nemotron_orchestrator, _run_nemotron_tool_loop,
     clean_response, parse_tool_calls_from_content,
 )
-from background_jobs import poll_calendar, morning_briefing
+from background_jobs import poll_calendar, morning_briefing, poll_email, process_emails_for_events
 from api_routes import router as api_router
 
 # ---------------------------------------------------------------------------
@@ -239,6 +242,13 @@ async def startup_event():
     else:
         logger.info("[orchestrator] Google Calendar not configured — tools disabled (run google_setup.py)")
 
+    # Initialize Gmail client
+    gmail_client = get_gmail_client(http_client=shared._http)
+    if gmail_client.is_configured:
+        logger.info("[orchestrator] Gmail configured — tools enabled")
+    else:
+        logger.info("[orchestrator] Gmail not configured — tools disabled (run google_setup.py)")
+
     BUILD_INFO.info({"version": "6.2", "architecture": "hybrid"})
     scheduler.start()
     logger.info("[SCHEDULER] Started (in-memory, no reminders to reload)")
@@ -267,6 +277,30 @@ async def startup_event():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
+
+    # Schedule email polling
+    if gmail_client.is_configured and EMAIL_POLL_ENABLED:
+        scheduler.add_job(
+            poll_email,
+            trigger="interval",
+            minutes=EMAIL_POLL_INTERVAL,
+            id="email_poll",
+            name="Email polling",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Email polling every {EMAIL_POLL_INTERVAL} min")
+
+    # Schedule email-to-calendar extraction
+    if gmail_client.is_configured and cal_client.is_configured and EMAIL_TO_CALENDAR_ENABLED:
+        scheduler.add_job(
+            process_emails_for_events,
+            trigger="interval",
+            minutes=EMAIL_TO_CALENDAR_INTERVAL,
+            id="email_to_calendar",
+            name="Email-to-calendar extraction",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Email-to-calendar every {EMAIL_TO_CALENDAR_INTERVAL} min")
 
 
 @app.on_event("shutdown")

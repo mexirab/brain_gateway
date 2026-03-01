@@ -1,16 +1,23 @@
 """
-Background scheduler jobs: calendar polling and morning briefing.
+Background scheduler jobs: calendar polling, morning briefing, email polling,
+email-to-calendar event extraction.
 """
 
+import json
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import shared
-from shared import TIMEZONE
+from shared import TIMEZONE, NEMOTRON_URL, NEMOTRON_MODEL
 from google_calendar import get_calendar_client
+from google_gmail import get_gmail_client
 from reminder_manager import list_pending_reminders, _announce_voice
-from metrics import CALENDAR_POLL_EVENTS_FOUND
+from metrics import (
+    CALENDAR_POLL_EVENTS_FOUND, GMAIL_API_CALLS, GMAIL_API_ERRORS,
+    EMAIL_TO_CALENDAR_EVENTS_CREATED, EMAIL_TO_CALENDAR_EMAILS_SCANNED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,25 +72,73 @@ async def poll_calendar():
 
 
 async def morning_briefing():
-    """Morning announcement: today's events summary via TTS."""
-    client = get_calendar_client()
-    if not client or not client.is_configured:
-        return
+    """Morning announcement: today's events from all calendars via TTS.
+
+    Sources (in priority order):
+    1. Phone calendar sync (consolidated: Gmail + iCloud + Work)
+    2. Google Calendar API (fallback if phone hasn't synced)
+    """
+    tz = ZoneInfo(TIMEZONE)
+    today = datetime.now(tz).date()
 
     try:
-        response = await client.list_events(days_ahead=1)
-        events = response.events if response.success else []
+        # Build unified event list from available sources
+        briefing_events = []
 
+        # Source 1: Phone calendar sync (preferred — has ALL calendars)
+        phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+        if shared._phone_calendar_events and phone_age < 86400:  # synced within 24h
+            for ev in shared._phone_calendar_events:
+                try:
+                    start_str = ev.get("start", "")
+                    start = datetime.fromisoformat(start_str)
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=tz)
+                    if start.date() != today:
+                        continue
+                    is_all_day = ev.get("all_day", False)
+                    briefing_events.append({
+                        "title": ev.get("title", "(No title)"),
+                        "start": start,
+                        "all_day": is_all_day,
+                        "calendar": ev.get("calendar", ""),
+                        "location": ev.get("location", ""),
+                    })
+                except (ValueError, TypeError):
+                    continue
+            logger.info(f"[MORNING_BRIEFING] Using phone calendar ({len(briefing_events)} today's events)")
+        else:
+            # Source 2: Google Calendar API (fallback)
+            client = get_calendar_client()
+            if client and client.is_configured:
+                response = await client.list_events(days_ahead=1)
+                if response.success:
+                    for event in response.events:
+                        briefing_events.append({
+                            "title": event.title,
+                            "start": event.start,
+                            "all_day": event.all_day,
+                            "calendar": "Google",
+                            "location": event.location,
+                        })
+                logger.info(f"[MORNING_BRIEFING] Using Google Calendar fallback ({len(briefing_events)} events)")
+            else:
+                logger.info("[MORNING_BRIEFING] No calendar source available")
+
+        # Sort by time (all-day first, then by start time)
+        briefing_events.sort(key=lambda e: (not e["all_day"], e["start"]))
+
+        # Build announcement
         parts = ["Good morning Nadim!"]
 
-        if events:
-            parts.append(f"You have {len(events)} event{'s' if len(events) > 1 else ''} today.")
-            for event in events[:5]:
-                if event.all_day:
-                    parts.append(f"All day: {event.title}")
+        if briefing_events:
+            parts.append(f"You have {len(briefing_events)} event{'s' if len(briefing_events) > 1 else ''} today.")
+            for ev in briefing_events[:8]:
+                if ev["all_day"]:
+                    parts.append(f"All day: {ev['title']}")
                 else:
-                    time_str = event.start.strftime("%I:%M %p").lstrip("0")
-                    parts.append(f"At {time_str}: {event.title}")
+                    time_str = ev["start"].strftime("%I:%M %p").lstrip("0")
+                    parts.append(f"At {time_str}: {ev['title']}")
         else:
             parts.append("Your calendar is clear today.")
 
@@ -92,7 +147,249 @@ async def morning_briefing():
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
 
         await _announce_voice(" ".join(parts))
-        logger.info(f"[MORNING_BRIEFING] Delivered: {len(events)} events, {len(pending)} reminders")
+        logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
+
+
+async def poll_email():
+    """Every N minutes: check for new unread emails, announce important ones via TTS."""
+    client = get_gmail_client()
+    if not client or not client.is_configured:
+        return
+
+    GMAIL_API_CALLS.labels(operation="poll").inc()
+
+    try:
+        # Find unread emails from the last hour, skip promotions/social
+        query = "is:unread newer_than:1h -category:promotions -category:social -category:forums"
+        response = await client.list_messages(query=query, max_results=5)
+
+        if not response.success:
+            GMAIL_API_ERRORS.labels(operation="poll").inc()
+            logger.warning(f"[EMAIL_POLL] Failed: {response.error}")
+            return
+
+        new_count = 0
+        for msg in response.messages:
+            if msg.id in shared._notified_emails:
+                continue
+
+            # Extract sender name (strip email address for TTS)
+            sender = msg.sender.split("<")[0].strip().strip('"')
+            if not sender:
+                sender = msg.sender
+
+            announcement = f"New email from {sender}: {msg.subject}"
+            await _announce_voice(announcement)
+            shared._notified_emails.add(msg.id)
+            new_count += 1
+            logger.info(f"[EMAIL_POLL] Announced: {msg.subject} from {sender}",
+                        extra={"component": "gmail"})
+
+        # Prevent unbounded growth — trim if over 500
+        if len(shared._notified_emails) > 500:
+            shared._notified_emails = set(list(shared._notified_emails)[-200:])
+
+        if new_count:
+            logger.info(f"[EMAIL_POLL] Announced {new_count} new emails")
+
+    except Exception as e:
+        GMAIL_API_ERRORS.labels(operation="poll").inc()
+        logger.error(f"[EMAIL_POLL] Error: {e}")
+
+
+_EVENT_EXTRACTION_PROMPT = """\
+You are a calendar event extractor. Analyze the email below and extract any events, appointments, reservations, flights, or meetings that have a specific date and time.
+
+Return ONLY a JSON array. Each element must have:
+- "title": short event title (e.g. "Flight to NYC", "Dentist Appointment", "Dinner at Uchi")
+- "start_time": ISO 8601 datetime string (e.g. "2026-03-15T14:30:00")
+- "duration_minutes": estimated duration in minutes (default 60)
+- "location": location if mentioned, empty string otherwise
+- "description": one-line source reference (e.g. "From: United Airlines confirmation")
+
+If there are NO events with a specific date and time, return an empty array: []
+
+Do NOT extract:
+- Vague mentions without dates/times ("let's meet soon")
+- Marketing or promotional events
+- Subscription renewals or billing dates (unless it's a scheduled appointment)
+
+EMAIL SUBJECT: {subject}
+FROM: {sender}
+DATE: {date}
+
+EMAIL BODY:
+{body}
+
+JSON ARRAY:"""
+
+
+async def process_emails_for_events():
+    """Scan recent emails for events/appointments and auto-add to calendar."""
+    gmail = get_gmail_client()
+    cal = get_calendar_client()
+
+    if not gmail or not gmail.is_configured:
+        return
+    if not cal or not cal.is_configured:
+        return
+
+    tz = ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+
+    try:
+        # Get emails from the last 24 hours, skip promos/social/forums
+        query = "newer_than:1d -category:promotions -category:social -category:forums"
+        response = await gmail.list_messages(query=query, max_results=15)
+
+        if not response.success:
+            logger.warning(f"[EMAIL_TO_CAL] Gmail query failed: {response.error}")
+            return
+
+        if not response.messages:
+            return
+
+        # Filter out already-processed emails
+        new_msgs = [m for m in response.messages if m.id not in shared._processed_for_events]
+        if not new_msgs:
+            return
+
+        logger.info(f"[EMAIL_TO_CAL] Scanning {len(new_msgs)} new emails for events")
+
+        # Deferred import to avoid circular dependency
+        from orchestrator import call_model
+
+        created_count = 0
+        for msg in new_msgs:
+            shared._processed_for_events.add(msg.id)
+            EMAIL_TO_CALENDAR_EMAILS_SCANNED.inc()
+
+            # Skip very short emails (unlikely to contain event details)
+            body = msg.body_text or msg.snippet
+            if len(body) < 30:
+                continue
+
+            # Ask Nemotron to extract events
+            prompt = _EVENT_EXTRACTION_PROMPT.format(
+                subject=msg.subject,
+                sender=msg.sender,
+                date=msg.date.strftime("%Y-%m-%d %H:%M"),
+                body=body[:1500],  # Limit body to keep prompt manageable
+            )
+
+            try:
+                llm_resp = await call_model(
+                    NEMOTRON_URL, NEMOTRON_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    timeout=30,
+                )
+                raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+            except Exception as e:
+                logger.warning(f"[EMAIL_TO_CAL] LLM call failed for '{msg.subject}': {e}")
+                continue
+
+            # Parse JSON from response
+            events = _parse_event_json(raw)
+            if not events:
+                continue
+
+            # Check calendar for duplicates and create missing events
+            for ev in events:
+                title = ev.get("title", "").strip()
+                start_time = ev.get("start_time", "").strip()
+                if not title or not start_time:
+                    continue
+
+                # Validate the start time is in the future
+                try:
+                    ev_start = datetime.fromisoformat(start_time)
+                    if ev_start.tzinfo is None:
+                        ev_start = ev_start.replace(tzinfo=tz)
+                    if ev_start < now:
+                        continue
+                except ValueError:
+                    continue
+
+                # Check for duplicates: list events on that day and look for title match
+                if await _event_exists_on_calendar(cal, title, ev_start):
+                    logger.info(f"[EMAIL_TO_CAL] Already on calendar: {title}")
+                    continue
+
+                # Create the event
+                duration = ev.get("duration_minutes", 60)
+                location = ev.get("location", "")
+                description = ev.get("description", "")
+                if description:
+                    description = f"[Auto-added from email] {description}"
+                else:
+                    description = f"[Auto-added from email] {msg.subject}"
+
+                result = await cal.create_event(
+                    title=title,
+                    start_time=start_time,
+                    duration_minutes=duration,
+                    description=description,
+                    location=location,
+                )
+
+                if result.success:
+                    created_count += 1
+                    EMAIL_TO_CALENDAR_EVENTS_CREATED.inc()
+                    logger.info(f"[EMAIL_TO_CAL] Created: {title} at {start_time}",
+                                extra={"component": "email_to_cal"})
+                else:
+                    logger.warning(f"[EMAIL_TO_CAL] Failed to create: {title} — {result.error}")
+
+        # Prevent unbounded growth
+        if len(shared._processed_for_events) > 500:
+            shared._processed_for_events = set(list(shared._processed_for_events)[-200:])
+
+        if created_count:
+            logger.info(f"[EMAIL_TO_CAL] Created {created_count} events from emails")
+
+    except Exception as e:
+        logger.error(f"[EMAIL_TO_CAL] Error: {e}")
+
+
+def _parse_event_json(raw: str) -> list:
+    """Parse a JSON array from LLM output, handling markdown fences."""
+    raw = raw.strip()
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        raw = "\n".join(lines).strip()
+
+    # Find the JSON array
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1:
+        return []
+
+    try:
+        events = json.loads(raw[start:end + 1])
+        if isinstance(events, list):
+            return events
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
+    """Check if a similar event already exists on the calendar around that time."""
+    response = await cal.list_events(days_ahead=1, calendar_id="primary")
+    if not response.success:
+        return False
+
+    title_lower = title.lower()
+    for existing in response.events:
+        # Check same day and similar title (substring match either direction)
+        if existing.start.date() != start.date():
+            continue
+        existing_title = existing.title.lower()
+        if title_lower in existing_title or existing_title in title_lower:
+            return True
+    return False

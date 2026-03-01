@@ -115,3 +115,30 @@ MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lo
 
 # Track which calendar events we've already announced (resets on restart)
 _notified_events: set = set()
+
+# ---------------------------------------------------------------------------
+# Email polling config
+# ---------------------------------------------------------------------------
+EMAIL_POLL_INTERVAL = int(os.environ.get("EMAIL_POLL_INTERVAL", "30"))
+EMAIL_POLL_ENABLED = os.environ.get("EMAIL_POLL_ENABLED", "true").lower() == "true"
+
+# Track which emails we've already announced (resets on restart)
+_notified_emails: set = set()
+
+# ---------------------------------------------------------------------------
+# Email-to-calendar config
+# ---------------------------------------------------------------------------
+EMAIL_TO_CALENDAR_ENABLED = os.environ.get("EMAIL_TO_CALENDAR_ENABLED", "true").lower() == "true"
+EMAIL_TO_CALENDAR_INTERVAL = int(os.environ.get("EMAIL_TO_CALENDAR_INTERVAL", "60"))
+
+# Track which emails we've already scanned for events (resets on restart)
+_processed_for_events: set = set()
+
+# ---------------------------------------------------------------------------
+# Phone calendar sync (iPhone Shortcut pushes consolidated calendar)
+# ---------------------------------------------------------------------------
+PHONE_CALENDAR_SYNC_ENABLED = os.environ.get("PHONE_CALENDAR_SYNC_ENABLED", "true").lower() == "true"
+
+# Cached events from last phone sync (list of dicts)
+_phone_calendar_events: list = []
+_phone_calendar_sync_time: float = 0.0

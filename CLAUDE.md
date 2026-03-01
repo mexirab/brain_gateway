@@ -65,6 +65,8 @@ User → Open WebUI → Orchestrator → Mode Router → Helios (conversation)
 | web_search | Nemotron | Search the web via SearXNG | Working |
 | check_calendar | Nemotron | Check Google Calendar for upcoming events | Working |
 | create_calendar_event | Nemotron | Create a new Google Calendar event | Working |
+| check_email | Nemotron | Check Gmail inbox (recent/unread) | Working |
+| search_email | Nemotron | Search Gmail with query syntax | Working |
 
 ## Key Paths
 
@@ -127,13 +129,14 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
 | orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
-| orchestrator/background_jobs.py | Calendar polling, morning briefing |
+| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/reminder_manager.py | APScheduler reminders |
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client for focus blocking |
 | orchestrator/web_search.py | SearXNG client for web search |
 | orchestrator/google_auth.py | Google OAuth2 token management |
 | orchestrator/google_calendar.py | Google Calendar API v3 client |
+| orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
 | orchestrator/google_setup.py | One-time OAuth2 consent flow script |
 | orchestrator/mode_router.py | Intent-based mode router (explainer/mirror/counterbalance/challenge/baseline) |
 | docker-compose.yml | Service stack |
@@ -232,7 +235,7 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 **Status:** Fully deployed and configured on Jupiter. OAuth2 token generated and mounted.
 
 **Setup (one-time on dev machine):**
-1. Google Cloud Console → create project → enable Calendar API → create OAuth2 Desktop credentials
+1. Google Cloud Console → create project → enable Calendar API + Gmail API → create OAuth2 Desktop credentials
 2. Add your Google account as a test user (OAuth consent screen → Test users)
 3. Download `credentials.json` → `credentials/google_credentials.json`
 4. Run consent flow:
@@ -258,6 +261,35 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 - `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 15)
 - `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:30)
 - `MORNING_BRIEFING_ENABLED` — true/false (default: true)
+
+## Gmail Integration
+
+Read-only Gmail access via OAuth2. Tools: `check_email`, `search_email`.
+
+**Status:** Code deployed. Requires re-running OAuth2 consent flow to add `gmail.readonly` scope.
+
+**Setup (after Calendar is already configured):**
+1. Google Cloud Console → enable **Gmail API** (same project as Calendar)
+2. Delete existing `credentials/google_token.json`
+3. Re-run consent flow (step 4 above) — will now request Calendar + Gmail permissions
+4. Copy new token to Jupiter (step 5 above)
+5. Restart orchestrator: `docker compose up -d --build orchestrator`
+
+**Tools:**
+- `check_email` — check inbox for recent/unread emails. Optional query, unread_only filter
+- `search_email` — search with Gmail query syntax (`from:`, `subject:`, `has:attachment`, `newer_than:`, etc.)
+
+**Proactive features (APScheduler):**
+- Email polling: every 30 min, announces new unread emails (skips promotions/social/forums) via TTS
+
+**Config (env vars):**
+- `EMAIL_POLL_INTERVAL` — minutes between polls (default: 30)
+- `EMAIL_POLL_ENABLED` — true/false (default: true)
+
+**OAuth2 scopes (all three in google_auth.py):**
+- `calendar.readonly` — read calendar events
+- `calendar.events` — create/modify calendar events
+- `gmail.readonly` — read email messages
 
 ## Mode Router (Personalized Coaching)
 

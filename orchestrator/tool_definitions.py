@@ -356,6 +356,52 @@ STATIC_TOOLS = [
                 "required": ["title", "start_time"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_email",
+            "description": "Check Nadim's Gmail inbox for recent or unread emails. Use when he asks about his email, new messages, or wants to see what's in his inbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional Gmail search query (e.g., 'from:amazon', 'subject:flight', 'is:unread')"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of emails to return (default: 10)"
+                    },
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "Only show unread messages (default: false)"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_email",
+            "description": "Search Nadim's Gmail with specific criteria. Use Gmail search syntax: from:, to:, subject:, has:attachment, after:YYYY/MM/DD, before:YYYY/MM/DD, newer_than:2d, older_than:1w.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Gmail search query (e.g., 'from:bank after:2026/02/01', 'has:attachment subject:invoice', 'from:amazon newer_than:7d')"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 10)"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 

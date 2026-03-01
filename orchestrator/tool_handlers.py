@@ -28,12 +28,14 @@ from reminder_manager import (
 )
 from web_search import get_search_client
 from google_calendar import get_calendar_client
+from google_gmail import get_gmail_client
 from helios_manager import check_helios_health, start_helios
 from focus_manager import tool_start_focus, tool_stop_focus, tool_focus_status
 from metrics import (
     TOOL_CALL_COUNT, TOOL_CALL_LATENCY, TOOL_CALL_ERRORS,
     WEB_SEARCH_COUNT, WEB_SEARCH_LATENCY, WEB_SEARCH_RESULTS,
     CALENDAR_API_CALLS, CALENDAR_API_LATENCY, CALENDAR_API_ERRORS,
+    GMAIL_API_CALLS, GMAIL_API_LATENCY, GMAIL_API_ERRORS,
     REMINDERS_SET, REMINDERS_DELIVERED,
     LLM_CALL_COUNT, LLM_CALL_LATENCY,
 )
@@ -104,6 +106,17 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("duration_minutes", 60),
                 arguments.get("description", ""),
                 arguments.get("location", "")
+            )
+        elif tool_name == "check_email":
+            return await tool_check_email(
+                arguments.get("query", ""),
+                arguments.get("max_results", 10),
+                arguments.get("unread_only", False)
+            )
+        elif tool_name == "search_email":
+            return await tool_search_email(
+                arguments.get("query", ""),
+                arguments.get("max_results", 10)
             )
         else:
             return f"Unknown tool: {tool_name}"
@@ -260,6 +273,92 @@ async def tool_create_calendar_event(
     if location:
         result += f" at {location}"
     return result
+
+
+async def tool_check_email(query: str = "", max_results: int = 10, unread_only: bool = False) -> str:
+    """Check Gmail inbox for recent or unread emails."""
+    client = get_gmail_client(http_client=shared._http)
+    if not client.is_configured:
+        return "Gmail is not configured. Run google_setup.py first to set up OAuth2 credentials."
+
+    GMAIL_API_CALLS.labels(operation="check_email").inc()
+    _gmail_t0 = time.time()
+
+    # Build query
+    q_parts = []
+    if unread_only:
+        q_parts.append("is:unread")
+    if query:
+        q_parts.append(query)
+    full_query = " ".join(q_parts)
+
+    logger.info(f"[GMAIL] Checking email: query='{full_query}', max={max_results}",
+                extra={"component": "gmail"})
+    response = await client.list_messages(query=full_query, max_results=max_results)
+    GMAIL_API_LATENCY.labels(operation="check_email").observe(time.time() - _gmail_t0)
+
+    if not response.success:
+        GMAIL_API_ERRORS.labels(operation="check_email").inc()
+        return f"Gmail error: {response.error}"
+
+    if not response.messages:
+        if unread_only:
+            return "No unread emails in your inbox."
+        if query:
+            return f"No emails found matching '{query}'."
+        return "No recent emails in your inbox."
+
+    unread_count = sum(1 for m in response.messages if "UNREAD" in m.labels)
+    lines = [f"Found {len(response.messages)} emails ({unread_count} unread):"]
+
+    for msg in response.messages:
+        unread_marker = " [UNREAD]" if "UNREAD" in msg.labels else ""
+        date_str = msg.date.strftime("%b %d, %I:%M %p")
+        lines.append(f"\n- {msg.subject}{unread_marker}")
+        lines.append(f"  From: {msg.sender}")
+        lines.append(f"  Date: {date_str}")
+        if msg.snippet:
+            lines.append(f"  Preview: {msg.snippet}")
+
+    return "\n".join(lines)
+
+
+async def tool_search_email(query: str, max_results: int = 10) -> str:
+    """Search Gmail with specific criteria."""
+    if not query:
+        return "Please provide a search query. Examples: 'from:amazon', 'subject:invoice', 'has:attachment newer_than:7d'"
+
+    client = get_gmail_client(http_client=shared._http)
+    if not client.is_configured:
+        return "Gmail is not configured. Run google_setup.py first to set up OAuth2 credentials."
+
+    GMAIL_API_CALLS.labels(operation="search_email").inc()
+    _gmail_t0 = time.time()
+
+    logger.info(f"[GMAIL] Searching: query='{query}', max={max_results}",
+                extra={"component": "gmail"})
+    response = await client.list_messages(query=query, max_results=max_results, label="")
+    GMAIL_API_LATENCY.labels(operation="search_email").observe(time.time() - _gmail_t0)
+
+    if not response.success:
+        GMAIL_API_ERRORS.labels(operation="search_email").inc()
+        return f"Gmail search error: {response.error}"
+
+    if not response.messages:
+        return f"No emails found matching '{query}'."
+
+    lines = [f"Search results for '{query}' ({len(response.messages)} of ~{response.total_estimate} matches):"]
+
+    for msg in response.messages:
+        unread_marker = " [UNREAD]" if "UNREAD" in msg.labels else ""
+        date_str = msg.date.strftime("%b %d, %I:%M %p")
+        lines.append(f"\n- {msg.subject}{unread_marker}")
+        lines.append(f"  From: {msg.sender}")
+        lines.append(f"  Date: {date_str}")
+        if msg.snippet:
+            lines.append(f"  Preview: {msg.snippet}")
+
+    return "\n".join(lines)
 
 
 async def tool_ask_expert(question: str, context: str = "") -> str:

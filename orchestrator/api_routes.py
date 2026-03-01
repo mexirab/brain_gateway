@@ -331,3 +331,89 @@ async def serve_audio(filename: str):
     if os.path.exists(filepath):
         return FileResponse(filepath, media_type="audio/wav")
     return JSONResponse({"error": "Audio file not found"}, status_code=404)
+
+
+@router.post("/api/email-to-calendar/run")
+async def run_email_to_calendar():
+    """Manually trigger email-to-calendar extraction."""
+    from background_jobs import process_emails_for_events
+    try:
+        await process_emails_for_events()
+        return {"ok": True, "message": "Email-to-calendar scan completed"}
+    except Exception as e:
+        logger.error(f"[EMAIL_TO_CAL] Manual trigger error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])
+async def sync_phone_calendar(req: Request):
+    """Receive consolidated calendar events from iPhone Shortcut, or return status.
+
+    GET: Returns sync status (last sync time, event count).
+    POST/PUT: Receives calendar events from iPhone Shortcut.
+
+    Accepts multiple body formats for flexibility with iOS Shortcuts:
+    1. {"events": [...]}           — wrapped in events key
+    2. [...]                       — bare list at top level
+    3. {"events": {"0": {...}}}    — iOS dict-of-dicts (auto-converted)
+    4. {"events": {single event}}  — single event dict (auto-wrapped)
+    """
+    # GET or no body → return status
+    if req.method == "GET":
+        sync_age = ""
+        if shared._phone_calendar_sync_time > 0:
+            age_min = int((time.time() - shared._phone_calendar_sync_time) / 60)
+            sync_age = f"{age_min} minutes ago"
+        else:
+            sync_age = "never"
+        return {
+            "synced": shared._phone_calendar_sync_time > 0,
+            "last_sync": sync_age,
+            "event_count": len(shared._phone_calendar_events),
+        }
+
+    # POST/PUT → receive events
+    # iOS Shortcuts sends one event per request inside a Repeat loop.
+    # Accumulate events arriving within 60s as a single batch.
+    try:
+        raw_body = await req.body()
+        if not raw_body:
+            return JSONResponse({"error": "empty body"}, status_code=400)
+
+        body = await req.json()
+
+        # Normalize: accept multiple input shapes from iOS Shortcuts
+        if isinstance(body, list):
+            events = body
+        elif isinstance(body, dict):
+            events = body.get("events", body)
+            if isinstance(events, dict):
+                if all(isinstance(v, dict) for v in events.values()):
+                    events = list(events.values())
+                else:
+                    events = [events]
+        else:
+            return JSONResponse({"error": f"unexpected body type: {type(body).__name__}"}, status_code=400)
+
+        if not isinstance(events, list):
+            events = [events]
+
+        # If last sync was >60s ago, start a new batch; otherwise append
+        now = time.time()
+        if now - shared._phone_calendar_sync_time > 60:
+            shared._phone_calendar_events = events
+            logger.info(f"[PHONE_SYNC] New batch started with {len(events)} event(s)")
+        else:
+            shared._phone_calendar_events.extend(events)
+            logger.info(f"[PHONE_SYNC] Appended {len(events)} event(s), total now {len(shared._phone_calendar_events)}")
+
+        shared._phone_calendar_sync_time = now
+
+        return {
+            "ok": True,
+            "events_received": len(shared._phone_calendar_events),
+            "message": f"Synced {len(shared._phone_calendar_events)} calendar events",
+        }
+    except Exception as e:
+        logger.error(f"[PHONE_SYNC] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)

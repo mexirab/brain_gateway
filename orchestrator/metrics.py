@@ -200,6 +200,26 @@ CALENDAR_POLL_EVENTS_FOUND = Counter(
     "Events announced by calendar poller",
 )
 
+# -- Gmail -------------------------------------------------------------------
+GMAIL_API_CALLS = Counter(
+    "bgw_gmail_api_calls_total",
+    "Gmail API calls",
+    ["operation"],
+)
+
+GMAIL_API_LATENCY = Histogram(
+    "bgw_gmail_api_duration_seconds",
+    "Gmail API latency",
+    ["operation"],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+)
+
+GMAIL_API_ERRORS = Counter(
+    "bgw_gmail_api_errors_total",
+    "Gmail API errors",
+    ["operation"],
+)
+
 # -- Pi-hole -----------------------------------------------------------------
 PIHOLE_BLOCKING_TOGGLES = Counter(
     "bgw_pihole_blocking_toggles_total",
@@ -235,6 +255,17 @@ FAST_PATH_COUNT = Counter(
 FAST_PATH_BYPASS = Counter(
     "bgw_fast_path_bypass_total",
     "Requests that could not use fast path (fell through to LLM)",
+)
+
+# -- Email-to-Calendar -------------------------------------------------------
+EMAIL_TO_CALENDAR_EVENTS_CREATED = Counter(
+    "bgw_email_to_calendar_events_created_total",
+    "Calendar events auto-created from emails",
+)
+
+EMAIL_TO_CALENDAR_EMAILS_SCANNED = Counter(
+    "bgw_email_to_calendar_emails_scanned_total",
+    "Emails scanned for calendar events",
 )
 
 # -- System info -------------------------------------------------------------
