@@ -64,6 +64,8 @@ export interface CalendarEvent {
   location: string | null;
   description: string | null;
   all_day: boolean;
+  calendar?: string;
+  source?: 'phone' | 'google';
 }
 
 export interface ChatMessage {

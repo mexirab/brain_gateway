@@ -140,5 +140,38 @@ _processed_for_events: set = set()
 PHONE_CALENDAR_SYNC_ENABLED = os.environ.get("PHONE_CALENDAR_SYNC_ENABLED", "true").lower() == "true"
 
 # Cached events from last phone sync (list of dicts)
+# Persisted to disk so they survive orchestrator restarts
 _phone_calendar_events: list = []
 _phone_calendar_sync_time: float = 0.0
+
+PHONE_CALENDAR_FILE = os.path.join(
+    os.environ.get("FINANCE_DB_PATH", "/app/data/finance.db").rsplit("/", 1)[0],
+    "phone_calendar.json",
+)
+
+def _load_phone_calendar():
+    """Load phone calendar events from disk (called at startup)."""
+    global _phone_calendar_events, _phone_calendar_sync_time
+    import json
+    try:
+        if os.path.exists(PHONE_CALENDAR_FILE):
+            with open(PHONE_CALENDAR_FILE, "r") as f:
+                data = json.load(f)
+            _phone_calendar_events = data.get("events", [])
+            _phone_calendar_sync_time = data.get("sync_time", 0.0)
+            logging.getLogger(__name__).info(
+                f"[PHONE_CAL] Loaded {len(_phone_calendar_events)} events from disk "
+                f"(synced {int((time.time() - _phone_calendar_sync_time) / 60)}m ago)"
+            )
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[PHONE_CAL] Failed to load from disk: {e}")
+
+def _save_phone_calendar():
+    """Save phone calendar events to disk (called after each sync)."""
+    import json
+    try:
+        os.makedirs(os.path.dirname(PHONE_CALENDAR_FILE), exist_ok=True)
+        with open(PHONE_CALENDAR_FILE, "w") as f:
+            json.dump({"events": _phone_calendar_events, "sync_time": _phone_calendar_sync_time}, f)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[PHONE_CAL] Failed to save to disk: {e}")

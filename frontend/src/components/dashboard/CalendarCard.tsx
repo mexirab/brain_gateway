@@ -9,11 +9,15 @@ export default function CalendarCard() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<string>('');
 
   useEffect(() => {
     api
       .calendarToday()
-      .then((data) => setEvents(data.events))
+      .then((data) => {
+        setEvents(data.events);
+        setSource(data.source || '');
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -28,10 +32,17 @@ export default function CalendarCard() {
 
   return (
     <div className="glass p-5">
-      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-        <Calendar size={18} className="text-indigo-400" />
-        Today
-      </h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold text-zinc-300 flex items-center gap-2">
+          <Calendar size={18} className="text-indigo-400" />
+          Today
+        </h2>
+        {source && (
+          <span className="text-[10px] text-zinc-600 uppercase tracking-wider">
+            {source === 'phone' ? 'All calendars' : 'Google'}
+          </span>
+        )}
+      </div>
 
       {loading && (
         <div className="space-y-2">
@@ -62,6 +73,7 @@ export default function CalendarCard() {
                 <p className="text-xs text-zinc-500">
                   {formatTime(event.start, event.all_day)}
                   {event.location && ` \u00b7 ${event.location}`}
+                  {event.calendar && ` \u00b7 ${event.calendar}`}
                 </p>
               </div>
             </div>

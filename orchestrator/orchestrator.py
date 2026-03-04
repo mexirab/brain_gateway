@@ -240,6 +240,9 @@ async def startup_event():
     shared._ha_tool_cache_time = 0.0
     print(f"[orchestrator] Loaded {count} HA entities")
 
+    # Load phone calendar events from disk (survives restarts)
+    shared._load_phone_calendar()
+
     # Initialize Google Calendar client
     cal_client = get_calendar_client(http_client=shared._http)
     if cal_client.is_configured:

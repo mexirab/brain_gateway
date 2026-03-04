@@ -46,5 +46,5 @@ export const api = {
       body: JSON.stringify({ entity_id: entityId, service, data }),
     }),
   calendarToday: () =>
-    fetcher<{ events: CalendarEvent[] }>('/api/calendar/today'),
+    fetcher<{ events: CalendarEvent[]; source?: string; count?: number }>('/api/calendar/today'),
 };

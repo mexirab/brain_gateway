@@ -368,28 +368,90 @@ async def announce_tts(req: Request):
 
 @router.get("/api/calendar/today")
 async def calendar_today():
-    """Get today's calendar events for the dashboard."""
-    cal = get_calendar_client()
-    if not cal.is_configured:
-        return {"events": [], "error": "Calendar not configured"}
+    """Get today's calendar events for the dashboard.
 
-    result = await cal.list_events(days_ahead=1)
-    if not result.success:
-        return {"events": [], "error": result.error}
+    Merges events from two sources:
+    1. Phone calendar sync (iPhone Shortcut — Outlook + Google + iCloud)
+    2. Google Calendar API (fallback if phone sync is stale/missing)
 
-    events = [
-        {
-            "id": e.id,
-            "title": e.title,
-            "start": e.start.isoformat(),
-            "end": e.end.isoformat(),
-            "location": e.location or None,
-            "description": e.description or None,
-            "all_day": e.all_day,
-        }
-        for e in result.events
-    ]
-    return {"events": events}
+    Phone sync is preferred when fresh (<24h old) since it aggregates all
+    iPhone calendars. Google Calendar is used as fallback. Events are
+    deduplicated by title + start time to avoid duplicates when Google
+    events appear in both sources.
+    """
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/New_York")
+    today = datetime.now(tz).date()
+    merged: list[dict] = []
+    seen: set[str] = set()  # "title|start_iso" for dedup
+    source = "none"
+
+    # Source 1: Phone calendar sync (has ALL calendars)
+    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+    if shared._phone_calendar_events and phone_age < 86400:
+        source = "phone"
+        for ev in shared._phone_calendar_events:
+            try:
+                start_str = ev.get("start", "")
+                start = datetime.fromisoformat(start_str)
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=tz)
+                if start.date() != today:
+                    continue
+
+                end_str = ev.get("end", "")
+                end = None
+                if end_str:
+                    end = datetime.fromisoformat(end_str)
+                    if end.tzinfo is None:
+                        end = end.replace(tzinfo=tz)
+
+                title = ev.get("title", "(No title)")
+                dedup_key = f"{title.lower()}|{start.isoformat()}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                merged.append({
+                    "id": ev.get("id", f"phone_{len(merged)}"),
+                    "title": title,
+                    "start": start.isoformat(),
+                    "end": end.isoformat() if end else start.isoformat(),
+                    "location": ev.get("location") or None,
+                    "description": ev.get("description") or None,
+                    "all_day": ev.get("all_day", False),
+                    "calendar": ev.get("calendar", ""),
+                    "source": "phone",
+                })
+            except (ValueError, TypeError):
+                continue
+    else:
+        # Source 2: Google Calendar API (fallback)
+        source = "google"
+        cal = get_calendar_client()
+        if cal and cal.is_configured:
+            result = await cal.list_events(days_ahead=1)
+            if result.success:
+                for e in result.events:
+                    title = e.title
+                    dedup_key = f"{title.lower()}|{e.start.isoformat()}"
+                    seen.add(dedup_key)
+                    merged.append({
+                        "id": e.id,
+                        "title": title,
+                        "start": e.start.isoformat(),
+                        "end": e.end.isoformat(),
+                        "location": e.location or None,
+                        "description": e.description or None,
+                        "all_day": e.all_day,
+                        "calendar": "Google",
+                        "source": "google",
+                    })
+
+    # Sort by start time (all-day events first, then by time)
+    merged.sort(key=lambda e: (0 if e.get("all_day") else 1, e["start"]))
+
+    return {"events": merged, "source": source, "count": len(merged)}
 
 
 @router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])
@@ -455,6 +517,7 @@ async def sync_phone_calendar(req: Request):
             logger.info(f"[PHONE_SYNC] Appended {len(events)} event(s), total now {len(shared._phone_calendar_events)}")
 
         shared._phone_calendar_sync_time = now
+        shared._save_phone_calendar()
 
         return {
             "ok": True,
