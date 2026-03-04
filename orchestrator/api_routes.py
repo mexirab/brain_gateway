@@ -366,6 +366,32 @@ async def announce_tts(req: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/api/calendar/today")
+async def calendar_today():
+    """Get today's calendar events for the dashboard."""
+    cal = get_calendar_client()
+    if not cal.is_configured:
+        return {"events": [], "error": "Calendar not configured"}
+
+    result = await cal.list_events(days_ahead=1)
+    if not result.success:
+        return {"events": [], "error": result.error}
+
+    events = [
+        {
+            "id": e.id,
+            "title": e.title,
+            "start": e.start.isoformat(),
+            "end": e.end.isoformat(),
+            "location": e.location or None,
+            "description": e.description or None,
+            "all_day": e.all_day,
+        }
+        for e in result.events
+    ]
+    return {"events": events}
+
+
 @router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])
 async def sync_phone_calendar(req: Request):
     """Receive consolidated calendar events from iPhone Shortcut, or return status.
