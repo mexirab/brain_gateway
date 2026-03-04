@@ -14,9 +14,12 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers | Working |
 | Personal memory (RAG) | ChromaDB with 154 docs: profile, patterns, meds, projects | Working |
 | Web search | "What's the weather?" → SearXNG | Working |
-| Hybrid LLM | Helios 120B for conversation, Nemotron 8B for tools | Working |
+| Hybrid LLM | Helios (Qwen3-32B) for conversation, Nemotron 8B for tools | Working |
 | Google Calendar | "What's on my calendar?" → check/create events, proactive alerts | Working |
-| Morning briefing | 7:30 AM daily → today's events + pending reminders via TTS | Working |
+| Phone calendar sync | iPhone Shortcut → all calendars (Outlook+Google+iCloud) merged on dashboard | Working |
+| Gmail monitoring | check_email/search_email tools + proactive polling (Primary inbox) | Working |
+| Morning briefing | 7:00 AM daily on bedroom pair → today's events + pending reminders via TTS | Working |
+| Email polling | Every 30 min → announce new unread Primary emails via TTS | Working |
 | Calendar polling | Every 15 min → announce events starting within 2 hours | Working |
 | Mode router | Intent-based coaching: explainer/mirror/counterbalance/challenge/baseline | Working |
 | HTTPS access | Tailscale Serve → valid TLS cert → mobile mic support | Working |
@@ -29,8 +32,6 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Voice pipeline routes to Nemotron directly | High | Should route through orchestrator :8888 for hybrid Helios+Nemotron. Requires HA UI access to change conversation agent. |
 | TTS output on ATOM Echo tiny speaker | High | Should route to Google speakers group ("all speakers"). Requires HA UI. |
 | ATOM Echo S3R has no LED feedback | Low | S3R variant has no programmable RGB LED (GPIO35 conflicts with PSRAM). Hardware limitation. |
-| Calendar only reads Google Calendar | Medium | Outlook/Exchange (work) and Apple Calendar not integrated yet |
-| TTS pacing not yet user-verified | Low | Sentence pause injection deployed on Uranus but Nadim hasn't tested voice output yet |
 
 ## In Progress: Frontend Dashboard (ConvivialProphet.com)
 
@@ -41,18 +42,16 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Phase | What | Status |
 |-------|------|--------|
 | 1 | Project scaffold, Docker, auth middleware, login, placeholder pages | ✅ Done |
-| 2 | Public pages: landing ("Meet Jess"), architecture SVG diagram, live cluster status | Not started |
-| 3 | Private dashboard: calendar widget, reminders, focus timer, quick actions | Not started |
-| 4 | Chat interface: streaming SSE, voice input (Web Speech API) | Not started |
-| 5 | Home controls: HA entity cards, toggles, brightness/climate controls | Not started |
+| 2 | Public pages: architecture page with cluster nodes, data flow, capabilities | ✅ Done |
+| 3 | Private dashboard: calendar (merged), reminders, focus timer, system health, finance snapshot | ✅ Done |
+| 4 | Chat interface: streaming SSE with Jess, routing badges | ✅ Done |
+| 5 | Home controls: HA entity cards, toggles, brightness, scenes | ✅ Done |
+| F1-F6 | Gamified finance dashboard: YNAB sync, budget health, XP/levels, quest board | ✅ Done |
 | 6 | DNS + Cloudflare Tunnel: ConvivialProphet.com → Jupiter | Not started |
 | 7 | Polish: animations, PWA, mobile optimization, toasts | Not started |
 
 **Remaining orchestrator changes needed:**
-- `GET /api/calendar/today` endpoint (for dashboard calendar widget)
 - CORS origins updated when Cloudflare domain is live
-
-**Plan file:** `.claude/plans/snug-nibbling-rossum.md` has full implementation details.
 
 ## Phase 2: Calendar & Email Awareness
 
@@ -63,20 +62,21 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - ✅ `check_calendar` tool — "Hey Jess, what's on my calendar this week?"
 - ✅ `create_calendar_event` tool — "Add pickleball Thursday at 7pm"
 - ✅ Proactive polling: every 15 min, TTS announcement for events within 2 hours
-- ✅ Morning briefing: 7:30 AM, today's events + pending reminders
+- ✅ Morning briefing: 7:00 AM on bedroom pair, today's events + pending reminders
 - ✅ Deployed and configured on Jupiter
 
-### Calendar unification — NOT STARTED
-- Outlook/Exchange (Cisco work calendar) → ICS subscription into Google Calendar
-- If corporate ICS blocked → iPhone Shortcuts bridge as fallback
-- Apple Calendar events → already sync to Google if using Google account
+### Calendar unification — DONE
+- ✅ iPhone Shortcuts bridge: sends all calendars (Outlook + Google + iCloud) to `/api/calendar/sync`
+- ✅ Dashboard merges phone-synced events with Google Calendar API, deduplicates by title+start
+- ✅ Phone events persisted to disk (survives restarts)
+- ✅ iOS date format parsing with Unicode space normalization
 
-### Gmail monitoring — NOT STARTED
-- Watch for calendar invites, flight confirmations, bill due dates
-- Parse and extract: event name, date, location, deadlines
-- Auto-create reminders or calendar entries
-- "Hey Jess, did I get any important emails today?"
-- Requires adding Gmail API scopes to OAuth2
+### Gmail monitoring — DONE
+- ✅ `check_email` tool — check inbox for recent/unread emails
+- ✅ `search_email` tool — Gmail query syntax (`from:`, `subject:`, `newer_than:`, etc.)
+- ✅ Proactive polling: every 30 min, announces new Primary inbox emails via TTS
+- ✅ Filters out promotions, social, forums, and updates categories
+- ✅ OAuth2 scopes: `calendar.readonly`, `calendar.events`, `gmail.readonly`
 
 ## Phase 3: Document Memory — NOT STARTED
 
@@ -158,11 +158,12 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 3. ~~**Personal RAG knowledge**~~ — ✅ DONE (154 docs: identity, patterns, preferences)
 4. ~~**HTTPS + mobile mic**~~ — ✅ DONE (Tailscale Serve)
 5. ~~**TTS pacing**~~ — ✅ DONE (paragraph splitting + sentence pause injection)
-6. **Frontend dashboard** — IN PROGRESS (Phase 1 deployed, Phases 2-7 pending)
-7. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
-8. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
-9. **Gmail integration** — Email awareness, auto-reminders from invites
-10. **Document ingestion** — builds on existing RAG, immediate utility
-11. **Proactive agent** — transforms from reactive to anticipatory
-12. **Vision/multimodal** — nice to have, depends on model capabilities
-13. **Jess avatar** — Animated talking head synced to TTS output
+6. ~~**Frontend dashboard**~~ — ✅ DONE (Architecture, Dashboard, Chat, Home, Finance pages)
+7. ~~**Gmail integration**~~ — ✅ DONE (check/search tools + proactive polling)
+8. ~~**Calendar unification**~~ — ✅ DONE (iPhone Shortcuts bridge for all calendars)
+9. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
+10. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
+11. **Document ingestion** — builds on existing RAG, immediate utility
+12. **Proactive agent** — transforms from reactive to anticipatory
+13. **Vision/multimodal** — nice to have, depends on model capabilities
+14. **Jess avatar** — Animated talking head synced to TTS output
