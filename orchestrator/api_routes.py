@@ -379,12 +379,45 @@ async def calendar_today():
     deduplicated by title + start time to avoid duplicates when Google
     events appear in both sources.
     """
+    import re
     from zoneinfo import ZoneInfo
-    tz = ZoneInfo("America/New_York")
+    tz = ZoneInfo("America/Chicago")
     today = datetime.now(tz).date()
     merged: list[dict] = []
     seen: set[str] = set()  # "title|start_iso" for dedup
     source = "none"
+
+    def _parse_phone_datetime(s: str) -> datetime:
+        """Parse date strings from iPhone Shortcuts.
+
+        Handles formats like:
+        - "Mar 4, 2026 at 10:00\u202fAM"  (narrow no-break space before AM/PM)
+        - "Mar 4, 2026 at 1:00 PM"         (regular space)
+        - "2026-03-04T10:00:00"            (ISO format)
+        """
+        if not s:
+            raise ValueError("empty date string")
+        # Try ISO first
+        try:
+            return datetime.fromisoformat(s)
+        except ValueError:
+            pass
+        # Normalize unicode spaces and "at" keyword
+        cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
+        # Remove extra whitespace
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        # Try common iOS Shortcut formats
+        for fmt in (
+            "%b %d, %Y %I:%M %p",   # "Mar 4, 2026 1:00 PM"
+            "%B %d, %Y %I:%M %p",   # "March 4, 2026 1:00 PM"
+            "%m/%d/%Y %I:%M %p",    # "03/04/2026 1:00 PM"
+            "%b %d, %Y",            # "Mar 4, 2026" (all-day)
+        ):
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"unrecognized date format: {s!r}")
 
     # Source 1: Phone calendar sync (has ALL calendars)
     phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
@@ -393,7 +426,7 @@ async def calendar_today():
         for ev in shared._phone_calendar_events:
             try:
                 start_str = ev.get("start", "")
-                start = datetime.fromisoformat(start_str)
+                start = _parse_phone_datetime(start_str)
                 if start.tzinfo is None:
                     start = start.replace(tzinfo=tz)
                 if start.date() != today:
@@ -402,28 +435,35 @@ async def calendar_today():
                 end_str = ev.get("end", "")
                 end = None
                 if end_str:
-                    end = datetime.fromisoformat(end_str)
-                    if end.tzinfo is None:
-                        end = end.replace(tzinfo=tz)
+                    try:
+                        end = _parse_phone_datetime(end_str)
+                        if end.tzinfo is None:
+                            end = end.replace(tzinfo=tz)
+                    except ValueError:
+                        pass
 
                 title = ev.get("title", "(No title)")
-                dedup_key = f"{title.lower()}|{start.isoformat()}"
+                dedup_key = f"{title.lower().strip()}|{start.isoformat()}"
                 if dedup_key in seen:
                     continue
                 seen.add(dedup_key)
 
+                # Handle trailing-space key from iOS ("calendar " vs "calendar")
+                cal_name = ev.get("calendar") or ev.get("calendar ") or ""
+
                 merged.append({
                     "id": ev.get("id", f"phone_{len(merged)}"),
-                    "title": title,
+                    "title": title.strip(),
                     "start": start.isoformat(),
                     "end": end.isoformat() if end else start.isoformat(),
                     "location": ev.get("location") or None,
                     "description": ev.get("description") or None,
                     "all_day": ev.get("all_day", False),
-                    "calendar": ev.get("calendar", ""),
+                    "calendar": cal_name.strip(),
                     "source": "phone",
                 })
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                logger.warning(f"[CALENDAR] Skipping phone event: {exc} — raw: {ev}")
                 continue
     else:
         # Source 2: Google Calendar API (fallback)

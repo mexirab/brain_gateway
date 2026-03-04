@@ -5,6 +5,7 @@ email-to-calendar event extraction, YNAB transaction sync.
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -71,6 +72,32 @@ async def poll_calendar():
         logger.error(f"[CALENDAR_POLL] Error: {e}")
 
 
+def _parse_phone_datetime(s: str, tz=None) -> datetime:
+    """Parse date strings from iPhone Shortcuts.
+
+    Handles: "Mar 4, 2026 at 10:00\u202fAM", ISO format, etc.
+    """
+    if not s:
+        raise ValueError("empty date string")
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    for fmt in (
+        "%b %d, %Y %I:%M %p",
+        "%B %d, %Y %I:%M %p",
+        "%m/%d/%Y %I:%M %p",
+        "%b %d, %Y",
+    ):
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognized date format: {s!r}")
+
+
 async def morning_briefing():
     """Morning announcement: today's events from all calendars via TTS.
 
@@ -91,7 +118,7 @@ async def morning_briefing():
             for ev in shared._phone_calendar_events:
                 try:
                     start_str = ev.get("start", "")
-                    start = datetime.fromisoformat(start_str)
+                    start = _parse_phone_datetime(start_str, tz)
                     if start.tzinfo is None:
                         start = start.replace(tzinfo=tz)
                     if start.date() != today:
@@ -101,7 +128,7 @@ async def morning_briefing():
                         "title": ev.get("title", "(No title)"),
                         "start": start,
                         "all_day": is_all_day,
-                        "calendar": ev.get("calendar", ""),
+                        "calendar": ev.get("calendar") or ev.get("calendar ") or "",
                         "location": ev.get("location", ""),
                     })
                 except (ValueError, TypeError):
