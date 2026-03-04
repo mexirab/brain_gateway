@@ -3,12 +3,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { FinanceProvider } from '@/lib/finance-context';
-import { Swords, ScrollText, Shield } from 'lucide-react';
+import { Swords, ScrollText, Shield, ArrowUpDown, Settings } from 'lucide-react';
 
 const FINANCE_TABS = [
   { href: '/finance/quest-board', label: 'Quest Board', icon: Shield },
   { href: '/finance/side-quests', label: 'Side Quests', icon: ScrollText },
   { href: '/finance/boss-battle', label: 'Boss Battle', icon: Swords },
+  { href: '/finance/transactions', label: 'Transactions', icon: ArrowUpDown },
+  { href: '/finance/settings', label: 'Settings', icon: Settings },
 ];
 
 export default function FinanceLayout({
@@ -30,14 +32,14 @@ export default function FinanceLayout({
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors flex-1 justify-center ${
+                className={`flex items-center gap-1.5 px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors flex-1 justify-center ${
                   active
                     ? 'bg-zinc-800 text-zinc-100 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-300'
                 }`}
               >
                 <Icon size={14} />
-                {tab.label}
+                <span className="hidden sm:inline">{tab.label}</span>
               </Link>
             );
           })}

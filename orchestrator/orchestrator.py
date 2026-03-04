@@ -58,9 +58,9 @@ from nemotron_loop import (
     call_nemotron_orchestrator, _run_nemotron_tool_loop,
     clean_response, parse_tool_calls_from_content,
 )
-from background_jobs import poll_calendar, morning_briefing, poll_email, process_emails_for_events
+from background_jobs import poll_calendar, morning_briefing, poll_email, process_emails_for_events, sync_ynab_transactions
 from api_routes import router as api_router
-from finance_manager import router as finance_router, setup_finance
+from finance_manager import router as finance_router, setup_finance, _is_ynab_configured, YNAB_SYNC_INTERVAL
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -307,6 +307,18 @@ async def startup_event():
             replace_existing=True,
         )
         logger.info(f"[SCHEDULER] Email-to-calendar every {EMAIL_TO_CALENDAR_INTERVAL} min")
+
+    # Schedule YNAB transaction sync
+    if _is_ynab_configured():
+        scheduler.add_job(
+            sync_ynab_transactions,
+            trigger="interval",
+            minutes=YNAB_SYNC_INTERVAL,
+            id="ynab_sync",
+            name="YNAB transaction sync",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] YNAB sync every {YNAB_SYNC_INTERVAL} min")
 
 
 @app.on_event("shutdown")

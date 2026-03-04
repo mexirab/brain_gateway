@@ -1,5 +1,5 @@
 """
-Financial Quest Board — SQLite persistence, game logic, and API routes.
+Financial Quest Board — SQLite persistence, game logic, YNAB integration, and API routes.
 
 Gamified finance tracking for ADHD support:
 - Health bar (discretionary budget tracking)
@@ -8,6 +8,7 @@ Gamified finance tracking for ADHD support:
 - Side quests (savings goals)
 - Future Self Damage calculator
 - Boss battles (windfall months)
+- YNAB integration for auto-tracking real spending
 """
 
 import os
@@ -17,6 +18,7 @@ import logging
 from datetime import datetime
 from contextlib import contextmanager
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -125,7 +127,21 @@ CREATE TABLE IF NOT EXISTS ynab_sync_state (
     last_knowledge_of_server INTEGER,
     last_synced_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ynab_category_mapping (
+    category_name TEXT PRIMARY KEY,
+    is_discretionary INTEGER NOT NULL DEFAULT 0
+);
 """
+
+# ---------------------------------------------------------------------------
+# YNAB Configuration
+# ---------------------------------------------------------------------------
+
+YNAB_ACCESS_TOKEN = os.environ.get("YNAB_ACCESS_TOKEN", "")
+YNAB_BUDGET_ID = os.environ.get("YNAB_BUDGET_ID", "")  # empty = auto-detect default
+YNAB_API_BASE = "https://api.ynab.com/v1"
+YNAB_SYNC_INTERVAL = int(os.environ.get("YNAB_SYNC_INTERVAL", "30"))  # minutes
 
 LEVELS = [
     (1, 0, "Copper Adventurer"),
@@ -753,6 +769,421 @@ async def get_xp_history(limit: int = 20):
 
 
 # ---------------------------------------------------------------------------
+# YNAB Integration
+# ---------------------------------------------------------------------------
+
+def _ynab_headers():
+    """Get YNAB API authorization headers."""
+    return {"Authorization": f"Bearer {YNAB_ACCESS_TOKEN}"}
+
+
+def _is_ynab_configured():
+    """Check if YNAB access token is set."""
+    return bool(YNAB_ACCESS_TOKEN)
+
+
+async def _ynab_get(path: str) -> dict:
+    """Make an authenticated GET request to YNAB API."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(f"{YNAB_API_BASE}{path}", headers=_ynab_headers())
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _resolve_budget_id() -> str:
+    """Get the budget ID — use configured one or auto-detect default."""
+    if YNAB_BUDGET_ID:
+        return YNAB_BUDGET_ID
+
+    # Check if we have one stored in DB
+    with get_db() as conn:
+        row = conn.execute("SELECT budget_id FROM ynab_sync_state WHERE id = 1").fetchone()
+        if row and row["budget_id"]:
+            return row["budget_id"]
+
+    # Auto-detect: use the default budget (most recently used)
+    data = await _ynab_get("/budgets?include_accounts=false")
+    budgets = data.get("data", {}).get("budgets", [])
+    if not budgets:
+        raise ValueError("No YNAB budgets found")
+
+    # Use the default budget (first one, which is the last used)
+    budget_id = budgets[0]["id"]
+    budget_name = budgets[0]["name"]
+
+    # Persist it
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO ynab_sync_state (id, budget_id) VALUES (1, ?)
+               ON CONFLICT(id) DO UPDATE SET budget_id = ?""",
+            (budget_id, budget_id),
+        )
+
+    logger.info(f"[YNAB] Auto-detected budget: {budget_name} ({budget_id})")
+    return budget_id
+
+
+async def ynab_sync_transactions():
+    """Sync transactions from YNAB using delta sync.
+
+    Called by APScheduler or manual trigger. Pulls only changed transactions
+    since last sync using last_knowledge_of_server.
+    """
+    if not _is_ynab_configured():
+        return {"synced": 0, "error": "YNAB not configured"}
+
+    try:
+        budget_id = await _resolve_budget_id()
+
+        # Get last sync state
+        with get_db() as conn:
+            sync_state = conn.execute(
+                "SELECT * FROM ynab_sync_state WHERE id = 1"
+            ).fetchone()
+
+        last_knowledge = sync_state["last_knowledge_of_server"] if sync_state else None
+
+        # Fetch transactions (delta if available)
+        path = f"/budgets/{budget_id}/transactions"
+        if last_knowledge:
+            path += f"?last_knowledge_of_server={last_knowledge}"
+
+        data = await _ynab_get(path)
+        server_knowledge = data.get("data", {}).get("server_knowledge", 0)
+        transactions = data.get("data", {}).get("transactions", [])
+
+        # Get category mappings
+        with get_db() as conn:
+            mapping_rows = conn.execute("SELECT * FROM ynab_category_mapping").fetchall()
+        category_map = {r["category_name"]: bool(r["is_discretionary"]) for r in mapping_rows}
+
+        synced = 0
+        with get_db() as conn:
+            for txn in transactions:
+                ynab_id = txn["id"]
+                deleted = txn.get("deleted", False)
+
+                if deleted:
+                    # Remove deleted transactions and recalculate budget
+                    existing = conn.execute(
+                        "SELECT * FROM transactions WHERE ynab_transaction_id = ?",
+                        (ynab_id,),
+                    ).fetchone()
+                    if existing:
+                        if existing["is_discretionary"] and existing["budget_period"]:
+                            conn.execute(
+                                "UPDATE budget_periods SET discretionary_spent = discretionary_spent - ? WHERE year_month = ?",
+                                (existing["amount"], existing["budget_period"]),
+                            )
+                        conn.execute(
+                            "DELETE FROM transactions WHERE ynab_transaction_id = ?",
+                            (ynab_id,),
+                        )
+                    continue
+
+                # YNAB amounts are in milliunits (negative = outflow)
+                amount_milliunits = txn.get("amount", 0)
+                amount = abs(amount_milliunits) / 1000.0
+
+                # Skip inflows (positive amounts = money coming in)
+                if amount_milliunits >= 0:
+                    continue
+
+                # Skip transfers between accounts
+                if txn.get("transfer_account_id"):
+                    continue
+
+                date = txn.get("date", "")
+                payee = txn.get("payee_name", "") or ""
+                category = txn.get("category_name", "") or ""
+                memo = txn.get("memo", "") or ""
+
+                # Determine budget period from date
+                if len(date) >= 7:
+                    budget_period = date[:7]  # YYYY-MM
+                else:
+                    budget_period = _current_year_month()
+
+                # Determine if discretionary based on category mapping
+                is_disc = category_map.get(category, False)
+
+                # Check if transaction already exists
+                existing = conn.execute(
+                    "SELECT id, is_discretionary, amount, budget_period FROM transactions WHERE ynab_transaction_id = ?",
+                    (ynab_id,),
+                ).fetchone()
+
+                if existing:
+                    # Update existing transaction
+                    old_disc = bool(existing["is_discretionary"])
+                    old_amount = existing["amount"]
+                    old_period = existing["budget_period"]
+
+                    # Remove old amount from old period
+                    if old_disc and old_period:
+                        conn.execute(
+                            "UPDATE budget_periods SET discretionary_spent = discretionary_spent - ? WHERE year_month = ?",
+                            (old_amount, old_period),
+                        )
+
+                    conn.execute(
+                        """UPDATE transactions SET date=?, amount=?, name=?, merchant_name=?,
+                           category=?, is_discretionary=?, budget_period=?
+                           WHERE ynab_transaction_id=?""",
+                        (date, amount, payee or memo or "YNAB Transaction", payee,
+                         category, 1 if is_disc else 0, budget_period, ynab_id),
+                    )
+
+                    # Add new amount to new period
+                    if is_disc:
+                        _ensure_budget_period(conn, budget_period)
+                        conn.execute(
+                            "UPDATE budget_periods SET discretionary_spent = discretionary_spent + ? WHERE year_month = ?",
+                            (amount, budget_period),
+                        )
+                else:
+                    # Insert new transaction
+                    _ensure_budget_period(conn, budget_period)
+                    conn.execute(
+                        """INSERT INTO transactions
+                           (ynab_transaction_id, date, amount, name, merchant_name, category,
+                            is_discretionary, budget_period, source)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ynab')""",
+                        (ynab_id, date, amount, payee or memo or "YNAB Transaction",
+                         payee, category, 1 if is_disc else 0, budget_period),
+                    )
+
+                    if is_disc:
+                        conn.execute(
+                            "UPDATE budget_periods SET discretionary_spent = discretionary_spent + ? WHERE year_month = ?",
+                            (amount, budget_period),
+                        )
+
+                synced += 1
+
+            # Update sync state
+            conn.execute(
+                """INSERT INTO ynab_sync_state (id, budget_id, last_knowledge_of_server, last_synced_at)
+                   VALUES (1, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                   last_knowledge_of_server = ?, last_synced_at = ?""",
+                (budget_id, server_knowledge, datetime.now().isoformat(),
+                 server_knowledge, datetime.now().isoformat()),
+            )
+
+        logger.info(f"[YNAB] Synced {synced} transactions (server_knowledge={server_knowledge})")
+        return {"synced": synced, "server_knowledge": server_knowledge}
+
+    except httpx.HTTPStatusError as e:
+        error_msg = f"YNAB API error: {e.response.status_code}"
+        logger.error(f"[YNAB] {error_msg}")
+        return {"synced": 0, "error": error_msg}
+    except Exception as e:
+        logger.error(f"[YNAB] Sync error: {e}")
+        return {"synced": 0, "error": str(e)}
+
+
+# ---- YNAB API Routes ----
+
+@router.get("/ynab/status")
+async def ynab_status():
+    """Get YNAB connection status and last sync info."""
+    configured = _is_ynab_configured()
+
+    if not configured:
+        return {
+            "configured": False,
+            "connected": False,
+            "budget_name": None,
+            "last_synced_at": None,
+            "category_count": 0,
+            "discretionary_count": 0,
+        }
+
+    with get_db() as conn:
+        sync_state = conn.execute("SELECT * FROM ynab_sync_state WHERE id = 1").fetchone()
+        cat_count = conn.execute("SELECT COUNT(*) FROM ynab_category_mapping").fetchone()[0]
+        disc_count = conn.execute(
+            "SELECT COUNT(*) FROM ynab_category_mapping WHERE is_discretionary = 1"
+        ).fetchone()[0]
+
+    # Try to get budget name
+    budget_name = None
+    connected = False
+    try:
+        budget_id = await _resolve_budget_id()
+        data = await _ynab_get(f"/budgets/{budget_id}")
+        budget_name = data.get("data", {}).get("budget", {}).get("name")
+        connected = True
+    except Exception as e:
+        logger.warning(f"[YNAB] Status check failed: {e}")
+
+    return {
+        "configured": True,
+        "connected": connected,
+        "budget_id": sync_state["budget_id"] if sync_state else None,
+        "budget_name": budget_name,
+        "last_synced_at": sync_state["last_synced_at"] if sync_state else None,
+        "server_knowledge": sync_state["last_knowledge_of_server"] if sync_state else None,
+        "category_count": cat_count,
+        "discretionary_count": disc_count,
+    }
+
+
+@router.post("/ynab/sync")
+async def trigger_ynab_sync():
+    """Manually trigger YNAB transaction sync."""
+    if not _is_ynab_configured():
+        return JSONResponse({"error": "YNAB not configured. Set YNAB_ACCESS_TOKEN env var."}, status_code=400)
+
+    result = await ynab_sync_transactions()
+    return result
+
+
+@router.get("/ynab/categories")
+async def get_ynab_categories():
+    """Get all YNAB categories with their discretionary mapping."""
+    if not _is_ynab_configured():
+        return JSONResponse({"error": "YNAB not configured"}, status_code=400)
+
+    try:
+        budget_id = await _resolve_budget_id()
+        data = await _ynab_get(f"/budgets/{budget_id}/categories")
+        groups = data.get("data", {}).get("category_groups", [])
+
+        # Get current mappings from DB
+        with get_db() as conn:
+            mapping_rows = conn.execute("SELECT * FROM ynab_category_mapping").fetchall()
+        existing_map = {r["category_name"]: bool(r["is_discretionary"]) for r in mapping_rows}
+
+        result = []
+        for group in groups:
+            # Skip internal YNAB groups
+            if group.get("hidden") or group.get("deleted"):
+                continue
+            group_name = group.get("name", "")
+            if group_name in ("Internal Master Category", "Credit Card Payments"):
+                continue
+
+            categories = []
+            for cat in group.get("categories", []):
+                if cat.get("hidden") or cat.get("deleted"):
+                    continue
+                cat_name = cat.get("name", "")
+                categories.append({
+                    "name": cat_name,
+                    "is_discretionary": existing_map.get(cat_name, False),
+                    "budgeted": cat.get("budgeted", 0) / 1000.0,
+                    "activity": abs(cat.get("activity", 0)) / 1000.0,
+                    "balance": cat.get("balance", 0) / 1000.0,
+                })
+
+            if categories:
+                result.append({
+                    "group_name": group_name,
+                    "categories": categories,
+                })
+
+        return {"groups": result}
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/ynab/categories/mapping")
+async def update_category_mapping(req: Request):
+    """Update which YNAB categories are considered discretionary.
+
+    Body: { "mappings": { "Dining Out": true, "Rent": false, ... } }
+    """
+    body = await req.json()
+    mappings = body.get("mappings", {})
+
+    if not mappings:
+        return JSONResponse({"error": "mappings dict required"}, status_code=400)
+
+    with get_db() as conn:
+        for cat_name, is_disc in mappings.items():
+            conn.execute(
+                """INSERT INTO ynab_category_mapping (category_name, is_discretionary)
+                   VALUES (?, ?)
+                   ON CONFLICT(category_name) DO UPDATE SET is_discretionary = ?""",
+                (cat_name, 1 if is_disc else 0, 1 if is_disc else 0),
+            )
+
+    logger.info(f"[YNAB] Updated {len(mappings)} category mappings")
+
+    # Recalculate budget spending based on new mappings
+    await _recalculate_budget_from_transactions()
+
+    return {"success": True, "updated": len(mappings)}
+
+
+async def _recalculate_budget_from_transactions():
+    """Recalculate discretionary_spent for all budget periods from transactions.
+
+    Called after category mapping changes to ensure accuracy.
+    """
+    with get_db() as conn:
+        # Get current category mappings
+        mapping_rows = conn.execute("SELECT * FROM ynab_category_mapping").fetchall()
+        category_map = {r["category_name"]: bool(r["is_discretionary"]) for r in mapping_rows}
+
+        # Update each YNAB transaction's is_discretionary flag based on mapping
+        ynab_txns = conn.execute(
+            "SELECT id, category, budget_period FROM transactions WHERE source = 'ynab'"
+        ).fetchall()
+
+        for txn in ynab_txns:
+            is_disc = category_map.get(txn["category"], False)
+            conn.execute(
+                "UPDATE transactions SET is_discretionary = ? WHERE id = ?",
+                (1 if is_disc else 0, txn["id"]),
+            )
+
+        # Recalculate totals for each budget period
+        periods = conn.execute("SELECT DISTINCT year_month FROM budget_periods").fetchall()
+        for period in periods:
+            ym = period["year_month"]
+            total = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE budget_period = ? AND is_discretionary = 1",
+                (ym,),
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE budget_periods SET discretionary_spent = ? WHERE year_month = ?",
+                (total, ym),
+            )
+
+    logger.info("[YNAB] Recalculated budget spending from transactions")
+
+
+@router.post("/ynab/reset-sync")
+async def reset_ynab_sync():
+    """Reset YNAB sync state (forces full re-sync on next sync)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE ynab_sync_state SET last_knowledge_of_server = NULL WHERE id = 1"
+        )
+        # Delete all YNAB-sourced transactions
+        conn.execute("DELETE FROM transactions WHERE source = 'ynab'")
+        # Recalculate budgets
+        periods = conn.execute("SELECT DISTINCT year_month FROM budget_periods").fetchall()
+        for period in periods:
+            ym = period["year_month"]
+            total = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE budget_period = ? AND is_discretionary = 1",
+                (ym,),
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE budget_periods SET discretionary_spent = ? WHERE year_month = ?",
+                (total, ym),
+            )
+
+    logger.info("[YNAB] Sync state reset — will do full sync on next trigger")
+    return {"success": True, "message": "Sync state reset. Trigger sync to re-import."}
+
+
+# ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
 
@@ -760,6 +1191,10 @@ def setup_finance():
     """Initialize finance module. Called from orchestrator startup."""
     try:
         init_db()
+        if _is_ynab_configured():
+            logger.info(f"[FINANCE] YNAB configured — sync every {YNAB_SYNC_INTERVAL}m")
+        else:
+            logger.info("[FINANCE] YNAB not configured (set YNAB_ACCESS_TOKEN to enable)")
         logger.info("[FINANCE] Finance Quest Board module initialized")
     except Exception as e:
         logger.error(f"[FINANCE] Failed to initialize: {e}")

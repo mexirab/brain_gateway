@@ -1,6 +1,6 @@
 """
 Background scheduler jobs: calendar polling, morning briefing, email polling,
-email-to-calendar event extraction.
+email-to-calendar event extraction, YNAB transaction sync.
 """
 
 import json
@@ -393,3 +393,18 @@ async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
         if title_lower in existing_title or existing_title in title_lower:
             return True
     return False
+
+
+async def sync_ynab_transactions():
+    """Background job: sync transactions from YNAB."""
+    from finance_manager import ynab_sync_transactions, _is_ynab_configured
+
+    if not _is_ynab_configured():
+        return
+
+    try:
+        result = await ynab_sync_transactions()
+        if result.get("synced", 0) > 0:
+            logger.info(f"[YNAB_POLL] Synced {result['synced']} transactions")
+    except Exception as e:
+        logger.error(f"[YNAB_POLL] Error: {e}")

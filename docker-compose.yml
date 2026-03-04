@@ -122,6 +122,10 @@ services:
       - MORNING_BRIEFING_ENABLED=${MORNING_BRIEFING_ENABLED:-true}
       # Finance
       - FINANCE_DB_PATH=/app/data/finance.db
+      # YNAB integration
+      - YNAB_ACCESS_TOKEN=${YNAB_ACCESS_TOKEN:-}
+      - YNAB_BUDGET_ID=${YNAB_BUDGET_ID:-}
+      - YNAB_SYNC_INTERVAL=${YNAB_SYNC_INTERVAL:-30}
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
     networks:

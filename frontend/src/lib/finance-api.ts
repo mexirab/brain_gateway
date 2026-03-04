@@ -118,6 +118,43 @@ export const financeApi = {
       `/api/finance/xp-history${limit ? `?limit=${limit}` : ''}`,
     ),
 
+  // YNAB integration
+  getYnabStatus: () =>
+    get<{
+      configured: boolean;
+      connected: boolean;
+      budget_id: string | null;
+      budget_name: string | null;
+      last_synced_at: string | null;
+      server_knowledge: number | null;
+      category_count: number;
+      discretionary_count: number;
+    }>('/api/finance/ynab/status'),
+  triggerYnabSync: () =>
+    post<{ synced: number; server_knowledge?: number; error?: string }>(
+      '/api/finance/ynab/sync',
+    ),
+  getYnabCategories: () =>
+    get<{
+      groups: Array<{
+        group_name: string;
+        categories: Array<{
+          name: string;
+          is_discretionary: boolean;
+          budgeted: number;
+          activity: number;
+          balance: number;
+        }>;
+      }>;
+    }>('/api/finance/ynab/categories'),
+  updateCategoryMapping: (mappings: Record<string, boolean>) =>
+    post<{ success: boolean; updated: number }>(
+      '/api/finance/ynab/categories/mapping',
+      { mappings },
+    ),
+  resetYnabSync: () =>
+    post<{ success: boolean; message: string }>('/api/finance/ynab/reset-sync'),
+
   // TTS announce
   announce: (text: string) =>
     post<{ success: boolean }>('/api/announce', { text }),
