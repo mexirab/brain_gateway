@@ -1,6 +1,7 @@
 import { CLUSTER_NODES, CAPABILITIES } from '@/lib/constants';
 import NodeCard from '@/components/architecture/NodeCard';
 import FlowDiagram from '@/components/architecture/FlowDiagram';
+import SystemDiagram from '@/components/architecture/SystemDiagram';
 import CapabilityCard from '@/components/architecture/CapabilityCard';
 import { Server, Cpu, Wrench, FileText } from 'lucide-react';
 
@@ -48,7 +49,12 @@ export default function ArchitecturePage() {
           </div>
         </section>
 
-        {/* Data flow */}
+        {/* Interactive system diagram */}
+        <section>
+          <SystemDiagram />
+        </section>
+
+        {/* Simple data flow */}
         <section>
           <FlowDiagram />
         </section>
