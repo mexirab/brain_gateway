@@ -357,10 +357,11 @@ async def announce_tts(req: Request):
     if not text:
         return JSONResponse({"error": "No text provided"}, status_code=400)
 
+    speaker = body.get("speaker", None)
     try:
-        await _announce_voice(text)
-        logger.info(f"[ANNOUNCE] TTS: {text[:80]}")
-        return {"success": True, "text": text}
+        await _announce_voice(text, speaker=speaker)
+        logger.info(f"[ANNOUNCE] TTS on {speaker or 'default'}: {text[:80]}")
+        return {"success": True, "text": text, "speaker": speaker or "default"}
     except Exception as e:
         logger.error(f"[ANNOUNCE] Failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
