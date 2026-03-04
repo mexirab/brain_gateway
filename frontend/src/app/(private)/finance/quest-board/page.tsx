@@ -1,8 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { Swords, Calendar, Loader2, ScrollText, ChevronRight } from 'lucide-react';
+import {
+  Swords, Calendar, Loader2, ScrollText, ChevronRight,
+  RefreshCw, CheckCircle, CloudOff,
+} from 'lucide-react';
 import HealthBar from '@/components/finance/HealthBar';
 import XPBar from '@/components/finance/XPBar';
 import LevelBadge from '@/components/finance/LevelBadge';
@@ -13,6 +16,7 @@ import XPToast from '@/components/finance/XPToast';
 import { WINDFALL_MONTHS, XP_AWARDS } from '@/lib/finance-constants';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';
 import { useFinance } from '@/lib/finance-context';
+import { financeApi } from '@/lib/finance-api';
 
 export default function QuestBoardPage() {
   const {
@@ -23,14 +27,49 @@ export default function QuestBoardPage() {
     sideQuests,
     loading,
     error,
-    addExpense,
+    refresh,
     lastXPGain,
     clearXPGain,
   } = useFinance();
 
-  const [manualAmount, setManualAmount] = useState('');
-  const [manualName, setManualName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [ynabConnected, setYnabConnected] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
+  const loadYnabStatus = useCallback(async () => {
+    try {
+      const status = await financeApi.getYnabStatus();
+      setYnabConnected(status.connected);
+      setLastSynced(status.last_synced_at);
+    } catch {
+      // YNAB status check failed — not critical
+    }
+  }, []);
+
+  useEffect(() => {
+    loadYnabStatus();
+  }, [loadYnabStatus]);
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await financeApi.triggerYnabSync();
+      if (result.error) {
+        setSyncResult(`Error: ${result.error}`);
+      } else {
+        setSyncResult(`+${result.synced} transactions`);
+        await refresh();
+        await loadYnabStatus();
+      }
+    } catch {
+      setSyncResult('Sync failed');
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncResult(null), 4000);
+    }
+  }
 
   const yearMonth = currentYearMonth();
   const month = yearMonth.split('-')[1];
@@ -38,22 +77,6 @@ export default function QuestBoardPage() {
   const spent = budget?.discretionary_spent ?? 0;
   const budgetLimit = budget?.discretionary_budget ?? config.monthly_discretionary;
   const overspend = Math.max(0, spent - budgetLimit);
-
-  async function handleAddExpense() {
-    const amount = parseFloat(manualAmount);
-    if (isNaN(amount) || amount <= 0) return;
-    const name = manualName.trim() || 'Expense';
-    setSubmitting(true);
-    try {
-      await addExpense(amount, name);
-      setManualAmount('');
-      setManualName('');
-    } catch (err) {
-      console.error('Failed to add expense:', err);
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   if (loading) {
     return (
@@ -165,59 +188,76 @@ export default function QuestBoardPage() {
         </Link>
       )}
 
-      {/* Manual Entry + Retirement side by side */}
+      {/* YNAB Sync + Retirement side by side */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Quick Expense Entry */}
+        {/* YNAB Sync Status + Recent Transactions */}
         <div className="glass p-5">
-          <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-3">
-            Log Expense
-          </h3>
-          <div className="space-y-2">
-            <input
-              type="text"
-              placeholder="What was it?"
-              value={manualName}
-              onChange={(e) => setManualName(e.target.value)}
-              className="w-full bg-zinc-800 text-zinc-200 text-sm rounded-lg px-3 py-2 border border-zinc-700 focus:border-brand-500 focus:outline-none"
-            />
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm">$</span>
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={manualAmount}
-                  onChange={(e) => setManualAmount(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddExpense()}
-                  className="w-full bg-zinc-800 text-zinc-200 text-sm rounded-lg pl-7 pr-3 py-2 border border-zinc-700 focus:border-brand-500 focus:outline-none"
-                  min="0"
-                  step="0.01"
-                  disabled={submitting}
-                />
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+              Spending Feed
+            </h3>
+            {ynabConnected ? (
+              <div className="flex items-center gap-2">
+                {syncResult && (
+                  <span className={`text-xs ${syncResult.startsWith('Error') || syncResult.includes('failed') ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {syncResult}
+                  </span>
+                )}
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-md transition-colors disabled:opacity-50"
+                  title="Sync from YNAB"
+                >
+                  {syncing ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={12} />
+                  )}
+                  Sync
+                </button>
               </div>
-              <button
-                onClick={handleAddExpense}
-                disabled={submitting}
-                className="px-4 py-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Add'}
-              </button>
-            </div>
+            ) : (
+              <Link href="/finance/settings" className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-400">
+                <CloudOff size={12} />
+                Connect YNAB
+              </Link>
+            )}
           </div>
 
+          {/* Sync info */}
+          {ynabConnected && lastSynced && (
+            <div className="flex items-center gap-1.5 mb-3 text-xs text-zinc-600">
+              <CheckCircle size={10} className="text-emerald-500/60" />
+              Last sync: {new Date(lastSynced).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            </div>
+          )}
+
           {/* Recent transactions */}
-          {transactions.length > 0 && (
-            <div className="mt-4 space-y-1.5">
-              {transactions.slice(0, 5).map((t) => (
-                <div key={t.id} className="flex justify-between text-sm">
-                  <span className="text-zinc-400 truncate">{t.name}</span>
-                  <span className="text-zinc-300 font-mono">{formatCurrency(t.amount)}</span>
+          {transactions.length > 0 ? (
+            <div className="space-y-1.5">
+              {transactions.slice(0, 6).map((t) => (
+                <div key={t.id} className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${t.is_discretionary ? 'bg-brand-500' : 'bg-zinc-700'}`} />
+                    <span className="text-zinc-400 truncate">{t.name}</span>
+                  </div>
+                  <span className={`font-mono flex-shrink-0 ml-2 ${t.is_discretionary ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                    {formatCurrency(t.amount)}
+                  </span>
                 </div>
               ))}
-              {transactions.length > 5 && (
-                <p className="text-xs text-zinc-500">+{transactions.length - 5} more</p>
-              )}
+              <Link
+                href="/finance/transactions"
+                className="block text-xs text-zinc-500 hover:text-brand-400 mt-2 transition-colors"
+              >
+                View all {transactions.length} transactions →
+              </Link>
             </div>
+          ) : (
+            <p className="text-sm text-zinc-600 text-center py-4">
+              {ynabConnected ? 'No transactions yet — hit Sync' : 'Connect YNAB to auto-track spending'}
+            </p>
           )}
         </div>
 
