@@ -67,8 +67,8 @@ services:
       # Mount SSH keys for Helios auto-start
       - ${USER_HOME:-/home/nadim}/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
       - ${USER_HOME:-/home/nadim}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
-      # Mount Google OAuth2 credentials (read-only)
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/credentials:/app/credentials:ro
+      # Mount Google OAuth2 credentials (rw needed for token refresh)
+      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
       # Finance SQLite database
