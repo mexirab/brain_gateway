@@ -100,7 +100,7 @@ services:
       - HELIOS_IDLE_TIMEOUT=${HELIOS_IDLE_TIMEOUT:-1800}
       - HELIOS_IDLE_CHECK_INTERVAL=${HELIOS_IDLE_CHECK_INTERVAL:-300}
       # Reminders
-      - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.office_speaker}
+      - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.all_speakers}
       - TZ=${TZ:-America/Chicago}
       # Agentic settings
       - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}
@@ -121,6 +121,8 @@ services:
       - MORNING_BRIEFING_TIME=${MORNING_BRIEFING_TIME:-07:00}
       - MORNING_BRIEFING_ENABLED=${MORNING_BRIEFING_ENABLED:-true}
       - MORNING_BRIEFING_SPEAKER=${MORNING_BRIEFING_SPEAKER:-media_player.bedroom_pair}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - TRAVEL_TIME_BUFFER=${TRAVEL_TIME_BUFFER:-10}
       # Finance
       - FINANCE_DB_PATH=/app/data/finance.db
       # YNAB integration
