@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { getHealthBarStatus, healthBarColor, formatCurrency } from '@/lib/finance-utils';
 import type { HealthBarStatus } from '@/lib/finance-types';
 
@@ -44,9 +45,12 @@ export default function HealthBar({ spent, budget, sideQuestCarve = 0 }: HealthB
 
       {/* Labels */}
       <div className="flex justify-between mt-2 text-sm">
-        <span className="text-zinc-400">
+        <Link
+          href="/finance/transactions"
+          className="text-zinc-400 hover:text-indigo-400 transition-colors underline decoration-zinc-600 hover:decoration-indigo-400 underline-offset-2"
+        >
           {formatCurrency(spent)} spent
-        </span>
+        </Link>
         <span className={remaining >= 0 ? 'text-zinc-300' : 'text-red-400 font-semibold'}>
           {remaining >= 0
             ? `${formatCurrency(remaining)} remaining`
