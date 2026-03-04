@@ -71,6 +71,8 @@ services:
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/credentials:/app/credentials:ro
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
+      # Finance SQLite database
+      - finance-data:/app/data:rw
     environment:
       # Model endpoints
       - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
@@ -118,6 +120,8 @@ services:
       - CALENDAR_POLL_INTERVAL=${CALENDAR_POLL_INTERVAL:-15}
       - MORNING_BRIEFING_TIME=${MORNING_BRIEFING_TIME:-07:30}
       - MORNING_BRIEFING_ENABLED=${MORNING_BRIEFING_ENABLED:-true}
+      # Finance
+      - FINANCE_DB_PATH=/app/data/finance.db
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
     networks:
@@ -282,5 +286,6 @@ volumes:
   pihole-etc:
   pihole-dnsmasq:
   wyoming-whisper-data:
+  finance-data:
   searxng-data:
 

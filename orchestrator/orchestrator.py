@@ -60,6 +60,7 @@ from nemotron_loop import (
 )
 from background_jobs import poll_calendar, morning_briefing, poll_email, process_emails_for_events
 from api_routes import router as api_router
+from finance_manager import router as finance_router, setup_finance
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -78,6 +79,7 @@ app.add_middleware(
 
 # Mount secondary endpoints
 app.include_router(api_router)
+app.include_router(finance_router)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +250,10 @@ async def startup_event():
         logger.info("[orchestrator] Gmail configured — tools enabled")
     else:
         logger.info("[orchestrator] Gmail not configured — tools disabled (run google_setup.py)")
+
+    # Initialize finance database
+    setup_finance()
+    logger.info("[orchestrator] Finance database initialized")
 
     BUILD_INFO.info({"version": "6.2", "architecture": "hybrid"})
     scheduler.start()

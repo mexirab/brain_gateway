@@ -25,7 +25,7 @@ from helios_manager import check_helios_health
 from focus_manager import tool_start_focus, tool_stop_focus
 from tool_handlers import deliver_reminder_job
 from google_calendar import get_calendar_client
-from reminder_manager import list_pending_reminders, mark_reminder_completed
+from reminder_manager import list_pending_reminders, mark_reminder_completed, _announce_voice
 from metrics import (
     HELIOS_ONLINE, FOCUS_ACTIVE, REMINDERS_PENDING, HELIOS_IDLE_SECONDS,
 )
@@ -342,6 +342,27 @@ async def run_email_to_calendar():
         return {"ok": True, "message": "Email-to-calendar scan completed"}
     except Exception as e:
         logger.error(f"[EMAIL_TO_CAL] Manual trigger error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/api/announce")
+async def announce_tts(req: Request):
+    """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
+    try:
+        body = await req.json()
+    except:
+        body = {}
+
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "No text provided"}, status_code=400)
+
+    try:
+        await _announce_voice(text)
+        logger.info(f"[ANNOUNCE] TTS: {text[:80]}")
+        return {"success": True, "text": text}
+    except Exception as e:
+        logger.error(f"[ANNOUNCE] Failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
