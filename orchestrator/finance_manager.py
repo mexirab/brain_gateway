@@ -1002,7 +1002,8 @@ async def _sync_fun_money_budget(budget_id: str):
         fun_money_balance = None
         for group in groups:
             for cat in group.get("categories", []):
-                if cat.get("name") == YNAB_FUN_MONEY_CATEGORY and not cat.get("deleted"):
+                cat_name = cat.get("name", "")
+                if YNAB_FUN_MONEY_CATEGORY.lower() in cat_name.lower() and not cat.get("deleted"):
                     # YNAB amounts are in milliunits
                     fun_money_balance = cat.get("balance", 0) / 1000.0
                     break
