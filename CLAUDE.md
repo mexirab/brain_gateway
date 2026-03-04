@@ -30,7 +30,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
 | Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
-| Grafana | 3000 | http://localhost:3000 (admin/testpassword123) |
+| Grafana | 3000 | http://localhost:3000/d/brain-gateway-overview (admin/braingw) |
 
 ## Architecture (v6 Hybrid)
 
@@ -187,6 +187,8 @@ Redundant Pi-hole v6 pair synced via Nebula Sync. Jupiter is primary, Saturn is 
 | Docker project | `gateway_mvp` | `pihole` |
 | Compose file | `docker-compose.yml` | `saturn/docker-compose.pihole.yml` |
 
+**DHCP:** Disabled on both Pi-holes. DHCP served by Orbi router with static reservations for all cluster nodes. Pi-holes handle DNS only.
+
 **Nebula Sync:** Runs as a Docker container on Jupiter (`nebula-sync` service). Uses Pi-hole v6 Teleporter API to sync config from Jupiter → Saturn every 15 min. No SSH needed.
 
 **Blocking groups:**
@@ -228,6 +230,16 @@ esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jes
 esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
 ```
 
+## Phone Calendar Sync (All Calendars)
+
+iPhone Shortcut sends aggregated calendar events (Outlook + Google + iCloud) to `/api/calendar/sync` endpoint every few hours. Dashboard `/api/calendar/today` merges phone-synced events with Google Calendar API, preferring phone data when fresh (<24h) and deduplicating by title+start time.
+
+**Persistence:** Phone events saved to `/app/data/phone_calendar.json` on Docker volume. Survives orchestrator restarts. Loaded at startup in `orchestrator.py`.
+
+**iOS date format handling:** iPhone Shortcuts sends dates like `"Mar 4, 2026 at 10:00 AM"` with narrow no-break space (`\u202f`). Custom `_parse_phone_datetime()` normalizes Unicode spaces and handles multiple date formats.
+
+**Known quirk:** iOS Shortcuts serialization adds trailing spaces to dict keys (`"calendar "` vs `"calendar"`). Code handles both.
+
 ## Google Calendar Integration
 
 Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar_event`.
@@ -255,12 +267,13 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 
 **Proactive features (APScheduler):**
 - Calendar polling: every 15 min, announces events starting within 2 hours via TTS
-- Morning briefing: 7:30 AM, announces today's events + pending reminders via TTS
+- Morning briefing: 7:00 AM on bedroom pair, announces today's events + pending reminders via TTS
 
 **Config (env vars):**
 - `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 15)
-- `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:30)
+- `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:00)
 - `MORNING_BRIEFING_ENABLED` — true/false (default: true)
+- `MORNING_BRIEFING_SPEAKER` — HA media_player entity (default: media_player.bedroom_pair)
 
 ## Gmail Integration
 
@@ -280,7 +293,7 @@ Read-only Gmail access via OAuth2. Tools: `check_email`, `search_email`.
 - `search_email` — search with Gmail query syntax (`from:`, `subject:`, `has:attachment`, `newer_than:`, etc.)
 
 **Proactive features (APScheduler):**
-- Email polling: every 30 min, announces new unread emails (skips promotions/social/forums) via TTS
+- Email polling: every 30 min, announces new unread emails (Primary inbox only — skips promotions/social/forums/updates) via TTS
 
 **Config (env vars):**
 - `EMAIL_POLL_INTERVAL` — minutes between polls (default: 30)
@@ -350,6 +363,42 @@ ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen
 | `rag/nadim_rag/20_meds/` | Medication data (auto-generated from YAML) |
 | `rag/nadim_rag/30_projects/` | Project data (auto-generated from YAML) |
 
+## Frontend Dashboard (ConvivialProphet.com)
+
+Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via `AUTH_TOKEN` cookie.
+
+**Pages:**
+
+| Page | Route | What |
+|------|-------|------|
+| Architecture | `/architecture` | Public. Cluster nodes, data flow diagram, capabilities grid |
+| Dashboard | `/dashboard` | Private. Calendar, reminders, focus timer, system health, finance snapshot |
+| Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
+| Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
+| Finance | `/finance` | Private. Gamified budget tracker with YNAB sync, XP/levels, quest board |
+
+**Dashboard widgets:**
+- **Budget card** → clickable, links to `/finance` page
+- **System Health card** → clickable, opens Grafana Brain Gateway Overview dashboard
+- **Calendar card** → shows merged phone+Google calendar events with source label
+- **Reminders card** → pending reminders with complete action
+- **Focus timer card** → current session with start/stop controls
+
+**Finance system (YNAB integration):**
+- Syncs budget data from YNAB API (`YNAB_API_TOKEN` + `YNAB_BUDGET_ID` env vars)
+- Gamified: XP for under-budget months, levels, streaks, quest board
+- SQLite persistence at `/app/data/finance.db`
+
+**API pattern:** All client-side API calls go through `/api/proxy` prefix → Next.js auth middleware → orchestrator `:8888`.
+
+**Deploy:**
+```bash
+# On Jupiter (or via SSH)
+docker compose up -d --build --force-recreate frontend
+```
+
+**Note:** `npm run build` on host does NOT update the Docker container. Must rebuild the Docker image.
+
 ## Performance Notes
 
 - Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown
@@ -366,3 +415,5 @@ ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
 - Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
+- TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`
+- Reminders default to office speaker, morning briefing defaults to bedroom pair

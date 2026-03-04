@@ -58,8 +58,12 @@ from nemotron_loop import (
     call_nemotron_orchestrator, _run_nemotron_tool_loop,
     clean_response, parse_tool_calls_from_content,
 )
-from background_jobs import poll_calendar, morning_briefing, poll_email, process_emails_for_events
+from background_jobs import (
+    poll_calendar, morning_briefing, poll_email, process_emails_for_events,
+    sync_ynab_transactions, weekly_spending_summary, midmonth_budget_warning,
+)
 from api_routes import router as api_router
+from finance_manager import router as finance_router, setup_finance, _is_ynab_configured, YNAB_SYNC_INTERVAL
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -78,6 +82,7 @@ app.add_middleware(
 
 # Mount secondary endpoints
 app.include_router(api_router)
+app.include_router(finance_router)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +240,9 @@ async def startup_event():
     shared._ha_tool_cache_time = 0.0
     print(f"[orchestrator] Loaded {count} HA entities")
 
+    # Load phone calendar events from disk (survives restarts)
+    shared._load_phone_calendar()
+
     # Initialize Google Calendar client
     cal_client = get_calendar_client(http_client=shared._http)
     if cal_client.is_configured:
@@ -248,6 +256,10 @@ async def startup_event():
         logger.info("[orchestrator] Gmail configured — tools enabled")
     else:
         logger.info("[orchestrator] Gmail not configured — tools disabled (run google_setup.py)")
+
+    # Initialize finance database
+    setup_finance()
+    logger.info("[orchestrator] Finance database initialized")
 
     BUILD_INFO.info({"version": "6.2", "architecture": "hybrid"})
     scheduler.start()
@@ -301,6 +313,43 @@ async def startup_event():
             replace_existing=True,
         )
         logger.info(f"[SCHEDULER] Email-to-calendar every {EMAIL_TO_CALENDAR_INTERVAL} min")
+
+    # Schedule YNAB transaction sync
+    if _is_ynab_configured():
+        scheduler.add_job(
+            sync_ynab_transactions,
+            trigger="interval",
+            minutes=YNAB_SYNC_INTERVAL,
+            id="ynab_sync",
+            name="YNAB transaction sync",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] YNAB sync every {YNAB_SYNC_INTERVAL} min")
+
+    # Schedule weekly spending summary (Sunday 6 PM)
+    scheduler.add_job(
+        weekly_spending_summary,
+        trigger="cron",
+        day_of_week="sun",
+        hour=18,
+        minute=0,
+        id="weekly_spending_summary",
+        name="Weekly spending summary TTS",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Weekly spending summary: Sunday 6 PM")
+
+    # Schedule mid-month budget warning (daily at noon, only fires day 13-17)
+    scheduler.add_job(
+        midmonth_budget_warning,
+        trigger="cron",
+        hour=12,
+        minute=0,
+        id="midmonth_budget_warning",
+        name="Mid-month budget warning TTS",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Mid-month budget warning: daily noon (active day 13-17)")
 
 
 @app.on_event("shutdown")

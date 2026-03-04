@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     apscheduler \
     google-auth \
     google-auth-oauthlib \
-    prometheus-client
+    prometheus-client \
+    ynab
 
 COPY *.py .
 

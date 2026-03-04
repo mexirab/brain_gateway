@@ -62,3 +62,28 @@ export async function POST(
   const data = await res.json();
   return NextResponse.json(data, { status: res.status });
 }
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  if (!isAuthed(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { path } = await params;
+  const targetPath = '/' + path.join('/');
+  const url = new URL(targetPath, ORCHESTRATOR_URL);
+
+  const body = await request.text();
+  const contentType = request.headers.get('content-type') || 'application/json';
+
+  const res = await fetch(url.toString(), {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    body,
+  });
+
+  const data = await res.json();
+  return NextResponse.json(data, { status: res.status });
+}

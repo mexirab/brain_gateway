@@ -60,13 +60,16 @@ User Request → Orchestrator
 | `tool_web_search()` | → `web_search.SearXNGClient.search()` |
 | `tool_check_calendar()` | → `google_calendar.GoogleCalendarClient.list_events()` |
 | `tool_create_calendar_event()` | → `google_calendar.GoogleCalendarClient.create_event()` |
+| `tool_check_email()` | → `google_gmail.GmailClient.check_inbox()` |
+| `tool_search_email()` | → `google_gmail.GmailClient.search()` |
 
 **Proactive Background Jobs:**
 
 | Job | Trigger | Action |
 |-----|---------|--------|
 | `poll_calendar()` | interval, every 15 min | TTS announce events starting within 2 hours |
-| `morning_briefing()` | cron, 7:30 AM daily | TTS announce today's events + pending reminders |
+| `morning_briefing()` | cron, 7:00 AM daily | TTS announce today's events + pending reminders (bedroom pair) |
+| `poll_email()` | interval, every 30 min | TTS announce new unread emails (Primary inbox only) |
 
 **Why `tool_choice: "none"`?** vLLM lacks `--enable-auto-tool-choice`. Nemotron outputs `<tool_call>` XML in content instead.
 
@@ -161,6 +164,19 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 4. watch_and_ingest.py auto-reindexes ChromaDB
 ```
 
+### Dashboard calendar (merged sources)
+
+```
+1. iPhone Shortcut → POST /api/calendar/sync (every few hours)
+   - Sends Outlook + Google + iCloud events
+   - Persisted to /app/data/phone_calendar.json
+2. GET /api/calendar/today
+   - If phone data fresh (<24h) → use phone events (all calendars)
+   - Else → fallback to Google Calendar API
+   - Dedup by title + start time
+   - Returns {events, source: "phone"|"google", count}
+```
+
 ### Proactive calendar alert (background)
 
 ```
@@ -169,6 +185,16 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 3. For each event not yet announced:
    "Heads up Nadim: Pickleball at Honcho in 2 hours"
 4. TTS via _announce_voice() → HA media_player
+```
+
+### TTS announcement routing
+
+```
+_announce_voice(text, speaker=None)
+  - speaker param overrides default (REMINDER_SPEAKER)
+  - Reminders → office speaker (default)
+  - Morning briefing → bedroom pair (MORNING_BRIEFING_SPEAKER)
+  - /api/announce → optional speaker in request body
 ```
 
 ## ChromaDB / RAG
@@ -241,3 +267,7 @@ Grafana ← Prometheus ← node_exporter (all nodes)
 | Calendar not configured | Check `/health` → `calendar.configured`, re-run google_setup.py |
 | Calendar token expired | Token auto-refreshes. If fails, re-run google_setup.py and copy to Jupiter |
 | Morning briefing not firing | Check `MORNING_BRIEFING_ENABLED=true`, verify scheduler has 2+ jobs |
+| Morning briefing wrong speaker | Check `MORNING_BRIEFING_SPEAKER` env var in docker-compose.yml |
+| Phone calendar not showing | Check phone sync age (<24h), iOS date format parsing in logs |
+| Email announces promotions | Ensure `-category:updates` in email polling queries (background_jobs.py) |
+| Frontend changes not deploying | Must `docker compose up -d --build --force-recreate frontend` (not just restart) |

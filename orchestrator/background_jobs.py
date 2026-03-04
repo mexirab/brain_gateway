@@ -1,10 +1,11 @@
 """
 Background scheduler jobs: calendar polling, morning briefing, email polling,
-email-to-calendar event extraction.
+email-to-calendar event extraction, YNAB transaction sync.
 """
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -71,6 +72,32 @@ async def poll_calendar():
         logger.error(f"[CALENDAR_POLL] Error: {e}")
 
 
+def _parse_phone_datetime(s: str, tz=None) -> datetime:
+    """Parse date strings from iPhone Shortcuts.
+
+    Handles: "Mar 4, 2026 at 10:00\u202fAM", ISO format, etc.
+    """
+    if not s:
+        raise ValueError("empty date string")
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    for fmt in (
+        "%b %d, %Y %I:%M %p",
+        "%B %d, %Y %I:%M %p",
+        "%m/%d/%Y %I:%M %p",
+        "%b %d, %Y",
+    ):
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognized date format: {s!r}")
+
+
 async def morning_briefing():
     """Morning announcement: today's events from all calendars via TTS.
 
@@ -91,7 +118,7 @@ async def morning_briefing():
             for ev in shared._phone_calendar_events:
                 try:
                     start_str = ev.get("start", "")
-                    start = datetime.fromisoformat(start_str)
+                    start = _parse_phone_datetime(start_str, tz)
                     if start.tzinfo is None:
                         start = start.replace(tzinfo=tz)
                     if start.date() != today:
@@ -101,7 +128,7 @@ async def morning_briefing():
                         "title": ev.get("title", "(No title)"),
                         "start": start,
                         "all_day": is_all_day,
-                        "calendar": ev.get("calendar", ""),
+                        "calendar": ev.get("calendar") or ev.get("calendar ") or "",
                         "location": ev.get("location", ""),
                     })
                 except (ValueError, TypeError):
@@ -146,8 +173,8 @@ async def morning_briefing():
         if pending:
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
 
-        await _announce_voice(" ".join(parts))
-        logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
+        await _announce_voice(" ".join(parts), speaker=shared.MORNING_BRIEFING_SPEAKER)
+        logger.info(f"[MORNING_BRIEFING] Delivered on {shared.MORNING_BRIEFING_SPEAKER}: {len(briefing_events)} events, {len(pending)} reminders")
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
@@ -162,8 +189,8 @@ async def poll_email():
     GMAIL_API_CALLS.labels(operation="poll").inc()
 
     try:
-        # Find unread emails from the last hour, skip promotions/social
-        query = "is:unread newer_than:1h -category:promotions -category:social -category:forums"
+        # Find unread emails from the last hour, skip non-primary tabs
+        query = "is:unread newer_than:1h -category:promotions -category:social -category:forums -category:updates"
         response = await client.list_messages(query=query, max_results=5)
 
         if not response.success:
@@ -242,7 +269,7 @@ async def process_emails_for_events():
 
     try:
         # Get emails from the last 24 hours, skip promos/social/forums
-        query = "newer_than:1d -category:promotions -category:social -category:forums"
+        query = "newer_than:1d -category:promotions -category:social -category:forums -category:updates"
         response = await gmail.list_messages(query=query, max_results=15)
 
         if not response.success:
@@ -393,3 +420,121 @@ async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
         if title_lower in existing_title or existing_title in title_lower:
             return True
     return False
+
+
+async def sync_ynab_transactions():
+    """Background job: sync transactions from YNAB."""
+    from finance_manager import ynab_sync_transactions, _is_ynab_configured
+
+    if not _is_ynab_configured():
+        return
+
+    try:
+        result = await ynab_sync_transactions()
+        if result.get("synced", 0) > 0:
+            logger.info(f"[YNAB_POLL] Synced {result['synced']} transactions")
+    except Exception as e:
+        logger.error(f"[YNAB_POLL] Error: {e}")
+
+
+async def weekly_spending_summary():
+    """Sunday evening: announce weekly spending summary via TTS."""
+    from finance_manager import (
+        get_db, _current_year_month, _ensure_budget_period, _get_level_info,
+    )
+
+    try:
+        with get_db() as conn:
+            ym = _ensure_budget_period(conn)
+            budget = dict(conn.execute(
+                "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
+            ).fetchone())
+            config = dict(conn.execute(
+                "SELECT * FROM finance_config WHERE id = 1"
+            ).fetchone())
+            game = dict(conn.execute(
+                "SELECT * FROM game_state WHERE id = 1"
+            ).fetchone())
+
+            spent = budget["discretionary_spent"]
+            limit = budget["discretionary_budget"]
+            remaining = max(0, limit - spent)
+            pct = (spent / limit * 100) if limit > 0 else 0
+            level_info = _get_level_info(game["level"])
+
+        parts = ["Hey Nadim, here's your weekly spending update."]
+
+        if spent > limit:
+            overspend = spent - limit
+            parts.append(f"You're over budget by ${overspend:.0f}.")
+            parts.append("Time to tighten up for the rest of the month!")
+        elif pct >= 75:
+            parts.append(f"You've spent ${spent:.0f} of your ${limit:.0f} budget. "
+                         f"That's {pct:.0f} percent with only ${remaining:.0f} left.")
+            parts.append("Getting close! Keep an eye on it this week.")
+        elif pct >= 50:
+            parts.append(f"You've spent ${spent:.0f} of ${limit:.0f}. "
+                         f"${remaining:.0f} remaining. You're on track!")
+        else:
+            parts.append(f"Only ${spent:.0f} spent out of ${limit:.0f}. "
+                         f"${remaining:.0f} left. Looking great!")
+
+        parts.append(f"You're Level {game['level']}, {level_info['title']}, "
+                     f"with {game['total_xp']} total XP "
+                     f"and a {game['streak_months']} month streak.")
+
+        await _announce_voice(" ".join(parts))
+        logger.info(f"[WEEKLY_SUMMARY] Delivered: ${spent:.2f}/{limit:.2f} ({pct:.0f}%)")
+
+    except Exception as e:
+        logger.error(f"[WEEKLY_SUMMARY] Error: {e}")
+
+
+async def midmonth_budget_warning():
+    """Mid-month check: if over 60% of discretionary spent, announce warning via TTS."""
+    from finance_manager import get_db, _current_year_month, _ensure_budget_period
+
+    tz = ZoneInfo(TIMEZONE)
+    today = datetime.now(tz)
+
+    # Only fire the actual warning between the 13th and 17th
+    if today.day < 13 or today.day > 17:
+        return
+
+    try:
+        with get_db() as conn:
+            ym = _ensure_budget_period(conn)
+            budget = dict(conn.execute(
+                "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
+            ).fetchone())
+
+            spent = budget["discretionary_spent"]
+            limit = budget["discretionary_budget"]
+            if limit <= 0:
+                return
+
+            pct = spent / limit * 100
+            remaining = max(0, limit - spent)
+
+        if pct < 60:
+            logger.info(f"[MIDMONTH] Budget at {pct:.0f}% — no warning needed")
+            return
+
+        if pct >= 100:
+            overspend = spent - limit
+            message = (f"Heads up Nadim. You're already over your monthly budget "
+                       f"by ${overspend:.0f} and we're only halfway through the month. "
+                       f"Future you is taking damage!")
+        elif pct >= 80:
+            message = (f"Budget warning Nadim. You've used {pct:.0f} percent of your "
+                       f"monthly budget with half the month still to go. "
+                       f"Only ${remaining:.0f} left. Be careful!")
+        else:
+            message = (f"Mid-month check. You've spent {pct:.0f} percent of your budget. "
+                       f"${remaining:.0f} left for the rest of the month. Keep it steady!")
+
+        await _announce_voice(message)
+        logger.info(f"[MIDMONTH] Warning delivered: {pct:.0f}% spent")
+
+    except Exception as e:
+        logger.error(f"[MIDMONTH] Error: {e}")

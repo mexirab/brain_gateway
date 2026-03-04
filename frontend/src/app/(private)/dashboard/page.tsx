@@ -1,24 +1,19 @@
+import CalendarCard from '@/components/dashboard/CalendarCard';
+import RemindersCard from '@/components/dashboard/RemindersCard';
+import FocusTimerCard from '@/components/dashboard/FocusTimerCard';
+import SystemHealthCard from '@/components/dashboard/SystemHealthCard';
+import FinanceSnapshotCard from '@/components/dashboard/FinanceSnapshotCard';
+
 export default function DashboardPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-6">Today</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="glass p-6">
-          <h2 className="text-lg font-semibold text-zinc-300 mb-3">Calendar</h2>
-          <p className="text-zinc-500">Coming in Phase 3</p>
-        </div>
-        <div className="glass p-6">
-          <h2 className="text-lg font-semibold text-zinc-300 mb-3">Reminders</h2>
-          <p className="text-zinc-500">Coming in Phase 3</p>
-        </div>
-        <div className="glass p-6">
-          <h2 className="text-lg font-semibold text-zinc-300 mb-3">Focus Timer</h2>
-          <p className="text-zinc-500">Coming in Phase 3</p>
-        </div>
-        <div className="glass p-6">
-          <h2 className="text-lg font-semibold text-zinc-300 mb-3">Quick Actions</h2>
-          <p className="text-zinc-500">Coming in Phase 3</p>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <CalendarCard />
+        <RemindersCard />
+        <FocusTimerCard />
+        <SystemHealthCard />
+        <FinanceSnapshotCard />
       </div>
     </div>
   );

@@ -402,6 +402,23 @@ STATIC_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finance_status",
+            "description": "Check Nadim's Financial Quest Board status: budget remaining, XP/level, streak, side quests, and spending summary. Use when he asks about his finances, budget, spending, how much he has left, savings goals, or game progress.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_details": {
+                        "type": "boolean",
+                        "description": "If true, include detailed breakdown (investing, retirement, side quests). Default false for quick summary."
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]
 
@@ -412,13 +429,13 @@ HELIOS_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_orchestrator",
-            "description": "Delegate an action to the smart home/personal assistant orchestrator. Use for: controlling devices (lights, fans, switches), searching personal notes, setting reminders, updating medications/projects, or searching the web for real-world information.",
+            "description": "Delegate an action to the smart home/personal assistant orchestrator. Use for: controlling devices (lights, fans, switches), searching personal notes, setting reminders, updating medications/projects, searching the web for real-world information, or checking financial status (budget, spending, XP, side quests).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Natural language command (e.g., 'turn off bedroom lights', 'what are my morning meds', 'remind me to call mom in 30 minutes')"
+                        "description": "Natural language command (e.g., 'turn off bedroom lights', 'what are my morning meds', 'remind me to call mom in 30 minutes', 'how is my budget looking')"
                     }
                 },
                 "required": ["command"]

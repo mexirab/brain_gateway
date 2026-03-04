@@ -25,7 +25,7 @@ from helios_manager import check_helios_health
 from focus_manager import tool_start_focus, tool_stop_focus
 from tool_handlers import deliver_reminder_job
 from google_calendar import get_calendar_client
-from reminder_manager import list_pending_reminders, mark_reminder_completed
+from reminder_manager import list_pending_reminders, mark_reminder_completed, _announce_voice
 from metrics import (
     HELIOS_ONLINE, FOCUS_ACTIVE, REMINDERS_PENDING, HELIOS_IDLE_SECONDS,
 )
@@ -345,6 +345,156 @@ async def run_email_to_calendar():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/api/announce")
+async def announce_tts(req: Request):
+    """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
+    try:
+        body = await req.json()
+    except:
+        body = {}
+
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "No text provided"}, status_code=400)
+
+    speaker = body.get("speaker", None)
+    try:
+        await _announce_voice(text, speaker=speaker)
+        logger.info(f"[ANNOUNCE] TTS on {speaker or 'default'}: {text[:80]}")
+        return {"success": True, "text": text, "speaker": speaker or "default"}
+    except Exception as e:
+        logger.error(f"[ANNOUNCE] Failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/calendar/today")
+async def calendar_today():
+    """Get today's calendar events for the dashboard.
+
+    Merges events from two sources:
+    1. Phone calendar sync (iPhone Shortcut — Outlook + Google + iCloud)
+    2. Google Calendar API (fallback if phone sync is stale/missing)
+
+    Phone sync is preferred when fresh (<24h old) since it aggregates all
+    iPhone calendars. Google Calendar is used as fallback. Events are
+    deduplicated by title + start time to avoid duplicates when Google
+    events appear in both sources.
+    """
+    import re
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Chicago")
+    today = datetime.now(tz).date()
+    merged: list[dict] = []
+    seen: set[str] = set()  # "title|start_iso" for dedup
+    source = "none"
+
+    def _parse_phone_datetime(s: str) -> datetime:
+        """Parse date strings from iPhone Shortcuts.
+
+        Handles formats like:
+        - "Mar 4, 2026 at 10:00\u202fAM"  (narrow no-break space before AM/PM)
+        - "Mar 4, 2026 at 1:00 PM"         (regular space)
+        - "2026-03-04T10:00:00"            (ISO format)
+        """
+        if not s:
+            raise ValueError("empty date string")
+        # Try ISO first
+        try:
+            return datetime.fromisoformat(s)
+        except ValueError:
+            pass
+        # Normalize unicode spaces and "at" keyword
+        cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
+        # Remove extra whitespace
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        # Try common iOS Shortcut formats
+        for fmt in (
+            "%b %d, %Y %I:%M %p",   # "Mar 4, 2026 1:00 PM"
+            "%B %d, %Y %I:%M %p",   # "March 4, 2026 1:00 PM"
+            "%m/%d/%Y %I:%M %p",    # "03/04/2026 1:00 PM"
+            "%b %d, %Y",            # "Mar 4, 2026" (all-day)
+        ):
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"unrecognized date format: {s!r}")
+
+    # Source 1: Phone calendar sync (has ALL calendars)
+    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+    if shared._phone_calendar_events and phone_age < 86400:
+        source = "phone"
+        for ev in shared._phone_calendar_events:
+            try:
+                start_str = ev.get("start", "")
+                start = _parse_phone_datetime(start_str)
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=tz)
+                if start.date() != today:
+                    continue
+
+                end_str = ev.get("end", "")
+                end = None
+                if end_str:
+                    try:
+                        end = _parse_phone_datetime(end_str)
+                        if end.tzinfo is None:
+                            end = end.replace(tzinfo=tz)
+                    except ValueError:
+                        pass
+
+                title = ev.get("title", "(No title)")
+                dedup_key = f"{title.lower().strip()}|{start.isoformat()}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                # Handle trailing-space key from iOS ("calendar " vs "calendar")
+                cal_name = ev.get("calendar") or ev.get("calendar ") or ""
+
+                merged.append({
+                    "id": ev.get("id", f"phone_{len(merged)}"),
+                    "title": title.strip(),
+                    "start": start.isoformat(),
+                    "end": end.isoformat() if end else start.isoformat(),
+                    "location": ev.get("location") or None,
+                    "description": ev.get("description") or None,
+                    "all_day": ev.get("all_day", False),
+                    "calendar": cal_name.strip(),
+                    "source": "phone",
+                })
+            except (ValueError, TypeError) as exc:
+                logger.warning(f"[CALENDAR] Skipping phone event: {exc} — raw: {ev}")
+                continue
+    else:
+        # Source 2: Google Calendar API (fallback)
+        source = "google"
+        cal = get_calendar_client()
+        if cal and cal.is_configured:
+            result = await cal.list_events(days_ahead=1)
+            if result.success:
+                for e in result.events:
+                    title = e.title
+                    dedup_key = f"{title.lower()}|{e.start.isoformat()}"
+                    seen.add(dedup_key)
+                    merged.append({
+                        "id": e.id,
+                        "title": title,
+                        "start": e.start.isoformat(),
+                        "end": e.end.isoformat(),
+                        "location": e.location or None,
+                        "description": e.description or None,
+                        "all_day": e.all_day,
+                        "calendar": "Google",
+                        "source": "google",
+                    })
+
+    # Sort by start time (all-day events first, then by time)
+    merged.sort(key=lambda e: (0 if e.get("all_day") else 1, e["start"]))
+
+    return {"events": merged, "source": source, "count": len(merged)}
+
+
 @router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])
 async def sync_phone_calendar(req: Request):
     """Receive consolidated calendar events from iPhone Shortcut, or return status.
@@ -408,6 +558,7 @@ async def sync_phone_calendar(req: Request):
             logger.info(f"[PHONE_SYNC] Appended {len(events)} event(s), total now {len(shared._phone_calendar_events)}")
 
         shared._phone_calendar_sync_time = now
+        shared._save_phone_calendar()
 
         return {
             "ok": True,

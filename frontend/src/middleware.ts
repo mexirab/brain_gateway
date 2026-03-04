@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-const PROTECTED_PATHS = ['/dashboard', '/chat', '/home'];
+const PROTECTED_PATHS = ['/dashboard', '/chat', '/home', '/finance'];
 const COOKIE_NAME = 'brain_token';
 
 export function middleware(request: NextRequest) {
@@ -26,5 +26,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/chat/:path*', '/home/:path*'],
+  matcher: ['/dashboard/:path*', '/chat/:path*', '/home/:path*', '/finance/:path*'],
 };
