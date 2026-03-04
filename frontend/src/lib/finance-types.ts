@@ -85,6 +85,7 @@ export interface Windfall {
   spend_amount: number | null;
   budget_period: string;
   boss_defeated: boolean;
+  created_at: string;
 }
 
 export type HealthBarStatus = 'safe' | 'caution' | 'warning' | 'danger' | 'over';

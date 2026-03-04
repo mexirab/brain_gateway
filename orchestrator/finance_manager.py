@@ -588,6 +588,91 @@ async def abandon_side_quest(quest_id: int):
     return {"success": True, "id": quest_id, "name": quest["name"]}
 
 
+@router.post("/side-quests/{quest_id}/contribute")
+async def contribute_to_quest(quest_id: int, req: Request):
+    """Contribute an amount toward a side quest."""
+    body = await req.json()
+    amount = body.get("amount", 0)
+    if amount <= 0:
+        return JSONResponse({"error": "Positive amount required"}, status_code=400)
+
+    with get_db() as conn:
+        quest = conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone()
+        if not quest:
+            return JSONResponse({"error": "Quest not found"}, status_code=404)
+        if quest["status"] != "active":
+            return JSONResponse({"error": "Quest is not active"}, status_code=400)
+
+        new_saved = quest["saved_amount"] + amount
+        completed = new_saved >= quest["target_amount"]
+
+        conn.execute(
+            "UPDATE side_quests SET saved_amount = ?, status = ?, completed_at = ? WHERE id = ?",
+            (
+                new_saved,
+                "completed" if completed else "active",
+                datetime.now().isoformat() if completed else None,
+                quest_id,
+            ),
+        )
+
+        # Also deduct from health bar (counts as spending allocation)
+        ym = _ensure_budget_period(conn)
+        conn.execute(
+            "UPDATE budget_periods SET discretionary_spent = discretionary_spent + ? WHERE year_month = ?",
+            (amount, ym),
+        )
+
+        # Log as a transaction
+        conn.execute(
+            """INSERT INTO transactions (date, amount, name, category, is_discretionary, budget_period, source)
+               VALUES (?, ?, ?, 'side_quest', 1, ?, 'manual')""",
+            (datetime.now().strftime("%Y-%m-%d"), amount, f"Side Quest: {quest['name']}", ym),
+        )
+
+        updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
+
+    if completed:
+        logger.info(f"[FINANCE] Side quest completed via contribution: {quest['name']}")
+
+    return {**updated, "completed": completed}
+
+
+@router.post("/side-quests/{quest_id}/complete")
+async def complete_quest(quest_id: int):
+    """Force-complete a side quest (e.g., purchase made)."""
+    with get_db() as conn:
+        quest = conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone()
+        if not quest:
+            return JSONResponse({"error": "Quest not found"}, status_code=404)
+
+        conn.execute(
+            "UPDATE side_quests SET status = 'completed', completed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), quest_id),
+        )
+        updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
+
+    logger.info(f"[FINANCE] Side quest force-completed: {quest['name']}")
+    return updated
+
+
+@router.post("/side-quests/{quest_id}/abandon")
+async def abandon_quest_post(quest_id: int):
+    """Abandon a side quest via POST (returns saved amount to general budget)."""
+    with get_db() as conn:
+        quest = conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone()
+        if not quest:
+            return JSONResponse({"error": "Quest not found"}, status_code=404)
+
+        conn.execute(
+            "UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,)
+        )
+        updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
+
+    logger.info(f"[FINANCE] Side quest abandoned: {quest['name']}")
+    return updated
+
+
 # ---- Future Self Damage ----
 
 @router.get("/future-damage")

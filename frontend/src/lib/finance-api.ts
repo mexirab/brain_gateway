@@ -96,14 +96,21 @@ export const financeApi = {
       `/api/finance/future-damage?amount=${amount}`,
     ),
 
-  // Windfalls
+  // Windfalls / Boss Battles
   getWindfalls: () => get<{ windfalls: Windfall[] }>('/api/finance/windfalls'),
   createWindfall: (windfall: {
     type: 'bonus' | 'espp';
     amount: number;
-    invest_amount: number;
-    spend_amount: number;
-  }) => post<Windfall>('/api/finance/windfalls', windfall),
+    invest_percent: number;
+  }) =>
+    post<{
+      success: boolean;
+      type: string;
+      amount: number;
+      invest_amount: number;
+      spend_amount: number;
+      boss_defeated: boolean;
+    }>('/api/finance/windfalls', windfall),
 
   // XP history
   getXPHistory: (limit?: number) =>

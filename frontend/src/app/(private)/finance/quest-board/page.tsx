@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Swords, Calendar, Loader2 } from 'lucide-react';
+import Link from 'next/link';
+import { Swords, Calendar, Loader2, ScrollText, ChevronRight } from 'lucide-react';
 import HealthBar from '@/components/finance/HealthBar';
 import XPBar from '@/components/finance/XPBar';
 import LevelBadge from '@/components/finance/LevelBadge';
@@ -19,6 +20,7 @@ export default function QuestBoardPage() {
     gameState,
     budget,
     transactions,
+    sideQuests,
     loading,
     error,
     addExpense,
@@ -112,20 +114,55 @@ export default function QuestBoardPage() {
       <FutureSelfDamage overspend={overspend} config={config} />
 
       {/* Boss Battle Banner (windfall months) */}
-      {windfall && (
-        <div className="glass p-5 border-amber-500/20 border">
-          <div className="flex items-center gap-3">
-            <Swords size={24} className="text-amber-400" />
-            <div>
-              <h3 className="text-sm font-semibold text-amber-400">
-                Boss Battle Available
-              </h3>
-              <p className="text-sm text-zinc-400">
-                {windfall === 'bonus' ? 'Bonus' : 'ESPP'} windfall month — defeat the boss by splitting your windfall correctly!
-              </p>
+      {windfall && !budget?.boss_defeated && (
+        <Link href="/finance/boss-battle" className="block">
+          <div className="glass p-5 border-amber-500/20 border hover:border-amber-500/40 transition-colors cursor-pointer">
+            <div className="flex items-center gap-3">
+              <Swords size={24} className="text-amber-400" />
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-amber-400">
+                  Boss Battle Available
+                </h3>
+                <p className="text-sm text-zinc-400">
+                  {windfall === 'bonus' ? 'Bonus' : 'ESPP'} windfall month — defeat the boss by splitting your windfall correctly!
+                </p>
+              </div>
+              <ChevronRight size={18} className="text-amber-500/50" />
             </div>
           </div>
-        </div>
+        </Link>
+      )}
+
+      {/* Active Side Quests summary */}
+      {sideQuests.filter(q => q.status === 'active').length > 0 && (
+        <Link href="/finance/side-quests" className="block">
+          <div className="glass p-4 hover:border-brand-500/20 border border-transparent transition-colors cursor-pointer">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                <ScrollText size={12} />
+                Active Side Quests
+              </h3>
+              <ChevronRight size={14} className="text-zinc-600" />
+            </div>
+            <div className="space-y-2">
+              {sideQuests.filter(q => q.status === 'active').slice(0, 3).map((q) => {
+                const pct = q.target_amount > 0 ? Math.min(100, (q.saved_amount / q.target_amount) * 100) : 0;
+                return (
+                  <div key={q.id} className="flex items-center gap-3">
+                    <span className="text-sm text-zinc-300 truncate flex-1">{q.name}</span>
+                    <div className="w-20 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-brand-500 rounded-full"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-zinc-500 w-8 text-right">{Math.round(pct)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Link>
       )}
 
       {/* Manual Entry + Retirement side by side */}
