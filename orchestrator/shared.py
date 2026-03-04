@@ -176,3 +176,13 @@ def _save_phone_calendar():
             json.dump({"events": _phone_calendar_events, "sync_time": _phone_calendar_sync_time}, f)
     except Exception as e:
         logging.getLogger(__name__).warning(f"[PHONE_CAL] Failed to save to disk: {e}")
+
+# ---------------------------------------------------------------------------
+# Travel time config (Google Maps Directions API)
+# ---------------------------------------------------------------------------
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+HOME_ADDRESS = "2804 Eastman St, Houston TX 77009"
+TRAVEL_TIME_BUFFER = int(os.environ.get("TRAVEL_TIME_BUFFER", "10"))  # extra minutes
+
+# Track which events we have already sent travel-time alerts for
+_notified_travel_events: set = set()

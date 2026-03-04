@@ -15,6 +15,7 @@ from shared import TIMEZONE, NEMOTRON_URL, NEMOTRON_MODEL
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
 from reminder_manager import list_pending_reminders, _announce_voice
+from travel_time import get_travel_time
 from metrics import (
     CALENDAR_POLL_EVENTS_FOUND, GMAIL_API_CALLS, GMAIL_API_ERRORS,
     EMAIL_TO_CALENDAR_EVENTS_CREATED, EMAIL_TO_CALENDAR_EMAILS_SCANNED,
@@ -24,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 async def poll_calendar():
-    """Every N minutes: check for events starting within 2 hours, announce via TTS."""
+    """Every N minutes: check for events starting within 2 hours, announce via TTS.
+
+    For events with physical locations, uses Google Maps Directions API to
+    calculate travel time with real-time traffic and announces "leave by" times.
+    """
     tz = ZoneInfo(TIMEZONE)
 
     client = get_calendar_client()
@@ -39,37 +44,90 @@ async def poll_calendar():
 
         now = datetime.now(tz)
         for event in response.events:
-            if event.id in shared._notified_events:
+            if event.all_day:
                 continue
             minutes = int((event.start - now).total_seconds() / 60)
             if minutes < 0:
                 continue
-            if event.all_day:
+            if minutes > 120:
                 continue
 
-            if minutes <= 120:
-                if minutes <= 1:
-                    time_str = "now"
-                elif minutes < 60:
-                    time_str = f"in {minutes} minutes"
-                else:
-                    hours = minutes // 60
-                    remaining = minutes % 60
-                    time_str = f"in {hours} hour{'s' if hours > 1 else ''}"
-                    if remaining > 0:
-                        time_str += f" and {remaining} minutes"
+            # --- Travel-time-aware announcement for events with locations ---
+            has_physical_location = (
+                event.location
+                and shared.GOOGLE_MAPS_API_KEY
+                and event.id not in shared._notified_travel_events
+            )
 
-                message = f"Heads up Nadim: {event.title} {time_str}"
-                if event.location:
-                    message += f" at {event.location}"
-                await _announce_voice(message)
-                shared._notified_events.add(event.id)
-                CALENDAR_POLL_EVENTS_FOUND.inc()
-                logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}",
-                            extra={"component": "calendar"})
+            if has_physical_location:
+                travel = await get_travel_time(
+                    shared.HOME_ADDRESS, event.location, event.start
+                )
+                if travel:
+                    drive_min = travel.duration_in_traffic_minutes
+                    leave_by_min = minutes - drive_min - shared.TRAVEL_TIME_BUFFER
+
+                    if leave_by_min <= 0 and event.id not in shared._notified_events:
+                        # Should have already left
+                        message = (
+                            f"Nadim, you should leave now for {event.title}. "
+                            f"It's a {drive_min} minute drive to {event.location}."
+                        )
+                        await _announce_voice(message)
+                        shared._notified_travel_events.add(event.id)
+                        shared._notified_events.add(event.id)
+                        CALENDAR_POLL_EVENTS_FOUND.inc()
+                        logger.info(
+                            f"[CALENDAR_POLL] LEAVE NOW: {event.title} "
+                            f"({drive_min} min drive)",
+                            extra={"component": "calendar"},
+                        )
+                        continue
+
+                    elif leave_by_min <= 45 and event.id not in shared._notified_travel_events:
+                        # Time to announce leave-by
+                        message = (
+                            f"Heads up Nadim: You need to leave in "
+                            f"{leave_by_min} minutes for {event.title}. "
+                            f"It's a {drive_min} minute drive to {event.location}."
+                        )
+                        await _announce_voice(message)
+                        shared._notified_travel_events.add(event.id)
+                        CALENDAR_POLL_EVENTS_FOUND.inc()
+                        logger.info(
+                            f"[CALENDAR_POLL] Leave in {leave_by_min} min: "
+                            f"{event.title} ({drive_min} min drive)",
+                            extra={"component": "calendar"},
+                        )
+                        continue
+
+            # --- Standard announcement (no location or virtual meeting) ---
+            if event.id in shared._notified_events:
+                continue
+
+            if minutes <= 1:
+                time_str = "now"
+            elif minutes < 60:
+                time_str = f"in {minutes} minutes"
+            else:
+                hours = minutes // 60
+                remaining = minutes % 60
+                time_str = f"in {hours} hour{'s' if hours > 1 else ''}"
+                if remaining > 0:
+                    time_str += f" and {remaining} minutes"
+
+            message = f"Heads up Nadim: {event.title} {time_str}"
+            if event.location:
+                message += f" at {event.location}"
+            await _announce_voice(message)
+            shared._notified_events.add(event.id)
+            CALENDAR_POLL_EVENTS_FOUND.inc()
+            logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}",
+                        extra={"component": "calendar"})
 
     except Exception as e:
         logger.error(f"[CALENDAR_POLL] Error: {e}")
+
 
 
 def _parse_phone_datetime(s: str, tz=None) -> datetime:
