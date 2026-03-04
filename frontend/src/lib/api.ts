@@ -6,11 +6,10 @@ import type {
   CalendarEvent,
 } from './types';
 
-const BASE = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || '';
+const PROXY = '/api/proxy';
 
 async function fetcher<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = path.startsWith('http') ? path : `${BASE}${path}`;
-  const res = await fetch(url, init);
+  const res = await fetch(`${PROXY}${path}`, init);
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
   return res.json();
 }

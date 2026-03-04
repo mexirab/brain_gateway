@@ -1,0 +1,73 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Calendar, Clock } from 'lucide-react';
+import { api } from '@/lib/api';
+import type { CalendarEvent } from '@/lib/types';
+
+export default function CalendarCard() {
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .calendarToday()
+      .then((data) => setEvents(data.events))
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const formatTime = (iso: string, allDay: boolean) => {
+    if (allDay) return 'All day';
+    return new Date(iso).toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
+  return (
+    <div className="glass p-5">
+      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
+        <Calendar size={18} className="text-indigo-400" />
+        Today
+      </h2>
+
+      {loading && (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-10 bg-zinc-800/50 rounded-lg animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {error && <p className="text-sm text-red-400/70">{error}</p>}
+
+      {!loading && !error && events.length === 0 && (
+        <p className="text-sm text-zinc-500">No events today</p>
+      )}
+
+      {!loading && !error && events.length > 0 && (
+        <div className="space-y-2">
+          {events.map((event) => (
+            <div
+              key={event.id}
+              className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-800/40 border border-zinc-700/30"
+            >
+              <Clock size={14} className="text-zinc-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white truncate">
+                  {event.title}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  {formatTime(event.start, event.all_day)}
+                  {event.location && ` \u00b7 ${event.location}`}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
