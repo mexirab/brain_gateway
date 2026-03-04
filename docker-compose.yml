@@ -126,6 +126,7 @@ services:
       - YNAB_ACCESS_TOKEN=${YNAB_ACCESS_TOKEN:-}
       - YNAB_BUDGET_ID=${YNAB_BUDGET_ID:-}
       - YNAB_SYNC_INTERVAL=${YNAB_SYNC_INTERVAL:-30}
+      - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
     networks:

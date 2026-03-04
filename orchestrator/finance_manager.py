@@ -142,6 +142,7 @@ YNAB_ACCESS_TOKEN = os.environ.get("YNAB_ACCESS_TOKEN", "")
 YNAB_BUDGET_ID = os.environ.get("YNAB_BUDGET_ID", "")  # empty = auto-detect default
 YNAB_API_BASE = "https://api.ynab.com/v1"
 YNAB_SYNC_INTERVAL = int(os.environ.get("YNAB_SYNC_INTERVAL", "30"))  # minutes
+YNAB_FUN_MONEY_CATEGORY = os.environ.get("YNAB_FUN_MONEY_CATEGORY", "Fun Money")
 
 LEVELS = [
     (1, 0, "Copper Adventurer"),
@@ -972,6 +973,10 @@ async def ynab_sync_transactions():
             )
 
         logger.info(f"[YNAB] Synced {synced} transactions (server_knowledge={server_knowledge})")
+
+        # Update discretionary budget from Fun Money category balance
+        await _sync_fun_money_budget(budget_id)
+
         return {"synced": synced, "server_knowledge": server_knowledge}
 
     except httpx.HTTPStatusError as e:
@@ -981,6 +986,53 @@ async def ynab_sync_transactions():
     except Exception as e:
         logger.error(f"[YNAB] Sync error: {e}")
         return {"synced": 0, "error": str(e)}
+
+
+async def _sync_fun_money_budget(budget_id: str):
+    """Update discretionary_budget from YNAB Fun Money category balance.
+
+    YNAB balance = budgeted - activity + any income added to the category.
+    We set discretionary_budget = balance + our tracked discretionary_spent,
+    so the health bar formula (budget - spent = remaining) matches YNAB's balance.
+    """
+    try:
+        data = await _ynab_get(f"/budgets/{budget_id}/categories")
+        groups = data.get("data", {}).get("category_groups", [])
+
+        fun_money_balance = None
+        for group in groups:
+            for cat in group.get("categories", []):
+                if cat.get("name") == YNAB_FUN_MONEY_CATEGORY and not cat.get("deleted"):
+                    # YNAB amounts are in milliunits
+                    fun_money_balance = cat.get("balance", 0) / 1000.0
+                    break
+            if fun_money_balance is not None:
+                break
+
+        if fun_money_balance is None:
+            logger.warning(f"[YNAB] Fun Money category '{YNAB_FUN_MONEY_CATEGORY}' not found")
+            return
+
+        with get_db() as conn:
+            ym = _ensure_budget_period(conn)
+            period = conn.execute(
+                "SELECT discretionary_spent FROM budget_periods WHERE year_month = ?", (ym,)
+            ).fetchone()
+
+            # budget = balance + spent, so that budget - spent = balance (YNAB truth)
+            new_budget = fun_money_balance + period["discretionary_spent"]
+
+            conn.execute(
+                "UPDATE budget_periods SET discretionary_budget = ? WHERE year_month = ?",
+                (new_budget, ym),
+            )
+
+        logger.info(
+            f"[YNAB] Updated discretionary budget from {YNAB_FUN_MONEY_CATEGORY}: "
+            f"balance=${fun_money_balance:.2f}, new budget=${new_budget:.2f}"
+        )
+    except Exception as e:
+        logger.error(f"[YNAB] Failed to sync Fun Money budget: {e}")
 
 
 # ---- YNAB API Routes ----
