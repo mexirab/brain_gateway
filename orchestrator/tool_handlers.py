@@ -118,6 +118,10 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("query", ""),
                 arguments.get("max_results", 10)
             )
+        elif tool_name == "finance_status":
+            return await tool_finance_status(
+                arguments.get("include_details", False)
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -536,3 +540,83 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
     if remove_reminder(reminder_id):
         return f"Reminder {reminder_id} cancelled."
     return f"Reminder {reminder_id} not found."
+
+
+async def tool_finance_status(include_details: bool = False) -> str:
+    """Check Financial Quest Board status: budget, XP, streak, side quests."""
+    from finance_manager import (
+        get_db, _current_year_month, _ensure_budget_period,
+        _get_level_info, _is_ynab_configured,
+    )
+
+    logger.info(f"[FINANCE] Checking status (details={include_details})",
+                extra={"component": "finance"})
+
+    try:
+        with get_db() as conn:
+            config = dict(conn.execute("SELECT * FROM finance_config WHERE id = 1").fetchone())
+            game = dict(conn.execute("SELECT * FROM game_state WHERE id = 1").fetchone())
+            ym = _ensure_budget_period(conn)
+            budget = dict(conn.execute(
+                "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
+            ).fetchone())
+
+            spent = budget["discretionary_spent"]
+            limit = budget["discretionary_budget"]
+            remaining = max(0, limit - spent)
+            pct = (spent / limit * 100) if limit > 0 else 0
+
+            level_info = _get_level_info(game["level"])
+            xp_for_next = (game["level"] + 1) * 200
+            xp_in_level = game["total_xp"] - (game["level"] * 200)
+
+            lines = [
+                f"Financial Quest Board — {ym}",
+                f"",
+                f"Level {game['level']}: {level_info['title']} | XP: {game['total_xp']} ({xp_in_level}/{xp_for_next - game['level'] * 200} to next)",
+                f"Streak: {game['streak_months']} months (best: {game['streak_best']})",
+                f"",
+                f"Budget: ${spent:.2f} / ${limit:.2f} spent ({pct:.0f}%)",
+                f"Remaining: ${remaining:.2f}",
+            ]
+
+            # Over budget warning
+            if spent > limit:
+                overspend = spent - limit
+                years = config["retirement_target_age"] - config["current_age"]
+                future_damage = overspend * ((1 + config["expected_return"]) ** years)
+                lines.append(f"⚠ OVER BUDGET by ${overspend:.2f} (Future Self Damage: ${future_damage:.2f})")
+
+            # Side quests
+            quests = conn.execute(
+                "SELECT name, target_amount, saved_amount FROM side_quests WHERE status = 'active'"
+            ).fetchall()
+            if quests:
+                lines.append("")
+                lines.append(f"Active Side Quests ({len(quests)}):")
+                for q in quests:
+                    q_pct = (q["saved_amount"] / q["target_amount"] * 100) if q["target_amount"] > 0 else 0
+                    lines.append(f"  - {q['name']}: ${q['saved_amount']:.2f}/${q['target_amount']:.2f} ({q_pct:.0f}%)")
+
+            if include_details:
+                lines.append("")
+                lines.append(f"Monthly Plan: ${config['monthly_discretionary']:.2f} guilt-free, "
+                             f"${config['monthly_investing']:.2f} investing, "
+                             f"${config['monthly_buffer']:.2f} buffer")
+                lines.append(f"Investing this month: ${budget['investing_actual']:.2f}")
+                lines.append(f"Retirement: ${config['retirement_current']:,.2f} (target age {config['retirement_target_age']})")
+
+                # YNAB status
+                if _is_ynab_configured():
+                    sync = conn.execute("SELECT last_synced_at FROM ynab_sync_state WHERE id = 1").fetchone()
+                    if sync and sync["last_synced_at"]:
+                        lines.append(f"YNAB: Connected, last synced {sync['last_synced_at']}")
+                    else:
+                        lines.append("YNAB: Connected, not yet synced")
+                else:
+                    lines.append("YNAB: Not configured")
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"[FINANCE] Failed to get status: {e}")
+        return f"Error checking finance status: {str(e)}"

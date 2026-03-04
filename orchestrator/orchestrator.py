@@ -58,7 +58,10 @@ from nemotron_loop import (
     call_nemotron_orchestrator, _run_nemotron_tool_loop,
     clean_response, parse_tool_calls_from_content,
 )
-from background_jobs import poll_calendar, morning_briefing, poll_email, process_emails_for_events, sync_ynab_transactions
+from background_jobs import (
+    poll_calendar, morning_briefing, poll_email, process_emails_for_events,
+    sync_ynab_transactions, weekly_spending_summary, midmonth_budget_warning,
+)
 from api_routes import router as api_router
 from finance_manager import router as finance_router, setup_finance, _is_ynab_configured, YNAB_SYNC_INTERVAL
 
@@ -319,6 +322,31 @@ async def startup_event():
             replace_existing=True,
         )
         logger.info(f"[SCHEDULER] YNAB sync every {YNAB_SYNC_INTERVAL} min")
+
+    # Schedule weekly spending summary (Sunday 6 PM)
+    scheduler.add_job(
+        weekly_spending_summary,
+        trigger="cron",
+        day_of_week="sun",
+        hour=18,
+        minute=0,
+        id="weekly_spending_summary",
+        name="Weekly spending summary TTS",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Weekly spending summary: Sunday 6 PM")
+
+    # Schedule mid-month budget warning (daily at noon, only fires day 13-17)
+    scheduler.add_job(
+        midmonth_budget_warning,
+        trigger="cron",
+        hour=12,
+        minute=0,
+        id="midmonth_budget_warning",
+        name="Mid-month budget warning TTS",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Mid-month budget warning: daily noon (active day 13-17)")
 
 
 @app.on_event("shutdown")
