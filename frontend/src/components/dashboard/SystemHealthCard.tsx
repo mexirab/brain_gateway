@@ -26,7 +26,7 @@ export default function SystemHealthCard() {
     );
 
   return (
-    <div className="glass p-5">
+    <a href="http://10.0.0.248:3000" target="_blank" rel="noopener noreferrer" className="block glass p-5 hover:border-indigo-500/40 transition-colors cursor-pointer">
       <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
         <Activity size={18} className="text-cyan-400" />
         System Health
@@ -64,6 +64,6 @@ export default function SystemHealthCard() {
           </div>
         </div>
       )}
-    </div>
+    </a>
   );
 }

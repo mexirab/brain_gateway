@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Coins, TrendingUp } from 'lucide-react';
 import { financeApi } from '@/lib/finance-api';
 import type { BudgetPeriod, GameState } from '@/lib/finance-types';
@@ -32,7 +33,7 @@ export default function FinanceSnapshotCard() {
     'bg-red-500';
 
   return (
-    <div className="glass p-5">
+    <Link href="/finance" className="block glass p-5 hover:border-indigo-500/40 transition-colors cursor-pointer">
       <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
         <Coins size={18} className="text-amber-400" />
         Budget
@@ -78,6 +79,6 @@ export default function FinanceSnapshotCard() {
           )}
         </div>
       )}
-    </div>
+    </Link>
   );
 }
