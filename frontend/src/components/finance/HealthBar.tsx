@@ -46,7 +46,7 @@ export default function HealthBar({ spent, budget, sideQuestCarve = 0 }: HealthB
       {/* Labels */}
       <div className="flex justify-between mt-2 text-sm">
         <Link
-          href="/finance/transactions"
+          href="/finance/transactions?filter=discretionary"
           className="text-zinc-400 hover:text-indigo-400 transition-colors underline decoration-zinc-600 hover:decoration-indigo-400 underline-offset-2"
         >
           {formatCurrency(spent)} spent

@@ -1,15 +1,28 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Loader2, ArrowUpDown, Tag, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useFinance } from '@/lib/finance-context';
 import { financeApi } from '@/lib/finance-api';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';
 
+type FilterType = 'all' | 'discretionary' | 'non-discretionary';
+
 export default function TransactionsPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="animate-spin text-brand-500" size={32} /></div>}>
+      <TransactionsContent />
+    </Suspense>
+  );
+}
+
+function TransactionsContent() {
+  const searchParams = useSearchParams();
+  const initialFilter = (searchParams.get('filter') as FilterType) || 'all';
   const { transactions, loading, error, refresh } = useFinance();
   const [reclassifying, setReclassifying] = useState<number | null>(null);
-  const [filter, setFilter] = useState<'all' | 'discretionary' | 'non-discretionary'>('all');
+  const [filter, setFilter] = useState<FilterType>(initialFilter);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'ynab' | 'manual'>('all');
 
   const yearMonth = currentYearMonth();
