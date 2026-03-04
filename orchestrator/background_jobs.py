@@ -189,8 +189,8 @@ async def poll_email():
     GMAIL_API_CALLS.labels(operation="poll").inc()
 
     try:
-        # Find unread emails from the last hour, skip promotions/social
-        query = "is:unread newer_than:1h -category:promotions -category:social -category:forums"
+        # Find unread emails from the last hour, skip non-primary tabs
+        query = "is:unread newer_than:1h -category:promotions -category:social -category:forums -category:updates"
         response = await client.list_messages(query=query, max_results=5)
 
         if not response.success:
@@ -269,7 +269,7 @@ async def process_emails_for_events():
 
     try:
         # Get emails from the last 24 hours, skip promos/social/forums
-        query = "newer_than:1d -category:promotions -category:social -category:forums"
+        query = "newer_than:1d -category:promotions -category:social -category:forums -category:updates"
         response = await gmail.list_messages(query=query, max_results=15)
 
         if not response.success:
