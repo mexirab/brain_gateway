@@ -110,8 +110,9 @@ scheduler = AsyncIOScheduler(
 # Calendar polling config
 # ---------------------------------------------------------------------------
 CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "15"))
-MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:30")
+MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
 MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
+MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", "media_player.bedroom_pair")
 
 # Track which calendar events we've already announced (resets on restart)
 _notified_events: set = set()

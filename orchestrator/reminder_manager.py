@@ -181,9 +181,9 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 # REMINDER DELIVERY HELPERS
 # =============================================================================
 
-async def _announce_voice(text: str) -> Dict[str, Any]:
+async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, Any]:
     """
-    Announce reminder via TTS on all speakers.
+    Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
     Uses the orchestrator's TTS endpoint to generate Jessica voice audio,
     then plays it on all speakers.
@@ -218,20 +218,21 @@ async def _announce_voice(text: str) -> Dict[str, Any]:
 
             audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.wav"
 
-            # Play on all speakers
+            # Play on speaker
+            target_speaker = speaker or REMINDER_SPEAKER
             ha_response = await client.post(
                 f"{HA_URL}/api/services/media_player/play_media",
                 headers=headers,
                 json={
-                    "entity_id": REMINDER_SPEAKER,
+                    "entity_id": target_speaker,
                     "media_content_id": audio_url,
                     "media_content_type": "audio/wav"
                 }
             )
 
             if ha_response.status_code == 200:
-                logger.info(f"Played reminder on {REMINDER_SPEAKER}")
-                return {"success": True, "speaker": REMINDER_SPEAKER}
+                logger.info(f"Played reminder on {target_speaker}")
+                return {"success": True, "speaker": target_speaker}
             else:
                 return {"success": False, "error": f"HA returned {ha_response.status_code}"}
 

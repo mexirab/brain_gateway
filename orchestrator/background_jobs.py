@@ -173,8 +173,8 @@ async def morning_briefing():
         if pending:
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
 
-        await _announce_voice(" ".join(parts))
-        logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
+        await _announce_voice(" ".join(parts), speaker=shared.MORNING_BRIEFING_SPEAKER)
+        logger.info(f"[MORNING_BRIEFING] Delivered on {shared.MORNING_BRIEFING_SPEAKER}: {len(briefing_events)} events, {len(pending)} reminders")
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
