@@ -42,6 +42,14 @@ async def health():
     """Health check endpoint."""
     helios_online = await check_helios_health()
 
+    # Check Nemotron health
+    nemotron_online = False
+    try:
+        resp = await shared._http.get(f"{NEMOTRON_URL}/models", timeout=3.0)
+        nemotron_online = resp.status_code == 200
+    except Exception:
+        pass
+
     scheduled_jobs = len(scheduler.get_jobs())
 
     idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
@@ -58,6 +66,7 @@ async def health():
         "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
         "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
         "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
+        "nemotron_status": "online" if nemotron_online else "offline",
         "helios_idle": idle_info,
         "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "helios_tools": ["ask_orchestrator"],
