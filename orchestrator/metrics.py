@@ -268,6 +268,18 @@ EMAIL_TO_CALENDAR_EMAILS_SCANNED = Counter(
     "Emails scanned for calendar events",
 )
 
+# -- Temperature Monitoring --------------------------------------------------
+TEMPERATURE_GAUGE = Gauge(
+    "bgw_temperature_fahrenheit",
+    "Temperature sensor readings in Fahrenheit",
+    ["location"],  # closet, kitchen
+)
+
+TEMPERATURE_DELTA = Gauge(
+    "bgw_temperature_delta_fahrenheit",
+    "Temperature difference between server closet and ambient (kitchen)",
+)
+
 # -- System info -------------------------------------------------------------
 BUILD_INFO = Info(
     "bgw_build",

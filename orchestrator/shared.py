@@ -127,6 +127,15 @@ EMAIL_POLL_ENABLED = os.environ.get("EMAIL_POLL_ENABLED", "true").lower() == "tr
 _notified_emails: set = set()
 
 # ---------------------------------------------------------------------------
+# Temperature monitoring
+# ---------------------------------------------------------------------------
+CLOSET_TEMP_WARNING = float(os.environ.get("CLOSET_TEMP_WARNING", "80"))
+CLOSET_TEMP_CRITICAL = float(os.environ.get("CLOSET_TEMP_CRITICAL", "85"))
+
+# Track which temperature alerts have fired (resets on restart)
+_notified_temp_alerts: set = set()
+
+# ---------------------------------------------------------------------------
 # Email-to-calendar config
 # ---------------------------------------------------------------------------
 EMAIL_TO_CALENDAR_ENABLED = os.environ.get("EMAIL_TO_CALENDAR_ENABLED", "true").lower() == "true"

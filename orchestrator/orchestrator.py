@@ -61,6 +61,7 @@ from nemotron_loop import (
 from background_jobs import (
     poll_calendar, morning_briefing, poll_email, process_emails_for_events,
     sync_ynab_transactions, weekly_spending_summary, midmonth_budget_warning,
+    check_closet_temperature,
 )
 from api_routes import router as api_router
 from finance_manager import router as finance_router, setup_finance, _is_ynab_configured, YNAB_SYNC_INTERVAL
@@ -350,6 +351,17 @@ async def startup_event():
         replace_existing=True,
     )
     logger.info("[SCHEDULER] Mid-month budget warning: daily noon (active day 13-17)")
+
+    # Schedule closet temperature monitoring
+    scheduler.add_job(
+        check_closet_temperature,
+        trigger="interval",
+        minutes=10,
+        id="closet_temp_check",
+        name="Closet temperature monitoring",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Closet temperature monitoring every 10 min")
 
 
 @app.on_event("shutdown")

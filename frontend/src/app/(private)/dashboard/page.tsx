@@ -3,6 +3,7 @@ import RemindersCard from '@/components/dashboard/RemindersCard';
 import FocusTimerCard from '@/components/dashboard/FocusTimerCard';
 import SystemHealthCard from '@/components/dashboard/SystemHealthCard';
 import FinanceSnapshotCard from '@/components/dashboard/FinanceSnapshotCard';
+import TemperatureCard from '@/components/dashboard/TemperatureCard';
 
 export default function DashboardPage() {
   return (
@@ -13,6 +14,7 @@ export default function DashboardPage() {
         <RemindersCard />
         <FocusTimerCard />
         <SystemHealthCard />
+        <TemperatureCard />
         <FinanceSnapshotCard />
       </div>
     </div>
