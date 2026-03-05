@@ -5,6 +5,7 @@ export interface HealthResponse {
   version: string;
   architecture: string;
   primary_status: string;
+  nemotron_status: string;
   helios_idle: string;
   rag_docs: number;
   ha_entities: number;

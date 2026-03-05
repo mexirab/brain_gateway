@@ -42,12 +42,12 @@ export default function SystemHealthCard() {
             <StatusDot ok={health.ok} />
           </div>
           <div className="flex items-center justify-between text-sm">
-            <span className="text-zinc-400">Nemotron</span>
-            <StatusDot ok={health.primary_status === 'ok'} />
+            <span className="text-zinc-400">Helios</span>
+            <StatusDot ok={health.primary_status === 'online'} />
           </div>
           <div className="flex items-center justify-between text-sm">
-            <span className="text-zinc-400">Helios</span>
-            <span className="text-xs text-zinc-500">{health.helios_idle}</span>
+            <span className="text-zinc-400">Nemotron</span>
+            <StatusDot ok={health.nemotron_status === 'online'} />
           </div>
           <div className="flex items-center justify-between text-sm">
             <span className="text-zinc-400">Scheduler</span>
