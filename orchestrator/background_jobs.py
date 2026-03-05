@@ -18,6 +18,7 @@ from reminder_manager import list_pending_reminders, _announce_voice
 from metrics import (
     CALENDAR_POLL_EVENTS_FOUND, GMAIL_API_CALLS, GMAIL_API_ERRORS,
     EMAIL_TO_CALENDAR_EVENTS_CREATED, EMAIL_TO_CALENDAR_EMAILS_SCANNED,
+    TEMPERATURE_GAUGE, TEMPERATURE_DELTA,
 )
 
 logger = logging.getLogger(__name__)
@@ -538,3 +539,66 @@ async def midmonth_budget_warning():
 
     except Exception as e:
         logger.error(f"[MIDMONTH] Error: {e}")
+
+
+async def check_closet_temperature():
+    """Every 10 minutes: check closet temperature and alert if too hot.
+
+    Thresholds:
+    - 80°F: warning (GPU heat building up)
+    - 85°F: urgent (risk of thermal throttling)
+    """
+    from shared import HA_URL, HA_TOKEN
+
+    try:
+        resp = await shared._http.get(
+            f"{HA_URL}/api/states/sensor.closet_temperature",
+            headers={"Authorization": f"Bearer {HA_TOKEN}"},
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return
+
+        temp = float(resp.json()["state"])
+        TEMPERATURE_GAUGE.labels(location="closet").set(temp)
+
+        # Also grab kitchen for delta tracking
+        try:
+            resp2 = await shared._http.get(
+                f"{HA_URL}/api/states/sensor.kitchen_temperature",
+                headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                timeout=5.0,
+            )
+            if resp2.status_code == 200:
+                kitchen_temp = float(resp2.json()["state"])
+                TEMPERATURE_GAUGE.labels(location="kitchen").set(kitchen_temp)
+                TEMPERATURE_DELTA.set(temp - kitchen_temp)
+        except Exception:
+            pass
+
+        # Alert thresholds (only alert once per crossing using shared state)
+        if temp >= 85 and "closet_85" not in shared._notified_temp_alerts:
+            await _announce_voice(
+                f"Warning! Server closet temperature is {temp:.0f} degrees. "
+                f"That's dangerously hot. Check the ventilation or shut down non-essential nodes."
+            )
+            shared._notified_temp_alerts.add("closet_85")
+            shared._notified_temp_alerts.discard("closet_80")  # Don't re-alert 80 on cooldown
+            logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — URGENT alert sent")
+
+        elif temp >= 80 and "closet_80" not in shared._notified_temp_alerts:
+            await _announce_voice(
+                f"Heads up Nadim. The server closet is at {temp:.0f} degrees. "
+                f"That's getting warm. You might want to check the airflow."
+            )
+            shared._notified_temp_alerts.add("closet_80")
+            logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — warning alert sent")
+
+        elif temp < 78:
+            # Clear alerts when cooled down — allows re-alerting if it heats up again
+            if shared._notified_temp_alerts:
+                shared._notified_temp_alerts.clear()
+                logger.info(f"[TEMP_ALERT] Closet cooled to {temp}°F — alerts cleared")
+
+    except Exception as e:
+        logger.error(f"[TEMP_ALERT] Error: {e}")

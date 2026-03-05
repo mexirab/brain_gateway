@@ -19,6 +19,7 @@ from shared import (
     CHROMA_COLLECTION, CHROMA_PERSIST,
     ENDEL_ENABLED, FOCUS_AUDIO_PLAYER, ENDEL_MODES,
     CALENDAR_POLL_INTERVAL, MORNING_BRIEFING_TIME, MORNING_BRIEFING_ENABLED,
+    HA_URL, HA_TOKEN,
 )
 from prompt_builder import rag_context
 from helios_manager import check_helios_health
@@ -28,6 +29,7 @@ from google_calendar import get_calendar_client
 from reminder_manager import list_pending_reminders, mark_reminder_completed, _announce_voice
 from metrics import (
     HELIOS_ONLINE, FOCUS_ACTIVE, REMINDERS_PENDING, HELIOS_IDLE_SECONDS,
+    TEMPERATURE_GAUGE, TEMPERATURE_DELTA,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,26 @@ async def metrics_endpoint():
     REMINDERS_PENDING.set(len(list_pending_reminders()))
     if shared._last_helios_request > 0:
         HELIOS_IDLE_SECONDS.set(time.time() - shared._last_helios_request)
+
+    # Scrape temperature sensors for Prometheus
+    try:
+        for location, entity_id in [("closet", "sensor.closet_temperature"), ("kitchen", "sensor.kitchen_temperature")]:
+            resp = await shared._http.get(
+                f"{HA_URL}/api/states/{entity_id}",
+                headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                timeout=3.0,
+            )
+            if resp.status_code == 200:
+                temp = float(resp.json()["state"])
+                TEMPERATURE_GAUGE.labels(location=location).set(temp)
+        # Calculate delta
+        closet = TEMPERATURE_GAUGE.labels(location="closet")._value.get()
+        kitchen = TEMPERATURE_GAUGE.labels(location="kitchen")._value.get()
+        if closet and kitchen:
+            TEMPERATURE_DELTA.set(closet - kitchen)
+    except Exception:
+        pass  # Don't let temp scrape failures break metrics
+
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -493,6 +515,50 @@ async def calendar_today():
     merged.sort(key=lambda e: (0 if e.get("all_day") else 1, e["start"]))
 
     return {"events": merged, "source": source, "count": len(merged)}
+
+
+@router.get("/api/temperatures")
+async def get_temperatures():
+    """Get temperature sensor readings from Home Assistant for dashboard widget."""
+    sensors = {
+        "closet": "sensor.closet_temperature",
+        "kitchen": "sensor.kitchen_temperature",
+    }
+    readings = {}
+    for label, entity_id in sensors.items():
+        try:
+            resp = await shared._http.get(
+                f"{HA_URL}/api/states/{entity_id}",
+                headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                readings[label] = {
+                    "temperature": float(data["state"]),
+                    "unit": data.get("attributes", {}).get("unit_of_measurement", "°F"),
+                    "friendly_name": data.get("attributes", {}).get("friendly_name", label),
+                }
+            else:
+                readings[label] = {"temperature": None, "error": f"HTTP {resp.status_code}"}
+        except Exception as e:
+            readings[label] = {"temperature": None, "error": str(e)}
+
+    # Calculate delta if both readings available
+    closet_temp = readings.get("closet", {}).get("temperature")
+    kitchen_temp = readings.get("kitchen", {}).get("temperature")
+    delta = round(closet_temp - kitchen_temp, 1) if closet_temp and kitchen_temp else None
+
+    # Estimate monthly cost impact: ~3.5 cents per degree-hour of cooling at $0.11/kWh
+    # Rough formula: delta * 24h * 30 days * 0.12 kW/degree * $0.11/kWh
+    monthly_cooling_cost = round(delta * 24 * 30 * 0.12 * 0.11, 2) if delta and delta > 0 else None
+
+    return {
+        "sensors": readings,
+        "delta": delta,
+        "estimated_monthly_cooling_cost": monthly_cooling_cost,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 @router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])

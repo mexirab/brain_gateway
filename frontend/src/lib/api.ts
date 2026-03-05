@@ -4,6 +4,7 @@ import type {
   RemindersResponse,
   HAEntitiesResponse,
   CalendarEvent,
+  TemperaturesResponse,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -47,4 +48,5 @@ export const api = {
     }),
   calendarToday: () =>
     fetcher<{ events: CalendarEvent[]; source?: string; count?: number }>('/api/calendar/today'),
+  temperatures: () => fetcher<TemperaturesResponse>('/api/temperatures'),
 };

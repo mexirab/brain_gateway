@@ -69,6 +69,20 @@ export interface CalendarEvent {
   source?: 'phone' | 'google';
 }
 
+export interface TemperatureReading {
+  temperature: number | null;
+  unit?: string;
+  friendly_name?: string;
+  error?: string;
+}
+
+export interface TemperaturesResponse {
+  sensors: Record<string, TemperatureReading>;
+  delta: number | null;
+  estimated_monthly_cooling_cost: number | null;
+  timestamp: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
