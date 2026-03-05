@@ -21,6 +21,9 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Morning briefing | 7:00 AM daily on bedroom pair → today's events + pending reminders via TTS | Working |
 | Email polling | Every 30 min → announce new unread Primary emails via TTS | Working |
 | Calendar polling | Every 15 min → announce events starting within 2 hours | Working |
+| Travel-time alerts | Google Maps API → "leave in X minutes" for events with physical locations | Working |
+| Temperature monitoring | Server closet temp dashboard widget + TTS alerts at 80°F/85°F + Grafana metrics | Working |
+| Interactive system diagram | Animated SVG on architecture page showing all data flows | Working |
 | Mode router | Intent-based coaching: explainer/mirror/counterbalance/challenge/baseline | Working |
 | HTTPS access | Tailscale Serve → valid TLS cert → mobile mic support | Working |
 | TTS pacing | Sentence pause injection + paragraph splitting for calmer speech | Working |
@@ -42,8 +45,8 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Phase | What | Status |
 |-------|------|--------|
 | 1 | Project scaffold, Docker, auth middleware, login, placeholder pages | ✅ Done |
-| 2 | Public pages: architecture page with cluster nodes, data flow, capabilities | ✅ Done |
-| 3 | Private dashboard: calendar (merged), reminders, focus timer, system health, finance snapshot | ✅ Done |
+| 2 | Public pages: architecture page with interactive system diagram, cluster nodes, data flow, capabilities | ✅ Done |
+| 3 | Private dashboard: calendar, reminders, focus timer, system health, temperature monitoring, finance snapshot | ✅ Done |
 | 4 | Chat interface: streaming SSE with Jess, routing badges | ✅ Done |
 | 5 | Home controls: HA entity cards, toggles, brightness, scenes | ✅ Done |
 | F1-F6 | Gamified finance dashboard: YNAB sync, budget health, XP/levels, quest board | ✅ Done |
@@ -77,6 +80,19 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - ✅ Proactive polling: every 30 min, announces new Primary inbox emails via TTS
 - ✅ Filters out promotions, social, forums, and updates categories
 - ✅ OAuth2 scopes: `calendar.readonly`, `calendar.events`, `gmail.readonly`
+
+### Travel-time calendar alerts — DONE
+- ✅ Google Maps Directions API integration for real-time traffic
+- ✅ "Leave in X minutes" alerts instead of "Event in X minutes" for physical locations
+- ✅ Virtual meeting detection (skips Zoom/Teams/Meet/WebEx links)
+- ✅ Configurable buffer time (`TRAVEL_TIME_BUFFER`, default 10 min)
+- ✅ Caches API results per destination+date to avoid redundant calls
+
+### Temperature monitoring — DONE
+- ✅ Dashboard widget: closet temp, kitchen ambient, heat delta, estimated cooling cost
+- ✅ TTS alerts: 80°F warning, 85°F critical, auto-clears below 78°F
+- ✅ Prometheus gauges: `bgw_temperature_fahrenheit`, `bgw_temperature_delta_fahrenheit`
+- ✅ Background job polls HA sensors every 10 min
 
 ## Phase 3: Document Memory — NOT STARTED
 
