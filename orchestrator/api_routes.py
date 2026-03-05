@@ -549,9 +549,11 @@ async def get_temperatures():
     kitchen_temp = readings.get("kitchen", {}).get("temperature")
     delta = round(closet_temp - kitchen_temp, 1) if closet_temp and kitchen_temp else None
 
-    # Estimate monthly cost impact: ~3.5 cents per degree-hour of cooling at $0.11/kWh
-    # Rough formula: delta * 24h * 30 days * 0.12 kW/degree * $0.11/kWh
-    monthly_cooling_cost = round(delta * 24 * 30 * 0.12 * 0.11, 2) if delta and delta > 0 else None
+    # Estimate monthly AC cost from server heat:
+    # ~300W server heat → AC needs ~100W extra to remove it (COP ~3)
+    # Scale proportionally with delta: baseline 5°F delta = 100W AC load
+    # monthly_cost = (delta/5) * 0.1kW * 24h * 30d * $0.11/kWh
+    monthly_cooling_cost = round((delta / 5.0) * 0.1 * 24 * 30 * 0.11, 2) if delta and delta > 0 else None
 
     return {
         "sensors": readings,
