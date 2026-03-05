@@ -7,7 +7,7 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | - | RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
+| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
 | Helios | 10.0.0.195 | - | RTX 5090 | Qwen3-32B conversational (auto-starts on demand) |
 | HA | 10.0.0.106 | - | - | Home Assistant |
@@ -129,7 +129,8 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
 | orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
-| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling |
+| orchestrator/travel_time.py | Google Maps Directions API client for travel-time alerts |
+| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling, temperature alerts |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/reminder_manager.py | APScheduler reminders |
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client for focus blocking |
@@ -138,6 +139,7 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 | orchestrator/google_calendar.py | Google Calendar API v3 client |
 | orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
 | orchestrator/google_setup.py | One-time OAuth2 consent flow script |
+| orchestrator/metrics.py | Prometheus metrics definitions (bgw_* namespace) |
 | orchestrator/mode_router.py | Intent-based mode router (explainer/mirror/counterbalance/challenge/baseline) |
 | docker-compose.yml | Service stack |
 | saturn/docker-compose.pihole.yml | Saturn Pi-hole secondary deployment |
@@ -149,6 +151,8 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 | ha_automations/atom_echo.yaml | ESPHome config for ATOM Echo S3R voice satellite |
 | ha_automations/hey_jess.tflite | On-device "Hey Jess" wake word model (microWakeWord) |
 | ha_automations/hey_jess.json | Wake word JSON manifest for ESPHome |
+| frontend/src/components/architecture/SystemDiagram.tsx | Interactive animated SVG system architecture diagram |
+| frontend/src/components/dashboard/TemperatureCard.tsx | Server closet temperature monitoring widget |
 | tts/wyoming_jessica_bridge.py | Wyoming-to-HTTP bridge for Jessica TTS |
 | tts/Dockerfile.wyoming-jessica | Docker image for Wyoming Jessica bridge |
 
@@ -266,7 +270,7 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 6. Restart orchestrator: `docker compose restart orchestrator`
 
 **Proactive features (APScheduler):**
-- Calendar polling: every 15 min, announces events starting within 2 hours via TTS
+- Calendar polling: every 15 min, announces events starting within 2 hours via TTS (with travel-time awareness for physical locations)
 - Morning briefing: 7:00 AM on bedroom pair, announces today's events + pending reminders via TTS
 
 **Config (env vars):**
@@ -371,8 +375,8 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 
 | Page | Route | What |
 |------|-------|------|
-| Architecture | `/architecture` | Public. Cluster nodes, data flow diagram, capabilities grid |
-| Dashboard | `/dashboard` | Private. Calendar, reminders, focus timer, system health, finance snapshot |
+| Architecture | `/architecture` | Public. Interactive animated system diagram, cluster nodes, data flow, capabilities grid |
+| Dashboard | `/dashboard` | Private. Calendar, reminders, focus timer, system health, temperature monitoring, finance snapshot |
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with YNAB sync, XP/levels, quest board |
@@ -383,6 +387,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 - **Calendar card** → shows merged phone+Google calendar events with source label
 - **Reminders card** → pending reminders with complete action
 - **Focus timer card** → current session with start/stop controls
+- **Temperature card** → server closet vs kitchen ambient temp, heat delta, estimated cooling cost
 
 **Finance system (YNAB integration):**
 - Syncs budget data from YNAB API (`YNAB_API_TOKEN` + `YNAB_BUDGET_ID` env vars)
@@ -398,6 +403,45 @@ docker compose up -d --build --force-recreate frontend
 ```
 
 **Note:** `npm run build` on host does NOT update the Docker container. Must rebuild the Docker image.
+
+## Travel-Time Calendar Alerts
+
+Calendar polling checks events with physical locations against Google Maps Directions API for real-time traffic. Announces "leave in X minutes" alerts instead of just "event in X minutes".
+
+**How it works:**
+1. Event within 2 hours with a physical location (not Zoom/Teams/Meet links)
+2. Maps API returns drive time with traffic from home address
+3. `leave_by = event.start - travel_time - buffer`
+4. Announces "You need to leave in X minutes for Event. It's a Y minute drive."
+5. If leave_by already passed: "You should leave now for Event."
+
+**Config (env vars):**
+- `GOOGLE_MAPS_API_KEY` — Google Maps Directions API key
+- `TRAVEL_TIME_BUFFER` — extra minutes buffer (default: 10)
+- Home address hardcoded in `shared.py` as `HOME_ADDRESS`
+
+**Virtual meeting detection:** Skips Maps API for locations containing `zoom.us`, `teams.microsoft`, `meet.google`, `webex`, or any URL (`http://`, `https://`).
+
+## Temperature Monitoring
+
+Server closet temperature monitoring with dashboard widget, TTS alerts, and Grafana metrics.
+
+**Dashboard widget:** Shows closet temp, kitchen ambient, heat delta (+°F), and estimated monthly AC cooling cost. Polls every 60s. Color-coded: green (<75°F), yellow (75-80°F), amber (80-85°F), red (>85°F).
+
+**TTS alerts (every 10 min):**
+- 80°F warning: "Server closet is at X degrees. Getting warm."
+- 85°F critical: "Server closet is dangerously hot. Check ventilation."
+- Auto-clears when cooled below 78°F (allows re-alerting on next heat-up)
+
+**Prometheus metrics:**
+- `bgw_temperature_fahrenheit{location="closet|kitchen"}` — sensor readings
+- `bgw_temperature_delta_fahrenheit` — closet minus kitchen delta
+
+**Config (env vars):**
+- `CLOSET_TEMP_WARNING` — warning threshold in °F (default: 80)
+- `CLOSET_TEMP_CRITICAL` — critical threshold in °F (default: 85)
+
+**HA sensors used:** `sensor.closet_temperature`, `sensor.kitchen_temperature`
 
 ## Performance Notes
 
