@@ -12,7 +12,7 @@ ALWAYS-ON (~200W):
 └── Jupiter: Orchestrator + Home Assistant
 
 OFF BY DEFAULT (saves ~150W):
-└── Helios: 120B Expert (manual start for deep dives)
+└── Helios: Qwen3-32B Expert (manual start for deep dives)
 ```
 
 ---
@@ -190,8 +190,8 @@ nvidia-smi
 
 ### Helios won't start
 ```bash
-# Check RAM availability (120B needs ~60GB RAM + 32GB VRAM)
-ssh helios 'free -h'
+# Check VRAM availability (Qwen3-32B-Q5_K_M needs ~24GB VRAM)
+ssh helios 'nvidia-smi'
 
 # Check GPU
 ssh helios 'nvidia-smi'

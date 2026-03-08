@@ -78,7 +78,7 @@ services:
       - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
       - NEMOTRON_MODEL=${NEMOTRON_MODEL:-nvidia/Nemotron-Orchestrator-8B}
       - HELIOS_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
-      - HELIOS_MODEL=${HELIOS_MODEL:-unsloth_gpt-oss-120b-GGUF_Q4_K_S_gpt-oss-120b-Q4_K_S-00001-of-00002.gguf}
+      - HELIOS_MODEL=${HELIOS_MODEL:-Qwen3-32B-Q5_K_M}
       # Home Assistant
       - HA_URL=http://${NODE_HA_IP:-10.0.0.106}:8123
       - HA_TOKEN=${HA_TOKEN:?HA_TOKEN must be set in .env}

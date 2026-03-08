@@ -120,7 +120,7 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
-## Helios (120B Expert Model)
+## Helios (Qwen3-32B Expert Model)
 
 Helios auto-starts on demand and stops after 30 min idle to save ~150W.
 

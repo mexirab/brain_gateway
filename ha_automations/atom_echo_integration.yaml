@@ -97,7 +97,7 @@ rest_command:
         "messages": [
           {
             "role": "system",
-            "content": "You are Jess with access to the Helios expert (120B model). For this complex question, take your time and provide a thorough, thoughtful response. Use the ask_expert tool if needed."
+            "content": "You are Jess with access to the Helios expert (Qwen3-32B model). For this complex question, take your time and provide a thorough, thoughtful response. Use the ask_expert tool if needed."
           },
           {
             "role": "user",

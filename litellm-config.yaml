@@ -18,21 +18,21 @@ model_list:
       timeout: 120
 
   # ============================================
-  # HELIOS - Conversational Expert (Qwen3-32B)
+  # HELIOS - Heavy Reasoning (Qwen3-32B)
   # ============================================
   - model_name: helios-qwen3-32b
     litellm_params:
-      model: openai/Qwen3-32B-Q5_K_M.gguf
+      model: openai/qwen3-32b
       api_base: os.environ/HELIOS_API_BASE
       api_key: dummy
-      timeout: 120
+      timeout: 300
 
   - model_name: helios
     litellm_params:
-      model: openai/Qwen3-32B-Q5_K_M.gguf
+      model: openai/qwen3-32b
       api_base: os.environ/HELIOS_API_BASE
       api_key: dummy
-      timeout: 120
+      timeout: 300
 
 router_settings:
   routing_strategy: simple-shuffle

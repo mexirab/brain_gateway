@@ -2,8 +2,8 @@
 
 ## Overview
 
-Helios runs the 120B expert model (unsloth_gpt-oss-120b) via llama.cpp, which splits
-the model between VRAM (32GB RTX 5090) and system RAM (128GB). This consumes ~150W continuously.
+Helios runs the Qwen3-32B expert model (Qwen3-32B-Q5_K_M.gguf) via llama.cpp on port 8080,
+fitting entirely in VRAM (~24GB on RTX 5090). This consumes ~150W continuously.
 For your ADHD support use case, this model is rarely needed - Nemotron-8B handles 95%+ of tasks.
 
 ## One-Time Setup (Run on Helios)
@@ -72,7 +72,7 @@ From Jupiter, use these scripts:
 The orchestrator's `ask_expert` tool will automatically try to use Helios.
 If Helios is off, the tool will gracefully fail and Nemotron will handle it.
 
-Good use cases for the 120B model:
+Good use cases for the Qwen3-32B model:
 - Complex technical deep dives
 - Nuanced emotional support conversations
 - Creative writing or brainstorming

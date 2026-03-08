@@ -16,7 +16,7 @@
 #   Uranus:   10.0.0.173  (TTS on GPU 0, STT on GPU 1 - 2x RTX 5080)
 #
 # OFF BY DEFAULT (saves ~150W):
-#   Helios:   10.0.0.195  (Expert 120B on RTX 5090 + RAM)
+#   Helios:   10.0.0.195  (Qwen3-32B on RTX 5090)
 
 global:
   scrape_interval: 15s
@@ -103,6 +103,20 @@ scrape_configs:
           node: 'saturn'
 
   # ============================================
+  # CONJURE API METRICS
+  # ============================================
+  # Conjure runs as a bare PM2 process on Jupiter (port 5050).
+  # The /metrics endpoint exposes prom-client counters/histograms
+  # for HTTP requests, visualization pipeline, and rate limiting.
+  - job_name: 'conjure'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['10.0.0.248:5050']
+        labels:
+          service: 'conjure-api'
+          node: 'jupiter'
+
+  # ============================================
   # HTTP HEALTH PROBES (Blackbox Exporter)
   # ============================================
   # Requires blackbox exporter running in monitoring stack
@@ -134,6 +148,12 @@ scrape_configs:
         labels:
           service: 'helios'
           node: 'helios'
+
+      # Conjure API (PM2 on Jupiter)
+      - targets: ['http://10.0.0.248:5050/health']
+        labels:
+          service: 'conjure'
+          node: 'jupiter'
 
     relabel_configs:
       - source_labels: [__address__]

@@ -90,3 +90,35 @@ scrape_configs:
 
       - labels:
           level:
+
+  # ============================================
+  # CONJURE PM2 LOGS (file-based, not Docker)
+  # ============================================
+  # Conjure runs as a bare Node.js process managed by PM2,
+  # not in Docker. PM2 writes pino structured JSON logs to
+  # /opt/conjure/server/logs/. This job reads those files
+  # and ships them to Loki with parsed labels for filtering.
+  - job_name: conjure
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: conjure
+          service: conjure-api
+          __path__: /opt/conjure/server/logs/*.log
+    pipeline_stages:
+      # Each line is a pino JSON object in production
+      - json:
+          expressions:
+            level: level
+            component: component
+            event: event
+      # Map pino numeric levels to human-readable labels.
+      # pino uses: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
+      - template:
+          source: level
+          template: '{{ if eq .Value "10" }}trace{{ else if eq .Value "20" }}debug{{ else if eq .Value "30" }}info{{ else if eq .Value "40" }}warn{{ else if eq .Value "50" }}error{{ else if eq .Value "60" }}fatal{{ else }}{{ .Value }}{{ end }}'
+      - labels:
+          level:
+          component:
+          event:

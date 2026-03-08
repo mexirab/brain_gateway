@@ -51,7 +51,7 @@ User Request → Orchestrator
 |---------|--------|
 | `tool_home_assistant()` | → `ha_client.call_service()` |
 | `tool_search_memory()` | → `rag_context()` |
-| `tool_ask_expert()` | → Helios 120B (auto-starts if needed) |
+| `tool_ask_expert()` | → Helios Qwen3-32B (auto-starts if needed) |
 | `tool_update_data()` | → `data_manager.handle_update_data()` |
 | `tool_set_reminder()` | → APScheduler + TTS + HA notification |
 | `tool_cancel_reminder()` | → Remove pending reminder by ID |

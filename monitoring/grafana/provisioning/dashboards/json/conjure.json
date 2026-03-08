@@ -1,0 +1,521 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "panels": [],
+      "title": "🟢 Is My App Healthy?",
+      "type": "row"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Is the Conjure server responding to Prometheus scrapes?",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"options": {"0": {"text": "DOWN"}}, "type": "value"},
+            {"options": {"1": {"text": "UP"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "green", "value": 1}
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+      "id": 2,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value"},
+      "targets": [{"expr": "up{job=\"conjure\"}", "refId": "A"}],
+      "title": "App Status",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Time since the server last restarted. A sudden reset means PM2 restarted it (maybe a crash or memory limit hit).",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "orange", "value": null},
+            {"color": "green", "value": 3600}
+          ]},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 1},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "conjure_process_start_time_seconds", "legendFormat": "", "refId": "A", "instant": true}],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "reduceRow",
+            "reduce": { "reducer": "lastNotNull" }
+          }
+        }
+      ],
+      "title": "Uptime",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Node.js memory usage (RSS). PM2 restarts the process if this exceeds 512MB.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 384000000},
+            {"color": "red", "value": 512000000}
+          ]},
+          "unit": "bytes",
+          "max": 536870912
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 1},
+      "id": 4,
+      "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "targets": [{"expr": "conjure_process_resident_memory_bytes{job=\"conjure\"}", "refId": "A"}],
+      "title": "Memory (RSS)",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "How many HTTP requests the server is handling per minute right now.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "blue", "value": null}
+          ]},
+          "unit": "reqpm"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 1},
+      "id": 5,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(rate(conjure_http_requests_total{job=\"conjure\"}[5m])) * 60", "refId": "A"}],
+      "title": "Requests / min",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Percentage of requests returning 5xx server errors. Should be 0%. Above 5% is concerning.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 5},
+            {"color": "red", "value": 10}
+          ]},
+          "unit": "percent",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 1},
+      "id": 6,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value"},
+      "targets": [{"expr": "sum(rate(conjure_http_requests_total{job=\"conjure\", status_code=~\"5..\"}[5m])) / sum(rate(conjure_http_requests_total{job=\"conjure\"}[5m])) * 100", "refId": "A"}],
+      "title": "Error Rate",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Is the /health endpoint returning 200? Green = reachable, red = down.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"options": {"0": {"text": "DOWN"}}, "type": "value"},
+            {"options": {"1": {"text": "HEALTHY"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "green", "value": 1}
+          ]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 1},
+      "id": 7,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value"},
+      "targets": [{"expr": "probe_success{service=\"conjure\"}", "refId": "A"}],
+      "title": "Health Probe",
+      "type": "stat"
+    },
+
+
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5},
+      "id": 10,
+      "panels": [],
+      "title": "✨ Are Visualizations Working?",
+      "type": "row"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Total number of visualization (Conjure) requests in the last 24 hours.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "purple", "value": null}
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 6},
+      "id": 11,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(increase(conjure_visualizations_total{job=\"conjure\"}[24h]))", "refId": "A"}],
+      "title": "Conjures Today",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "What percentage of visualizations completed successfully. Below 90% means something is broken.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 90},
+            {"color": "green", "value": 99}
+          ]},
+          "unit": "percent",
+          "max": 100,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 6},
+      "id": 12,
+      "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "targets": [{"expr": "sum(rate(conjure_visualizations_total{job=\"conjure\", status=\"success\"}[1h])) / sum(rate(conjure_visualizations_total{job=\"conjure\"}[1h])) * 100", "refId": "A"}],
+      "title": "Success Rate",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Median (typical) time for the full pipeline: LLM + image generation.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 15000},
+            {"color": "red", "value": 25000}
+          ]},
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 6},
+      "id": 13,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "histogram_quantile(0.5, rate(conjure_visualization_duration_ms_bucket{job=\"conjure\", stage=\"total\"}[1h]))", "refId": "A"}],
+      "title": "Median Pipeline Time",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "95th percentile pipeline time — 95% of requests are faster than this. If this is high, some requests are really slow.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 20000},
+            {"color": "red", "value": 30000}
+          ]},
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 6},
+      "id": 14,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "histogram_quantile(0.95, rate(conjure_visualization_duration_ms_bucket{job=\"conjure\", stage=\"total\"}[1h]))", "refId": "A"}],
+      "title": "P95 Pipeline Time",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Shows where time is spent: LLM (thinking) vs Image (generating). Helps you see which step is the bottleneck.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 30, "lineWidth": 2, "spanNulls": true},
+          "unit": "ms"
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "LLM"}, "properties": [{"id": "color", "value": {"fixedColor": "blue", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "Image"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "Total"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 16, "x": 0, "y": 11},
+      "id": 15,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.5, rate(conjure_visualization_duration_ms_bucket{job=\"conjure\", stage=\"llm\"}[5m]))", "legendFormat": "LLM", "refId": "A"},
+        {"expr": "histogram_quantile(0.5, rate(conjure_visualization_duration_ms_bucket{job=\"conjure\", stage=\"image\"}[5m]))", "legendFormat": "Image", "refId": "B"},
+        {"expr": "histogram_quantile(0.5, rate(conjure_visualization_duration_ms_bucket{job=\"conjure\", stage=\"total\"}[5m]))", "legendFormat": "Total", "refId": "C"}
+      ],
+      "title": "Pipeline Duration Breakdown (Median)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Which art styles users choose most. Helps you see what's popular.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 11},
+      "id": 16,
+      "options": {"legend": {"displayMode": "list", "placement": "right"}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "tooltip": {"mode": "single"}},
+      "targets": [{"expr": "sum by (art_style) (increase(conjure_visualizations_total{job=\"conjure\", status=\"success\"}[24h]))", "legendFormat": "{{art_style}}", "refId": "A"}],
+      "title": "Art Styles (24h)",
+      "type": "piechart"
+    },
+
+
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 19},
+      "id": 20,
+      "panels": [],
+      "title": "📊 API Traffic",
+      "type": "row"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "How many requests per minute each endpoint is receiving. Spikes may indicate bots or bugs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 10, "lineWidth": 1, "spanNulls": true},
+          "unit": "reqpm"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 20},
+      "id": 21,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "sum by (path) (rate(conjure_http_requests_total{job=\"conjure\"}[5m])) * 60", "legendFormat": "{{path}}", "refId": "A"}],
+      "title": "Requests / min by Endpoint",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "Response time percentiles. p50 = typical, p95 = slow outliers, p99 = worst case.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 5, "lineWidth": 2, "spanNulls": true},
+          "unit": "ms"
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "p50"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "p95"}, "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "p99"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 20},
+      "id": 22,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.5, sum(rate(conjure_http_request_duration_ms_bucket{job=\"conjure\"}[5m])) by (le))", "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum(rate(conjure_http_request_duration_ms_bucket{job=\"conjure\"}[5m])) by (le))", "legendFormat": "p95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum(rate(conjure_http_request_duration_ms_bucket{job=\"conjure\"}[5m])) by (le))", "legendFormat": "p99", "refId": "C"}
+      ],
+      "title": "Response Time Percentiles",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "HTTP status code breakdown. Green (2xx) = good, yellow (4xx) = client errors, red (5xx) = server errors.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 30, "lineWidth": 1, "stacking": {"mode": "normal"}, "spanNulls": true},
+          "unit": "reqpm"
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": "2.."}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": "4.."}, "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": "5.."}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 27},
+      "id": 23,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "sum by (status_code) (rate(conjure_http_requests_total{job=\"conjure\"}[5m])) * 60", "legendFormat": "{{status_code}}", "refId": "A"}],
+      "title": "HTTP Status Codes",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "How often rate limiters are blocking requests. Should normally be zero. Spikes mean someone is hitting the API too fast (possible abuse).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 30, "lineWidth": 2, "spanNulls": true},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 27},
+      "id": 24,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "sum by (endpoint) (rate(conjure_rate_limit_hits_total{job=\"conjure\"}[5m])) * 60", "legendFormat": "{{endpoint}}", "refId": "A"}],
+      "title": "Rate Limit Hits",
+      "type": "timeseries"
+    },
+
+
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34},
+      "id": 30,
+      "panels": [],
+      "title": "📖 Characters & Features",
+      "type": "row"
+    },
+
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "description": "How many times users used the character discovery/lookup feature today.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "blue", "value": null}
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 35},
+      "id": 31,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(increase(conjure_character_lookups_total{job=\"conjure\"}[24h]))", "refId": "A"}],
+      "title": "Character Lookups Today",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+      "description": "How long each character lookup takes (LLM response time). Useful for spotting slow lookups.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 10, "lineWidth": 2},
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 35},
+      "id": 32,
+      "targets": [{"expr": "{job=\"conjure\", event=\"character_lookup_complete\"} | json | unwrap llmMs", "legendFormat": "Lookup Duration", "refId": "A"}],
+      "title": "Character Lookup Duration",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+      "description": "Parental control events: password setup, content toggling, and failed password attempts (possible brute force).",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 35},
+      "id": 33,
+      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [{"expr": "{job=\"conjure\", event=~\"parental_.*\"}", "refId": "A"}],
+      "title": "Parental Control Events",
+      "type": "logs"
+    },
+
+
+
+    {
+      "collapsed": true,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
+      "id": 40,
+      "panels": [
+        {
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "description": "All error and warning log lines. Red = errors (something broke), yellow = warnings (slow response, client error, rate limit).",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 41},
+          "id": 41,
+          "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+          "targets": [{"expr": "{job=\"conjure\", level=~\"error|warn|fatal\"}", "refId": "A"}],
+          "title": "Errors & Warnings",
+          "type": "logs"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "description": "The full lifecycle of each visualization: start → LLM complete → image complete → done (or error). Useful for debugging a specific failed conjure.",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 49},
+          "id": 42,
+          "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+          "targets": [{"expr": "{job=\"conjure\", event=~\"visualize_.*\"}", "refId": "A"}],
+          "title": "Visualization Pipeline Trace",
+          "type": "logs"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "description": "All Conjure server logs. Use the search bar to filter for specific events or errors.",
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 57},
+          "id": 43,
+          "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+          "targets": [{"expr": "{job=\"conjure\"}", "refId": "A"}],
+          "title": "All Logs",
+          "type": "logs"
+        }
+      ],
+      "title": "🔍 Logs (click to expand)",
+      "type": "row"
+    }
+
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["conjure"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Conjure — AI Book Visualizer",
+  "uid": "conjure-dashboard",
+  "version": 1
+}

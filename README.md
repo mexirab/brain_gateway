@@ -31,7 +31,7 @@ open http://localhost
 │                └─► TTS/STT (Uranus)                       │
 └──────────────────────────────────────────────────────────┘
 ┌─ ON-DEMAND (saves ~150W) ────────────────────────────────┐
-│  Helios (120B) ◄── Auto-starts when needed               │
+│  Helios (Qwen3-32B) ◄── Auto-starts when needed            │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -44,7 +44,7 @@ open http://localhost
 | Jupiter | 10.0.0.248 | - | Gateway, Docker |
 | Saturn | 10.0.0.58 | RTX 3090 | Nemotron-8B brain |
 | Uranus | 10.0.0.173 | 2x RTX 5080 | TTS + STT |
-| Helios | 10.0.0.195 | RTX 5090 | 120B expert |
+| Helios | 10.0.0.195 | RTX 5090 | Qwen3-32B expert |
 
 ## Features
 

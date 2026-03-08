@@ -191,7 +191,7 @@
 # -----------------------------------------------------------------------------
 - alias: "Activate Helios Expert Mode"
   id: activate_helios_expert
-  description: "Start the 120B expert model for deep conversations"
+  description: "Start the Qwen3-32B expert model for deep conversations"
   mode: single
 
   trigger:
@@ -222,12 +222,12 @@
       target:
         entity_id: "{{ target_speaker }}"
       data:
-        message: "Helios is now ready. The 120 billion parameter model is at your service for deep, thoughtful conversations."
+        message: "Helios is now ready. The Qwen 3 32 billion parameter model is at your service for deep, thoughtful conversations."
         media_player_entity_id: "{{ target_speaker }}"
 
 - alias: "Deactivate Helios Expert Mode"
   id: deactivate_helios_expert
-  description: "Stop the 120B expert model to save power"
+  description: "Stop the Qwen3-32B expert model to save power"
   mode: single
 
   trigger:
