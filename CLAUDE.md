@@ -349,7 +349,7 @@ sudo tailscale cert --cert-file /opt/jupiter/gateway_mvp/certs/jupiter.crt \
 Jessica voice clone uses Qwen3-TTS on Uranus. Two pacing controls:
 
 1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
-2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/nadim/server.py` on Uranus — inserts `...` between sentences for calmer delivery
+2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Uranus — inserts `...` between sentences for calmer delivery
 
 ```bash
 # Restart TTS after pacing changes

@@ -233,7 +233,7 @@ Open WebUI → split on paragraph (\n\n) → TTS server
                                     Qwen3-TTS → audio
 ```
 
-The sentence pause injection (`/home/nadim/server.py` on Uranus) inserts `...` between sentences before Qwen3-TTS processes the text. This produces calmer, more natural speech. Service: `qwen-tts` (systemd).
+The sentence pause injection (`/home/labadmin/server.py` on Uranus) inserts `...` between sentences before Qwen3-TTS processes the text. This produces calmer, more natural speech. Service: `qwen-tts` (systemd).
 
 ## HTTPS (Tailscale Serve)
 

@@ -96,7 +96,7 @@ class VoiceInfo(BaseModel):
 VOICES = {}
 
 # Directory for storing reference audio files and voice configs
-VOICE_SAMPLES_DIR = os.getenv("QWEN_TTS_VOICES_DIR", "/home/nadim/tts-voices")
+VOICE_SAMPLES_DIR = os.getenv("QWEN_TTS_VOICES_DIR", "/home/labadmin/tts-voices")
 VOICES_CONFIG_FILE = os.path.join(VOICE_SAMPLES_DIR, "voices.json")
 
 SUPPORTED_LANGUAGES = [
@@ -354,7 +354,7 @@ async def load_voice(request: LoadVoiceRequest):
       -H "Content-Type: application/json" \
       -d '{
         "name": "jessica",
-        "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+        "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
         "ref_text": "The transcript of what Jessica says in the audio.",
         "description": "Jessica McCabe - warm, energetic ADHD advocate"
       }'

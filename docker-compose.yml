@@ -59,14 +59,14 @@ services:
       - "${SERVICE_ORCHESTRATOR_PORT:-8888}:8888"
     volumes:
       # Mount ChromaDB data
-      - ${USER_HOME:-/home/nadim}/.local/share/chroma:/chroma:rw
+      - ${USER_HOME:-/home/labadmin}/.local/share/chroma:/chroma:rw
       # Mount env file
-      - ${USER_HOME:-/home/nadim}/brain_gateway/.env:/app/.env:ro
+      - ${USER_HOME:-/home/labadmin}/brain_gateway/.env:/app/.env:ro
       # Mount RAG data for write access (medications, projects)
-      - ${RAG_BASE:-/home/nadim/rag/nadim_rag}:/rag:rw
+      - ${RAG_BASE:-/home/labadmin/rag/nadim_rag}:/rag:rw
       # Mount SSH keys for Helios auto-start
-      - ${USER_HOME:-/home/nadim}/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
-      - ${USER_HOME:-/home/nadim}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      - ${USER_HOME:-/home/labadmin}/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+      - ${USER_HOME:-/home/labadmin}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
       # Mount Google OAuth2 credentials (rw needed for token refresh)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files

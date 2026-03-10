@@ -4,17 +4,17 @@ After=network.target
 
 [Service]
 Type=simple
-User=nadim
-Group=nadim
-WorkingDirectory=/home/nadim
+User=labadmin
+Group=labadmin
+WorkingDirectory=/home/labadmin
 
 # Use same environment as TTS server
-Environment="PATH=/home/nadim/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/home/labadmin/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="WHISPER_MODEL=base"
 Environment="WHISPER_DEVICE=cuda:1"
 Environment="WHISPER_PORT=8003"
 
-ExecStart=/home/nadim/qwen-tts-env/bin/python /home/nadim/stt_server.py
+ExecStart=/home/labadmin/qwen-tts-env/bin/python /home/labadmin/stt_server.py
 
 Restart=on-failure
 RestartSec=10

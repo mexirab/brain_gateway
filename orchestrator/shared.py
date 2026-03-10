@@ -43,7 +43,7 @@ ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 # ---------------------------------------------------------------------------
 # RAG / ChromaDB
 # ---------------------------------------------------------------------------
-CHROMA_PERSIST = os.environ.get("CHROMA_PERSIST", "/home/nadim/.local/share/chroma/personal_rag")
+CHROMA_PERSIST = os.environ.get("CHROMA_PERSIST", "/home/labadmin/.local/share/chroma/personal_rag")
 CHROMA_COLLECTION = os.environ.get("CHROMA_COLLECTION", "nadim_rag")
 MIN_COS = float(os.environ.get("MIN_COS", "0.30"))
 TOP_K = int(os.environ.get("TOP_K", "6"))

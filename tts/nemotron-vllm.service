@@ -3,11 +3,11 @@
 # Copy to Saturn: /etc/systemd/system/nemotron-vllm.service
 #
 # Installation:
-#   scp nemotron-vllm.service nadim@10.0.0.58:/tmp/
-#   ssh nadim@10.0.0.58 'sudo mv /tmp/nemotron-vllm.service /etc/systemd/system/'
-#   ssh nadim@10.0.0.58 'sudo systemctl daemon-reload'
-#   ssh nadim@10.0.0.58 'sudo systemctl enable nemotron-vllm'
-#   ssh nadim@10.0.0.58 'sudo systemctl start nemotron-vllm'
+#   scp nemotron-vllm.service labadmin@10.0.0.58:/tmp/
+#   ssh labadmin@10.0.0.58 'sudo mv /tmp/nemotron-vllm.service /etc/systemd/system/'
+#   ssh labadmin@10.0.0.58 'sudo systemctl daemon-reload'
+#   ssh labadmin@10.0.0.58 'sudo systemctl enable nemotron-vllm'
+#   ssh labadmin@10.0.0.58 'sudo systemctl start nemotron-vllm'
 
 [Unit]
 Description=Nemotron-8B Brain Model (vLLM on RTX 3090)
@@ -17,17 +17,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nadim
-Group=nadim
-WorkingDirectory=/home/nadim
+User=labadmin
+Group=labadmin
+WorkingDirectory=/home/labadmin
 
 # Environment
 Environment="CUDA_VISIBLE_DEVICES=1"
-Environment="HF_HOME=/home/nadim/.cache/huggingface"
+Environment="HF_HOME=/home/labadmin/.cache/huggingface"
 
 # vLLM server command
 # Adjust model path and parameters as needed
-ExecStart=/home/nadim/.local/bin/vllm serve nvidia/Nemotron-Orchestrator-8B \
+ExecStart=/home/labadmin/.local/bin/vllm serve nvidia/Nemotron-Orchestrator-8B \
     --host 0.0.0.0 \
     --port 8001 \
     --tensor-parallel-size 1 \

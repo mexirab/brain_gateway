@@ -59,7 +59,7 @@ mkdir -p ~/tts-voices
 cat > ~/tts-voices/voices.json << 'EOF'
 {
   "jessica": {
-    "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+    "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
     "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
     "description": "Jessica McCabe - warm, energetic ADHD advocate"
   }
@@ -135,7 +135,7 @@ curl -X POST http://10.0.0.173:8002/voices/load \
   -H "Content-Type: application/json" \
   -d '{
     "name": "jessica",
-    "ref_audio": "/home/nadim/tts-voices/jessica_sample.wav",
+    "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
     "ref_text": "And trying to get my brain to focus...",
     "description": "Jessica McCabe voice"
   }'

@@ -4,19 +4,19 @@ After=network.target
 
 [Service]
 Type=simple
-User=nadim
-Group=nadim
-WorkingDirectory=/home/nadim
+User=labadmin
+Group=labadmin
+WorkingDirectory=/home/labadmin
 
 # Virtual environment
-Environment="PATH=/home/nadim/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="QWEN_TTS_MODEL=/home/nadim/models/Qwen3-TTS-1.7B-Base"
+Environment="PATH=/home/labadmin/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="QWEN_TTS_MODEL=/home/labadmin/models/Qwen3-TTS-1.7B-Base"
 Environment="QWEN_TTS_DEVICE=cuda:0"
 Environment="QWEN_TTS_PORT=8002"
 Environment="QWEN_TTS_DTYPE=bfloat16"
 Environment="QWEN_TTS_FLASH_ATTN=false"
 
-ExecStart=/home/nadim/qwen-tts-env/bin/python /home/nadim/server.py
+ExecStart=/home/labadmin/qwen-tts-env/bin/python /home/labadmin/server.py
 
 Restart=on-failure
 RestartSec=10
