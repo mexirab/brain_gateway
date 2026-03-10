@@ -4,6 +4,9 @@
 *secret*
 *token*
 
+# Active user profile (contains personal data)
+user_profile.yaml
+
 # Backups
 *.backup
 *.bak
