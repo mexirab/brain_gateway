@@ -26,7 +26,7 @@ services:
       - open-webui-data:/app/backend/data
     environment:
       - WEBUI_AUTH=False
-      - WEBUI_NAME=Nadim's Brain
+      - WEBUI_NAME=${WEBUI_NAME:-Brain Gateway}
       # Point to orchestrator instead of litellm directly
       - OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
       - OPENAI_API_KEY=local
@@ -73,6 +73,8 @@ services:
       - brain-audio:/tmp/brain_audio:rw
       # Finance SQLite database
       - finance-data:/app/data:rw
+      # User profile (personal config — names, speakers, sensors, etc.)
+      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
     environment:
       # Model endpoints
       - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1

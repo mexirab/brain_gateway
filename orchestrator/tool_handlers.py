@@ -461,7 +461,8 @@ async def deliver_reminder_job(reminder_id: str):
 
     text = reminder.get("text", "You have a reminder")
     target = reminder.get("target", "both")
-    spoken_text = f"Hey Nadim! Quick reminder: {text}"
+    from shared import profile
+    spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
     if target in ["voice", "both"]:
         await _announce_voice(spoken_text)

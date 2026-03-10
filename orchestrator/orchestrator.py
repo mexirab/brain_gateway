@@ -61,10 +61,14 @@ from web_search import get_search_client
 
 # Import the Google Calendar client
 from google_calendar import get_calendar_client
-from mode_router import get_mode_router, MODE_PROMPTS, TONE_CONSTRAINT
+from mode_router import get_mode_router, MODE_PROMPTS, TONE_CONSTRAINT, get_tone_constraint
+from user_profile import get_profile
 
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
+
+# User profile (names, speakers, sensors, etc.)
+profile = get_profile()
 
 # Model endpoints and names
 NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.173:8001/v1")
@@ -203,7 +207,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Search Nadim's personal knowledge base for relevant context. Use this when the user asks about personal information, projects, routines, preferences, medications, schedules, or anything that might be in their notes.",
+            "description": "Search the user's personal knowledge base for relevant context. Use this when the user asks about personal information, projects, routines, preferences, medications, schedules, or anything that might be in their notes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -241,7 +245,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_data",
-            "description": "Update Nadim's structured personal data (medications, projects). Use this when he asks to add, remove, or modify medications or project information.",
+            "description": "Update the user's structured personal data (medications, projects). Use this when they ask to add, remove, or modify medications or project information.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -308,7 +312,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "set_reminder",
-            "description": "Set a reminder for Nadim. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
+            "description": "Set a reminder for the user. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -411,7 +415,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for real-world information. Use for: current events, news, weather, restaurants, sports, businesses, or any factual question about the real world that isn't in Nadim's personal notes.",
+            "description": "Search the web for real-world information. Use for: current events, news, weather, restaurants, sports, businesses, or any factual question about the real world that isn't in the user's personal notes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -438,7 +442,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "check_calendar",
-            "description": "Check Nadim's Google Calendar for upcoming events. Use when he asks about his schedule, what's on his calendar, or what's happening today/tomorrow/this week.",
+            "description": "Check the user's Google Calendar for upcoming events. Use when they ask about their schedule, what's on their calendar, or what's happening today/tomorrow/this week.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -455,7 +459,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_calendar_event",
-            "description": "Create a new event on Nadim's Google Calendar. Use when he asks to add, schedule, or create a calendar event.",
+            "description": "Create a new event on the user's Google Calendar. Use when they ask to add, schedule, or create a calendar event.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -509,32 +513,35 @@ def is_greeting(text: str) -> bool:
 
 
 def get_helios_system_prompt(personal_context: str = "", mode: str = "explainer", intensity: str = "low") -> str:
-    """System prompt for Helios as the primary conversational assistant (Jessica)."""
+    """System prompt for Helios as the primary conversational assistant."""
+    user = profile.user_name
+    assistant = profile.assistant_name
+    tone = get_tone_constraint(user)
     context_section = ""
     if personal_context:
         context_section = f"""
-PERSONAL CONTEXT (from Nadim's notes):
+PERSONAL CONTEXT (from {user}'s notes):
 {personal_context}
 """
 
     mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
 
-    return f"""You are Jessica, Nadim's personal AI assistant and ADHD coach.
+    return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
 
 PERSONALITY:
-- Warm, friendly, and supportive - like a caring friend
+- {profile.assistant_personality}
 - Understand ADHD challenges (task initiation, time blindness, overwhelm)
 - Keep responses concise and natural for voice conversations
 - Celebrate small wins, be encouraging without being patronizing
 
-{TONE_CONSTRAINT}
+{tone}
 
 {mode_block}
 {context_section}
 YOU HAVE ONE TOOL: ask_orchestrator
 Use it ONLY when you need to:
 - Control smart home devices (lights, fans, switches, thermostats)
-- Search Nadim's personal notes/memory for specific info
+- Search {user}'s personal notes/memory for specific info
 - Set reminders for specific times
 - Update personal data (medications, projects)
 - Look up real-world information (events, news, weather, restaurants, sports, businesses)
@@ -545,12 +552,13 @@ IMPORTANT RULES:
 - For device control, reminders, or personal data updates - use ask_orchestrator
 - For real-world questions (events, news, weather, businesses, sports) - use ask_orchestrator to search the web
 - After getting a tool result, respond naturally to the user (don't just repeat the raw result)
+- NEVER mention internal tool names (ask_orchestrator, update_data, etc.) to the user. Just do the action or say you'll handle it.
 
 RESPONSE STYLE:
 - Brief and natural (2-3 sentences typical)
 - Conversational, not robotic
 - For voice: avoid markdown, bullets, or formatting
-- No emojis unless Nadim uses them first"""
+- No emojis unless {user} uses them first"""
 
 
 # Tool definition for Helios - just one simple tool
@@ -1155,7 +1163,7 @@ async def deliver_reminder_job(reminder_id: str):
 
     text = reminder.get("text", "You have a reminder")
     target = reminder.get("target", "both")
-    spoken_text = f"Hey Nadim! Quick reminder: {text}"
+    spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
     if target in ["voice", "both"]:
         await _announce_voice(spoken_text)
@@ -1704,24 +1712,27 @@ def parse_tool_calls_from_content(content: str) -> List[Dict[str, Any]]:
 
 def get_orchestrator_system_prompt(mode: str = "explainer", intensity: str = "low") -> str:
     """System prompt for Nemotron when used in fallback mode (Helios unavailable)."""
+    user = profile.user_name
+    assistant = profile.assistant_name
+    tone = get_tone_constraint(user)
     mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
-    return f"""You are Jessica, Nadim's personal AI assistant. You have access to tools to help with actions.
+    return f"""You are {assistant}, {user}'s personal AI assistant. You have access to tools to help with actions.
 
-{TONE_CONSTRAINT}
+{tone}
 
 {mode_block}
 
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, thermostats, media, scenes)
-2. search_memory - Search Nadim's personal notes for context (projects, routines, preferences, medications)
-3. update_data - Update Nadim's personal data (medications, projects)
-4. set_reminder - Set a reminder that will be announced on speakers and/or sent to his phone
+2. search_memory - Search {user}'s personal notes for context (projects, routines, preferences, medications)
+3. update_data - Update {user}'s personal data (medications, projects)
+4. set_reminder - Set a reminder that will be announced on speakers and/or sent to their phone
 5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration, speaker, soundscape, block_sites)
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses)
-9. check_calendar - Check Nadim's Google Calendar for upcoming events
-10. create_calendar_event - Create a new event on Nadim's Google Calendar
+9. check_calendar - Check {user}'s Google Calendar for upcoming events
+10. create_calendar_event - Create a new event on {user}'s Google Calendar
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -1743,7 +1754,7 @@ CONVERSATION STYLE:
 
 IMPORTANT:
 - After getting tool results, summarize naturally in 1-2 sentences
-- Be direct and concise (Nadim has ADHD)
+- Be direct and concise ({user} has ADHD)
 - DON'T dump raw data from tools - synthesize it into a natural response
 
 EXAMPLES:
@@ -1757,9 +1768,6 @@ EXAMPLES:
 - "Start focus with study sounds" → start_focus(task="work", soundscape="study")
 - "How much time left on my focus?" → focus_status
 - "Stop the focus timer" → stop_focus
-- "What's happening in Houston this weekend?" → web_search(query="Houston events this weekend")
-- "What's the weather like today?" → web_search(query="weather Houston today")
-- "Any good Thai restaurants nearby?" → web_search(query="best Thai restaurants Houston")
 - "What's on my calendar this week?" → check_calendar(days_ahead=7)
 - "What's tomorrow look like?" → check_calendar(days_ahead=2)
 - "Add pickleball Thursday at 7pm" → create_calendar_event(title="Pickleball", start_time="2026-02-26T19:00:00")"""
@@ -1767,19 +1775,20 @@ EXAMPLES:
 
 def get_nemotron_system_prompt() -> str:
     """System prompt for Nemotron as the tool orchestrator (called by Helios)."""
-    return """You are a tool orchestrator. Execute the requested action using your available tools.
+    user = profile.user_name
+    return f"""You are a tool orchestrator. Execute the requested action using your available tools.
 
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, fans, thermostats, scenes)
-2. search_memory - Search Nadim's personal notes for context (projects, routines, medications)
-3. update_data - Update Nadim's medications or projects
+2. search_memory - Search {user}'s personal notes for context (projects, routines, medications)
+3. update_data - Update {user}'s medications or projects
 4. set_reminder - Set a reminder for a specific time
 5. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking (task, duration=25, break_duration=5, speaker=optional, soundscape). ALWAYS enables site blocking unless user explicitly says "without blocking" or "no blocking".
 6. stop_focus - Stop the current focus timer early
 7. focus_status - Check how much time is left in the current focus session
 8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses). NOT for personal notes - use search_memory for that.
-9. check_calendar - Check Nadim's Google Calendar for upcoming events (days_ahead=7)
-10. create_calendar_event - Create a new event on Nadim's Google Calendar (title, start_time, duration_minutes, description, location)
+9. check_calendar - Check {user}'s Google Calendar for upcoming events (days_ahead=7)
+10. create_calendar_event - Create a new event on {user}'s Google Calendar (title, start_time, duration_minutes, description, location)
 
 YOUR JOB:
 - Understand the command and use the appropriate tool(s)
@@ -1797,8 +1806,6 @@ EXAMPLES:
 - "start focus without blocking" → start_focus(task="work", block_sites=false) [only if user explicitly says no blocking]
 - "how much time left?" → focus_status()
 - "stop the focus timer" → stop_focus()
-- "what events are happening in Houston this weekend" → web_search(query="Houston events this weekend")
-- "what's the weather today" → web_search(query="weather Houston today")
 - "latest news" → web_search(query="latest news today", category="news", time_range="day")
 - "what's on my calendar this week" → check_calendar(days_ahead=7)
 - "add pickleball Thursday at 7pm" → create_calendar_event(title="Pickleball", start_time="2026-02-26T19:00:00")
@@ -1865,7 +1872,7 @@ async def poll_calendar():
                     if remaining > 0:
                         time_str += f" and {remaining} minutes"
 
-                message = f"Heads up Nadim: {event.title} {time_str}"
+                message = f"Heads up {profile.user_name}: {event.title} {time_str}"
                 if event.location:
                     message += f" at {event.location}"
                 await _announce_voice(message)
@@ -1889,7 +1896,7 @@ async def morning_briefing():
         response = await client.list_events(days_ahead=1)
         events = response.events if response.success else []
 
-        parts = ["Good morning Nadim!"]
+        parts = [f"Good morning {profile.user_name}!"]
 
         if events:
             parts.append(f"You have {len(events)} event{'s' if len(events) > 1 else ''} today.")
@@ -2033,11 +2040,11 @@ def list_models():
         "object": "list",
         "data": [
             {
-                "id": "jessica",
+                "id": profile.assistant_voice,
                 "object": "model",
                 "created": 1700000000,
                 "owned_by": "brain-gateway",
-                "name": "Jessica (Hybrid)",
+                "name": f"{profile.assistant_name} (Hybrid)",
             },
             {
                 "id": "brain",

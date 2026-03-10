@@ -9,7 +9,7 @@ import time
 import logging
 from typing import Any, Dict, List
 
-from shared import ha_client, _HA_TOOL_CACHE_TTL
+from shared import ha_client, _HA_TOOL_CACHE_TTL, profile
 import shared
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Search Nadim's personal knowledge base for relevant context. Use this when the user asks about personal information, projects, routines, preferences, medications, schedules, or anything that might be in their notes.",
+            "description": "Search the user's personal knowledge base for relevant context. Use this when the user asks about personal information, projects, routines, preferences, medications, schedules, or anything that might be in their notes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -114,7 +114,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_data",
-            "description": "Update Nadim's structured personal data (medications, projects). Use this when he asks to add, remove, or modify medications or project information.",
+            "description": "Update the user's structured personal data (medications, projects). Use this when they ask to add, remove, or modify medications or project information.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -181,7 +181,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "set_reminder",
-            "description": "Set a reminder for Nadim. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
+            "description": "Set a reminder for the user. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -284,7 +284,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for real-world information. Use for: current events, news, weather, restaurants, sports, businesses, or any factual question about the real world that isn't in Nadim's personal notes.",
+            "description": "Search the web for real-world information. Use for: current events, news, weather, restaurants, sports, businesses, or any factual question about the real world that isn't in the user's personal notes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -311,7 +311,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "check_calendar",
-            "description": "Check Nadim's Google Calendar for upcoming events. Use when he asks about his schedule, what's on his calendar, or what's happening today/tomorrow/this week.",
+            "description": "Check the user's Google Calendar for upcoming events. Use when they ask about their schedule, what's on their calendar, or what's happening today/tomorrow/this week.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -328,7 +328,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_calendar_event",
-            "description": "Create a new event on Nadim's Google Calendar. Use when he asks to add, schedule, or create a calendar event.",
+            "description": "Create a new event on the user's Google Calendar. Use when they ask to add, schedule, or create a calendar event.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -361,7 +361,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "check_email",
-            "description": "Check Nadim's Gmail inbox for recent or unread emails. Use when he asks about his email, new messages, or wants to see what's in his inbox.",
+            "description": "Check the user's Gmail inbox for recent or unread emails. Use when they ask about their email, new messages, or want to see what's in their inbox.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -386,7 +386,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_email",
-            "description": "Search Nadim's Gmail with specific criteria. Use Gmail search syntax: from:, to:, subject:, has:attachment, after:YYYY/MM/DD, before:YYYY/MM/DD, newer_than:2d, older_than:1w.",
+            "description": "Search the user's Gmail with specific criteria. Use Gmail search syntax: from:, to:, subject:, has:attachment, after:YYYY/MM/DD, before:YYYY/MM/DD, newer_than:2d, older_than:1w.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -407,7 +407,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "finance_status",
-            "description": "Check Nadim's Financial Quest Board status: budget remaining, XP/level, streak, side quests, and spending summary. Use when he asks about his finances, budget, spending, how much he has left, savings goals, or game progress.",
+            "description": "Check the user's Financial Quest Board status: budget remaining, XP/level, streak, side quests, and spending summary. Use when they ask about their finances, budget, spending, how much they have left, savings goals, or game progress.",
             "parameters": {
                 "type": "object",
                 "properties": {

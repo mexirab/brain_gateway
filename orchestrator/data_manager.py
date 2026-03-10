@@ -173,7 +173,8 @@ def update_medication(name: str, dose: str = None, purpose: str = None,
 
 def _generate_medications_md(data: Dict[str, Any]) -> None:
     """Regenerate medications.md from YAML data."""
-    lines = ["# Nadim's Medications", ""]
+    from user_profile import get_profile
+    lines = [f"# {get_profile().user_name}'s Medications", ""]
 
     # Daily medications
     lines.append("## Daily Medications")

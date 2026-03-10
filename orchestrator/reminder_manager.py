@@ -11,6 +11,8 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from user_profile import get_profile
+
 logger = logging.getLogger(__name__)
 
 # Home Assistant config
@@ -20,9 +22,10 @@ HA_TOKEN = os.environ.get("HA_TOKEN", "")
 # Orchestrator URL (for HA to call back)
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.248:8888")
 
-# Delivery targets (configurable via env)
-REMINDER_SPEAKER = os.environ.get("REMINDER_SPEAKER", "media_player.office_speaker")
-MOBILE_NOTIFY = "notify.mobile_app_nadims_iphone"
+# Delivery targets (configurable via env and profile)
+_profile = get_profile()
+REMINDER_SPEAKER = os.environ.get("REMINDER_SPEAKER", _profile.default_speaker)
+MOBILE_NOTIFY = _profile.mobile_notify_service
 
 
 # =============================================================================
@@ -185,11 +188,11 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
-    Uses the orchestrator's TTS endpoint to generate Jessica voice audio,
+    Uses the orchestrator's TTS endpoint to generate voice audio,
     then plays it on all speakers.
     """
     TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
-    TTS_VOICE = os.environ.get("TTS_VOICE", "jessica")
+    TTS_VOICE = os.environ.get("TTS_VOICE", _profile.assistant_voice)
 
     headers = {
         "Authorization": f"Bearer {HA_TOKEN}",
@@ -248,14 +251,22 @@ async def _send_notification(text: str) -> Dict[str, Any]:
         "Content-Type": "application/json"
     }
 
+    if not MOBILE_NOTIFY:
+        logger.warning("No mobile_notify_service configured, skipping notification")
+        return {"success": False, "error": "No mobile notification service configured"}
+
+    # Extract the service path from the full service name
+    # "notify.mobile_app_nadims_iphone" → "notify/mobile_app_nadims_iphone"
+    service_path = MOBILE_NOTIFY.replace(".", "/", 1)
+
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                f"{HA_URL}/api/services/notify/mobile_app_nadims_iphone",
+                f"{HA_URL}/api/services/{service_path}",
                 headers=headers,
                 json={
                     "message": text,
-                    "title": "Reminder from Jess",
+                    "title": _profile.notification_title,
                     "data": {
                         "push": {
                             "sound": "default",

@@ -19,9 +19,15 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 from ha_integration import HomeAssistantClient
+from user_profile import get_profile
 
 # Load environment (fallback for local dev; Docker passes env vars directly)
 load_dotenv("/app/.env", override=False)
+
+# ---------------------------------------------------------------------------
+# User profile (loaded once at import time)
+# ---------------------------------------------------------------------------
+profile = get_profile()
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +100,7 @@ current_focus_session = {
 # Endel focus audio configuration
 ENDEL_API_URL = "https://app.endel.io/api/pacific"
 ENDEL_MODES = ["focus", "deeper-focus", "study", "colored-noises"]
-FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", "media_player.dining_room_max")
+FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", profile.focus_audio_player)
 ENDEL_ENABLED = os.environ.get("ENDEL_ENABLED", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------
@@ -112,7 +118,7 @@ scheduler = AsyncIOScheduler(
 CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "15"))
 MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
 MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
-MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", "media_player.bedroom_pair")
+MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.morning_briefing_speaker)
 
 # Track which calendar events we've already announced (resets on restart)
 _notified_events: set = set()
@@ -129,8 +135,8 @@ _notified_emails: set = set()
 # ---------------------------------------------------------------------------
 # Temperature monitoring
 # ---------------------------------------------------------------------------
-CLOSET_TEMP_WARNING = float(os.environ.get("CLOSET_TEMP_WARNING", "80"))
-CLOSET_TEMP_CRITICAL = float(os.environ.get("CLOSET_TEMP_CRITICAL", "85"))
+CLOSET_TEMP_WARNING = float(os.environ.get("CLOSET_TEMP_WARNING", str(profile.temp_warning)))
+CLOSET_TEMP_CRITICAL = float(os.environ.get("CLOSET_TEMP_CRITICAL", str(profile.temp_critical)))
 
 # Track which temperature alerts have fired (resets on restart)
 _notified_temp_alerts: set = set()
@@ -190,7 +196,7 @@ def _save_phone_calendar():
 # Travel time config (Google Maps Directions API)
 # ---------------------------------------------------------------------------
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-HOME_ADDRESS = "2804 Eastman St, Houston TX 77009"
+HOME_ADDRESS = os.environ.get("HOME_ADDRESS", profile.home_address)
 TRAVEL_TIME_BUFFER = int(os.environ.get("TRAVEL_TIME_BUFFER", "10"))  # extra minutes
 
 # Track which events we have already sent travel-time alerts for

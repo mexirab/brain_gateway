@@ -11,6 +11,7 @@ import shared
 from shared import (
     ha_client, scheduler, current_focus_session,
     ENDEL_API_URL, ENDEL_MODES, FOCUS_AUDIO_PLAYER, ENDEL_ENABLED,
+    profile,
 )
 from pihole_client import get_pihole_client
 from reminder_manager import _announce_voice
@@ -23,18 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_speaker_entity(speaker_name: str) -> Optional[str]:
-    """Map friendly speaker names to entity IDs."""
-    aliases = {
-        "office": "media_player.dining_room_max",
-        "office speaker": "media_player.dining_room_max",
-        "bedroom": "media_player.bedroom_pair",
-        "kitchen": "media_player.kitchen_display",
-        "living room": "media_player.living_room_speakers",
-        "laundry": "media_player.laundry_room",
-        "closet": "media_player.laundry_room",
-        "all": "media_player.all_speakers",
-        "everywhere": "media_player.all_speakers",
-    }
+    """Map friendly speaker names to entity IDs (from user profile)."""
+    aliases = profile.speaker_aliases
     name_lower = speaker_name.lower().strip()
     if name_lower in aliases:
         return aliases[name_lower]

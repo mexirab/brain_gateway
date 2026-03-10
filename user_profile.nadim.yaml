@@ -1,0 +1,48 @@
+# Brain Gateway User Profile — Nadim
+# ====================================
+# Copy to user_profile.yaml on Jupiter: /opt/jupiter/gateway_mvp/user_profile.yaml
+
+user:
+  name: "Nadim"
+  home_address: "2804 Eastman St, Houston TX 77009"
+  timezone: "America/Chicago"
+
+assistant:
+  name: "Jessica"
+  voice: "jessica"
+  personality: "warm, friendly, supportive ADHD coach"
+
+speakers:
+  default: "media_player.office_speaker"
+  morning_briefing: "media_player.bedroom_pair"
+  focus_audio: "media_player.dining_room_max"
+  aliases:
+    office: "media_player.dining_room_max"
+    office speaker: "media_player.dining_room_max"
+    bedroom: "media_player.bedroom_pair"
+    kitchen: "media_player.kitchen_display"
+    living room: "media_player.living_room_speakers"
+    laundry: "media_player.laundry_room"
+    closet: "media_player.laundry_room"
+    all: "media_player.all_speakers"
+    everywhere: "media_player.all_speakers"
+
+notifications:
+  mobile_service: "notify.mobile_app_nadims_iphone"
+  title: "Reminder from Jess"
+
+sensors:
+  temperature:
+    closet: "sensor.closet_temperature"
+    ambient: "sensor.kitchen_temperature"
+    warning: 80
+    critical: 85
+
+coaching:
+  default_mode: "explainer"
+  grounding_preference: "only_when_high"
+
+finance:
+  monthly_discretionary: 1000
+  retirement_target_age: 62
+  current_age: 48

@@ -35,7 +35,7 @@ MODE_PROMPTS = {
 
     "mirror": """MODE: MIRROR (reflective)
 - Identify behavioral patterns, distortions, and strengths
-- Reference what you know about Nadim from personal context
+- Reference what you know about the user from personal context
 - End with ONE precise question to deepen self-awareness
 - Do not lecture — reflect back what you observe""",
 
@@ -49,7 +49,7 @@ MODE_PROMPTS = {
 - Be firm but not shaming
 - Provide ONE specific next action
 - Include a time-bound suggestion ("by end of day", "in the next hour")
-- Minimal validation — Nadim asked to be pushed""",
+- Minimal validation — the user asked to be pushed""",
 
     "baseline": """MODE: BASELINE (low cognitive load)
 - Reduce cognitive load — keep it simple
@@ -60,8 +60,16 @@ MODE_PROMPTS = {
 
 TONE_CONSTRAINT = """TONE CONSTRAINT:
 - Do NOT default to grounding techniques (breathing exercises, "take a deep breath", body scans)
-- Only suggest grounding if intensity is high OR Nadim explicitly asks for calming help
-- Match your energy to Nadim's — if he's analytical, be analytical"""
+- Only suggest grounding if intensity is high OR the user explicitly asks for calming help
+- Match your energy to the user's — if they're analytical, be analytical"""
+
+
+def get_tone_constraint(user_name: str = "the user") -> str:
+    """Get tone constraint with user name substituted."""
+    return f"""TONE CONSTRAINT:
+- Do NOT default to grounding techniques (breathing exercises, "take a deep breath", body scans)
+- Only suggest grounding if intensity is high OR {user_name} explicitly asks for calming help
+- Match your energy to {user_name}'s — if they're analytical, be analytical"""
 
 
 class ModeRouter:

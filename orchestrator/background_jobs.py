@@ -11,7 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import shared
-from shared import TIMEZONE, NEMOTRON_URL, NEMOTRON_MODEL
+from shared import TIMEZONE, NEMOTRON_URL, NEMOTRON_MODEL, profile
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
 from reminder_manager import list_pending_reminders, _announce_voice
@@ -71,7 +71,7 @@ async def poll_calendar():
                     if leave_by_min <= 0 and event.id not in shared._notified_events:
                         # Should have already left
                         message = (
-                            f"Nadim, you should leave now for {event.title}. "
+                            f"{profile.user_name}, you should leave now for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
                         await _announce_voice(message)
@@ -88,7 +88,7 @@ async def poll_calendar():
                     elif leave_by_min <= 45 and event.id not in shared._notified_travel_events:
                         # Time to announce leave-by
                         message = (
-                            f"Heads up Nadim: You need to leave in "
+                            f"Heads up {profile.user_name}: You need to leave in "
                             f"{leave_by_min} minutes for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
@@ -117,7 +117,7 @@ async def poll_calendar():
                 if remaining > 0:
                     time_str += f" and {remaining} minutes"
 
-            message = f"Heads up Nadim: {event.title} {time_str}"
+            message = f"Heads up {profile.user_name}: {event.title} {time_str}"
             if event.location:
                 message += f" at {event.location}"
             await _announce_voice(message)
@@ -215,7 +215,7 @@ async def morning_briefing():
         briefing_events.sort(key=lambda e: (not e["all_day"], e["start"]))
 
         # Build announcement
-        parts = ["Good morning Nadim!"]
+        parts = [f"Good morning {profile.user_name}!"]
 
         if briefing_events:
             parts.append(f"You have {len(briefing_events)} event{'s' if len(briefing_events) > 1 else ''} today.")
@@ -521,7 +521,7 @@ async def weekly_spending_summary():
             pct = (spent / limit * 100) if limit > 0 else 0
             level_info = _get_level_info(game["level"])
 
-        parts = ["Hey Nadim, here's your weekly spending update."]
+        parts = [f"Hey {profile.user_name}, here's your weekly spending update."]
 
         if spent > limit:
             overspend = spent - limit
@@ -581,11 +581,11 @@ async def midmonth_budget_warning():
 
         if pct >= 100:
             overspend = spent - limit
-            message = (f"Heads up Nadim. You're already over your monthly budget "
+            message = (f"Heads up {profile.user_name}. You're already over your monthly budget "
                        f"by ${overspend:.0f} and we're only halfway through the month. "
                        f"Future you is taking damage!")
         elif pct >= 80:
-            message = (f"Budget warning Nadim. You've used {pct:.0f} percent of your "
+            message = (f"Budget warning {profile.user_name}. You've used {pct:.0f} percent of your "
                        f"monthly budget with half the month still to go. "
                        f"Only ${remaining:.0f} left. Be careful!")
         else:
@@ -610,7 +610,7 @@ async def check_closet_temperature():
 
     try:
         resp = await shared._http.get(
-            f"{HA_URL}/api/states/sensor.closet_temperature",
+            f"{HA_URL}/api/states/{profile.closet_temp_sensor}",
             headers={"Authorization": f"Bearer {HA_TOKEN}"},
             timeout=5.0,
         )
@@ -620,10 +620,10 @@ async def check_closet_temperature():
         temp = float(resp.json()["state"])
         TEMPERATURE_GAUGE.labels(location="closet").set(temp)
 
-        # Also grab kitchen for delta tracking
+        # Also grab ambient for delta tracking
         try:
             resp2 = await shared._http.get(
-                f"{HA_URL}/api/states/sensor.kitchen_temperature",
+                f"{HA_URL}/api/states/{profile.ambient_temp_sensor}",
                 headers={"Authorization": f"Bearer {HA_TOKEN}"},
                 timeout=5.0,
             )
@@ -646,7 +646,7 @@ async def check_closet_temperature():
 
         elif temp >= 80 and "closet_80" not in shared._notified_temp_alerts:
             await _announce_voice(
-                f"Heads up Nadim. The server closet is at {temp:.0f} degrees. "
+                f"Heads up {profile.user_name}. The server closet is at {temp:.0f} degrees. "
                 f"That's getting warm. You might want to check the airflow."
             )
             shared._notified_temp_alerts.add("closet_80")

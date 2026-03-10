@@ -19,7 +19,7 @@ from shared import (
     CHROMA_COLLECTION, CHROMA_PERSIST,
     ENDEL_ENABLED, FOCUS_AUDIO_PLAYER, ENDEL_MODES,
     CALENDAR_POLL_INTERVAL, MORNING_BRIEFING_TIME, MORNING_BRIEFING_ENABLED,
-    HA_URL, HA_TOKEN,
+    HA_URL, HA_TOKEN, profile,
 )
 from prompt_builder import rag_context
 from helios_manager import check_helios_health
@@ -113,7 +113,7 @@ async def metrics_endpoint():
 
     # Scrape temperature sensors for Prometheus
     try:
-        for location, entity_id in [("closet", "sensor.closet_temperature"), ("kitchen", "sensor.kitchen_temperature")]:
+        for location, entity_id in [("closet", profile.closet_temp_sensor), ("ambient", profile.ambient_temp_sensor)]:
             resp = await shared._http.get(
                 f"{HA_URL}/api/states/{entity_id}",
                 headers={"Authorization": f"Bearer {HA_TOKEN}"},
@@ -124,9 +124,9 @@ async def metrics_endpoint():
                 TEMPERATURE_GAUGE.labels(location=location).set(temp)
         # Calculate delta
         closet = TEMPERATURE_GAUGE.labels(location="closet")._value.get()
-        kitchen = TEMPERATURE_GAUGE.labels(location="kitchen")._value.get()
-        if closet and kitchen:
-            TEMPERATURE_DELTA.set(closet - kitchen)
+        ambient = TEMPERATURE_GAUGE.labels(location="ambient")._value.get()
+        if closet and ambient:
+            TEMPERATURE_DELTA.set(closet - ambient)
     except Exception:
         pass  # Don't let temp scrape failures break metrics
 
@@ -140,11 +140,11 @@ def list_models():
         "object": "list",
         "data": [
             {
-                "id": "jessica",
+                "id": profile.assistant_voice,
                 "object": "model",
                 "created": 1700000000,
                 "owned_by": "brain-gateway",
-                "name": "Jessica (Hybrid)",
+                "name": f"{profile.assistant_name} (Hybrid)",
             },
             {
                 "id": "brain",
@@ -413,7 +413,7 @@ async def calendar_today():
     """
     import re
     from zoneinfo import ZoneInfo
-    tz = ZoneInfo("America/Chicago")
+    tz = ZoneInfo(profile.timezone)
     today = datetime.now(tz).date()
     merged: list[dict] = []
     seen: set[str] = set()  # "title|start_iso" for dedup
@@ -530,8 +530,8 @@ async def calendar_today():
 async def get_temperatures():
     """Get temperature sensor readings from Home Assistant for dashboard widget."""
     sensors = {
-        "closet": "sensor.closet_temperature",
-        "kitchen": "sensor.kitchen_temperature",
+        "closet": profile.closet_temp_sensor,
+        "ambient": profile.ambient_temp_sensor,
     }
     readings = {}
     for label, entity_id in sensors.items():
@@ -555,8 +555,8 @@ async def get_temperatures():
 
     # Calculate delta if both readings available
     closet_temp = readings.get("closet", {}).get("temperature")
-    kitchen_temp = readings.get("kitchen", {}).get("temperature")
-    delta = round(closet_temp - kitchen_temp, 1) if closet_temp and kitchen_temp else None
+    ambient_temp = readings.get("ambient", {}).get("temperature")
+    delta = round(closet_temp - ambient_temp, 1) if closet_temp and ambient_temp else None
 
     # Estimate monthly AC cost from server heat:
     # ~300W server heat → AC needs ~100W extra to remove it (COP ~3)

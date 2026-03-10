@@ -1,0 +1,46 @@
+# Brain Gateway User Profile
+# ===========================
+# Copy this file to user_profile.yaml and customize for your setup.
+# All values have sensible defaults — only set what you need to change.
+#
+# Priority: environment variables > this file > built-in defaults
+
+user:
+  name: "Your Name"
+  home_address: ""                      # For travel-time calendar alerts
+  timezone: "America/Chicago"
+
+assistant:
+  name: "Jess"                          # Your AI assistant's name
+  voice: "jessica"                      # TTS voice name
+  personality: "warm, friendly, supportive ADHD coach"
+
+speakers:
+  default: "media_player.office_speaker"          # Reminders, announcements
+  morning_briefing: "media_player.bedroom_pair"   # Morning briefing speaker
+  focus_audio: "media_player.dining_room_max"     # Endel focus audio
+  aliases:                                         # Friendly name → entity_id
+    office: "media_player.dining_room_max"
+    bedroom: "media_player.bedroom_pair"
+    kitchen: "media_player.kitchen_display"
+    # living room: "media_player.living_room_speakers"
+
+notifications:
+  mobile_service: ""                    # e.g., "notify.mobile_app_your_iphone"
+  title: "Reminder"                     # Push notification title
+
+sensors:
+  temperature:
+    closet: "sensor.closet_temperature"
+    ambient: "sensor.kitchen_temperature"
+    warning: 80                          # Warning threshold (°F)
+    critical: 85                         # Critical threshold (°F)
+
+coaching:
+  default_mode: "explainer"              # explainer | mirror | counterbalance | challenge | baseline
+  grounding_preference: "only_when_high" # only_when_high | always | never
+
+finance:
+  monthly_discretionary: 1000
+  retirement_target_age: 62
+  current_age: 30
