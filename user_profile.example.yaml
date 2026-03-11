@@ -86,3 +86,35 @@ finance:
 #     backend: "openai_compatible"
 #     url: "http://localhost:11434/v1"
 #     model: "llama3.1:8b"
+
+# TTS Backend Configuration (optional)
+# =====================================
+# Omit this section entirely to use env vars (TTS_URL, TTS_VOICE)
+# Backends: "local_http" (Qwen3-TTS, etc.), "elevenlabs", "piper", "openai"
+# API keys support ${ENV_VAR} syntax to reference environment variables.
+#
+# tts:
+#   backend: "local_http"
+#   url: "http://10.0.0.173:8002"
+#   voice: "jessica"
+#
+# --- Cloud TTS Examples ---
+#
+# ElevenLabs:
+# tts:
+#   backend: "elevenlabs"
+#   voice: "Rachel"                    # ElevenLabs voice name or ID
+#   api_key: "${ELEVENLABS_API_KEY}"
+#
+# OpenAI TTS:
+# tts:
+#   backend: "openai"
+#   voice: "nova"                      # alloy, echo, fable, onyx, nova, shimmer
+#   api_key: "${OPENAI_API_KEY}"
+#   model: "tts-1"                     # tts-1 or tts-1-hd
+#
+# Piper (free, local CPU — no GPU required):
+# tts:
+#   backend: "piper"
+#   url: "http://localhost:10200"
+#   voice: "en_US-lessac-medium"

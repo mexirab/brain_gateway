@@ -21,6 +21,7 @@ from sentence_transformers import SentenceTransformer
 from ha_integration import HomeAssistantClient
 from user_profile import get_profile
 from llm_backend import LLMConfig, LLMBackend, create_backend
+from tts_backend import TTSConfig, TTSBackend, create_tts_backend
 
 # Load environment (fallback for local dev; Docker passes env vars directly)
 load_dotenv("/app/.env", override=False)
@@ -46,29 +47,35 @@ HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M.gguf")
 conversation_backend: Optional[LLMBackend] = None
 orchestrator_backend: Optional[LLMBackend] = None
 
+# ---------------------------------------------------------------------------
+# TTS Backend instance (initialized in startup_event after _http is ready)
+# ---------------------------------------------------------------------------
+tts_backend: Optional[TTSBackend] = None
+
 
 def init_backends(http_client: httpx.AsyncClient):
     """
-    Initialize LLM backend instances.
+    Initialize LLM and TTS backend instances.
 
-    Priority: user_profile.yaml llm section > env vars > defaults.
+    Priority: user_profile.yaml llm/tts section > env vars > defaults.
     Called from startup_event after _http is initialized.
     """
-    global conversation_backend, orchestrator_backend
+    global conversation_backend, orchestrator_backend, tts_backend
 
-    # Check if profile YAML has llm config
-    llm_cfg = {}
+    # Load profile YAML for llm/tts config sections
+    yaml_data = {}
     try:
         from user_profile import _find_profile_path
         import yaml
         path = _find_profile_path()
         if path:
             with open(path) as f:
-                data = yaml.safe_load(f) or {}
-            llm_cfg = data.get("llm", {})
+                yaml_data = yaml.safe_load(f) or {}
     except Exception:
         pass
 
+    # --- LLM backends ---
+    llm_cfg = yaml_data.get("llm", {})
     conv_cfg = llm_cfg.get("conversation", {})
     orch_cfg = llm_cfg.get("orchestrator", {})
 
@@ -90,6 +97,23 @@ def init_backends(http_client: httpx.AsyncClient):
 
     logger.info(f"[LLM] Conversation backend: {conv_config.backend} -> {conv_config.url} ({conv_config.model})")
     logger.info(f"[LLM] Orchestrator backend: {orch_config.backend} -> {orch_config.url} ({orch_config.model})")
+
+    # --- TTS backend ---
+    TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
+    TTS_VOICE = os.environ.get("TTS_VOICE", profile.assistant_voice)
+
+    tts_cfg = yaml_data.get("tts", {})
+    tts_config = TTSConfig(
+        backend=tts_cfg.get("backend", "local_http"),
+        url=tts_cfg.get("url", TTS_URL),
+        voice=tts_cfg.get("voice", TTS_VOICE),
+        api_key=_resolve_api_key(tts_cfg.get("api_key", "")),
+        model=tts_cfg.get("model", ""),
+    )
+
+    tts_backend = create_tts_backend(tts_config, http_client)
+
+    logger.info(f"[TTS] Backend: {tts_config.backend} -> {tts_config.url} ({tts_config.voice})")
 
 
 def _resolve_api_key(value: str) -> str:

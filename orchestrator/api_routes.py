@@ -360,7 +360,10 @@ async def serve_audio(filename: str):
     """Serve audio files from /tmp/brain_audio/."""
     filepath = f"/tmp/brain_audio/{filename}"
     if os.path.exists(filepath):
-        return FileResponse(filepath, media_type="audio/wav")
+        media_types = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg"}
+        ext = os.path.splitext(filename)[1].lower()
+        media_type = media_types.get(ext, "audio/wav")
+        return FileResponse(filepath, media_type=media_type)
     return JSONResponse({"error": "Audio file not found"}, status_code=404)
 
 

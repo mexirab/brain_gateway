@@ -188,11 +188,10 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
-    Uses the orchestrator's TTS endpoint to generate voice audio,
-    then plays it on all speakers.
+    Uses the configured TTS backend to generate audio,
+    then plays it on a Home Assistant media_player.
     """
-    TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
-    TTS_VOICE = os.environ.get("TTS_VOICE", _profile.assistant_voice)
+    import shared
 
     headers = {
         "Authorization": f"Bearer {HA_TOKEN}",
@@ -200,44 +199,43 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            # Generate TTS audio
-            tts_response = await client.post(
-                f"{TTS_URL}/tts",
-                json={"text": text, "voice": TTS_VOICE}
-            )
+        backend = shared.tts_backend
+        if backend is None:
+            return {"success": False, "error": "TTS backend not initialized"}
 
-            if tts_response.status_code != 200:
-                return {"success": False, "error": "TTS generation failed"}
+        # Generate audio via backend
+        audio_bytes = await backend.synthesize(text)
 
-            # Save audio with UUID
-            audio_id = str(uuid.uuid4())[:8]
-            audio_dir = "/tmp/brain_audio"
-            os.makedirs(audio_dir, exist_ok=True)
-            audio_path = f"{audio_dir}/{audio_id}.wav"
+        # Save audio with UUID
+        audio_id = str(uuid.uuid4())[:8]
+        audio_dir = "/tmp/brain_audio"
+        os.makedirs(audio_dir, exist_ok=True)
+        ext = backend.file_extension
+        audio_path = f"{audio_dir}/{audio_id}.{ext}"
 
-            with open(audio_path, "wb") as f:
-                f.write(tts_response.content)
+        with open(audio_path, "wb") as f:
+            f.write(audio_bytes)
 
-            audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.wav"
+        audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
 
-            # Play on speaker
-            target_speaker = speaker or REMINDER_SPEAKER
+        # Play on speaker
+        target_speaker = speaker or REMINDER_SPEAKER
+        async with httpx.AsyncClient(timeout=30) as client:
             ha_response = await client.post(
                 f"{HA_URL}/api/services/media_player/play_media",
                 headers=headers,
                 json={
                     "entity_id": target_speaker,
                     "media_content_id": audio_url,
-                    "media_content_type": "audio/wav"
+                    "media_content_type": backend.audio_format,
                 }
             )
 
-            if ha_response.status_code == 200:
-                logger.info(f"Played reminder on {target_speaker}")
-                return {"success": True, "speaker": target_speaker}
-            else:
-                return {"success": False, "error": f"HA returned {ha_response.status_code}"}
+        if ha_response.status_code == 200:
+            logger.info(f"Played announcement on {target_speaker}")
+            return {"success": True, "speaker": target_speaker}
+        else:
+            return {"success": False, "error": f"HA returned {ha_response.status_code}"}
 
     except Exception as e:
         logger.error(f"Voice announcement failed: {e}")
