@@ -664,8 +664,23 @@ class HomeAssistantClient:
                 message="Missing entity_id or service",
             )
 
+        # Validate entity_id and service to prevent URL injection
+        import re
+        if not re.match(r'^[a-z_]+\.[a-z0-9_]+$', entity_id):
+            return ExecutionResult(
+                success=False, action=service or "unknown",
+                entity_id=entity_id,
+                message=f"Invalid entity_id format: {entity_id}",
+            )
+        if not re.match(r'^[a-z_]+$', service):
+            return ExecutionResult(
+                success=False, action=service or "unknown",
+                entity_id=entity_id,
+                message=f"Invalid service format: {service}",
+            )
+
         # Extract domain from entity_id
-        domain = entity_id.split(".")[0] if "." in entity_id else "unknown"
+        domain = entity_id.split(".")[0]
 
         # Build service data
         service_data = {"entity_id": entity_id}

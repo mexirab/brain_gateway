@@ -109,7 +109,7 @@ class CloudBrain:
                 return JSONResponse(llm_resp)
             except Exception as e:
                 logger.error(f"[HYBRID] Passthrough failed: {e}")
-                return JSONResponse({"error": str(e)}, status_code=503)
+                return JSONResponse({"error": "Service temporarily unavailable"}, status_code=503)
 
         # Hybrid mode
         routing_info["mode"] = "hybrid"
@@ -179,7 +179,7 @@ class CloudBrain:
         except Exception as e:
             logger.error(f"[HYBRID] Helios call failed: {e}")
             routing_info["fallback"] = "nemotron"
-            routing_info["helios_error"] = str(e)
+            routing_info["helios_error"] = "call_failed"
             return await self._nemotron_fallback(
                 messages, stream, routing_info,
                 mode=intent.mode, intensity=intent.intensity,

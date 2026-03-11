@@ -40,7 +40,7 @@ async def start_helios() -> bool:
 
     try:
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
         ssh.connect(
             hostname=helios_ip,
             username=ssh_user,
@@ -87,7 +87,7 @@ async def stop_helios() -> bool:
 
     try:
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
         ssh.connect(
             hostname=helios_ip,
             username=ssh_user,

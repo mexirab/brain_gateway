@@ -380,7 +380,7 @@ async def run_email_to_calendar():
         return {"ok": True, "message": "Email-to-calendar scan completed"}
     except Exception as e:
         logger.error(f"[EMAIL_TO_CAL] Manual trigger error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Email-to-calendar scan failed"}, status_code=500)
 
 
 @router.post("/api/announce")
@@ -402,7 +402,7 @@ async def announce_tts(req: Request):
         return {"success": True, "text": text, "speaker": speaker or "default"}
     except Exception as e:
         logger.error(f"[ANNOUNCE] Failed: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "TTS announcement failed"}, status_code=500)
 
 
 @router.get("/api/calendar/today")
@@ -558,7 +558,8 @@ async def get_temperatures():
             else:
                 readings[label] = {"temperature": None, "error": f"HTTP {resp.status_code}"}
         except Exception as e:
-            readings[label] = {"temperature": None, "error": str(e)}
+            logger.error(f"[TEMP] Failed to read {label} sensor: {e}")
+            readings[label] = {"temperature": None, "error": "Sensor read failed"}
 
     # Calculate delta if both readings available
     closet_temp = readings.get("closet", {}).get("temperature")
@@ -651,4 +652,4 @@ async def sync_phone_calendar(req: Request):
         }
     except Exception as e:
         logger.error(f"[PHONE_SYNC] Error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Calendar sync failed"}, status_code=500)
