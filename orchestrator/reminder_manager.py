@@ -133,14 +133,15 @@ def format_time_friendly(dt: datetime) -> str:
 
 
 # =============================================================================
-# IN-MEMORY REMINDER STORAGE
+# PERSISTENT REMINDER STORAGE (SQLite via state_store)
 # =============================================================================
 
-_reminders: Dict[str, Dict[str, Any]] = {}
+import state_store
 
 
 def add_reminder(reminder_id: str, text: str, trigger_time: datetime, target: str = "both") -> Dict[str, Any]:
-    """Add a new reminder to in-memory storage."""
+    """Add a new reminder to persistent storage."""
+    state_store.save_reminder(reminder_id, text, trigger_time.isoformat(), target)
     reminder = {
         "id": reminder_id,
         "text": text,
@@ -150,34 +151,28 @@ def add_reminder(reminder_id: str, text: str, trigger_time: datetime, target: st
         "created": datetime.now().isoformat(),
         "status": "pending",
     }
-    _reminders[reminder_id] = reminder
     logger.info(f"Added reminder {reminder_id}: '{text}' at {trigger_time}")
     return reminder
 
 
 def get_reminder(reminder_id: str) -> Optional[Dict[str, Any]]:
     """Get a single reminder by ID."""
-    return _reminders.get(reminder_id)
+    return state_store.get_reminder(reminder_id)
 
 
 def remove_reminder(reminder_id: str) -> bool:
     """Remove a reminder by ID."""
-    return _reminders.pop(reminder_id, None) is not None
+    return state_store.delete_reminder(reminder_id)
 
 
 def mark_reminder_completed(reminder_id: str) -> bool:
     """Mark a reminder as completed."""
-    reminder = _reminders.get(reminder_id)
-    if reminder:
-        reminder["status"] = "completed"
-        reminder["completed_at"] = datetime.now().isoformat()
-        return True
-    return False
+    return state_store.complete_reminder(reminder_id)
 
 
 def list_pending_reminders() -> List[Dict[str, Any]]:
     """Get all pending reminders."""
-    return [r for r in _reminders.values() if r.get("status") == "pending"]
+    return state_store.get_pending_reminders()
 
 
 # =============================================================================

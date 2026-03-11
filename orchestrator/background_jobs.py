@@ -11,6 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import shared
+import state_store
 from shared import TIMEZONE, NEMOTRON_URL, NEMOTRON_MODEL, profile
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
@@ -54,10 +55,12 @@ async def poll_calendar():
                 continue
 
             # --- Travel-time-aware announcement for events with locations ---
+            travel_key = f"travel:{event.id}"
+            cal_key = f"cal:{event.id}"
             has_physical_location = (
                 event.location
                 and shared.GOOGLE_MAPS_API_KEY
-                and event.id not in shared._notified_travel_events
+                and not state_store.is_notified(travel_key)
             )
 
             if has_physical_location:
@@ -68,15 +71,15 @@ async def poll_calendar():
                     drive_min = travel.duration_in_traffic_minutes
                     leave_by_min = minutes - drive_min - shared.TRAVEL_TIME_BUFFER
 
-                    if leave_by_min <= 0 and event.id not in shared._notified_events:
+                    if leave_by_min <= 0 and not state_store.is_notified(cal_key):
                         # Should have already left
                         message = (
                             f"{profile.user_name}, you should leave now for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
                         await _announce_voice(message)
-                        shared._notified_travel_events.add(event.id)
-                        shared._notified_events.add(event.id)
+                        state_store.mark_notified(travel_key)
+                        state_store.mark_notified(cal_key)
                         CALENDAR_POLL_EVENTS_FOUND.inc()
                         logger.info(
                             f"[CALENDAR_POLL] LEAVE NOW: {event.title} "
@@ -85,7 +88,7 @@ async def poll_calendar():
                         )
                         continue
 
-                    elif leave_by_min <= 45 and event.id not in shared._notified_travel_events:
+                    elif leave_by_min <= 45 and not state_store.is_notified(travel_key):
                         # Time to announce leave-by
                         message = (
                             f"Heads up {profile.user_name}: You need to leave in "
@@ -93,7 +96,7 @@ async def poll_calendar():
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
                         await _announce_voice(message)
-                        shared._notified_travel_events.add(event.id)
+                        state_store.mark_notified(travel_key)
                         CALENDAR_POLL_EVENTS_FOUND.inc()
                         logger.info(
                             f"[CALENDAR_POLL] Leave in {leave_by_min} min: "
@@ -103,7 +106,7 @@ async def poll_calendar():
                         continue
 
             # --- Standard announcement (no location or virtual meeting) ---
-            if event.id in shared._notified_events:
+            if state_store.is_notified(cal_key):
                 continue
 
             if minutes <= 1:
@@ -121,7 +124,7 @@ async def poll_calendar():
             if event.location:
                 message += f" at {event.location}"
             await _announce_voice(message)
-            shared._notified_events.add(event.id)
+            state_store.mark_notified(cal_key)
             CALENDAR_POLL_EVENTS_FOUND.inc()
             logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}",
                         extra={"component": "calendar"})
@@ -259,7 +262,8 @@ async def poll_email():
 
         new_count = 0
         for msg in response.messages:
-            if msg.id in shared._notified_emails:
+            email_key = f"email:{msg.id}"
+            if state_store.is_notified(email_key):
                 continue
 
             # Extract sender name (strip email address for TTS)
@@ -269,14 +273,10 @@ async def poll_email():
 
             announcement = f"New email from {sender}: {msg.subject}"
             await _announce_voice(announcement)
-            shared._notified_emails.add(msg.id)
+            state_store.mark_notified(email_key)
             new_count += 1
             logger.info(f"[EMAIL_POLL] Announced: {msg.subject} from {sender}",
                         extra={"component": "gmail"})
-
-        # Prevent unbounded growth — trim if over 500
-        if len(shared._notified_emails) > 500:
-            shared._notified_emails = set(list(shared._notified_emails)[-200:])
 
         if new_count:
             logger.info(f"[EMAIL_POLL] Announced {new_count} new emails")
@@ -339,7 +339,7 @@ async def process_emails_for_events():
             return
 
         # Filter out already-processed emails
-        new_msgs = [m for m in response.messages if m.id not in shared._processed_for_events]
+        new_msgs = [m for m in response.messages if not state_store.is_notified(f"e2c:{m.id}")]
         if not new_msgs:
             return
 
@@ -350,7 +350,7 @@ async def process_emails_for_events():
 
         created_count = 0
         for msg in new_msgs:
-            shared._processed_for_events.add(msg.id)
+            state_store.mark_notified(f"e2c:{msg.id}")
             EMAIL_TO_CALENDAR_EMAILS_SCANNED.inc()
 
             # Skip very short emails (unlikely to contain event details)
@@ -429,9 +429,8 @@ async def process_emails_for_events():
                 else:
                     logger.warning(f"[EMAIL_TO_CAL] Failed to create: {title} — {result.error}")
 
-        # Prevent unbounded growth
-        if len(shared._processed_for_events) > 500:
-            shared._processed_for_events = set(list(shared._processed_for_events)[-200:])
+        # Clean up old notification tracking entries (>48h)
+        state_store.clear_stale_notifications(older_than_hours=48)
 
         if created_count:
             logger.info(f"[EMAIL_TO_CAL] Created {created_count} events from emails")
@@ -634,28 +633,27 @@ async def check_closet_temperature():
         except Exception:
             pass
 
-        # Alert thresholds (only alert once per crossing using shared state)
-        if temp >= 85 and "closet_85" not in shared._notified_temp_alerts:
+        # Alert thresholds (only alert once per crossing, persisted via state_store)
+        if temp >= 85 and not state_store.is_notified("temp:closet_85"):
             await _announce_voice(
                 f"Warning! Server closet temperature is {temp:.0f} degrees. "
                 f"That's dangerously hot. Check the ventilation or shut down non-essential nodes."
             )
-            shared._notified_temp_alerts.add("closet_85")
-            shared._notified_temp_alerts.discard("closet_80")  # Don't re-alert 80 on cooldown
+            state_store.mark_notified("temp:closet_85")
             logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — URGENT alert sent")
 
-        elif temp >= 80 and "closet_80" not in shared._notified_temp_alerts:
+        elif temp >= 80 and not state_store.is_notified("temp:closet_80"):
             await _announce_voice(
                 f"Heads up {profile.user_name}. The server closet is at {temp:.0f} degrees. "
                 f"That's getting warm. You might want to check the airflow."
             )
-            shared._notified_temp_alerts.add("closet_80")
+            state_store.mark_notified("temp:closet_80")
             logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — warning alert sent")
 
         elif temp < 78:
             # Clear alerts when cooled down — allows re-alerting if it heats up again
-            if shared._notified_temp_alerts:
-                shared._notified_temp_alerts.clear()
+            cleared = state_store.clear_notifications_by_prefix("temp:")
+            if cleared:
                 logger.info(f"[TEMP_ALERT] Closet cooled to {temp}°F — alerts cleared")
 
     except Exception as e:

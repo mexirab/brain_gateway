@@ -206,7 +206,8 @@ MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
 MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
 MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.morning_briefing_speaker)
 
-# Track which calendar events we've already announced (resets on restart)
+# Notification tracking — persisted in state_store.py (survives restarts)
+# These in-memory sets are kept as a fast cache; state_store is source of truth.
 _notified_events: set = set()
 
 # ---------------------------------------------------------------------------
@@ -215,7 +216,6 @@ _notified_events: set = set()
 EMAIL_POLL_INTERVAL = int(os.environ.get("EMAIL_POLL_INTERVAL", "30"))
 EMAIL_POLL_ENABLED = os.environ.get("EMAIL_POLL_ENABLED", "true").lower() == "true"
 
-# Track which emails we've already announced (resets on restart)
 _notified_emails: set = set()
 
 # ---------------------------------------------------------------------------
@@ -224,7 +224,6 @@ _notified_emails: set = set()
 CLOSET_TEMP_WARNING = float(os.environ.get("CLOSET_TEMP_WARNING", str(profile.temp_warning)))
 CLOSET_TEMP_CRITICAL = float(os.environ.get("CLOSET_TEMP_CRITICAL", str(profile.temp_critical)))
 
-# Track which temperature alerts have fired (resets on restart)
 _notified_temp_alerts: set = set()
 
 # ---------------------------------------------------------------------------
@@ -233,7 +232,6 @@ _notified_temp_alerts: set = set()
 EMAIL_TO_CALENDAR_ENABLED = os.environ.get("EMAIL_TO_CALENDAR_ENABLED", "true").lower() == "true"
 EMAIL_TO_CALENDAR_INTERVAL = int(os.environ.get("EMAIL_TO_CALENDAR_INTERVAL", "60"))
 
-# Track which emails we've already scanned for events (resets on restart)
 _processed_for_events: set = set()
 
 # ---------------------------------------------------------------------------
@@ -285,5 +283,4 @@ GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 HOME_ADDRESS = os.environ.get("HOME_ADDRESS", profile.home_address)
 TRAVEL_TIME_BUFFER = int(os.environ.get("TRAVEL_TIME_BUFFER", "10"))  # extra minutes
 
-# Track which events we have already sent travel-time alerts for
 _notified_travel_events: set = set()

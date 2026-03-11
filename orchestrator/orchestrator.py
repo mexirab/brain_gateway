@@ -63,6 +63,9 @@ from web_search import get_search_client
 from google_calendar import get_calendar_client
 from mode_router import get_mode_router, MODE_PROMPTS, TONE_CONSTRAINT, get_tone_constraint
 from user_profile import get_profile
+import state_store
+from local_agent import LocalAgent
+from cloud_brain import CloudBrain
 
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
@@ -79,6 +82,9 @@ HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M")
 # LLM backends (initialized in startup_event after _http is ready)
 conversation_backend = None
 orchestrator_backend = None
+
+# Cloud brain + local agent (initialized in startup_event)
+cloud_brain: Optional[CloudBrain] = None
 
 # Home Assistant
 HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
@@ -1918,12 +1924,16 @@ async def morning_briefing():
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
-    global _http, conversation_backend, orchestrator_backend
+    global _http, conversation_backend, orchestrator_backend, cloud_brain
     _http = httpx.AsyncClient(
         timeout=httpx.Timeout(60, connect=10),
         limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
     )
     logger.info("[orchestrator] Initialized shared HTTP client")
+
+    # Initialize persistent state store (SQLite)
+    state_store.init_db()
+    state_store.clear_stale_notifications(older_than_hours=48)
 
     # Initialize LLM backends
     import shared as _shared
@@ -1947,8 +1957,61 @@ async def startup_event():
     else:
         logger.info("[orchestrator] Google Calendar not configured — tools disabled (run google_setup.py)")
 
+    # Initialize LocalAgent + CloudBrain
+    local_agent = LocalAgent(
+        rag_context_fn=rag_context,
+        run_tool_loop_fn=_run_nemotron_tool_loop,
+        get_nemotron_system_prompt_fn=get_orchestrator_system_prompt,
+        ha_client=ha_client,
+        collection=collection,
+        scheduler=scheduler,
+        profile=profile,
+    )
+    cloud_brain = CloudBrain(
+        local_agent=local_agent,
+        call_model_fn=call_model,
+        stream_final_response_fn=_stream_text_response,
+        get_helios_system_prompt_fn=get_helios_system_prompt,
+        get_orchestrator_system_prompt_fn=get_orchestrator_system_prompt,
+        check_helios_health_fn=check_helios_health,
+        start_helios_fn=start_helios,
+        try_fast_path_fn=try_fast_path,
+        is_greeting_fn=is_greeting,
+        last_user_text_fn=last_user_text,
+        clean_response_fn=clean_response,
+        parse_tool_calls_fn=parse_tool_calls_from_content,
+        helios_tools=HELIOS_TOOLS,
+        helios_url=HELIOS_URL,
+        helios_model=HELIOS_MODEL,
+        nemotron_url=NEMOTRON_URL,
+        nemotron_model=NEMOTRON_MODEL,
+    )
+    cloud_brain.on_helios_request = lambda: globals().update(_last_helios_request=time.time())
+    logger.info("[orchestrator] CloudBrain + LocalAgent initialized")
+
+    # Reload pending reminders from DB and re-schedule
+    pending = state_store.get_pending_reminders()
+    reloaded = 0
+    for rem in pending:
+        try:
+            trigger = datetime.fromisoformat(rem["trigger_time"])
+            if trigger > datetime.now():
+                scheduler.add_job(
+                    deliver_reminder_job,
+                    trigger="date",
+                    run_date=trigger,
+                    args=[rem["id"]],
+                    id=f"reminder_{rem['id']}",
+                    replace_existing=True,
+                )
+                reloaded += 1
+        except Exception as e:
+            logger.warning(f"[STATE] Failed to reload reminder {rem.get('id')}: {e}")
+    if reloaded:
+        logger.info(f"[STATE] Reloaded {reloaded} pending reminders from DB")
+
     scheduler.start()
-    logger.info("[SCHEDULER] Started (in-memory, no reminders to reload)")
+    logger.info(f"[SCHEDULER] Started ({reloaded} reminders reloaded from DB)")
 
     # Schedule proactive calendar polling (if calendar is configured)
     if cal_client.is_configured:
@@ -2102,216 +2165,18 @@ async def chat_completions(req: Request):
     """
     Main chat endpoint - Hybrid Architecture v6.
 
-    Flow: User → Helios (conversation) → ask_orchestrator → Nemotron (tools) → Helios → User
-
-    Helios (Qwen3-32B) handles:
-    - Natural conversation, greetings, general knowledge
-    - Deciding when to delegate actions to the orchestrator
-
-    Nemotron (8B) handles:
-    - Tool execution: HA, RAG, reminders, update_data
-    - Called via ask_orchestrator when Helios needs actions performed
+    Delegates to CloudBrain for the full chat flow.
     """
     body = await req.json()
     messages = body.get("messages", [])
     external_tools = body.get("tools")  # HA may send its own tools
     stream = body.get("stream", False)
-    user_text = last_user_text(messages)
 
-    # Track what we did for debugging
-    routing_info = {
-        "timestamp": datetime.now().isoformat(),
-        "user_query_length": len(user_text),
-        "architecture": "hybrid_v6",
-        "tool_calls": [],
-        "streaming": stream,
-    }
-
-    # Route user intent (mode + emotional intensity)
-    intent = get_mode_router().route(user_text)
-    routing_info["intent_mode"] = intent.mode
-    routing_info["intent_intensity"] = intent.intensity
-    routing_info["intent_tags"] = intent.tags
-    logger.info(f"[MODE_ROUTER] mode={intent.mode} intensity={intent.intensity} tags={intent.tags}")
-
-    # If external tools are provided (e.g., from HA voice pipeline),
-    # pass through to Nemotron for native handling
-    if external_tools:
-        logger.info(f"[HYBRID] External tools provided ({len(external_tools)}), passing to Nemotron")
-        routing_info["mode"] = "passthrough"
-        try:
-            llm_resp = await call_model(
-                NEMOTRON_URL, NEMOTRON_MODEL, messages,
-                system=get_orchestrator_system_prompt(mode=intent.mode, intensity=intent.intensity),
-                tools=external_tools,
-                timeout=60
-            )
-            llm_resp["_routing"] = routing_info
-            return JSONResponse(llm_resp)
-        except Exception as e:
-            logger.error(f"[HYBRID] Passthrough failed: {e}")
-            return JSONResponse({"error": str(e)}, status_code=503)
-
-    # === HYBRID MODE: Helios first, Nemotron for tools ===
-    routing_info["mode"] = "hybrid"
-    logger.info(f"[HYBRID] Processing: {user_text[:100]}... (stream={stream})")
-
-    # Fast-path: intercept simple device commands before any LLM call
-    try:
-        fast_result = await try_fast_path(user_text, ha_client)
-        if fast_result.handled:
-            routing_info["mode"] = "fast_path"
-            routing_info["fast_path_action"] = fast_result.action
-            routing_info["fast_path_entity"] = fast_result.entity_name
-            logger.info(f"[FAST-PATH] Handled: {fast_result.action} -> {fast_result.entity_name}")
-            if stream:
-                return _stream_text_response(fast_result.response_text, "fast-path")
-            return JSONResponse({
-                "id": f"chatcmpl-fp-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "fast-path",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": fast_result.response_text},
-                    "finish_reason": "stop",
-                }],
-                "_routing": routing_info,
-            })
-    except Exception as e:
-        logger.warning(f"[FAST-PATH] Error, falling through to Helios: {e}")
-
-    # 1. Pre-fetch relevant personal context from RAG (skip for greetings)
-    personal_context = ""
-    if not is_greeting(user_text):
-        personal_context = rag_context(user_text)
-        if personal_context:
-            logger.info(f"[HYBRID] Pre-fetched RAG context ({len(personal_context)} chars)")
-            routing_info["rag_prefetch"] = True
-
-    # 2. Build Helios system prompt with personal context + mode
-    helios_system = get_helios_system_prompt(personal_context, mode=intent.mode, intensity=intent.intensity)
-
-    # 3. Check if Helios is available, start if needed
-    if not await check_helios_health():
-        logger.info("[HYBRID] Helios offline, attempting to start...")
-        started = await start_helios()
-        if not started:
-            # Fallback to Nemotron-only mode
-            logger.warning("[HYBRID] Helios unavailable, falling back to Nemotron")
-            routing_info["fallback"] = "nemotron"
-            return await _nemotron_fallback(messages, stream, routing_info,
-                                            mode=intent.mode, intensity=intent.intensity)
-
-    # 4. Call Helios
-    global _last_helios_request
-    logger.info("[HYBRID] Calling Helios...")
-    try:
-        helios_resp = await call_model(
-            HELIOS_URL, HELIOS_MODEL, messages,
-            system=helios_system,
-            tools=HELIOS_TOOLS,
-            timeout=180  # Helios can be slow
-        )
-        _last_helios_request = time.time()  # Track for auto-shutdown
-    except Exception as e:
-        logger.error(f"[HYBRID] Helios call failed: {e}")
-        # Fallback to Nemotron
-        routing_info["fallback"] = "nemotron"
-        routing_info["helios_error"] = str(e)
-        return await _nemotron_fallback(messages, stream, routing_info,
-                                        mode=intent.mode, intensity=intent.intensity)
-
-    # 5. Check for tool calls (ask_orchestrator)
-    choice = helios_resp.get("choices", [{}])[0]
-    message = choice.get("message", {})
-    tool_calls = message.get("tool_calls", [])
-    content = message.get("content") or ""
-
-    # Parse tool calls from content if needed
-    if not tool_calls and content:
-        tool_calls = parse_tool_calls_from_content(content)
-
-    # 6. If no tool calls, return Helios response directly
-    if not tool_calls:
-        logger.info("[HYBRID] Helios responded directly (no orchestrator needed)")
-        routing_info["helios_direct"] = True
-
-        if stream:
-            return _stream_text_response(clean_response(content), HELIOS_MODEL)
-        else:
-            if content:
-                message["content"] = clean_response(content)
-            helios_resp["_routing"] = routing_info
-            return JSONResponse(helios_resp)
-
-    # 7. Execute ask_orchestrator via Nemotron
-    logger.info(f"[HYBRID] Helios called orchestrator, delegating to Nemotron")
-    conversation = messages.copy()
-
-    for tool_call in tool_calls:
-        function = tool_call.get("function", {})
-        tool_name = function.get("name", "")
-
-        if tool_name != "ask_orchestrator":
-            logger.warning(f"[HYBRID] Unexpected tool from Helios: {tool_name}")
-            continue
-
-        try:
-            arguments = json.loads(function.get("arguments", "{}"))
-        except json.JSONDecodeError:
-            arguments = {}
-
-        command = arguments.get("command", "")
-        if not command:
-            continue
-
-        logger.info(f"[HYBRID] Orchestrator command: {command[:100]}...")
-        routing_info["tool_calls"].append({"tool": "ask_orchestrator", "command": command})
-
-        # Send to Nemotron orchestrator
-        orchestrator_result = await call_nemotron_orchestrator(command)
-        logger.info(f"[HYBRID] Orchestrator result: {orchestrator_result[:200]}...")
-
-        # Add to conversation for Helios follow-up
-        conversation.append({
-            "role": "assistant",
-            "content": f"I used the orchestrator to: {command}"
-        })
-        conversation.append({
-            "role": "user",
-            "content": f"Orchestrator result: {orchestrator_result}\n\nPlease respond naturally to me based on this result. Keep it brief and conversational."
-        })
-
-    # 8. Get final response from Helios
-    logger.info("[HYBRID] Getting final response from Helios...")
-    try:
-        final_resp = await call_model(
-            HELIOS_URL, HELIOS_MODEL, conversation,
-            system=helios_system,
-            timeout=120
-        )
-        _last_helios_request = time.time()  # Track for auto-shutdown
-    except Exception as e:
-        logger.error(f"[HYBRID] Helios final response failed: {e}")
-        # Return the orchestrator result directly
-        if stream:
-            return _stream_text_response(orchestrator_result, NEMOTRON_MODEL)
-        return JSONResponse({
-            "choices": [{"message": {"role": "assistant", "content": orchestrator_result}}],
-            "_routing": routing_info,
-        })
-
-    final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-    final_content = clean_response(final_content)
-
-    if stream:
-        return _stream_text_response(final_content, HELIOS_MODEL)
-
-    final_resp["_routing"] = routing_info
-    if final_content:
-        final_resp["choices"][0]["message"]["content"] = final_content
-    return JSONResponse(final_resp)
+    return await cloud_brain.chat(
+        messages, stream=stream,
+        external_tools=external_tools,
+        ha_client=ha_client,
+    )
 
 
 def _stream_text_response(text: str, model: str):
