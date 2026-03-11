@@ -44,3 +44,45 @@ finance:
   monthly_discretionary: 1000
   retirement_target_age: 62
   current_age: 30
+
+# LLM Backend Configuration (optional)
+# =====================================
+# Omit this section entirely to use env vars (NEMOTRON_URL, HELIOS_URL, etc.)
+# Backends: "openai_compatible" (vLLM, llama.cpp, Ollama), "anthropic" (Claude), "openai" (GPT)
+# API keys support ${ENV_VAR} syntax to reference environment variables.
+#
+# llm:
+#   conversation:                            # The conversational model (Helios role)
+#     backend: "openai_compatible"
+#     url: "http://10.0.0.195:8080/v1"
+#     model: "Qwen3-32B-Q5_K_M.gguf"
+#   orchestrator:                            # The tool execution model (Nemotron role)
+#     backend: "openai_compatible"
+#     url: "http://10.0.0.58:8001/v1"
+#     model: "nvidia/Nemotron-Orchestrator-8B"
+#
+# --- BYOK Examples ---
+#
+# Claude as conversation model + GPT as orchestrator:
+# llm:
+#   conversation:
+#     backend: "anthropic"
+#     url: "https://api.anthropic.com/v1"
+#     model: "claude-sonnet-4-20250514"
+#     api_key: "${ANTHROPIC_API_KEY}"
+#   orchestrator:
+#     backend: "openai"
+#     url: "https://api.openai.com/v1"
+#     model: "gpt-4o-mini"
+#     api_key: "${OPENAI_API_KEY}"
+#
+# Fully local with Ollama:
+# llm:
+#   conversation:
+#     backend: "openai_compatible"
+#     url: "http://localhost:11434/v1"
+#     model: "llama3.1:8b"
+#   orchestrator:
+#     backend: "openai_compatible"
+#     url: "http://localhost:11434/v1"
+#     model: "llama3.1:8b"

@@ -20,6 +20,7 @@ from sentence_transformers import SentenceTransformer
 
 from ha_integration import HomeAssistantClient
 from user_profile import get_profile
+from llm_backend import LLMConfig, LLMBackend, create_backend
 
 # Load environment (fallback for local dev; Docker passes env vars directly)
 load_dotenv("/app/.env", override=False)
@@ -38,6 +39,67 @@ NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.58:8001/v1")
 NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-8B")
 HELIOS_URL = os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1")
 HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M.gguf")
+
+# ---------------------------------------------------------------------------
+# LLM Backend instances (initialized in startup_event after _http is ready)
+# ---------------------------------------------------------------------------
+conversation_backend: Optional[LLMBackend] = None
+orchestrator_backend: Optional[LLMBackend] = None
+
+
+def init_backends(http_client: httpx.AsyncClient):
+    """
+    Initialize LLM backend instances.
+
+    Priority: user_profile.yaml llm section > env vars > defaults.
+    Called from startup_event after _http is initialized.
+    """
+    global conversation_backend, orchestrator_backend
+
+    # Check if profile YAML has llm config
+    llm_cfg = {}
+    try:
+        from user_profile import _find_profile_path
+        import yaml
+        path = _find_profile_path()
+        if path:
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+            llm_cfg = data.get("llm", {})
+    except Exception:
+        pass
+
+    conv_cfg = llm_cfg.get("conversation", {})
+    orch_cfg = llm_cfg.get("orchestrator", {})
+
+    conv_config = LLMConfig(
+        backend=conv_cfg.get("backend", "openai_compatible"),
+        url=conv_cfg.get("url", HELIOS_URL),
+        model=conv_cfg.get("model", HELIOS_MODEL),
+        api_key=_resolve_api_key(conv_cfg.get("api_key", "")),
+    )
+    orch_config = LLMConfig(
+        backend=orch_cfg.get("backend", "openai_compatible"),
+        url=orch_cfg.get("url", NEMOTRON_URL),
+        model=orch_cfg.get("model", NEMOTRON_MODEL),
+        api_key=_resolve_api_key(orch_cfg.get("api_key", "")),
+    )
+
+    conversation_backend = create_backend(conv_config, http_client)
+    orchestrator_backend = create_backend(orch_config, http_client)
+
+    logger.info(f"[LLM] Conversation backend: {conv_config.backend} -> {conv_config.url} ({conv_config.model})")
+    logger.info(f"[LLM] Orchestrator backend: {orch_config.backend} -> {orch_config.url} ({orch_config.model})")
+
+
+def _resolve_api_key(value: str) -> str:
+    """Resolve API key — supports ${ENV_VAR} syntax for env var references."""
+    if not value:
+        return ""
+    if value.startswith("${") and value.endswith("}"):
+        env_name = value[2:-1]
+        return os.environ.get(env_name, "")
+    return value
 
 # ---------------------------------------------------------------------------
 # Home Assistant

@@ -76,6 +76,10 @@ NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-
 HELIOS_URL = os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1")
 HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M")
 
+# LLM backends (initialized in startup_event after _http is ready)
+conversation_backend = None
+orchestrator_backend = None
+
 # Home Assistant
 HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
@@ -688,59 +692,49 @@ def rag_context(query: str) -> str:
     return "\n".join(chunks) if chunks else ""
 
 async def call_model(url: str, model: str, messages: List[Dict], system: str = "", tools: List = None, tool_choice: str = "auto", timeout: int = 180) -> Dict[str, Any]:
-    """Call an LLM endpoint.
+    """Call an LLM endpoint via the appropriate backend.
+
+    Signature unchanged from v6. Backend selection is automatic based on
+    which role's URL matches. Falls back to OpenAI-compatible for unknown URLs.
 
     Args:
         tool_choice: "auto" for native tool calling (Helios), "none" for XML-style (Nemotron)
     """
-    final_messages = messages.copy()
-    if system:
-        final_messages.insert(0, {"role": "system", "content": system})
-
-    payload = {
-        "model": model,
-        "messages": final_messages,
-        "temperature": 0.3,
-        "max_tokens": 4096,
-    }
-
-    # Pass through tools with specified tool_choice
-    # - "auto": Enable native tool calling (for Helios/llama.cpp)
-    # - "none": Disable native tool calling, model outputs <tool_call> tags (for Nemotron/vLLM)
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = tool_choice
-
-    r = await _http.post(f"{url}/chat/completions", json=payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    backend = _resolve_backend(url, model)
+    return await backend.chat_completion(
+        messages, system=system, tools=tools,
+        tool_choice=tool_choice, timeout=timeout,
+    )
 
 
 async def stream_final_response(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180):
     """
-    Stream the final response from Nemotron (after tool calls are done).
+    Stream the final response via the appropriate backend.
     Pass through SSE chunks directly for minimal latency.
     """
-    final_messages = messages.copy()
-    if system:
-        final_messages.insert(0, {"role": "system", "content": system})
+    backend = _resolve_backend(url, model)
+    async for chunk in backend.stream_chat_completion(
+        messages, system=system, timeout=timeout,
+    ):
+        yield chunk
 
-    payload = {
-        "model": model,
-        "messages": final_messages,
-        "temperature": 0.3,
-        "max_tokens": 4096,
-        "stream": True,
-    }
 
-    async with _http.stream("POST", f"{url}/chat/completions", json=payload, timeout=timeout) as response:
-        response.raise_for_status()
-        async for line in response.aiter_lines():
-            if not line:
-                continue
-            if line.startswith("data: "):
-                # Pass through directly for minimal latency
-                yield f"{line}\n\n"
+def _resolve_backend(url: str, model: str):
+    """Pick the backend whose URL matches the call.
+
+    Falls back to a temporary OpenAI-compatible backend for unrecognized URLs.
+    """
+    from llm_backend import LLMConfig, OpenAICompatibleBackend
+
+    if conversation_backend and url == conversation_backend.config.url:
+        return conversation_backend
+    if orchestrator_backend and url == orchestrator_backend.config.url:
+        return orchestrator_backend
+
+    # Fallback: create a one-off OpenAI-compatible backend
+    logger.warning(f"[LLM] No configured backend for {url}, using OpenAI-compatible fallback")
+    fallback_config = LLMConfig(backend="openai_compatible", url=url, model=model)
+    return OpenAICompatibleBackend(fallback_config, _http)
 
 
 # =============================================================================
@@ -1924,12 +1918,19 @@ async def morning_briefing():
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
-    global _http
+    global _http, conversation_backend, orchestrator_backend
     _http = httpx.AsyncClient(
         timeout=httpx.Timeout(60, connect=10),
         limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
     )
     logger.info("[orchestrator] Initialized shared HTTP client")
+
+    # Initialize LLM backends
+    import shared as _shared
+    _shared._http = _http  # ensure shared module has the http client too
+    _shared.init_backends(_http)
+    conversation_backend = _shared.conversation_backend
+    orchestrator_backend = _shared.orchestrator_backend
 
     # Load HA entities at startup
     global _ha_tool_cache, _ha_tool_cache_time
