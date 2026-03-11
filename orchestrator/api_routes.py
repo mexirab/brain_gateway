@@ -358,10 +358,14 @@ async def stop_focus_api():
 @router.get("/api/audio/{filename}")
 async def serve_audio(filename: str):
     """Serve audio files from /tmp/brain_audio/."""
-    filepath = f"/tmp/brain_audio/{filename}"
+    # Sanitize filename to prevent path traversal
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or ".." in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    filepath = f"/tmp/brain_audio/{safe_name}"
     if os.path.exists(filepath):
         media_types = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg"}
-        ext = os.path.splitext(filename)[1].lower()
+        ext = os.path.splitext(safe_name)[1].lower()
         media_type = media_types.get(ext, "audio/wav")
         return FileResponse(filepath, media_type=media_type)
     return JSONResponse({"error": "Audio file not found"}, status_code=404)

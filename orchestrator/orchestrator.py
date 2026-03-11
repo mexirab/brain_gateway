@@ -74,10 +74,10 @@ load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 profile = get_profile()
 
 # Model endpoints and names
-NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.173:8001/v1")
+NEMOTRON_URL = os.environ.get("NEMOTRON_URL", "http://10.0.0.58:8001/v1")
 NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-8B")
 HELIOS_URL = os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1")
-HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M")
+HELIOS_MODEL = os.environ.get("HELIOS_MODEL", "Qwen3-32B-Q5_K_M.gguf")
 
 # LLM backends (initialized in startup_event after _http is ready)
 conversation_backend = None
@@ -143,7 +143,7 @@ FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", "media_player.office_s
 ENDEL_ENABLED = os.environ.get("ENDEL_ENABLED", "true").lower() == "true"
 
 # APScheduler for reminder scheduling (single source of truth: YAML)
-TIMEZONE = os.environ.get("TZ", "America/New_York")
+TIMEZONE = os.environ.get("TZ", "America/Chicago")
 scheduler = AsyncIOScheduler(
     jobstores={'default': MemoryJobStore()},
     timezone=TIMEZONE
@@ -1201,7 +1201,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     for existing in list_pending_reminders():
         if existing.get("text", "").lower().strip() == reminder_text.lower().strip():
             try:
-                created = datetime.fromisoformat(existing.get("created", ""))
+                created = datetime.fromisoformat(existing.get("created_at", ""))
                 if (now - created).total_seconds() < DEDUP_WINDOW_SECONDS:
                     logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing {existing.get('id')})")
                     return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."
@@ -1407,6 +1407,7 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         "audio_player": player if audio_started else None,
         "block_sites": blocking_enabled
     }
+    state_store.save_focus_session(current_focus_session)
 
     logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}")
 
@@ -1468,6 +1469,7 @@ async def tool_stop_focus() -> str:
         "audio_player": None,
         "block_sites": False
     }
+    state_store.clear_focus_session()
 
     logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'")
     return f"Focus timer stopped. You worked on '{task}' for {elapsed:.0f} minutes. Nice work!"
@@ -1529,8 +1531,9 @@ async def deliver_focus_break(task: str, break_duration: int):
         "break_duration": None,
         "job_id": None,
         "audio_player": None,
-        "block_sites": False
+        "block_sites": False,
     }
+    state_store.clear_focus_session()
 
     logger.info(f"[FOCUS] Break announced for '{task}'")
 
@@ -2431,9 +2434,15 @@ from fastapi.responses import FileResponse
 @app.get("/api/audio/{filename}")
 async def serve_audio(filename: str):
     """Serve audio files from /tmp/brain_audio/."""
-    filepath = f"/tmp/brain_audio/{filename}"
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or ".." in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    filepath = f"/tmp/brain_audio/{safe_name}"
     if os.path.exists(filepath):
-        return FileResponse(filepath, media_type="audio/wav")
+        media_types = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg"}
+        ext = os.path.splitext(safe_name)[1].lower()
+        media_type = media_types.get(ext, "audio/wav")
+        return FileResponse(filepath, media_type=media_type)
     return JSONResponse({"error": "Audio file not found"}, status_code=404)
 
 

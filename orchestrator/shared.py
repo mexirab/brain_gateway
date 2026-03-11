@@ -206,17 +206,11 @@ MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
 MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
 MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.morning_briefing_speaker)
 
-# Notification tracking — persisted in state_store.py (survives restarts)
-# These in-memory sets are kept as a fast cache; state_store is source of truth.
-_notified_events: set = set()
-
 # ---------------------------------------------------------------------------
 # Email polling config
 # ---------------------------------------------------------------------------
 EMAIL_POLL_INTERVAL = int(os.environ.get("EMAIL_POLL_INTERVAL", "30"))
 EMAIL_POLL_ENABLED = os.environ.get("EMAIL_POLL_ENABLED", "true").lower() == "true"
-
-_notified_emails: set = set()
 
 # ---------------------------------------------------------------------------
 # Temperature monitoring
@@ -224,15 +218,11 @@ _notified_emails: set = set()
 CLOSET_TEMP_WARNING = float(os.environ.get("CLOSET_TEMP_WARNING", str(profile.temp_warning)))
 CLOSET_TEMP_CRITICAL = float(os.environ.get("CLOSET_TEMP_CRITICAL", str(profile.temp_critical)))
 
-_notified_temp_alerts: set = set()
-
 # ---------------------------------------------------------------------------
 # Email-to-calendar config
 # ---------------------------------------------------------------------------
 EMAIL_TO_CALENDAR_ENABLED = os.environ.get("EMAIL_TO_CALENDAR_ENABLED", "true").lower() == "true"
 EMAIL_TO_CALENDAR_INTERVAL = int(os.environ.get("EMAIL_TO_CALENDAR_INTERVAL", "60"))
-
-_processed_for_events: set = set()
 
 # ---------------------------------------------------------------------------
 # Phone calendar sync (iPhone Shortcut pushes consolidated calendar)
@@ -282,5 +272,3 @@ def _save_phone_calendar():
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 HOME_ADDRESS = os.environ.get("HOME_ADDRESS", profile.home_address)
 TRAVEL_TIME_BUFFER = int(os.environ.get("TRAVEL_TIME_BUFFER", "10"))  # extra minutes
-
-_notified_travel_events: set = set()

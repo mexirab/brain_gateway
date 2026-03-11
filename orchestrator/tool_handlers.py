@@ -497,7 +497,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     for existing in list_pending_reminders():
         if existing.get("text", "").lower().strip() == reminder_text.lower().strip():
             try:
-                created = datetime.fromisoformat(existing.get("created", ""))
+                created = datetime.fromisoformat(existing.get("created_at", ""))
                 if (now - created).total_seconds() < DEDUP_WINDOW_SECONDS:
                     logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing {existing.get('id')})")
                     return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."

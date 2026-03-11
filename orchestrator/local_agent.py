@@ -73,9 +73,9 @@ class LocalAgent:
         return state_store.get_pending_reminders()
 
     def get_focus_status(self) -> Dict[str, Any]:
-        """Get current focus session state."""
-        import shared
-        session = shared.current_focus_session
+        """Get current focus session state from persistent store."""
+        import state_store
+        session = state_store.load_focus_session()
         if not session["active"]:
             return {"active": False}
         elapsed = (datetime.now() - session["started"]).total_seconds() / 60

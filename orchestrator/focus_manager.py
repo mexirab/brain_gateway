@@ -13,6 +13,7 @@ from shared import (
     ENDEL_API_URL, ENDEL_MODES, FOCUS_AUDIO_PLAYER, ENDEL_ENABLED,
     profile,
 )
+import state_store
 from pihole_client import get_pihole_client
 from reminder_manager import _announce_voice
 from metrics import (
@@ -160,6 +161,7 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
         "audio_player": player if audio_started else None,
         "block_sites": blocking_enabled,
     })
+    state_store.save_focus_session(current_focus_session)
 
     FOCUS_SESSIONS_STARTED.labels(soundscape=soundscape).inc()
     FOCUS_ACTIVE.set(1)
@@ -285,3 +287,4 @@ def _reset_focus_session():
         "audio_player": None,
         "block_sites": False,
     })
+    state_store.clear_focus_session()
