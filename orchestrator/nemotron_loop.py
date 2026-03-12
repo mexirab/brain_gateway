@@ -88,7 +88,7 @@ async def _run_nemotron_tool_loop(messages: List[Dict], system_prompt: str, labe
             )
         except Exception as e:
             logger.error(f"[{label}] Call failed: {e}")
-            return f"Sorry, I couldn't complete that action: {e}"
+            return "Sorry, I couldn't complete that action. Please try again."
 
         choice = llm_resp.get("choices", [{}])[0]
         message = choice.get("message", {})

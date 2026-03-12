@@ -38,8 +38,15 @@ router = APIRouter()
 
 
 @router.get("/health")
-async def health():
-    """Health check endpoint."""
+async def health(req: Request):
+    """Health check endpoint. Minimal response without auth, full details with auth."""
+    # Minimal response for unauthenticated requests (monitoring, uptime checks)
+    api_token = os.environ.get("API_TOKEN", "")
+    auth = req.headers.get("authorization", "")
+    if auth != f"Bearer {api_token}":
+        return {"ok": True, "version": "6.2"}
+
+    # Full health details for authenticated requests
     helios_online = await check_helios_health()
 
     # Check Nemotron health
@@ -332,6 +339,17 @@ async def start_focus_api(req: Request):
     speaker = body.get("speaker")
     soundscape = body.get("soundscape", "focus")
 
+    # Validate duration at API boundary
+    try:
+        duration = int(duration)
+        break_duration = int(break_duration)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "Duration must be a number"}, status_code=400)
+    if duration < 1 or duration > 480:
+        return JSONResponse({"error": "Duration must be between 1 and 480 minutes"}, status_code=400)
+    if break_duration < 1 or break_duration > 60:
+        return JSONResponse({"error": "Break duration must be between 1 and 60 minutes"}, status_code=400)
+
     result = await tool_start_focus(task, duration, break_duration, speaker, soundscape)
     return JSONResponse({
         "success": current_focus_session["active"],
@@ -380,7 +398,7 @@ async def run_email_to_calendar():
         return {"ok": True, "message": "Email-to-calendar scan completed"}
     except Exception as e:
         logger.error(f"[EMAIL_TO_CAL] Manual trigger error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Email-to-calendar scan failed"}, status_code=500)
 
 
 @router.post("/api/announce")
@@ -402,7 +420,7 @@ async def announce_tts(req: Request):
         return {"success": True, "text": text, "speaker": speaker or "default"}
     except Exception as e:
         logger.error(f"[ANNOUNCE] Failed: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "TTS announcement failed"}, status_code=500)
 
 
 @router.get("/api/calendar/today")
@@ -558,7 +576,8 @@ async def get_temperatures():
             else:
                 readings[label] = {"temperature": None, "error": f"HTTP {resp.status_code}"}
         except Exception as e:
-            readings[label] = {"temperature": None, "error": str(e)}
+            logger.error(f"[TEMP] Failed to read {label} sensor: {e}")
+            readings[label] = {"temperature": None, "error": "Sensor read failed"}
 
     # Calculate delta if both readings available
     closet_temp = readings.get("closet", {}).get("temperature")
@@ -651,4 +670,4 @@ async def sync_phone_calendar(req: Request):
         }
     except Exception as e:
         logger.error(f"[PHONE_SYNC] Error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Calendar sync failed"}, status_code=500)

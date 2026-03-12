@@ -122,6 +122,11 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_finance_status(
                 arguments.get("include_details", False)
             )
+        elif tool_name == "check_system":
+            from system_diagnostics import check_system
+            return await check_system(
+                arguments.get("query", "system_health")
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
