@@ -187,15 +187,6 @@ app.add_middleware(BearerAuthMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 app.add_middleware(RateLimitMiddleware)
 
-
-@app.middleware("http")
-async def strip_server_header(request: Request, call_next):
-    """Remove server version header to reduce information disclosure."""
-    response = await call_next(request)
-    if "server" in response.headers:
-        del response.headers["server"]
-    return response
-
 # Mount the infrastructure API routes (health, metrics, HA, memory, reminders, focus, etc.)
 app.include_router(api_router)
 
