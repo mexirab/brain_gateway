@@ -14,6 +14,7 @@ routes, and infrastructure logic live in their respective modules.
 import os
 import logging
 import time
+import collections
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -104,6 +105,59 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
 
+# Maximum request body size (bytes) — rejects oversized payloads before LLM processing
+MAX_BODY_SIZE = int(os.environ.get("MAX_BODY_SIZE", 50_000))  # 50KB default
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject request bodies larger than MAX_BODY_SIZE."""
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_BODY_SIZE:
+            return JSONResponse(
+                {"error": f"Request body too large (max {MAX_BODY_SIZE} bytes)"},
+                status_code=413,
+            )
+        return await call_next(request)
+
+
+# Simple sliding-window rate limiter (per-IP, in-memory)
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", 60))  # seconds
+RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", 30))  # requests per window
+_rate_limit_store: Dict[str, collections.deque] = {}
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Per-IP sliding window rate limiter."""
+
+    EXEMPT_PATHS = {"/health", "/metrics"}
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+
+        if client_ip not in _rate_limit_store:
+            _rate_limit_store[client_ip] = collections.deque()
+
+        window = _rate_limit_store[client_ip]
+        # Purge entries older than the window
+        while window and window[0] < now - RATE_LIMIT_WINDOW:
+            window.popleft()
+
+        if len(window) >= RATE_LIMIT_MAX:
+            return JSONResponse(
+                {"error": "Rate limit exceeded. Try again later."},
+                status_code=429,
+            )
+
+        window.append(now)
+        return await call_next(request)
+
+
 # LLM backends (initialized in startup_event after _http is ready)
 conversation_backend = None
 orchestrator_backend = None
@@ -130,6 +184,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(BearerAuthMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware)
+app.add_middleware(RateLimitMiddleware)
+
+
+@app.middleware("http")
+async def strip_server_header(request: Request, call_next):
+    """Remove server version header to reduce information disclosure."""
+    response = await call_next(request)
+    response.headers.pop("server", None)
+    return response
 
 # Mount the infrastructure API routes (health, metrics, HA, memory, reminders, focus, etc.)
 app.include_router(api_router)

@@ -339,6 +339,17 @@ async def start_focus_api(req: Request):
     speaker = body.get("speaker")
     soundscape = body.get("soundscape", "focus")
 
+    # Validate duration at API boundary
+    try:
+        duration = int(duration)
+        break_duration = int(break_duration)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "Duration must be a number"}, status_code=400)
+    if duration < 1 or duration > 480:
+        return JSONResponse({"error": "Duration must be between 1 and 480 minutes"}, status_code=400)
+    if break_duration < 1 or break_duration > 60:
+        return JSONResponse({"error": "Break duration must be between 1 and 60 minutes"}, status_code=400)
+
     result = await tool_start_focus(task, duration, break_duration, speaker, soundscape)
     return JSONResponse({
         "success": current_focus_session["active"],

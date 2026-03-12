@@ -102,6 +102,17 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
                            speaker: str = None, soundscape: str = "focus",
                            block_sites: bool = True) -> str:
     """Start a focus timer with voice announcement at end, optional Endel audio, and distraction blocking."""
+    # Validate duration bounds
+    try:
+        duration = int(duration)
+        break_duration = int(break_duration)
+    except (TypeError, ValueError):
+        return "Duration must be a number."
+    if duration < 1 or duration > 480:
+        return "Focus duration must be between 1 and 480 minutes (8 hours max)."
+    if break_duration < 1 or break_duration > 60:
+        return "Break duration must be between 1 and 60 minutes."
+
     if current_focus_session["active"]:
         elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
         remaining = current_focus_session["duration"] - elapsed
