@@ -38,8 +38,15 @@ router = APIRouter()
 
 
 @router.get("/health")
-async def health():
-    """Health check endpoint."""
+async def health(req: Request):
+    """Health check endpoint. Minimal response without auth, full details with auth."""
+    # Minimal response for unauthenticated requests (monitoring, uptime checks)
+    api_token = os.environ.get("API_TOKEN", "")
+    auth = req.headers.get("authorization", "")
+    if auth != f"Bearer {api_token}":
+        return {"ok": True, "version": "6.2"}
+
+    # Full health details for authenticated requests
     helios_online = await check_helios_health()
 
     # Check Nemotron health

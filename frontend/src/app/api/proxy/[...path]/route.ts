@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || 'http://localhost:8888';
 const COOKIE_NAME = 'brain_token';
 const TOKEN = process.env.DASHBOARD_TOKEN || 'changeme';
+const API_TOKEN = process.env.API_TOKEN || '';
 
 function isAuthed(request: NextRequest): boolean {
   return request.cookies.get(COOKIE_NAME)?.value === TOKEN;
@@ -21,7 +22,9 @@ export async function GET(
   const url = new URL(targetPath, ORCHESTRATOR_URL);
   url.search = request.nextUrl.search;
 
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), {
+    headers: { 'Authorization': `Bearer ${API_TOKEN}` },
+  });
   const data = await res.json();
   return NextResponse.json(data, { status: res.status });
 }
@@ -43,7 +46,7 @@ export async function POST(
 
   const res = await fetch(url.toString(), {
     method: 'POST',
-    headers: { 'Content-Type': contentType },
+    headers: { 'Content-Type': contentType, 'Authorization': `Bearer ${API_TOKEN}` },
     body,
   });
 
@@ -80,7 +83,7 @@ export async function PUT(
 
   const res = await fetch(url.toString(), {
     method: 'PUT',
-    headers: { 'Content-Type': contentType },
+    headers: { 'Content-Type': contentType, 'Authorization': `Bearer ${API_TOKEN}` },
     body,
   });
 

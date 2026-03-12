@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +79,31 @@ from shared import (
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
+# API authentication
+API_TOKEN = os.environ.get("API_TOKEN", "")
+if not API_TOKEN:
+    raise RuntimeError("API_TOKEN environment variable is required — set it in .env")
+
+
+class BearerAuthMiddleware(BaseHTTPMiddleware):
+    """Require Bearer token on all endpoints except public ones."""
+
+    PUBLIC_PATHS = {"/health", "/metrics"}
+
+    async def dispatch(self, request: Request, call_next):
+        # CORS preflight must pass through
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        # Public endpoints don't require auth
+        if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+        # Check Bearer token
+        auth = request.headers.get("authorization", "")
+        if auth == f"Bearer {API_TOKEN}":
+            return await call_next(request)
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+
 # LLM backends (initialized in startup_event after _http is ready)
 conversation_backend = None
 orchestrator_backend = None
@@ -103,6 +129,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(BearerAuthMiddleware)
 
 # Mount the infrastructure API routes (health, metrics, HA, memory, reminders, focus, etc.)
 app.include_router(api_router)
