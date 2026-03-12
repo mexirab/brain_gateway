@@ -13,7 +13,7 @@ assistant:
   personality: "warm, friendly, supportive ADHD coach"
 
 speakers:
-  default: "media_player.office_speaker"
+  default: "media_player.all_speakers"
   morning_briefing: "media_player.bedroom_pair"
   focus_audio: "media_player.dining_room_max"
   aliases:
