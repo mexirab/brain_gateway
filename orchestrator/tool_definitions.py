@@ -419,6 +419,24 @@ STATIC_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_system",
+            "description": "Check Brain Gateway system status, recent activity, and logs. Use when the user asks about system behavior like 'did my morning briefing run?', 'are my reminders working?', 'what happened with the calendar?', 'any temperature alerts?', 'is everything running?', 'any errors?'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "enum": ["morning_briefing", "calendar_poll", "email_poll", "reminders", "focus_timer", "temperature", "system_health", "recent_errors"],
+                        "description": "What to check: morning_briefing (did briefing run?), calendar_poll (last calendar check), email_poll (last email check), reminders (pending reminders), focus_timer (current/recent focus), temperature (server closet temps), system_health (overall status), recent_errors (error log)"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 

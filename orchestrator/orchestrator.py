@@ -25,9 +25,12 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Configure logging
+# Configure logging with ring buffer for self-diagnosis
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+from log_buffer import log_ring
+logging.getLogger().addHandler(log_ring)
 
 # --- Dedicated module imports (the decoupled architecture) ---
 
