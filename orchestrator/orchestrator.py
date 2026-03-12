@@ -93,6 +93,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer token on all endpoints except public ones."""
 
     PUBLIC_PATHS = {"/health", "/metrics"}
+    PUBLIC_PREFIXES = ("/api/audio/",)  # Google speakers fetch audio without auth
 
     async def dispatch(self, request: Request, call_next):
         # CORS preflight must pass through
@@ -100,6 +101,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         # Public endpoints don't require auth
         if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+        # Prefix-based public paths (audio served to speakers)
+        if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
         # Check Bearer token
         auth = request.headers.get("authorization", "")
