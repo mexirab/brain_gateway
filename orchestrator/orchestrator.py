@@ -406,6 +406,15 @@ async def startup_event():
             logger.info("[FOCUS] Restored active focus session '%s' (%.0f min remaining, break at %s)",
                         saved_focus["task"], remaining, end_time.strftime('%H:%M'))
 
+    # Defensive: always ensure Pi-hole blocking is off if no active focus session
+    if not current_focus_session["active"]:
+        pihole = get_pihole_client()
+        result = await pihole.disable_focus_blocking()
+        if result.success:
+            logger.info("[FOCUS] Defensive startup: ensured Pi-hole blocking is disabled")
+        else:
+            logger.warning("[FOCUS] Defensive startup: could not disable blocking: %s", result.message)
+
     scheduler.start()
     logger.info(f"[SCHEDULER] Started ({reloaded} reminders reloaded from DB)")
 
