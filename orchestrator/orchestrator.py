@@ -16,7 +16,7 @@ import logging
 import time
 import collections
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 from dotenv import load_dotenv
@@ -60,6 +60,10 @@ from helios_manager import check_helios_health, start_helios, stop_helios, check
 # Fast-path for simple device commands (bypasses LLMs)
 from fast_path import try_fast_path
 
+# Focus session management
+from focus_manager import deliver_focus_break
+from pihole_client import get_pihole_client
+
 # Background scheduler jobs
 from background_jobs import poll_calendar, morning_briefing
 
@@ -73,7 +77,7 @@ from cloud_brain import CloudBrain
 # Shared state (singletons initialized at module level in shared.py)
 import shared
 from shared import (
-    ha_client, scheduler, collection,
+    ha_client, scheduler, collection, current_focus_session,
     NEMOTRON_URL, NEMOTRON_MODEL, HELIOS_URL, HELIOS_MODEL,
     CHROMA_COLLECTION, CHROMA_PERSIST,
     CALENDAR_POLL_INTERVAL, MORNING_BRIEFING_TIME, MORNING_BRIEFING_ENABLED,
@@ -368,6 +372,39 @@ async def startup_event():
             logger.warning(f"[STATE] Failed to reload reminder {rem.get('id')}: {e}")
     if reloaded:
         logger.info(f"[STATE] Reloaded {reloaded} pending reminders from DB")
+
+    # Restore focus session from DB (survives orchestrator restarts)
+    saved_focus = state_store.load_focus_session()
+    if saved_focus["active"]:
+        end_time = saved_focus["started"] + timedelta(minutes=saved_focus["duration"])
+        if end_time <= datetime.now():
+            # Session expired while we were down — clean up blocking
+            logger.info("[FOCUS] Found expired focus session '%s' — cleaning up", saved_focus["task"])
+            if saved_focus.get("block_sites"):
+                pihole = get_pihole_client()
+                result = await pihole.disable_focus_blocking()
+                if result.success:
+                    logger.info("[FOCUS] Disabled leftover Pi-hole blocking from expired session")
+                else:
+                    logger.warning("[FOCUS] Could not disable leftover blocking: %s", result.message)
+            state_store.clear_focus_session()
+            logger.info("[FOCUS] Cleared expired focus session from DB")
+        else:
+            # Session still active — restore in-memory state and re-schedule break
+            current_focus_session.update(saved_focus)
+            job_id = f"focus_restored_{datetime.now().strftime('%H%M%S')}"
+            current_focus_session["job_id"] = job_id
+            remaining = (end_time - datetime.now()).total_seconds() / 60
+            scheduler.add_job(
+                deliver_focus_break,
+                trigger='date',
+                run_date=end_time,
+                args=[saved_focus["task"], saved_focus["break_duration"]],
+                id=job_id,
+                replace_existing=True,
+            )
+            logger.info("[FOCUS] Restored active focus session '%s' (%.0f min remaining, break at %s)",
+                        saved_focus["task"], remaining, end_time.strftime('%H:%M'))
 
     scheduler.start()
     logger.info(f"[SCHEDULER] Started ({reloaded} reminders reloaded from DB)")
