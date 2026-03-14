@@ -1,8 +1,7 @@
 """
-Brain Gateway Orchestrator v6 - Hybrid Architecture
-- Helios (Qwen3-32B) is the primary conversational assistant (Jessica)
-- Nemotron (8B) is the tool orchestrator (HA, RAG, reminders, update_data)
-- Flow: User → Helios → (ask_orchestrator) → Nemotron → tools → result → Helios → User
+Brain Gateway Orchestrator v7 - Unified Architecture
+- Single model (Qwen3.5-27B on Helios) handles both conversation and tools
+- Flow: User → Orchestrator → Model (conversation + tools) → User
 - ChromaDB RAG for personal context
 - Home Assistant integration (auto-discovery!)
 
@@ -57,20 +56,11 @@ from focus_manager import deliver_focus_break
 from google_calendar import get_calendar_client
 
 # Model lifecycle management
-from helios_manager import check_helios_health, check_helios_idle, start_helios
-
-# Cloud brain + local agent
-from local_agent import LocalAgent
-from model_manager import check_model_health, check_model_idle, start_model_server
-
-# Nemotron agentic loop (v6 hybrid)
-from nemotron_loop import _run_nemotron_tool_loop, clean_response, parse_tool_calls_from_content
+from model_manager import check_model_health, start_model_server
 from pihole_client import get_pihole_client
 
 # Prompts, RAG, helpers
 from prompt_builder import (
-    get_helios_system_prompt,
-    get_orchestrator_system_prompt,
     get_unified_system_prompt,
     is_greeting,
     last_user_text,
@@ -80,23 +70,17 @@ from shared import (
     CALENDAR_POLL_INTERVAL,
     FALLBACK_MODEL_NAME,
     FALLBACK_MODEL_URL,
-    HELIOS_MODEL,
-    HELIOS_URL,
     MODEL_NAME,
     MODEL_URL,
     MORNING_BRIEFING_ENABLED,
     MORNING_BRIEFING_TIME,
-    NEMOTRON_MODEL,
-    NEMOTRON_URL,
-    collection,
     current_focus_session,
     ha_client,
-    profile,
     scheduler,
 )
 
-# Tool definitions (schemas for Nemotron, Helios, and unified mode)
-from tool_definitions import HELIOS_TOOLS, get_all_tools
+# Tool definitions (schemas for unified mode)
+from tool_definitions import get_all_tools
 
 # Tool execution dispatcher
 from tool_handlers import deliver_reminder_job
@@ -189,10 +173,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# LLM backends (initialized in startup_event after _http is ready)
-conversation_backend = None
-orchestrator_backend = None
-
 # Cloud brain (initialized in startup_event)
 cloud_brain: Optional[CloudBrain] = None
 
@@ -204,7 +184,7 @@ _http: httpx.AsyncClient = None
 # FASTAPI APP
 # =============================================================================
 
-app = FastAPI(title="Brain Gateway", version="6.0")
+app = FastAPI(title="Brain Gateway", version="7.0")
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3001").split(",")
 app.add_middleware(
@@ -269,16 +249,10 @@ def _resolve_backend(url: str, model: str):
     """Pick the backend whose URL matches the call."""
     from llm_backend import LLMConfig, OpenAICompatibleBackend
 
-    # Check unified mode backends first
     if shared.primary_backend and url == shared.primary_backend.config.url:
         return shared.primary_backend
     if shared.fallback_backend and url == shared.fallback_backend.config.url:
         return shared.fallback_backend
-    # v6 hybrid backends
-    if conversation_backend and url == conversation_backend.config.url:
-        return conversation_backend
-    if orchestrator_backend and url == orchestrator_backend.config.url:
-        return orchestrator_backend
 
     # Fallback: create a one-off OpenAI-compatible backend
     logger.warning(f"[LLM] No configured backend for {url}, using OpenAI-compatible fallback")
@@ -294,7 +268,7 @@ def _resolve_backend(url: str, model: str):
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
     """
-    Main chat endpoint - Hybrid Architecture v6.
+    Main chat endpoint - Unified Architecture v7.
 
     Delegates to CloudBrain for the full chat flow.
     """
@@ -329,7 +303,7 @@ async def shutdown_event():
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
-    global _http, conversation_backend, orchestrator_backend, cloud_brain
+    global _http, cloud_brain
     _http = httpx.AsyncClient(
         timeout=httpx.Timeout(60, connect=10),
         limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
@@ -343,8 +317,6 @@ async def startup_event():
     # Initialize LLM backends
     shared._http = _http  # ensure shared module has the http client too
     shared.init_backends(_http)
-    conversation_backend = shared.conversation_backend
-    orchestrator_backend = shared.orchestrator_backend
 
     # Load HA entities at startup
     print("[orchestrator] Loading Home Assistant entities...")
@@ -360,35 +332,13 @@ async def startup_event():
     else:
         logger.info("[orchestrator] Google Calendar not configured — tools disabled (run google_setup.py)")
 
-    # Initialize LocalAgent + CloudBrain
-    local_agent = LocalAgent(
-        rag_context_fn=rag_context,
-        run_tool_loop_fn=_run_nemotron_tool_loop,
-        get_nemotron_system_prompt_fn=get_orchestrator_system_prompt,
-        ha_client=ha_client,
-        collection=collection,
-        scheduler=scheduler,
-        profile=profile,
-    )
+    # Initialize CloudBrain (v7 unified)
     cloud_brain = CloudBrain(
-        local_agent=local_agent,
         call_model_fn=call_model,
-        stream_final_response_fn=None,  # CloudBrain uses its own _stream_text()
-        get_helios_system_prompt_fn=get_helios_system_prompt,
-        get_orchestrator_system_prompt_fn=get_orchestrator_system_prompt,
-        check_helios_health_fn=check_helios_health,
-        start_helios_fn=start_helios,
         try_fast_path_fn=try_fast_path,
         is_greeting_fn=is_greeting,
         last_user_text_fn=last_user_text,
-        clean_response_fn=clean_response,
-        parse_tool_calls_fn=parse_tool_calls_from_content,
-        helios_tools=HELIOS_TOOLS,
-        helios_url=HELIOS_URL,
-        helios_model=HELIOS_MODEL,
-        nemotron_url=NEMOTRON_URL,
-        nemotron_model=NEMOTRON_MODEL,
-        # v7 unified mode
+        rag_search_fn=rag_context,
         get_unified_system_prompt_fn=get_unified_system_prompt,
         get_all_tools_fn=get_all_tools,
         check_model_health_fn=check_model_health,
@@ -399,9 +349,7 @@ async def startup_event():
         fallback_model_url=FALLBACK_MODEL_URL,
         fallback_model_name=FALLBACK_MODEL_NAME,
     )
-    cloud_brain.on_helios_request = lambda: setattr(shared, "_last_helios_request", time.time())
-    arch_mode = "unified_v7" if shared.UNIFIED_MODE else "hybrid_v6"
-    logger.info("[orchestrator] CloudBrain + LocalAgent initialized (mode=%s)", arch_mode)
+    logger.info("[orchestrator] CloudBrain initialized (mode=unified_v7)")
 
     # Reload pending reminders from DB and re-schedule
     pending = state_store.get_pending_reminders()
@@ -497,18 +445,6 @@ async def startup_event():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
-
-    # Schedule model server idle check (auto-shutdown to save power)
-    idle_check_fn = check_model_idle if shared.UNIFIED_MODE else check_helios_idle
-    scheduler.add_job(
-        idle_check_fn,
-        trigger="interval",
-        minutes=5,
-        id="model_idle_check",
-        name="Model idle check",
-        replace_existing=True,
-    )
-    logger.info("[SCHEDULER] Model idle check every 5 min")
 
 
 if __name__ == "__main__":

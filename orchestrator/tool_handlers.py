@@ -14,7 +14,6 @@ from data_manager import handle_update_data
 from focus_manager import tool_focus_status, tool_start_focus, tool_stop_focus
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
-from helios_manager import check_helios_health, start_helios
 from metrics import (
     CALENDAR_API_CALLS,
     CALENDAR_API_ERRORS,
@@ -31,6 +30,7 @@ from metrics import (
     WEB_SEARCH_LATENCY,
     WEB_SEARCH_RESULTS,
 )
+from model_manager import check_model_health, start_model_server
 from prompt_builder import rag_context
 from reminder_manager import (
     _announce_voice,
@@ -44,8 +44,8 @@ from reminder_manager import (
     remove_reminder,
 )
 from shared import (
-    HELIOS_MODEL,
-    HELIOS_URL,
+    MODEL_NAME,
+    MODEL_URL,
     ha_client,
     scheduler,
 )
@@ -70,9 +70,7 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         elif tool_name == "search_memory":
             return tool_search_memory(arguments.get("query", ""))
         elif tool_name == "ask_expert":
-            if shared.UNIFIED_MODE:
-                return "ask_expert is not available in unified mode — the primary model handles all queries directly."
-            return await tool_ask_expert(arguments.get("question", ""), arguments.get("context", ""))
+            return "ask_expert is not available — the primary model handles all queries directly."
         elif tool_name == "update_data":
             return tool_update_data(arguments)
         elif tool_name == "set_reminder":
@@ -377,10 +375,10 @@ async def tool_ask_expert(question: str, context: str = "") -> str:
         return "No question provided"
 
     logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
-    shared._last_helios_request = time.time()
+    # Track model request for monitoring
 
-    if not await check_helios_health():
-        started = await start_helios()
+    if not await check_model_health():
+        started = await start_model_server()
         if not started:
             return "Expert model is offline and could not be started. Please try again later or start Helios manually."
 
@@ -395,8 +393,8 @@ Provide detailed, thorough answers. Be precise and accurate."""
 
     try:
         response = await call_model(
-            HELIOS_URL,
-            HELIOS_MODEL,
+            MODEL_URL,
+            MODEL_NAME,
             messages,
             system=system_prompt,
             timeout=300,

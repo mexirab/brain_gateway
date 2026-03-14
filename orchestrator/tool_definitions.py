@@ -1,7 +1,7 @@
 """
 Tool definitions for the Brain Gateway orchestrator.
 
-Contains all tool JSON schemas that Nemotron and Helios use,
+Contains all tool JSON schemas for the unified model,
 plus the dynamic HA tool builder.
 """
 
@@ -429,37 +429,6 @@ STATIC_TOOLS = [
         },
     },
 ]
-
-
-# Tool definition for Helios - just one simple tool
-HELIOS_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "ask_orchestrator",
-            "description": "Delegate an action to the smart home/personal assistant orchestrator. Use for: controlling devices (lights, fans, switches), searching personal notes, setting reminders, updating medications/projects, searching the web for real-world information, or checking financial status (budget, spending, XP, side quests).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Natural language command (e.g., 'turn off bedroom lights', 'what are my morning meds', 'remind me to call mom in 30 minutes', 'how is my budget looking')",
-                    }
-                },
-                "required": ["command"],
-            },
-        },
-    }
-]
-
-
-def get_orchestrator_tools() -> List[Dict[str, Any]]:
-    """Get tools for Nemotron orchestrator (v6 hybrid mode).
-
-    Excludes ask_expert since Helios handles expert queries in v6.
-    """
-    nemotron_tools = [t for t in STATIC_TOOLS if t["function"]["name"] != "ask_expert"]
-    return [get_ha_tool_definition()] + nemotron_tools
 
 
 def get_all_tools() -> List[Dict[str, Any]]:

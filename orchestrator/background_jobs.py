@@ -26,13 +26,8 @@ from metrics import (
 from reminder_manager import _announce_voice, list_pending_reminders
 from shared import TIMEZONE, profile
 
-# v7 unified mode: use primary model; v6 hybrid: use Nemotron
-if shared.UNIFIED_MODE:
-    _LLM_URL = shared.MODEL_URL
-    _LLM_MODEL = shared.MODEL_NAME
-else:
-    _LLM_URL = shared.NEMOTRON_URL
-    _LLM_MODEL = shared.NEMOTRON_MODEL
+_LLM_URL = shared.MODEL_URL
+_LLM_MODEL = shared.MODEL_NAME
 
 from travel_time import get_travel_time
 

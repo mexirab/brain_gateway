@@ -15,11 +15,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 import shared
 from focus_manager import tool_start_focus, tool_stop_focus
 from google_calendar import get_calendar_client
-from helios_manager import check_helios_health
 from metrics import (
     FALLBACK_ONLINE,
     FOCUS_ACTIVE,
-    HELIOS_IDLE_SECONDS,
     HELIOS_ONLINE,
     REMINDERS_PENDING,
     TEMPERATURE_DELTA,
@@ -46,15 +44,10 @@ from shared import (
     FOCUS_AUDIO_PLAYER,
     HA_TOKEN,
     HA_URL,
-    HELIOS_MODEL,
-    HELIOS_URL,
     MODEL_NAME,
     MODEL_URL,
     MORNING_BRIEFING_ENABLED,
     MORNING_BRIEFING_TIME,
-    NEMOTRON_MODEL,
-    NEMOTRON_URL,
-    UNIFIED_MODE,
     collection,
     current_focus_session,
     ha_client,
@@ -75,19 +68,10 @@ async def health(req: Request):
     api_token = os.environ.get("API_TOKEN", "")
     auth = req.headers.get("authorization", "")
     if auth != f"Bearer {api_token}":
-        version = "7.0" if UNIFIED_MODE else "6.2"
-        arch = "unified" if UNIFIED_MODE else "hybrid"
-        return {"ok": True, "version": version, "architecture": arch}
+        return {"ok": True, "version": "7.0", "architecture": "unified"}
 
     # Full health details for authenticated requests
     scheduled_jobs = len(scheduler.get_jobs())
-
-    idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
-    if shared._last_helios_request > 0:
-        idle_time = int(time.time() - shared._last_helios_request)
-        idle_info = f"{idle_time}s (timeout: {idle_timeout}s)"
-    else:
-        idle_info = "no requests yet"
 
     # Shared health fields (calendar, RAG, HA, scheduler, focus, endel)
     cal_client = get_calendar_client()
@@ -127,68 +111,29 @@ async def health(req: Request):
         },
     }
 
-    if UNIFIED_MODE:
-        # v7 unified architecture
-        from tool_definitions import get_all_tools  # late import: avoids circular import at module load
+    from tool_definitions import get_all_tools  # late import: avoids circular import at module load
 
-        primary_online = await check_model_health()
+    primary_online = await check_model_health()
 
-        fallback_online = False
-        try:
-            resp = await shared._http.get(f"{FALLBACK_MODEL_URL}/models", timeout=3.0)
-            fallback_online = resp.status_code == 200
-        except Exception as e:
-            logger.debug("Fallback model health check failed: %s", e)
-
-        tool_names = [t["function"]["name"] for t in get_all_tools()]
-
-        return {
-            "ok": True,
-            "version": "7.0",
-            "architecture": "unified",
-            "flow": "User → Orchestrator → Brain (conversation + tools) → User",
-            "primary": f"{MODEL_URL} ({MODEL_NAME})",
-            "primary_status": "online" if primary_online else "offline (auto-starts on demand)",
-            "fallback": f"{FALLBACK_MODEL_URL} ({FALLBACK_MODEL_NAME})",
-            "fallback_status": "online" if fallback_online else "offline",
-            "model_idle": idle_info,
-            "tools": tool_names,
-            **common_fields,
-        }
-
-    # v6.2 hybrid architecture
-    helios_online = await check_helios_health()
-
-    nemotron_online = False
+    fallback_online = False
     try:
-        resp = await shared._http.get(f"{NEMOTRON_URL}/models", timeout=3.0)
-        nemotron_online = resp.status_code == 200
-    except Exception:
-        pass
+        resp = await shared._http.get(f"{FALLBACK_MODEL_URL}/models", timeout=3.0)
+        fallback_online = resp.status_code == 200
+    except Exception as e:
+        logger.debug("Fallback model health check failed: %s", e)
+
+    tool_names = [t["function"]["name"] for t in get_all_tools()]
 
     return {
         "ok": True,
-        "version": "6.2",
-        "architecture": "hybrid",
-        "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
-        "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
-        "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
-        "nemotron_status": "online" if nemotron_online else "offline",
-        "helios_idle": idle_info,
-        "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
-        "helios_tools": ["ask_orchestrator"],
-        "nemotron_tools": [
-            "home_assistant",
-            "search_memory",
-            "update_data",
-            "set_reminder",
-            "cancel_reminder",
-            "start_focus",
-            "stop_focus",
-            "focus_status",
-            "check_calendar",
-            "create_calendar_event",
-        ],
+        "version": "7.0",
+        "architecture": "unified",
+        "flow": "User → Orchestrator → Brain (conversation + tools) → User",
+        "primary": f"{MODEL_URL} ({MODEL_NAME})",
+        "primary_status": "online" if primary_online else "offline (auto-starts on demand)",
+        "fallback": f"{FALLBACK_MODEL_URL} ({FALLBACK_MODEL_NAME})",
+        "fallback_status": "online" if fallback_online else "offline",
+        "tools": tool_names,
         **common_fields,
     }
 
@@ -198,20 +143,15 @@ async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     from starlette.responses import Response
 
-    if UNIFIED_MODE:
-        HELIOS_ONLINE.set(1 if await check_model_health() else 0)
-        # Scrape fallback model health
-        try:
-            resp = await shared._http.get(f"{FALLBACK_MODEL_URL}/models", timeout=3.0)
-            FALLBACK_ONLINE.set(1 if resp.status_code == 200 else 0)
-        except Exception:
-            FALLBACK_ONLINE.set(0)
-    else:
-        HELIOS_ONLINE.set(1 if await check_helios_health() else 0)
+    HELIOS_ONLINE.set(1 if await check_model_health() else 0)
+    # Scrape fallback model health
+    try:
+        resp = await shared._http.get(f"{FALLBACK_MODEL_URL}/models", timeout=3.0)
+        FALLBACK_ONLINE.set(1 if resp.status_code == 200 else 0)
+    except Exception:
+        FALLBACK_ONLINE.set(0)
     FOCUS_ACTIVE.set(1 if current_focus_session["active"] else 0)
     REMINDERS_PENDING.set(len(list_pending_reminders()))
-    if shared._last_helios_request > 0:
-        HELIOS_IDLE_SECONDS.set(time.time() - shared._last_helios_request)
 
     # Scrape temperature sensors for Prometheus
     try:

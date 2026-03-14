@@ -191,43 +191,28 @@ async def _check_temperature() -> str:
 
 async def _check_system_health() -> str:
     """Check overall system health: models, scheduler, entities."""
-    from helios_manager import check_helios_health
-
     lines = ["System Health Report:"]
 
-    if shared.UNIFIED_MODE:
-        # v7 unified: single primary model + optional fallback
+    # Primary model
+    try:
+        resp = await shared._http.get(f"{shared.MODEL_URL}/models", timeout=5)
+        lines.append(
+            f"  Primary model ({shared.MODEL_NAME}): "
+            f"{'online' if resp.status_code == 200 else f'error ({resp.status_code})'}"
+        )
+    except Exception:
+        lines.append(f"  Primary model ({shared.MODEL_NAME}): offline")
+
+    # Fallback model
+    if shared.FALLBACK_MODEL_URL:
         try:
-            resp = await shared._http.get(f"{shared.MODEL_URL}/models", timeout=5)
+            resp = await shared._http.get(f"{shared.FALLBACK_MODEL_URL}/models", timeout=5)
             lines.append(
-                f"  Primary model ({shared.MODEL_NAME}): "
+                f"  Fallback model ({shared.FALLBACK_MODEL_NAME}): "
                 f"{'online' if resp.status_code == 200 else f'error ({resp.status_code})'}"
             )
         except Exception:
-            lines.append(f"  Primary model ({shared.MODEL_NAME}): offline")
-
-        if shared.FALLBACK_MODEL_URL:
-            try:
-                resp = await shared._http.get(f"{shared.FALLBACK_MODEL_URL}/models", timeout=5)
-                lines.append(
-                    f"  Fallback model ({shared.FALLBACK_MODEL_NAME}): "
-                    f"{'online' if resp.status_code == 200 else f'error ({resp.status_code})'}"
-                )
-            except Exception:
-                lines.append(f"  Fallback model ({shared.FALLBACK_MODEL_NAME}): offline")
-    else:
-        # v6 hybrid: separate Nemotron + Helios
-        try:
-            resp = await shared._http.get(f"{shared.NEMOTRON_URL}/models", timeout=5)
-            lines.append(f"  Nemotron: {'online' if resp.status_code == 200 else f'error ({resp.status_code})'}")
-        except Exception:
-            lines.append("  Nemotron: offline")
-
-        try:
-            helios_ok = await check_helios_health()
-            lines.append(f"  Helios: {'online' if helios_ok else 'offline (auto-starts on demand)'}")
-        except Exception:
-            lines.append("  Helios: offline")
+            lines.append(f"  Fallback model ({shared.FALLBACK_MODEL_NAME}): offline")
 
     # HA entities
     entity_count = sum(

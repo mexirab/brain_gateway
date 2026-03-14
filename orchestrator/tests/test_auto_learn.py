@@ -585,8 +585,8 @@ class TestRunAutoLearn:
             mock.AUTO_LEARN_MAX_FACTS = 5
             mock.AUTO_LEARN_DEDUP_THRESHOLD = 0.85
             mock.AUTO_LEARN_ENCRYPTION_KEY = ""
-            mock.NEMOTRON_URL = "http://fake:8001/v1"
-            mock.NEMOTRON_MODEL = "test-model"
+            mock.MODEL_URL = "http://fake:8001/v1"
+            mock.MODEL_NAME = "test-model"
 
             # Mock embedding model
             import numpy as np

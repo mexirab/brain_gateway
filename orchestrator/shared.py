@@ -34,28 +34,15 @@ profile = get_profile()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Architecture mode
+# Model endpoints (v7 unified)
 # ---------------------------------------------------------------------------
-UNIFIED_MODE = os.environ.get("UNIFIED_MODE", "false").lower() == "true"
-
-# ---------------------------------------------------------------------------
-# Model endpoints (v7 unified — with v6 backward compat)
-# ---------------------------------------------------------------------------
-# Primary model (conversation + tools in unified mode)
-MODEL_URL = os.environ.get("MODEL_URL", os.environ.get("HELIOS_URL", "http://10.0.0.195:8080/v1"))
-MODEL_NAME = os.environ.get("MODEL_NAME", os.environ.get("HELIOS_MODEL", "Qwen3.5-27B"))
+# Primary model (conversation + tools)
+MODEL_URL = os.environ.get("MODEL_URL", "http://10.0.0.195:8080/v1")
+MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen3.5-27B")
 
 # Fallback model (used when primary is unavailable)
-FALLBACK_MODEL_URL = os.environ.get("FALLBACK_MODEL_URL", os.environ.get("NEMOTRON_URL", "http://10.0.0.58:8001/v1"))
-FALLBACK_MODEL_NAME = os.environ.get(
-    "FALLBACK_MODEL_NAME", os.environ.get("NEMOTRON_MODEL", "nvidia/Nemotron-Orchestrator-8B")
-)
-
-# Legacy aliases (backward compat for v6 hybrid mode and existing code)
-NEMOTRON_URL = os.environ.get("NEMOTRON_URL", FALLBACK_MODEL_URL)
-NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", FALLBACK_MODEL_NAME)
-HELIOS_URL = os.environ.get("HELIOS_URL", MODEL_URL)
-HELIOS_MODEL = os.environ.get("HELIOS_MODEL", MODEL_NAME)
+FALLBACK_MODEL_URL = os.environ.get("FALLBACK_MODEL_URL", "http://10.0.0.58:8001/v1")
+FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "nvidia/Nemotron-Orchestrator-8B")
 
 # ---------------------------------------------------------------------------
 # Embedding model (configurable)
@@ -65,9 +52,6 @@ EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "nomic-ai/nomic-embed-t
 # ---------------------------------------------------------------------------
 # LLM Backend instances (initialized in startup_event after _http is ready)
 # ---------------------------------------------------------------------------
-conversation_backend: Optional[LLMBackend] = None
-orchestrator_backend: Optional[LLMBackend] = None
-# Unified mode backends
 primary_backend: Optional[LLMBackend] = None
 fallback_backend: Optional[LLMBackend] = None
 
@@ -84,7 +68,7 @@ def init_backends(http_client: httpx.AsyncClient):
     Priority: user_profile.yaml llm/tts section > env vars > defaults.
     Called from startup_event after _http is initialized.
     """
-    global conversation_backend, orchestrator_backend, primary_backend, fallback_backend, tts_backend
+    global primary_backend, fallback_backend, tts_backend
 
     # Load profile YAML for llm/tts config sections
     yaml_data = {}
@@ -102,74 +86,33 @@ def init_backends(http_client: httpx.AsyncClient):
 
     llm_cfg = yaml_data.get("llm", {})
 
-    if UNIFIED_MODE:
-        # --- v7 unified mode: single primary + optional fallback ---
-        # Check for new 'model' key first, fall back to 'conversation' for compat
-        model_cfg = llm_cfg.get("model", llm_cfg.get("conversation", {}))
-        fb_cfg = llm_cfg.get("fallback", llm_cfg.get("orchestrator", {}))
+    # --- v7 unified mode: single primary + optional fallback ---
+    model_cfg = llm_cfg.get("model", llm_cfg.get("conversation", {}))
+    fb_cfg = llm_cfg.get("fallback", llm_cfg.get("orchestrator", {}))
 
-        if "conversation" in llm_cfg and "model" not in llm_cfg:
-            logger.warning(
-                "[LLM] Deprecated: 'llm.conversation' in user_profile.yaml — "
-                "use 'llm.model' instead (see user_profile.example.yaml)"
-            )
+    primary_config = LLMConfig(
+        backend=model_cfg.get("backend", "openai_compatible"),
+        url=model_cfg.get("url", MODEL_URL),
+        model=model_cfg.get("model", MODEL_NAME),
+        api_key=_resolve_api_key(model_cfg.get("api_key", "")),
+    )
+    primary_backend = create_backend(primary_config, http_client)
 
-        primary_config = LLMConfig(
-            backend=model_cfg.get("backend", "openai_compatible"),
-            url=model_cfg.get("url", MODEL_URL),
-            model=model_cfg.get("model", MODEL_NAME),
-            api_key=_resolve_api_key(model_cfg.get("api_key", "")),
+    logger.info("[LLM] Primary: %s -> %s (%s)", primary_config.backend, primary_config.url, primary_config.model)
+
+    # Optional fallback
+    fb_url = fb_cfg.get("url", FALLBACK_MODEL_URL)
+    if fb_url:
+        fb_config = LLMConfig(
+            backend=fb_cfg.get("backend", "openai_compatible"),
+            url=fb_url,
+            model=fb_cfg.get("model", FALLBACK_MODEL_NAME),
+            api_key=_resolve_api_key(fb_cfg.get("api_key", "")),
         )
-        primary_backend = create_backend(primary_config, http_client)
-
-        # Also set conversation_backend/orchestrator_backend for backward compat
-        conversation_backend = primary_backend
-        orchestrator_backend = primary_backend
-
-        logger.info(
-            "[LLM] Unified mode: %s -> %s (%s)", primary_config.backend, primary_config.url, primary_config.model
-        )
-
-        # Optional fallback
-        fb_url = fb_cfg.get("url", FALLBACK_MODEL_URL)
-        if fb_url:
-            fb_config = LLMConfig(
-                backend=fb_cfg.get("backend", "openai_compatible"),
-                url=fb_url,
-                model=fb_cfg.get("model", FALLBACK_MODEL_NAME),
-                api_key=_resolve_api_key(fb_cfg.get("api_key", "")),
-            )
-            fallback_backend = create_backend(fb_config, http_client)
-            logger.info("[LLM] Fallback: %s -> %s (%s)", fb_config.backend, fb_config.url, fb_config.model)
-        else:
-            logger.info("[LLM] No fallback model configured")
+        fallback_backend = create_backend(fb_config, http_client)
+        logger.info("[LLM] Fallback: %s -> %s (%s)", fb_config.backend, fb_config.url, fb_config.model)
     else:
-        # --- v6 hybrid mode: separate conversation + orchestrator ---
-        conv_cfg = llm_cfg.get("conversation", {})
-        orch_cfg = llm_cfg.get("orchestrator", {})
-
-        conv_config = LLMConfig(
-            backend=conv_cfg.get("backend", "openai_compatible"),
-            url=conv_cfg.get("url", HELIOS_URL),
-            model=conv_cfg.get("model", HELIOS_MODEL),
-            api_key=_resolve_api_key(conv_cfg.get("api_key", "")),
-        )
-        orch_config = LLMConfig(
-            backend=orch_cfg.get("backend", "openai_compatible"),
-            url=orch_cfg.get("url", NEMOTRON_URL),
-            model=orch_cfg.get("model", NEMOTRON_MODEL),
-            api_key=_resolve_api_key(orch_cfg.get("api_key", "")),
-        )
-
-        conversation_backend = create_backend(conv_config, http_client)
-        orchestrator_backend = create_backend(orch_config, http_client)
-
-        logger.info(
-            "[LLM] Conversation backend: %s -> %s (%s)", conv_config.backend, conv_config.url, conv_config.model
-        )
-        logger.info(
-            "[LLM] Orchestrator backend: %s -> %s (%s)", orch_config.backend, orch_config.url, orch_config.model
-        )
+        logger.info("[LLM] No fallback model configured")
 
     # --- TTS backend ---
     TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
@@ -237,11 +180,6 @@ _http: Optional[httpx.AsyncClient] = None
 _ha_tool_cache: Optional[Dict[str, Any]] = None
 _ha_tool_cache_time: float = 0.0
 _HA_TOOL_CACHE_TTL: float = 300.0  # 5 minutes
-
-# ---------------------------------------------------------------------------
-# Helios idle tracking
-# ---------------------------------------------------------------------------
-_last_helios_request: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Focus timer state (Pomodoro)
