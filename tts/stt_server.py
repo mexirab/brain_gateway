@@ -2,7 +2,7 @@
 Whisper STT FastAPI Server for Brain Gateway
 =============================================
 Provides speech-to-text endpoints for the Brain Gateway voice pipeline.
-Runs on Uranus GPU 1 (cuda:1) alongside TTS on GPU 0.
+Runs on Uranus GPU 0 (cuda:0) alongside TTS. GPU 1 reserved for ComfyUI.
 
 Endpoints:
 - POST /v1/audio/transcriptions  - OpenAI-compatible transcription
@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 
 # Configuration from environment
 MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
-DEVICE = os.getenv("WHISPER_DEVICE", "cuda:1")
+DEVICE = os.getenv("WHISPER_DEVICE", "cuda:0")
 HOST = os.getenv("WHISPER_HOST", "0.0.0.0")
 PORT = int(os.getenv("WHISPER_PORT", "8003"))
 
