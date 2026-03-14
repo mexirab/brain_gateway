@@ -178,15 +178,24 @@ def main():
     print(f"Embedding dimension: {model.get_sentence_embedding_dimension()}")
 
     if args.dry_run:
-        # Run test queries with CURRENT embeddings, then with new model
-        print("\n--- Test queries (current embeddings) ---")
-        current_results = run_test_queries(collection, model, TEST_QUERIES)
-        for qr in current_results:
-            print(f"\nQuery: {qr['query']}")
-            for r in qr["results"]:
-                print(f"  [{r['distance']:.4f}] {r['file_path']}: {r['preview'][:80]}...")
-        print("\nDry run complete. No changes made.")
+        print(f"\nDry run complete. {len(all_ids)} documents would be re-embedded.")
+        print("No changes made.")
         return
+
+    # Check if embedding dimension changed — need to recreate collection
+    new_dim = model.get_sentence_embedding_dimension()
+    try:
+        # Probe current collection dimension by querying with a dummy vector
+        test_embed = model.encode(["test"], normalize_embeddings=True).tolist()
+        collection.query(query_embeddings=test_embed, n_results=1)
+    except Exception as e:
+        if "dimension" in str(e).lower():
+            print(f"\nEmbedding dimension changed — recreating collection...")
+            client.delete_collection(name=args.collection)
+            collection = client.create_collection(name=args.collection)
+            print(f"Collection recreated (new dimension: {new_dim})")
+        else:
+            raise
 
     # Re-embed and upsert in batches
     print(f"\nRe-embedding {len(all_ids)} documents...")
