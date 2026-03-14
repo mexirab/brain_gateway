@@ -78,13 +78,16 @@ In **v7 unified mode**, all tools are called directly by the single model (no `a
 | web_search | Nemotron / unified | Search the web via SearXNG |
 | check_calendar / create_calendar_event | Nemotron / unified | Google Calendar read/write |
 | check_email / search_email | Nemotron / unified | Gmail inbox (read-only) |
+| brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | orchestrator/auto_learn.py | Auto-learn: extract facts from conversations, encrypt, store in RAG |
+| orchestrator/brain_dump_manager.py | Brain dump: capture, categorize, dedup, and route items to RAG or reminders |
 | orchestrator/tests/test_auto_learn.py | Auto-learn unit tests (sensitive data, privacy, JSON parsing, encryption) |
+| orchestrator/tests/test_brain_dump.py | Brain dump unit tests (routing, dedup, validation, error handling) |
 | orchestrator/unified_loop.py | v7 unified agentic loop: single model conversation + tool execution |
 | orchestrator/model_manager.py | Model health, SSH start/stop, fallback selection (replaces helios_manager for v7) |
 | orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
@@ -157,6 +160,24 @@ docker exec brain-orchestrator python scripts/reindex_rag.py
 | **TECHNICAL_REFERENCE.md** | API specs, schemas |
 | **ROADMAP.md** | Feature roadmap and what's done/planned |
 | **monitoring/README.md** | Monitoring setup |
+| **jess-features/README.md** | ADHD feature roadmap (F-001 through F-010) — build order, dependencies, per-feature implementation specs |
+
+## Jess Feature Specs
+
+ADHD-informed feature specs live in `jess-features/`. Each file is a self-contained implementation spec with interaction examples, tool schemas, modified files, TTS templates, env vars, and testing checklists. Read `jess-features/README.md` for the build order and dependency graph, then load individual feature files as needed:
+
+| File | Feature | Priority |
+|------|---------|----------|
+| `jess-features/F-001-brain-dump.md` | Voice-First Brain Dump | P0 |
+| `jess-features/F-002-time-nudges.md` | Proactive Time-Aware Nudges | P0 |
+| `jess-features/F-003-task-decomposition.md` | Task Decomposition Engine | P0 |
+| `jess-features/F-004-body-doubling.md` | Body Doubling & Focus Sessions | P1 |
+| `jess-features/F-005-progress-tracking.md` | Dopamine-Aware Progress Tracking | P1 |
+| `jess-features/F-006-routine-scaffolding.md` | Context-Aware Routine Scaffolding | P1 |
+| `jess-features/F-007-interruption-recovery.md` | Interruption Recovery | P1 |
+| `jess-features/F-008-selfcare-nudges.md` | Meal & Self-Care Nudges | P2 |
+| `jess-features/F-009-decision-simplifier.md` | Decision Simplifier | P2 |
+| `jess-features/F-010-ambient-awareness.md` | Ambient Awareness Mode | P2 |
 
 ## Notes
 

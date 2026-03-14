@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 import shared
+from brain_dump_manager import process_brain_dump
 from data_manager import handle_update_data
 from focus_manager import tool_focus_status, tool_start_focus, tool_stop_focus
 from google_calendar import get_calendar_client
@@ -115,6 +116,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_search_email(arguments.get("query", ""), arguments.get("max_results", 10))
         elif tool_name == "finance_status":
             return await tool_finance_status(arguments.get("include_details", False))
+        elif tool_name == "brain_dump":
+            return await tool_brain_dump(arguments.get("items", []))
         elif tool_name == "check_system":
             from system_diagnostics import check_system
 
@@ -620,3 +623,13 @@ async def tool_finance_status(include_details: bool = False) -> str:
     except Exception as e:
         logger.error(f"[FINANCE] Failed to get status: {e}")
         return f"Error checking finance status: {str(e)}"
+
+
+async def tool_brain_dump(items: list) -> str:
+    """Process a brain dump: categorize and route items."""
+    if not items:
+        return "Nothing to capture — no items provided."
+
+    logger.info("[BRAIN_DUMP] Processing %d items", len(items))
+    result = await process_brain_dump(items)
+    return result.summary

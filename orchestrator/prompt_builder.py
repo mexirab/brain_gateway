@@ -171,6 +171,7 @@ IMPORTANT RULES:
 - For greetings (hi, hello, good morning) - just respond warmly, NO tools
 - For general chat/questions - respond naturally using your knowledge + context above
 - For device control, reminders, or personal data updates - use ask_orchestrator
+- For brain dumps ("brain dump", "remember that", "capture", listing multiple things) - use ask_orchestrator
 - For real-world questions (events, news, weather, businesses, sports) - use ask_orchestrator to search the web
 - After getting a tool result, respond naturally to the user (don't just repeat the raw result)
 - NEVER mention internal tool names (ask_orchestrator, update_data, etc.) to the user. Just do the action or say you'll handle it.
@@ -205,12 +206,14 @@ AVAILABLE TOOLS:
 8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses)
 9. check_calendar - Check {user}'s Google Calendar for upcoming events
 10. create_calendar_event - Create a new event on {user}'s Google Calendar
+11. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
 - search_memory: For personal info (projects, routines, preferences, medications, schedules)
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
+- brain_dump: When user says "brain dump", "remember that", "capture", "note to self", or lists multiple things to remember/do at once
 - start_focus: When user wants to start a focus timer, pomodoro, or work session (with optional speaker/soundscape)
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
@@ -292,12 +295,14 @@ AVAILABLE TOOLS:
 13. search_email - Search {user}'s Gmail with specific criteria
 14. finance_status - Check Financial Quest Board status (budget, XP, streak, spending)
 15. check_system - Check Brain Gateway system status and logs
+16. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
 - search_memory: For personal info (projects, routines, preferences, medications, schedules)
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
+- brain_dump: When user says "brain dump", "remember that", "capture", "note to self", or lists multiple things to remember/do at once
 - start_focus: When user wants to start a focus timer, pomodoro, or work session
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
@@ -341,6 +346,7 @@ AVAILABLE TOOLS:
 8. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses). NOT for personal notes - use search_memory for that.
 9. check_calendar - Check {user}'s Google Calendar for upcoming events (days_ahead=7)
 10. create_calendar_event - Create a new event on {user}'s Google Calendar (title, start_time, duration_minutes, description, location)
+11. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
 
 YOUR JOB:
 - Understand the command and use the appropriate tool(s)
@@ -363,5 +369,7 @@ EXAMPLES:
 - "latest news" → web_search(query="latest news today", category="news", time_range="day")
 - "what's on my calendar this week" → check_calendar(days_ahead=7)
 - "add pickleball Thursday at 7pm" → create_calendar_event(title="Pickleball", start_time="2026-02-26T19:00:00")
+- "brain dump: call dentist, buy cat food, look into that tax thing" → brain_dump(items=[...])
+- "remember I like the Thai place on Westheimer" → brain_dump(items=[{{"text": "likes Thai place on Westheimer", "category": "preference"}}])
 
 Be direct and efficient. Execute the tool and summarize the result."""

@@ -23,6 +23,7 @@ TERMINAL_TOOLS = {
     "home_assistant",
     "update_data",
     "create_calendar_event",
+    "brain_dump",
 }
 
 

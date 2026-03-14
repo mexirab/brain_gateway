@@ -318,3 +318,33 @@ AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
     "Auto-learn extraction pipeline latency",
     buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0],
 )
+
+# -- Brain Dump ---------------------------------------------------------------
+BRAIN_DUMP_ITEMS_CAPTURED = Counter(
+    "bgw_brain_dump_items_captured_total",
+    "Brain dump items captured",
+    ["category"],
+)
+
+BRAIN_DUMP_ITEMS_ROUTED = Counter(
+    "bgw_brain_dump_items_routed_total",
+    "Brain dump items routed to destination",
+    ["destination"],  # rag, reminder
+)
+
+BRAIN_DUMP_RAG_LATENCY = Histogram(
+    "bgw_brain_dump_rag_duration_seconds",
+    "Brain dump RAG upsert latency (embedding + dedup + store)",
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
+)
+
+BRAIN_DUMP_DUPLICATES_SKIPPED = Counter(
+    "bgw_brain_dump_duplicates_skipped_total",
+    "Brain dump items skipped by dedup",
+)
+
+BRAIN_DUMP_ERRORS = Counter(
+    "bgw_brain_dump_errors_total",
+    "Brain dump processing errors",
+    ["operation"],  # route, rag_upsert
+)

@@ -370,6 +370,40 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "brain_dump",
+            "description": "Capture one or more thoughts, tasks, ideas, or reminders from a brain dump. Automatically categorizes and routes each item. Use when the user says 'brain dump', 'remember', 'capture', 'note to self', or lists multiple things to remember.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string", "description": "The captured thought or task"},
+                                "category": {
+                                    "type": "string",
+                                    "enum": ["task", "reminder", "idea", "errand", "preference", "research"],
+                                    "description": "Category of the item",
+                                },
+                                "urgency": {
+                                    "type": "string",
+                                    "enum": ["now", "today", "soon", "someday"],
+                                    "description": "How urgent the item is",
+                                },
+                            },
+                            "required": ["text", "category"],
+                        },
+                        "description": "Parsed items from the brain dump",
+                    }
+                },
+                "required": ["items"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_system",
             "description": "Check Brain Gateway system status, recent activity, and logs. Use when the user asks about system behavior like 'did my morning briefing run?', 'are my reminders working?', 'what happened with the calendar?', 'any temperature alerts?', 'is everything running?', 'any errors?'.",
             "parameters": {
