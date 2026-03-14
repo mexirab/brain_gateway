@@ -303,10 +303,10 @@ class TestReminderRouting:
         mock_trigger = datetime.now() + timedelta(minutes=5)
 
         with (
-            patch("brain_dump_manager.add_reminder") as mock_add,
-            patch("brain_dump_manager.parse_time_expression", return_value=(mock_trigger, None)),
-            patch("brain_dump_manager.deliver_reminder_job"),
-            patch("brain_dump_manager.scheduler") as mock_sched,
+            patch("reminder_manager.add_reminder") as mock_add,
+            patch("reminder_manager.parse_time_expression", return_value=(mock_trigger, None)),
+            patch("tool_handlers.deliver_reminder_job"),
+            patch("shared.scheduler") as mock_sched,
         ):
             item = bdm.CapturedItem(raw_text="call dentist", category="reminder", urgency="now")
             confirmation = await bdm._route_to_reminder(item)
