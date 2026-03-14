@@ -283,10 +283,13 @@ async def chat_completions(req: Request):
         len(raw_msgs),
         [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
     )
-    # Debug: log last 500 chars of the single system message to see where user query is
+    # Debug: log structure of HA's single system message
     if len(raw_msgs) == 1 and raw_msgs[0].get("role") == "system":
         content = str(raw_msgs[0].get("content", ""))
-        logger.info("[CHAT] Single system msg tail: ...%s", content[-500:])
+        logger.info("[CHAT] System msg head: %s", content[:500])
+        logger.info("[CHAT] System msg tail: ...%s", content[-500:])
+    # Debug: log all body keys (maybe user query is outside messages)
+    logger.info("[CHAT] Body keys: %s", list(body.keys()))
     chat_req = ChatRequest(**body)
 
     return await cloud_brain.chat(
