@@ -243,7 +243,9 @@ services:
       - gateway-net
 
   wyoming-whisper:
-    image: rhasspy/wyoming-whisper
+    build:
+      context: ./tts
+      dockerfile: Dockerfile.wyoming-whisper
     container_name: wyoming-whisper
     restart: unless-stopped
     logging: *default-logging
@@ -251,9 +253,10 @@ services:
       - "${WYOMING_WHISPER_PORT:-10300}:10300"
     environment:
       - TZ=${TZ:-America/Chicago}
-    command: --model base-int8 --language en --uri tcp://0.0.0.0:10300
-    volumes:
-      - wyoming-whisper-data:/data
+    command: >-
+      --uri tcp://0.0.0.0:10300
+      --stt-url http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_STT_PORT:-8003}
+      --language en
     networks:
       - gateway-net
 
@@ -316,7 +319,6 @@ volumes:
   brain-audio:
   pihole-etc:
   pihole-dnsmasq:
-  wyoming-whisper-data:
   finance-data:
   searxng-data:
 

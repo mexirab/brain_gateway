@@ -194,9 +194,8 @@ micro_wake_word:
 voice_assistant:
   id: va
   microphone: echo_mic
-  # Speaker kept so HA generates TTS and on_tts_start fires with URL.
-  # Amp is OFF so no sound from ATOM Echo — TTS redirected to all speakers via HA service.
-  speaker: echo_speaker
+  # No speaker configured — all TTS output goes to Google speakers via tts.speak.
+  # This avoids I2S bus contention (mic and speaker share one bus on ATOM Echo S3R).
   micro_wake_word: mww
   noise_suppression_level: 2
   auto_gain: 31dBFS
@@ -210,49 +209,21 @@ voice_assistant:
     - micro_wake_word.stop
 
   on_tts_start:
-    # TTS is about to stream — stop mWW to free the shared I2S bus
-    - lambda: id(tts_streaming) = true;
-    - micro_wake_word.stop
-
-  on_tts_end:
-    # TTS URL is available as 'x' — redirect to all house speakers
-    - lambda: id(tts_url) = x;
+    # Response text available as 'x' — redirect to Google speakers via tts.speak
     - homeassistant.service:
-        service: media_player.play_media
+        service: tts.speak
         data:
-          entity_id: ${tts_speaker}
-          media_content_id: !lambda 'return id(tts_url);'
-          media_content_type: music
-    # Wait for local speaker to START receiving the silent TTS stream,
-    # then wait for it to FINISH before restarting mWW (frees I2S bus)
-    - wait_until:
-        condition:
-          speaker.is_playing:
-        timeout: 5s
-    - wait_until:
-        - not:
-            speaker.is_playing:
-    - lambda: id(tts_streaming) = false;
+          entity_id: tts.jessica_tts
+          media_player_entity_id: ${tts_speaker}
+          message: !lambda 'return x;'
+
+  on_end:
+    # Pipeline ended — restart wake word detection
+    - delay: 300ms
     - lambda: id(va).set_use_wake_word(false);
     - micro_wake_word.start:
 
-  on_end:
-    # Pipeline ended — only restart mWW if TTS is NOT streaming
-    # (TTS stream arrives after on_end, so on_tts_end handles that case)
-    # Delay lets on_tts_start fire first to set the flag and free the I2S bus
-    - delay: 300ms
-    - if:
-        condition:
-          lambda: return !id(tts_streaming);
-        then:
-          - wait_until:
-              - not:
-                  speaker.is_playing:
-          - lambda: id(va).set_use_wake_word(false);
-          - micro_wake_word.start:
-
   on_error:
-    - lambda: id(tts_streaming) = false;
     - if:
         condition:
           and:
@@ -335,10 +306,3 @@ globals:
     type: bool
     restore_value: no
     initial_value: "true"
-  - id: tts_streaming
-    type: bool
-    restore_value: no
-    initial_value: "false"
-  - id: tts_url
-    type: std::string
-    restore_value: no
