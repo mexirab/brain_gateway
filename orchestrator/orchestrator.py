@@ -129,11 +129,15 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_BODY_SIZE:
-            return JSONResponse(
-                {"error": f"Request body too large (max {MAX_BODY_SIZE} bytes)"},
-                status_code=413,
-            )
+        if content_length:
+            try:
+                if int(content_length) > MAX_BODY_SIZE:
+                    return JSONResponse(
+                        {"error": f"Request body too large (max {MAX_BODY_SIZE} bytes)"},
+                        status_code=413,
+                    )
+            except ValueError:
+                return JSONResponse({"error": "Invalid Content-Length"}, status_code=400)
         return await call_next(request)
 
 
@@ -218,11 +222,8 @@ async def call_model(
 ) -> Dict[str, Any]:
     """Call an LLM endpoint via the appropriate backend.
 
-    Signature unchanged from v6. Backend selection is automatic based on
-    which role's URL matches. Falls back to OpenAI-compatible for unknown URLs.
-
-    Args:
-        tool_choice: "auto" for native tool calling (Helios), "none" for XML-style (Nemotron)
+    Backend selection is automatic based on which configured URL matches.
+    Falls back to OpenAI-compatible for unknown URLs.
     """
     backend = _resolve_backend(url, model)
     return await backend.chat_completion(
