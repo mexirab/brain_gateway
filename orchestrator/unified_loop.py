@@ -49,7 +49,8 @@ def parse_xml_tool_calls(content: str) -> List[Dict[str, Any]]:
     Returns tool_calls in OpenAI-compatible format.
     """
     tool_calls = []
-    pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
+    # Greedy match between tags to handle nested JSON objects like {"arguments": {"key": "val"}}
+    pattern = r"<tool_call>\s*(\{.*\})\s*</tool_call>"
     matches = re.findall(pattern, content, re.DOTALL)
 
     for i, match in enumerate(matches):
@@ -201,9 +202,11 @@ async def run_unified_tool_loop(
 
         # Build assistant message with tool_calls for the conversation
         assistant_msg = {"role": "assistant", "content": content or None}
-        # Include tool_calls in the message for models that expect it
+        # Only include tool_calls that will actually be executed (not skipped duplicates)
+        # to avoid dangling tool_calls with no matching tool result messages
         if message.get("tool_calls"):
-            assistant_msg["tool_calls"] = message["tool_calls"]
+            executed_ids = {tc.get("id") for tc in new_tool_calls}
+            assistant_msg["tool_calls"] = [tc for tc in message["tool_calls"] if tc.get("id") in executed_ids]
         messages.append(assistant_msg)
 
         tool_results = []

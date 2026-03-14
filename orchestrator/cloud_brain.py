@@ -292,8 +292,8 @@ class CloudBrain:
             REQUEST_ERRORS.labels(mode="unified_fallback", error_type="fallback_failed").inc()
             return JSONResponse({"error": "All models unavailable"}, status_code=503)
 
-        # Track activity and schedule learning even on fallback path
-        self._track_helios_request()
+        # Schedule learning on fallback path (but don't update primary idle tracker —
+        # the primary model didn't handle this request, so its idle timer shouldn't reset)
         self._schedule_auto_learn(messages)
 
         if stream:

@@ -35,7 +35,7 @@ _ALLOWED_CMD_PREFIXES = (
 
 
 # Shell metacharacters that indicate command chaining/injection
-_SHELL_METACHARACTERS = set(";|&$`")
+_SHELL_METACHARACTERS = set(";|&$`\n><()")
 
 
 def _validate_ssh_cmd(cmd: str, label: str) -> bool:
@@ -88,6 +88,7 @@ async def start_model_server() -> bool:
     if not _validate_ssh_cmd(start_cmd, "start"):
         return False
 
+    ssh = None
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
@@ -99,7 +100,6 @@ async def start_model_server() -> bool:
         )
         stdin, stdout, stderr = ssh.exec_command(start_cmd, timeout=30)
         exit_code = stdout.channel.recv_exit_status()
-        ssh.close()
 
         if exit_code != 0:
             error_msg = stderr.read().decode()
@@ -109,6 +109,9 @@ async def start_model_server() -> bool:
     except Exception as e:
         logger.error("[MODEL] SSH to model server failed: %s", e)
         return False
+    finally:
+        if ssh:
+            ssh.close()
 
     logger.info("[MODEL] Waiting for model server to load model...")
     for i in range(36):  # 36 * 5 seconds = 3 minutes
@@ -142,6 +145,7 @@ async def stop_model_server() -> bool:
     if not _validate_ssh_cmd(stop_cmd, "stop"):
         return False
 
+    ssh = None
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
@@ -153,7 +157,6 @@ async def stop_model_server() -> bool:
         )
         stdin, stdout, stderr = ssh.exec_command(stop_cmd, timeout=30)
         exit_code = stdout.channel.recv_exit_status()
-        ssh.close()
 
         if exit_code != 0:
             error_msg = stderr.read().decode()
@@ -165,6 +168,9 @@ async def stop_model_server() -> bool:
     except Exception as e:
         logger.error("[MODEL] SSH to model server failed: %s", e)
         return False
+    finally:
+        if ssh:
+            ssh.close()
 
 
 async def check_model_idle():
