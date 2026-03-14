@@ -60,7 +60,7 @@ HELIOS_MODEL = os.environ.get("HELIOS_MODEL", MODEL_NAME)
 # ---------------------------------------------------------------------------
 # Embedding model (configurable)
 # ---------------------------------------------------------------------------
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "nomic-ai/nomic-embed-text-v2-moe")
 
 # ---------------------------------------------------------------------------
 # LLM Backend instances (initialized in startup_event after _http is ready)

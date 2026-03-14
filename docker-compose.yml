@@ -85,7 +85,7 @@ services:
       - FALLBACK_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
       - FALLBACK_MODEL_NAME=${FALLBACK_MODEL_NAME:-Qwen3.5-9B}
       # Embedding model
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-ai/nomic-embed-text-v2-moe}
       # Legacy model endpoints (backward compat for v6 hybrid mode)
       - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
       - NEMOTRON_MODEL=${NEMOTRON_MODEL:-nvidia/Nemotron-Orchestrator-8B}

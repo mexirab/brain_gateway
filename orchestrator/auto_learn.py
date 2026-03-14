@@ -248,9 +248,12 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
     try:
         from orchestrator import call_model
 
+        # Use primary model in unified mode, fallback to Nemotron in hybrid mode
+        model_url = shared.MODEL_URL if shared.UNIFIED_MODE else shared.NEMOTRON_URL
+        model_name = shared.MODEL_NAME if shared.UNIFIED_MODE else shared.NEMOTRON_MODEL
         llm_resp = await call_model(
-            shared.NEMOTRON_URL,
-            shared.NEMOTRON_MODEL,
+            model_url,
+            model_name,
             messages=[{"role": "user", "content": prompt}],
             timeout=30,
         )
