@@ -76,7 +76,17 @@ services:
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
     environment:
-      # Model endpoints
+      # Architecture mode (true=unified v7, false=hybrid v6)
+      - UNIFIED_MODE=${UNIFIED_MODE:-false}
+      # Primary model (conversation + tools in unified mode)
+      - MODEL_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
+      - MODEL_NAME=${MODEL_NAME:-Qwen3.5-27B}
+      # Fallback model (used when primary is unavailable)
+      - FALLBACK_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
+      - FALLBACK_MODEL_NAME=${FALLBACK_MODEL_NAME:-Qwen3.5-9B}
+      # Embedding model
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      # Legacy model endpoints (backward compat for v6 hybrid mode)
       - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
       - NEMOTRON_MODEL=${NEMOTRON_MODEL:-nvidia/Nemotron-Orchestrator-8B}
       - HELIOS_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
