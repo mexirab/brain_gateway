@@ -134,6 +134,14 @@ services:
       - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
       # API authentication
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
+      # Auto-learn from conversations
+      - AUTO_LEARN_ENABLED=${AUTO_LEARN_ENABLED:-true}
+      - AUTO_LEARN_DELAY_MINUTES=${AUTO_LEARN_DELAY_MINUTES:-10}
+      - AUTO_LEARN_MAX_FACTS=${AUTO_LEARN_MAX_FACTS:-5}
+      - AUTO_LEARN_DEDUP_THRESHOLD=${AUTO_LEARN_DEDUP_THRESHOLD:-0.85}
+      - AUTO_LEARN_MARKDOWN=${AUTO_LEARN_MARKDOWN:-true}
+      - AUTO_LEARN_ENCRYPT=${AUTO_LEARN_ENCRYPT:-true}
+      - AUTO_LEARN_ENCRYPTION_KEY=${AUTO_LEARN_ENCRYPTION_KEY:-}
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
     networks:

@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -581,6 +582,62 @@ async def get_temperatures():
         "estimated_monthly_cooling_cost": monthly_cooling_cost,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto-Learn endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/memory/learned")
+async def list_learned_facts(category: Optional[str] = None, limit: int = 100):
+    """List auto-learned facts (decrypted)."""
+    from auto_learn import get_learned_facts
+
+    facts = get_learned_facts(category=category, limit=limit)
+    return JSONResponse({"count": len(facts), "facts": facts})
+
+
+@router.delete("/api/memory/learned/{doc_id}")
+async def delete_learned_fact_api(doc_id: str):
+    """Delete a single auto-learned fact."""
+    from auto_learn import delete_learned_fact
+
+    success = delete_learned_fact(doc_id)
+    if success:
+        return {"ok": True, "deleted": doc_id}
+    return JSONResponse({"ok": False, "error": "Fact not found or delete failed"}, status_code=404)
+
+
+@router.delete("/api/memory/learned")
+async def wipe_learned_facts(confirm: bool = False):
+    """Delete ALL auto-learned facts. Requires ?confirm=true."""
+    if not confirm:
+        return JSONResponse(
+            {"ok": False, "error": "Pass ?confirm=true to wipe all learned facts"},
+            status_code=400,
+        )
+    from auto_learn import delete_all_learned_facts
+
+    count = delete_all_learned_facts()
+    return {"ok": True, "deleted_count": count}
+
+
+@router.get("/api/memory/learned/stats")
+async def learned_facts_stats():
+    """Get auto-learn statistics."""
+    from auto_learn import get_learned_stats
+
+    return JSONResponse(get_learned_stats())
+
+
+@router.post("/api/memory/learned/toggle")
+async def toggle_auto_learn():
+    """Enable/disable auto-learn at runtime."""
+    shared.AUTO_LEARN_ENABLED = not shared.AUTO_LEARN_ENABLED
+    state = "enabled" if shared.AUTO_LEARN_ENABLED else "disabled"
+    logger.info("[AUTO_LEARN] Toggled to %s", state)
+    return {"ok": True, "auto_learn_enabled": shared.AUTO_LEARN_ENABLED}
 
 
 @router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])

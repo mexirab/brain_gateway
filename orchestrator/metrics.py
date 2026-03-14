@@ -285,3 +285,31 @@ BUILD_INFO = Info(
     "bgw_build",
     "Brain Gateway build information",
 )
+
+# -- Auto-Learn ---------------------------------------------------------------
+AUTO_LEARN_EXTRACTIONS_TOTAL = Counter(
+    "bgw_auto_learn_extractions_total",
+    "Auto-learn extraction jobs run",
+)
+
+AUTO_LEARN_FACTS_STORED = Counter(
+    "bgw_auto_learn_facts_stored_total",
+    "Facts stored by auto-learn",
+    ["category"],
+)
+
+AUTO_LEARN_DUPLICATES_SKIPPED = Counter(
+    "bgw_auto_learn_duplicates_skipped_total",
+    "Facts skipped by auto-learn dedup",
+)
+
+AUTO_LEARN_SENSITIVE_FILTERED = Counter(
+    "bgw_auto_learn_sensitive_filtered_total",
+    "Facts rejected by sensitive data filter",
+)
+
+AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
+    "bgw_auto_learn_extraction_duration_seconds",
+    "Auto-learn extraction pipeline latency",
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0],
+)

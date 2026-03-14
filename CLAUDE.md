@@ -67,6 +67,8 @@ User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
 
 | File | Purpose |
 |------|---------|
+| orchestrator/auto_learn.py | Auto-learn: extract facts from conversations, encrypt, store in RAG |
+| orchestrator/tests/test_auto_learn.py | Auto-learn unit tests (sensitive data, privacy, JSON parsing, encryption) |
 | orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HELIOS_TOOLS, HA tool builder) |
@@ -142,3 +144,25 @@ docker compose up -d --build --force-recreate frontend
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
 - Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
+
+## Auto-Learn Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| AUTO_LEARN_ENABLED | true | Enable/disable background fact extraction |
+| AUTO_LEARN_DELAY_MINUTES | 10 | Delay after conversation before extracting facts |
+| AUTO_LEARN_MAX_FACTS | 5 | Max facts extracted per conversation |
+| AUTO_LEARN_DEDUP_THRESHOLD | 0.85 | Cosine similarity threshold for deduplication |
+| AUTO_LEARN_MARKDOWN | false | Also append facts to a markdown file |
+| AUTO_LEARN_ENCRYPT | true | Encrypt stored facts at rest (Fernet) |
+| AUTO_LEARN_ENCRYPTION_KEY | (auto-generated) | Fernet key; auto-generated if empty |
+
+## Auto-Learn API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/memory/learned | List learned facts (decrypted), optional `?category=` and `?limit=` |
+| DELETE | /api/memory/learned/{doc_id} | Delete a single learned fact |
+| DELETE | /api/memory/learned?confirm=true | Wipe all learned facts |
+| GET | /api/memory/learned/stats | Auto-learn statistics (counts by category) |
+| POST | /api/memory/learned/toggle | Enable/disable auto-learn at runtime |

@@ -10,6 +10,7 @@ this becomes a separate cloud service that calls the local agent via
 HTTP/WebSocket.
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -18,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
+import shared
 from local_agent import LocalAgent
 from mode_router import get_mode_router
 
@@ -79,6 +81,8 @@ class CloudBrain:
         self._mode_router = get_mode_router()
         # Callback to update Helios idle tracker (set by orchestrator.py)
         self.on_helios_request = None
+        # Callback to schedule auto-learn (set by orchestrator.py)
+        self.on_conversation_update = None
 
     async def chat(
         self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
@@ -221,6 +225,7 @@ class CloudBrain:
         if not tool_calls:
             logger.info("[HYBRID] Helios responded directly (no orchestrator needed)")
             routing_info["helios_direct"] = True
+            self._schedule_auto_learn(messages)
             if stream:
                 return self._stream_text(self._clean_response(content), self._helios_model)
             if content:
@@ -302,6 +307,8 @@ class CloudBrain:
         final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         final_content = self._clean_response(final_content)
 
+        self._schedule_auto_learn(messages)
+
         if stream:
             return self._stream_text(final_content, self._helios_model)
 
@@ -311,6 +318,59 @@ class CloudBrain:
         return JSONResponse(final_resp)
 
     # --- Helpers ---
+
+    def _schedule_auto_learn(self, messages: List[Dict]):
+        """Cache conversation and schedule auto-learn extraction after inactivity timeout."""
+        if not shared.AUTO_LEARN_ENABLED:
+            return
+        try:
+            # Generate session key from first user message + date
+            first_user = ""
+            for m in messages:
+                if m.get("role") == "user":
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        first_user = content[:100]
+                    break
+            msg_count = sum(1 for m in messages if m.get("role") == "user")
+            session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}:{msg_count}".encode()).hexdigest()[:16]
+
+            # Cache in-memory (never to disk) — cap at 20 entries to prevent memory leaks
+            if len(shared._auto_learn_conversations) >= 20:
+                oldest = next(iter(shared._auto_learn_conversations))
+                shared._auto_learn_conversations.pop(oldest, None)
+            shared._auto_learn_conversations[session_key] = messages
+
+            # Schedule/reschedule extraction job
+            job_id = f"auto_learn_{session_key}"
+
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                shared.scheduler.remove_job(job_id)
+
+            from datetime import timedelta
+
+            run_at = datetime.now() + timedelta(minutes=shared.AUTO_LEARN_DELAY_MINUTES)
+            shared.scheduler.add_job(
+                self._run_auto_learn_job,
+                trigger="date",
+                run_date=run_at,
+                args=[session_key],
+                id=job_id,
+                replace_existing=True,
+            )
+        except Exception as e:
+            logger.warning("[AUTO_LEARN] Failed to schedule extraction: %s", e)
+
+    @staticmethod
+    async def _run_auto_learn_job(session_key: str):
+        """Scheduler callback: run auto-learn and clear conversation cache."""
+        from auto_learn import run_auto_learn
+
+        messages = shared._auto_learn_conversations.pop(session_key, None)
+        if messages:
+            await run_auto_learn(messages)
 
     def _track_helios_request(self):
         """Update Helios idle tracker."""

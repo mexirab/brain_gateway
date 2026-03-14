@@ -280,3 +280,17 @@ def _save_phone_calendar():
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 HOME_ADDRESS = os.environ.get("HOME_ADDRESS", profile.home_address)
 TRAVEL_TIME_BUFFER = int(os.environ.get("TRAVEL_TIME_BUFFER", "10"))  # extra minutes
+
+# ---------------------------------------------------------------------------
+# Auto-learn configuration
+# ---------------------------------------------------------------------------
+AUTO_LEARN_ENABLED = os.environ.get("AUTO_LEARN_ENABLED", "true").lower() == "true"
+AUTO_LEARN_DELAY_MINUTES = int(os.environ.get("AUTO_LEARN_DELAY_MINUTES", "10"))
+AUTO_LEARN_MAX_FACTS = int(os.environ.get("AUTO_LEARN_MAX_FACTS", "5"))
+AUTO_LEARN_DEDUP_THRESHOLD = float(os.environ.get("AUTO_LEARN_DEDUP_THRESHOLD", "0.85"))
+AUTO_LEARN_MARKDOWN = os.environ.get("AUTO_LEARN_MARKDOWN", "false").lower() == "true"
+AUTO_LEARN_ENCRYPT = os.environ.get("AUTO_LEARN_ENCRYPT", "true").lower() == "true"
+AUTO_LEARN_ENCRYPTION_KEY = os.environ.get("AUTO_LEARN_ENCRYPTION_KEY", "")
+
+# In-memory conversation buffer for auto-learn (never written to disk)
+_auto_learn_conversations: Dict[str, list] = {}
