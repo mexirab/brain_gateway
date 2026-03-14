@@ -276,6 +276,13 @@ async def chat_completions(req: Request):
     from schemas import ChatRequest
 
     body = await req.json()
+    # Debug: log incoming message roles/lengths to diagnose HA integration issues
+    raw_msgs = body.get("messages", [])
+    logger.info(
+        "[CHAT] Incoming %d messages: %s",
+        len(raw_msgs),
+        [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
+    )
     chat_req = ChatRequest(**body)
 
     return await cloud_brain.chat(
