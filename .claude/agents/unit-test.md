@@ -12,7 +12,7 @@ After code changes pass code review. Trigger with `/test` or as part of the post
 - **Config**: `orchestrator/pytest.ini`
 - **Tests dir**: `orchestrator/tests/`
 - **Fixtures**: `orchestrator/tests/conftest.py` (tmp_db, mode_router)
-- **Existing tests**: test_focus_manager, test_ha_validation, test_log_buffer, test_mode_router, test_nemotron_loop, test_state_store
+- **Existing tests**: test_focus_manager, test_ha_validation, test_log_buffer, test_mode_router, test_xml_parsing, test_state_store, test_auto_learn, test_brain_dump
 
 ## What to test
 

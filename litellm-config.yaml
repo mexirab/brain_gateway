@@ -1,43 +1,43 @@
 # /opt/jupiter/gateway_mvp/litellm-config.yaml
-# Nemotron-Orchestrator as DEFAULT, routes to Helios for heavy tasks
+# LiteLLM proxy routes Open WebUI requests to the primary model (Helios)
 #
 # Environment variables are passed through from docker-compose.yml:
-#   - NODE_SATURN_IP, NODE_HELIOS_IP
-#   - SERVICE_NEMOTRON_PORT, SERVICE_HELIOS_PORT
+#   - MODEL_API_BASE, FALLBACK_API_BASE
 #   - LITELLM_MASTER_KEY
 
 model_list:
   # ============================================
-  # NEMOTRON - Orchestrator (DEFAULT / FIRST HOP)
+  # PRIMARY - Qwen3.5-27B on Helios (RTX 5090)
   # ============================================
-  - model_name: brain-orchestrator
+  - model_name: brain-primary
     litellm_params:
-      model: openai/nvidia/Nemotron-Orchestrator-8B
-      api_base: os.environ/NEMOTRON_API_BASE
-      api_key: dummy
-      timeout: 120
-
-  # ============================================
-  # HELIOS - Heavy Reasoning (Qwen3-32B)
-  # ============================================
-  - model_name: helios-qwen3-32b
-    litellm_params:
-      model: openai/qwen3-32b
-      api_base: os.environ/HELIOS_API_BASE
+      model: openai/Qwen3.5-27B
+      api_base: os.environ/MODEL_API_BASE
       api_key: dummy
       timeout: 300
 
+  # ============================================
+  # FALLBACK - Saturn (when Helios is down)
+  # ============================================
+  - model_name: brain-fallback
+    litellm_params:
+      model: openai/Qwen3.5-9B
+      api_base: os.environ/FALLBACK_API_BASE
+      api_key: dummy
+      timeout: 120
+
+  # Alias for backward compatibility with Open WebUI
   - model_name: helios
     litellm_params:
-      model: openai/qwen3-32b
-      api_base: os.environ/HELIOS_API_BASE
+      model: openai/Qwen3.5-27B
+      api_base: os.environ/MODEL_API_BASE
       api_key: dummy
       timeout: 300
 
 router_settings:
   routing_strategy: simple-shuffle
   fallbacks:
-    - brain-orchestrator: ["helios-qwen3-32b"]
+    - brain-primary: ["brain-fallback"]
   num_retries: 2
 
 general_settings:

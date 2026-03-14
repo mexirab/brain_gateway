@@ -29,7 +29,7 @@ User Request → Orchestrator
 ### orchestrator/orchestrator.py (~2500 lines)
 
 **Configuration:**
-- `NEMOTRON_URL`, `HELIOS_URL` - LLM endpoints
+- `MODEL_URL`, `FALLBACK_MODEL_URL` - LLM endpoints
 - `MAX_TOOL_ROUNDS = 5` - prevent infinite loops
 
 **Core Functions:**

@@ -42,7 +42,7 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen3.5-27B")
 
 # Fallback model (used when primary is unavailable)
 FALLBACK_MODEL_URL = os.environ.get("FALLBACK_MODEL_URL", "http://10.0.0.58:8001/v1")
-FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "nvidia/Nemotron-Orchestrator-8B")
+FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "Qwen3.5-9B")
 
 # ---------------------------------------------------------------------------
 # Embedding model (configurable)

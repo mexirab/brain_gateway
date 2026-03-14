@@ -141,21 +141,21 @@ fi
 
 echo ""
 echo -e "${BLUE}=== Service URLs ===${NC}"
-check_optional "NEMOTRON_URL" "Nemotron endpoint"
-check_optional "HELIOS_URL" "Helios endpoint"
+check_optional "MODEL_URL" "Primary model endpoint"
+check_optional "FALLBACK_MODEL_URL" "Fallback model endpoint"
 check_optional "HA_URL" "Home Assistant URL"
 check_optional "TTS_URL" "TTS endpoint"
 check_optional "ORCHESTRATOR_URL" "Orchestrator URL"
 
 echo ""
 echo -e "${BLUE}=== SSH Configuration ===${NC}"
-check_optional "HELIOS_SSH_USER" "Helios SSH user"
+check_optional "MODEL_SSH_USER" "Model server SSH user"
 
 echo ""
 echo -e "${BLUE}=== Network Connectivity (Optional) ===${NC}"
 echo "Testing if nodes are reachable..."
 check_ip_reachable "NODE_JUPITER_IP" "Gateway"
-check_ip_reachable "NODE_SATURN_IP" "Nemotron"
+check_ip_reachable "NODE_SATURN_IP" "Saturn (reserve)"
 check_ip_reachable "NODE_URANUS_IP" "TTS/STT"
 check_ip_reachable "NODE_HELIOS_IP" "Helios"
 check_ip_reachable "NODE_HA_IP" "Home Assistant"
@@ -174,16 +174,16 @@ if [[ -n "${HA_URL:-}" && -n "${HA_TOKEN:-}" && "$HA_TOKEN" != "your-"*"-here" ]
     fi
 fi
 
-# Expand variables in NEMOTRON_URL for testing
-NEMOTRON_TEST_URL="${NEMOTRON_URL:-}"
-NEMOTRON_TEST_URL="${NEMOTRON_TEST_URL//\$\{NODE_SATURN_IP:-10.0.0.58\}/${NODE_SATURN_IP:-10.0.0.58}}"
-NEMOTRON_TEST_URL="${NEMOTRON_TEST_URL//\$\{SERVICE_NEMOTRON_PORT:-8001\}/${SERVICE_NEMOTRON_PORT:-8001}}"
-if [[ -n "$NEMOTRON_TEST_URL" ]]; then
-    base_url="${NEMOTRON_TEST_URL%/v1}"
+# Primary model health check
+MODEL_TEST_URL="${MODEL_URL:-}"
+MODEL_TEST_URL="${MODEL_TEST_URL//\$\{NODE_HELIOS_IP:-10.0.0.195\}/${NODE_HELIOS_IP:-10.0.0.195}}"
+MODEL_TEST_URL="${MODEL_TEST_URL//\$\{SERVICE_MODEL_PORT:-8080\}/${SERVICE_MODEL_PORT:-8080}}"
+if [[ -n "$MODEL_TEST_URL" ]]; then
+    base_url="${MODEL_TEST_URL%/v1}"
     if curl -s --connect-timeout 3 "${base_url}/health" &>/dev/null; then
-        echo -e "  ${GREEN}UP${NC}: Nemotron (${base_url})"
+        echo -e "  ${GREEN}UP${NC}: Primary model (${base_url})"
     else
-        echo -e "  ${YELLOW}DOWN${NC}: Nemotron (${base_url})"
+        echo -e "  ${YELLOW}DOWN${NC}: Primary model (${base_url})"
         ((WARNINGS++))
     fi
 fi

@@ -79,7 +79,7 @@ async def start_model_server() -> bool:
     _t0 = time.time()
     logger.info("[MODEL] Model server is offline, attempting to start...", extra={"component": "model"})
 
-    server_ip = os.environ.get("MODEL_SERVER_IP", "10.0.0.195")
+    server_ip = os.environ.get("MODEL_SERVER_IP", os.environ.get("NODE_HELIOS_IP", "10.0.0.195"))
     ssh_user = os.environ.get("MODEL_SSH_USER", "labadmin")
     ssh_key = os.environ.get("MODEL_SSH_KEY", "/root/.ssh/id_ed25519")
     start_cmd = os.environ.get("MODEL_START_CMD", "sudo systemctl start llama-server")
@@ -136,7 +136,7 @@ async def stop_model_server() -> bool:
     MODEL_STOP_COUNT.inc()
     logger.info("[MODEL] Stopping model server to save power...", extra={"component": "model"})
 
-    server_ip = os.environ.get("MODEL_SERVER_IP", "10.0.0.195")
+    server_ip = os.environ.get("MODEL_SERVER_IP", os.environ.get("NODE_HELIOS_IP", "10.0.0.195"))
     ssh_user = os.environ.get("MODEL_SSH_USER", "labadmin")
     ssh_key = os.environ.get("MODEL_SSH_KEY", "/root/.ssh/id_ed25519")
     stop_cmd = os.environ.get("MODEL_STOP_CMD", "sudo systemctl stop llama-server")

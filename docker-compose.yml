@@ -76,21 +76,14 @@ services:
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
     environment:
-      # Architecture mode (true=unified v7, false=hybrid v6)
-      - UNIFIED_MODE=${UNIFIED_MODE:-false}
-      # Primary model (conversation + tools in unified mode)
-      - MODEL_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
+      # Primary model (conversation + tools)
+      - MODEL_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_MODEL_PORT:-8080}/v1
       - MODEL_NAME=${MODEL_NAME:-Qwen3.5-27B}
       # Fallback model (used when primary is unavailable)
-      - FALLBACK_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
+      - FALLBACK_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:8001/v1
       - FALLBACK_MODEL_NAME=${FALLBACK_MODEL_NAME:-Qwen3.5-9B}
       # Embedding model
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-ai/nomic-embed-text-v2-moe}
-      # Legacy model endpoints (backward compat for v6 hybrid mode)
-      - NEMOTRON_URL=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
-      - NEMOTRON_MODEL=${NEMOTRON_MODEL:-nvidia/Nemotron-Orchestrator-8B}
-      - HELIOS_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
-      - HELIOS_MODEL=${HELIOS_MODEL:-Qwen3-32B-Q5_K_M}
       # Home Assistant
       - HA_URL=http://${NODE_HA_IP:-10.0.0.106}:8123
       - HA_TOKEN=${HA_TOKEN:?HA_TOKEN must be set in .env}
@@ -105,12 +98,9 @@ services:
       - TTS_VOICE=${TTS_VOICE:-jessica}
       # Callback URL
       - ORCHESTRATOR_URL=http://${NODE_JUPITER_IP:-10.0.0.248}:${SERVICE_ORCHESTRATOR_PORT:-8888}
-      # SSH for Helios auto-start/stop
+      # SSH for remote model server management
       - NODE_HELIOS_IP=${NODE_HELIOS_IP:-10.0.0.195}
-      - HELIOS_SSH_USER=${HELIOS_SSH_USER:-labadmin}
-      # Helios power management - auto-shutdown after idle
-      - HELIOS_IDLE_TIMEOUT=${HELIOS_IDLE_TIMEOUT:-1800}
-      - HELIOS_IDLE_CHECK_INTERVAL=${HELIOS_IDLE_CHECK_INTERVAL:-300}
+      - MODEL_SSH_USER=${MODEL_SSH_USER:-labadmin}
       # Reminders
       - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.all_speakers}
       - TZ=${TZ:-America/Chicago}
@@ -173,8 +163,8 @@ services:
       - ./litellm-config.yaml:/app/config.yaml:ro
     environment:
       # Derived URLs for litellm-config.yaml os.environ/ references
-      - NEMOTRON_API_BASE=http://${NODE_SATURN_IP:-10.0.0.58}:${SERVICE_NEMOTRON_PORT:-8001}/v1
-      - HELIOS_API_BASE=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_HELIOS_PORT:-8080}/v1
+      - MODEL_API_BASE=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_MODEL_PORT:-8080}/v1
+      - FALLBACK_API_BASE=http://${NODE_SATURN_IP:-10.0.0.58}:8001/v1
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
     command: --config /app/config.yaml --port 4000
     networks:

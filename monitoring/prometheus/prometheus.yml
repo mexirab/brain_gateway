@@ -12,11 +12,9 @@
 #
 # ALWAYS-ON:
 #   Jupiter:  10.0.0.248 (Orchestrator, no GPU)
-#   Saturn:   10.0.0.58  (Nemotron-8B brain on RTX 3090)
-#   Uranus:   10.0.0.173  (TTS on GPU 0, STT on GPU 1 - 2x RTX 5080)
-#
-# OFF BY DEFAULT (saves ~150W):
-#   Helios:   10.0.0.195  (Qwen3-32B on RTX 5090)
+#   Helios:   10.0.0.195 (Qwen3.5-27B on RTX 5090 — primary model)
+#   Uranus:   10.0.0.173 (TTS + STT on GPU 0, ComfyUI on GPU 1 — 2x RTX 5080)
+#   Saturn:   10.0.0.58  (Reserve — RTX 3080 + RTX 3090)
 
 global:
   scrape_interval: 15s
@@ -60,7 +58,7 @@ scrape_configs:
           role: 'tts-stt'
           gpu: '2x-rtx5080'
 
-      # Saturn (Nemotron brain on RTX 3090, RTX 3080 available)
+      # Saturn (reserve — RTX 3080 + RTX 3090)
       - targets: ['10.0.0.58:9100']
         labels:
           node: 'saturn'
@@ -78,7 +76,7 @@ scrape_configs:
           node: 'helios'
           gpu: 'rtx5090'
 
-      # Uranus GPUs (Nemotron - 2x RTX 5080)
+      # Uranus GPUs (TTS+STT on GPU0, ComfyUI on GPU1 — 2x RTX 5080)
       - targets: ['10.0.0.173:9400']
         labels:
           node: 'uranus'
@@ -89,18 +87,6 @@ scrape_configs:
         labels:
           node: 'saturn'
           gpu: 'rtx3080+rtx3090'
-
-  # ============================================
-  # LLM SERVICE METRICS (vLLM exposes /metrics)
-  # ============================================
-  - job_name: 'llm-services'
-    metrics_path: /metrics
-    static_configs:
-      # Nemotron on Saturn (vLLM exposes metrics)
-      - targets: ['10.0.0.58:8001']
-        labels:
-          service: 'nemotron'
-          node: 'saturn'
 
   # ============================================
   # CONJURE API METRICS

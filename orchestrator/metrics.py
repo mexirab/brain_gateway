@@ -11,7 +11,7 @@ from prometheus_client import Counter, Gauge, Histogram, Info
 REQUEST_COUNT = Counter(
     "bgw_requests_total",
     "Total chat completion requests",
-    ["mode"],  # hybrid, fallback, passthrough, fast_path
+    ["mode"],  # unified, unified_fallback, fast_path
 )
 
 REQUEST_LATENCY = Histogram(
@@ -36,7 +36,7 @@ ACTIVE_REQUESTS = Gauge(
 LLM_CALL_COUNT = Counter(
     "bgw_llm_calls_total",
     "Total LLM API calls",
-    ["model", "purpose"],  # model: helios/nemotron, purpose: conversation/tool_loop/expert/final
+    ["model", "purpose"],  # model: primary/fallback, purpose: conversation/tool_loop/final
 )
 
 LLM_CALL_LATENCY = Histogram(
@@ -74,7 +74,7 @@ TOOL_CALL_ERRORS = Counter(
 
 TOOL_ROUNDS = Histogram(
     "bgw_tool_loop_rounds",
-    "Number of Nemotron tool loop rounds per request",
+    "Number of tool loop rounds per request",
     buckets=[1, 2, 3, 4, 5],
 )
 
@@ -156,11 +156,6 @@ HELIOS_START_LATENCY = Histogram(
     "bgw_helios_start_duration_seconds",
     "Time to start Helios and get it ready",
     buckets=[5, 10, 20, 30, 60, 90, 120, 180],
-)
-
-HELIOS_IDLE_SECONDS = Gauge(
-    "bgw_helios_idle_seconds",
-    "Seconds since last Helios request",
 )
 
 # -- Reminders ---------------------------------------------------------------

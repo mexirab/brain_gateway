@@ -11,7 +11,6 @@ Endpoints:
 """
 
 import os
-import io
 import logging
 import tempfile
 from typing import Optional
@@ -147,7 +146,7 @@ async def transcribe(
 @app.post("/v1/audio/transcriptions")
 async def openai_transcribe(
     file: UploadFile = File(...),
-    model: str = Form(default="whisper-1"),
+    model_name: str = Form(default="whisper-1", alias="model"),
     language: Optional[str] = Form(default=None),
     response_format: str = Form(default="json"),
     temperature: float = Form(default=0.0),
@@ -177,7 +176,7 @@ async def openai_transcribe(
             if language:
                 options["language"] = language
 
-            result = globals()["model"].transcribe(tmp_path, **options)
+            result = model.transcribe(tmp_path, **options)
             text = result["text"].strip()
 
             if response_format == "text":

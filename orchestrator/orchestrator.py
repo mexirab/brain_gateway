@@ -319,11 +319,11 @@ async def startup_event():
     shared.init_backends(_http)
 
     # Load HA entities at startup
-    print("[orchestrator] Loading Home Assistant entities...")
+    logger.info("[orchestrator] Loading Home Assistant entities...")
     count = await ha_client.refresh_entities()
     shared._ha_tool_cache = None  # Invalidate cache after entity refresh
     shared._ha_tool_cache_time = 0.0
-    print(f"[orchestrator] Loaded {count} HA entities")
+    logger.info(f"[orchestrator] Loaded {count} HA entities")
 
     # Initialize Google Calendar client
     cal_client = get_calendar_client(http_client=_http)

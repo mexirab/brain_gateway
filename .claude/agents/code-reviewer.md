@@ -28,7 +28,7 @@ After any module is written or significantly modified. Trigger with `/review`.
 - Shared state lives in `shared.py` — not duplicated across modules
 - Tool functions are in `tool_handlers.py`, not scattered across modules
 - Tool schemas are in `tool_definitions.py` — kept in sync with actual tool function signatures
-- Dedicated modules (api_routes, focus_manager, helios_manager, etc.) are self-contained — they import from shared.py, not from orchestrator.py
+- Dedicated modules (api_routes, focus_manager, model_manager, etc.) are self-contained — they import from shared.py, not from orchestrator.py
 
 ### Security
 - No secrets in code — all from environment variables via `shared.py`

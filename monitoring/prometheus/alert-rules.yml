@@ -12,15 +12,6 @@ groups:
           summary: "Brain Gateway orchestrator is down"
           description: "The orchestrator has not responded to /metrics scrapes for 2 minutes."
 
-      - alert: NemotronDown
-        expr: up{job="llm-services", service="nemotron"} == 0
-        for: 3m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Nemotron (Saturn) is unreachable"
-          description: "Nemotron vLLM on Saturn has not responded for 3 minutes."
-
       - alert: NodeDown
         expr: up{job="node-exporter"} == 0
         for: 3m
@@ -108,15 +99,6 @@ groups:
   - name: brain_gateway_informational
     interval: 60s
     rules:
-      - alert: HeliosIdleLong
-        expr: bgw_helios_idle_seconds > 3600 and bgw_helios_online == 1
-        for: 5m
-        labels:
-          severity: info
-        annotations:
-          summary: "Helios idle >1hr but still running"
-          description: "Helios has been idle for {{ $value | humanizeDuration }} and is consuming ~150W."
-
       - alert: CalendarPollingFailed
         expr: increase(bgw_calendar_api_errors_total{operation="list_events"}[1h]) > 5
         for: 15m

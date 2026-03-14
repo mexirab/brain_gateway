@@ -1,5 +1,5 @@
 """
-Tests for nemotron_loop.py — XML tool parsing and response cleaning.
+Tests for XML tool parsing and response cleaning (used in unified_loop.py fallback).
 
 Tests pure functions: parse_tool_calls_from_content() and clean_response().
 No LLM calls or mocking needed.
