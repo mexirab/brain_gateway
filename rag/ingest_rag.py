@@ -114,7 +114,7 @@ def main():
         settings=Settings(anonymized_telemetry=False),
     )
     coll = client.get_or_create_collection(name=args.collection)
-    model = SentenceTransformer(args.embed_model)
+    model = SentenceTransformer(args.embed_model, trust_remote_code=True)
 
     # Map existing file markers: file::<rel> -> hash
     existing_hash_by_rel: Dict[str, str] = {}

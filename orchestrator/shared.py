@@ -219,7 +219,7 @@ chroma = chromadb.PersistentClient(
     settings=Settings(anonymized_telemetry=False),
 )
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
 # ---------------------------------------------------------------------------
 # Agentic settings

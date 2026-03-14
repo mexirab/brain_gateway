@@ -173,7 +173,7 @@ def main():
     # Load embedding model
     print(f"\nLoading embedding model: {args.embed_model}")
     t0 = time.time()
-    model = SentenceTransformer(args.embed_model)
+    model = SentenceTransformer(args.embed_model, trust_remote_code=True)
     print(f"Model loaded in {time.time() - t0:.1f}s")
     print(f"Embedding dimension: {model.get_sentence_embedding_dimension()}")
 
