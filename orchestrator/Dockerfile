@@ -7,13 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run as non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
-
 COPY *.py .
-
-USER appuser
 
 EXPOSE 8888
 
