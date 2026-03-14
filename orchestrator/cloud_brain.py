@@ -196,6 +196,12 @@ class CloudBrain:
         model_name = self._model_name
         tools = self._get_all_tools()
 
+        # Strip incoming system messages — the orchestrator builds its own system
+        # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
+        # send a system message with all entity states; keeping it causes Qwen's Jinja
+        # template to fail ("System message must be at the beginning" / duplicate system).
+        messages = [m for m in messages if m.get("role") != "system"]
+
         try:
             result = await self._run_unified_loop(
                 messages=messages.copy(),
