@@ -1,15 +1,15 @@
 # Brain Gateway
 
-Personal AI assistant for ADHD support. v7 unified mode: single model (Qwen3.5-27B on Helios) handles both conversation and tools. v6 hybrid mode still available as fallback (Nemotron-8B orchestrates tools; Helios handles conversation).
+Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) handles both conversation and tools in one unified agentic loop. v6 hybrid mode has been removed.
 
 ## Cluster
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Nemotron-8B (fallback brain), Pi-hole secondary |
-| Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
-| Helios | 10.0.0.195 | - | RTX 5090 | Qwen3.5-27B unified (conversation + tools), auto-starts on demand |
+| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Reserve capacity, Pi-hole secondary |
+| Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS + STT (GPU0), ComfyUI/Conjure (GPU1) |
+| Helios | 10.0.0.195 | - | RTX 5090 | Qwen3.5-27B (conversation + tools), always-on |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
@@ -20,8 +20,7 @@ Personal AI assistant for ADHD support. v7 unified mode: single model (Qwen3.5-2
 | Open WebUI (HTTPS) | 443 | https://jupiter-amds.tail74fc4a.ts.net (Tailscale) |
 | Open WebUI (HTTP) | 80 | http://localhost |
 | Orchestrator | 8888 | http://localhost:8888 |
-| Nemotron | 8001 | http://10.0.0.58:8001/v1 |
-| Helios | 8080 | http://10.0.0.195:8080/v1 |
+| Helios (primary model) | 8080 | http://10.0.0.195:8080/v1 |
 | TTS | 8002 | http://10.0.0.173:8002 |
 | STT | 8003 | http://10.0.0.173:8003 |
 | Pi-hole (Jupiter) | 53/8053 | http://10.0.0.248:8053/admin |
@@ -44,40 +43,22 @@ User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
               home_assistant  search_memory  set_reminder  web_search  check_calendar
 ```
 
-**Flow (v7):** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Falls back to Saturn (Nemotron) if Helios is unavailable. Controlled by `UNIFIED_MODE=true`.
-
-### Architecture (v6 Hybrid — legacy)
-
-```
-User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
-                                   (intent+intensity)      |
-                                                +----------+----------+
-                                           Direct response      ask_orchestrator
-                                                                      |
-                                                               Nemotron (tools)
-                                                                      |
-                    +----------+----------+----+----+----------+----------+
-                    v          v          v    v    v          v          v
-              home_assistant  search_memory  set_reminder  web_search  check_calendar
-```
-
-**Flow (v6):** Mode router classifies intent + emotional intensity. Helios handles conversation. For actions, calls `ask_orchestrator` -> Nemotron executes tools -> result back to Helios. Active when `UNIFIED_MODE=false`.
+**Flow:** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Optional fallback model if primary is unavailable. Helios is always-on (no auto-shutdown).
 
 ## Tools
 
-In **v7 unified mode**, all tools are called directly by the single model (no `ask_orchestrator` delegation). In **v6 hybrid mode**, Helios delegates to Nemotron via `ask_orchestrator`.
+All tools are called directly by the single model in one agentic loop.
 
-| Tool | v6 Model | Purpose |
-|------|----------|---------|
-| ask_orchestrator | Helios (v6 only) | Delegate to Nemotron for actions |
-| home_assistant | Nemotron / unified | HA API: `{entity_id, service, data}` |
-| search_memory | Nemotron / unified | ChromaDB RAG query |
-| set_reminder / cancel_reminder | Nemotron / unified | Voice/phone reminders |
-| update_data | Nemotron / unified | Update meds/projects YAML |
-| start_focus / stop_focus / focus_status | Nemotron / unified | Pomodoro timer + Endel + Pi-hole |
-| web_search | Nemotron / unified | Search the web via SearXNG |
-| check_calendar / create_calendar_event | Nemotron / unified | Google Calendar read/write |
-| check_email / search_email | Nemotron / unified | Gmail inbox (read-only) |
+| Tool | Purpose |
+|------|---------|
+| home_assistant | HA API: `{entity_id, service, data}` |
+| search_memory | ChromaDB RAG query |
+| set_reminder / cancel_reminder | Voice/phone reminders |
+| update_data | Update meds/projects YAML |
+| start_focus / stop_focus / focus_status | Pomodoro timer + Endel + Pi-hole |
+| web_search | Search the web via SearXNG |
+| check_calendar / create_calendar_event | Google Calendar read/write |
+| check_email / search_email | Gmail inbox (read-only) |
 | brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
 
 ## Key Files
@@ -89,13 +70,11 @@ In **v7 unified mode**, all tools are called directly by the single model (no `a
 | orchestrator/tests/test_auto_learn.py | Auto-learn unit tests (sensitive data, privacy, JSON parsing, encryption) |
 | orchestrator/tests/test_brain_dump.py | Brain dump unit tests (routing, dedup, validation, error handling) |
 | orchestrator/unified_loop.py | v7 unified agentic loop: single model conversation + tool execution |
-| orchestrator/model_manager.py | Model health, SSH start/stop, fallback selection (replaces helios_manager for v7) |
+| orchestrator/model_manager.py | Model health, SSH start/stop |
 | orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
-| orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HELIOS_TOOLS, HA tool builder) |
-| orchestrator/prompt_builder.py | System prompts for Helios/Nemotron, RAG context, helpers |
-| orchestrator/helios_manager.py | Helios health check, SSH start/stop, idle tracking |
-| orchestrator/nemotron_loop.py | Agentic tool loop, XML parsing, dedup |
+| orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
+| orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
 | orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
@@ -183,20 +162,19 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 
 - Owner: Nadim (ADHD - prefers step-by-step with verification)
 - Docker project: `gateway_mvp` (default from directory name)
-- Helios auto-starts on demand via SSH, auto-stops after 30 min idle (~150W savings)
+- Helios is always-on (no auto-shutdown); can be manually started/stopped via SSH
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
 - Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
 
-## Unified Mode Environment Variables
+## Model Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| UNIFIED_MODE | false | Enable v7 unified loop (single model for conversation + tools) |
 | MODEL_URL | - | Primary model endpoint (e.g. `http://10.0.0.195:8080/v1`) |
 | MODEL_NAME | - | Primary model name (e.g. `Qwen3.5-27B`) |
-| FALLBACK_MODEL_URL | - | Fallback model endpoint (e.g. `http://10.0.0.58:8001/v1`) |
-| FALLBACK_MODEL_NAME | - | Fallback model name (e.g. `Nemotron-8B`) |
+| FALLBACK_MODEL_URL | - | Fallback model endpoint (optional) |
+| FALLBACK_MODEL_NAME | - | Fallback model name (optional) |
 | EMBEDDING_MODEL | - | Embedding model for RAG indexing |
 | MODEL_SERVER_IP | - | SSH target for remote model start/stop |
 | MODEL_SSH_USER | - | SSH user for model server |
