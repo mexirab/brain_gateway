@@ -69,6 +69,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         elif tool_name == "search_memory":
             return tool_search_memory(arguments.get("query", ""))
         elif tool_name == "ask_expert":
+            if shared.UNIFIED_MODE:
+                return "ask_expert is not available in unified mode — the primary model handles all queries directly."
             return await tool_ask_expert(arguments.get("question", ""), arguments.get("context", ""))
         elif tool_name == "update_data":
             return tool_update_data(arguments)

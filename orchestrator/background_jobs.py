@@ -24,7 +24,16 @@ from metrics import (
     TEMPERATURE_GAUGE,
 )
 from reminder_manager import _announce_voice, list_pending_reminders
-from shared import NEMOTRON_MODEL, NEMOTRON_URL, TIMEZONE, profile
+from shared import TIMEZONE, profile
+
+# v7 unified mode: use primary model; v6 hybrid: use Nemotron
+if shared.UNIFIED_MODE:
+    _LLM_URL = shared.MODEL_URL
+    _LLM_MODEL = shared.MODEL_NAME
+else:
+    _LLM_URL = shared.NEMOTRON_URL
+    _LLM_MODEL = shared.NEMOTRON_MODEL
+
 from travel_time import get_travel_time
 
 logger = logging.getLogger(__name__)
@@ -371,8 +380,8 @@ async def process_emails_for_events():
 
             try:
                 llm_resp = await call_model(
-                    NEMOTRON_URL,
-                    NEMOTRON_MODEL,
+                    _LLM_URL,
+                    _LLM_MODEL,
                     messages=[{"role": "user", "content": prompt}],
                     timeout=30,
                 )

@@ -5,8 +5,14 @@ export interface HealthResponse {
   version: string;
   architecture: string;
   primary_status: string;
-  nemotron_status: string;
-  helios_idle: string;
+  // v7 unified: fallback_status; v6 hybrid: nemotron_status
+  fallback_status?: string;
+  nemotron_status?: string;
+  // v7: model_idle; v6: helios_idle
+  model_idle?: string;
+  helios_idle?: string;
+  // v7 unified: list of available tool names
+  tools?: string[];
   rag_docs: number;
   ha_entities: number;
   calendar: {
