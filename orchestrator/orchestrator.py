@@ -283,6 +283,10 @@ async def chat_completions(req: Request):
         len(raw_msgs),
         [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
     )
+    # Debug: log last 500 chars of the single system message to see where user query is
+    if len(raw_msgs) == 1 and raw_msgs[0].get("role") == "system":
+        content = str(raw_msgs[0].get("content", ""))
+        logger.info("[CHAT] Single system msg tail: ...%s", content[-500:])
     chat_req = ChatRequest(**body)
 
     return await cloud_brain.chat(
