@@ -34,17 +34,31 @@ _ALLOWED_CMD_PREFIXES = (
 )
 
 
+# Shell metacharacters that indicate command chaining/injection
+_SHELL_METACHARACTERS = set(";|&$`")
+
+
 def _validate_ssh_cmd(cmd: str, label: str) -> bool:
-    """Validate SSH command against allowed prefixes."""
-    if any(cmd.startswith(prefix) for prefix in _ALLOWED_CMD_PREFIXES):
-        return True
-    logger.error(
-        "[MODEL] Rejected %s command '%s' — must start with one of: %s",
-        label,
-        cmd[:80],
-        ", ".join(_ALLOWED_CMD_PREFIXES),
-    )
-    return False
+    """Validate SSH command against allowed prefixes and reject shell injection."""
+    if not any(cmd.startswith(prefix) for prefix in _ALLOWED_CMD_PREFIXES):
+        logger.error(
+            "[MODEL] Rejected %s command '%s' — must start with one of: %s",
+            label,
+            cmd[:80],
+            ", ".join(_ALLOWED_CMD_PREFIXES),
+        )
+        return False
+
+    # Reject commands containing shell metacharacters (prevents chaining attacks)
+    if any(c in _SHELL_METACHARACTERS for c in cmd):
+        logger.error(
+            "[MODEL] Rejected %s command '%s' — contains shell metacharacters",
+            label,
+            cmd[:80],
+        )
+        return False
+
+    return True
 
 
 async def check_model_health() -> bool:

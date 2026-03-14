@@ -232,8 +232,9 @@ async def run_unified_tool_loop(
                 result = await execute_tool(tool_name, arguments)
             except Exception as e:
                 TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
-                logger.error("[%s] Tool %s failed: %s", label, tool_name, e)
-                result = f"Tool error: {e}"
+                logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
+                # Return generic message to model/user — full details logged above
+                result = f"The {tool_name} tool encountered an error. Please try again."
             TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
             tool_results.append((tool_call.get("id", f"call_{round_num}"), tool_name, result))
 
