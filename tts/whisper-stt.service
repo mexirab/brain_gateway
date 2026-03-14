@@ -10,7 +10,7 @@ WorkingDirectory=/home/labadmin
 
 # Use same environment as TTS server
 Environment="PATH=/home/labadmin/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="WHISPER_MODEL=large-v3"
+Environment="WHISPER_MODEL=medium"
 Environment="WHISPER_DEVICE=cuda:0"
 Environment="WHISPER_PORT=8003"
 
