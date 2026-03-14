@@ -10,7 +10,7 @@ methods become HTTP/WebSocket endpoints served by the on-premise agent.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,9 @@ class LocalAgent:
     to the actual implementation in the orchestrator modules.
     """
 
-    def __init__(self, rag_context_fn, run_tool_loop_fn, get_nemotron_system_prompt_fn,
-                 ha_client, collection, scheduler, profile):
+    def __init__(
+        self, rag_context_fn, run_tool_loop_fn, get_nemotron_system_prompt_fn, ha_client, collection, scheduler, profile
+    ):
         """
         Args:
             rag_context_fn: callable(query: str) -> str — from orchestrator.py
@@ -51,9 +52,7 @@ class LocalAgent:
 
     # --- Tool Execution ---
 
-    async def execute_orchestrator(self, command: str,
-                                   mode: str = "explainer",
-                                   intensity: str = "low") -> str:
+    async def execute_orchestrator(self, command: str, mode: str = "explainer", intensity: str = "low") -> str:
         """
         Run the Nemotron tool loop for a command.
 
@@ -70,11 +69,13 @@ class LocalAgent:
     def get_pending_reminders(self) -> List[Dict[str, Any]]:
         """Get all pending reminders from persistent store."""
         import state_store
+
         return state_store.get_pending_reminders()
 
     def get_focus_status(self) -> Dict[str, Any]:
         """Get current focus session state from persistent store."""
         import state_store
+
         session = state_store.load_focus_session()
         if not session["active"]:
             return {"active": False}

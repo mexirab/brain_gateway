@@ -33,15 +33,26 @@ class CloudBrain:
       User → intent routing → RAG → Helios → ask_orchestrator → Nemotron → Helios → User
     """
 
-    def __init__(self, local_agent: LocalAgent,
-                 call_model_fn, stream_final_response_fn,
-                 get_helios_system_prompt_fn, get_orchestrator_system_prompt_fn,
-                 check_helios_health_fn, start_helios_fn,
-                 try_fast_path_fn, is_greeting_fn, last_user_text_fn,
-                 clean_response_fn, parse_tool_calls_fn,
-                 helios_tools: List[Dict],
-                 helios_url: str, helios_model: str,
-                 nemotron_url: str, nemotron_model: str):
+    def __init__(
+        self,
+        local_agent: LocalAgent,
+        call_model_fn,
+        stream_final_response_fn,
+        get_helios_system_prompt_fn,
+        get_orchestrator_system_prompt_fn,
+        check_helios_health_fn,
+        start_helios_fn,
+        try_fast_path_fn,
+        is_greeting_fn,
+        last_user_text_fn,
+        clean_response_fn,
+        parse_tool_calls_fn,
+        helios_tools: List[Dict],
+        helios_url: str,
+        helios_model: str,
+        nemotron_url: str,
+        nemotron_model: str,
+    ):
         """
         Initialize with function references from orchestrator.py.
 
@@ -69,9 +80,9 @@ class CloudBrain:
         # Callback to update Helios idle tracker (set by orchestrator.py)
         self.on_helios_request = None
 
-    async def chat(self, messages: List[Dict], stream: bool = False,
-                   external_tools: Optional[List] = None,
-                   ha_client=None) -> Any:
+    async def chat(
+        self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
+    ) -> Any:
         """
         Main chat flow — hybrid v6 architecture.
 
@@ -100,7 +111,9 @@ class CloudBrain:
             routing_info["mode"] = "passthrough"
             try:
                 llm_resp = await self._call_model(
-                    self._nemotron_url, self._nemotron_model, messages,
+                    self._nemotron_url,
+                    self._nemotron_model,
+                    messages,
                     system=self._get_orchestrator_system_prompt(mode=intent.mode, intensity=intent.intensity),
                     tools=external_tools,
                     timeout=60,
@@ -126,18 +139,22 @@ class CloudBrain:
                     logger.info(f"[FAST-PATH] Handled: {fast_result.action} -> {fast_result.entity_name}")
                     if stream:
                         return self._stream_text(fast_result.response_text, "fast-path")
-                    return JSONResponse({
-                        "id": f"chatcmpl-fp-{int(time.time())}",
-                        "object": "chat.completion",
-                        "created": int(time.time()),
-                        "model": "fast-path",
-                        "choices": [{
-                            "index": 0,
-                            "message": {"role": "assistant", "content": fast_result.response_text},
-                            "finish_reason": "stop",
-                        }],
-                        "_routing": routing_info,
-                    })
+                    return JSONResponse(
+                        {
+                            "id": f"chatcmpl-fp-{int(time.time())}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": "fast-path",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": fast_result.response_text},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "_routing": routing_info,
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"[FAST-PATH] Error, falling through to Helios: {e}")
 
@@ -150,9 +167,7 @@ class CloudBrain:
                 routing_info["rag_prefetch"] = True
 
         # 2. Build system prompt
-        helios_system = self._get_helios_system_prompt(
-            personal_context, mode=intent.mode, intensity=intent.intensity
-        )
+        helios_system = self._get_helios_system_prompt(personal_context, mode=intent.mode, intensity=intent.intensity)
 
         # 3. Check Helios health, start if needed
         if not await self._check_helios_health():
@@ -162,15 +177,20 @@ class CloudBrain:
                 logger.warning("[HYBRID] Helios unavailable, falling back to Nemotron")
                 routing_info["fallback"] = "nemotron"
                 return await self._nemotron_fallback(
-                    messages, stream, routing_info,
-                    mode=intent.mode, intensity=intent.intensity,
+                    messages,
+                    stream,
+                    routing_info,
+                    mode=intent.mode,
+                    intensity=intent.intensity,
                 )
 
         # 4. Call Helios
         logger.info("[HYBRID] Calling Helios...")
         try:
             helios_resp = await self._call_model(
-                self._helios_url, self._helios_model, messages,
+                self._helios_url,
+                self._helios_model,
+                messages,
                 system=helios_system,
                 tools=self._helios_tools,
                 timeout=180,
@@ -181,8 +201,11 @@ class CloudBrain:
             routing_info["fallback"] = "nemotron"
             routing_info["helios_error"] = "call_failed"
             return await self._nemotron_fallback(
-                messages, stream, routing_info,
-                mode=intent.mode, intensity=intent.intensity,
+                messages,
+                stream,
+                routing_info,
+                mode=intent.mode,
+                intensity=intent.intensity,
             )
 
         # 5. Parse tool calls
@@ -231,28 +254,36 @@ class CloudBrain:
             routing_info["tool_calls"].append({"tool": "ask_orchestrator", "command": command})
 
             orchestrator_result = await self.agent.execute_orchestrator(
-                command, mode=intent.mode, intensity=intent.intensity,
+                command,
+                mode=intent.mode,
+                intensity=intent.intensity,
             )
             logger.info(f"[HYBRID] Orchestrator result: {orchestrator_result[:200]}...")
 
-            conversation.append({
-                "role": "assistant",
-                "content": f"I used the orchestrator to: {command}",
-            })
-            conversation.append({
-                "role": "user",
-                "content": (
-                    f"Orchestrator result: {orchestrator_result}\n\n"
-                    "Please respond naturally to me based on this result. "
-                    "Keep it brief and conversational."
-                ),
-            })
+            conversation.append(
+                {
+                    "role": "assistant",
+                    "content": f"I used the orchestrator to: {command}",
+                }
+            )
+            conversation.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"Orchestrator result: {orchestrator_result}\n\n"
+                        "Please respond naturally to me based on this result. "
+                        "Keep it brief and conversational."
+                    ),
+                }
+            )
 
         # 8. Final Helios response
         logger.info("[HYBRID] Getting final response from Helios...")
         try:
             final_resp = await self._call_model(
-                self._helios_url, self._helios_model, conversation,
+                self._helios_url,
+                self._helios_model,
+                conversation,
                 system=helios_system,
                 timeout=120,
             )
@@ -261,10 +292,12 @@ class CloudBrain:
             logger.error(f"[HYBRID] Helios final response failed: {e}")
             if stream:
                 return self._stream_text(orchestrator_result, self._nemotron_model)
-            return JSONResponse({
-                "choices": [{"message": {"role": "assistant", "content": orchestrator_result}}],
-                "_routing": routing_info,
-            })
+            return JSONResponse(
+                {
+                    "choices": [{"message": {"role": "assistant", "content": orchestrator_result}}],
+                    "_routing": routing_info,
+                }
+            )
 
         final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         final_content = self._clean_response(final_content)
@@ -291,17 +324,19 @@ class CloudBrain:
         async def generate():
             chunk_size = 80
             for i in range(0, len(text), chunk_size):
-                chunk_text = text[i:i + chunk_size]
+                chunk_text = text[i : i + chunk_size]
                 chunk_data = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
                     "created": int(time.time()),
                     "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": chunk_text},
-                        "finish_reason": None,
-                    }],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": chunk_text},
+                            "finish_reason": None,
+                        }
+                    ],
                 }
                 yield f"data: {json.dumps(chunk_data)}\n\n"
             final_chunk = {
@@ -320,18 +355,21 @@ class CloudBrain:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    async def _nemotron_fallback(self, messages: List[Dict], stream: bool,
-                                 routing_info: Dict, mode: str = "explainer",
-                                 intensity: str = "low"):
+    async def _nemotron_fallback(
+        self, messages: List[Dict], stream: bool, routing_info: Dict, mode: str = "explainer", intensity: str = "low"
+    ):
         """Fallback to Nemotron-only mode when Helios is unavailable."""
         logger.info("[FALLBACK] Using Nemotron-only mode")
         result = await self.agent.execute_orchestrator(
             self._last_user_text(messages),
-            mode=mode, intensity=intensity,
+            mode=mode,
+            intensity=intensity,
         )
         if stream:
             return self._stream_text(result, self._nemotron_model)
-        return JSONResponse({
-            "choices": [{"message": {"role": "assistant", "content": result}}],
-            "_routing": routing_info,
-        })
+        return JSONResponse(
+            {
+                "choices": [{"message": {"role": "assistant", "content": result}}],
+                "_routing": routing_info,
+            }
+        )

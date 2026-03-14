@@ -5,23 +5,23 @@ All cross-module state lives here so modules can import what they need
 without circular dependencies.
 """
 
-import os
 import logging
+import os
 import time
 from typing import Any, Dict, Optional
 
-import httpx
-from dotenv import load_dotenv
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.memory import MemoryJobStore
 import chromadb
+import httpx
+from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from chromadb.config import Settings
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 
 from ha_integration import HomeAssistantClient
+from llm_backend import LLMBackend, LLMConfig, create_backend
+from tts_backend import TTSBackend, TTSConfig, create_tts_backend
 from user_profile import get_profile
-from llm_backend import LLMConfig, LLMBackend, create_backend
-from tts_backend import TTSConfig, TTSBackend, create_tts_backend
 
 # Load environment (fallback for local dev; Docker passes env vars directly)
 load_dotenv("/app/.env", override=False)
@@ -65,8 +65,10 @@ def init_backends(http_client: httpx.AsyncClient):
     # Load profile YAML for llm/tts config sections
     yaml_data = {}
     try:
-        from user_profile import _find_profile_path
         import yaml
+
+        from user_profile import _find_profile_path
+
         path = _find_profile_path()
         if path:
             with open(path) as f:
@@ -124,6 +126,7 @@ def _resolve_api_key(value: str) -> str:
         env_name = value[2:-1]
         return os.environ.get(env_name, "")
     return value
+
 
 # ---------------------------------------------------------------------------
 # Home Assistant
@@ -239,13 +242,15 @@ PHONE_CALENDAR_FILE = os.path.join(
     "phone_calendar.json",
 )
 
+
 def _load_phone_calendar():
     """Load phone calendar events from disk (called at startup)."""
     global _phone_calendar_events, _phone_calendar_sync_time
     import json
+
     try:
         if os.path.exists(PHONE_CALENDAR_FILE):
-            with open(PHONE_CALENDAR_FILE, "r") as f:
+            with open(PHONE_CALENDAR_FILE) as f:
                 data = json.load(f)
             _phone_calendar_events = data.get("events", [])
             _phone_calendar_sync_time = data.get("sync_time", 0.0)
@@ -256,15 +261,18 @@ def _load_phone_calendar():
     except Exception as e:
         logging.getLogger(__name__).warning(f"[PHONE_CAL] Failed to load from disk: {e}")
 
+
 def _save_phone_calendar():
     """Save phone calendar events to disk (called after each sync)."""
     import json
+
     try:
         os.makedirs(os.path.dirname(PHONE_CALENDAR_FILE), exist_ok=True)
         with open(PHONE_CALENDAR_FILE, "w") as f:
             json.dump({"events": _phone_calendar_events, "sync_time": _phone_calendar_sync_time}, f)
     except Exception as e:
         logging.getLogger(__name__).warning(f"[PHONE_CAL] Failed to save to disk: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Travel time config (Google Maps Directions API)

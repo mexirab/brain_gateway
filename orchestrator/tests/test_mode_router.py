@@ -6,7 +6,8 @@ intensity detection, curiosity detection, and default routing.
 """
 
 import pytest
-from mode_router import ModeRouter, RoutingResult
+
+from mode_router import ModeRouter
 
 
 @pytest.fixture
@@ -15,6 +16,7 @@ def router():
 
 
 # ── Explicit intent overrides ──
+
 
 class TestExplicitOverrides:
     def test_mirror_analyze_me(self, router):
@@ -43,6 +45,7 @@ class TestExplicitOverrides:
 
 
 # ── Emotional intensity ──
+
 
 class TestEmotionalIntensity:
     def test_high_intensity_panic(self, router):
@@ -82,6 +85,7 @@ class TestEmotionalIntensity:
 
 # ── Curiosity detection ──
 
+
 class TestCuriosityDetection:
     def test_how_does(self, router):
         result = router.route("How does ADHD medication work?")
@@ -109,6 +113,7 @@ class TestCuriosityDetection:
 
 # ── Default routing ──
 
+
 class TestDefaultRouting:
     def test_default_low_is_explainer(self, router):
         result = router.route("Turn on the bedroom lights")
@@ -129,6 +134,7 @@ class TestDefaultRouting:
 
 # ── Tags ──
 
+
 class TestTags:
     def test_explicit_tag_present(self, router):
         result = router.route("Hold me accountable")
@@ -144,6 +150,7 @@ class TestTags:
 
 
 # ── RoutingResult structure ──
+
 
 class TestRoutingResult:
     def test_dataclass_fields(self, router):

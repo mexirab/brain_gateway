@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TTSConfig:
     """Configuration for a TTS endpoint."""
-    backend: str          # "local_http", "elevenlabs", "piper", "openai"
-    url: str = ""         # base URL (for local/piper backends)
-    voice: str = ""       # voice name or ID
-    api_key: str = ""     # for cloud APIs
-    model: str = ""       # for OpenAI (tts-1, tts-1-hd)
+
+    backend: str  # "local_http", "elevenlabs", "piper", "openai"
+    url: str = ""  # base URL (for local/piper backends)
+    voice: str = ""  # voice name or ID
+    api_key: str = ""  # for cloud APIs
+    model: str = ""  # for OpenAI (tts-1, tts-1-hd)
 
 
 class TTSBackend(ABC):
@@ -196,8 +197,5 @@ def create_tts_backend(config: TTSConfig, http_client: httpx.AsyncClient) -> TTS
     """Create a TTS backend instance from config."""
     cls = _BACKENDS.get(config.backend)
     if not cls:
-        raise ValueError(
-            f"Unknown TTS backend: '{config.backend}'. "
-            f"Must be one of: {list(_BACKENDS.keys())}"
-        )
+        raise ValueError(f"Unknown TTS backend: '{config.backend}'. Must be one of: {list(_BACKENDS.keys())}")
     return cls(config, http_client)

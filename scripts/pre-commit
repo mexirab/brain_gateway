@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Git pre-commit hook — lints and format-checks only staged files.
+# Install with: scripts/install-hooks.sh
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+EXIT_CODE=0
+
+# --- Python (Ruff lint + format check) ---
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM -- 'orchestrator/*.py' | head -100)
+if [[ -n "$STAGED_PY" ]]; then
+    if command -v ruff &>/dev/null; then
+        echo "Running Ruff lint on staged Python files..."
+        echo "$STAGED_PY" | xargs ruff check --no-fix || EXIT_CODE=1
+        echo "Checking Python formatting..."
+        echo "$STAGED_PY" | xargs ruff format --check || EXIT_CODE=1
+    else
+        echo "[pre-commit] ruff not installed — skipping Python lint"
+    fi
+fi
+
+# --- TypeScript/JavaScript (ESLint) ---
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM -- 'frontend/src/**/*.ts' 'frontend/src/**/*.tsx' | head -100)
+if [[ -n "$STAGED_TS" ]]; then
+    echo "Running ESLint on staged frontend files..."
+    cd "$REPO_ROOT/frontend"
+    echo "$STAGED_TS" | sed "s|^|$REPO_ROOT/|" | xargs npx --no-install eslint --no-error-on-unmatched-pattern || EXIT_CODE=1
+    cd "$REPO_ROOT"
+fi
+
+if [[ $EXIT_CODE -ne 0 ]]; then
+    echo ""
+    echo "Lint/format errors found. Fix them before committing, or use --no-verify to skip."
+fi
+
+exit $EXIT_CODE

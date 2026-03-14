@@ -5,10 +5,10 @@ Captures the last N log lines in a deque so the check_system tool
 can query recent logs without needing Docker socket access or subprocess calls.
 """
 
-import logging
 import collections
+import logging
 from datetime import datetime
-from typing import List, Dict
+from typing import Dict, List
 
 
 class LogRingBuffer(logging.Handler):
@@ -19,26 +19,22 @@ class LogRingBuffer(logging.Handler):
         self.buffer: collections.deque = collections.deque(maxlen=capacity)
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.buffer.append({
-            "time": datetime.fromtimestamp(record.created).isoformat(),
-            "level": record.levelname,
-            "message": self.format(record),
-        })
+        self.buffer.append(
+            {
+                "time": datetime.fromtimestamp(record.created).isoformat(),
+                "level": record.levelname,
+                "message": self.format(record),
+            }
+        )
 
     def search(self, pattern: str, limit: int = 20) -> List[Dict]:
         """Search buffer for entries containing pattern (case-insensitive)."""
         pattern_lower = pattern.lower()
-        return [
-            e for e in reversed(self.buffer)
-            if pattern_lower in e["message"].lower()
-        ][:limit]
+        return [e for e in reversed(self.buffer) if pattern_lower in e["message"].lower()][:limit]
 
     def errors(self, limit: int = 20) -> List[Dict]:
         """Get recent ERROR and CRITICAL entries."""
-        return [
-            e for e in reversed(self.buffer)
-            if e["level"] in ("ERROR", "CRITICAL")
-        ][:limit]
+        return [e for e in reversed(self.buffer) if e["level"] in ("ERROR", "CRITICAL")][:limit]
 
     def recent(self, limit: int = 50) -> List[Dict]:
         """Get the most recent log entries."""

@@ -10,11 +10,11 @@ Usage:
     events = await client.list_events(days_ahead=7)
 """
 
-import os
 import logging
-from datetime import datetime, timedelta
-from typing import Optional, List
+import os
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -30,6 +30,7 @@ TIMEZONE = os.environ.get("TZ", "America/Chicago")
 @dataclass
 class CalendarEvent:
     """A single calendar event."""
+
     id: str
     title: str
     start: datetime
@@ -43,6 +44,7 @@ class CalendarEvent:
 @dataclass
 class CalendarResponse:
     """Response from a calendar query."""
+
     success: bool
     events: List[CalendarEvent] = field(default_factory=list)
     error: Optional[str] = None
@@ -74,6 +76,7 @@ class GoogleCalendarClient:
             return {}
         if self._creds.expired and self._creds.refresh_token:
             from google.auth.transport.requests import Request
+
             self._creds.refresh(Request())
         return {"Authorization": f"Bearer {self._creds.token}"}
 
@@ -127,9 +130,7 @@ class GoogleCalendarClient:
             all_day=all_day,
         )
 
-    async def list_events(
-        self, days_ahead: int = 7, calendar_id: str = "primary"
-    ) -> CalendarResponse:
+    async def list_events(self, days_ahead: int = 7, calendar_id: str = "primary") -> CalendarResponse:
         """
         List calendar events for the next N days.
 
@@ -171,9 +172,7 @@ class GoogleCalendarClient:
 
         except httpx.HTTPStatusError as e:
             logger.error(f"[CALENDAR] API error: {e.response.status_code}")
-            return CalendarResponse(
-                success=False, error=f"Calendar API error: {e.response.status_code}"
-            )
+            return CalendarResponse(success=False, error=f"Calendar API error: {e.response.status_code}")
         except Exception as e:
             logger.error(f"[CALENDAR] Error: {e}")
             return CalendarResponse(success=False, error=str(e))
@@ -238,9 +237,7 @@ class GoogleCalendarClient:
 
         except httpx.HTTPStatusError as e:
             logger.error(f"[CALENDAR] Create error: {e.response.status_code}")
-            return CalendarResponse(
-                success=False, error=f"Failed to create event: {e.response.status_code}"
-            )
+            return CalendarResponse(success=False, error=f"Failed to create event: {e.response.status_code}")
         except Exception as e:
             logger.error(f"[CALENDAR] Create error: {e}")
             return CalendarResponse(success=False, error=str(e))

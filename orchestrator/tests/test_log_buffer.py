@@ -5,7 +5,9 @@ Tests the LogRingBuffer used for Jess self-diagnosis.
 """
 
 import logging
+
 import pytest
+
 from log_buffer import LogRingBuffer
 
 
@@ -19,8 +21,13 @@ def buffer():
 def _emit(buf, msg, level=logging.INFO):
     """Helper to emit a log record into the buffer."""
     record = logging.LogRecord(
-        name="test", level=level, pathname="", lineno=0,
-        msg=msg, args=(), exc_info=None,
+        name="test",
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=msg,
+        args=(),
+        exc_info=None,
     )
     buf.emit(record)
 

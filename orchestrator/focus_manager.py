@@ -2,23 +2,33 @@
 Focus timer (Pomodoro) management: timer, Endel audio, Pi-hole blocking, break delivery.
 """
 
+import contextlib
 import logging
 import random
-from typing import Optional
 from datetime import datetime, timedelta
+from typing import Optional
 
 import shared
-from shared import (
-    ha_client, scheduler, current_focus_session,
-    ENDEL_API_URL, ENDEL_MODES, FOCUS_AUDIO_PLAYER, ENDEL_ENABLED,
-    profile,
-)
 import state_store
+from metrics import (
+    FOCUS_ACTIVE,
+    FOCUS_SESSION_DURATION,
+    FOCUS_SESSIONS_COMPLETED,
+    FOCUS_SESSIONS_STARTED,
+    FOCUS_SESSIONS_STOPPED_EARLY,
+    PIHOLE_BLOCKING_TOGGLES,
+)
 from pihole_client import get_pihole_client
 from reminder_manager import _announce_voice
-from metrics import (
-    FOCUS_SESSIONS_STARTED, FOCUS_SESSIONS_COMPLETED, FOCUS_SESSIONS_STOPPED_EARLY,
-    FOCUS_SESSION_DURATION, FOCUS_ACTIVE, PIHOLE_BLOCKING_TOGGLES,
+from shared import (
+    ENDEL_API_URL,
+    ENDEL_ENABLED,
+    ENDEL_MODES,
+    FOCUS_AUDIO_PLAYER,
+    current_focus_session,
+    ha_client,
+    profile,
+    scheduler,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,9 +60,9 @@ async def get_endel_focus_url(duration_minutes: int, mode: str = "focus") -> Opt
         resp.raise_for_status()
 
         audio_urls = []
-        for line in resp.text.split('\n'):
+        for line in resp.text.split("\n"):
             line = line.strip()
-            if line and not line.startswith('#'):
+            if line and not line.startswith("#"):
                 audio_urls.append(line)
 
         if audio_urls:
@@ -79,9 +89,7 @@ async def start_focus_audio(duration_minutes: int, player: str, soundscape: str 
     logger.info(f"[FOCUS] Starting Endel {soundscape} audio on {player}: {url}")
 
     result = await ha_client.call_service(
-        player,
-        "play_media",
-        {"media_content_id": url, "media_content_type": "music"}
+        player, "play_media", {"media_content_id": url, "media_content_type": "music"}
     )
     if not result.success:
         logger.error(f"[FOCUS] Failed to start audio on {player}: {result.message}")
@@ -98,9 +106,14 @@ async def stop_focus_audio(player: str = None) -> bool:
     return result.success
 
 
-async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 5,
-                           speaker: str = None, soundscape: str = "focus",
-                           block_sites: bool = True) -> str:
+async def tool_start_focus(
+    task: str,
+    duration: int = 25,
+    break_duration: int = 5,
+    speaker: str = None,
+    soundscape: str = "focus",
+    block_sites: bool = True,
+) -> str:
     """Start a focus timer with voice announcement at end, optional Endel audio, and distraction blocking."""
     # Validate duration bounds
     try:
@@ -155,29 +168,33 @@ async def tool_start_focus(task: str, duration: int = 25, break_duration: int = 
 
     scheduler.add_job(
         deliver_focus_break,
-        trigger='date',
+        trigger="date",
         run_date=end_time,
         args=[task, break_duration],
         id=job_id,
         replace_existing=True,
     )
 
-    current_focus_session.update({
-        "active": True,
-        "task": task,
-        "started": datetime.now(),
-        "duration": duration,
-        "break_duration": break_duration,
-        "job_id": job_id,
-        "audio_player": player if audio_started else None,
-        "block_sites": blocking_enabled,
-    })
+    current_focus_session.update(
+        {
+            "active": True,
+            "task": task,
+            "started": datetime.now(),
+            "duration": duration,
+            "break_duration": break_duration,
+            "job_id": job_id,
+            "audio_player": player if audio_started else None,
+            "block_sites": blocking_enabled,
+        }
+    )
     state_store.save_focus_session(current_focus_session)
 
     FOCUS_SESSIONS_STARTED.labels(soundscape=soundscape).inc()
     FOCUS_ACTIVE.set(1)
-    logger.info(f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}",
-                extra={"component": "focus"})
+    logger.info(
+        f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}",
+        extra={"component": "focus"},
+    )
 
     parts = []
     if audio_started:
@@ -217,18 +234,15 @@ async def tool_stop_focus() -> str:
         else:
             logger.warning(f"[FOCUS] Could not disable blocking: {result.message}")
 
-    try:
+    with contextlib.suppress(Exception):
         scheduler.remove_job(current_focus_session["job_id"])
-    except Exception:
-        pass
 
     _reset_focus_session()
 
     FOCUS_SESSIONS_STOPPED_EARLY.inc()
     FOCUS_SESSION_DURATION.observe(elapsed)
     FOCUS_ACTIVE.set(0)
-    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'",
-                extra={"component": "focus"})
+    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'", extra={"component": "focus"})
     return f"Focus timer stopped. You worked on '{task}' for {elapsed:.0f} minutes. Nice work!"
 
 
@@ -243,7 +257,9 @@ async def tool_focus_status() -> str:
     if remaining <= 0:
         return f"Your focus session on '{current_focus_session['task']}' just ended!"
 
-    return f"You're focusing on '{current_focus_session['task']}'. {remaining:.0f} minutes left, {elapsed:.0f} minutes in."
+    return (
+        f"You're focusing on '{current_focus_session['task']}'. {remaining:.0f} minutes left, {elapsed:.0f} minutes in."
+    )
 
 
 async def deliver_focus_break(task: str, break_duration: int):
@@ -268,7 +284,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         f"Time's up! You crushed it working on {task}. {break_duration} minute break - you've earned it!",
         f"Focus session complete! Step away from {task} for {break_duration} minutes. Move around, breathe.",
         f"Nice work on {task}! Your brain needs a {break_duration} minute reset. Get up and stretch!",
-        f"Pomodoro done! Great job on {task}. Take {break_duration} minutes to recharge."
+        f"Pomodoro done! Great job on {task}. Take {break_duration} minutes to recharge.",
     ]
     message = random.choice(messages)
 
@@ -288,14 +304,16 @@ async def deliver_focus_break(task: str, break_duration: int):
 
 def _reset_focus_session():
     """Reset focus session state to inactive."""
-    current_focus_session.update({
-        "active": False,
-        "task": None,
-        "started": None,
-        "duration": None,
-        "break_duration": None,
-        "job_id": None,
-        "audio_player": None,
-        "block_sites": False,
-    })
+    current_focus_session.update(
+        {
+            "active": False,
+            "task": None,
+            "started": None,
+            "duration": None,
+            "break_duration": None,
+            "job_id": None,
+            "audio_player": None,
+            "block_sites": False,
+        }
+    )
     state_store.clear_focus_session()

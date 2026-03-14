@@ -7,10 +7,11 @@ with graceful per-instance failure handling.
 """
 
 import asyncio
-import os
 import logging
-from typing import Optional, Dict, Any, List
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PiHoleResult:
     """Result of a Pi-hole API operation."""
+
     success: bool
     message: str
     details: Optional[Dict[str, Any]] = None
@@ -60,10 +62,7 @@ class PiHoleClient:
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    f"{self.url}/api/auth",
-                    json={"password": self.password}
-                )
+                resp = await client.post(f"{self.url}/api/auth", json={"password": self.password})
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -86,10 +85,7 @@ class PiHoleClient:
 
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                await client.delete(
-                    f"{self.url}/api/auth",
-                    headers={"sid": self._sid}
-                )
+                await client.delete(f"{self.url}/api/auth", headers={"sid": self._sid})
         except Exception:
             pass  # Best effort cleanup
         finally:
@@ -111,26 +107,17 @@ class PiHoleClient:
         """
         # Authenticate first
         if not await self._authenticate():
-            return PiHoleResult(
-                success=False,
-                message=f"[{self.name}] Failed to authenticate with Pi-hole"
-            )
+            return PiHoleResult(success=False, message=f"[{self.name}] Failed to authenticate with Pi-hole")
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 # First, get all domains in the focus group
-                resp = await client.get(
-                    f"{self.url}/api/domains/deny/exact",
-                    headers={"sid": self._sid}
-                )
+                resp = await client.get(f"{self.url}/api/domains/deny/exact", headers={"sid": self._sid})
                 resp.raise_for_status()
                 domains_data = resp.json()
 
                 # Find focus group ID
-                groups_resp = await client.get(
-                    f"{self.url}/api/groups",
-                    headers={"sid": self._sid}
-                )
+                groups_resp = await client.get(f"{self.url}/api/groups", headers={"sid": self._sid})
                 groups_resp.raise_for_status()
                 groups = groups_resp.json().get("groups", [])
                 focus_group_id = None
@@ -141,21 +128,14 @@ class PiHoleClient:
 
                 if focus_group_id is None:
                     return PiHoleResult(
-                        success=False,
-                        message=f"[{self.name}] Focus group '{self.focus_group}' not found"
+                        success=False, message=f"[{self.name}] Focus group '{self.focus_group}' not found"
                     )
 
                 # Filter domains that belong to focus group
-                focus_domains = [
-                    d for d in domains_data.get("domains", [])
-                    if focus_group_id in d.get("groups", [])
-                ]
+                focus_domains = [d for d in domains_data.get("domains", []) if focus_group_id in d.get("groups", [])]
 
                 if not focus_domains:
-                    return PiHoleResult(
-                        success=True,
-                        message=f"[{self.name}] No domains in focus group to toggle"
-                    )
+                    return PiHoleResult(success=True, message=f"[{self.name}] No domains in focus group to toggle")
 
                 # Toggle each domain's enabled state and add to Default group (0) when enabling
                 toggled = 0
@@ -172,11 +152,8 @@ class PiHoleClient:
 
                     update_resp = await client.put(
                         f"{self.url}/api/domains/deny/exact/{domain_name}",
-                        headers={
-                            "Content-Type": "application/json",
-                            "sid": self._sid
-                        },
-                        json={"groups": new_groups}
+                        headers={"Content-Type": "application/json", "sid": self._sid},
+                        json={"groups": new_groups},
                     )
                     if update_resp.status_code == 200:
                         toggled += 1
@@ -187,21 +164,20 @@ class PiHoleClient:
                 return PiHoleResult(
                     success=True,
                     message=f"[{self.name}] Focus blocking {action} ({toggled} domains)",
-                    details={"instance": self.name, "group": self.focus_group, "enabled": enabled, "domains_toggled": toggled}
+                    details={
+                        "instance": self.name,
+                        "group": self.focus_group,
+                        "enabled": enabled,
+                        "domains_toggled": toggled,
+                    },
                 )
 
         except httpx.HTTPStatusError as e:
             logger.error("[PIHOLE:%s] API error: %s", self.name, e.response.status_code)
-            return PiHoleResult(
-                success=False,
-                message=f"[{self.name}] Pi-hole API error: {e.response.status_code}"
-            )
+            return PiHoleResult(success=False, message=f"[{self.name}] Pi-hole API error: {e.response.status_code}")
         except Exception as e:
             logger.error("[PIHOLE:%s] Error setting blocking status: %s", self.name, e)
-            return PiHoleResult(
-                success=False,
-                message=f"[{self.name}] Pi-hole error: {str(e)}"
-            )
+            return PiHoleResult(success=False, message=f"[{self.name}] Pi-hole error: {str(e)}")
         finally:
             await self._end_session()
 
@@ -275,15 +251,13 @@ class PiHoleMultiClient:
             if failed:
                 msg += f" (failed on {', '.join(failed)})"
             return PiHoleResult(
-                success=True,
-                message=msg,
-                details={"succeeded": succeeded, "failed": failed, "enabled": enabled}
+                success=True, message=msg, details={"succeeded": succeeded, "failed": failed, "enabled": enabled}
             )
         else:
             return PiHoleResult(
                 success=False,
                 message=f"Focus blocking {action} failed on all instances: {', '.join(failed)}",
-                details={"succeeded": [], "failed": failed, "enabled": enabled}
+                details={"succeeded": [], "failed": failed, "enabled": enabled},
             )
 
     async def is_available(self) -> bool:
@@ -319,12 +293,14 @@ def get_pihole_client() -> PiHoleMultiClient:
     for url in urls:
         # Derive a short name from the URL for logging
         name = url.split("//")[-1].split(":")[0]
-        clients.append(PiHoleClient(
-            url=url,
-            password=password,
-            focus_group=focus_group,
-            name=name,
-        ))
+        clients.append(
+            PiHoleClient(
+                url=url,
+                password=password,
+                focus_group=focus_group,
+                name=name,
+            )
+        )
 
     logger.info("[PIHOLE] Initialized %d instance(s): %s", len(clients), ", ".join(c.name for c in clients))
     _pihole_multi_client = PiHoleMultiClient(clients=clients, enabled=enabled)

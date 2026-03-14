@@ -11,12 +11,11 @@ Gamified finance tracking for ADHD support:
 - YNAB integration for auto-tracking real spending
 """
 
-import os
-import json
-import sqlite3
 import logging
-from datetime import datetime
+import os
+import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 
 import httpx
 from fastapi import APIRouter, Request
@@ -220,6 +219,7 @@ def init_db():
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _current_year_month():
     return datetime.now().strftime("%Y-%m")
 
@@ -227,9 +227,7 @@ def _current_year_month():
 def _ensure_budget_period(conn, year_month=None):
     """Create budget period for the given month if it doesn't exist."""
     ym = year_month or _current_year_month()
-    existing = conn.execute(
-        "SELECT id FROM budget_periods WHERE year_month = ?", (ym,)
-    ).fetchone()
+    existing = conn.execute("SELECT id FROM budget_periods WHERE year_month = ?", (ym,)).fetchone()
     if existing:
         return ym
 
@@ -260,9 +258,7 @@ def _get_level_for_xp(total_xp):
 def _get_level_info(level):
     """Get level info from thresholds table."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM level_thresholds WHERE level = ?", (level,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM level_thresholds WHERE level = ?", (level,)).fetchone()
         if row:
             return dict(row)
         # Above max defined level
@@ -275,6 +271,7 @@ def _get_level_info(level):
 
 # ---- Config ----
 
+
 @router.get("/config")
 async def get_config():
     with get_db() as conn:
@@ -286,9 +283,14 @@ async def get_config():
 async def update_config(req: Request):
     body = await req.json()
     allowed = [
-        "monthly_discretionary", "monthly_investing", "monthly_buffer",
-        "retirement_current", "retirement_target_age", "current_age",
-        "savings_rate", "expected_return",
+        "monthly_discretionary",
+        "monthly_investing",
+        "monthly_buffer",
+        "retirement_current",
+        "retirement_target_age",
+        "current_age",
+        "savings_rate",
+        "expected_return",
     ]
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
@@ -306,6 +308,7 @@ async def update_config(req: Request):
 
 
 # ---- Game State ----
+
 
 @router.get("/game-state")
 async def get_game_state():
@@ -374,13 +377,12 @@ async def award_xp(req: Request):
 
 # ---- Budget ----
 
+
 @router.get("/budget/current")
 async def get_current_budget():
     with get_db() as conn:
         ym = _ensure_budget_period(conn)
-        period = dict(conn.execute(
-            "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
-        ).fetchone())
+        period = dict(conn.execute("SELECT * FROM budget_periods WHERE year_month = ?", (ym,)).fetchone())
 
         config = dict(conn.execute("SELECT * FROM finance_config WHERE id = 1").fetchone())
 
@@ -411,9 +413,7 @@ async def get_current_budget():
 @router.get("/budget/{year_month}")
 async def get_budget_period(year_month: str):
     with get_db() as conn:
-        period = conn.execute(
-            "SELECT * FROM budget_periods WHERE year_month = ?", (year_month,)
-        ).fetchone()
+        period = conn.execute("SELECT * FROM budget_periods WHERE year_month = ?", (year_month,)).fetchone()
         if not period:
             return JSONResponse({"error": f"No budget period for {year_month}"}, status_code=404)
         return dict(period)
@@ -447,9 +447,7 @@ async def add_manual_entry(req: Request):
             )
 
         # Get updated budget
-        period = dict(conn.execute(
-            "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
-        ).fetchone())
+        period = dict(conn.execute("SELECT * FROM budget_periods WHERE year_month = ?", (ym,)).fetchone())
 
     return {
         "success": True,
@@ -463,6 +461,7 @@ async def add_manual_entry(req: Request):
 
 
 # ---- Transactions ----
+
 
 @router.get("/transactions")
 async def get_transactions(month: str = None, limit: int = 50):
@@ -509,12 +508,11 @@ async def reclassify_transaction(req: Request):
 
 # ---- Side Quests ----
 
+
 @router.get("/side-quests")
 async def get_side_quests():
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM side_quests ORDER BY status ASC, created_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM side_quests ORDER BY status ASC, created_at DESC").fetchall()
         return {"quests": [dict(r) for r in rows]}
 
 
@@ -597,9 +595,7 @@ async def abandon_side_quest(quest_id: int):
         if not quest:
             return JSONResponse({"error": "Quest not found"}, status_code=404)
 
-        conn.execute(
-            "UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,)
-        )
+        conn.execute("UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,))
 
     logger.info(f"[FINANCE] Side quest abandoned: {quest['name']}")
     return {"success": True, "id": quest_id, "name": quest["name"]}
@@ -681,9 +677,7 @@ async def abandon_quest_post(quest_id: int):
         if not quest:
             return JSONResponse({"error": "Quest not found"}, status_code=404)
 
-        conn.execute(
-            "UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,)
-        )
+        conn.execute("UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,))
         updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
 
     logger.info(f"[FINANCE] Side quest abandoned: {quest['name']}")
@@ -691,6 +685,7 @@ async def abandon_quest_post(quest_id: int):
 
 
 # ---- Future Self Damage ----
+
 
 @router.get("/future-damage")
 async def calculate_future_damage(amount: float = 0):
@@ -711,6 +706,7 @@ async def calculate_future_damage(amount: float = 0):
 
 
 # ---- Windfalls / Boss Battles ----
+
 
 @router.get("/windfalls")
 async def get_windfalls(year: int = None):
@@ -743,11 +739,11 @@ async def log_windfall(req: Request):
                VALUES (?, ?, ?, ?, ?, 1)""",
             (wf_type, amount, invest_amount, spend_amount, ym),
         )
-        conn.execute(
-            "UPDATE budget_periods SET boss_defeated = 1 WHERE year_month = ?", (ym,)
-        )
+        conn.execute("UPDATE budget_periods SET boss_defeated = 1 WHERE year_month = ?", (ym,))
 
-    logger.info(f"[FINANCE] Windfall logged: {wf_type} ${amount} (invest: ${invest_amount:.0f}, spend: ${spend_amount:.0f})")
+    logger.info(
+        f"[FINANCE] Windfall logged: {wf_type} ${amount} (invest: ${invest_amount:.0f}, spend: ${spend_amount:.0f})"
+    )
     return {
         "success": True,
         "type": wf_type,
@@ -760,18 +756,18 @@ async def log_windfall(req: Request):
 
 # ---- XP History ----
 
+
 @router.get("/xp-history")
 async def get_xp_history(limit: int = 20):
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM xp_events ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM xp_events ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return {"events": [dict(r) for r in rows]}
 
 
 # ---------------------------------------------------------------------------
 # YNAB Integration
 # ---------------------------------------------------------------------------
+
 
 def _ynab_headers():
     """Get YNAB API authorization headers."""
@@ -838,9 +834,7 @@ async def ynab_sync_transactions():
 
         # Get last sync state
         with get_db() as conn:
-            sync_state = conn.execute(
-                "SELECT * FROM ynab_sync_state WHERE id = 1"
-            ).fetchone()
+            sync_state = conn.execute("SELECT * FROM ynab_sync_state WHERE id = 1").fetchone()
 
         last_knowledge = sync_state["last_knowledge_of_server"] if sync_state else None
 
@@ -931,8 +925,16 @@ async def ynab_sync_transactions():
                         """UPDATE transactions SET date=?, amount=?, name=?, merchant_name=?,
                            category=?, is_discretionary=?, budget_period=?
                            WHERE ynab_transaction_id=?""",
-                        (date, amount, payee or memo or "YNAB Transaction", payee,
-                         category, 1 if is_disc else 0, budget_period, ynab_id),
+                        (
+                            date,
+                            amount,
+                            payee or memo or "YNAB Transaction",
+                            payee,
+                            category,
+                            1 if is_disc else 0,
+                            budget_period,
+                            ynab_id,
+                        ),
                     )
 
                     # Add new amount to new period
@@ -950,8 +952,16 @@ async def ynab_sync_transactions():
                            (ynab_transaction_id, date, amount, name, merchant_name, category,
                             is_discretionary, budget_period, source)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ynab')""",
-                        (ynab_id, date, amount, payee or memo or "YNAB Transaction",
-                         payee, category, 1 if is_disc else 0, budget_period),
+                        (
+                            ynab_id,
+                            date,
+                            amount,
+                            payee or memo or "YNAB Transaction",
+                            payee,
+                            category,
+                            1 if is_disc else 0,
+                            budget_period,
+                        ),
                     )
 
                     if is_disc:
@@ -968,8 +978,7 @@ async def ynab_sync_transactions():
                    VALUES (1, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                    last_knowledge_of_server = ?, last_synced_at = ?""",
-                (budget_id, server_knowledge, datetime.now().isoformat(),
-                 server_knowledge, datetime.now().isoformat()),
+                (budget_id, server_knowledge, datetime.now().isoformat(), server_knowledge, datetime.now().isoformat()),
             )
 
         logger.info(f"[YNAB] Synced {synced} transactions (server_knowledge={server_knowledge})")
@@ -1038,6 +1047,7 @@ async def _sync_fun_money_budget(budget_id: str):
 
 # ---- YNAB API Routes ----
 
+
 @router.get("/ynab/status")
 async def ynab_status():
     """Get YNAB connection status and last sync info."""
@@ -1056,9 +1066,7 @@ async def ynab_status():
     with get_db() as conn:
         sync_state = conn.execute("SELECT * FROM ynab_sync_state WHERE id = 1").fetchone()
         cat_count = conn.execute("SELECT COUNT(*) FROM ynab_category_mapping").fetchone()[0]
-        disc_count = conn.execute(
-            "SELECT COUNT(*) FROM ynab_category_mapping WHERE is_discretionary = 1"
-        ).fetchone()[0]
+        disc_count = conn.execute("SELECT COUNT(*) FROM ynab_category_mapping WHERE is_discretionary = 1").fetchone()[0]
 
     # Try to get budget name
     budget_name = None
@@ -1123,19 +1131,23 @@ async def get_ynab_categories():
                 if cat.get("hidden") or cat.get("deleted"):
                     continue
                 cat_name = cat.get("name", "")
-                categories.append({
-                    "name": cat_name,
-                    "is_discretionary": existing_map.get(cat_name, False),
-                    "budgeted": cat.get("budgeted", 0) / 1000.0,
-                    "activity": abs(cat.get("activity", 0)) / 1000.0,
-                    "balance": cat.get("balance", 0) / 1000.0,
-                })
+                categories.append(
+                    {
+                        "name": cat_name,
+                        "is_discretionary": existing_map.get(cat_name, False),
+                        "budgeted": cat.get("budgeted", 0) / 1000.0,
+                        "activity": abs(cat.get("activity", 0)) / 1000.0,
+                        "balance": cat.get("balance", 0) / 1000.0,
+                    }
+                )
 
             if categories:
-                result.append({
-                    "group_name": group_name,
-                    "categories": categories,
-                })
+                result.append(
+                    {
+                        "group_name": group_name,
+                        "categories": categories,
+                    }
+                )
 
         return {"groups": result}
 
@@ -1214,9 +1226,7 @@ async def _recalculate_budget_from_transactions():
 async def reset_ynab_sync():
     """Reset YNAB sync state (forces full re-sync on next sync)."""
     with get_db() as conn:
-        conn.execute(
-            "UPDATE ynab_sync_state SET last_knowledge_of_server = NULL WHERE id = 1"
-        )
+        conn.execute("UPDATE ynab_sync_state SET last_knowledge_of_server = NULL WHERE id = 1")
         # Delete all YNAB-sourced transactions
         conn.execute("DELETE FROM transactions WHERE source = 'ynab'")
         # Recalculate budgets
@@ -1239,6 +1249,7 @@ async def reset_ynab_sync():
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
+
 
 def setup_finance():
     """Initialize finance module. Called from orchestrator startup."""

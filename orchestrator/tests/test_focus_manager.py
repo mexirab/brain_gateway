@@ -20,32 +20,32 @@ class TestDurationValidation:
 
     def test_valid_duration_25(self):
         """Standard Pomodoro duration."""
-        duration = int(25)
+        duration = 25
         assert 1 <= duration <= 480
 
     def test_valid_duration_1(self):
         """Minimum valid duration."""
-        duration = int(1)
+        duration = 1
         assert 1 <= duration <= 480
 
     def test_valid_duration_480(self):
         """Maximum valid duration (8 hours)."""
-        duration = int(480)
+        duration = 480
         assert 1 <= duration <= 480
 
     def test_invalid_duration_0(self):
         """Zero is below minimum."""
-        duration = int(0)
+        duration = 0
         assert not (1 <= duration <= 480)
 
     def test_invalid_duration_negative(self):
         """Negative duration."""
-        duration = int(-1)
+        duration = -1
         assert not (1 <= duration <= 480)
 
     def test_invalid_duration_too_high(self):
         """Above maximum."""
-        duration = int(481)
+        duration = 481
         assert not (1 <= duration <= 480)
 
     def test_invalid_duration_string(self):
@@ -64,21 +64,21 @@ class TestBreakDurationValidation:
 
     def test_valid_break_5(self):
         """Standard break."""
-        assert 1 <= int(5) <= 60
+        assert 1 <= 5 <= 60
 
     def test_valid_break_1(self):
         """Minimum."""
-        assert 1 <= int(1) <= 60
+        assert 1 <= 1 <= 60
 
     def test_valid_break_60(self):
         """Maximum."""
-        assert 1 <= int(60) <= 60
+        assert 1 <= 60 <= 60
 
     def test_invalid_break_0(self):
-        assert not (1 <= int(0) <= 60)
+        assert not (1 <= 0 <= 60)
 
     def test_invalid_break_61(self):
-        assert not (1 <= int(61) <= 60)
+        assert not (1 <= 61 <= 60)
 
     def test_invalid_break_negative(self):
-        assert not (1 <= int(-5) <= 60)
+        assert not (1 <= -5 <= 60)

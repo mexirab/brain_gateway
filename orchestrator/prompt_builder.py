@@ -9,26 +9,37 @@ import logging
 import time
 from typing import Any, Dict, List
 
-from shared import (
-    collection, embedding_model, MIN_COS, TOP_K, profile,
-)
-from mode_router import MODE_PROMPTS, get_tone_constraint
 from metrics import RAG_QUERY_COUNT, RAG_QUERY_LATENCY, RAG_RESULTS_RETURNED
+from mode_router import MODE_PROMPTS, get_tone_constraint
+from shared import (
+    MIN_COS,
+    TOP_K,
+    collection,
+    embedding_model,
+    profile,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def is_greeting(text: str) -> bool:
     """Check if text is a simple greeting (skip RAG for these)."""
-    greetings = ["hi", "hello", "hey", "good morning", "good afternoon",
-                 "good evening", "good night", "what's up", "howdy", "yo"]
+    greetings = [
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "good night",
+        "what's up",
+        "howdy",
+        "yo",
+    ]
     text_lower = text.lower().strip().rstrip("!?.,")
     if text_lower in greetings:
         return True
-    for g in greetings:
-        if text_lower.startswith(g + " ") or text_lower.startswith(g + ","):
-            return True
-    return False
+    return any(text_lower.startswith(g + " ") or text_lower.startswith(g + ",") for g in greetings)
 
 
 def last_user_text(messages: List[Dict[str, Any]]) -> str:
@@ -59,8 +70,7 @@ def rag_context(query: str) -> str:
         logger.warning(f"[RAG] Empty query after normalization (original: '{original_query}')")
         return ""
 
-    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}')",
-                extra={"component": "rag"})
+    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}')", extra={"component": "rag"})
 
     try:
         query_embedding = embedding_model.encode(query, normalize_embeddings=True).tolist()
@@ -88,14 +98,14 @@ def rag_context(query: str) -> str:
     MIN_CHUNK_LEN = 100
 
     chunks = []
-    for i, (doc, meta, dist) in enumerate(zip(docs, metas, dists)):
+    for _i, (doc, meta, dist) in enumerate(zip(docs, metas, dists, strict=False)):
         if doc is None or len(doc.strip()) < MIN_CHUNK_LEN:
             logger.debug(f"[RAG] Skipping short chunk ({len(doc)} chars)")
             continue
 
         try:
             cos = 1.0 - float(dist)
-        except:
+        except (ValueError, TypeError):
             cos = None
 
         if cos is not None and cos < MIN_COS and len(chunks) >= MIN_RESULTS:
@@ -114,9 +124,10 @@ def rag_context(query: str) -> str:
 
     RAG_QUERY_LATENCY.observe(time.time() - _rag_t0)
     RAG_RESULTS_RETURNED.observe(len(chunks))
-    logger.info(f"[RAG] Returning {len(chunks)} chunks (filtered by MIN_COS={MIN_COS})",
-                extra={"component": "rag", "result_count": len(chunks),
-                       "latency_ms": int((time.time() - _rag_t0) * 1000)})
+    logger.info(
+        f"[RAG] Returning {len(chunks)} chunks (filtered by MIN_COS={MIN_COS})",
+        extra={"component": "rag", "result_count": len(chunks), "latency_ms": int((time.time() - _rag_t0) * 1000)},
+    )
 
     return "\n".join(chunks) if chunks else ""
 

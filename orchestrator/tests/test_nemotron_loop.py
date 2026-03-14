@@ -9,24 +9,23 @@ orchestrator dependency chain (shared → chromadb → ...). The actual function
 are identical — this tests the logic, not the import.
 """
 
-import re
 import json
-import pytest
-
+import re
 
 # --- Extracted pure functions (identical to nemotron_loop.py) ---
 
+
 def clean_response(text: str) -> str:
     """Remove <think> and <tool_call> tags from Nemotron responses."""
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
     return text.strip()
 
 
 def parse_tool_calls_from_content(content: str):
     """Parse <tool_call> tags from Nemotron's content output."""
     tool_calls = []
-    pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+    pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
     matches = re.findall(pattern, content, re.DOTALL)
 
     for i, match in enumerate(matches):
@@ -35,14 +34,16 @@ def parse_tool_calls_from_content(content: str):
             tool_name = parsed.get("name", "")
             arguments = parsed.get("arguments", {})
 
-            tool_calls.append({
-                "id": f"call_{i}",
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(arguments) if isinstance(arguments, dict) else arguments
+            tool_calls.append(
+                {
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(arguments) if isinstance(arguments, dict) else arguments,
+                    },
                 }
-            })
+            )
         except json.JSONDecodeError:
             continue
 
@@ -50,6 +51,7 @@ def parse_tool_calls_from_content(content: str):
 
 
 # --- Tests ---
+
 
 class TestParseToolCalls:
     def test_single_tool_call(self):

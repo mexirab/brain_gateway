@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RoutingResult:
-    mode: str                       # explainer | mirror | counterbalance | challenge | baseline
-    intensity: str                  # low | medium | high
+    mode: str  # explainer | mirror | counterbalance | challenge | baseline
+    intensity: str  # low | medium | high
     tags: list[str] = field(default_factory=list)  # detected signal tags for logging
 
 
@@ -32,25 +32,21 @@ MODE_PROMPTS = {
 - No coaching language or emotional scaffolding
 - Explain how/why things work clearly
 - Only shift to support if distress appears mid-conversation""",
-
     "mirror": """MODE: MIRROR (reflective)
 - Identify behavioral patterns, distortions, and strengths
 - Reference what you know about the user from personal context
 - End with ONE precise question to deepen self-awareness
 - Do not lecture — reflect back what you observe""",
-
     "counterbalance": """MODE: COUNTERBALANCE (grounded support)
 - Name urgency distortions and all-or-nothing thinking
 - Reduce the emotional temperature without dismissing feelings
 - Suggest small, repeatable actions (not grand plans)
 - Avoid shame language — normalize the struggle""",
-
     "challenge": """MODE: CHALLENGE (accountability)
 - Be firm but not shaming
 - Provide ONE specific next action
 - Include a time-bound suggestion ("by end of day", "in the next hour")
 - Minimal validation — the user asked to be pushed""",
-
     "baseline": """MODE: BASELINE (low cognitive load)
 - Reduce cognitive load — keep it simple
 - Offer 2-3 concrete options, not open-ended questions
@@ -77,34 +73,82 @@ class ModeRouter:
 
     # Step 1: Explicit intent overrides (phrase → mode)
     EXPLICIT_MIRROR_PHRASES = [
-        "analyze me", "analyze my", "reflect on", "behavioral tendencies",
-        "behavioral patterns", "my patterns", "what do you notice about me",
+        "analyze me",
+        "analyze my",
+        "reflect on",
+        "behavioral tendencies",
+        "behavioral patterns",
+        "my patterns",
+        "what do you notice about me",
     ]
     EXPLICIT_CHALLENGE_PHRASES = [
-        "hold me accountable", "don't let me off", "push me",
-        "be tough", "be honest with me", "call me out",
-        "don't sugarcoat", "no excuses",
+        "hold me accountable",
+        "don't let me off",
+        "push me",
+        "be tough",
+        "be honest with me",
+        "call me out",
+        "don't sugarcoat",
+        "no excuses",
     ]
 
     # Step 2: Emotional intensity keywords
     HIGH_INTENSITY = {
-        "panic", "panicking", "hopeless", "killing me", "can't stop crying",
-        "uncontrollable", "self-harm", "hurt myself", "can't breathe",
-        "breaking down", "falling apart", "can't take it",
+        "panic",
+        "panicking",
+        "hopeless",
+        "killing me",
+        "can't stop crying",
+        "uncontrollable",
+        "self-harm",
+        "hurt myself",
+        "can't breathe",
+        "breaking down",
+        "falling apart",
+        "can't take it",
     }
     MEDIUM_INTENSITY = {
-        "lonely", "shame", "ashamed", "rejected", "anxious", "anxiety",
-        "depressed", "depression", "emptiness", "empty", "spiral",
-        "spiraling", "crash", "crashing", "overwhelmed", "worthless",
-        "numb", "stuck", "lost", "exhausted", "drained", "burned out",
+        "lonely",
+        "shame",
+        "ashamed",
+        "rejected",
+        "anxious",
+        "anxiety",
+        "depressed",
+        "depression",
+        "emptiness",
+        "empty",
+        "spiral",
+        "spiraling",
+        "crash",
+        "crashing",
+        "overwhelmed",
+        "worthless",
+        "numb",
+        "stuck",
+        "lost",
+        "exhausted",
+        "drained",
+        "burned out",
     }
 
     # Step 3: Curiosity signals (mechanism language)
     CURIOSITY_PHRASES = [
-        "how does", "how do", "why does", "why do", "what is",
-        "what are", "what's the", "symbolism", "history of",
-        "difference between", "explain", "tell me about",
-        "how come", "what causes", "mechanism",
+        "how does",
+        "how do",
+        "why does",
+        "why do",
+        "what is",
+        "what are",
+        "what's the",
+        "symbolism",
+        "history of",
+        "difference between",
+        "explain",
+        "tell me about",
+        "how come",
+        "what causes",
+        "mechanism",
     ]
 
     def route(self, user_text: str) -> RoutingResult:
@@ -152,7 +196,7 @@ class ModeRouter:
                 return "high"
 
         # Check medium intensity (word-level matching)
-        words = set(re.findall(r'\b\w+\b', text_lower))
+        words = set(re.findall(r"\b\w+\b", text_lower))
         for trigger in self.MEDIUM_INTENSITY:
             if trigger in words or trigger in text_lower:
                 tags.append(f"intensity_medium:{trigger}")

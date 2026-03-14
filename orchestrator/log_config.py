@@ -33,8 +33,16 @@ class JSONFormatter(logging.Formatter):
     """Formats log records as single-line JSON."""
 
     EXTRA_FIELDS = (
-        "component", "tool_name", "latency_ms", "mode", "intensity",
-        "model", "entity_id", "error_type", "result_count", "request_id",
+        "component",
+        "tool_name",
+        "latency_ms",
+        "mode",
+        "intensity",
+        "model",
+        "entity_id",
+        "error_type",
+        "result_count",
+        "request_id",
     )
 
     def format(self, record: logging.LogRecord) -> str:

@@ -2,15 +2,16 @@
 Helios lifecycle management: health checks, SSH start/stop, idle tracking.
 """
 
-import os
-import time
 import asyncio
 import logging
+import os
+import time
 
 import shared
 from metrics import (
-    HELIOS_START_COUNT, HELIOS_STOP_COUNT, HELIOS_START_LATENCY,
-    HELIOS_ONLINE,
+    HELIOS_START_COUNT,
+    HELIOS_START_LATENCY,
+    HELIOS_STOP_COUNT,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ async def check_helios_health() -> bool:
     try:
         r = await shared._http.get(f"{shared.HELIOS_URL.replace('/v1', '')}/health", timeout=5)
         return r.status_code == 200
-    except:
+    except Exception:
         return False
 
 
@@ -31,8 +32,7 @@ async def start_helios() -> bool:
 
     HELIOS_START_COUNT.inc()
     _helios_t0 = time.time()
-    logger.info("[EXPERT] Helios is offline, attempting to start...",
-                extra={"component": "helios"})
+    logger.info("[EXPERT] Helios is offline, attempting to start...", extra={"component": "helios"})
 
     helios_ip = os.environ.get("NODE_HELIOS_IP", "10.0.0.195")
     ssh_user = os.environ.get("HELIOS_SSH_USER", "labadmin")
@@ -65,10 +65,12 @@ async def start_helios() -> bool:
         await asyncio.sleep(5)
         if await check_helios_health():
             HELIOS_START_LATENCY.observe(time.time() - _helios_t0)
-            logger.info(f"[EXPERT] Helios ready after ~{(i+1)*5} seconds",
-                        extra={"component": "helios", "latency_ms": int((time.time() - _helios_t0) * 1000)})
+            logger.info(
+                f"[EXPERT] Helios ready after ~{(i + 1) * 5} seconds",
+                extra={"component": "helios", "latency_ms": int((time.time() - _helios_t0) * 1000)},
+            )
             return True
-        logger.debug(f"[EXPERT] Still waiting... ({(i+1)*5}s)")
+        logger.debug(f"[EXPERT] Still waiting... ({(i + 1) * 5}s)")
 
     logger.error("[EXPERT] Helios failed to start within 3 minutes")
     return False
@@ -125,5 +127,7 @@ async def check_helios_idle():
     idle_time = time.time() - shared._last_helios_request
 
     if idle_time > idle_timeout:
-        logger.info(f"[EXPERT] Helios idle for {idle_time:.0f}s (threshold: {idle_timeout}s), stopping to save power...")
+        logger.info(
+            f"[EXPERT] Helios idle for {idle_time:.0f}s (threshold: {idle_timeout}s), stopping to save power..."
+        )
         await stop_helios()

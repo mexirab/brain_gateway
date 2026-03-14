@@ -11,78 +11,89 @@ startup/shutdown, and hosts the chat endpoint. All tool execution, prompts,
 routes, and infrastructure logic live in their respective modules.
 """
 
-import os
-import logging
-import time
 import collections
-from typing import Any, Dict, List, Optional
+import logging
+import os
+import time
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Configure logging with ring buffer for self-diagnosis
-logging.basicConfig(level=logging.INFO)
+# Configure structured JSON logging
+from log_config import configure_logging
+
+configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 from log_buffer import log_ring
+
 logging.getLogger().addHandler(log_ring)
 
 # --- Dedicated module imports (the decoupled architecture) ---
 
 # Infrastructure
-from google_calendar import get_calendar_client
+# Shared state (singletons initialized at module level in shared.py)
+import shared
 import state_store
 
-# Prompts, RAG, helpers
-from prompt_builder import (
-    rag_context, get_helios_system_prompt,
-    get_orchestrator_system_prompt, get_nemotron_system_prompt,
-    is_greeting, last_user_text,
-)
+# REST API routes (infrastructure endpoints)
+from api_routes import router as api_router
 
-# Tool definitions (schemas for Nemotron and Helios)
-from tool_definitions import HELIOS_TOOLS, get_orchestrator_tools
-
-# Tool execution dispatcher
-from tool_handlers import execute_tool, deliver_reminder_job
-
-# Nemotron agentic loop
-from nemotron_loop import _run_nemotron_tool_loop, clean_response, parse_tool_calls_from_content
-
-# Helios lifecycle management
-from helios_manager import check_helios_health, start_helios, stop_helios, check_helios_idle
+# Background scheduler jobs
+from background_jobs import morning_briefing, poll_calendar
+from cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
 from fast_path import try_fast_path
 
 # Focus session management
 from focus_manager import deliver_focus_break
-from pihole_client import get_pihole_client
+from google_calendar import get_calendar_client
 
-# Background scheduler jobs
-from background_jobs import poll_calendar, morning_briefing
-
-# REST API routes (infrastructure endpoints)
-from api_routes import router as api_router
+# Helios lifecycle management
+from helios_manager import check_helios_health, check_helios_idle, start_helios
 
 # Cloud brain + local agent
 from local_agent import LocalAgent
-from cloud_brain import CloudBrain
 
-# Shared state (singletons initialized at module level in shared.py)
-import shared
-from shared import (
-    ha_client, scheduler, collection, current_focus_session,
-    NEMOTRON_URL, NEMOTRON_MODEL, HELIOS_URL, HELIOS_MODEL,
-    CHROMA_COLLECTION, CHROMA_PERSIST,
-    CALENDAR_POLL_INTERVAL, MORNING_BRIEFING_TIME, MORNING_BRIEFING_ENABLED,
-    profile,
+# Nemotron agentic loop
+from nemotron_loop import _run_nemotron_tool_loop, clean_response, parse_tool_calls_from_content
+from pihole_client import get_pihole_client
+
+# Prompts, RAG, helpers
+from prompt_builder import (
+    get_helios_system_prompt,
+    get_orchestrator_system_prompt,
+    is_greeting,
+    last_user_text,
+    rag_context,
 )
+from shared import (
+    CALENDAR_POLL_INTERVAL,
+    HELIOS_MODEL,
+    HELIOS_URL,
+    MORNING_BRIEFING_ENABLED,
+    MORNING_BRIEFING_TIME,
+    NEMOTRON_MODEL,
+    NEMOTRON_URL,
+    collection,
+    current_focus_session,
+    ha_client,
+    profile,
+    scheduler,
+)
+
+# Tool definitions (schemas for Nemotron and Helios)
+from tool_definitions import HELIOS_TOOLS
+
+# Tool execution dispatcher
+from tool_handlers import deliver_reminder_job
 
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
@@ -206,9 +217,16 @@ app.include_router(api_router)
 # LLM BACKEND RESOLUTION (unique to orchestrator.py)
 # =============================================================================
 
-async def call_model(url: str, model: str, messages: List[Dict], system: str = "",
-                     tools: List = None, tool_choice: str = "auto",
-                     timeout: int = 180) -> Dict[str, Any]:
+
+async def call_model(
+    url: str,
+    model: str,
+    messages: List[Dict],
+    system: str = "",
+    tools: List = None,
+    tool_choice: str = "auto",
+    timeout: int = 180,
+) -> Dict[str, Any]:
     """Call an LLM endpoint via the appropriate backend.
 
     Signature unchanged from v6. Backend selection is automatic based on
@@ -219,17 +237,21 @@ async def call_model(url: str, model: str, messages: List[Dict], system: str = "
     """
     backend = _resolve_backend(url, model)
     return await backend.chat_completion(
-        messages, system=system, tools=tools,
-        tool_choice=tool_choice, timeout=timeout,
+        messages,
+        system=system,
+        tools=tools,
+        tool_choice=tool_choice,
+        timeout=timeout,
     )
 
 
-async def stream_final_response(url: str, model: str, messages: List[Dict],
-                                system: str = "", timeout: int = 180):
+async def stream_final_response(url: str, model: str, messages: List[Dict], system: str = "", timeout: int = 180):
     """Stream the final response via the appropriate backend."""
     backend = _resolve_backend(url, model)
     async for chunk in backend.stream_chat_completion(
-        messages, system=system, timeout=timeout,
+        messages,
+        system=system,
+        timeout=timeout,
     ):
         yield chunk
 
@@ -253,6 +275,7 @@ def _resolve_backend(url: str, model: str):
 # CHAT ENDPOINT (the brain — delegates to CloudBrain)
 # =============================================================================
 
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
     """
@@ -260,14 +283,15 @@ async def chat_completions(req: Request):
 
     Delegates to CloudBrain for the full chat flow.
     """
+    from schemas import ChatRequest
+
     body = await req.json()
-    messages = body.get("messages", [])
-    external_tools = body.get("tools")  # HA may send its own tools
-    stream = body.get("stream", False)
+    chat_req = ChatRequest(**body)
 
     return await cloud_brain.chat(
-        messages, stream=stream,
-        external_tools=external_tools,
+        [m.model_dump() for m in chat_req.messages],
+        stream=chat_req.stream,
+        external_tools=chat_req.tools,
         ha_client=ha_client,
     )
 
@@ -275,6 +299,7 @@ async def chat_completions(req: Request):
 # =============================================================================
 # STARTUP / SHUTDOWN
 # =============================================================================
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -349,7 +374,7 @@ async def startup_event():
         nemotron_url=NEMOTRON_URL,
         nemotron_model=NEMOTRON_MODEL,
     )
-    cloud_brain.on_helios_request = lambda: setattr(shared, '_last_helios_request', time.time())
+    cloud_brain.on_helios_request = lambda: setattr(shared, "_last_helios_request", time.time())
     logger.info("[orchestrator] CloudBrain + LocalAgent initialized")
 
     # Reload pending reminders from DB and re-schedule
@@ -397,14 +422,18 @@ async def startup_event():
             remaining = (end_time - datetime.now()).total_seconds() / 60
             scheduler.add_job(
                 deliver_focus_break,
-                trigger='date',
+                trigger="date",
                 run_date=end_time,
                 args=[saved_focus["task"], saved_focus["break_duration"]],
                 id=job_id,
                 replace_existing=True,
             )
-            logger.info("[FOCUS] Restored active focus session '%s' (%.0f min remaining, break at %s)",
-                        saved_focus["task"], remaining, end_time.strftime('%H:%M'))
+            logger.info(
+                "[FOCUS] Restored active focus session '%s' (%.0f min remaining, break at %s)",
+                saved_focus["task"],
+                remaining,
+                end_time.strftime("%H:%M"),
+            )
 
     # Defensive: always ensure Pi-hole blocking is off if no active focus session
     if not current_focus_session["active"]:
@@ -457,4 +486,5 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8888)

@@ -5,10 +5,11 @@ Provides web search capabilities via a self-hosted SearXNG instance.
 Gracefully handles SearXNG being unavailable.
 """
 
-import os
 import logging
-from typing import Optional, List
+import os
 from dataclasses import dataclass, field
+from typing import List, Optional
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SearchResult:
     """A single search result."""
+
     title: str
     url: str
     content: str
@@ -27,6 +29,7 @@ class SearchResult:
 @dataclass
 class SearchResponse:
     """Response from a web search."""
+
     success: bool
     results: List[SearchResult] = field(default_factory=list)
     error: Optional[str] = None
@@ -93,14 +96,16 @@ class SearXNGClient:
 
             raw_results = data.get("results", [])
             results = []
-            for r in raw_results[:self.max_results]:
-                results.append(SearchResult(
-                    title=r.get("title", ""),
-                    url=r.get("url", ""),
-                    content=r.get("content", ""),
-                    engine=r.get("engine", ""),
-                    score=r.get("score", 0.0),
-                ))
+            for r in raw_results[: self.max_results]:
+                results.append(
+                    SearchResult(
+                        title=r.get("title", ""),
+                        url=r.get("url", ""),
+                        content=r.get("content", ""),
+                        engine=r.get("engine", ""),
+                        score=r.get("score", 0.0),
+                    )
+                )
 
             logger.info(f"[WEB_SEARCH] Got {len(results)} results (from {len(raw_results)} total)")
             return SearchResponse(success=True, results=results, query=query)

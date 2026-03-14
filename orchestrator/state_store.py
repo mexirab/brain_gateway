@@ -7,9 +7,9 @@ tracking. Survives orchestrator restarts.
 Uses the same pattern as finance_manager.py (contextmanager + WAL mode).
 """
 
+import logging
 import os
 import sqlite3
-import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -77,8 +77,8 @@ def init_db():
 # Reminders
 # ---------------------------------------------------------------------------
 
-def save_reminder(reminder_id: str, text: str, trigger_time: str,
-                  target: str = "both") -> None:
+
+def save_reminder(reminder_id: str, text: str, trigger_time: str, target: str = "both") -> None:
     """Save a reminder to persistent storage."""
     with get_db() as conn:
         conn.execute(
@@ -98,9 +98,7 @@ def get_reminder(reminder_id: str) -> Optional[Dict[str, Any]]:
 def get_pending_reminders() -> List[Dict[str, Any]]:
     """Get all pending reminders."""
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM reminders WHERE status = 'pending' ORDER BY trigger_time"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM reminders WHERE status = 'pending' ORDER BY trigger_time").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -135,6 +133,7 @@ def delete_reminder(reminder_id: str) -> bool:
 # Focus Sessions
 # ---------------------------------------------------------------------------
 
+
 def save_focus_session(session: Dict[str, Any]) -> None:
     """Save focus session state to persistent storage."""
     with get_db() as conn:
@@ -162,9 +161,14 @@ def load_focus_session() -> Dict[str, Any]:
         row = conn.execute("SELECT * FROM focus_sessions WHERE id = 1").fetchone()
         if not row or not row["active"]:
             return {
-                "active": False, "task": None, "started": None,
-                "duration": None, "break_duration": None,
-                "job_id": None, "audio_player": None, "block_sites": False,
+                "active": False,
+                "task": None,
+                "started": None,
+                "duration": None,
+                "break_duration": None,
+                "job_id": None,
+                "audio_player": None,
+                "block_sites": False,
             }
         started = datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
         return {
@@ -194,6 +198,7 @@ def clear_focus_session() -> None:
 # Notification Tracking
 # ---------------------------------------------------------------------------
 
+
 def mark_notified(key: str) -> None:
     """Mark a notification key as sent."""
     with get_db() as conn:
@@ -206,9 +211,7 @@ def mark_notified(key: str) -> None:
 def is_notified(key: str) -> bool:
     """Check if a notification key has been sent."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM notification_tracking WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT 1 FROM notification_tracking WHERE key = ?", (key,)).fetchone()
         return row is not None
 
 
@@ -216,9 +219,7 @@ def clear_stale_notifications(older_than_hours: int = 48) -> int:
     """Remove notification tracking entries older than the threshold."""
     cutoff = (datetime.now() - timedelta(hours=older_than_hours)).isoformat()
     with get_db() as conn:
-        cursor = conn.execute(
-            "DELETE FROM notification_tracking WHERE notified_at < ?", (cutoff,)
-        )
+        cursor = conn.execute("DELETE FROM notification_tracking WHERE notified_at < ?", (cutoff,))
         count = cursor.rowcount
     if count > 0:
         logger.info(f"[STATE] Cleared {count} stale notification entries (>{older_than_hours}h)")
@@ -228,7 +229,5 @@ def clear_stale_notifications(older_than_hours: int = 48) -> int:
 def clear_notifications_by_prefix(prefix: str) -> int:
     """Remove all notification tracking entries matching a prefix (e.g., 'temp:')."""
     with get_db() as conn:
-        cursor = conn.execute(
-            "DELETE FROM notification_tracking WHERE key LIKE ?", (f"{prefix}%",)
-        )
+        cursor = conn.execute("DELETE FROM notification_tracking WHERE key LIKE ?", (f"{prefix}%",))
         return cursor.rowcount

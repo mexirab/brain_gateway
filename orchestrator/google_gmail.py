@@ -10,14 +10,13 @@ Usage:
     response = await client.list_messages(query="is:unread", max_results=10)
 """
 
-import os
-import re
 import base64
 import logging
+import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Optional, List, Set
-from dataclasses import dataclass, field
+from typing import List, Optional, Set
 
 import httpx
 
@@ -31,6 +30,7 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 @dataclass
 class EmailMessage:
     """A single email message."""
+
     id: str
     thread_id: str
     subject: str
@@ -44,6 +44,7 @@ class EmailMessage:
 @dataclass
 class GmailResponse:
     """Response from a Gmail query."""
+
     success: bool
     messages: List[EmailMessage] = field(default_factory=list)
     total_estimate: int = 0
@@ -78,6 +79,7 @@ class GoogleGmailClient:
             return {}
         if self._creds.expired and self._creds.refresh_token:
             from google.auth.transport.requests import Request
+
             self._creds.refresh(Request())
         return {"Authorization": f"Bearer {self._creds.token}"}
 
@@ -138,10 +140,7 @@ class GoogleGmailClient:
 
     def _parse_message(self, data: dict) -> EmailMessage:
         """Parse a Gmail API message response into EmailMessage."""
-        headers = {
-            h["name"].lower(): h["value"]
-            for h in data.get("payload", {}).get("headers", [])
-        }
+        headers = {h["name"].lower(): h["value"] for h in data.get("payload", {}).get("headers", [])}
 
         # Parse date
         date_str = headers.get("date", "")
@@ -163,9 +162,7 @@ class GoogleGmailClient:
             body_text=body_text,
         )
 
-    async def list_messages(
-        self, query: str = "", max_results: int = 10, label: str = "INBOX"
-    ) -> GmailResponse:
+    async def list_messages(self, query: str = "", max_results: int = 10, label: str = "INBOX") -> GmailResponse:
         """
         List Gmail messages matching a query.
 
@@ -204,23 +201,17 @@ class GoogleGmailClient:
             messages = []
             for stub in message_stubs:
                 try:
-                    msg_data = await self._get(
-                        f"/messages/{stub['id']}", params={"format": "full"}
-                    )
+                    msg_data = await self._get(f"/messages/{stub['id']}", params={"format": "full"})
                     messages.append(self._parse_message(msg_data))
                 except Exception as e:
                     logger.warning(f"[GMAIL] Failed to fetch message {stub['id']}: {e}")
 
             logger.info(f"[GMAIL] Found {len(messages)} messages (est. {total_estimate} total)")
-            return GmailResponse(
-                success=True, messages=messages, total_estimate=total_estimate
-            )
+            return GmailResponse(success=True, messages=messages, total_estimate=total_estimate)
 
         except httpx.HTTPStatusError as e:
             logger.error(f"[GMAIL] API error: {e.response.status_code}")
-            return GmailResponse(
-                success=False, error=f"Gmail API error: {e.response.status_code}"
-            )
+            return GmailResponse(success=False, error=f"Gmail API error: {e.response.status_code}")
         except Exception as e:
             logger.error(f"[GMAIL] Error: {e}")
             return GmailResponse(success=False, error=str(e))
@@ -231,9 +222,7 @@ class GoogleGmailClient:
             return GmailResponse(success=False, error="Gmail not configured.")
 
         try:
-            data = await self._get(
-                f"/messages/{message_id}", params={"format": "full"}
-            )
+            data = await self._get(f"/messages/{message_id}", params={"format": "full"})
             msg = self._parse_message(data)
             return GmailResponse(success=True, messages=[msg])
         except Exception as e:

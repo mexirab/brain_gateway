@@ -3,11 +3,12 @@ Data Manager for Brain Gateway
 Handles structured YAML data (medications, projects) with auto-markdown generation.
 """
 
-import os
-import yaml
 import logging
+import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +24,11 @@ PROJECTS_MD = os.path.join(RAG_BASE, "30_projects", "current.md")
 # MEDICATIONS
 # =============================================================================
 
+
 def get_medications() -> Dict[str, Any]:
     """Load medications from YAML."""
     try:
-        with open(MEDICATIONS_YAML, 'r') as f:
+        with open(MEDICATIONS_YAML) as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
         logger.warning(f"Medications file not found: {MEDICATIONS_YAML}")
@@ -39,7 +41,7 @@ def get_medications() -> Dict[str, Any]:
 def save_medications(data: Dict[str, Any]) -> bool:
     """Save medications to YAML and regenerate markdown."""
     try:
-        with open(MEDICATIONS_YAML, 'w') as f:
+        with open(MEDICATIONS_YAML, "w") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         _generate_medications_md(data)
         return True
@@ -48,8 +50,7 @@ def save_medications(data: Dict[str, Any]) -> bool:
         return False
 
 
-def add_medication(name: str, dose: str = "", schedule: str = "morning",
-                   purpose: str = "", notes: str = "") -> str:
+def add_medication(name: str, dose: str = "", schedule: str = "morning", purpose: str = "", notes: str = "") -> str:
     """Add a medication to the specified schedule."""
     data = get_medications()
 
@@ -94,30 +95,21 @@ def remove_medication(name: str) -> str:
     for schedule in ["morning", "evening"]:
         if "daily" in data and schedule in data["daily"]:
             original_len = len(data["daily"][schedule])
-            data["daily"][schedule] = [
-                m for m in data["daily"][schedule]
-                if m.get("name", "").lower() != name.lower()
-            ]
+            data["daily"][schedule] = [m for m in data["daily"][schedule] if m.get("name", "").lower() != name.lower()]
             if len(data["daily"][schedule]) < original_len:
                 found = True
 
     # Search weekly
     if "weekly" in data:
         original_len = len(data["weekly"])
-        data["weekly"] = [
-            m for m in data["weekly"]
-            if m.get("name", "").lower() != name.lower()
-        ]
+        data["weekly"] = [m for m in data["weekly"] if m.get("name", "").lower() != name.lower()]
         if len(data["weekly"]) < original_len:
             found = True
 
     # Search as_needed
     if "as_needed" in data:
         original_len = len(data["as_needed"])
-        data["as_needed"] = [
-            m for m in data["as_needed"]
-            if m.get("name", "").lower() != name.lower()
-        ]
+        data["as_needed"] = [m for m in data["as_needed"] if m.get("name", "").lower() != name.lower()]
         if len(data["as_needed"]) < original_len:
             found = True
 
@@ -128,8 +120,7 @@ def remove_medication(name: str) -> str:
     return f"Medication '{name}' not found."
 
 
-def update_medication(name: str, dose: str = None, purpose: str = None,
-                      notes: str = None, schedule: str = None) -> str:
+def update_medication(name: str, dose: str = None, purpose: str = None, notes: str = None, schedule: str = None) -> str:
     """Update an existing medication's properties."""
     data = get_medications()
     found = False
@@ -174,6 +165,7 @@ def update_medication(name: str, dose: str = None, purpose: str = None,
 def _generate_medications_md(data: Dict[str, Any]) -> None:
     """Regenerate medications.md from YAML data."""
     from user_profile import get_profile
+
     lines = [f"# {get_profile().user_name}'s Medications", ""]
 
     # Daily medications
@@ -185,7 +177,9 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
     lines.append("| Medication | Dose | Purpose | Notes |")
     lines.append("|------------|------|---------|-------|")
     for med in data.get("daily", {}).get("morning", []):
-        lines.append(f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |")
+        lines.append(
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |"
+        )
     lines.append("")
 
     # Evening
@@ -193,7 +187,9 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
     lines.append("| Medication | Dose | Purpose | Notes |")
     lines.append("|------------|------|---------|-------|")
     for med in data.get("daily", {}).get("evening", []):
-        lines.append(f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |")
+        lines.append(
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |"
+        )
     lines.append("")
 
     # Weekly
@@ -201,7 +197,9 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
     lines.append("| Medication | Dose | When to Take | Notes |")
     lines.append("|------------|------|--------------|-------|")
     for med in data.get("weekly", []):
-        lines.append(f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('when', '')} | {med.get('notes', '')} |")
+        lines.append(
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('when', '')} | {med.get('notes', '')} |"
+        )
     lines.append("")
 
     # As-needed
@@ -209,7 +207,9 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
     lines.append("| Medication | Dose | When to Take | Max per Day |")
     lines.append("|------------|------|--------------|-------------|")
     for med in data.get("as_needed", []):
-        lines.append(f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('when', '')} | {med.get('max_per_day', '')} |")
+        lines.append(
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('when', '')} | {med.get('max_per_day', '')} |"
+        )
     lines.append("")
 
     # Pharmacy & Refills
@@ -240,7 +240,7 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
     lines.append("")
 
     try:
-        with open(MEDICATIONS_MD, 'w') as f:
+        with open(MEDICATIONS_MD, "w") as f:
             f.write("\n".join(lines))
         logger.info(f"Regenerated {MEDICATIONS_MD}")
     except Exception as e:
@@ -251,10 +251,11 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
 # PROJECTS
 # =============================================================================
 
+
 def get_projects() -> Dict[str, Any]:
     """Load projects from YAML."""
     try:
-        with open(PROJECTS_YAML, 'r') as f:
+        with open(PROJECTS_YAML) as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
         logger.warning(f"Projects file not found: {PROJECTS_YAML}")
@@ -267,7 +268,7 @@ def get_projects() -> Dict[str, Any]:
 def save_projects(data: Dict[str, Any]) -> bool:
     """Save projects to YAML and regenerate markdown."""
     try:
-        with open(PROJECTS_YAML, 'w') as f:
+        with open(PROJECTS_YAML, "w") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         _generate_projects_md(data)
         return True
@@ -276,8 +277,7 @@ def save_projects(data: Dict[str, Any]) -> bool:
         return False
 
 
-def add_project(name: str, goal: str = "", priority: str = "medium",
-                category: str = "active") -> str:
+def add_project(name: str, goal: str = "", priority: str = "medium", category: str = "active") -> str:
     """Add a new project."""
     data = get_projects()
 
@@ -319,7 +319,8 @@ def remove_project(name: str) -> str:
         items = data.get(category, [])
         original_len = len(items)
         data[category] = [
-            p for p in items
+            p
+            for p in items
             if not (
                 (isinstance(p, dict) and p.get("name", "").lower() == name.lower())
                 or (isinstance(p, str) and p.lower() == name.lower())
@@ -357,7 +358,7 @@ def update_project_status(name: str, status: str) -> str:
                 data["active"].pop(i)
                 if save_projects(data):
                     return f"Marked '{name}' as complete and moved to completed list."
-                return f"Failed to save project status change."
+                return "Failed to save project status change."
         return f"Project '{name}' not found in active projects."
 
     # Otherwise update status in active
@@ -366,7 +367,7 @@ def update_project_status(name: str, status: str) -> str:
             project["status"] = status
             if save_projects(data):
                 return f"Updated '{name}' status to {status}."
-            return f"Failed to save project status change."
+            return "Failed to save project status change."
 
     return f"Project '{name}' not found in active projects."
 
@@ -390,7 +391,7 @@ def add_project_step(project_name: str, step: str, completed: bool = False) -> s
 
             if save_projects(data):
                 return f"Added '{step}' to {project['name']}'s {action}."
-            return f"Failed to save step."
+            return "Failed to save step."
 
     return f"Project '{project_name}' not found in active projects."
 
@@ -421,7 +422,7 @@ def complete_step(project_name: str, step: str) -> str:
 
                 if save_projects(data):
                     return f"Marked '{found_step}' as complete on {project['name']}."
-                return f"Failed to save step completion."
+                return "Failed to save step completion."
 
             return f"Step '{step}' not found in {project['name']}'s next steps."
 
@@ -520,7 +521,7 @@ def _generate_projects_md(data: Dict[str, Any]) -> None:
     lines.append("")
 
     try:
-        with open(PROJECTS_MD, 'w') as f:
+        with open(PROJECTS_MD, "w") as f:
             f.write("\n".join(lines))
         logger.info(f"Regenerated {PROJECTS_MD}")
     except Exception as e:
@@ -530,6 +531,7 @@ def _generate_projects_md(data: Dict[str, Any]) -> None:
 # =============================================================================
 # UNIFIED TOOL HANDLER
 # =============================================================================
+
 
 def handle_update_data(action: str, name: str, **kwargs) -> str:
     """

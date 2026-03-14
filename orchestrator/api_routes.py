@@ -2,35 +2,58 @@
 Secondary REST API endpoints (health, metrics, memory, reminders, focus, audio, HA).
 """
 
+import logging
 import os
 import time
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, FileResponse
-
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import FileResponse, JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 import shared
-from shared import (
-    ha_client, scheduler, current_focus_session, collection,
-    HELIOS_URL, HELIOS_MODEL, NEMOTRON_URL, NEMOTRON_MODEL,
-    CHROMA_COLLECTION, CHROMA_PERSIST,
-    ENDEL_ENABLED, FOCUS_AUDIO_PLAYER, ENDEL_MODES,
-    CALENDAR_POLL_INTERVAL, MORNING_BRIEFING_TIME, MORNING_BRIEFING_ENABLED,
-    HA_URL, HA_TOKEN, profile,
+from focus_manager import tool_start_focus, tool_stop_focus
+from google_calendar import get_calendar_client
+from helios_manager import check_helios_health
+from metrics import (
+    FOCUS_ACTIVE,
+    HELIOS_IDLE_SECONDS,
+    HELIOS_ONLINE,
+    REMINDERS_PENDING,
+    TEMPERATURE_DELTA,
+    TEMPERATURE_GAUGE,
 )
 from prompt_builder import rag_context
-from helios_manager import check_helios_health
-from focus_manager import tool_start_focus, tool_stop_focus
-from tool_handlers import deliver_reminder_job
-from google_calendar import get_calendar_client
-from reminder_manager import list_pending_reminders, mark_reminder_completed, _announce_voice
-from metrics import (
-    HELIOS_ONLINE, FOCUS_ACTIVE, REMINDERS_PENDING, HELIOS_IDLE_SECONDS,
-    TEMPERATURE_GAUGE, TEMPERATURE_DELTA,
+from reminder_manager import _announce_voice, list_pending_reminders, mark_reminder_completed
+from schemas import (
+    AnnounceRequest,
+    FocusStartRequest,
+    HACommandRequest,
+    MemoryAddRequest,
+    ReminderTriggerRequest,
 )
+from shared import (
+    CALENDAR_POLL_INTERVAL,
+    CHROMA_COLLECTION,
+    CHROMA_PERSIST,
+    ENDEL_ENABLED,
+    ENDEL_MODES,
+    FOCUS_AUDIO_PLAYER,
+    HA_TOKEN,
+    HA_URL,
+    HELIOS_MODEL,
+    HELIOS_URL,
+    MORNING_BRIEFING_ENABLED,
+    MORNING_BRIEFING_TIME,
+    NEMOTRON_MODEL,
+    NEMOTRON_URL,
+    collection,
+    current_focus_session,
+    ha_client,
+    profile,
+    scheduler,
+)
+from tool_handlers import deliver_reminder_job
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +100,24 @@ async def health(req: Request):
         "helios_idle": idle_info,
         "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
         "helios_tools": ["ask_orchestrator"],
-        "nemotron_tools": ["home_assistant", "search_memory", "update_data", "set_reminder", "cancel_reminder", "start_focus", "stop_focus", "focus_status", "check_calendar", "create_calendar_event"],
+        "nemotron_tools": [
+            "home_assistant",
+            "search_memory",
+            "update_data",
+            "set_reminder",
+            "cancel_reminder",
+            "start_focus",
+            "stop_focus",
+            "focus_status",
+            "check_calendar",
+            "create_calendar_event",
+        ],
         "calendar": {
             "configured": get_calendar_client().is_configured,
             "poll_interval_min": CALENDAR_POLL_INTERVAL if get_calendar_client().is_configured else None,
-            "morning_briefing": MORNING_BRIEFING_TIME if MORNING_BRIEFING_ENABLED and get_calendar_client().is_configured else None,
+            "morning_briefing": MORNING_BRIEFING_TIME
+            if MORNING_BRIEFING_ENABLED and get_calendar_client().is_configured
+            else None,
         },
         "rag_collection": CHROMA_COLLECTION,
         "rag_docs": collection.count(),
@@ -95,11 +131,15 @@ async def health(req: Request):
             "active": current_focus_session["active"],
             "task": current_focus_session["task"],
             "remaining_minutes": (
-                current_focus_session["duration"] -
-                (datetime.now() - current_focus_session["started"]).total_seconds() / 60
-            ) if current_focus_session["active"] else None,
+                current_focus_session["duration"]
+                - (datetime.now() - current_focus_session["started"]).total_seconds() / 60
+            )
+            if current_focus_session["active"]
+            else None,
             "audio_player": current_focus_session.get("audio_player"),
-        } if current_focus_session["active"] else {"active": False},
+        }
+        if current_focus_session["active"]
+        else {"active": False},
         "endel": {
             "enabled": ENDEL_ENABLED,
             "default_player": FOCUS_AUDIO_PLAYER,
@@ -112,6 +152,7 @@ async def health(req: Request):
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     from starlette.responses import Response
+
     HELIOS_ONLINE.set(1 if await check_helios_health() else 0)
     FOCUS_ACTIVE.set(1 if current_focus_session["active"] else 0)
     REMINDERS_PENDING.set(len(list_pending_reminders()))
@@ -160,7 +201,7 @@ def list_models():
                 "owned_by": "brain-gateway",
                 "name": "Brain Gateway",
             },
-        ]
+        ],
     }
 
 
@@ -174,28 +215,19 @@ async def list_ha_entities():
     return {
         "total": len(ha_client._entities),
         "controllable": {
-            domain: [
-                {"entity_id": e.entity_id, "friendly_name": e.friendly_name, "state": e.state}
-                for e in entities
-            ]
+            domain: [{"entity_id": e.entity_id, "friendly_name": e.friendly_name, "state": e.state} for e in entities]
             for domain, entities in controllable.items()
-        }
+        },
     }
 
 
 @router.post("/api/ha/command")
-async def execute_ha_command(req: Request):
+async def execute_ha_command(body: HACommandRequest):
     """Execute a Home Assistant command directly (for testing)."""
-    body = await req.json()
-    command = body.get("command", "")
-
-    if not command:
-        return JSONResponse({"error": "No command provided"}, status_code=400)
-
-    result = await ha_client.execute_command(command)
+    result = await ha_client.execute_command(body.command)
 
     return {
-        "success": result.success,
+        "ok": result.success,
         "action": result.action,
         "entity_id": result.entity_id,
         "message": result.message,
@@ -204,35 +236,26 @@ async def execute_ha_command(req: Request):
 
 
 @router.post("/api/memory/add")
-async def add_memory(req: Request):
+async def add_memory(body: MemoryAddRequest):
     """Add a memory to RAG."""
-    body = await req.json()
-    text = body.get("text", "").strip()
-    category = body.get("category", "general")
-    source = body.get("source", "manual")
-    tags = body.get("tags", [])
-
-    if not text:
-        return JSONResponse({"error": "No text provided"}, status_code=400)
-
-    doc_id = f"{category}_{datetime.now().timestamp()}"
+    doc_id = f"{body.category}_{datetime.now().timestamp()}"
 
     metadata = {
-        "category": category,
-        "source": source,
+        "category": body.category,
+        "source": body.source,
         "kind": "chunk",
         "created_at": datetime.now().isoformat(),
     }
-    if tags and isinstance(tags, list):
-        metadata["tags"] = ",".join(str(t) for t in tags)
+    if body.tags:
+        metadata["tags"] = ",".join(str(t) for t in body.tags)
 
     collection.add(
-        documents=[text],
+        documents=[body.text.strip()],
         metadatas=[metadata],
         ids=[doc_id],
     )
 
-    return JSONResponse({"ok": True, "id": doc_id})
+    return {"ok": True, "id": doc_id}
 
 
 @router.get("/api/memory/search")
@@ -245,30 +268,21 @@ async def search_memory_api(query: str, n: int = 5):
 @router.get("/api/memory/stats")
 def memory_stats():
     """Get RAG statistics."""
-    return JSONResponse({
-        "collection": CHROMA_COLLECTION,
-        "total_documents": collection.count(),
-        "persist_path": CHROMA_PERSIST,
-    })
+    return JSONResponse(
+        {
+            "collection": CHROMA_COLLECTION,
+            "total_documents": collection.count(),
+            "persist_path": CHROMA_PERSIST,
+        }
+    )
 
 
 @router.post("/api/reminder/trigger")
-async def trigger_reminder(req: Request):
+async def trigger_reminder(body: ReminderTriggerRequest):
     """Manually trigger a reminder (for testing or legacy HA automation callbacks)."""
-    try:
-        body = await req.json()
-    except:
-        body = {}
-
-    reminder_id = body.get("reminder_id")
-    if not reminder_id:
-        return JSONResponse({"error": "Missing reminder_id"}, status_code=400)
-
-    logger.info(f"[REMINDER] Manual trigger: {reminder_id}")
-
-    await deliver_reminder_job(reminder_id)
-
-    return JSONResponse({"success": True, "reminder_id": reminder_id})
+    logger.info(f"[REMINDER] Manual trigger: {body.reminder_id}")
+    await deliver_reminder_job(body.reminder_id)
+    return {"ok": True, "reminder_id": body.reminder_id}
 
 
 @router.get("/api/reminders")
@@ -281,11 +295,7 @@ async def get_reminders_api():
         job_id = f"reminder_{reminder.get('id')}"
         reminder["scheduled"] = job_id in scheduled_job_ids
 
-    return JSONResponse({
-        "count": len(pending),
-        "scheduler_jobs": len(scheduled_job_ids),
-        "reminders": pending
-    })
+    return JSONResponse({"count": len(pending), "scheduler_jobs": len(scheduled_job_ids), "reminders": pending})
 
 
 @router.post("/api/reminder/complete/{reminder_id}")
@@ -293,84 +303,63 @@ async def complete_reminder_api(reminder_id: str):
     """Mark a reminder as completed (triggered)."""
     success = mark_reminder_completed(reminder_id)
     if success:
-        return JSONResponse({"success": True, "reminder_id": reminder_id})
-    return JSONResponse({"error": "Reminder not found"}, status_code=404)
+        return {"ok": True, "reminder_id": reminder_id}
+    return JSONResponse({"ok": False, "error": "Reminder not found"}, status_code=404)
 
 
 @router.get("/api/focus")
 async def get_focus_status_api():
     """Get current focus timer status (for dashboards/widgets)."""
     if not current_focus_session["active"]:
-        return JSONResponse({
-            "active": False,
-            "task": None,
-            "elapsed_minutes": None,
-            "remaining_minutes": None,
-            "duration": None,
-            "break_duration": None,
-            "started": None,
-        })
+        return JSONResponse(
+            {
+                "active": False,
+                "task": None,
+                "elapsed_minutes": None,
+                "remaining_minutes": None,
+                "duration": None,
+                "break_duration": None,
+                "started": None,
+            }
+        )
 
     elapsed = (datetime.now() - current_focus_session["started"]).total_seconds() / 60
     remaining = current_focus_session["duration"] - elapsed
 
-    return JSONResponse({
-        "active": True,
-        "task": current_focus_session["task"],
-        "elapsed_minutes": round(elapsed, 1),
-        "remaining_minutes": round(max(0, remaining), 1),
-        "duration": current_focus_session["duration"],
-        "break_duration": current_focus_session["break_duration"],
-        "started": current_focus_session["started"].isoformat(),
-    })
+    return JSONResponse(
+        {
+            "active": True,
+            "task": current_focus_session["task"],
+            "elapsed_minutes": round(elapsed, 1),
+            "remaining_minutes": round(max(0, remaining), 1),
+            "duration": current_focus_session["duration"],
+            "break_duration": current_focus_session["break_duration"],
+            "started": current_focus_session["started"].isoformat(),
+        }
+    )
 
 
 @router.post("/api/focus/start")
-async def start_focus_api(req: Request):
+async def start_focus_api(body: FocusStartRequest):
     """Start a focus timer via REST API."""
-    try:
-        body = await req.json()
-    except:
-        body = {}
-
-    task = body.get("task", "focus session")
-    duration = body.get("duration", 25)
-    break_duration = body.get("break_duration", 5)
-    speaker = body.get("speaker")
-    soundscape = body.get("soundscape", "focus")
-
-    # Validate duration at API boundary
-    try:
-        duration = int(duration)
-        break_duration = int(break_duration)
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "Duration must be a number"}, status_code=400)
-    if duration < 1 or duration > 480:
-        return JSONResponse({"error": "Duration must be between 1 and 480 minutes"}, status_code=400)
-    if break_duration < 1 or break_duration > 60:
-        return JSONResponse({"error": "Break duration must be between 1 and 60 minutes"}, status_code=400)
-
-    result = await tool_start_focus(task, duration, break_duration, speaker, soundscape)
-    return JSONResponse({
-        "success": current_focus_session["active"],
+    result = await tool_start_focus(body.task, body.duration, body.break_duration, body.speaker, body.soundscape)
+    return {
+        "ok": current_focus_session["active"],
         "message": result,
-        "task": task,
-        "duration": duration,
-        "break_duration": break_duration,
-        "speaker": speaker,
-        "soundscape": soundscape,
+        "task": body.task,
+        "duration": body.duration,
+        "break_duration": body.break_duration,
+        "speaker": body.speaker,
+        "soundscape": body.soundscape,
         "audio_player": current_focus_session.get("audio_player"),
-    })
+    }
 
 
 @router.post("/api/focus/stop")
 async def stop_focus_api():
     """Stop the current focus timer via REST API."""
     result = await tool_stop_focus()
-    return JSONResponse({
-        "success": True,
-        "message": result,
-    })
+    return {"ok": True, "message": result}
 
 
 @router.get("/api/audio/{filename}")
@@ -393,6 +382,7 @@ async def serve_audio(filename: str):
 async def run_email_to_calendar():
     """Manually trigger email-to-calendar extraction."""
     from background_jobs import process_emails_for_events
+
     try:
         await process_emails_for_events()
         return {"ok": True, "message": "Email-to-calendar scan completed"}
@@ -402,25 +392,15 @@ async def run_email_to_calendar():
 
 
 @router.post("/api/announce")
-async def announce_tts(req: Request):
+async def announce_tts(body: AnnounceRequest):
     """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
     try:
-        body = await req.json()
-    except:
-        body = {}
-
-    text = body.get("text", "").strip()
-    if not text:
-        return JSONResponse({"error": "No text provided"}, status_code=400)
-
-    speaker = body.get("speaker", None)
-    try:
-        await _announce_voice(text, speaker=speaker)
-        logger.info(f"[ANNOUNCE] TTS on {speaker or 'default'}: {text[:80]}")
-        return {"success": True, "text": text, "speaker": speaker or "default"}
+        await _announce_voice(body.text, speaker=body.speaker)
+        logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'}: {body.text[:80]}")
+        return {"ok": True, "text": body.text, "speaker": body.speaker or "default"}
     except Exception as e:
         logger.error(f"[ANNOUNCE] Failed: {e}")
-        return JSONResponse({"error": "TTS announcement failed"}, status_code=500)
+        return JSONResponse({"ok": False, "error": "TTS announcement failed"}, status_code=500)
 
 
 @router.get("/api/calendar/today")
@@ -438,6 +418,7 @@ async def calendar_today():
     """
     import re
     from zoneinfo import ZoneInfo
+
     tz = ZoneInfo(profile.timezone)
     today = datetime.now(tz).date()
     merged: list[dict] = []
@@ -465,10 +446,10 @@ async def calendar_today():
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         # Try common iOS Shortcut formats
         for fmt in (
-            "%b %d, %Y %I:%M %p",   # "Mar 4, 2026 1:00 PM"
-            "%B %d, %Y %I:%M %p",   # "March 4, 2026 1:00 PM"
-            "%m/%d/%Y %I:%M %p",    # "03/04/2026 1:00 PM"
-            "%b %d, %Y",            # "Mar 4, 2026" (all-day)
+            "%b %d, %Y %I:%M %p",  # "Mar 4, 2026 1:00 PM"
+            "%B %d, %Y %I:%M %p",  # "March 4, 2026 1:00 PM"
+            "%m/%d/%Y %I:%M %p",  # "03/04/2026 1:00 PM"
+            "%b %d, %Y",  # "Mar 4, 2026" (all-day)
         ):
             try:
                 return datetime.strptime(cleaned, fmt)
@@ -508,17 +489,19 @@ async def calendar_today():
                 # Handle trailing-space key from iOS ("calendar " vs "calendar")
                 cal_name = ev.get("calendar") or ev.get("calendar ") or ""
 
-                merged.append({
-                    "id": ev.get("id", f"phone_{len(merged)}"),
-                    "title": title.strip(),
-                    "start": start.isoformat(),
-                    "end": end.isoformat() if end else start.isoformat(),
-                    "location": ev.get("location") or None,
-                    "description": ev.get("description") or None,
-                    "all_day": ev.get("all_day", False),
-                    "calendar": cal_name.strip(),
-                    "source": "phone",
-                })
+                merged.append(
+                    {
+                        "id": ev.get("id", f"phone_{len(merged)}"),
+                        "title": title.strip(),
+                        "start": start.isoformat(),
+                        "end": end.isoformat() if end else start.isoformat(),
+                        "location": ev.get("location") or None,
+                        "description": ev.get("description") or None,
+                        "all_day": ev.get("all_day", False),
+                        "calendar": cal_name.strip(),
+                        "source": "phone",
+                    }
+                )
             except (ValueError, TypeError) as exc:
                 logger.warning(f"[CALENDAR] Skipping phone event: {exc} — raw: {ev}")
                 continue
@@ -533,17 +516,19 @@ async def calendar_today():
                     title = e.title
                     dedup_key = f"{title.lower()}|{e.start.isoformat()}"
                     seen.add(dedup_key)
-                    merged.append({
-                        "id": e.id,
-                        "title": title,
-                        "start": e.start.isoformat(),
-                        "end": e.end.isoformat(),
-                        "location": e.location or None,
-                        "description": e.description or None,
-                        "all_day": e.all_day,
-                        "calendar": "Google",
-                        "source": "google",
-                    })
+                    merged.append(
+                        {
+                            "id": e.id,
+                            "title": title,
+                            "start": e.start.isoformat(),
+                            "end": e.end.isoformat(),
+                            "location": e.location or None,
+                            "description": e.description or None,
+                            "all_day": e.all_day,
+                            "calendar": "Google",
+                            "source": "google",
+                        }
+                    )
 
     # Sort by start time (all-day events first, then by time)
     merged.sort(key=lambda e: (0 if e.get("all_day") else 1, e["start"]))

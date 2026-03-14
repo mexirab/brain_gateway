@@ -5,12 +5,10 @@ Tests the regex validation added during the security hardening phase.
 """
 
 import re
-import pytest
-
 
 # Extracted from ha_integration.py call_service() validation
-ENTITY_ID_PATTERN = r'^[a-z_]+\.[a-z0-9_]+$'
-SERVICE_PATTERN = r'^[a-z_]+$'
+ENTITY_ID_PATTERN = r"^[a-z_]+\.[a-z0-9_]+$"
+SERVICE_PATTERN = r"^[a-z_]+$"
 
 
 class TestEntityIdValidation:

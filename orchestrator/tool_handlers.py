@@ -5,40 +5,50 @@ Tool execution handlers: dispatcher + all tool_* functions.
 import logging
 import time
 import uuid
-from typing import Any, Dict
 from datetime import datetime
+from typing import Any, Dict
 
 import shared
-from shared import (
-    ha_client, scheduler,
-    HELIOS_URL, HELIOS_MODEL,
-)
-from prompt_builder import rag_context
 from data_manager import handle_update_data
-from reminder_manager import (
-    parse_time_expression,
-    format_time_friendly,
-    add_reminder,
-    get_reminder,
-    list_pending_reminders,
-    remove_reminder,
-    mark_reminder_completed,
-    _announce_voice,
-    _send_notification,
-)
-from web_search import get_search_client
+from focus_manager import tool_focus_status, tool_start_focus, tool_stop_focus
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
 from helios_manager import check_helios_health, start_helios
-from focus_manager import tool_start_focus, tool_stop_focus, tool_focus_status
 from metrics import (
-    TOOL_CALL_COUNT, TOOL_CALL_LATENCY, TOOL_CALL_ERRORS,
-    WEB_SEARCH_COUNT, WEB_SEARCH_LATENCY, WEB_SEARCH_RESULTS,
-    CALENDAR_API_CALLS, CALENDAR_API_LATENCY, CALENDAR_API_ERRORS,
-    GMAIL_API_CALLS, GMAIL_API_LATENCY, GMAIL_API_ERRORS,
-    REMINDERS_SET, REMINDERS_DELIVERED,
-    LLM_CALL_COUNT, LLM_CALL_LATENCY,
+    CALENDAR_API_CALLS,
+    CALENDAR_API_ERRORS,
+    CALENDAR_API_LATENCY,
+    GMAIL_API_CALLS,
+    GMAIL_API_ERRORS,
+    GMAIL_API_LATENCY,
+    REMINDERS_DELIVERED,
+    REMINDERS_SET,
+    TOOL_CALL_COUNT,
+    TOOL_CALL_ERRORS,
+    TOOL_CALL_LATENCY,
+    WEB_SEARCH_COUNT,
+    WEB_SEARCH_LATENCY,
+    WEB_SEARCH_RESULTS,
 )
+from prompt_builder import rag_context
+from reminder_manager import (
+    _announce_voice,
+    _send_notification,
+    add_reminder,
+    format_time_friendly,
+    get_reminder,
+    list_pending_reminders,
+    mark_reminder_completed,
+    parse_time_expression,
+    remove_reminder,
+)
+from shared import (
+    HELIOS_MODEL,
+    HELIOS_URL,
+    ha_client,
+    scheduler,
+)
+from web_search import get_search_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,35 +57,27 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     """Execute a tool and return the result as a string."""
     TOOL_CALL_COUNT.labels(tool=tool_name).inc()
     _tool_t0 = time.time()
-    logger.info(f"[TOOL] Executing: {tool_name} with args: {arguments}",
-                extra={"component": "tool", "tool_name": tool_name})
+    logger.info(
+        f"[TOOL] Executing: {tool_name} with args: {arguments}", extra={"component": "tool", "tool_name": tool_name}
+    )
 
     try:
         if tool_name == "home_assistant":
             return await tool_home_assistant(
-                arguments.get("entity_id", ""),
-                arguments.get("service", ""),
-                arguments.get("data", {})
+                arguments.get("entity_id", ""), arguments.get("service", ""), arguments.get("data", {})
             )
         elif tool_name == "search_memory":
             return tool_search_memory(arguments.get("query", ""))
         elif tool_name == "ask_expert":
-            return await tool_ask_expert(
-                arguments.get("question", ""),
-                arguments.get("context", "")
-            )
+            return await tool_ask_expert(arguments.get("question", ""), arguments.get("context", ""))
         elif tool_name == "update_data":
             return tool_update_data(arguments)
         elif tool_name == "set_reminder":
             return await tool_set_reminder(
-                arguments.get("reminder_text", ""),
-                arguments.get("time", ""),
-                arguments.get("target", "both")
+                arguments.get("reminder_text", ""), arguments.get("time", ""), arguments.get("target", "both")
             )
         elif tool_name == "cancel_reminder":
-            return await tool_cancel_reminder(
-                arguments.get("reminder_id", "")
-            )
+            return await tool_cancel_reminder(arguments.get("reminder_id", ""))
         elif tool_name == "start_focus":
             return await tool_start_focus(
                 arguments.get("task", "your task"),
@@ -83,7 +85,7 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("break_duration", 5),
                 arguments.get("speaker"),
                 arguments.get("soundscape", "focus"),
-                arguments.get("block_sites", True)
+                arguments.get("block_sites", True),
             )
         elif tool_name == "stop_focus":
             return await tool_stop_focus()
@@ -91,48 +93,38 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_focus_status()
         elif tool_name == "web_search":
             return await tool_web_search(
-                arguments.get("query", ""),
-                arguments.get("category", "general"),
-                arguments.get("time_range")
+                arguments.get("query", ""), arguments.get("category", "general"), arguments.get("time_range")
             )
         elif tool_name == "check_calendar":
-            return await tool_check_calendar(
-                arguments.get("days_ahead", 7)
-            )
+            return await tool_check_calendar(arguments.get("days_ahead", 7))
         elif tool_name == "create_calendar_event":
             return await tool_create_calendar_event(
                 arguments.get("title", ""),
                 arguments.get("start_time", ""),
                 arguments.get("duration_minutes", 60),
                 arguments.get("description", ""),
-                arguments.get("location", "")
+                arguments.get("location", ""),
             )
         elif tool_name == "check_email":
             return await tool_check_email(
-                arguments.get("query", ""),
-                arguments.get("max_results", 10),
-                arguments.get("unread_only", False)
+                arguments.get("query", ""), arguments.get("max_results", 10), arguments.get("unread_only", False)
             )
         elif tool_name == "search_email":
-            return await tool_search_email(
-                arguments.get("query", ""),
-                arguments.get("max_results", 10)
-            )
+            return await tool_search_email(arguments.get("query", ""), arguments.get("max_results", 10))
         elif tool_name == "finance_status":
-            return await tool_finance_status(
-                arguments.get("include_details", False)
-            )
+            return await tool_finance_status(arguments.get("include_details", False))
         elif tool_name == "check_system":
             from system_diagnostics import check_system
-            return await check_system(
-                arguments.get("query", "system_health")
-            )
+
+            return await check_system(arguments.get("query", "system_health"))
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
         TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
-        logger.error(f"[TOOL] Error executing {tool_name}: {e}",
-                     extra={"component": "tool", "tool_name": tool_name, "error_type": type(e).__name__})
+        logger.error(
+            f"[TOOL] Error executing {tool_name}: {e}",
+            extra={"component": "tool", "tool_name": tool_name, "error_type": type(e).__name__},
+        )
         return f"Error executing {tool_name}: {str(e)}"
     finally:
         TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
@@ -143,8 +135,9 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
     if not entity_id or not service:
         return "Missing entity_id or service"
 
-    logger.info(f"[HA] Calling {service} on {entity_id} with data: {data}",
-                extra={"component": "ha", "entity_id": entity_id})
+    logger.info(
+        f"[HA] Calling {service} on {entity_id} with data: {data}", extra={"component": "ha", "entity_id": entity_id}
+    )
     result = await ha_client.call_service(entity_id, service, data or {})
 
     if result.success:
@@ -176,8 +169,10 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
 
     WEB_SEARCH_COUNT.inc()
     _ws_t0 = time.time()
-    logger.info(f"[WEB_SEARCH] Searching: '{query}' (category={category}, time_range={time_range})",
-                extra={"component": "web_search"})
+    logger.info(
+        f"[WEB_SEARCH] Searching: '{query}' (category={category}, time_range={time_range})",
+        extra={"component": "web_search"},
+    )
     client = get_search_client(http_client=shared._http)
     response = await client.search(query=query, category=category, time_range=time_range)
     WEB_SEARCH_LATENCY.observe(time.time() - _ws_t0)
@@ -198,8 +193,10 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
         lines.append(f"   URL: {r.url}")
 
     WEB_SEARCH_RESULTS.observe(len(response.results))
-    logger.info(f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'",
-                extra={"component": "web_search", "result_count": len(response.results)})
+    logger.info(
+        f"[WEB_SEARCH] Returning {len(response.results)} results for '{query}'",
+        extra={"component": "web_search", "result_count": len(response.results)},
+    )
     return "\n".join(lines)
 
 
@@ -211,8 +208,7 @@ async def tool_check_calendar(days_ahead: int = 7) -> str:
 
     CALENDAR_API_CALLS.labels(operation="list_events").inc()
     _cal_t0 = time.time()
-    logger.info(f"[CALENDAR] Checking calendar for next {days_ahead} days",
-                extra={"component": "calendar"})
+    logger.info(f"[CALENDAR] Checking calendar for next {days_ahead} days", extra={"component": "calendar"})
     response = await client.list_events(days_ahead=days_ahead)
     CALENDAR_API_LATENCY.labels(operation="list_events").observe(time.time() - _cal_t0)
 
@@ -246,8 +242,7 @@ async def tool_check_calendar(days_ahead: int = 7) -> str:
 
 
 async def tool_create_calendar_event(
-    title: str, start_time: str, duration_minutes: int = 60,
-    description: str = "", location: str = ""
+    title: str, start_time: str, duration_minutes: int = 60, description: str = "", location: str = ""
 ) -> str:
     """Create a new Google Calendar event."""
     if not title:
@@ -261,8 +256,7 @@ async def tool_create_calendar_event(
 
     CALENDAR_API_CALLS.labels(operation="create_event").inc()
     _cal_t0 = time.time()
-    logger.info(f"[CALENDAR] Creating event: {title} at {start_time}",
-                extra={"component": "calendar"})
+    logger.info(f"[CALENDAR] Creating event: {title} at {start_time}", extra={"component": "calendar"})
     response = await client.create_event(
         title=title,
         start_time=start_time,
@@ -301,8 +295,7 @@ async def tool_check_email(query: str = "", max_results: int = 10, unread_only: 
         q_parts.append(query)
     full_query = " ".join(q_parts)
 
-    logger.info(f"[GMAIL] Checking email: query='{full_query}', max={max_results}",
-                extra={"component": "gmail"})
+    logger.info(f"[GMAIL] Checking email: query='{full_query}', max={max_results}", extra={"component": "gmail"})
     response = await client.list_messages(query=full_query, max_results=max_results)
     GMAIL_API_LATENCY.labels(operation="check_email").observe(time.time() - _gmail_t0)
 
@@ -335,7 +328,9 @@ async def tool_check_email(query: str = "", max_results: int = 10, unread_only: 
 async def tool_search_email(query: str, max_results: int = 10) -> str:
     """Search Gmail with specific criteria."""
     if not query:
-        return "Please provide a search query. Examples: 'from:amazon', 'subject:invoice', 'has:attachment newer_than:7d'"
+        return (
+            "Please provide a search query. Examples: 'from:amazon', 'subject:invoice', 'has:attachment newer_than:7d'"
+        )
 
     client = get_gmail_client(http_client=shared._http)
     if not client.is_configured:
@@ -344,8 +339,7 @@ async def tool_search_email(query: str, max_results: int = 10) -> str:
     GMAIL_API_CALLS.labels(operation="search_email").inc()
     _gmail_t0 = time.time()
 
-    logger.info(f"[GMAIL] Searching: query='{query}', max={max_results}",
-                extra={"component": "gmail"})
+    logger.info(f"[GMAIL] Searching: query='{query}', max={max_results}", extra={"component": "gmail"})
     response = await client.list_messages(query=query, max_results=max_results, label="")
     GMAIL_API_LATENCY.labels(operation="search_email").observe(time.time() - _gmail_t0)
 
@@ -387,10 +381,7 @@ async def tool_ask_expert(question: str, context: str = "") -> str:
 
     messages = []
     if context:
-        messages.append({
-            "role": "user",
-            "content": f"Context:\n{context}\n\nQuestion: {question}"
-        })
+        messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"})
     else:
         messages.append({"role": "user", "content": question})
 
@@ -467,6 +458,7 @@ async def deliver_reminder_job(reminder_id: str):
     text = reminder.get("text", "You have a reminder")
     target = reminder.get("target", "both")
     from shared import profile
+
     spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
     if target in ["voice", "both"]:
@@ -515,22 +507,19 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
 
     scheduler.add_job(
         deliver_reminder_job,
-        trigger='date',
+        trigger="date",
         run_date=trigger_time,
         args=[reminder_id],
         id=f"reminder_{reminder_id}",
         replace_existing=True,
     )
     REMINDERS_SET.labels(target=target).inc()
-    logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}",
-                extra={"component": "reminder"})
+    logger.info(f"[SCHEDULER] Scheduled job reminder_{reminder_id} for {trigger_time}", extra={"component": "reminder"})
 
     time_friendly = format_time_friendly(trigger_time)
-    target_desc = {
-        "voice": "on all speakers",
-        "phone": "on your phone",
-        "both": "on all speakers and your phone"
-    }.get(target, "")
+    target_desc = {"voice": "on all speakers", "phone": "on your phone", "both": "on all speakers and your phone"}.get(
+        target, ""
+    )
 
     return f"Got it! I'll remind you to {reminder_text} {time_friendly} {target_desc}."
 
@@ -551,21 +540,20 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
 async def tool_finance_status(include_details: bool = False) -> str:
     """Check Financial Quest Board status: budget, XP, streak, side quests."""
     from finance_manager import (
-        get_db, _current_year_month, _ensure_budget_period,
-        _get_level_info, _is_ynab_configured,
+        _ensure_budget_period,
+        _get_level_info,
+        _is_ynab_configured,
+        get_db,
     )
 
-    logger.info(f"[FINANCE] Checking status (details={include_details})",
-                extra={"component": "finance"})
+    logger.info(f"[FINANCE] Checking status (details={include_details})", extra={"component": "finance"})
 
     try:
         with get_db() as conn:
             config = dict(conn.execute("SELECT * FROM finance_config WHERE id = 1").fetchone())
             game = dict(conn.execute("SELECT * FROM game_state WHERE id = 1").fetchone())
             ym = _ensure_budget_period(conn)
-            budget = dict(conn.execute(
-                "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
-            ).fetchone())
+            budget = dict(conn.execute("SELECT * FROM budget_periods WHERE year_month = ?", (ym,)).fetchone())
 
             spent = budget["discretionary_spent"]
             limit = budget["discretionary_budget"]
@@ -578,10 +566,10 @@ async def tool_finance_status(include_details: bool = False) -> str:
 
             lines = [
                 f"Financial Quest Board — {ym}",
-                f"",
+                "",
                 f"Level {game['level']}: {level_info['title']} | XP: {game['total_xp']} ({xp_in_level}/{xp_for_next - game['level'] * 200} to next)",
                 f"Streak: {game['streak_months']} months (best: {game['streak_best']})",
-                f"",
+                "",
                 f"Budget: ${spent:.2f} / ${limit:.2f} spent ({pct:.0f}%)",
                 f"Remaining: ${remaining:.2f}",
             ]
@@ -606,11 +594,15 @@ async def tool_finance_status(include_details: bool = False) -> str:
 
             if include_details:
                 lines.append("")
-                lines.append(f"Monthly Plan: ${config['monthly_discretionary']:.2f} guilt-free, "
-                             f"${config['monthly_investing']:.2f} investing, "
-                             f"${config['monthly_buffer']:.2f} buffer")
+                lines.append(
+                    f"Monthly Plan: ${config['monthly_discretionary']:.2f} guilt-free, "
+                    f"${config['monthly_investing']:.2f} investing, "
+                    f"${config['monthly_buffer']:.2f} buffer"
+                )
                 lines.append(f"Investing this month: ${budget['investing_actual']:.2f}")
-                lines.append(f"Retirement: ${config['retirement_current']:,.2f} (target age {config['retirement_target_age']})")
+                lines.append(
+                    f"Retirement: ${config['retirement_current']:,.2f} (target age {config['retirement_target_age']})"
+                )
 
                 # YNAB status
                 if _is_ynab_configured():

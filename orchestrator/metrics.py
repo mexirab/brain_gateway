@@ -5,7 +5,7 @@ All metric definitions in one place. Import individual metrics where needed.
 Uses bgw_ prefix to namespace all metrics.
 """
 
-from prometheus_client import Counter, Histogram, Gauge, Info
+from prometheus_client import Counter, Gauge, Histogram, Info
 
 # -- Request-level metrics ---------------------------------------------------
 REQUEST_COUNT = Counter(

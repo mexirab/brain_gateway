@@ -41,6 +41,14 @@ After any backend route is written, any API integration is added, or before any 
 - Sensitive HA entities (locks, alarms) should require confirmation
 - Entity discovery doesn't expose entities that should be hidden
 
+### Docker & Dependencies
+- Dockerfile runs as non-root user (`USER appuser`) — flag if running as root
+- Dependencies in `orchestrator/requirements.txt` have version constraints — no unpinned `pip install`
+- `.dockerignore` exists and excludes `.env`, credentials, and dev files
+- HEALTHCHECK directive present in Dockerfile
+- No secrets baked into Docker image layers
+- Base image is slim/minimal (not full debian/ubuntu)
+
 ### Network
 - Services communicate over LAN IPs (10.0.0.x) — not exposed to internet
 - Tailscale access requires authentication

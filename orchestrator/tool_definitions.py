@@ -5,12 +5,12 @@ Contains all tool JSON schemas that Nemotron and Helios use,
 plus the dynamic HA tool builder.
 """
 
-import time
 import logging
+import time
 from typing import Any, Dict, List
 
-from shared import ha_client, _HA_TOOL_CACHE_TTL, profile
 import shared
+from shared import _HA_TOOL_CACHE_TTL, ha_client
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +49,19 @@ BRIGHTNESS: 0-255 scale. 50%=128, 75%=191, 100%=255""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "entity_id": {
-                        "type": "string",
-                        "description": "Entity ID like 'light.bedroom_fan_lights'"
-                    },
+                    "entity_id": {"type": "string", "description": "Entity ID like 'light.bedroom_fan_lights'"},
                     "service": {
                         "type": "string",
-                        "description": "Service: turn_on, turn_off, toggle, set_temperature, etc."
+                        "description": "Service: turn_on, turn_off, toggle, set_temperature, etc.",
                     },
                     "data": {
                         "type": "object",
-                        "description": "Service data, e.g., {\"brightness\": 128, \"rgb_color\": [0,0,255]}"
-                    }
+                        "description": 'Service data, e.g., {"brightness": 128, "rgb_color": [0,0,255]}',
+                    },
                 },
-                "required": ["entity_id", "service"]
-            }
-        }
+                "required": ["entity_id", "service"],
+            },
+        },
     }
     shared._ha_tool_cache_time = time.time()
     return shared._ha_tool_cache
@@ -80,14 +77,11 @@ STATIC_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query to find relevant personal information"
-                    }
+                    "query": {"type": "string", "description": "Search query to find relevant personal information"}
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
@@ -99,16 +93,13 @@ STATIC_TOOLS = [
                 "properties": {
                     "question": {
                         "type": "string",
-                        "description": "The question or task to delegate to the expert model"
+                        "description": "The question or task to delegate to the expert model",
                     },
-                    "context": {
-                        "type": "string",
-                        "description": "Optional additional context to help the expert"
-                    }
+                    "context": {"type": "string", "description": "Optional additional context to help the expert"},
                 },
-                "required": ["question"]
-            }
-        }
+                "required": ["question"],
+            },
+        },
     },
     {
         "type": "function",
@@ -120,62 +111,48 @@ STATIC_TOOLS = [
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["add_medication", "remove_medication", "update_medication",
-                                 "add_project", "update_project_status", "add_project_step", "complete_step"],
-                        "description": "The action to perform"
+                        "enum": [
+                            "add_medication",
+                            "remove_medication",
+                            "update_medication",
+                            "add_project",
+                            "update_project_status",
+                            "add_project_step",
+                            "complete_step",
+                        ],
+                        "description": "The action to perform",
                     },
-                    "name": {
-                        "type": "string",
-                        "description": "Medication name or project name"
-                    },
-                    "dose": {
-                        "type": "string",
-                        "description": "Medication dose (e.g., '50mg')"
-                    },
+                    "name": {"type": "string", "description": "Medication name or project name"},
+                    "dose": {"type": "string", "description": "Medication dose (e.g., '50mg')"},
                     "schedule": {
                         "type": "string",
                         "enum": ["morning", "evening", "weekly", "as_needed"],
-                        "description": "When to take the medication"
+                        "description": "When to take the medication",
                     },
-                    "purpose": {
-                        "type": "string",
-                        "description": "What the medication is for"
-                    },
-                    "notes": {
-                        "type": "string",
-                        "description": "Additional notes"
-                    },
+                    "purpose": {"type": "string", "description": "What the medication is for"},
+                    "notes": {"type": "string", "description": "Additional notes"},
                     "status": {
                         "type": "string",
                         "enum": ["not_started", "in_progress", "blocked", "done"],
-                        "description": "Project status"
+                        "description": "Project status",
                     },
-                    "step": {
-                        "type": "string",
-                        "description": "A project step/task to add or complete"
-                    },
-                    "goal": {
-                        "type": "string",
-                        "description": "Project goal description"
-                    },
+                    "step": {"type": "string", "description": "A project step/task to add or complete"},
+                    "goal": {"type": "string", "description": "Project goal description"},
                     "priority": {
                         "type": "string",
                         "enum": ["high", "medium", "low"],
-                        "description": "Project priority"
+                        "description": "Project priority",
                     },
                     "category": {
                         "type": "string",
                         "enum": ["active", "someday_maybe", "parking_lot"],
-                        "description": "Project category"
+                        "description": "Project category",
                     },
-                    "completed": {
-                        "type": "boolean",
-                        "description": "Whether to add step as already completed"
-                    }
+                    "completed": {"type": "boolean", "description": "Whether to add step as already completed"},
                 },
-                "required": ["action", "name"]
-            }
-        }
+                "required": ["action", "name"],
+            },
+        },
     },
     {
         "type": "function",
@@ -187,21 +164,21 @@ STATIC_TOOLS = [
                 "properties": {
                     "reminder_text": {
                         "type": "string",
-                        "description": "What to remind about (e.g., 'take your Vyvanse', 'call mom', 'check the laundry')"
+                        "description": "What to remind about (e.g., 'take your Vyvanse', 'call mom', 'check the laundry')",
                     },
                     "time": {
                         "type": "string",
-                        "description": "When to remind. Accepts: 'in 5 minutes', 'in 2 hours', 'at 3pm', 'at 14:30'"
+                        "description": "When to remind. Accepts: 'in 5 minutes', 'in 2 hours', 'at 3pm', 'at 14:30'",
                     },
                     "target": {
                         "type": "string",
                         "enum": ["voice", "phone", "both"],
-                        "description": "Where to deliver the reminder: voice=all speakers, phone=mobile notification, both=all (default: both)"
-                    }
+                        "description": "Where to deliver the reminder: voice=all speakers, phone=mobile notification, both=all (default: both)",
+                    },
                 },
-                "required": ["reminder_text", "time"]
-            }
-        }
+                "required": ["reminder_text", "time"],
+            },
+        },
     },
     {
         "type": "function",
@@ -213,12 +190,12 @@ STATIC_TOOLS = [
                 "properties": {
                     "reminder_id": {
                         "type": "string",
-                        "description": "The ID of the reminder to cancel (e.g., 'abc12345')"
+                        "description": "The ID of the reminder to cancel (e.g., 'abc12345')",
                     }
                 },
-                "required": ["reminder_id"]
-            }
-        }
+                "required": ["reminder_id"],
+            },
+        },
     },
     {
         "type": "function",
@@ -230,55 +207,43 @@ STATIC_TOOLS = [
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "What you're focusing on (e.g., 'writing report', 'coding', 'emails')"
+                        "description": "What you're focusing on (e.g., 'writing report', 'coding', 'emails')",
                     },
-                    "duration": {
-                        "type": "integer",
-                        "description": "Focus duration in minutes (default 25)"
-                    },
-                    "break_duration": {
-                        "type": "integer",
-                        "description": "Break duration in minutes (default 5)"
-                    },
+                    "duration": {"type": "integer", "description": "Focus duration in minutes (default 25)"},
+                    "break_duration": {"type": "integer", "description": "Break duration in minutes (default 5)"},
                     "speaker": {
                         "type": "string",
-                        "description": "Media player for audio (e.g., 'office speaker', 'bedroom', 'kitchen'). Uses default if not specified."
+                        "description": "Media player for audio (e.g., 'office speaker', 'bedroom', 'kitchen'). Uses default if not specified.",
                     },
                     "soundscape": {
                         "type": "string",
                         "enum": ["focus", "deeper-focus", "study", "colored-noises", "none"],
-                        "description": "Endel soundscape to play (default: focus, 'none' to disable)"
+                        "description": "Endel soundscape to play (default: focus, 'none' to disable)",
                     },
                     "block_sites": {
                         "type": "boolean",
-                        "description": "ALWAYS true unless user explicitly says 'without blocking' or 'no blocking'. Do not set to false unless explicitly requested."
-                    }
+                        "description": "ALWAYS true unless user explicitly says 'without blocking' or 'no blocking'. Do not set to false unless explicitly requested.",
+                    },
                 },
-                "required": ["task"]
-            }
-        }
+                "required": ["task"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "stop_focus",
             "description": "Stop the current focus timer early.",
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
+            "parameters": {"type": "object", "properties": {}},
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "focus_status",
             "description": "Check how much time is left in the current focus session.",
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
+            "parameters": {"type": "object", "properties": {}},
+        },
     },
     {
         "type": "function",
@@ -290,22 +255,22 @@ STATIC_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query (e.g., 'Houston events this weekend', 'weather in Houston today')"
+                        "description": "Search query (e.g., 'Houston events this weekend', 'weather in Houston today')",
                     },
                     "category": {
                         "type": "string",
                         "enum": ["general", "news"],
-                        "description": "Search category (default: general)"
+                        "description": "Search category (default: general)",
                     },
                     "time_range": {
                         "type": "string",
                         "enum": ["day", "week", "month", "year"],
-                        "description": "Optional time filter for recent results"
-                    }
+                        "description": "Optional time filter for recent results",
+                    },
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
@@ -317,12 +282,12 @@ STATIC_TOOLS = [
                 "properties": {
                     "days_ahead": {
                         "type": "integer",
-                        "description": "Number of days to look ahead (default: 7). Use 1 for today, 2 for tomorrow, 7 for this week."
+                        "description": "Number of days to look ahead (default: 7). Use 1 for today, 2 for tomorrow, 7 for this week.",
                     }
                 },
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
     {
         "type": "function",
@@ -332,30 +297,18 @@ STATIC_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Event title (e.g., 'Pickleball at Honcho')"
-                    },
+                    "title": {"type": "string", "description": "Event title (e.g., 'Pickleball at Honcho')"},
                     "start_time": {
                         "type": "string",
-                        "description": "Event start time in ISO 8601 format (e.g., '2026-02-21T19:00:00')"
+                        "description": "Event start time in ISO 8601 format (e.g., '2026-02-21T19:00:00')",
                     },
-                    "duration_minutes": {
-                        "type": "integer",
-                        "description": "Duration in minutes (default: 60)"
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Optional event description"
-                    },
-                    "location": {
-                        "type": "string",
-                        "description": "Optional event location"
-                    }
+                    "duration_minutes": {"type": "integer", "description": "Duration in minutes (default: 60)"},
+                    "description": {"type": "string", "description": "Optional event description"},
+                    "location": {"type": "string", "description": "Optional event location"},
                 },
-                "required": ["title", "start_time"]
-            }
-        }
+                "required": ["title", "start_time"],
+            },
+        },
     },
     {
         "type": "function",
@@ -367,20 +320,17 @@ STATIC_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Optional Gmail search query (e.g., 'from:amazon', 'subject:flight', 'is:unread')"
+                        "description": "Optional Gmail search query (e.g., 'from:amazon', 'subject:flight', 'is:unread')",
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of emails to return (default: 10)"
+                        "description": "Maximum number of emails to return (default: 10)",
                     },
-                    "unread_only": {
-                        "type": "boolean",
-                        "description": "Only show unread messages (default: false)"
-                    }
+                    "unread_only": {"type": "boolean", "description": "Only show unread messages (default: false)"},
                 },
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
     {
         "type": "function",
@@ -392,16 +342,13 @@ STATIC_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Gmail search query (e.g., 'from:bank after:2026/02/01', 'has:attachment subject:invoice', 'from:amazon newer_than:7d')"
+                        "description": "Gmail search query (e.g., 'from:bank after:2026/02/01', 'has:attachment subject:invoice', 'from:amazon newer_than:7d')",
                     },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of results (default: 10)"
-                    }
+                    "max_results": {"type": "integer", "description": "Maximum number of results (default: 10)"},
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
@@ -413,12 +360,12 @@ STATIC_TOOLS = [
                 "properties": {
                     "include_details": {
                         "type": "boolean",
-                        "description": "If true, include detailed breakdown (investing, retirement, side quests). Default false for quick summary."
+                        "description": "If true, include detailed breakdown (investing, retirement, side quests). Default false for quick summary.",
                     }
                 },
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
     {
         "type": "function",
@@ -430,14 +377,23 @@ STATIC_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "enum": ["morning_briefing", "calendar_poll", "email_poll", "reminders", "focus_timer", "temperature", "system_health", "recent_errors"],
-                        "description": "What to check: morning_briefing (did briefing run?), calendar_poll (last calendar check), email_poll (last email check), reminders (pending reminders), focus_timer (current/recent focus), temperature (server closet temps), system_health (overall status), recent_errors (error log)"
+                        "enum": [
+                            "morning_briefing",
+                            "calendar_poll",
+                            "email_poll",
+                            "reminders",
+                            "focus_timer",
+                            "temperature",
+                            "system_health",
+                            "recent_errors",
+                        ],
+                        "description": "What to check: morning_briefing (did briefing run?), calendar_poll (last calendar check), email_poll (last email check), reminders (pending reminders), focus_timer (current/recent focus), temperature (server closet temps), system_health (overall status), recent_errors (error log)",
                     }
                 },
-                "required": ["query"]
-            }
-        }
-    }
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -453,12 +409,12 @@ HELIOS_TOOLS = [
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Natural language command (e.g., 'turn off bedroom lights', 'what are my morning meds', 'remind me to call mom in 30 minutes', 'how is my budget looking')"
+                        "description": "Natural language command (e.g., 'turn off bedroom lights', 'what are my morning meds', 'remind me to call mom in 30 minutes', 'how is my budget looking')",
                     }
                 },
-                "required": ["command"]
-            }
-        }
+                "required": ["command"],
+            },
+        },
     }
 ]
 

@@ -3,13 +3,14 @@ Reminder Manager for Brain Gateway
 Handles voice reminder scheduling, storage, and delivery via Home Assistant.
 """
 
+import logging
 import os
 import re
 import uuid
-import logging
-import httpx
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
 
 from user_profile import get_profile
 
@@ -32,6 +33,7 @@ MOBILE_NOTIFY = _profile.mobile_notify_service
 # TIME PARSING
 # =============================================================================
 
+
 def parse_time_expression(time_str: str) -> Tuple[Optional[datetime], Optional[str]]:
     """
     Parse a time expression into a datetime.
@@ -48,21 +50,21 @@ def parse_time_expression(time_str: str) -> Tuple[Optional[datetime], Optional[s
     now = datetime.now()
 
     # Handle "in X minutes"
-    match = re.match(r'in\s+(\d+)\s*(?:min(?:utes?)?|m)\b', time_str)
+    match = re.match(r"in\s+(\d+)\s*(?:min(?:utes?)?|m)\b", time_str)
     if match:
         minutes = int(match.group(1))
         target = now + timedelta(minutes=minutes)
         return (target, None)
 
     # Handle "in X hours"
-    match = re.match(r'in\s+(\d+)\s*(?:hours?|h)\b', time_str)
+    match = re.match(r"in\s+(\d+)\s*(?:hours?|h)\b", time_str)
     if match:
         hours = int(match.group(1))
         target = now + timedelta(hours=hours)
         return (target, None)
 
     # Handle "in X hours and Y minutes"
-    match = re.match(r'in\s+(\d+)\s*(?:hours?|h)\s*(?:and\s+)?(\d+)\s*(?:min(?:utes?)?|m)', time_str)
+    match = re.match(r"in\s+(\d+)\s*(?:hours?|h)\s*(?:and\s+)?(\d+)\s*(?:min(?:utes?)?|m)", time_str)
     if match:
         hours = int(match.group(1))
         minutes = int(match.group(2))
@@ -70,7 +72,7 @@ def parse_time_expression(time_str: str) -> Tuple[Optional[datetime], Optional[s
         return (target, None)
 
     # Handle "at 3pm" / "at 3:30pm" / "at 3:30 pm"
-    match = re.match(r'(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)', time_str)
+    match = re.match(r"(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)", time_str)
     if match:
         hour = int(match.group(1))
         minute = int(match.group(2)) if match.group(2) else 0
@@ -90,7 +92,7 @@ def parse_time_expression(time_str: str) -> Tuple[Optional[datetime], Optional[s
         return (target, None)
 
     # Handle 24-hour format "HH:MM" or "at HH:MM"
-    match = re.match(r'(?:at\s+)?(\d{1,2}):(\d{2})(?!\s*[ap]m)', time_str)
+    match = re.match(r"(?:at\s+)?(\d{1,2}):(\d{2})(?!\s*[ap]m)", time_str)
     if match:
         hour = int(match.group(1))
         minute = int(match.group(2))
@@ -179,6 +181,7 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 # REMINDER DELIVERY HELPERS
 # =============================================================================
 
+
 async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
@@ -188,10 +191,7 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
     """
     import shared
 
-    headers = {
-        "Authorization": f"Bearer {HA_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
     try:
         backend = shared.tts_backend
@@ -223,7 +223,7 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
                     "entity_id": target_speaker,
                     "media_content_id": audio_url,
                     "media_content_type": backend.audio_format,
-                }
+                },
             )
 
         if ha_response.status_code == 200:
@@ -239,10 +239,7 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
 
 async def _send_notification(text: str) -> Dict[str, Any]:
     """Send a mobile push notification via HA Companion App."""
-    headers = {
-        "Authorization": f"Bearer {HA_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
     if not MOBILE_NOTIFY:
         logger.warning("No mobile_notify_service configured, skipping notification")
@@ -260,13 +257,8 @@ async def _send_notification(text: str) -> Dict[str, Any]:
                 json={
                     "message": text,
                     "title": _profile.notification_title,
-                    "data": {
-                        "push": {
-                            "sound": "default",
-                            "interruption-level": "time-sensitive"
-                        }
-                    }
-                }
+                    "data": {"push": {"sound": "default", "interruption-level": "time-sensitive"}},
+                },
             )
 
             if response.status_code == 200:

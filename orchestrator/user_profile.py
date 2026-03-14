@@ -8,8 +8,8 @@ user_profile.nadim.yaml. New users create their own user_profile.yaml.
 Priority: env vars > profile YAML > built-in defaults
 """
 
-import os
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -63,6 +63,7 @@ _DEFAULTS = {
 # ---------------------------------------------------------------------------
 # Dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class UserProfile:
@@ -119,29 +120,27 @@ class UserProfile:
             user_name=user.get("name", _DEFAULTS["user"]["name"]),
             home_address=user.get("home_address", _DEFAULTS["user"]["home_address"]),
             timezone=user.get("timezone", _DEFAULTS["user"]["timezone"]),
-
             assistant_name=assistant.get("name", _DEFAULTS["assistant"]["name"]),
             assistant_voice=assistant.get("voice", _DEFAULTS["assistant"]["voice"]),
             assistant_personality=assistant.get("personality", _DEFAULTS["assistant"]["personality"]),
-
             default_speaker=speakers.get("default", _DEFAULTS["speakers"]["default"]),
             morning_briefing_speaker=speakers.get("morning_briefing", _DEFAULTS["speakers"]["morning_briefing"]),
             focus_audio_player=speakers.get("focus_audio", _DEFAULTS["speakers"]["focus_audio"]),
             speaker_aliases=speakers.get("aliases", {}),
-
             mobile_notify_service=notifications.get("mobile_service", _DEFAULTS["notifications"]["mobile_service"]),
             notification_title=notifications.get("title", _DEFAULTS["notifications"]["title"]),
-
             closet_temp_sensor=temp.get("closet", _DEFAULTS["sensors"]["temperature"]["closet"]),
             ambient_temp_sensor=temp.get("ambient", _DEFAULTS["sensors"]["temperature"]["ambient"]),
             temp_warning=float(temp.get("warning", _DEFAULTS["sensors"]["temperature"]["warning"])),
             temp_critical=float(temp.get("critical", _DEFAULTS["sensors"]["temperature"]["critical"])),
-
             default_mode=coaching.get("default_mode", _DEFAULTS["coaching"]["default_mode"]),
             grounding_preference=coaching.get("grounding_preference", _DEFAULTS["coaching"]["grounding_preference"]),
-
-            monthly_discretionary=float(finance.get("monthly_discretionary", _DEFAULTS["finance"]["monthly_discretionary"])),
-            retirement_target_age=int(finance.get("retirement_target_age", _DEFAULTS["finance"]["retirement_target_age"])),
+            monthly_discretionary=float(
+                finance.get("monthly_discretionary", _DEFAULTS["finance"]["monthly_discretionary"])
+            ),
+            retirement_target_age=int(
+                finance.get("retirement_target_age", _DEFAULTS["finance"]["retirement_target_age"])
+            ),
             current_age=int(finance.get("current_age", _DEFAULTS["finance"]["current_age"])),
         )
 
@@ -149,6 +148,7 @@ class UserProfile:
 # ---------------------------------------------------------------------------
 # Loader — finds and loads the profile YAML
 # ---------------------------------------------------------------------------
+
 
 def _find_profile_path() -> Optional[Path]:
     """Search for user_profile.yaml in standard locations."""
@@ -183,6 +183,7 @@ def load_profile() -> UserProfile:
     if profile_path:
         try:
             import yaml
+
             with open(profile_path) as f:
                 data = yaml.safe_load(f) or {}
             logger.info(f"[PROFILE] Loaded from {profile_path}")

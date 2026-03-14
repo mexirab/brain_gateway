@@ -35,38 +35,57 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (
 ## Architecture (v6 Hybrid)
 
 ```
-User → Open WebUI → Orchestrator → Mode Router → Helios (conversation)
-                                   (intent+intensity)      │
-                                                ┌──────────┴──────────┐
+User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
+                                   (intent+intensity)      |
+                                                +----------+----------+
                                            Direct response      ask_orchestrator
-                                                                      │
+                                                                      |
                                                                Nemotron (tools)
-                                                                      │
-                    ┌──────────┬──────────┬────┼────┬──────────┬──────────┐
-                    ▼          ▼          ▼    ▼    ▼          ▼          ▼
+                                                                      |
+                    +----------+----------+----+----+----------+----------+
+                    v          v          v    v    v          v          v
               home_assistant  search_memory  set_reminder  web_search  check_calendar
 ```
 
-**Flow:** Mode router classifies intent (explainer/mirror/counterbalance/challenge/baseline) + emotional intensity (low/medium/high). System prompt adapts accordingly. Helios handles conversation. For actions, calls `ask_orchestrator` → Nemotron executes tools → result back to Helios.
+**Flow:** Mode router classifies intent + emotional intensity. Helios handles conversation. For actions, calls `ask_orchestrator` -> Nemotron executes tools -> result back to Helios.
 
 ## Tools
 
-| Tool | Model | Purpose | Status |
-|------|-------|---------|--------|
-| ask_orchestrator | Helios | Delegate to Nemotron for actions | Working |
-| home_assistant | Nemotron | HA API: `{entity_id, service, data}` | Working |
-| search_memory | Nemotron | ChromaDB RAG query | Working |
-| set_reminder | Nemotron | Voice/phone reminders | Working |
-| cancel_reminder | Nemotron | Cancel a pending reminder by ID | Working |
-| update_data | Nemotron | Update meds/projects YAML | Working |
-| start_focus | Nemotron | Pomodoro timer + Endel audio + Pi-hole blocking | Working |
-| stop_focus | Nemotron | Stop focus timer early | Working |
-| focus_status | Nemotron | Check remaining focus time | Working |
-| web_search | Nemotron | Search the web via SearXNG | Working |
-| check_calendar | Nemotron | Check Google Calendar for upcoming events | Working |
-| create_calendar_event | Nemotron | Create a new Google Calendar event | Working |
-| check_email | Nemotron | Check Gmail inbox (recent/unread) | Working |
-| search_email | Nemotron | Search Gmail with query syntax | Working |
+| Tool | Model | Purpose |
+|------|-------|---------|
+| ask_orchestrator | Helios | Delegate to Nemotron for actions |
+| home_assistant | Nemotron | HA API: `{entity_id, service, data}` |
+| search_memory | Nemotron | ChromaDB RAG query |
+| set_reminder / cancel_reminder | Nemotron | Voice/phone reminders |
+| update_data | Nemotron | Update meds/projects YAML |
+| start_focus / stop_focus / focus_status | Nemotron | Pomodoro timer + Endel + Pi-hole |
+| web_search | Nemotron | Search the web via SearXNG |
+| check_calendar / create_calendar_event | Nemotron | Google Calendar read/write |
+| check_email / search_email | Nemotron | Gmail inbox (read-only) |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
+| orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
+| orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HELIOS_TOOLS, HA tool builder) |
+| orchestrator/prompt_builder.py | System prompts for Helios/Nemotron, RAG context, helpers |
+| orchestrator/helios_manager.py | Helios health check, SSH start/stop, idle tracking |
+| orchestrator/nemotron_loop.py | Agentic tool loop, XML parsing, dedup |
+| orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
+| orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
+| orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
+| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling, temperature alerts |
+| orchestrator/ha_integration.py | HA entity discovery + call_service() |
+| orchestrator/mode_router.py | Intent-based mode router |
+| orchestrator/google_calendar.py | Google Calendar API v3 client |
+| orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
+| orchestrator/pihole_client.py | Pi-hole v6 multi-instance client |
+| orchestrator/travel_time.py | Google Maps Directions API client |
+| orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
+| docker-compose.yml | Service stack |
+| .env | Environment config (from .env.example) |
 
 ## Key Paths
 
@@ -92,372 +111,34 @@ docker logs brain-orchestrator --tail 50 -f
 # Health
 curl http://localhost:8888/health
 
-# RAG reindex
-cd /opt/jupiter/gateway_mvp/rag && python ingest_rag.py \
-  --source ~/rag/nadim_rag \
-  --persist ~/.local/share/chroma/personal_rag \
-  --collection nadim_rag
-
-# Monitoring
-cd monitoring && docker compose --env-file ../.env -p monitoring up -d
-
-# Saturn Pi-hole
-./saturn/deploy-pihole.sh           # deploy and start
-./saturn/deploy-pihole.sh logs      # tail logs
-./saturn/deploy-pihole.sh stop      # stop
-
 # Remote deploy from Mac (via Tailscale)
 ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker compose up -d --build orchestrator"
 
-# Callisto kiosk (monitoring display)
-./pi-kiosk/deploy.sh                # deploy and start
-./pi-kiosk/deploy.sh restart        # restart kiosk display
-./pi-kiosk/deploy.sh status         # check status
-./pi-kiosk/deploy.sh stop           # stop kiosk
-```
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
-| orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
-| orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HELIOS_TOOLS, HA tool builder) |
-| orchestrator/prompt_builder.py | System prompts for Helios/Nemotron, RAG context, helpers |
-| orchestrator/helios_manager.py | Helios health check, SSH start/stop, idle tracking |
-| orchestrator/nemotron_loop.py | Agentic tool loop, XML parsing, dedup |
-| orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
-| orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
-| orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
-| orchestrator/travel_time.py | Google Maps Directions API client for travel-time alerts |
-| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling, temperature alerts |
-| orchestrator/ha_integration.py | HA entity discovery + call_service() |
-| orchestrator/reminder_manager.py | APScheduler reminders |
-| orchestrator/pihole_client.py | Pi-hole v6 multi-instance client for focus blocking |
-| orchestrator/web_search.py | SearXNG client for web search |
-| orchestrator/google_auth.py | Google OAuth2 token management |
-| orchestrator/google_calendar.py | Google Calendar API v3 client |
-| orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
-| orchestrator/google_setup.py | One-time OAuth2 consent flow script |
-| orchestrator/metrics.py | Prometheus metrics definitions (bgw_* namespace) |
-| orchestrator/mode_router.py | Intent-based mode router (explainer/mirror/counterbalance/challenge/baseline) |
-| docker-compose.yml | Service stack |
-| saturn/docker-compose.pihole.yml | Saturn Pi-hole secondary deployment |
-| saturn/deploy-pihole.sh | Deploy/manage Pi-hole on Saturn via SSH |
-| pi-kiosk/deploy.sh | Deploy/manage Grafana kiosk on Callisto (Pi) via SSH |
-| pi-kiosk/kiosk.sh | Chromium kiosk launcher (runs on Pi) |
-| .env | Environment config (from .env.example) |
-| litellm-config.yaml | LLM proxy config |
-| ha_automations/atom_echo.yaml | ESPHome config for ATOM Echo S3R voice satellite |
-| ha_automations/hey_jess.tflite | On-device "Hey Jess" wake word model (microWakeWord) |
-| ha_automations/hey_jess.json | Wake word JSON manifest for ESPHome |
-| frontend/src/components/architecture/SystemDiagram.tsx | Interactive animated SVG system architecture diagram |
-| frontend/src/components/dashboard/TemperatureCard.tsx | Server closet temperature monitoring widget |
-| tts/wyoming_jessica_bridge.py | Wyoming-to-HTTP bridge for Jessica TTS |
-| tts/Dockerfile.wyoming-jessica | Docker image for Wyoming Jessica bridge |
-
-## Detailed Docs
-
-- **ARCHITECTURE.md** - Internals, data flow, troubleshooting
-- **COMMANDS.md** - Command quick reference
-- **TECHNICAL_REFERENCE.md** - API specs, schemas
-- **ROADMAP.md** - Feature roadmap and what's done/planned
-- **monitoring/README.md** - Monitoring setup
-
-## Focus Timer (Pomodoro)
-
-ADHD-friendly focus timer with ambient audio and site blocking:
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Timer + voice break | Done | `start_focus`, `stop_focus`, `focus_status` tools |
-| Endel audio | Done | Streams HLS from Endel Pacific API to Office speaker |
-| Pi-hole blocking | Done | 24 focus domains + 72 always-blocked adult domains |
-
-**Usage:**
-- `"start focus on coding for 30 minutes"` - starts timer + audio + blocking
-- `"start focus without blocking"` - no site blocking
-- `"stop focus"` or timer expires → unblocks sites, announces break
-
-## Pi-hole DNS (whole-house)
-
-Redundant Pi-hole v6 pair synced via Nebula Sync. Jupiter is primary, Saturn is secondary.
-
-| Item | Jupiter (primary) | Saturn (secondary) |
-|------|-------------------|-------------------|
-| Admin UI | http://10.0.0.248:8053/admin | http://10.0.0.58:8053/admin |
-| DNS | 10.0.0.248:53 | 10.0.0.58:53 |
-| Upstream | 8.8.8.8, 8.8.4.4 | 8.8.8.8, 8.8.4.4 |
-| Docker project | `gateway_mvp` | `pihole` |
-| Compose file | `docker-compose.yml` | `saturn/docker-compose.pihole.yml` |
-
-**DHCP:** Disabled on both Pi-holes. DHCP served by Orbi router with static reservations for all cluster nodes. Pi-holes handle DNS only.
-
-**Nebula Sync:** Runs as a Docker container on Jupiter (`nebula-sync` service). Uses Pi-hole v6 Teleporter API to sync config from Jupiter → Saturn every 15 min. No SSH needed.
-
-**Blocking groups:**
-- **Default (group 0):** 72 adult domains — always blocked for all clients
-- **focus_blocklist (group 1):** 19 distraction domains (reddit, twitter, youtube, etc.) — toggled by `start_focus`/`stop_focus`
-
-**Focus blocking:** Orchestrator applies focus blocking to both instances concurrently via `PIHOLE_URLS`. If one is down, the other still blocks.
-
-## Voice Assistant (ATOM Echo S3R)
-
-Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
-
-```
-"Hey Jess" (on-device microWakeWord)
-    → ATOM Echo S3R (ESPHome voice_assistant)
-    → Home Assistant voice pipeline
-    → Wyoming Whisper STT (Docker on Jupiter :10300)
-    → HA Conversation Agent → Brain Gateway :8888
-    → Wyoming Jessica TTS bridge (:10301) → Uranus TTS :8002
-    → ATOM Echo S3R speaker (or Google speakers group)
-```
-
-**Current status:**
-- Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: currently routed to Nemotron directly (TODO: route through orchestrator for hybrid LLM)
-- TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
-- No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
-
-**Key components:**
-- **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
-- **Wake word manifest:** `hey_jess.json` served via nginx model-server at http://10.0.0.248:8080/hey_jess.json
-- **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Jupiter)
-- **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol → HTTP Jessica TTS on Uranus
-- **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions
-
-**Multi-room deployment:**
-```bash
-esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jess"
-esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
-```
-
-## Phone Calendar Sync (All Calendars)
-
-iPhone Shortcut sends aggregated calendar events (Outlook + Google + iCloud) to `/api/calendar/sync` endpoint every few hours. Dashboard `/api/calendar/today` merges phone-synced events with Google Calendar API, preferring phone data when fresh (<24h) and deduplicating by title+start time.
-
-**Persistence:** Phone events saved to `/app/data/phone_calendar.json` on Docker volume. Survives orchestrator restarts. Loaded at startup in `orchestrator.py`.
-
-**iOS date format handling:** iPhone Shortcuts sends dates like `"Mar 4, 2026 at 10:00 AM"` with narrow no-break space (`\u202f`). Custom `_parse_phone_datetime()` normalizes Unicode spaces and handles multiple date formats.
-
-**Known quirk:** iOS Shortcuts serialization adds trailing spaces to dict keys (`"calendar "` vs `"calendar"`). Code handles both.
-
-## Google Calendar Integration
-
-Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar_event`.
-
-**Status:** Fully deployed and configured on Jupiter. OAuth2 token generated and mounted.
-
-**Setup (one-time on dev machine):**
-1. Google Cloud Console → create project → enable Calendar API + Gmail API → create OAuth2 Desktop credentials
-2. Add your Google account as a test user (OAuth consent screen → Test users)
-3. Download `credentials.json` → `credentials/google_credentials.json`
-4. Run consent flow:
-   ```bash
-   python3 -m venv /tmp/google-auth-venv
-   /tmp/google-auth-venv/bin/pip install google-auth google-auth-oauthlib
-   /tmp/google-auth-venv/bin/python orchestrator/google_setup.py \
-     --credentials credentials/google_credentials.json \
-     --token-output credentials/google_token.json
-   ```
-5. Copy credentials to Jupiter:
-   ```bash
-   scp credentials/google_credentials.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
-   scp credentials/google_token.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
-   ```
-6. Restart orchestrator: `docker compose restart orchestrator`
-
-**Proactive features (APScheduler):**
-- Calendar polling: every 15 min, announces events starting within 2 hours via TTS (with travel-time awareness for physical locations)
-- Morning briefing: 7:00 AM on bedroom pair, announces today's events + pending reminders via TTS
-
-**Config (env vars):**
-- `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 15)
-- `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:00)
-- `MORNING_BRIEFING_ENABLED` — true/false (default: true)
-- `MORNING_BRIEFING_SPEAKER` — HA media_player entity (default: media_player.bedroom_pair)
-
-## Gmail Integration
-
-Read-only Gmail access via OAuth2. Tools: `check_email`, `search_email`.
-
-**Status:** Code deployed. Requires re-running OAuth2 consent flow to add `gmail.readonly` scope.
-
-**Setup (after Calendar is already configured):**
-1. Google Cloud Console → enable **Gmail API** (same project as Calendar)
-2. Delete existing `credentials/google_token.json`
-3. Re-run consent flow (step 4 above) — will now request Calendar + Gmail permissions
-4. Copy new token to Jupiter (step 5 above)
-5. Restart orchestrator: `docker compose up -d --build orchestrator`
-
-**Tools:**
-- `check_email` — check inbox for recent/unread emails. Optional query, unread_only filter
-- `search_email` — search with Gmail query syntax (`from:`, `subject:`, `has:attachment`, `newer_than:`, etc.)
-
-**Proactive features (APScheduler):**
-- Email polling: every 30 min, announces new unread emails (Primary inbox only — skips promotions/social/forums/updates) via TTS
-
-**Config (env vars):**
-- `EMAIL_POLL_INTERVAL` — minutes between polls (default: 30)
-- `EMAIL_POLL_ENABLED` — true/false (default: true)
-
-**OAuth2 scopes (all three in google_auth.py):**
-- `calendar.readonly` — read calendar events
-- `calendar.events` — create/modify calendar events
-- `gmail.readonly` — read email messages
-
-## Mode Router (Personalized Coaching)
-
-Deterministic v1 intent classifier. Adapts Jess's system prompt based on what Nadim needs.
-
-**Modes:**
-
-| Mode | When | Behavior |
-|------|------|----------|
-| explainer | Curiosity/mechanism questions, default for low intensity | Analytical, structured, no coaching language |
-| mirror | "Analyze me", "reflect", "behavioral tendencies" | Pattern identification, ends with one question |
-| counterbalance | Medium emotional intensity (lonely, shame, spiral) | Names distortions, small actions, no shame |
-| challenge | "Hold me accountable", "push me", "no excuses" | Firm, one specific action, time-bound |
-| baseline | High emotional intensity (panic, hopeless, can't breathe) | Low cognitive load, 2-3 options, grounding allowed |
-
-**Global tone constraint:** Never default to grounding techniques unless intensity is high or explicitly requested.
-
-**Routing logged in `_routing`:** `intent_mode`, `intent_intensity`, `intent_tags` — visible in API response for debugging.
-
-## HTTPS Access (Tailscale Serve)
-
-Mobile mic access requires HTTPS. Handled by Tailscale Serve (no nginx needed).
-
-```bash
-# Already running — persists across reboots
-sudo tailscale serve --bg http://localhost:80
-
-# Disable
-sudo tailscale serve --https=443 off
-
-# Cert renewal (auto-managed, but manual if needed)
-sudo tailscale cert --cert-file /opt/jupiter/gateway_mvp/certs/jupiter.crt \
-  --key-file /opt/jupiter/gateway_mvp/certs/jupiter.key jupiter-amds.tail74fc4a.ts.net
-```
-
-**URL:** `https://jupiter-amds.tail74fc4a.ts.net/` (must use domain, not IP, for valid cert)
-
-## TTS Pacing
-
-Jessica voice clone uses Qwen3-TTS on Uranus. Two pacing controls:
-
-1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
-2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Uranus — inserts `...` between sentences for calmer delivery
-
-```bash
-# Restart TTS after pacing changes
-ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen-tts'"
-```
-
-## RAG Personal Knowledge
-
-154 documents indexed in ChromaDB (`nadim_rag` collection). Source docs organized by category:
-
-| Path | Content |
-|------|---------|
-| `rag/nadim_rag/10_profile/` | Identity, personality models, AI preferences, Pisces symbolism |
-| `rag/nadim_rag/50_patterns/` | Strengths/frictions, triggers/distortions, rejection-shame loop, social frequency plan |
-| `rag/nadim_rag/20_meds/` | Medication data (auto-generated from YAML) |
-| `rag/nadim_rag/30_projects/` | Project data (auto-generated from YAML) |
-
-## Frontend Dashboard (ConvivialProphet.com)
-
-Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via `AUTH_TOKEN` cookie.
-
-**Pages:**
-
-| Page | Route | What |
-|------|-------|------|
-| Architecture | `/architecture` | Public. Interactive animated system diagram, cluster nodes, data flow, capabilities grid |
-| Dashboard | `/dashboard` | Private. Calendar, reminders, focus timer, system health, temperature monitoring, finance snapshot |
-| Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
-| Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
-| Finance | `/finance` | Private. Gamified budget tracker with YNAB sync, XP/levels, quest board |
-
-**Dashboard widgets:**
-- **Budget card** → clickable, links to `/finance` page
-- **System Health card** → clickable, opens Grafana Brain Gateway Overview dashboard
-- **Calendar card** → shows merged phone+Google calendar events with source label
-- **Reminders card** → pending reminders with complete action
-- **Focus timer card** → current session with start/stop controls
-- **Temperature card** → server closet vs kitchen ambient temp, heat delta, estimated cooling cost
-
-**Finance system (YNAB integration):**
-- Syncs budget data from YNAB API (`YNAB_API_TOKEN` + `YNAB_BUDGET_ID` env vars)
-- Gamified: XP for under-budget months, levels, streaks, quest board
-- SQLite persistence at `/app/data/finance.db`
-
-**API pattern:** All client-side API calls go through `/api/proxy` prefix → Next.js auth middleware → orchestrator `:8888`.
-
-**Deploy:**
-```bash
-# On Jupiter (or via SSH)
+# Frontend rebuild
 docker compose up -d --build --force-recreate frontend
 ```
 
-**Note:** `npm run build` on host does NOT update the Docker container. Must rebuild the Docker image.
+## Detailed Docs
 
-## Travel-Time Calendar Alerts
-
-Calendar polling checks events with physical locations against Google Maps Directions API for real-time traffic. Announces "leave in X minutes" alerts instead of just "event in X minutes".
-
-**How it works:**
-1. Event within 2 hours with a physical location (not Zoom/Teams/Meet links)
-2. Maps API returns drive time with traffic from home address
-3. `leave_by = event.start - travel_time - buffer`
-4. Announces "You need to leave in X minutes for Event. It's a Y minute drive."
-5. If leave_by already passed: "You should leave now for Event."
-
-**Config (env vars):**
-- `GOOGLE_MAPS_API_KEY` — Google Maps Directions API key
-- `TRAVEL_TIME_BUFFER` — extra minutes buffer (default: 10)
-- Home address hardcoded in `shared.py` as `HOME_ADDRESS`
-
-**Virtual meeting detection:** Skips Maps API for locations containing `zoom.us`, `teams.microsoft`, `meet.google`, `webex`, or any URL (`http://`, `https://`).
-
-## Temperature Monitoring
-
-Server closet temperature monitoring with dashboard widget, TTS alerts, and Grafana metrics.
-
-**Dashboard widget:** Shows closet temp, kitchen ambient, heat delta (+°F), and estimated monthly AC cooling cost. Polls every 60s. Color-coded: green (<75°F), yellow (75-80°F), amber (80-85°F), red (>85°F).
-
-**TTS alerts (every 10 min):**
-- 80°F warning: "Server closet is at X degrees. Getting warm."
-- 85°F critical: "Server closet is dangerously hot. Check ventilation."
-- Auto-clears when cooled below 78°F (allows re-alerting on next heat-up)
-
-**Prometheus metrics:**
-- `bgw_temperature_fahrenheit{location="closet|kitchen"}` — sensor readings
-- `bgw_temperature_delta_fahrenheit` — closet minus kitchen delta
-
-**Config (env vars):**
-- `CLOSET_TEMP_WARNING` — warning threshold in °F (default: 80)
-- `CLOSET_TEMP_CRITICAL` — critical threshold in °F (default: 85)
-
-**HA sensors used:** `sensor.closet_temperature`, `sensor.kitchen_temperature`
-
-## Performance Notes
-
-- Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown
-- HA tool definition cached 300s (`_ha_tool_cache`) — invalidated on entity refresh
-- Nemotron agentic loop deduplicated into `_run_nemotron_tool_loop()` — both `call_nemotron_orchestrator()` and `_nemotron_fallback()` call it
-- `TERMINAL_TOOLS` set in the loop short-circuits after state-changing tools (start_focus, stop_focus, home_assistant, set_reminder, cancel_reminder, update_data, create_calendar_event) — prevents Nemotron from undoing its own actions in subsequent rounds
-- Streaming chunk size: 80 chars (was 20)
+| Doc | What |
+|-----|------|
+| **docs/FOCUS_AND_PIHOLE.md** | Focus timer (Pomodoro), Pi-hole DNS blocking, Nebula Sync |
+| **docs/VOICE_AND_TTS.md** | ATOM Echo voice assistant, TTS pacing, Wyoming bridges |
+| **docs/GOOGLE_INTEGRATIONS.md** | Calendar, Gmail, phone sync, travel-time alerts, OAuth2 setup |
+| **docs/FRONTEND.md** | Dashboard pages, widgets, YNAB finance, API proxy pattern |
+| **docs/MODE_ROUTER.md** | Intent classification modes (explainer/mirror/counterbalance/challenge/baseline) |
+| **docs/INFRASTRUCTURE.md** | HTTPS/Tailscale, RAG, temperature monitoring, performance notes, kiosk |
+| **ARCHITECTURE.md** | Internals, data flow, troubleshooting |
+| **COMMANDS.md** | Command quick reference |
+| **TECHNICAL_REFERENCE.md** | API specs, schemas |
+| **ROADMAP.md** | Feature roadmap and what's done/planned |
+| **monitoring/README.md** | Monitoring setup |
 
 ## Notes
 
 - Owner: Nadim (ADHD - prefers step-by-step with verification)
-- Docker project: `gateway_mvp` (default from directory name, no `-p` flag needed)
+- Docker project: `gateway_mvp` (default from directory name)
 - Helios auto-starts on demand via SSH, auto-stops after 30 min idle (~150W savings)
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
 - Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
-- TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`
-- Reminders default to office speaker, morning briefing defaults to bedroom pair

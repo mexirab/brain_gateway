@@ -8,13 +8,12 @@ Setup:
     python google_setup.py --credentials ./credentials/google_credentials.json
 """
 
-import os
-import json
 import logging
+import os
 from typing import Optional
 
-from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +34,7 @@ def get_credentials(
     Returns None if not configured (no credentials file).
     Raises if credentials exist but are invalid/expired and can't refresh.
     """
-    token_path = token_path or os.environ.get(
-        "GOOGLE_TOKEN_PATH", "/app/credentials/google_token.json"
-    )
+    token_path = token_path or os.environ.get("GOOGLE_TOKEN_PATH", "/app/credentials/google_token.json")
     credentials_path = credentials_path or os.environ.get(
         "GOOGLE_CREDENTIALS_PATH", "/app/credentials/google_credentials.json"
     )
@@ -66,9 +63,7 @@ def get_credentials(
             return None
 
     if not creds or not creds.valid:
-        logger.warning(
-            "[GOOGLE_AUTH] No valid token — run google_setup.py to authenticate"
-        )
+        logger.warning("[GOOGLE_AUTH] No valid token — run google_setup.py to authenticate")
         return None
 
     return creds

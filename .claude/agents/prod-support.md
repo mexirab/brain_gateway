@@ -69,7 +69,7 @@ curl -s -X POST http://localhost:8888/v1/chat/completions \
 - **DEBUG**: Full LLM prompts/responses, RAG query details — dev only, never production
 
 ### Log format
-Structured Python logging via `logger.info/warning/error`. All modules use `logging.getLogger(__name__)`. Key log prefixes:
+Structured JSON logging via `log_config.configure_logging()` — called in `orchestrator.py` at startup. All modules use `logging.getLogger(__name__)`. Log output is JSON lines with fields: `ts`, `level`, `logger`, `msg`, `request_id`, plus optional extras (`component`, `tool_name`, `latency_ms`). Key log prefixes:
 - `[orchestrator]` — startup, shutdown, HTTP client
 - `[CLOUD_BRAIN]` — chat flow, mode routing, Helios/Nemotron delegation
 - `[LOCAL_AGENT]` — tool execution commands

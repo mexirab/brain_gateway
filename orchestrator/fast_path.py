@@ -9,9 +9,9 @@ Result: ~100-200ms instead of 3-12s for ~40-50% of voice commands.
 Conservative by design: any ambiguity -> falls through to Helios.
 """
 
-import re
-import random
 import logging
+import random
+import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FastPathResult:
     """Result of a fast-path attempt."""
+
     handled: bool
     response_text: str = ""
     action: str = ""
@@ -29,19 +30,33 @@ class FastPathResult:
 # --- Disqualifier patterns (anything matching these is NOT a simple device command) ---
 
 # Questions about state
-_QUESTION_RE = re.compile(r"\?$|^(?:is|are|was|were|do|does|did|can|could|will|would|what|how|why|when|where|which)\b", re.IGNORECASE)
+_QUESTION_RE = re.compile(
+    r"\?$|^(?:is|are|was|were|do|does|did|can|could|will|would|what|how|why|when|where|which)\b", re.IGNORECASE
+)
 
 # Temporal qualifiers
-_TEMPORAL_RE = re.compile(r"\b(?:in\s+\d+\s+(?:minute|hour|second|min|hr|sec)s?|at\s+\d{1,2}(?::\d{2})\s*(?:am|pm)?|at\s+\d{1,2}\s*(?:am|pm)|tomorrow|tonight|later|soon|after|before|every\s+\d|schedule|morning|evening|afternoon)\b", re.IGNORECASE)
+_TEMPORAL_RE = re.compile(
+    r"\b(?:in\s+\d+\s+(?:minute|hour|second|min|hr|sec)s?|at\s+\d{1,2}(?::\d{2})\s*(?:am|pm)?|at\s+\d{1,2}\s*(?:am|pm)|tomorrow|tonight|later|soon|after|before|every\s+\d|schedule|morning|evening|afternoon)\b",
+    re.IGNORECASE,
+)
 
 # Multi-intent conjunctions followed by non-device verbs
-_MULTI_INTENT_RE = re.compile(r"\b(?:and|then|also)\s+(?:remind|search|tell|find|look|show|check|ask|play\s+(?:some|a\s+song|music\s+from))\b", re.IGNORECASE)
+_MULTI_INTENT_RE = re.compile(
+    r"\b(?:and|then|also)\s+(?:remind|search|tell|find|look|show|check|ask|play\s+(?:some|a\s+song|music\s+from))\b",
+    re.IGNORECASE,
+)
 
 # References to non-device tools
-_NON_DEVICE_RE = re.compile(r"\b(?:remind(?:er)?|timer|focus\s+(?:mode|session|timer)|search|look\s+up|find\s+(?:out|me)|weather|news|remember|note|email|message|text|call|calendar|alarm)\b", re.IGNORECASE)
+_NON_DEVICE_RE = re.compile(
+    r"\b(?:remind(?:er)?|timer|focus\s+(?:mode|session|timer)|search|look\s+up|find\s+(?:out|me)|weather|news|remember|note|email|message|text|call|calendar|alarm)\b",
+    re.IGNORECASE,
+)
 
 # Conversational framing
-_CONVERSATIONAL_RE = re.compile(r"\b(?:i\s+think|maybe|what\s+if|could\s+you|please\s+(?:also|and)|can\s+you\s+also|should\s+i|do\s+you|tell\s+me|explain|help\s+me)\b", re.IGNORECASE)
+_CONVERSATIONAL_RE = re.compile(
+    r"\b(?:i\s+think|maybe|what\s+if|could\s+you|please\s+(?:also|and)|can\s+you\s+also|should\s+i|do\s+you|tell\s+me|explain|help\s+me)\b",
+    re.IGNORECASE,
+)
 
 MAX_COMMAND_LENGTH = 120
 
@@ -171,10 +186,7 @@ def is_fast_path_eligible(text: str) -> bool:
     if _NON_DEVICE_RE.search(text):
         return False
 
-    if _CONVERSATIONAL_RE.search(text):
-        return False
-
-    return True
+    return not _CONVERSATIONAL_RE.search(text)
 
 
 async def try_fast_path(text: str, ha_client) -> FastPathResult:

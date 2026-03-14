@@ -83,10 +83,7 @@ async def get_travel_time(
         data = resp.json()
 
         if data.get("status") != "OK":
-            logger.warning(
-                f"[TRAVEL] API returned {data.get('status')}: "
-                f"{data.get('error_message', '')}"
-            )
+            logger.warning(f"[TRAVEL] API returned {data.get('status')}: {data.get('error_message', '')}")
             return None
 
         leg = data["routes"][0]["legs"][0]
@@ -109,10 +106,7 @@ async def get_travel_time(
             for k in keys[:50]:
                 _travel_cache.pop(k, None)
 
-        logger.info(
-            f"[TRAVEL] {destination}: {info.duration_in_traffic_minutes} min "
-            f"(traffic), {info.distance_text}"
-        )
+        logger.info(f"[TRAVEL] {destination}: {info.duration_in_traffic_minutes} min (traffic), {info.distance_text}")
         return info
 
     except Exception as e:

@@ -12,9 +12,16 @@ After any module is written or significantly modified. Trigger with `/review`.
 - Async functions use `await` correctly — missing awaits cause silent bugs (coroutine never executed)
 - httpx calls have appropriate timeouts — no unbounded waits on external services
 - Exception handling doesn't swallow errors silently — at minimum log the exception
+- No bare `except:` — always catch specific exceptions or at minimum `except Exception:`
 - No mutable default arguments in function signatures (e.g., `def foo(items=[])`)
-- FastAPI route handlers validate input — use Pydantic models or explicit checks
 - Background tasks (APScheduler jobs) handle their own exceptions — unhandled exceptions kill the job silently
+
+### Type Safety & Validation (anti-slop checklist)
+- **API endpoints MUST use Pydantic models** for request bodies — no raw `req.json()` + `.get()` chains
+- Pydantic models live in `orchestrator/schemas.py` — check they exist for any new endpoint
+- **Response format is standardized**: all responses include `"ok": true/false`. Error responses include `"error": "message"`. Never use `"success"`, always `"ok"`
+- Type hints on all function signatures (parameters and return types)
+- No `Any` type where a specific type is knowable
 
 ### Architecture
 - No circular imports at module level — use deferred imports inside function bodies if needed
@@ -36,11 +43,21 @@ After any module is written or significantly modified. Trigger with `/review`.
 - ChromaDB queries use the shared collection, not re-opening the DB
 - No blocking I/O in async handlers — use `await` or `run_in_executor`
 
-### General
+### Code Quality (anti-slop checklist)
 - Naming: modules snake_case, classes PascalCase, constants SCREAMING_SNAKE_CASE
 - No `print()` in production paths — use `logger.info/warning/error`
+- Logging uses structured JSON via `log_config.configure_logging()` — not `logging.basicConfig()`
 - Prometheus metrics updated for new tools/features (metrics.py)
 - No duplicate code between orchestrator.py and dedicated modules
+- New dependencies MUST be added to `orchestrator/requirements.txt` with version constraints
+- Ruff lint passes: `ruff check orchestrator/`
+- Ruff format passes: `ruff format --check orchestrator/`
+
+### Docker
+- Dockerfile uses `requirements.txt`, not inline `pip install`
+- Container runs as non-root (`USER appuser`)
+- HEALTHCHECK directive present
+- `.dockerignore` excludes dev files, secrets, and frontend node_modules
 
 ## Output format
 

@@ -12,16 +12,20 @@ from zoneinfo import ZoneInfo
 
 import shared
 import state_store
-from shared import TIMEZONE, NEMOTRON_URL, NEMOTRON_MODEL, profile
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
-from reminder_manager import list_pending_reminders, _announce_voice
-from travel_time import get_travel_time
 from metrics import (
-    CALENDAR_POLL_EVENTS_FOUND, GMAIL_API_CALLS, GMAIL_API_ERRORS,
-    EMAIL_TO_CALENDAR_EVENTS_CREATED, EMAIL_TO_CALENDAR_EMAILS_SCANNED,
-    TEMPERATURE_GAUGE, TEMPERATURE_DELTA,
+    CALENDAR_POLL_EVENTS_FOUND,
+    EMAIL_TO_CALENDAR_EMAILS_SCANNED,
+    EMAIL_TO_CALENDAR_EVENTS_CREATED,
+    GMAIL_API_CALLS,
+    GMAIL_API_ERRORS,
+    TEMPERATURE_DELTA,
+    TEMPERATURE_GAUGE,
 )
+from reminder_manager import _announce_voice, list_pending_reminders
+from shared import NEMOTRON_MODEL, NEMOTRON_URL, TIMEZONE, profile
+from travel_time import get_travel_time
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +62,11 @@ async def poll_calendar():
             travel_key = f"travel:{event.id}"
             cal_key = f"cal:{event.id}"
             has_physical_location = (
-                event.location
-                and shared.GOOGLE_MAPS_API_KEY
-                and not state_store.is_notified(travel_key)
+                event.location and shared.GOOGLE_MAPS_API_KEY and not state_store.is_notified(travel_key)
             )
 
             if has_physical_location:
-                travel = await get_travel_time(
-                    shared.HOME_ADDRESS, event.location, event.start
-                )
+                travel = await get_travel_time(shared.HOME_ADDRESS, event.location, event.start)
                 if travel:
                     drive_min = travel.duration_in_traffic_minutes
                     leave_by_min = minutes - drive_min - shared.TRAVEL_TIME_BUFFER
@@ -82,8 +82,7 @@ async def poll_calendar():
                         state_store.mark_notified(cal_key)
                         CALENDAR_POLL_EVENTS_FOUND.inc()
                         logger.info(
-                            f"[CALENDAR_POLL] LEAVE NOW: {event.title} "
-                            f"({drive_min} min drive)",
+                            f"[CALENDAR_POLL] LEAVE NOW: {event.title} ({drive_min} min drive)",
                             extra={"component": "calendar"},
                         )
                         continue
@@ -99,8 +98,7 @@ async def poll_calendar():
                         state_store.mark_notified(travel_key)
                         CALENDAR_POLL_EVENTS_FOUND.inc()
                         logger.info(
-                            f"[CALENDAR_POLL] Leave in {leave_by_min} min: "
-                            f"{event.title} ({drive_min} min drive)",
+                            f"[CALENDAR_POLL] Leave in {leave_by_min} min: {event.title} ({drive_min} min drive)",
                             extra={"component": "calendar"},
                         )
                         continue
@@ -126,12 +124,10 @@ async def poll_calendar():
             await _announce_voice(message)
             state_store.mark_notified(cal_key)
             CALENDAR_POLL_EVENTS_FOUND.inc()
-            logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}",
-                        extra={"component": "calendar"})
+            logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}", extra={"component": "calendar"})
 
     except Exception as e:
         logger.error(f"[CALENDAR_POLL] Error: {e}")
-
 
 
 def _parse_phone_datetime(s: str, tz=None) -> datetime:
@@ -175,7 +171,9 @@ async def morning_briefing():
         briefing_events = []
 
         # Source 1: Phone calendar sync (preferred — has ALL calendars)
-        phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+        phone_age = (
+            time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+        )
         if shared._phone_calendar_events and phone_age < 86400:  # synced within 24h
             for ev in shared._phone_calendar_events:
                 try:
@@ -186,13 +184,15 @@ async def morning_briefing():
                     if start.date() != today:
                         continue
                     is_all_day = ev.get("all_day", False)
-                    briefing_events.append({
-                        "title": ev.get("title", "(No title)"),
-                        "start": start,
-                        "all_day": is_all_day,
-                        "calendar": ev.get("calendar") or ev.get("calendar ") or "",
-                        "location": ev.get("location", ""),
-                    })
+                    briefing_events.append(
+                        {
+                            "title": ev.get("title", "(No title)"),
+                            "start": start,
+                            "all_day": is_all_day,
+                            "calendar": ev.get("calendar") or ev.get("calendar ") or "",
+                            "location": ev.get("location", ""),
+                        }
+                    )
                 except (ValueError, TypeError):
                     continue
             logger.info(f"[MORNING_BRIEFING] Using phone calendar ({len(briefing_events)} today's events)")
@@ -203,13 +203,15 @@ async def morning_briefing():
                 response = await client.list_events(days_ahead=1)
                 if response.success:
                     for event in response.events:
-                        briefing_events.append({
-                            "title": event.title,
-                            "start": event.start,
-                            "all_day": event.all_day,
-                            "calendar": "Google",
-                            "location": event.location,
-                        })
+                        briefing_events.append(
+                            {
+                                "title": event.title,
+                                "start": event.start,
+                                "all_day": event.all_day,
+                                "calendar": "Google",
+                                "location": event.location,
+                            }
+                        )
                 logger.info(f"[MORNING_BRIEFING] Using Google Calendar fallback ({len(briefing_events)} events)")
             else:
                 logger.info("[MORNING_BRIEFING] No calendar source available")
@@ -236,7 +238,9 @@ async def morning_briefing():
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
 
         await _announce_voice(" ".join(parts), speaker=shared.MORNING_BRIEFING_SPEAKER)
-        logger.info(f"[MORNING_BRIEFING] Delivered on {shared.MORNING_BRIEFING_SPEAKER}: {len(briefing_events)} events, {len(pending)} reminders")
+        logger.info(
+            f"[MORNING_BRIEFING] Delivered on {shared.MORNING_BRIEFING_SPEAKER}: {len(briefing_events)} events, {len(pending)} reminders"
+        )
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
@@ -275,8 +279,7 @@ async def poll_email():
             await _announce_voice(announcement)
             state_store.mark_notified(email_key)
             new_count += 1
-            logger.info(f"[EMAIL_POLL] Announced: {msg.subject} from {sender}",
-                        extra={"component": "gmail"})
+            logger.info(f"[EMAIL_POLL] Announced: {msg.subject} from {sender}", extra={"component": "gmail"})
 
         if new_count:
             logger.info(f"[EMAIL_POLL] Announced {new_count} new emails")
@@ -368,7 +371,8 @@ async def process_emails_for_events():
 
             try:
                 llm_resp = await call_model(
-                    NEMOTRON_URL, NEMOTRON_MODEL,
+                    NEMOTRON_URL,
+                    NEMOTRON_MODEL,
                     messages=[{"role": "user", "content": prompt}],
                     timeout=30,
                 )
@@ -424,8 +428,7 @@ async def process_emails_for_events():
                 if result.success:
                     created_count += 1
                     EMAIL_TO_CALENDAR_EVENTS_CREATED.inc()
-                    logger.info(f"[EMAIL_TO_CAL] Created: {title} at {start_time}",
-                                extra={"component": "email_to_cal"})
+                    logger.info(f"[EMAIL_TO_CAL] Created: {title} at {start_time}", extra={"component": "email_to_cal"})
                 else:
                     logger.warning(f"[EMAIL_TO_CAL] Failed to create: {title} — {result.error}")
 
@@ -455,7 +458,7 @@ def _parse_event_json(raw: str) -> list:
         return []
 
     try:
-        events = json.loads(raw[start:end + 1])
+        events = json.loads(raw[start : end + 1])
         if isinstance(events, list):
             return events
     except json.JSONDecodeError:
@@ -482,7 +485,7 @@ async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
 
 async def sync_ynab_transactions():
     """Background job: sync transactions from YNAB."""
-    from finance_manager import ynab_sync_transactions, _is_ynab_configured
+    from finance_manager import _is_ynab_configured, ynab_sync_transactions
 
     if not _is_ynab_configured():
         return
@@ -498,21 +501,17 @@ async def sync_ynab_transactions():
 async def weekly_spending_summary():
     """Sunday evening: announce weekly spending summary via TTS."""
     from finance_manager import (
-        get_db, _current_year_month, _ensure_budget_period, _get_level_info,
+        _ensure_budget_period,
+        _get_level_info,
+        get_db,
     )
 
     try:
         with get_db() as conn:
             ym = _ensure_budget_period(conn)
-            budget = dict(conn.execute(
-                "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
-            ).fetchone())
-            config = dict(conn.execute(
-                "SELECT * FROM finance_config WHERE id = 1"
-            ).fetchone())
-            game = dict(conn.execute(
-                "SELECT * FROM game_state WHERE id = 1"
-            ).fetchone())
+            budget = dict(conn.execute("SELECT * FROM budget_periods WHERE year_month = ?", (ym,)).fetchone())
+            _config = dict(conn.execute("SELECT * FROM finance_config WHERE id = 1").fetchone())
+            game = dict(conn.execute("SELECT * FROM game_state WHERE id = 1").fetchone())
 
             spent = budget["discretionary_spent"]
             limit = budget["discretionary_budget"]
@@ -527,19 +526,21 @@ async def weekly_spending_summary():
             parts.append(f"You're over budget by ${overspend:.0f}.")
             parts.append("Time to tighten up for the rest of the month!")
         elif pct >= 75:
-            parts.append(f"You've spent ${spent:.0f} of your ${limit:.0f} budget. "
-                         f"That's {pct:.0f} percent with only ${remaining:.0f} left.")
+            parts.append(
+                f"You've spent ${spent:.0f} of your ${limit:.0f} budget. "
+                f"That's {pct:.0f} percent with only ${remaining:.0f} left."
+            )
             parts.append("Getting close! Keep an eye on it this week.")
         elif pct >= 50:
-            parts.append(f"You've spent ${spent:.0f} of ${limit:.0f}. "
-                         f"${remaining:.0f} remaining. You're on track!")
+            parts.append(f"You've spent ${spent:.0f} of ${limit:.0f}. ${remaining:.0f} remaining. You're on track!")
         else:
-            parts.append(f"Only ${spent:.0f} spent out of ${limit:.0f}. "
-                         f"${remaining:.0f} left. Looking great!")
+            parts.append(f"Only ${spent:.0f} spent out of ${limit:.0f}. ${remaining:.0f} left. Looking great!")
 
-        parts.append(f"You're Level {game['level']}, {level_info['title']}, "
-                     f"with {game['total_xp']} total XP "
-                     f"and a {game['streak_months']} month streak.")
+        parts.append(
+            f"You're Level {game['level']}, {level_info['title']}, "
+            f"with {game['total_xp']} total XP "
+            f"and a {game['streak_months']} month streak."
+        )
 
         await _announce_voice(" ".join(parts))
         logger.info(f"[WEEKLY_SUMMARY] Delivered: ${spent:.2f}/{limit:.2f} ({pct:.0f}%)")
@@ -550,7 +551,7 @@ async def weekly_spending_summary():
 
 async def midmonth_budget_warning():
     """Mid-month check: if over 60% of discretionary spent, announce warning via TTS."""
-    from finance_manager import get_db, _current_year_month, _ensure_budget_period
+    from finance_manager import _ensure_budget_period, get_db
 
     tz = ZoneInfo(TIMEZONE)
     today = datetime.now(tz)
@@ -562,9 +563,7 @@ async def midmonth_budget_warning():
     try:
         with get_db() as conn:
             ym = _ensure_budget_period(conn)
-            budget = dict(conn.execute(
-                "SELECT * FROM budget_periods WHERE year_month = ?", (ym,)
-            ).fetchone())
+            budget = dict(conn.execute("SELECT * FROM budget_periods WHERE year_month = ?", (ym,)).fetchone())
 
             spent = budget["discretionary_spent"]
             limit = budget["discretionary_budget"]
@@ -580,16 +579,22 @@ async def midmonth_budget_warning():
 
         if pct >= 100:
             overspend = spent - limit
-            message = (f"Heads up {profile.user_name}. You're already over your monthly budget "
-                       f"by ${overspend:.0f} and we're only halfway through the month. "
-                       f"Future you is taking damage!")
+            message = (
+                f"Heads up {profile.user_name}. You're already over your monthly budget "
+                f"by ${overspend:.0f} and we're only halfway through the month. "
+                f"Future you is taking damage!"
+            )
         elif pct >= 80:
-            message = (f"Budget warning {profile.user_name}. You've used {pct:.0f} percent of your "
-                       f"monthly budget with half the month still to go. "
-                       f"Only ${remaining:.0f} left. Be careful!")
+            message = (
+                f"Budget warning {profile.user_name}. You've used {pct:.0f} percent of your "
+                f"monthly budget with half the month still to go. "
+                f"Only ${remaining:.0f} left. Be careful!"
+            )
         else:
-            message = (f"Mid-month check. You've spent {pct:.0f} percent of your budget. "
-                       f"${remaining:.0f} left for the rest of the month. Keep it steady!")
+            message = (
+                f"Mid-month check. You've spent {pct:.0f} percent of your budget. "
+                f"${remaining:.0f} left for the rest of the month. Keep it steady!"
+            )
 
         await _announce_voice(message)
         logger.info(f"[MIDMONTH] Warning delivered: {pct:.0f}% spent")
@@ -605,7 +610,7 @@ async def check_closet_temperature():
     - 80°F: warning (GPU heat building up)
     - 85°F: urgent (risk of thermal throttling)
     """
-    from shared import HA_URL, HA_TOKEN
+    from shared import HA_TOKEN, HA_URL
 
     try:
         resp = await shared._http.get(

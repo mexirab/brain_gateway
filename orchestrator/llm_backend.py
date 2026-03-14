@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
@@ -23,10 +23,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LLMConfig:
     """Configuration for a single LLM endpoint."""
-    backend: str          # "openai_compatible", "anthropic", "openai"
-    url: str              # base URL (e.g., "http://10.0.0.195:8080/v1")
-    model: str            # model name
-    api_key: str = ""     # for cloud APIs
+
+    backend: str  # "openai_compatible", "anthropic", "openai"
+    url: str  # base URL (e.g., "http://10.0.0.195:8080/v1")
+    model: str  # model name
+    api_key: str = ""  # for cloud APIs
     temperature: float = 0.3
     max_tokens: int = 4096
 
@@ -83,8 +84,7 @@ class OpenAICompatibleBackend(LLMBackend):
     This is the current behavior — essentially a thin wrapper.
     """
 
-    async def chat_completion(self, messages, system="", tools=None,
-                              tool_choice="auto", timeout=180):
+    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180):
         final_messages = messages.copy()
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
@@ -105,7 +105,9 @@ class OpenAICompatibleBackend(LLMBackend):
 
         r = await self._http.post(
             f"{self.config.url}/chat/completions",
-            json=payload, timeout=timeout, headers=headers,
+            json=payload,
+            timeout=timeout,
+            headers=headers,
         )
         r.raise_for_status()
         return r.json()
@@ -128,8 +130,11 @@ class OpenAICompatibleBackend(LLMBackend):
             headers["Authorization"] = f"Bearer {self.config.api_key}"
 
         async with self._http.stream(
-            "POST", f"{self.config.url}/chat/completions",
-            json=payload, timeout=timeout, headers=headers,
+            "POST",
+            f"{self.config.url}/chat/completions",
+            json=payload,
+            timeout=timeout,
+            headers=headers,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -156,11 +161,13 @@ class AnthropicBackend(LLMBackend):
             if tool.get("type") != "function":
                 continue
             fn = tool["function"]
-            anthropic_tools.append({
-                "name": fn["name"],
-                "description": fn.get("description", ""),
-                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
-            })
+            anthropic_tools.append(
+                {
+                    "name": fn["name"],
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                }
+            )
         return anthropic_tools
 
     def _convert_messages_to_anthropic(self, messages: List[Dict]) -> List[Dict]:
@@ -195,25 +202,31 @@ class AnthropicBackend(LLMBackend):
                                 args = json.loads(args)
                             except json.JSONDecodeError:
                                 args = {}
-                        blocks.append({
-                            "type": "tool_use",
-                            "id": tc.get("id", ""),
-                            "name": fn.get("name", ""),
-                            "input": args,
-                        })
+                        blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": tc.get("id", ""),
+                                "name": fn.get("name", ""),
+                                "input": args,
+                            }
+                        )
                     result.append({"role": "assistant", "content": blocks})
                 else:
                     result.append({"role": "assistant", "content": content or ""})
 
             elif role == "tool":
-                result.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": msg.get("tool_call_id", ""),
-                        "content": msg.get("content", ""),
-                    }],
-                })
+                result.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": msg.get("content", ""),
+                            }
+                        ],
+                    }
+                )
 
             else:
                 result.append({"role": role, "content": msg.get("content", "")})
@@ -230,14 +243,16 @@ class AnthropicBackend(LLMBackend):
             if block["type"] == "text":
                 text_parts.append(block["text"])
             elif block["type"] == "tool_use":
-                tool_calls.append({
-                    "id": block["id"],
-                    "type": "function",
-                    "function": {
-                        "name": block["name"],
-                        "arguments": json.dumps(block["input"]),
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": block["id"],
+                        "type": "function",
+                        "function": {
+                            "name": block["name"],
+                            "arguments": json.dumps(block["input"]),
+                        },
+                    }
+                )
 
         message = {
             "role": "assistant",
@@ -250,16 +265,17 @@ class AnthropicBackend(LLMBackend):
             "id": anthropic_resp.get("id", ""),
             "object": "chat.completion",
             "model": anthropic_resp.get("model", ""),
-            "choices": [{
-                "index": 0,
-                "message": message,
-                "finish_reason": "tool_calls" if tool_calls else "stop",
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": "tool_calls" if tool_calls else "stop",
+                }
+            ],
             "usage": anthropic_resp.get("usage", {}),
         }
 
-    async def chat_completion(self, messages, system="", tools=None,
-                              tool_choice="auto", timeout=180):
+    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180):
         anthropic_messages = self._convert_messages_to_anthropic(messages)
 
         payload = {
@@ -284,7 +300,9 @@ class AnthropicBackend(LLMBackend):
 
         r = await self._http.post(
             f"{self.config.url}/messages",
-            json=payload, timeout=timeout, headers=headers,
+            json=payload,
+            timeout=timeout,
+            headers=headers,
         )
         r.raise_for_status()
         return self._normalize_response(r.json())
@@ -311,8 +329,11 @@ class AnthropicBackend(LLMBackend):
         chunk_id = f"chatcmpl-{int(time.time())}"
 
         async with self._http.stream(
-            "POST", f"{self.config.url}/messages",
-            json=payload, timeout=timeout, headers=headers,
+            "POST",
+            f"{self.config.url}/messages",
+            json=payload,
+            timeout=timeout,
+            headers=headers,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -332,11 +353,13 @@ class AnthropicBackend(LLMBackend):
                             "id": chunk_id,
                             "object": "chat.completion.chunk",
                             "model": self.config.model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": delta["text"]},
-                                "finish_reason": None,
-                            }],
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"content": delta["text"]},
+                                    "finish_reason": None,
+                                }
+                            ],
                         }
                         yield f"data: {json.dumps(oai_chunk)}\n\n"
 
@@ -362,8 +385,7 @@ class OpenAIBackend(LLMBackend):
     Nearly identical to OpenAICompatibleBackend but always uses Bearer auth.
     """
 
-    async def chat_completion(self, messages, system="", tools=None,
-                              tool_choice="auto", timeout=180):
+    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180):
         final_messages = messages.copy()
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
@@ -382,7 +404,9 @@ class OpenAIBackend(LLMBackend):
 
         r = await self._http.post(
             f"{self.config.url}/chat/completions",
-            json=payload, timeout=timeout, headers=headers,
+            json=payload,
+            timeout=timeout,
+            headers=headers,
         )
         r.raise_for_status()
         return r.json()
@@ -403,8 +427,11 @@ class OpenAIBackend(LLMBackend):
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
 
         async with self._http.stream(
-            "POST", f"{self.config.url}/chat/completions",
-            json=payload, timeout=timeout, headers=headers,
+            "POST",
+            f"{self.config.url}/chat/completions",
+            json=payload,
+            timeout=timeout,
+            headers=headers,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -427,8 +454,5 @@ def create_backend(config: LLMConfig, http_client: httpx.AsyncClient) -> LLMBack
     """Create a backend instance from config."""
     cls = _BACKENDS.get(config.backend)
     if not cls:
-        raise ValueError(
-            f"Unknown LLM backend: '{config.backend}'. "
-            f"Must be one of: {list(_BACKENDS.keys())}"
-        )
+        raise ValueError(f"Unknown LLM backend: '{config.backend}'. Must be one of: {list(_BACKENDS.keys())}")
     return cls(config, http_client)
