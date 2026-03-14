@@ -11,7 +11,7 @@ WorkingDirectory=/home/labadmin
 # Use same environment as TTS server
 Environment="PATH=/home/labadmin/qwen-tts-env/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="WHISPER_MODEL=large-v3"
-Environment="WHISPER_DEVICE=cuda:1"
+Environment="WHISPER_DEVICE=cuda:0"
 Environment="WHISPER_PORT=8003"
 
 ExecStart=/home/labadmin/qwen-tts-env/bin/python /home/labadmin/stt_server.py
