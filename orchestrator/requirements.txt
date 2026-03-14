@@ -10,6 +10,7 @@ pydantic-settings>=2.13,<3.0
 # AI/ML
 chromadb>=1.5,<2.0
 sentence-transformers>=5.3,<6.0
+einops>=0.8,<1.0
 rapidfuzz>=3.14,<4.0
 
 # Infrastructure
