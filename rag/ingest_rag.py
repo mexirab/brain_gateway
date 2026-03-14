@@ -100,7 +100,7 @@ def main():
     ap.add_argument("--source", required=True)
     ap.add_argument("--persist", required=True)
     ap.add_argument("--collection", required=True)
-    ap.add_argument("--embed-model", default="sentence-transformers/all-MiniLM-L6-v2")
+    ap.add_argument("--embed-model", default="nomic-ai/nomic-embed-text-v2-moe")
     ap.add_argument("--target-chars", type=int, default=2400)
     ap.add_argument("--overlap-chars", type=int, default=300)
     args = ap.parse_args()

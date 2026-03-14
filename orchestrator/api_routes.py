@@ -17,6 +17,7 @@ from focus_manager import tool_start_focus, tool_stop_focus
 from google_calendar import get_calendar_client
 from helios_manager import check_helios_health
 from metrics import (
+    FALLBACK_ONLINE,
     FOCUS_ACTIVE,
     HELIOS_IDLE_SECONDS,
     HELIOS_ONLINE,
@@ -24,6 +25,7 @@ from metrics import (
     TEMPERATURE_DELTA,
     TEMPERATURE_GAUGE,
 )
+from model_manager import check_model_health
 from prompt_builder import rag_context
 from reminder_manager import _announce_voice, list_pending_reminders, mark_reminder_completed
 from schemas import (
@@ -39,15 +41,20 @@ from shared import (
     CHROMA_PERSIST,
     ENDEL_ENABLED,
     ENDEL_MODES,
+    FALLBACK_MODEL_NAME,
+    FALLBACK_MODEL_URL,
     FOCUS_AUDIO_PLAYER,
     HA_TOKEN,
     HA_URL,
     HELIOS_MODEL,
     HELIOS_URL,
+    MODEL_NAME,
+    MODEL_URL,
     MORNING_BRIEFING_ENABLED,
     MORNING_BRIEFING_TIME,
     NEMOTRON_MODEL,
     NEMOTRON_URL,
+    UNIFIED_MODE,
     collection,
     current_focus_session,
     ha_client,
@@ -68,19 +75,11 @@ async def health(req: Request):
     api_token = os.environ.get("API_TOKEN", "")
     auth = req.headers.get("authorization", "")
     if auth != f"Bearer {api_token}":
-        return {"ok": True, "version": "6.2"}
+        version = "7.0" if UNIFIED_MODE else "6.2"
+        arch = "unified" if UNIFIED_MODE else "hybrid"
+        return {"ok": True, "version": version, "architecture": arch}
 
     # Full health details for authenticated requests
-    helios_online = await check_helios_health()
-
-    # Check Nemotron health
-    nemotron_online = False
-    try:
-        resp = await shared._http.get(f"{NEMOTRON_URL}/models", timeout=3.0)
-        nemotron_online = resp.status_code == 200
-    except Exception:
-        pass
-
     scheduled_jobs = len(scheduler.get_jobs())
 
     idle_timeout = int(os.environ.get("HELIOS_IDLE_TIMEOUT", 1800))
@@ -90,34 +89,14 @@ async def health(req: Request):
     else:
         idle_info = "no requests yet"
 
-    return {
-        "ok": True,
-        "version": "6.2",
-        "architecture": "hybrid",
-        "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
-        "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
-        "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
-        "nemotron_status": "online" if nemotron_online else "offline",
-        "helios_idle": idle_info,
-        "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
-        "helios_tools": ["ask_orchestrator"],
-        "nemotron_tools": [
-            "home_assistant",
-            "search_memory",
-            "update_data",
-            "set_reminder",
-            "cancel_reminder",
-            "start_focus",
-            "stop_focus",
-            "focus_status",
-            "check_calendar",
-            "create_calendar_event",
-        ],
+    # Shared health fields (calendar, RAG, HA, scheduler, focus, endel)
+    cal_client = get_calendar_client()
+    common_fields = {
         "calendar": {
-            "configured": get_calendar_client().is_configured,
-            "poll_interval_min": CALENDAR_POLL_INTERVAL if get_calendar_client().is_configured else None,
+            "configured": cal_client.is_configured,
+            "poll_interval_min": CALENDAR_POLL_INTERVAL if cal_client.is_configured else None,
             "morning_briefing": MORNING_BRIEFING_TIME
-            if MORNING_BRIEFING_ENABLED and get_calendar_client().is_configured
+            if MORNING_BRIEFING_ENABLED and cal_client.is_configured
             else None,
         },
         "rag_collection": CHROMA_COLLECTION,
@@ -148,13 +127,87 @@ async def health(req: Request):
         },
     }
 
+    if UNIFIED_MODE:
+        # v7 unified architecture
+        from tool_definitions import get_all_tools  # late import: avoids circular import at module load
+
+        primary_online = await check_model_health()
+
+        fallback_online = False
+        try:
+            resp = await shared._http.get(f"{FALLBACK_MODEL_URL}/models", timeout=3.0)
+            fallback_online = resp.status_code == 200
+        except Exception as e:
+            logger.debug("Fallback model health check failed: %s", e)
+
+        tool_names = [t["function"]["name"] for t in get_all_tools()]
+
+        return {
+            "ok": True,
+            "version": "7.0",
+            "architecture": "unified",
+            "flow": "User → Orchestrator → Brain (conversation + tools) → User",
+            "primary": f"{MODEL_URL} ({MODEL_NAME})",
+            "primary_status": "online" if primary_online else "offline (auto-starts on demand)",
+            "fallback": f"{FALLBACK_MODEL_URL} ({FALLBACK_MODEL_NAME})",
+            "fallback_status": "online" if fallback_online else "offline",
+            "model_idle": idle_info,
+            "tools": tool_names,
+            **common_fields,
+        }
+
+    # v6.2 hybrid architecture
+    helios_online = await check_helios_health()
+
+    nemotron_online = False
+    try:
+        resp = await shared._http.get(f"{NEMOTRON_URL}/models", timeout=3.0)
+        nemotron_online = resp.status_code == 200
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "version": "6.2",
+        "architecture": "hybrid",
+        "flow": "User → Helios (conversation) → Nemotron (tools) → Helios → User",
+        "primary": f"{HELIOS_URL} ({HELIOS_MODEL})",
+        "primary_status": "online" if helios_online else "offline (auto-starts on demand)",
+        "nemotron_status": "online" if nemotron_online else "offline",
+        "helios_idle": idle_info,
+        "orchestrator": f"{NEMOTRON_URL} ({NEMOTRON_MODEL})",
+        "helios_tools": ["ask_orchestrator"],
+        "nemotron_tools": [
+            "home_assistant",
+            "search_memory",
+            "update_data",
+            "set_reminder",
+            "cancel_reminder",
+            "start_focus",
+            "stop_focus",
+            "focus_status",
+            "check_calendar",
+            "create_calendar_event",
+        ],
+        **common_fields,
+    }
+
 
 @router.get("/metrics")
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     from starlette.responses import Response
 
-    HELIOS_ONLINE.set(1 if await check_helios_health() else 0)
+    if UNIFIED_MODE:
+        HELIOS_ONLINE.set(1 if await check_model_health() else 0)
+        # Scrape fallback model health
+        try:
+            resp = await shared._http.get(f"{FALLBACK_MODEL_URL}/models", timeout=3.0)
+            FALLBACK_ONLINE.set(1 if resp.status_code == 200 else 0)
+        except Exception:
+            FALLBACK_ONLINE.set(0)
+    else:
+        HELIOS_ONLINE.set(1 if await check_helios_health() else 0)
     FOCUS_ACTIVE.set(1 if current_focus_session["active"] else 0)
     REMINDERS_PENDING.set(len(list_pending_reminders()))
     if shared._last_helios_request > 0:

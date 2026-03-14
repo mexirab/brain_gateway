@@ -56,13 +56,14 @@ from fast_path import try_fast_path
 from focus_manager import deliver_focus_break
 from google_calendar import get_calendar_client
 
-# Helios lifecycle management
+# Model lifecycle management
 from helios_manager import check_helios_health, check_helios_idle, start_helios
 
 # Cloud brain + local agent
 from local_agent import LocalAgent
+from model_manager import check_model_health, check_model_idle, start_model_server
 
-# Nemotron agentic loop
+# Nemotron agentic loop (v6 hybrid)
 from nemotron_loop import _run_nemotron_tool_loop, clean_response, parse_tool_calls_from_content
 from pihole_client import get_pihole_client
 
@@ -70,14 +71,19 @@ from pihole_client import get_pihole_client
 from prompt_builder import (
     get_helios_system_prompt,
     get_orchestrator_system_prompt,
+    get_unified_system_prompt,
     is_greeting,
     last_user_text,
     rag_context,
 )
 from shared import (
     CALENDAR_POLL_INTERVAL,
+    FALLBACK_MODEL_NAME,
+    FALLBACK_MODEL_URL,
     HELIOS_MODEL,
     HELIOS_URL,
+    MODEL_NAME,
+    MODEL_URL,
     MORNING_BRIEFING_ENABLED,
     MORNING_BRIEFING_TIME,
     NEMOTRON_MODEL,
@@ -89,11 +95,14 @@ from shared import (
     scheduler,
 )
 
-# Tool definitions (schemas for Nemotron and Helios)
-from tool_definitions import HELIOS_TOOLS
+# Tool definitions (schemas for Nemotron, Helios, and unified mode)
+from tool_definitions import HELIOS_TOOLS, get_all_tools
 
 # Tool execution dispatcher
 from tool_handlers import deliver_reminder_job
+
+# Unified tool loop (v7)
+from unified_loop import run_unified_tool_loop
 
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
@@ -260,6 +269,12 @@ def _resolve_backend(url: str, model: str):
     """Pick the backend whose URL matches the call."""
     from llm_backend import LLMConfig, OpenAICompatibleBackend
 
+    # Check unified mode backends first
+    if shared.primary_backend and url == shared.primary_backend.config.url:
+        return shared.primary_backend
+    if shared.fallback_backend and url == shared.fallback_backend.config.url:
+        return shared.fallback_backend
+    # v6 hybrid backends
     if conversation_backend and url == conversation_backend.config.url:
         return conversation_backend
     if orchestrator_backend and url == orchestrator_backend.config.url:
@@ -373,9 +388,20 @@ async def startup_event():
         helios_model=HELIOS_MODEL,
         nemotron_url=NEMOTRON_URL,
         nemotron_model=NEMOTRON_MODEL,
+        # v7 unified mode
+        get_unified_system_prompt_fn=get_unified_system_prompt,
+        get_all_tools_fn=get_all_tools,
+        check_model_health_fn=check_model_health,
+        start_model_server_fn=start_model_server,
+        run_unified_loop_fn=run_unified_tool_loop,
+        model_url=MODEL_URL,
+        model_name=MODEL_NAME,
+        fallback_model_url=FALLBACK_MODEL_URL,
+        fallback_model_name=FALLBACK_MODEL_NAME,
     )
     cloud_brain.on_helios_request = lambda: setattr(shared, "_last_helios_request", time.time())
-    logger.info("[orchestrator] CloudBrain + LocalAgent initialized")
+    arch_mode = "unified_v7" if shared.UNIFIED_MODE else "hybrid_v6"
+    logger.info("[orchestrator] CloudBrain + LocalAgent initialized (mode=%s)", arch_mode)
 
     # Reload pending reminders from DB and re-schedule
     pending = state_store.get_pending_reminders()
@@ -472,16 +498,17 @@ async def startup_event():
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
 
-    # Schedule Helios idle check (auto-shutdown to save power)
+    # Schedule model server idle check (auto-shutdown to save power)
+    idle_check_fn = check_model_idle if shared.UNIFIED_MODE else check_helios_idle
     scheduler.add_job(
-        check_helios_idle,
+        idle_check_fn,
         trigger="interval",
         minutes=5,
-        id="helios_idle_check",
-        name="Helios idle check",
+        id="model_idle_check",
+        name="Model idle check",
         replace_existing=True,
     )
-    logger.info("[SCHEDULER] Helios idle check every 5 min")
+    logger.info("[SCHEDULER] Model idle check every 5 min")
 
 
 if __name__ == "__main__":

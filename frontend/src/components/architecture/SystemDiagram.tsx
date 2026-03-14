@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 
 type NodeId =
   | 'user' | 'echo' | 'wake' | 'stt' | 'webui'
-  | 'orchestrator' | 'router' | 'helios' | 'nemotron'
+  | 'orchestrator' | 'router' | 'brain'
   | 'ha' | 'memory' | 'calendar' | 'email' | 'web' | 'focus' | 'finance'
   | 'tts' | 'speakers'
   | 'bg_calendar' | 'bg_email' | 'bg_morning' | 'bg_travel';
@@ -52,9 +52,8 @@ const NODES: DiagramNode[] = [
   { id: 'orchestrator', label: 'Orchestrator', sub: 'Brain Gateway', x: 320, y: 205, w: 160, h: 60, color: '#6366f1', glow: '#6366f1', icon: '🧠', group: 'processing' },
   { id: 'router', label: 'Mode Router', sub: 'Intent + Emotion', x: 520, y: 205, w: 140, h: 52, color: '#818cf8', glow: '#818cf8', icon: '🎯', group: 'processing' },
 
-  // AI layer
-  { id: 'helios', label: 'Helios', sub: 'Qwen3-32B · RTX 5090', x: 210, y: 320, w: 160, h: 56, color: '#10b981', glow: '#10b981', icon: '💬', group: 'ai' },
-  { id: 'nemotron', label: 'Nemotron', sub: '8B · RTX 3090', x: 430, y: 320, w: 160, h: 56, color: '#3b82f6', glow: '#3b82f6', icon: '⚡', group: 'ai' },
+  // AI layer (unified v7 — single brain model)
+  { id: 'brain', label: 'Brain', sub: 'Qwen3.5-27B · RTX 5090', x: 320, y: 320, w: 160, h: 56, color: '#10b981', glow: '#10b981', icon: '🧠', group: 'ai' },
 
   // Tools layer (2 rows of 4 to fit width)
   { id: 'ha', label: 'Home', sub: 'Lights · Switches', x: 50, y: 425, w: 105, h: 46, color: '#06b6d4', glow: '#06b6d4', icon: '🏠', group: 'tools' },
@@ -86,10 +85,11 @@ const FLOWS: FlowPath[] = [
     edges: [
       { from: 'user', to: 'echo', label: '"Hey Jess..."' },
       { from: 'echo', to: 'stt', label: 'Audio stream' },
-      { from: 'stt', to: 'nemotron', label: 'Transcribed text' },
-      { from: 'nemotron', to: 'ha', label: 'Turn on lights' },
-      { from: 'ha', to: 'nemotron', label: 'Success' },
-      { from: 'nemotron', to: 'tts', label: '"Lights are blue"' },
+      { from: 'stt', to: 'orchestrator', label: 'Transcribed text' },
+      { from: 'orchestrator', to: 'brain', label: 'Tool call' },
+      { from: 'brain', to: 'ha', label: 'Turn on lights' },
+      { from: 'ha', to: 'brain', label: 'Success' },
+      { from: 'brain', to: 'tts', label: '"Lights are blue"' },
       { from: 'tts', to: 'speakers', label: 'Audio' },
     ],
   },
@@ -132,12 +132,10 @@ const FLOWS: FlowPath[] = [
       { from: 'user', to: 'webui', label: 'Type or speak' },
       { from: 'webui', to: 'orchestrator', label: 'Message' },
       { from: 'orchestrator', to: 'router', label: 'Classify' },
-      { from: 'router', to: 'helios', label: 'Mirror mode' },
-      { from: 'helios', to: 'nemotron', label: 'search_memory' },
-      { from: 'nemotron', to: 'memory', label: 'RAG query' },
-      { from: 'memory', to: 'nemotron', label: 'Pattern docs' },
-      { from: 'nemotron', to: 'helios', label: 'Context' },
-      { from: 'helios', to: 'webui', label: 'Personalized response' },
+      { from: 'router', to: 'brain', label: 'Mirror mode' },
+      { from: 'brain', to: 'memory', label: 'RAG query' },
+      { from: 'memory', to: 'brain', label: 'Pattern docs' },
+      { from: 'brain', to: 'webui', label: 'Personalized response' },
     ],
   },
 ];
@@ -290,7 +288,7 @@ export default function SystemDiagram() {
           {/* Group labels */}
           <text x="20" y="20" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Input</text>
           <text x="20" y="199" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Processing</text>
-          <text x="20" y="314" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">AI Models</text>
+          <text x="20" y="314" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">AI Model</text>
           <text x="20" y="420" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Tools</text>
           <text x="20" y="560" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Output</text>
           <text x="688" y="104" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Background</text>

@@ -18,8 +18,8 @@ export const CLUSTER_NODES = [
     name: 'Saturn',
     ip: '10.0.0.58',
     gpu: 'RTX 3090',
-    role: 'Nemotron-8B (brain)',
-    services: ['Nemotron vLLM', 'Pi-hole secondary'],
+    role: 'Qwen3.5-9B (fallback)',
+    services: ['llama.cpp', 'Pi-hole secondary'],
   },
   {
     id: 'uranus',
@@ -34,8 +34,8 @@ export const CLUSTER_NODES = [
     name: 'Helios',
     ip: '10.0.0.195',
     gpu: 'RTX 5090',
-    role: '120B conversational',
-    services: ['GPT-OSS 120B'],
+    role: 'Qwen3.5-27B (brain)',
+    services: ['llama.cpp'],
   },
   {
     id: 'ha',

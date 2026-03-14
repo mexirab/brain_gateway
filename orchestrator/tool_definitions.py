@@ -420,7 +420,19 @@ HELIOS_TOOLS = [
 
 
 def get_orchestrator_tools() -> List[Dict[str, Any]]:
-    """Get all tools including dynamic HA tool with entity list."""
-    # For Nemotron orchestrator, exclude ask_expert (Helios IS the expert now)
+    """Get tools for Nemotron orchestrator (v6 hybrid mode).
+
+    Excludes ask_expert since Helios handles expert queries in v6.
+    """
     nemotron_tools = [t for t in STATIC_TOOLS if t["function"]["name"] != "ask_expert"]
     return [get_ha_tool_definition()] + nemotron_tools
+
+
+def get_all_tools() -> List[Dict[str, Any]]:
+    """Get all tools for unified mode (v7).
+
+    Returns HA tool + all static tools, excluding ask_expert
+    (the unified model IS the expert — no delegation needed).
+    """
+    unified_tools = [t for t in STATIC_TOOLS if t["function"]["name"] != "ask_expert"]
+    return [get_ha_tool_definition()] + unified_tools

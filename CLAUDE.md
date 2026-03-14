@@ -1,15 +1,15 @@
 # Brain Gateway
 
-Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (Qwen3-32B) handles conversation.
+Personal AI assistant for ADHD support. v7 unified mode: single model (Qwen3.5-27B on Helios) handles both conversation and tools. v6 hybrid mode still available as fallback (Nemotron-8B orchestrates tools; Helios handles conversation).
 
 ## Cluster
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Nemotron-8B (brain), Pi-hole secondary |
+| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Nemotron-8B (fallback brain), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS (GPU0), STT (GPU1) |
-| Helios | 10.0.0.195 | - | RTX 5090 | Qwen3-32B conversational (auto-starts on demand) |
+| Helios | 10.0.0.195 | - | RTX 5090 | Qwen3.5-27B unified (conversation + tools), auto-starts on demand |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
@@ -32,7 +32,21 @@ Personal AI assistant for ADHD support. Nemotron-8B orchestrates tools; Helios (
 | SearXNG | 8090 | http://localhost:8090 |
 | Grafana | 3000 | http://localhost:3000/d/brain-gateway-overview (admin/braingw) |
 
-## Architecture (v6 Hybrid)
+## Architecture (v7 Unified)
+
+```
+User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
+                                                         |
+                                          conversation + tool calls in one loop
+                                                         |
+                    +----------+----------+----+----+----------+----------+
+                    v          v          v    v    v          v          v
+              home_assistant  search_memory  set_reminder  web_search  check_calendar
+```
+
+**Flow (v7):** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Falls back to Saturn (Nemotron) if Helios is unavailable. Controlled by `UNIFIED_MODE=true`.
+
+### Architecture (v6 Hybrid — legacy)
 
 ```
 User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
@@ -47,21 +61,23 @@ User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
               home_assistant  search_memory  set_reminder  web_search  check_calendar
 ```
 
-**Flow:** Mode router classifies intent + emotional intensity. Helios handles conversation. For actions, calls `ask_orchestrator` -> Nemotron executes tools -> result back to Helios.
+**Flow (v6):** Mode router classifies intent + emotional intensity. Helios handles conversation. For actions, calls `ask_orchestrator` -> Nemotron executes tools -> result back to Helios. Active when `UNIFIED_MODE=false`.
 
 ## Tools
 
-| Tool | Model | Purpose |
-|------|-------|---------|
-| ask_orchestrator | Helios | Delegate to Nemotron for actions |
-| home_assistant | Nemotron | HA API: `{entity_id, service, data}` |
-| search_memory | Nemotron | ChromaDB RAG query |
-| set_reminder / cancel_reminder | Nemotron | Voice/phone reminders |
-| update_data | Nemotron | Update meds/projects YAML |
-| start_focus / stop_focus / focus_status | Nemotron | Pomodoro timer + Endel + Pi-hole |
-| web_search | Nemotron | Search the web via SearXNG |
-| check_calendar / create_calendar_event | Nemotron | Google Calendar read/write |
-| check_email / search_email | Nemotron | Gmail inbox (read-only) |
+In **v7 unified mode**, all tools are called directly by the single model (no `ask_orchestrator` delegation). In **v6 hybrid mode**, Helios delegates to Nemotron via `ask_orchestrator`.
+
+| Tool | v6 Model | Purpose |
+|------|----------|---------|
+| ask_orchestrator | Helios (v6 only) | Delegate to Nemotron for actions |
+| home_assistant | Nemotron / unified | HA API: `{entity_id, service, data}` |
+| search_memory | Nemotron / unified | ChromaDB RAG query |
+| set_reminder / cancel_reminder | Nemotron / unified | Voice/phone reminders |
+| update_data | Nemotron / unified | Update meds/projects YAML |
+| start_focus / stop_focus / focus_status | Nemotron / unified | Pomodoro timer + Endel + Pi-hole |
+| web_search | Nemotron / unified | Search the web via SearXNG |
+| check_calendar / create_calendar_event | Nemotron / unified | Google Calendar read/write |
+| check_email / search_email | Nemotron / unified | Gmail inbox (read-only) |
 
 ## Key Files
 
@@ -69,6 +85,8 @@ User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
 |------|---------|
 | orchestrator/auto_learn.py | Auto-learn: extract facts from conversations, encrypt, store in RAG |
 | orchestrator/tests/test_auto_learn.py | Auto-learn unit tests (sensitive data, privacy, JSON parsing, encryption) |
+| orchestrator/unified_loop.py | v7 unified agentic loop: single model conversation + tool execution |
+| orchestrator/model_manager.py | Model health, SSH start/stop, fallback selection (replaces helios_manager for v7) |
 | orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HELIOS_TOOLS, HA tool builder) |
@@ -86,6 +104,7 @@ User -> Open WebUI -> Orchestrator -> Mode Router -> Helios (conversation)
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client |
 | orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
+| scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
 | docker-compose.yml | Service stack |
 | .env | Environment config (from .env.example) |
 
@@ -118,6 +137,9 @@ ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker co
 
 # Frontend rebuild
 docker compose up -d --build --force-recreate frontend
+
+# Re-index RAG documents
+docker exec brain-orchestrator python scripts/reindex_rag.py
 ```
 
 ## Detailed Docs
@@ -144,6 +166,21 @@ docker compose up -d --build --force-recreate frontend
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
 - Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
+
+## Unified Mode Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| UNIFIED_MODE | false | Enable v7 unified loop (single model for conversation + tools) |
+| MODEL_URL | - | Primary model endpoint (e.g. `http://10.0.0.195:8080/v1`) |
+| MODEL_NAME | - | Primary model name (e.g. `Qwen3.5-27B`) |
+| FALLBACK_MODEL_URL | - | Fallback model endpoint (e.g. `http://10.0.0.58:8001/v1`) |
+| FALLBACK_MODEL_NAME | - | Fallback model name (e.g. `Nemotron-8B`) |
+| EMBEDDING_MODEL | - | Embedding model for RAG indexing |
+| MODEL_SERVER_IP | - | SSH target for remote model start/stop |
+| MODEL_SSH_USER | - | SSH user for model server |
+| MODEL_START_CMD | - | Command to start model server via SSH |
+| MODEL_STOP_CMD | - | Command to stop model server via SSH |
 
 ## Auto-Learn Environment Variables
 

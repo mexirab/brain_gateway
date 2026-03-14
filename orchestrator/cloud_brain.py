@@ -21,6 +21,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import shared
 from local_agent import LocalAgent
+from metrics import (
+    ACTIVE_REQUESTS,
+    FAST_PATH_COUNT,
+    MODE_ROUTE_COUNT,
+    REQUEST_COUNT,
+    REQUEST_ERRORS,
+    REQUEST_LATENCY,
+)
 from mode_router import get_mode_router
 
 logger = logging.getLogger(__name__)
@@ -30,9 +38,9 @@ class CloudBrain:
     """
     Stateless LLM orchestration. Calls LocalAgent for infrastructure.
 
-    Extracted from chat_completions() in orchestrator.py. The chat() method
-    implements the full hybrid v6 flow:
-      User → intent routing → RAG → Helios → ask_orchestrator → Nemotron → Helios → User
+    Supports two architectures via shared.UNIFIED_MODE:
+    - v6 hybrid: User → Helios → ask_orchestrator → Nemotron → Helios → User
+    - v7 unified: User → single model (conversation + tools) → User
     """
 
     def __init__(
@@ -54,6 +62,16 @@ class CloudBrain:
         helios_model: str,
         nemotron_url: str,
         nemotron_model: str,
+        # v7 unified mode additions (optional for backward compat)
+        get_unified_system_prompt_fn=None,
+        get_all_tools_fn=None,
+        check_model_health_fn=None,
+        start_model_server_fn=None,
+        run_unified_loop_fn=None,
+        model_url: str = "",
+        model_name: str = "",
+        fallback_model_url: str = "",
+        fallback_model_name: str = "",
     ):
         """
         Initialize with function references from orchestrator.py.
@@ -79,7 +97,17 @@ class CloudBrain:
         self._nemotron_url = nemotron_url
         self._nemotron_model = nemotron_model
         self._mode_router = get_mode_router()
-        # Callback to update Helios idle tracker (set by orchestrator.py)
+        # v7 unified mode
+        self._get_unified_system_prompt = get_unified_system_prompt_fn
+        self._get_all_tools = get_all_tools_fn
+        self._check_model_health = check_model_health_fn
+        self._start_model_server = start_model_server_fn
+        self._run_unified_loop = run_unified_loop_fn
+        self._model_url = model_url
+        self._model_name = model_name
+        self._fallback_model_url = fallback_model_url
+        self._fallback_model_name = fallback_model_name
+        # Callback to update model idle tracker (set by orchestrator.py)
         self.on_helios_request = None
         # Callback to schedule auto-learn (set by orchestrator.py)
         self.on_conversation_update = None
@@ -88,10 +116,209 @@ class CloudBrain:
         self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
     ) -> Any:
         """
-        Main chat flow — hybrid v6 architecture.
+        Main chat flow. Routes to unified (v7) or hybrid (v6) based on UNIFIED_MODE.
 
         Returns a FastAPI response (JSONResponse or StreamingResponse).
         """
+        if shared.UNIFIED_MODE and self._run_unified_loop:
+            return await self._chat_unified(messages, stream, external_tools, ha_client)
+        return await self._chat_hybrid(messages, stream, external_tools, ha_client)
+
+    async def _chat_unified(
+        self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
+    ) -> Any:
+        """Unified v7 chat flow — single model handles conversation + tools."""
+        _t0 = time.time()
+        ACTIVE_REQUESTS.inc()
+        user_text = self._last_user_text(messages)
+
+        routing_info = {
+            "timestamp": datetime.now().isoformat(),
+            "user_query_length": len(user_text),
+            "architecture": "unified_v7",
+            "tool_calls": [],
+            "streaming": stream,
+        }
+
+        try:
+            return await self._chat_unified_inner(messages, stream, external_tools, ha_client, user_text, routing_info)
+        except Exception as e:
+            REQUEST_ERRORS.labels(mode="unified", error_type=type(e).__name__).inc()
+            raise
+        finally:
+            ACTIVE_REQUESTS.dec()
+            REQUEST_LATENCY.labels(mode="unified").observe(time.time() - _t0)
+
+    async def _chat_unified_inner(
+        self,
+        messages: List[Dict],
+        stream: bool,
+        external_tools: Optional[List],
+        ha_client,
+        user_text: str,
+        routing_info: Dict,
+    ) -> Any:
+        """Inner unified flow (separated for clean metrics wrapping)."""
+        # Route intent (unchanged from v6)
+        intent = self._mode_router.route(user_text)
+        routing_info["intent_mode"] = intent.mode
+        routing_info["intent_intensity"] = intent.intensity
+        routing_info["intent_tags"] = intent.tags
+        MODE_ROUTE_COUNT.labels(mode=intent.mode, intensity=intent.intensity).inc()
+        logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%s", intent.mode, intent.intensity, intent.tags)
+
+        # Fast-path: simple device commands (unchanged)
+        if ha_client:
+            try:
+                fast_result = await self._try_fast_path(user_text, ha_client)
+                if fast_result.handled:
+                    routing_info["mode"] = "fast_path"
+                    routing_info["fast_path_action"] = fast_result.action
+                    routing_info["fast_path_entity"] = fast_result.entity_name
+                    REQUEST_COUNT.labels(mode="fast_path").inc()
+                    FAST_PATH_COUNT.labels(action=fast_result.action or "unknown").inc()
+                    logger.info("[FAST-PATH] Handled: %s -> %s", fast_result.action, fast_result.entity_name)
+                    if stream:
+                        return self._stream_text(fast_result.response_text, "fast-path")
+                    return JSONResponse(
+                        {
+                            "id": f"chatcmpl-fp-{int(time.time())}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": "fast-path",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": fast_result.response_text},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "_routing": routing_info,
+                        }
+                    )
+            except Exception as e:
+                logger.warning("[FAST-PATH] Error, falling through: %s", e)
+
+        # RAG prefetch (unchanged)
+        personal_context = ""
+        if not self._is_greeting(user_text):
+            personal_context = self.agent.rag_search(user_text)
+            if personal_context:
+                logger.info("[UNIFIED] Pre-fetched RAG context (%d chars)", len(personal_context))
+                routing_info["rag_prefetch"] = True
+
+        # Build unified system prompt
+        system_prompt = self._get_unified_system_prompt(personal_context, mode=intent.mode, intensity=intent.intensity)
+
+        # Check model health, start if needed
+        if not await self._check_model_health():
+            logger.info("[UNIFIED] Model offline, attempting to start...")
+            started = await self._start_model_server()
+            if not started:
+                # Try fallback model
+                if self._fallback_model_url:
+                    logger.warning("[UNIFIED] Primary unavailable, using fallback")
+                    routing_info["fallback"] = "fallback_model"
+                    REQUEST_COUNT.labels(mode="unified_fallback").inc()
+                    return await self._unified_fallback(messages, system_prompt, stream, routing_info)
+                logger.error("[UNIFIED] No model available")
+                REQUEST_ERRORS.labels(mode="unified", error_type="model_unavailable").inc()
+                return JSONResponse({"error": "Model unavailable"}, status_code=503)
+
+        # Run unified tool loop
+        logger.info("[UNIFIED] Processing: %s...", user_text[:100])
+        routing_info["mode"] = "unified"
+        REQUEST_COUNT.labels(mode="unified").inc()
+        model_url = self._model_url
+        model_name = self._model_name
+        tools = self._get_all_tools()
+
+        try:
+            result = await self._run_unified_loop(
+                messages=messages.copy(),
+                system_prompt=system_prompt,
+                tools=tools,
+                model_url=model_url,
+                model_name=model_name,
+                http_client=None,  # resolved by call_model
+            )
+            self._track_helios_request()
+        except Exception as e:
+            logger.error("[UNIFIED] Tool loop failed: %s", e)
+            REQUEST_ERRORS.labels(mode="unified", error_type="tool_loop_failed").inc()
+            if self._fallback_model_url:
+                routing_info["fallback"] = "fallback_model"
+                REQUEST_COUNT.labels(mode="unified_fallback").inc()
+                return await self._unified_fallback(messages, system_prompt, stream, routing_info)
+            return JSONResponse({"error": "Service temporarily unavailable"}, status_code=503)
+
+        self._schedule_auto_learn(messages)
+
+        if stream:
+            return self._stream_text(result, model_name)
+        return JSONResponse(
+            {
+                "id": f"chatcmpl-{int(time.time())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model_name,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": result},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "_routing": routing_info,
+            }
+        )
+
+    async def _unified_fallback(
+        self, messages: List[Dict], system_prompt: str, stream: bool, routing_info: Dict
+    ) -> Any:
+        """Fallback to secondary model using the same unified loop."""
+        logger.info("[UNIFIED-FALLBACK] Using fallback model: %s", self._fallback_model_name)
+        try:
+            result = await self._run_unified_loop(
+                messages=messages.copy(),
+                system_prompt=system_prompt,
+                tools=self._get_all_tools(),
+                model_url=self._fallback_model_url,
+                model_name=self._fallback_model_name,
+                http_client=None,
+            )
+        except Exception as e:
+            logger.error("[UNIFIED-FALLBACK] Fallback also failed: %s", e)
+            REQUEST_ERRORS.labels(mode="unified_fallback", error_type="fallback_failed").inc()
+            return JSONResponse({"error": "All models unavailable"}, status_code=503)
+
+        # Schedule learning on fallback path (but don't update primary idle tracker —
+        # the primary model didn't handle this request, so its idle timer shouldn't reset)
+        self._schedule_auto_learn(messages)
+
+        if stream:
+            return self._stream_text(result, self._fallback_model_name)
+        return JSONResponse(
+            {
+                "id": f"chatcmpl-fb-{int(time.time())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": self._fallback_model_name,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": result},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "_routing": routing_info,
+            }
+        )
+
+    async def _chat_hybrid(
+        self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
+    ) -> Any:
+        """Hybrid v6 chat flow — Helios for conversation, Nemotron for tools."""
         user_text = self._last_user_text(messages)
 
         routing_info = {

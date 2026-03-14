@@ -22,7 +22,7 @@ export default function ArchitecturePage() {
             Cluster Architecture
           </h1>
           <p className="text-zinc-400 text-sm md:text-base">
-            Brain Gateway runs across a 5-node home lab cluster with dedicated GPUs for inference, TTS, and STT.
+            Brain Gateway runs across a 5-node home lab cluster with a unified AI brain (Qwen3.5-27B) handling both conversation and tool execution.
           </p>
         </div>
 

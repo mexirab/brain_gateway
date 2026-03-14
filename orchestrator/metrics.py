@@ -131,10 +131,15 @@ FOCUS_ACTIVE = Gauge(
     "Whether a focus session is currently active (1=yes, 0=no)",
 )
 
-# -- Helios Power Management -------------------------------------------------
+# -- Model Health -----------------------------------------------------------
 HELIOS_ONLINE = Gauge(
     "bgw_helios_online",
-    "Whether Helios is currently online (1=yes, 0=no)",
+    "Whether the primary model is currently online (1=yes, 0=no)",
+)
+
+FALLBACK_ONLINE = Gauge(
+    "bgw_fallback_online",
+    "Whether the fallback model is currently online (1=yes, 0=no)",
 )
 
 HELIOS_START_COUNT = Counter(
