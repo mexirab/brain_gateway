@@ -121,7 +121,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 # Maximum request body size (bytes) — rejects oversized payloads before LLM processing
-MAX_BODY_SIZE = int(os.environ.get("MAX_BODY_SIZE", 50_000))  # 50KB default
+MAX_BODY_SIZE = int(os.environ.get("MAX_BODY_SIZE", 1_000_000))  # 1MB default (HA sends all entity states)
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
