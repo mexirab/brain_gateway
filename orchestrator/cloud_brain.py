@@ -78,17 +78,27 @@ class CloudBrain:
         self.on_conversation_update = None
 
     async def chat(
-        self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
+        self,
+        messages: List[Dict],
+        stream: bool = False,
+        external_tools: Optional[List] = None,
+        ha_client=None,
+        is_voice: bool = False,
     ) -> Any:
         """
         Main chat flow — unified v7. Single model handles conversation + tools.
 
         Returns a FastAPI response (JSONResponse or StreamingResponse).
         """
-        return await self._chat_unified(messages, stream, external_tools, ha_client)
+        return await self._chat_unified(messages, stream, external_tools, ha_client, is_voice)
 
     async def _chat_unified(
-        self, messages: List[Dict], stream: bool = False, external_tools: Optional[List] = None, ha_client=None
+        self,
+        messages: List[Dict],
+        stream: bool = False,
+        external_tools: Optional[List] = None,
+        ha_client=None,
+        is_voice: bool = False,
     ) -> Any:
         """Unified v7 chat flow — single model handles conversation + tools."""
         _t0 = time.time()
@@ -101,10 +111,13 @@ class CloudBrain:
             "architecture": "unified_v7",
             "tool_calls": [],
             "streaming": stream,
+            "is_voice": is_voice,
         }
 
         try:
-            return await self._chat_unified_inner(messages, stream, external_tools, ha_client, user_text, routing_info)
+            return await self._chat_unified_inner(
+                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice
+            )
         except Exception as e:
             REQUEST_ERRORS.labels(mode="unified", error_type=type(e).__name__).inc()
             raise
@@ -120,6 +133,7 @@ class CloudBrain:
         ha_client,
         user_text: str,
         routing_info: Dict,
+        is_voice: bool = False,
     ) -> Any:
         """Inner unified flow (separated for clean metrics wrapping)."""
         # Route intent
@@ -172,6 +186,15 @@ class CloudBrain:
 
         # Build unified system prompt
         system_prompt = self._get_unified_system_prompt(personal_context, mode=intent.mode, intensity=intent.intensity)
+
+        # Voice mode: add conciseness hint to reduce TTS latency
+        if is_voice:
+            system_prompt += (
+                "\n\n[VOICE MODE] The user is speaking via voice assistant. "
+                "Keep responses concise (1-3 sentences). No markdown, no bullet points, "
+                "no asterisks. Speak naturally as if talking to a friend."
+            )
+            logger.info("[UNIFIED] Voice mode active, conciseness hint added")
 
         # Check model health, start if needed
         if not await self._check_model_health():

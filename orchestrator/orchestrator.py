@@ -276,20 +276,48 @@ async def chat_completions(req: Request):
     from schemas import ChatRequest
 
     body = await req.json()
-    # Debug: log incoming message roles/lengths to diagnose HA integration issues
     raw_msgs = body.get("messages", [])
     logger.info(
         "[CHAT] Incoming %d messages: %s",
         len(raw_msgs),
         [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
     )
-    # Debug: log structure of HA's single system message
-    if len(raw_msgs) == 1 and raw_msgs[0].get("role") == "system":
-        content = str(raw_msgs[0].get("content", ""))
-        logger.info("[CHAT] System msg head (2000): %s", content[:2000])
-        logger.info("[CHAT] System msg tail (2000): ...%s", content[-2000:])
-    # Debug: log all body keys (maybe user query is outside messages)
-    logger.info("[CHAT] Body keys: %s", list(body.keys()))
+
+    # --- HA voice pipeline detection & optimization ---
+    # HA's llama_conversation sends a huge system prompt (~50KB) with all entity
+    # states. Our orchestrator already has its own HA integration, so this is
+    # redundant. Detect it, strip it, and extract the user query.
+    is_voice = False
+    ha_system_marker = "You are 'Al'"
+    if raw_msgs and str(raw_msgs[0].get("content", "")).startswith(ha_system_marker):
+        is_voice = True
+        logger.info("[CHAT] Detected HA voice pipeline, stripping entity dump")
+        # Find the user message (HA sends system + user after our schema fix)
+        user_text = ""
+        for msg in raw_msgs:
+            content = msg.get("content", "")
+            # Handle list-format content from HA
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                content = " ".join(parts)
+            if msg.get("role") == "user":
+                user_text = content
+                break
+        # Check if user query is embedded in the system prompt via {{ user_input }}
+        if not user_text:
+            sys_content = str(raw_msgs[0].get("content", ""))
+            marker = "User request:"
+            if marker in sys_content:
+                user_text = sys_content.split(marker, 1)[1].strip()
+        if not user_text:
+            user_text = "Hello"
+        logger.info("[CHAT] Voice user query: %s", user_text[:200])
+        # Replace messages: drop HA system prompt, keep just the user query
+        body["messages"] = [{"role": "user", "content": user_text}]
+
     chat_req = ChatRequest(**body)
 
     return await cloud_brain.chat(
@@ -297,6 +325,7 @@ async def chat_completions(req: Request):
         stream=chat_req.stream,
         external_tools=chat_req.tools,
         ha_client=ha_client,
+        is_voice=is_voice,
     )
 
 
