@@ -284,17 +284,21 @@ async def chat_completions(req: Request):
     )
 
     # --- HA voice pipeline detection & optimization ---
-    # HA's llama_conversation sends a huge system prompt (~50KB) with all entity
-    # states. Our orchestrator already has its own HA integration, so this is
-    # redundant. Detect it, strip it, and extract the user query.
+    # HA's llama_conversation sends a system prompt with entity states plus
+    # conversation history. Detect requests from HA and optimize:
+    # strip redundant system prompts, keep only the latest user message,
+    # and enable voice mode (concise responses, no markdown).
     is_voice = False
-    ha_system_marker = "You are 'Al'"
-    if raw_msgs and str(raw_msgs[0].get("content", "")).startswith(ha_system_marker):
+    client_ip = req.client.host if req.client else ""
+    ha_ip = os.environ.get("HA_HOST", "10.0.0.106").replace("http://", "").split(":")[0]
+    first_content = str(raw_msgs[0].get("content", "")) if raw_msgs else ""
+    is_ha_request = client_ip == ha_ip or first_content.startswith("You are 'Al'")
+    if is_ha_request:
         is_voice = True
-        logger.info("[CHAT] Detected HA voice pipeline, stripping entity dump")
-        # Find the user message (HA sends system + user after our schema fix)
+        logger.info("[CHAT] Detected HA voice pipeline (client=%s), optimizing", client_ip)
+        # Find the LAST user message (HA sends conversation history)
         user_text = ""
-        for msg in raw_msgs:
+        for msg in reversed(raw_msgs):
             content = msg.get("content", "")
             # Handle list-format content from HA
             if isinstance(content, list):
@@ -303,7 +307,7 @@ async def chat_completions(req: Request):
                     if isinstance(item, dict) and item.get("type") == "text":
                         parts.append(item.get("text", ""))
                 content = " ".join(parts)
-            if msg.get("role") == "user":
+            if msg.get("role") == "user" and content.strip():
                 user_text = content
                 break
         # Check if user query is embedded in the system prompt via {{ user_input }}
@@ -315,7 +319,7 @@ async def chat_completions(req: Request):
         if not user_text:
             user_text = "Hello"
         logger.info("[CHAT] Voice user query: %s", user_text[:200])
-        # Replace messages: drop HA system prompt, keep just the user query
+        # Replace messages: drop HA system/history, keep just the latest user query
         body["messages"] = [{"role": "user", "content": user_text}]
 
     chat_req = ChatRequest(**body)
