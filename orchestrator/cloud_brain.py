@@ -233,6 +233,7 @@ class CloudBrain:
                 model_url=model_url,
                 model_name=model_name,
                 http_client=None,  # resolved by call_model
+                is_voice=is_voice,
             )
         except Exception as e:
             logger.error("[UNIFIED] Tool loop failed: %s", e)

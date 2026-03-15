@@ -47,6 +47,7 @@ class LLMBackend(ABC):
         tools: Optional[List] = None,
         tool_choice: str = "auto",
         timeout: int = 180,
+        extra_body: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
         Non-streaming chat completion.
@@ -84,7 +85,7 @@ class OpenAICompatibleBackend(LLMBackend):
     This is the current behavior — essentially a thin wrapper.
     """
 
-    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180):
+    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180, extra_body=None):
         final_messages = messages.copy()
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
@@ -98,6 +99,8 @@ class OpenAICompatibleBackend(LLMBackend):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
+        if extra_body:
+            payload.update(extra_body)
 
         headers = {}
         if self.config.api_key:

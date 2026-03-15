@@ -86,6 +86,7 @@ async def run_unified_tool_loop(
     http_client,
     max_rounds: int = MAX_TOOL_ROUNDS,
     label: str = "UNIFIED",
+    is_voice: bool = False,
 ) -> str:
     """
     Unified agentic tool loop with native function calling.
@@ -111,6 +112,15 @@ async def run_unified_tool_loop(
     from orchestrator import call_model
     from tool_handlers import execute_tool
 
+    # Voice mode: disable thinking + reduce max_tokens for faster responses
+    voice_extra = None
+    if is_voice:
+        voice_extra = {
+            "max_tokens": 256,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        logger.info("[%s] Voice mode: thinking disabled, max_tokens=256", label)
+
     # Build allowlist of valid tool names from the tools passed in
     valid_tool_names = {t["function"]["name"] for t in tools if "function" in t}
 
@@ -129,6 +139,7 @@ async def run_unified_tool_loop(
                 tools=tools,
                 tool_choice="auto",
                 timeout=120,
+                extra_body=voice_extra,
             )
             LLM_CALL_COUNT.labels(model=model_name, purpose="unified_loop").inc()
             LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_loop").observe(time.time() - _llm_t0)

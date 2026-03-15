@@ -219,6 +219,7 @@ async def call_model(
     tools: List = None,
     tool_choice: str = "auto",
     timeout: int = 180,
+    extra_body: Dict = None,
 ) -> Dict[str, Any]:
     """Call an LLM endpoint via the appropriate backend.
 
@@ -232,6 +233,7 @@ async def call_model(
         tools=tools,
         tool_choice=tool_choice,
         timeout=timeout,
+        extra_body=extra_body,
     )
 
 
