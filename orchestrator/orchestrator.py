@@ -286,7 +286,7 @@ async def chat_completions(req: Request):
     # Debug: log structure of HA's single system message
     if len(raw_msgs) == 1 and raw_msgs[0].get("role") == "system":
         content = str(raw_msgs[0].get("content", ""))
-        logger.info("[CHAT] System msg head: %s", content[:500])
+        logger.info("[CHAT] System msg head (2000): %s", content[:2000])
         logger.info("[CHAT] System msg tail (2000): ...%s", content[-2000:])
     # Debug: log all body keys (maybe user query is outside messages)
     logger.info("[CHAT] Body keys: %s", list(body.keys()))
