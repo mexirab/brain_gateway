@@ -245,13 +245,6 @@ async def run_unified_tool_loop(
             if tool_name in TERMINAL_TOOLS:
                 has_terminal = True
 
-        # For state-changing tools, return immediately
-        if has_terminal:
-            TOOL_ROUNDS.observe(round_num + 1)
-            results_text = "\n".join(f"[{name}] {result}" for _, name, result in tool_results)
-            logger.info("[%s] Terminal tool executed, returning result directly", label)
-            return results_text
-
         # Add tool results to conversation
         # Use proper tool role messages if the model sent native tool_calls
         if message.get("tool_calls"):
@@ -272,6 +265,21 @@ async def run_unified_tool_loop(
                     "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nThe action is complete. Summarize the result in a brief, natural response. Do NOT call any more tools.",
                 }
             )
+
+        # For terminal tools, allow one final round for natural language response
+        # but prevent further tool calls
+        if has_terminal:
+            logger.info("[%s] Terminal tool executed, allowing final response round", label)
+            # Add instruction to respond naturally without more tool calls
+            if message.get("tool_calls"):
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "The action(s) above are complete. Now respond naturally to the user's full request. Do NOT call any more tools.",
+                    }
+                )
+            # Cap remaining rounds to 1 (just generate the response)
+            max_rounds = round_num + 2  # current round + 1 more
 
     # Hit max rounds
     TOOL_ROUNDS.observe(max_rounds)
