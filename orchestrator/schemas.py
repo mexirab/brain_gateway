@@ -6,7 +6,7 @@ All API endpoints should use these models instead of raw dicts.
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Standard response envelope
@@ -35,7 +35,24 @@ class ErrorResponse(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | list
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalize_content(cls, v: Any) -> str:
+        """Accept OpenAI multi-part content format and flatten to string.
+
+        HA's llama_conversation sends: [{"type": "text", "text": "..."}]
+        """
+        if isinstance(v, list):
+            parts = []
+            for item in v:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "\n".join(parts)
+        return v
 
 
 class ChatRequest(BaseModel):
