@@ -112,14 +112,12 @@ async def run_unified_tool_loop(
     from orchestrator import call_model
     from tool_handlers import execute_tool
 
-    # Voice mode: disable thinking + reduce max_tokens for faster responses
+    # Voice mode: reduce max_tokens for shorter responses (faster TTS)
+    # Keep thinking enabled — disabling it causes the model to skip tool calls
     voice_extra = None
     if is_voice:
-        voice_extra = {
-            "max_tokens": 256,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-        logger.info("[%s] Voice mode: thinking disabled, max_tokens=256", label)
+        voice_extra = {"max_tokens": 512}
+        logger.info("[%s] Voice mode: max_tokens=512", label)
 
     # Build allowlist of valid tool names from the tools passed in
     valid_tool_names = {t["function"]["name"] for t in tools if "function" in t}
