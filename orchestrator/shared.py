@@ -213,7 +213,9 @@ scheduler = AsyncIOScheduler(
 # ---------------------------------------------------------------------------
 # Calendar polling config
 # ---------------------------------------------------------------------------
-CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "15"))
+CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "5"))
+CALENDAR_TIERED_ALERTS = os.environ.get("CALENDAR_TIERED_ALERTS", "true").lower() == "true"
+CALENDAR_ALERT_TIERS = [int(x) for x in os.environ.get("CALENDAR_ALERT_TIERS", "60,30,15,5").split(",")]
 MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
 MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
 MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.morning_briefing_speaker)

@@ -33,14 +33,64 @@ from travel_time import get_travel_time
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Tiered countdown nudges (F-002)
+# ---------------------------------------------------------------------------
+
+# Message templates keyed by tier threshold (minutes before event).
+# {name} = user name, {title} = event title, {prep} = contextual prep hint
+_TIER_MESSAGES = {
+    60: "{name}, you have {title} in about an hour.",
+    30: "{name}, {title} in 30 minutes. Start wrapping up what you're doing.",
+    15: "{name}, {title} in 15 minutes. Time to transition — save your work, grab water.",
+    5:  "{name}, {title} starts in 5 minutes. {prep}",
+}
+
+# Fallback single-announcement message (used when tiered alerts are disabled)
+_SINGLE_MESSAGE = "Heads up {name}: {title} {time_str}"
+
+
+def _get_prep_hint(event) -> str:
+    """Generate contextual transition scaffolding for the 5-minute tier."""
+    desc = (event.description or "").lower()
+    loc = (event.location or "").lower()
+
+    # Video call links
+    if any(kw in desc or kw in loc for kw in ("zoom.us", "teams.microsoft", "meet.google", "webex")):
+        return "Pull up the meeting link."
+    # Physical location
+    if event.location and not any(kw in loc for kw in ("http", "zoom", "teams", "meet.google")):
+        return f"Head out to {event.location}."
+    # Agenda mention
+    if "agenda" in desc:
+        return "Check the agenda."
+    return "Take a breath, you've got this."
+
+
+def _is_focus_related(event) -> bool:
+    """Check if the active focus session is related to this event (skip nudges)."""
+    session = shared.current_focus_session
+    if not session["active"] or not session.get("task"):
+        return False
+    # Simple substring match between focus task and event title
+    task = session["task"].lower()
+    title = event.title.lower()
+    return task in title or title in task
+
 
 async def poll_calendar():
     """Every N minutes: check for events starting within 2 hours, announce via TTS.
+
+    Supports two modes (controlled by CALENDAR_TIERED_ALERTS env var):
+    - Tiered: escalating announcements at 60/30/15/5 minutes (ADHD-friendly)
+    - Single: one announcement per event (legacy behavior)
 
     For events with physical locations, uses Google Maps Directions API to
     calculate travel time with real-time traffic and announces "leave by" times.
     """
     tz = ZoneInfo(TIMEZONE)
+    tiered = shared.CALENDAR_TIERED_ALERTS
+    tiers = sorted(shared.CALENDAR_ALERT_TIERS, reverse=True)  # e.g. [60, 30, 15, 5]
 
     client = get_calendar_client()
     if not client or not client.is_configured:
@@ -57,14 +107,11 @@ async def poll_calendar():
             if event.all_day:
                 continue
             minutes = int((event.start - now).total_seconds() / 60)
-            if minutes < 0:
-                continue
-            if minutes > 120:
+            if minutes < 0 or minutes > 120:
                 continue
 
             # --- Travel-time-aware announcement for events with locations ---
             travel_key = f"travel:{event.id}"
-            cal_key = f"cal:{event.id}"
             has_physical_location = (
                 event.location and shared.GOOGLE_MAPS_API_KEY and not state_store.is_notified(travel_key)
             )
@@ -75,60 +122,117 @@ async def poll_calendar():
                     drive_min = travel.duration_in_traffic_minutes
                     leave_by_min = minutes - drive_min - shared.TRAVEL_TIME_BUFFER
 
-                    if leave_by_min <= 0 and not state_store.is_notified(cal_key):
-                        # Should have already left
+                    if leave_by_min <= 0 and not state_store.is_notified(f"cal:{event.id}:leave_now"):
                         message = (
                             f"{profile.user_name}, you should leave now for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
-                        await _announce_voice(message)
-                        state_store.mark_notified(travel_key)
-                        state_store.mark_notified(cal_key)
-                        CALENDAR_POLL_EVENTS_FOUND.inc()
-                        logger.info(
-                            f"[CALENDAR_POLL] LEAVE NOW: {event.title} ({drive_min} min drive)",
-                            extra={"component": "calendar"},
-                        )
+                        result = await _announce_voice(message)
+                        if result.get("success"):
+                            state_store.mark_notified(travel_key)
+                            state_store.mark_notified(f"cal:{event.id}:leave_now")
+                            CALENDAR_POLL_EVENTS_FOUND.inc()
+                            logger.info(
+                                f"[CALENDAR_POLL] LEAVE NOW: {event.title} ({drive_min} min drive)",
+                                extra={"component": "calendar"},
+                            )
+                        else:
+                            logger.error(
+                                f"[CALENDAR_POLL] TTS FAILED for '{event.title}': {result.get('error')} — will retry next poll",
+                                extra={"component": "calendar"},
+                            )
                         continue
 
                     elif leave_by_min <= 45 and not state_store.is_notified(travel_key):
-                        # Time to announce leave-by
                         message = (
                             f"Heads up {profile.user_name}: You need to leave in "
                             f"{leave_by_min} minutes for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
-                        await _announce_voice(message)
-                        state_store.mark_notified(travel_key)
-                        CALENDAR_POLL_EVENTS_FOUND.inc()
-                        logger.info(
-                            f"[CALENDAR_POLL] Leave in {leave_by_min} min: {event.title} ({drive_min} min drive)",
-                            extra={"component": "calendar"},
-                        )
+                        result = await _announce_voice(message)
+                        if result.get("success"):
+                            state_store.mark_notified(travel_key)
+                            CALENDAR_POLL_EVENTS_FOUND.inc()
+                            logger.info(
+                                f"[CALENDAR_POLL] Leave in {leave_by_min} min: {event.title} ({drive_min} min drive)",
+                                extra={"component": "calendar"},
+                            )
+                        else:
+                            logger.error(
+                                f"[CALENDAR_POLL] TTS FAILED for '{event.title}': {result.get('error')} — will retry next poll",
+                                extra={"component": "calendar"},
+                            )
                         continue
 
-            # --- Standard announcement (no location or virtual meeting) ---
-            if state_store.is_notified(cal_key):
-                continue
+            # --- Tiered countdown announcements ---
+            if tiered:
+                # Smart suppression: skip if focus session is related to this event
+                if _is_focus_related(event):
+                    logger.debug(f"[CALENDAR_POLL] Suppressed nudge for '{event.title}' — related focus session active")
+                    continue
 
-            if minutes <= 1:
-                time_str = "now"
-            elif minutes < 60:
-                time_str = f"in {minutes} minutes"
+                # Find the matching tier for current minutes-before-event
+                for tier_min in tiers:
+                    if minutes > tier_min:
+                        continue  # not yet reached this tier
+                    tier_key = f"cal:{event.id}:{tier_min}"
+                    if state_store.is_notified(tier_key):
+                        continue  # already announced this tier
+
+                    # Build tier message
+                    template = _TIER_MESSAGES.get(tier_min)
+                    if not template:
+                        continue
+                    prep = _get_prep_hint(event) if tier_min <= 5 else ""
+                    message = template.format(name=profile.user_name, title=event.title, prep=prep)
+                    if event.location and tier_min > 5:
+                        message += f" at {event.location}"
+
+                    result = await _announce_voice(message)
+                    if result.get("success"):
+                        state_store.mark_notified(tier_key)
+                        CALENDAR_POLL_EVENTS_FOUND.inc()
+                        logger.info(
+                            f"[CALENDAR_POLL] Tier {tier_min}min: {event.title} (actual: {minutes}min away)",
+                            extra={"component": "calendar"},
+                        )
+                    else:
+                        logger.error(
+                            f"[CALENDAR_POLL] TTS FAILED for '{event.title}': {result.get('error')} — will retry next poll",
+                            extra={"component": "calendar"},
+                        )
+                    break  # only announce the most recent un-announced tier
+
             else:
-                hours = minutes // 60
-                remaining = minutes % 60
-                time_str = f"in {hours} hour{'s' if hours > 1 else ''}"
-                if remaining > 0:
-                    time_str += f" and {remaining} minutes"
+                # --- Legacy single announcement ---
+                cal_key = f"cal:{event.id}"
+                if state_store.is_notified(cal_key):
+                    continue
 
-            message = f"Heads up {profile.user_name}: {event.title} {time_str}"
-            if event.location:
-                message += f" at {event.location}"
-            await _announce_voice(message)
-            state_store.mark_notified(cal_key)
-            CALENDAR_POLL_EVENTS_FOUND.inc()
-            logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}", extra={"component": "calendar"})
+                if minutes <= 1:
+                    time_str = "now"
+                elif minutes < 60:
+                    time_str = f"in {minutes} minutes"
+                else:
+                    hours = minutes // 60
+                    remaining = minutes % 60
+                    time_str = f"in {hours} hour{'s' if hours > 1 else ''}"
+                    if remaining > 0:
+                        time_str += f" and {remaining} minutes"
+
+                message = _SINGLE_MESSAGE.format(name=profile.user_name, title=event.title, time_str=time_str)
+                if event.location:
+                    message += f" at {event.location}"
+                result = await _announce_voice(message)
+                if result.get("success"):
+                    state_store.mark_notified(cal_key)
+                    CALENDAR_POLL_EVENTS_FOUND.inc()
+                    logger.info(f"[CALENDAR_POLL] Announced: {event.title} {time_str}", extra={"component": "calendar"})
+                else:
+                    logger.error(
+                        f"[CALENDAR_POLL] TTS FAILED for '{event.title}': {result.get('error')} — will retry next poll",
+                        extra={"component": "calendar"},
+                    )
 
     except Exception as e:
         logger.error(f"[CALENDAR_POLL] Error: {e}")
