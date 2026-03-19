@@ -182,12 +182,16 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 # =============================================================================
 
 
+FALLBACK_SPEAKER = os.environ.get("FALLBACK_SPEAKER", "media_player.dining_room_pair")
+
+
 async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
     Uses the configured TTS backend to generate audio,
     then plays it on a Home Assistant media_player.
+    Falls back to FALLBACK_SPEAKER if primary speaker returns an error.
     """
     import shared
 
@@ -213,24 +217,38 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
 
         audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
 
-        # Play on speaker
+        # Build speaker list: primary, then fallback if different
         target_speaker = speaker or REMINDER_SPEAKER
-        async with httpx.AsyncClient(timeout=30) as client:
-            ha_response = await client.post(
-                f"{HA_URL}/api/services/media_player/play_media",
-                headers=headers,
-                json={
-                    "entity_id": target_speaker,
-                    "media_content_id": audio_url,
-                    "media_content_type": backend.audio_format,
-                },
-            )
+        speakers_to_try = [target_speaker]
+        if FALLBACK_SPEAKER and FALLBACK_SPEAKER != target_speaker:
+            speakers_to_try.append(FALLBACK_SPEAKER)
 
-        if ha_response.status_code == 200:
-            logger.info(f"Played announcement on {target_speaker}")
-            return {"success": True, "speaker": target_speaker}
-        else:
-            return {"success": False, "error": f"HA returned {ha_response.status_code}"}
+        # Try each speaker until one succeeds
+        last_error = None
+        async with httpx.AsyncClient(timeout=30) as client:
+            for try_speaker in speakers_to_try:
+                ha_response = await client.post(
+                    f"{HA_URL}/api/services/media_player/play_media",
+                    headers=headers,
+                    json={
+                        "entity_id": try_speaker,
+                        "media_content_id": audio_url,
+                        "media_content_type": backend.audio_format,
+                    },
+                )
+
+                if ha_response.status_code == 200:
+                    if try_speaker != target_speaker:
+                        logger.warning(
+                            f"Primary speaker {target_speaker} failed, used fallback {try_speaker}"
+                        )
+                    logger.info(f"Played announcement on {try_speaker}")
+                    return {"success": True, "speaker": try_speaker}
+                else:
+                    last_error = f"HA returned {ha_response.status_code} for {try_speaker}"
+                    logger.warning(f"play_media failed: {last_error}")
+
+        return {"success": False, "error": last_error}
 
     except Exception as e:
         logger.error(f"Voice announcement failed: {e}")

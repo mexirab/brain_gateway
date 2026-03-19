@@ -464,15 +464,28 @@ async def deliver_reminder_job(reminder_id: str):
 
     spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
+    voice_ok = True
     if target in ["voice", "both"]:
-        await _announce_voice(spoken_text)
+        result = await _announce_voice(spoken_text)
+        voice_ok = result.get("success", False)
+        if not voice_ok:
+            logger.error(
+                f"[REMINDER] TTS FAILED for {reminder_id}: {result.get('error')}",
+                extra={"component": "reminder"},
+            )
 
     if target in ["phone", "both"]:
         await _send_notification(text)
 
-    REMINDERS_DELIVERED.inc()
-    mark_reminder_completed(reminder_id)
-    logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
+    if voice_ok or target == "phone":
+        REMINDERS_DELIVERED.inc()
+        mark_reminder_completed(reminder_id)
+        logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
+    else:
+        logger.error(
+            f"[REMINDER] {reminder_id} NOT marked complete — TTS failed, will need manual retry",
+            extra={"component": "reminder"},
+        )
 
 
 async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:
