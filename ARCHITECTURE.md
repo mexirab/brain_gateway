@@ -67,7 +67,7 @@ User Request → Orchestrator
 
 | Job | Trigger | Action |
 |-----|---------|--------|
-| `poll_calendar()` | interval, every 15 min | TTS announce events starting within 2 hours |
+| `poll_calendar()` | interval, every 5 min | TTS announce events within 2 hours (tiered countdown alerts) |
 | `morning_briefing()` | cron, 7:00 AM daily | TTS announce today's events + pending reminders (bedroom pair) |
 | `poll_email()` | interval, every 30 min | TTS announce new unread emails (Primary inbox only) |
 
@@ -180,11 +180,11 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 ### Proactive calendar alert (background)
 
 ```
-1. APScheduler triggers poll_calendar() every 15 min
+1. APScheduler triggers poll_calendar() every 5 min
 2. GoogleCalendarClient.get_upcoming(hours_ahead=2)
-3. For each event not yet announced:
-   "Heads up Nadim: Pickleball at Honcho in 2 hours"
-4. TTS via _announce_voice() → HA media_player
+3. Tiered alerts: picks closest un-announced tier (60/30/15/5 min),
+   auto-marks larger tiers as notified on catch-up
+4. TTS via _announce_voice() → HA media_player (with speaker fallback)
 ```
 
 ### TTS announcement routing
@@ -192,7 +192,8 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 ```
 _announce_voice(text, speaker=None)
   - speaker param overrides default (REMINDER_SPEAKER)
-  - Reminders → office speaker (default)
+  - Falls back to FALLBACK_SPEAKER on connection or HTTP errors
+  - Reminders → REMINDER_SPEAKER (default), auto-retry once + phone fallback
   - Morning briefing → bedroom pair (MORNING_BRIEFING_SPEAKER)
   - /api/announce → optional speaker in request body
 ```

@@ -47,4 +47,8 @@ Jessica voice clone uses Qwen3-TTS on Uranus. Two pacing controls:
 ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen-tts'"
 ```
 
-TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Reminders default to office speaker, morning briefing defaults to bedroom pair.
+TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Reminders default to `REMINDER_SPEAKER`, morning briefing defaults to bedroom pair. Speaker fallback (`FALLBACK_SPEAKER`) catches both HTTP errors and connection-level errors (e.g., speaker offline/unreachable).
+
+## Reminder Voice Retry
+
+Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry once after 2 minutes. If the retry also fails, the system falls back to a phone notification so the reminder is never silently lost.

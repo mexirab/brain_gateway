@@ -220,32 +220,34 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
         # Build speaker list: primary, then fallback if different
         target_speaker = speaker or REMINDER_SPEAKER
         speakers_to_try = [target_speaker]
-        if FALLBACK_SPEAKER and FALLBACK_SPEAKER != target_speaker:
+        if FALLBACK_SPEAKER and target_speaker != FALLBACK_SPEAKER:
             speakers_to_try.append(FALLBACK_SPEAKER)
 
         # Try each speaker until one succeeds
         last_error = None
         async with httpx.AsyncClient(timeout=30) as client:
             for try_speaker in speakers_to_try:
-                ha_response = await client.post(
-                    f"{HA_URL}/api/services/media_player/play_media",
-                    headers=headers,
-                    json={
-                        "entity_id": try_speaker,
-                        "media_content_id": audio_url,
-                        "media_content_type": backend.audio_format,
-                    },
-                )
+                try:
+                    ha_response = await client.post(
+                        f"{HA_URL}/api/services/media_player/play_media",
+                        headers=headers,
+                        json={
+                            "entity_id": try_speaker,
+                            "media_content_id": audio_url,
+                            "media_content_type": backend.audio_format,
+                        },
+                    )
 
-                if ha_response.status_code == 200:
-                    if try_speaker != target_speaker:
-                        logger.warning(
-                            f"Primary speaker {target_speaker} failed, used fallback {try_speaker}"
-                        )
-                    logger.info(f"Played announcement on {try_speaker}")
-                    return {"success": True, "speaker": try_speaker}
-                else:
-                    last_error = f"HA returned {ha_response.status_code} for {try_speaker}"
+                    if ha_response.status_code == 200:
+                        if try_speaker != target_speaker:
+                            logger.warning(f"Primary speaker {target_speaker} failed, used fallback {try_speaker}")
+                        logger.info(f"Played announcement on {try_speaker}")
+                        return {"success": True, "speaker": try_speaker}
+                    else:
+                        last_error = f"HA returned {ha_response.status_code} for {try_speaker}"
+                        logger.warning(f"play_media failed: {last_error}")
+                except Exception as speaker_err:
+                    last_error = f"Connection error for {try_speaker}: {speaker_err}"
                     logger.warning(f"play_media failed: {last_error}")
 
         return {"success": False, "error": last_error}

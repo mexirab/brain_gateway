@@ -213,9 +213,16 @@ scheduler = AsyncIOScheduler(
 # ---------------------------------------------------------------------------
 # Calendar polling config
 # ---------------------------------------------------------------------------
-CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "5"))
+try:
+    CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "5"))
+except ValueError:
+    CALENDAR_POLL_INTERVAL = 5
 CALENDAR_TIERED_ALERTS = os.environ.get("CALENDAR_TIERED_ALERTS", "true").lower() == "true"
-CALENDAR_ALERT_TIERS = [int(x) for x in os.environ.get("CALENDAR_ALERT_TIERS", "60,30,15,5").split(",")]
+_DEFAULT_TIERS = [60, 30, 15, 5]
+try:
+    CALENDAR_ALERT_TIERS = [int(x) for x in os.environ.get("CALENDAR_ALERT_TIERS", "60,30,15,5").split(",")]
+except ValueError:
+    CALENDAR_ALERT_TIERS = _DEFAULT_TIERS
 MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
 MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
 MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.morning_briefing_speaker)
@@ -223,7 +230,10 @@ MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.mo
 # ---------------------------------------------------------------------------
 # Email polling config
 # ---------------------------------------------------------------------------
-EMAIL_POLL_INTERVAL = int(os.environ.get("EMAIL_POLL_INTERVAL", "30"))
+try:
+    EMAIL_POLL_INTERVAL = int(os.environ.get("EMAIL_POLL_INTERVAL", "30"))
+except ValueError:
+    EMAIL_POLL_INTERVAL = 30
 EMAIL_POLL_ENABLED = os.environ.get("EMAIL_POLL_ENABLED", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------

@@ -103,6 +103,7 @@ services:
       - MODEL_SSH_USER=${MODEL_SSH_USER:-labadmin}
       # Reminders
       - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.all_speakers}
+      - FALLBACK_SPEAKER=${FALLBACK_SPEAKER:-media_player.dining_room_pair}
       - TZ=${TZ:-America/Chicago}
       # Agentic settings
       - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}

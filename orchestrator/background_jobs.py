@@ -43,7 +43,7 @@ _TIER_MESSAGES = {
     60: "{name}, you have {title} in about an hour.",
     30: "{name}, {title} in 30 minutes. Start wrapping up what you're doing.",
     15: "{name}, {title} in 15 minutes. Time to transition — save your work, grab water.",
-    5:  "{name}, {title} starts in 5 minutes. {prep}",
+    5: "{name}, {title} starts in 5 minutes. {prep}",
 }
 
 # Fallback single-announcement message (used when tiered alerts are disabled)
@@ -171,37 +171,48 @@ async def poll_calendar():
                     logger.debug(f"[CALENDAR_POLL] Suppressed nudge for '{event.title}' — related focus session active")
                     continue
 
-                # Find the matching tier for current minutes-before-event
-                for tier_min in tiers:
+                # Find the best matching tier: the largest tier that we've
+                # actually reached (minutes <= tier_min), not yet announced.
+                # Iterate smallest-to-largest so we pick the closest tier first,
+                # avoiding stale "in about an hour" when the event is 28 min away.
+                best_tier = None
+                for tier_min in sorted(tiers):
                     if minutes > tier_min:
                         continue  # not yet reached this tier
                     tier_key = f"cal:{event.id}:{tier_min}"
-                    if state_store.is_notified(tier_key):
-                        continue  # already announced this tier
+                    if not state_store.is_notified(tier_key):
+                        best_tier = tier_min
+                        break  # closest un-announced tier
 
-                    # Build tier message
-                    template = _TIER_MESSAGES.get(tier_min)
-                    if not template:
-                        continue
-                    prep = _get_prep_hint(event) if tier_min <= 5 else ""
-                    message = template.format(name=profile.user_name, title=event.title, prep=prep)
-                    if event.location and tier_min > 5:
-                        message += f" at {event.location}"
+                if best_tier is not None:
+                    tier_key = f"cal:{event.id}:{best_tier}"
+                    template = _TIER_MESSAGES.get(
+                        best_tier,
+                        "{name}, {title} in " + str(best_tier) + " minutes.",
+                    )
+                    if template:
+                        prep = _get_prep_hint(event) if best_tier <= 5 else ""
+                        message = template.format(name=profile.user_name, title=event.title, prep=prep)
+                        if event.location and best_tier > 5:
+                            message += f" at {event.location}"
 
-                    result = await _announce_voice(message)
-                    if result.get("success"):
-                        state_store.mark_notified(tier_key)
-                        CALENDAR_POLL_EVENTS_FOUND.inc()
-                        logger.info(
-                            f"[CALENDAR_POLL] Tier {tier_min}min: {event.title} (actual: {minutes}min away)",
-                            extra={"component": "calendar"},
-                        )
-                    else:
-                        logger.error(
-                            f"[CALENDAR_POLL] TTS FAILED for '{event.title}': {result.get('error')} — will retry next poll",
-                            extra={"component": "calendar"},
-                        )
-                    break  # only announce the most recent un-announced tier
+                        result = await _announce_voice(message)
+                        if result.get("success"):
+                            state_store.mark_notified(tier_key)
+                            # Also mark all larger tiers as notified (catch-up)
+                            for t in tiers:
+                                if t > best_tier:
+                                    state_store.mark_notified(f"cal:{event.id}:{t}")
+                            CALENDAR_POLL_EVENTS_FOUND.inc()
+                            logger.info(
+                                f"[CALENDAR_POLL] Tier {best_tier}min: {event.title} (actual: {minutes}min away)",
+                                extra={"component": "calendar"},
+                            )
+                        else:
+                            logger.error(
+                                f"[CALENDAR_POLL] TTS FAILED for '{event.title}': {result.get('error')} — will retry next poll",
+                                extra={"component": "calendar"},
+                            )
 
             else:
                 # --- Legacy single announcement ---
@@ -235,7 +246,7 @@ async def poll_calendar():
                     )
 
     except Exception as e:
-        logger.error(f"[CALENDAR_POLL] Error: {e}")
+        logger.error(f"[CALENDAR_POLL] Error: {e}", exc_info=True)
 
 
 def _parse_phone_datetime(s: str, tz=None) -> datetime:

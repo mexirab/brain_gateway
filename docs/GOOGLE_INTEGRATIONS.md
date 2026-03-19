@@ -26,11 +26,14 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 6. Restart orchestrator: `docker compose restart orchestrator`
 
 **Proactive features (APScheduler):**
-- Calendar polling: every 15 min, announces events starting within 2 hours via TTS (with travel-time awareness for physical locations)
+- Calendar polling: every 5 min, announces events starting within 2 hours via TTS (with travel-time awareness for physical locations)
+- Tiered countdown alerts: configurable tier thresholds (default: 60/30/15/5 min before event). Selects the closest un-announced tier (smallest-to-largest), and auto-marks larger tiers as notified on catch-up so you never hear a stale "in about an hour" when an event is 28 min away. Custom tier values get generic message templates automatically.
 - Morning briefing: 7:00 AM on bedroom pair, announces today's events + pending reminders via TTS
 
 **Config (env vars):**
-- `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 15)
+- `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 5, defensive parsing with fallback)
+- `CALENDAR_TIERED_ALERTS` — enable tiered countdown alerts (default: true)
+- `CALENDAR_ALERT_TIERS` — comma-separated tier thresholds in minutes (default: 60,30,15,5, defensive parsing with fallback)
 - `MORNING_BRIEFING_TIME` — HH:MM 24h format (default: 07:00)
 - `MORNING_BRIEFING_ENABLED` — true/false (default: true)
 - `MORNING_BRIEFING_SPEAKER` — HA media_player entity (default: media_player.bedroom_pair)
@@ -56,7 +59,7 @@ Read-only Gmail access via OAuth2. Tools: `check_email`, `search_email`.
 - Email polling: every 30 min, announces new unread emails (Primary inbox only — skips promotions/social/forums/updates) via TTS
 
 **Config (env vars):**
-- `EMAIL_POLL_INTERVAL` — minutes between polls (default: 30)
+- `EMAIL_POLL_INTERVAL` — minutes between polls (default: 30, defensive parsing with fallback)
 - `EMAIL_POLL_ENABLED` — true/false (default: true)
 
 **Key files:** `orchestrator/google_gmail.py`

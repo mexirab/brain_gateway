@@ -5,7 +5,7 @@ Tool execution handlers: dispatcher + all tool_* functions.
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 import shared
@@ -482,10 +482,37 @@ async def deliver_reminder_job(reminder_id: str):
         mark_reminder_completed(reminder_id)
         logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
     else:
-        logger.error(
-            f"[REMINDER] {reminder_id} NOT marked complete — TTS failed, will need manual retry",
-            extra={"component": "reminder"},
-        )
+        # Schedule a single retry in 2 minutes — but only once (check for existing retry job)
+        retry_job_id = f"reminder_{reminder_id}_retry"
+        existing_retry = scheduler.get_job(retry_job_id)
+        if existing_retry:
+            logger.error(
+                f"[REMINDER] {reminder_id} TTS failed again on retry — giving up, sending phone fallback",
+                extra={"component": "reminder"},
+            )
+            await _send_notification(text)
+            REMINDERS_DELIVERED.inc()
+            mark_reminder_completed(reminder_id)
+        else:
+            retry_time = datetime.now(shared.TIMEZONE) + timedelta(minutes=2)
+            try:
+                scheduler.add_job(
+                    deliver_reminder_job,
+                    trigger="date",
+                    run_date=retry_time,
+                    args=[reminder_id],
+                    id=retry_job_id,
+                    replace_existing=True,
+                )
+                logger.warning(
+                    f"[REMINDER] {reminder_id} TTS failed — scheduled retry at {retry_time:%H:%M}",
+                    extra={"component": "reminder"},
+                )
+            except Exception as retry_err:
+                logger.error(
+                    f"[REMINDER] {reminder_id} TTS failed and retry scheduling failed: {retry_err}",
+                    extra={"component": "reminder"},
+                )
 
 
 async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:
