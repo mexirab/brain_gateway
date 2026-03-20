@@ -132,6 +132,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             )
         elif tool_name == "task_step":
             return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
+        elif tool_name == "decide_for_me":
+            return await tool_decide_for_me(arguments)
         elif tool_name == "selfcare_log":
             from selfcare_manager import log_selfcare
 
@@ -745,6 +747,64 @@ def tool_task_step(task_id: str, action: str) -> str:
         return abandon_task(task_id)
     else:
         return f"Unknown action '{action}'. Use: done, skip, next, list, or abandon."
+
+
+async def tool_decide_for_me(arguments: Dict[str, Any]) -> str:
+    """Gather context for decision-making. Model synthesizes the recommendation."""
+    import json as _json
+
+    domain = arguments.get("domain", "general")
+    constraints = arguments.get("constraints", "")
+    context: Dict[str, Any] = {"domain": domain, "constraints": constraints}
+
+    try:
+        # Active tasks
+        if domain in ("work", "general", "overwhelm"):
+            context["active_tasks"] = list_active_tasks()
+
+            # Upcoming calendar events
+            try:
+                cal_client = get_calendar_client(http_client=shared._http)
+                if cal_client and cal_client.is_configured:
+                    response = await cal_client.get_upcoming(hours_ahead=48)
+                    if response.success:
+                        context["upcoming_events"] = [
+                            {"title": e.title, "start": str(e.start), "all_day": e.all_day} for e in response.events[:5]
+                        ]
+            except Exception:
+                pass
+
+            # Self-care state (for overwhelm triage)
+            try:
+                from selfcare_manager import get_selfcare_status
+
+                context["selfcare"] = await get_selfcare_status()
+            except Exception:
+                pass
+
+            # Focus session state
+            context["focus_active"] = shared.current_focus_session.get("active", False)
+            if context["focus_active"]:
+                context["focus_task"] = shared.current_focus_session.get("task")
+
+        if domain == "food":
+            # Search RAG for food preferences
+            try:
+                from prompt_builder import rag_context
+
+                prefs = await rag_context("food preferences dietary restrictions allergies")
+                if prefs:
+                    context["food_preferences"] = prefs
+            except Exception:
+                pass
+
+        if domain == "overwhelm":
+            context["triage"] = True
+
+    except Exception as e:
+        logger.warning(f"[DECIDE] Context gathering failed: {e}")
+
+    return _json.dumps(context, default=str)
 
 
 async def tool_brain_dump(items: list) -> str:

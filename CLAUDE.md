@@ -62,6 +62,7 @@ All tools are called directly by the single model in one agentic loop.
 | check_email / search_email | Gmail inbox (read-only) |
 | decompose_task / task_step | Break tasks into micro-steps, advance through them |
 | start_routine / routine_action / routine_status | Step-by-step morning/evening routines with TTS guidance |
+| decide_for_me | Decision simplifier: gathers context for 1-2 concrete recommendations |
 | selfcare_log | Log meals, meds, water, movement for self-care nudge tracking |
 | bookmark_context / recall_context | Interruption recovery: save and recall work context |
 | brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |

@@ -526,6 +526,28 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "decide_for_me",
+            "description": "Help user make a decision when stuck or overwhelmed. Gathers context from calendar, tasks, self-care state, and preferences, then returns 1-2 concrete recommendations. Use for 'what should I do', 'what should I work on', 'what should I eat', 'I'm overwhelmed', 'I can't decide', or choice paralysis.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "enum": ["work", "food", "general", "overwhelm"],
+                        "description": "Decision domain: work (what to work on), food (what to eat), general (anything else), overwhelm (triage mode)",
+                    },
+                    "constraints": {
+                        "type": "string",
+                        "description": "Optional constraints like 'quick', 'healthy', 'under 30 minutes'",
+                    },
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "selfcare_log",
             "description": "Log a self-care action: meal eaten, medication taken, water drunk, or movement done. Use when user says they ate, took meds, drank water, or exercised.",
             "parameters": {

@@ -1,7 +1,7 @@
 # F-009: Decision Simplifier
 
 **Priority:** P2 — Nice to Have
-**Status:** Not started
+**Status:** Done
 **Depends on:** F-003 Task Decomposition, F-005 Progress Tracking, F-008 Self-Care Nudges, RAG (done), Calendar (done)
 **Blocks:** None
 

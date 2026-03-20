@@ -18,7 +18,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-006 | [Context-Aware Routine Scaffolding](./F-006-routine-scaffolding.md) | P1 | Ready | Done |
 | F-007 | [Interruption Recovery](./F-007-interruption-recovery.md) | P1 | Ready | Done |
 | F-008 | [Meal & Self-Care Nudges](./F-008-selfcare-nudges.md) | P2 | Ready | Done |
-| F-009 | [Decision Simplifier](./F-009-decision-simplifier.md) | P2 | Ready | Not started |
+| F-009 | [Decision Simplifier](./F-009-decision-simplifier.md) | P2 | Ready | Done |
 | F-010 | [Ambient Awareness Mode](./F-010-ambient-awareness.md) | P2 | Ready | Partial — dashboard exists |
 
 ## Build Order
