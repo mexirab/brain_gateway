@@ -40,8 +40,6 @@ else
 {
   "permissions": {
     "allow": [
-      "Bash(ssh:*)",
-      "Bash(scp:*)",
       "Bash(ssh labadmin@10.0.0.*:*)",
       "Bash(scp:*)",
       "Bash(git push:*)",

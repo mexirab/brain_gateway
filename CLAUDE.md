@@ -87,6 +87,7 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
 | scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
+| scripts/setup-jupiter-claude.sh | One-time Jupiter Claude Code setup (hooks, ruff, permissions) |
 | docker-compose.yml | Service stack |
 | .env | Environment config (from .env.example) |
 
@@ -134,6 +135,7 @@ docker exec brain-orchestrator python scripts/reindex_rag.py
 | **docs/FRONTEND.md** | Dashboard pages, widgets, YNAB finance, API proxy pattern |
 | **docs/MODE_ROUTER.md** | Intent classification modes (explainer/mirror/counterbalance/challenge/baseline) |
 | **docs/INFRASTRUCTURE.md** | HTTPS/Tailscale, RAG, temperature monitoring, performance notes, kiosk |
+| **docs/REMOTE_DEV.md** | Remote dev workflow (mosh + tmux on Jupiter, jdev alias, git sync) |
 | **ARCHITECTURE.md** | Internals, data flow, troubleshooting |
 | **COMMANDS.md** | Command quick reference |
 | **TECHNICAL_REFERENCE.md** | API specs, schemas |
