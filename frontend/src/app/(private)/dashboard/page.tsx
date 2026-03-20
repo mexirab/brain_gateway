@@ -4,6 +4,7 @@ import FocusTimerCard from '@/components/dashboard/FocusTimerCard';
 import SystemHealthCard from '@/components/dashboard/SystemHealthCard';
 import FinanceSnapshotCard from '@/components/dashboard/FinanceSnapshotCard';
 import TemperatureCard from '@/components/dashboard/TemperatureCard';
+import ProgressCard from '@/components/dashboard/ProgressCard';
 
 export default function DashboardPage() {
   return (
@@ -13,6 +14,7 @@ export default function DashboardPage() {
         <CalendarCard />
         <RemindersCard />
         <FocusTimerCard />
+        <ProgressCard />
         <SystemHealthCard />
         <TemperatureCard />
         <FinanceSnapshotCard />

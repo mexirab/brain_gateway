@@ -77,6 +77,8 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
+| orchestrator/progress_tracker.py | Progress tracking: daily stats, streaks, personal bests, daily/weekly TTS summaries |
+| orchestrator/tests/test_progress_tracker.py | Progress tracker unit tests (events, streaks, summaries, personal bests) |
 | orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
@@ -185,6 +187,24 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | MODEL_SSH_USER | - | SSH user for model server |
 | MODEL_START_CMD | - | Command to start model server via SSH |
 | MODEL_STOP_CMD | - | Command to stop model server via SSH |
+
+## Progress Tracking Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| PROGRESS_ENABLED | true | Enable progress tracking |
+| PROGRESS_DB_PATH | /app/data/progress.db | SQLite database path |
+| DAILY_SUMMARY_TIME | 18:00 | When to announce daily summary via TTS |
+| WEEKLY_SUMMARY_DAY | sunday | Day for weekly digest |
+| WEEKLY_SUMMARY_TIME | 19:00 | Time for weekly digest |
+
+## Progress Tracking API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/progress/today | Today's stats (tasks, focus, brain dumps) |
+| GET | /api/progress/week | This week's stats + trend vs prior week |
+| GET | /api/progress/streaks | Active streaks (task, focus, brain dump) |
 
 ## Auto-Learn Environment Variables
 

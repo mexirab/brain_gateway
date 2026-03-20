@@ -5,6 +5,9 @@ import type {
   HAEntitiesResponse,
   CalendarEvent,
   TemperaturesResponse,
+  ProgressToday,
+  ProgressWeek,
+  ProgressStreaks,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -49,4 +52,7 @@ export const api = {
   calendarToday: () =>
     fetcher<{ events: CalendarEvent[]; source?: string; count?: number }>('/api/calendar/today'),
   temperatures: () => fetcher<TemperaturesResponse>('/api/temperatures'),
+  progressToday: () => fetcher<ProgressToday>('/api/progress/today'),
+  progressWeek: () => fetcher<ProgressWeek>('/api/progress/week'),
+  progressStreaks: () => fetcher<ProgressStreaks>('/api/progress/streaks'),
 };

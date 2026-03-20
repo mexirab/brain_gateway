@@ -369,3 +369,16 @@ TASK_DECOMP_ERRORS = Counter(
     "bgw_task_decomp_errors_total",
     "Task decomposition errors",
 )
+
+# -- Progress Tracking -------------------------------------------------------
+PROGRESS_EVENTS_RECORDED = Counter(
+    "bgw_progress_events_total",
+    "Progress events recorded",
+    ["event_type"],
+)
+
+PROGRESS_STREAK_MILESTONES = Counter(
+    "bgw_progress_streak_milestones_total",
+    "Streak milestone announcements triggered",
+    ["category"],
+)

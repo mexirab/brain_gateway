@@ -1,7 +1,7 @@
 # F-005: Dopamine-Aware Progress Tracking
 
 **Priority:** P1 — Should Have
-**Status:** Not started
+**Status:** Done
 **Depends on:** F-001 Brain Dump, F-003 Task Decomposition, F-004 Focus Sessions, F-006 Routine Scaffolding
 **Blocks:** F-009 Decision Simplifier (provides context for decisions)
 

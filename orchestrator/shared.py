@@ -327,3 +327,11 @@ AUTO_LEARN_ENCRYPTION_KEY = os.environ.get("AUTO_LEARN_ENCRYPTION_KEY", "")
 
 # In-memory conversation buffer for auto-learn (never written to disk)
 _auto_learn_conversations: Dict[str, list] = {}
+
+# ---------------------------------------------------------------------------
+# Progress tracking configuration (F-005)
+# ---------------------------------------------------------------------------
+PROGRESS_ENABLED = os.environ.get("PROGRESS_ENABLED", "true").lower() == "true"
+DAILY_SUMMARY_TIME = os.environ.get("DAILY_SUMMARY_TIME", "18:00")
+WEEKLY_SUMMARY_DAY = os.environ.get("WEEKLY_SUMMARY_DAY", "sunday")
+WEEKLY_SUMMARY_TIME = os.environ.get("WEEKLY_SUMMARY_TIME", "19:00")

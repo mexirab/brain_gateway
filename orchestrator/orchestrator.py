@@ -364,6 +364,11 @@ async def startup_event():
     state_store.init_db()
     state_store.clear_stale_notifications(older_than_hours=48)
 
+    # Initialize progress tracking DB (F-005)
+    import progress_tracker
+
+    progress_tracker.init_db()
+
     # Initialize LLM backends
     shared._http = _http  # ensure shared module has the http client too
     shared.init_backends(_http)
@@ -495,6 +500,37 @@ async def startup_event():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
+
+    # Schedule progress tracking jobs (F-005)
+    if shared.PROGRESS_ENABLED:
+        from background_jobs import daily_progress_summary, weekly_progress_digest
+
+        ds_hour, ds_minute = map(int, shared.DAILY_SUMMARY_TIME.split(":"))
+        scheduler.add_job(
+            daily_progress_summary,
+            trigger="cron",
+            hour=ds_hour,
+            minute=ds_minute,
+            id="daily_progress_summary",
+            name="Daily progress summary",
+            replace_existing=True,
+        )
+
+        ws_hour, ws_minute = map(int, shared.WEEKLY_SUMMARY_TIME.split(":"))
+        scheduler.add_job(
+            weekly_progress_digest,
+            trigger="cron",
+            day_of_week=shared.WEEKLY_SUMMARY_DAY[:3].lower(),
+            hour=ws_hour,
+            minute=ws_minute,
+            id="weekly_progress_digest",
+            name="Weekly progress digest",
+            replace_existing=True,
+        )
+        logger.info(
+            f"[SCHEDULER] Progress summary at {shared.DAILY_SUMMARY_TIME} daily, "
+            f"digest {shared.WEEKLY_SUMMARY_DAY} {shared.WEEKLY_SUMMARY_TIME}"
+        )
 
 
 if __name__ == "__main__":

@@ -273,6 +273,19 @@ async def process_brain_dump(items_raw: List[Dict[str, Any]]) -> BrainDumpResult
         display_text = item.raw_text[:100] + "..." if len(item.raw_text) > 100 else item.raw_text
         confirmations.append(f"{display_text} — {confirmation}")
 
+    # Record progress event (F-005)
+    routed_count = sum(1 for c in confirmations if "error" not in c and "duplicate" not in c.lower())
+    if routed_count > 0:
+        try:
+            import asyncio
+
+            import progress_tracker
+
+            progress_tracker.record_event("brain_dump", {"count": routed_count})
+            asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
+        except Exception as e:
+            logger.warning(f"[BRAIN_DUMP] Progress tracking failed: {e}")
+
     # Build TTS-friendly summary
     if len(captured) == 0:
         summary = "Nothing to capture."

@@ -361,6 +361,16 @@ async def tool_stop_focus() -> str:
     FOCUS_SESSIONS_STOPPED_EARLY.inc()
     FOCUS_SESSION_DURATION.observe(total or elapsed)
     FOCUS_ACTIVE.set(0)
+
+    # Record partial focus event (F-005) — only if meaningful time spent
+    if int(elapsed) >= 5:
+        try:
+            import progress_tracker
+
+            progress_tracker.record_event("focus_partial", {"minutes": int(elapsed)})
+        except Exception as e:
+            logger.warning(f"[FOCUS] Progress tracking failed: {e}")
+
     logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'", extra={"component": "focus"})
 
     if sprint_count > 0:
@@ -410,8 +420,21 @@ async def tool_focus_sprint(action: str, duration_minutes: int = None) -> str:
                 with contextlib.suppress(Exception):
                     scheduler.remove_job(jid)
         total = current_focus_session.get("total_focus_minutes", 0)
+        sprints_done = current_focus_session.get("sprint_count", 0)
         FOCUS_SESSION_DURATION.observe(total or current_focus_session.get("duration", 0))
         FOCUS_SESSIONS_COMPLETED.inc()
+
+        # Record focus completion (F-005)
+        try:
+            import asyncio as _asyncio
+
+            import progress_tracker
+
+            progress_tracker.record_event("focus_complete", {"minutes": total, "sprints": sprints_done})
+            _asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
+        except Exception as e:
+            logger.warning(f"[FOCUS] Progress tracking failed: {e}")
+
         _reset_focus_session()
         FOCUS_ACTIVE.set(0)
         await _announce_voice(summary_text)
@@ -548,6 +571,18 @@ async def deliver_focus_break(task: str, break_duration: int):
         FOCUS_SESSIONS_COMPLETED.inc()
         FOCUS_ACTIVE.set(0)
         FOCUS_SESSION_DURATION.observe(total)
+
+        # Record focus completion (F-005)
+        try:
+            import asyncio as _asyncio
+
+            import progress_tracker
+
+            progress_tracker.record_event("focus_complete", {"minutes": total, "sprints": sprint_count})
+            _asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
+        except Exception as e:
+            logger.warning(f"[FOCUS] Progress tracking failed: {e}")
+
         logger.info(f"[FOCUS] All {sprints_planned} sprints complete for '{task}'", extra={"component": "focus"})
         return
 
@@ -568,6 +603,18 @@ async def deliver_focus_break(task: str, break_duration: int):
         FOCUS_ACTIVE.set(0)
         if planned_duration:
             FOCUS_SESSION_DURATION.observe(planned_duration)
+
+        # Record focus completion (F-005)
+        try:
+            import asyncio as _asyncio
+
+            import progress_tracker
+
+            progress_tracker.record_event("focus_complete", {"minutes": planned_duration or 0, "sprints": 1})
+            _asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
+        except Exception as e:
+            logger.warning(f"[FOCUS] Progress tracking failed: {e}")
+
         logger.info(f"[FOCUS] Break announced for '{task}'", extra={"component": "focus"})
     else:
         # Multi-sprint break: session stays active, timer cleared

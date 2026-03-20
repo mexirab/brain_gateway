@@ -113,3 +113,50 @@ export interface ChatChunk {
   }>;
   _routing?: RoutingInfo;
 }
+
+// Progress Tracking (F-005)
+export interface ProgressToday {
+  date: string;
+  tasks_completed: number;
+  brain_dumps: number;
+  focus_sessions: number;
+  focus_minutes: number;
+  reminders_done: number;
+  routine_steps: number;
+}
+
+export interface WeekDay {
+  date: string;
+  tasks_completed: number;
+  focus_sessions: number;
+  brain_dumps: number;
+  focus_minutes: number;
+}
+
+export interface ProgressTotals {
+  tasks_completed: number;
+  brain_dumps: number;
+  focus_sessions: number;
+  focus_minutes: number;
+  reminders_done: number;
+  routine_steps: number;
+}
+
+export interface ProgressWeek {
+  days: WeekDay[];
+  totals: ProgressTotals;
+  prior_week_totals: ProgressTotals;
+  trend: 'up' | 'down' | 'flat';
+  best_day: string | null;
+}
+
+export interface Streak {
+  category: string;
+  current: number;
+  longest: number;
+  last_active: string;
+}
+
+export interface ProgressStreaks {
+  streaks: Streak[];
+}

@@ -194,6 +194,14 @@ def complete_step(task_id: str) -> str:
     task.current_step_index = step.index + 1
     TASK_DECOMP_STEPS_COMPLETED.inc()
 
+    # Record task step completion (F-005)
+    try:
+        import progress_tracker
+
+        progress_tracker.record_event("task_done", {})
+    except Exception as e:
+        logger.warning(f"[TASK_DECOMP] Progress tracking failed: {e}")
+
     logger.info(
         "[TASK_DECOMP] Task %s step %d completed",
         task_id,
@@ -352,6 +360,16 @@ def _format_completion_summary(task: DecomposedTask) -> str:
 
     # Clean up completed task
     _active_tasks.pop(task.task_id, None)
+
+    # Check for streak milestones (F-005)
+    try:
+        import asyncio
+
+        import progress_tracker
+
+        asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
+    except Exception:
+        pass
 
     parts = [f"All done with '{task.original_text}'!"]
     parts.append(f"{completed} of {total} steps completed")

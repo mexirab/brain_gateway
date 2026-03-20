@@ -14,7 +14,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-002 | [Proactive Time-Aware Nudges](./F-002-time-nudges.md) | P0 | Ready | Partial — needs tiered countdown |
 | F-003 | [Task Decomposition Engine](./F-003-task-decomposition.md) | P0 | Ready | Done |
 | F-004 | [Body Doubling & Focus Sessions](./F-004-body-doubling.md) | P1 | Ready | Done |
-| F-005 | [Dopamine-Aware Progress Tracking](./F-005-progress-tracking.md) | P1 | Ready | Not started |
+| F-005 | [Dopamine-Aware Progress Tracking](./F-005-progress-tracking.md) | P1 | Ready | Done |
 | F-006 | [Context-Aware Routine Scaffolding](./F-006-routine-scaffolding.md) | P1 | Ready | Not started |
 | F-007 | [Interruption Recovery](./F-007-interruption-recovery.md) | P1 | Ready | Not started |
 | F-008 | [Meal & Self-Care Nudges](./F-008-selfcare-nudges.md) | P2 | Ready | Not started |

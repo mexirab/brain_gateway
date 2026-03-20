@@ -782,3 +782,32 @@ async def check_closet_temperature():
 
     except Exception as e:
         logger.error(f"[TEMP_ALERT] Error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Progress Tracking (F-005)
+# ---------------------------------------------------------------------------
+
+
+async def daily_progress_summary():
+    """Announce daily progress stats via TTS at configured time."""
+    try:
+        import progress_tracker
+
+        summary = await progress_tracker.daily_summary()
+        await _announce_voice(summary)
+        logger.info("[PROGRESS] Daily summary announced")
+    except Exception as e:
+        logger.error(f"[PROGRESS] Daily summary failed: {e}")
+
+
+async def weekly_progress_digest():
+    """Announce weekly progress digest via TTS."""
+    try:
+        import progress_tracker
+
+        summary = await progress_tracker.weekly_summary()
+        await _announce_voice(summary)
+        logger.info("[PROGRESS] Weekly digest announced")
+    except Exception as e:
+        logger.error(f"[PROGRESS] Weekly digest failed: {e}")

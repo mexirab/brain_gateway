@@ -706,3 +706,32 @@ async def sync_phone_calendar(req: Request):
     except Exception as e:
         logger.error(f"[PHONE_SYNC] Error: {e}")
         return JSONResponse({"error": "Calendar sync failed"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Progress Tracking (F-005)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/progress/today")
+async def get_progress_today():
+    """Today's progress stats."""
+    from progress_tracker import get_today_stats
+
+    return JSONResponse(get_today_stats())
+
+
+@router.get("/api/progress/week")
+async def get_progress_week():
+    """This week's stats and trend vs prior week."""
+    from progress_tracker import get_week_stats
+
+    return JSONResponse(get_week_stats())
+
+
+@router.get("/api/progress/streaks")
+async def get_progress_streaks():
+    """Active streaks."""
+    from progress_tracker import get_streaks
+
+    return JSONResponse(get_streaks())
