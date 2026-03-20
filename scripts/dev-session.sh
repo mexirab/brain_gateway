@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Persistent Claude Code dev session via tmux.
+# Creates or reattaches to a named session with 3 windows:
+#   1. Claude Code   2. Docker logs   3. Shell
+#
+# Usage:
+#   ./dev-session.sh brain     # Brain Gateway
+#   ./dev-session.sh conjure   # Conjure app
+#   ./dev-session.sh           # defaults to brain
+
+set -euo pipefail
+
+PROJECT="${1:-brain}"
+
+case "$PROJECT" in
+    brain)
+        SESSION="brain-dev"
+        DIR="/opt/jupiter/gateway_mvp"
+        LOG_CONTAINER="brain-orchestrator"
+        ;;
+    conjure)
+        SESSION="conjure-dev"
+        DIR="/opt/jupiter/conjure"
+        LOG_CONTAINER=""
+        ;;
+    *)
+        echo "Usage: $0 [brain|conjure]"
+        exit 1
+        ;;
+esac
+
+# If session exists, auto-pull and reattach
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "Syncing with remote..."
+    cd "$DIR"
+    git fetch origin main --quiet
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse origin/main)
+    if [ "$LOCAL" != "$REMOTE" ]; then
+        echo "Pulling latest changes..."
+        git pull --ff-only
+    fi
+    echo "Reattaching to $SESSION..."
+    exec tmux attach -t "$SESSION"
+fi
+
+# Create new session
+echo "Creating $SESSION session..."
+cd "$DIR"
+
+# Pull latest before starting
+git fetch origin main --quiet
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse origin/main)
+if [ "$LOCAL" != "$REMOTE" ]; then
+    echo "Pulling latest changes..."
+    git pull --ff-only
+fi
+
+tmux new-session -d -s "$SESSION" -c "$DIR"
+
+# Window 1: Claude Code
+tmux rename-window -t "$SESSION:1" "claude"
+tmux send-keys -t "$SESSION:1" "claude" C-m
+
+# Window 2: Docker logs (if applicable)
+if [ -n "$LOG_CONTAINER" ]; then
+    tmux new-window -t "$SESSION" -n "logs" -c "$DIR"
+    tmux send-keys -t "$SESSION:2" "docker logs $LOG_CONTAINER --tail 50 -f" C-m
+fi
+
+# Window 3: Shell
+tmux new-window -t "$SESSION" -n "shell" -c "$DIR"
+
+tmux select-window -t "$SESSION:1"
+exec tmux attach -t "$SESSION"
