@@ -15,9 +15,9 @@ The target cluster uses consumer NVIDIA GPUs. When recommending models, always c
 
 | Node | GPU | VRAM | Current role |
 |------|-----|------|-------------|
-| Saturn | RTX 3080 + RTX 3090 | 10GB + 24GB | Nemotron-8B orchestrator (tool routing) |
-| Uranus | 2x RTX 5080 | 16GB + 16GB | GPU0: TTS (Qwen3-TTS), GPU1: STT (Whisper) |
-| Helios | RTX 5090 | 32GB | Qwen3-32B conversational (Q5_K_M via llama.cpp) |
+| Saturn | RTX 3080 + RTX 3090 | 10GB + 24GB | Reserve capacity |
+| Uranus | 2x RTX 5080 | 16GB + 16GB | GPU0: TTS (Qwen3-TTS) + STT (Whisper), GPU1: ComfyUI/Conjure |
+| Helios | RTX 5090 | 32GB | Qwen3.5-27B unified (conversation + tools, always-on) |
 
 **Important:** These are the user's current GPUs but the product ships to other users too. Frame recommendations as "fits in X GB VRAM" so any user can match to their hardware.
 
@@ -52,11 +52,10 @@ The target cluster uses consumer NVIDIA GPUs. When recommending models, always c
 
 | Role | Current model | Key requirements |
 |------|--------------|-----------------|
-| Conversational | Qwen3-32B (Q5_K_M) | Personality, empathy, ADHD-aware coaching, 32GB max |
-| Orchestrator | Nemotron-8B | Tool calling reliability, JSON output, fast inference, 24GB max |
+| Unified (conversation + tools) | Qwen3.5-27B | Personality, empathy, ADHD-aware coaching, tool calling, JSON output, 32GB max |
 | TTS | Qwen3-TTS | Voice cloning quality, real-time factor, 16GB max |
 | STT | Whisper | Accuracy, speed, streaming support, 16GB max |
-| Embedding | all-MiniLM-L6-v2 | Semantic quality, speed, CPU-friendly |
+| Embedding | nomic-embed-text-v2-moe | Semantic quality, speed, CPU-friendly |
 
 ## Minimum viable hardware
 

@@ -18,7 +18,13 @@ echo "[2/3] Checking ruff..."
 if ! command -v ruff &>/dev/null; then
     echo "  Installing ruff..."
     pip3 install --user ruff
-    echo "  Done. You may need to add ~/.local/bin to PATH."
+    # Verify ruff is actually on PATH after install
+    if ! command -v ruff &>/dev/null; then
+        echo "  WARNING: ruff installed but not on PATH."
+        echo "  Add this to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+        echo "  Then run: source ~/.bashrc"
+        exit 1
+    fi
 else
     echo "  ruff $(ruff --version) already installed."
 fi
@@ -36,6 +42,8 @@ else
     "allow": [
       "Bash(ssh:*)",
       "Bash(scp:*)",
+      "Bash(ssh labadmin@10.0.0.*:*)",
+      "Bash(scp:*)",
       "Bash(git push:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
@@ -44,6 +52,11 @@ else
       "Bash(git fetch:*)",
       "Bash(git pull:*)",
       "Bash(git rm:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
       "Bash(git reset:*)",
       "Bash(kill:*)",
       "Bash(python3:*)",
@@ -53,7 +66,8 @@ else
       "Bash(docker compose:*)",
       "Bash(docker logs:*)",
       "Bash(docker exec:*)",
-      "Bash(curl -s http://localhost:*)",
+      "Bash(docker restart:*)",
+      "Bash(curl:*)",
       "Bash(bash scripts/install-hooks.sh)",
       "Bash(chmod +x:*)",
       "Bash(pip install:*)",

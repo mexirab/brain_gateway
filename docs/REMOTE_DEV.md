@@ -33,13 +33,13 @@ Add to `~/.zshrc`:
 
 ```bash
 jdev() {
-    mosh labadmin@100.102.29.14 -- tmux attach -t brain-dev 2>/dev/null \
-        || mosh labadmin@100.102.29.14 -- bash /opt/jupiter/gateway_mvp/scripts/dev-session.sh brain
+    mosh labadmin@100.102.29.14 -- bash -c \
+        'tmux attach -t brain-dev 2>/dev/null || bash /opt/jupiter/gateway_mvp/scripts/dev-session.sh brain'
 }
 
 jcon() {
-    mosh labadmin@100.102.29.14 -- tmux attach -t conjure-dev 2>/dev/null \
-        || mosh labadmin@100.102.29.14 -- bash /opt/jupiter/conjure/scripts/dev-session.sh conjure
+    mosh labadmin@100.102.29.14 -- bash -c \
+        'tmux attach -t conjure-dev 2>/dev/null || bash /opt/jupiter/gateway_mvp/scripts/dev-session.sh conjure'
 }
 ```
 
