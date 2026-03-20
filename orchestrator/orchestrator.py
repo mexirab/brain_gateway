@@ -538,6 +538,20 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"[ROUTINE] Failed to schedule routine triggers: {e}")
 
+    # Schedule self-care nudge checks (F-008)
+    if shared.SELFCARE_ENABLED:
+        from background_jobs import check_selfcare
+
+        scheduler.add_job(
+            check_selfcare,
+            trigger="interval",
+            minutes=15,
+            id="selfcare_check",
+            name="Self-care nudge check",
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Self-care nudges every 15 min")
+
     # Schedule progress tracking jobs (F-005)
     if shared.PROGRESS_ENABLED:
         from background_jobs import daily_progress_summary, weekly_progress_digest

@@ -790,6 +790,21 @@ async def check_closet_temperature():
 
 
 # ---------------------------------------------------------------------------
+# Self-Care Nudges (F-008)
+# ---------------------------------------------------------------------------
+
+
+async def check_selfcare():
+    """Every 15 min: check meal, meds, hydration, movement."""
+    try:
+        from selfcare_manager import check_selfcare as _check
+
+        await _check()
+    except Exception as e:
+        logger.error(f"[SELFCARE] Check failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Routine Scaffolding (F-006)
 # ---------------------------------------------------------------------------
 

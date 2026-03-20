@@ -342,6 +342,16 @@ ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "tru
 # ---------------------------------------------------------------------------
 # Interruption recovery configuration (F-007)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Self-care nudges configuration (F-008)
+# ---------------------------------------------------------------------------
+SELFCARE_ENABLED = os.environ.get("SELFCARE_ENABLED", "true").lower() == "true"
+MEAL_NUDGE_HOURS = int(os.environ.get("MEAL_NUDGE_HOURS", "4"))
+HYDRATION_INTERVAL = int(os.environ.get("HYDRATION_INTERVAL", "90"))
+MOVEMENT_INTERVAL = int(os.environ.get("MOVEMENT_INTERVAL", "90"))
+QUIET_HOURS_START = os.environ.get("QUIET_HOURS_START", "22:00")
+QUIET_HOURS_END = os.environ.get("QUIET_HOURS_END", "07:00")
+
 INTERRUPT_CHECKIN_DELAY = int(os.environ.get("INTERRUPT_CHECKIN_DELAY", "5"))
 CONTEXT_STACK_SIZE = int(os.environ.get("CONTEXT_STACK_SIZE", "10"))
 

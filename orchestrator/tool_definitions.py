@@ -526,6 +526,28 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "selfcare_log",
+            "description": "Log a self-care action: meal eaten, medication taken, water drunk, or movement done. Use when user says they ate, took meds, drank water, or exercised.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["meal", "medication", "water", "movement"],
+                        "description": "Type of self-care action",
+                    },
+                    "detail": {
+                        "type": "string",
+                        "description": "Medication name or meal type (optional)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "bookmark_context",
             "description": "Bookmark current work context before an interruption. Use when user says 'I need to take a call', 'stepping away', 'be right back', 'brb', 'I need to handle something'.",
             "parameters": {

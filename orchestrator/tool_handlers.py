@@ -132,6 +132,10 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             )
         elif tool_name == "task_step":
             return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
+        elif tool_name == "selfcare_log":
+            from selfcare_manager import log_selfcare
+
+            return await log_selfcare(arguments.get("action", ""), arguments.get("detail"))
         elif tool_name == "bookmark_context":
             from context_tracker import bookmark_context
 

@@ -62,6 +62,7 @@ All tools are called directly by the single model in one agentic loop.
 | check_email / search_email | Gmail inbox (read-only) |
 | decompose_task / task_step | Break tasks into micro-steps, advance through them |
 | start_routine / routine_action / routine_status | Step-by-step morning/evening routines with TTS guidance |
+| selfcare_log | Log meals, meds, water, movement for self-care nudge tracking |
 | bookmark_context / recall_context | Interruption recovery: save and recall work context |
 | brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
 
@@ -79,6 +80,8 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
+| orchestrator/selfcare_manager.py | Self-care nudges: meals, meds, hydration, movement with smart suppression |
+| orchestrator/tests/test_selfcare_manager.py | Self-care manager unit tests (logging, nudge timing, quiet hours) |
 | orchestrator/context_tracker.py | Interruption recovery: context stack, bookmarks, auto-capture, check-in timer |
 | orchestrator/tests/test_context_tracker.py | Context tracker unit tests (bookmarks, recall, prompt context) |
 | orchestrator/routine_manager.py | Routine scaffolding: morning/evening step-by-step TTS guidance, nudges, calendar awareness |
@@ -193,6 +196,17 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | MODEL_SSH_USER | - | SSH user for model server |
 | MODEL_START_CMD | - | Command to start model server via SSH |
 | MODEL_STOP_CMD | - | Command to stop model server via SSH |
+
+## Self-Care Nudge Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| SELFCARE_ENABLED | true | Enable self-care nudges |
+| MEAL_NUDGE_HOURS | 4 | Hours since last meal before nudging |
+| HYDRATION_INTERVAL | 90 | Minutes between water reminders |
+| MOVEMENT_INTERVAL | 90 | Minutes between movement reminders |
+| QUIET_HOURS_START | 22:00 | No nudges after this |
+| QUIET_HOURS_END | 07:00 | No nudges before this |
 
 ## Interruption Recovery Environment Variables
 

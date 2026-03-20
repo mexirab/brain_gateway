@@ -1,7 +1,7 @@
 # F-008: Meal & Self-Care Nudges
 
 **Priority:** P2 — Nice to Have
-**Status:** Not started
+**Status:** Done
 **Depends on:** TTS (done), APScheduler (done), data manager (done), HA (done), F-006 Routine Scaffolding
 **Blocks:** F-009 Decision Simplifier (provides self-care state for triage)
 
