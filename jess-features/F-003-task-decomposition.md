@@ -1,7 +1,7 @@
 # F-003: Task Decomposition Engine
 
 **Priority:** P0 — Must Have
-**Status:** Not started
+**Status:** Done
 **Depends on:** F-001 Brain Dump, RAG (done), reminders (done)
 **Blocks:** F-007 Interruption Recovery, F-009 Decision Simplifier
 

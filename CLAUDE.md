@@ -59,6 +59,7 @@ All tools are called directly by the single model in one agentic loop.
 | web_search | Search the web via SearXNG |
 | check_calendar / create_calendar_event | Google Calendar read/write |
 | check_email / search_email | Gmail inbox (read-only) |
+| decompose_task / task_step | Break tasks into micro-steps, advance through them |
 | brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
 
 ## Key Files
@@ -75,6 +76,7 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
+| orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
 | orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |

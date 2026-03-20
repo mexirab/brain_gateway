@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
+import shared
 from metrics import (
     TASK_DECOMP_ERRORS,
     TASK_DECOMP_STEPS_COMPLETED,
@@ -25,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 # ADHD time buffer — model estimates multiplied by this factor
 ADHD_TIME_BUFFER = 1.5
+
+# Resource caps
+MAX_ACTIVE_TASKS = 10
+MAX_STEPS_PER_TASK = 20
+MAX_TASK_TEXT_LENGTH = 1000
 
 
 @dataclass
@@ -57,10 +63,13 @@ async def decompose_task(task_text: str, mode: str = "next_step_only", context: 
     then stores the result and returns a TTS-friendly summary.
     """
     from orchestrator import call_model
-    from shared import MODEL_NAME, MODEL_URL
 
     if not task_text:
         return "Please tell me what task you'd like me to break down."
+
+    # Sanitize input
+    task_text = task_text[:MAX_TASK_TEXT_LENGTH]
+    context = context[:MAX_TASK_TEXT_LENGTH] if context else ""
 
     system_prompt = """You are a task decomposition assistant. Break the given task into concrete micro-steps.
 
@@ -81,8 +90,8 @@ Return format:
 
     try:
         response = await call_model(
-            MODEL_URL,
-            MODEL_NAME,
+            shared.MODEL_URL,
+            shared.MODEL_NAME,
             messages,
             system=system_prompt,
             timeout=60,
@@ -92,12 +101,15 @@ Return format:
         # Strip markdown code fences if present
         content = content.strip()
         if content.startswith("```"):
-            content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+            first_newline = content.find("\n")
+            content = content[first_newline + 1 :] if first_newline != -1 else content[3:]
         if content.endswith("```"):
-            content = content[:-3]
+            content = content[:-3].rstrip()
         content = content.strip()
 
         raw_steps = json.loads(content)
+        if not isinstance(raw_steps, list):
+            raise ValueError(f"Expected list, got {type(raw_steps).__name__}")
     except json.JSONDecodeError:
         TASK_DECOMP_ERRORS.inc()
         logger.warning("[TASK_DECOMP] Failed to parse model response as JSON: %s", content[:200])
@@ -110,16 +122,28 @@ Return format:
 
     # Build micro-steps with ADHD time buffer
     steps = []
-    for i, raw in enumerate(raw_steps):
-        desc = raw.get("description", "").strip()
-        if not desc:
+    for i, raw in enumerate(raw_steps[:MAX_STEPS_PER_TASK]):
+        if not isinstance(raw, dict):
             continue
-        raw_minutes = raw.get("est_minutes", 15)
+        desc = raw.get("description", "")
+        if not isinstance(desc, str) or not desc.strip():
+            continue
+        desc = desc.strip()
+        try:
+            raw_minutes = max(1, min(int(raw.get("est_minutes", 15)), 240))
+        except (ValueError, TypeError):
+            raw_minutes = 15
         buffered_minutes = math.ceil(raw_minutes * ADHD_TIME_BUFFER)
         steps.append(MicroStep(index=i, description=desc, est_minutes=buffered_minutes))
 
     if not steps:
         return "I couldn't generate steps for that task. Could you describe it differently?"
+
+    # Evict oldest task if at cap
+    if len(_active_tasks) >= MAX_ACTIVE_TASKS:
+        oldest_id = next(iter(_active_tasks))
+        _active_tasks.pop(oldest_id)
+        logger.warning("[TASK_DECOMP] Active task cap reached, evicted oldest task %s", oldest_id)
 
     task_id = str(uuid.uuid4())[:8]
     task = DecomposedTask(
