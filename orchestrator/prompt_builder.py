@@ -232,7 +232,7 @@ WHEN TO USE TOOLS:
 - routine_action: When user says "done", "next", "finished", "skip", "pause routine", "resume routine", "stop routine" during an active routine
 - routine_status: When user asks "where am I in the routine" or "what's the current step"
 - decide_for_me: When user says "what should I do", "what should I work on", "I'm overwhelmed", "I can't decide", "what should I eat", or seems stuck with choice paralysis
-- selfcare_log: When user says "I ate", "I took my meds", "had lunch", "drank water", "went for a walk", "yes I took it"
+- selfcare_log: ALWAYS call this when user mentions eating, meals, meds, water, or exercise. Examples: "I ate", "had lunch", "I took my meds", "yes I took it", "just had a sandwich", "drank water", "went for a walk", "grabbed a snack", "just ate". This MUST be logged even if you also respond conversationally.
 - bookmark_context: When user says "I need to take a call", "stepping away", "be right back", "brb", "I need to handle something"
 - recall_context: When user says "what was I doing?", "where was I?", "what was I working on?", "I'm back", "just got back"
 

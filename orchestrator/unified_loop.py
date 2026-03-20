@@ -40,6 +40,7 @@ TERMINAL_TOOLS = {
     "start_routine",
     "routine_action",
     "bookmark_context",
+    "selfcare_log",
 }
 
 

@@ -549,7 +549,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "selfcare_log",
-            "description": "Log a self-care action: meal eaten, medication taken, water drunk, or movement done. Use when user says they ate, took meds, drank water, or exercised.",
+            "description": "Log a self-care action: meal eaten, medication taken, water drunk, or movement done. ALWAYS call this when user mentions eating (had lunch, grabbed a snack, just ate), taking medication (took my meds, yes I took it), drinking water, or exercising. Must be logged even if you also respond conversationally.",
             "parameters": {
                 "type": "object",
                 "properties": {
