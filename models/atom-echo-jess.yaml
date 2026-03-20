@@ -1,41 +1,61 @@
-# ATOM Echo S3R Voice Assistant Configuration
-# =============================================
-# M5Stack ATOM Echo S3R (ESP32-S3 + ES8311 codec)
-# On-device wake word: "Hey Jess" via microWakeWord
+# ATOM Echo S3R — Mic-Only Voice Satellite
+# ==========================================
+# M5Stack ATOM Echo S3R (ESP32-S3 + ES8311 codec + NS4150B amp)
+# Based on official M5Stack config (2026.1.2), customized for Brain Gateway.
 #
-# Flash: esphome run atom_echo.yaml --device /dev/ttyACM0
+# Role: Wake word detection + microphone only.
+# TTS responses are redirected to Google/Cast speakers via HA service call.
+# Confirmation beep plays on the ATOM Echo (amp toggled briefly).
+#
+# Flash (first time, USB):
+#   esphome run atom_echo.yaml --device /dev/ttyACM0
+#
 # OTA updates after first flash.
 #
 # Multi-room: override substitutions per device:
 #   esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jess"
+#   esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
 
 substitutions:
   name: atom-echo-jess
   friendly_name: Jess Voice Assistant
+  tts_speaker: media_player.whole_home
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  min_version: 2024.11.0
+  project:
+    name: brain-gateway.jess-voice
+    version: "1.0.0"
+  min_version: 2026.1.0
   on_boot:
     priority: 600
     then:
-      - delay: 2s
-      - micro_wake_word.start
+      # Safety timeout: if HA API never connects, clear init flag after 30s
+      - delay: 30s
+      - if:
+          condition:
+            lambda: return id(init_in_progress);
+          then:
+            - lambda: id(init_in_progress) = false;
 
 esp32:
-  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 8MB
+  cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    version: recommended
-  flash_size: 8MB
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
 
 psram:
   mode: octal
   speed: 80MHz
 
 logger:
-  level: INFO
+  level: DEBUG
 
 api:
   encryption:
@@ -55,24 +75,43 @@ wifi:
 
 captive_portal:
 
-# ES8311 codec communicates over I2C
-i2c:
-  sda: GPIO45
-  scl: GPIO0
+button:
+  - platform: factory_reset
+    id: factory_reset_btn
+    internal: true
 
-# I2S audio bus (ES8311 codec)
+# =============================================================================
+# Hardware: ES8311 codec over I2C, shared I2S bus for mic + speaker
+# =============================================================================
+
+i2c:
+  sda:
+    number: GPIO45
+    ignore_strapping_warning: true
+  scl:
+    number: GPIO0
+    ignore_strapping_warning: true
+  scan: false
+
 i2s_audio:
   - id: i2s_audio_bus
-    i2s_lrclk_pin: GPIO3
+    i2s_lrclk_pin:
+      number: GPIO3
+      ignore_strapping_warning: true
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
 
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    bits_per_sample: 16bit
+    sample_rate: 48000
+
 microphone:
   - platform: i2s_audio
-    id: echo_microphone
+    id: echo_mic
     i2s_din_pin: GPIO4
     adc_type: external
-    pdm: false
     sample_rate: 16000
     bits_per_sample: 16bit
 
@@ -81,39 +120,188 @@ speaker:
     id: echo_speaker
     i2s_dout_pin: GPIO48
     dac_type: external
-    sample_rate: 16000
+    sample_rate: 48000
     bits_per_sample: 16bit
+    channel: left
+    audio_dac: es8311_dac
 
-# On-device wake word detection (ESP32-S3 only)
-# Note: ATOM Echo S3R has no programmable RGB LED (green LED behind
-# reset button is not GPIO-accessible). Uses audio feedback instead.
+# Media player wraps the speaker for proper I2S bus arbitration
+# (mic and speaker share one bus — cannot run simultaneously)
+media_player:
+  - platform: speaker
+    name: None
+    id: echo_media_player
+    volume_min: 0.5
+    volume_max: 0.8
+    announcement_pipeline:
+      speaker: echo_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    files:
+      - id: wake_sound
+        file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/wake_word_triggered.flac
+    on_announcement:
+      # Stop wake word listener to free the I2S bus for speaker playback
+      - if:
+          condition:
+            microphone.is_capturing:
+          then:
+            - micro_wake_word.stop
+    on_idle:
+      # Restart wake word after user-initiated media playback ends
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - script.execute: start_wake_word
+
+# =============================================================================
+# Voice: on-device wake word + HA voice pipeline
+# =============================================================================
+
 micro_wake_word:
+  id: mww
+  microphone: echo_mic
+  stop_after_detection: false
   models:
-    - model: http://10.0.0.248:8080/hey_jess.json
+    - model: okay_nabu
+      id: okay_nabu
+    # Custom "Hey Jess" wake word (served by model-server on Jupiter):
+    # - model: http://10.0.0.248:8080/hey_jess.json
+    #   id: hey_jess
   on_wake_word_detected:
-    - voice_assistant.start
+    # Amp on -> beep -> wait for beep -> amp off -> start VA
+    - switch.turn_on: speaker_amp
+    - lambda: |-
+        id(echo_media_player)
+          ->play_file(id(wake_sound), true, false);
+    - wait_until:
+        condition:
+          media_player.is_announcing:
+        timeout: 0.5s
+    - wait_until:
+        - and:
+            - not:
+                media_player.is_announcing:
+            - not:
+                speaker.is_playing:
+    - switch.turn_off: speaker_amp
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
 
 voice_assistant:
   id: va
-  microphone: echo_microphone
-  speaker: echo_speaker
+  microphone: echo_mic
+  # No speaker configured — all TTS output goes to Google speakers via tts.speak.
+  # This avoids I2S bus contention (mic and speaker share one bus on ATOM Echo S3R).
+  micro_wake_word: mww
   noise_suppression_level: 2
   auto_gain: 31dBFS
   volume_multiplier: 2.0
-  on_tts_end:
-    - micro_wake_word.start
+
+  on_client_connected:
+    - lambda: id(init_in_progress) = false;
+    - script.execute: start_wake_word
+  on_client_disconnected:
+    - micro_wake_word.stop
+
+  on_tts_start:
+    # Response text available as 'x' — redirect to Google speakers via tts.speak
+    - homeassistant.service:
+        service: tts.speak
+        data:
+          entity_id: tts.jessica_tts
+          media_player_entity_id: ${tts_speaker}
+          message: !lambda 'return x;'
+
   on_end:
-    - micro_wake_word.start
+    # Pipeline ended — restart wake word detection
+    - delay: 300ms
+    - lambda: id(va).set_use_wake_word(false);
+    - micro_wake_word.start:
+
   on_error:
-    - delay: 2s
-    - micro_wake_word.start
+    - if:
+        condition:
+          and:
+            - lambda: return !id(init_in_progress);
+            - lambda: return code != "duplicate_wake_up_detected";
+            - lambda: return code != "stt-no-text-recognized";
+        then:
+          - delay: 1s
+          - script.execute: start_wake_word
+
+# =============================================================================
+# Controls
+# =============================================================================
 
 binary_sensor:
   - platform: gpio
-    id: button
+    id: wake_button
     name: "Wake Button"
     pin:
       number: GPIO41
+      mode: INPUT_PULLUP
       inverted: true
-    on_press:
-      - voice_assistant.start
+    on_multi_click:
+      # Short press: manual voice trigger (push-to-talk)
+      - timing:
+          - ON for at least 50ms
+          - OFF for at least 50ms
+        then:
+          - micro_wake_word.stop
+          - voice_assistant.start
+      # Long press (10s): factory reset
+      - timing:
+          - ON for at least 10s
+        then:
+          - button.press: factory_reset_btn
+
+switch:
+  # NS4150B amplifier — defaults OFF (mic-only device), toggled ON for confirmation beep
+  - platform: gpio
+    name: Speaker Enable
+    id: speaker_amp
+    pin: GPIO18
+    restore_mode: RESTORE_DEFAULT_OFF
+    internal: true
+
+  # Software mic mute
+  - platform: template
+    name: Microphone Mute
+    id: mute
+    icon: "mdi:microphone-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - microphone.mute:
+      - micro_wake_word.stop
+    on_turn_off:
+      - microphone.unmute:
+      - script.execute: start_wake_word
+
+# =============================================================================
+# Scripts & Globals
+# =============================================================================
+
+script:
+  - id: start_wake_word
+    then:
+      - if:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - switch.is_off: mute
+          then:
+            # Disable HA-side wake word (we use on-device mWW only)
+            - lambda: id(va).set_use_wake_word(false);
+            - micro_wake_word.start:
+
+globals:
+  - id: init_in_progress
+    type: bool
+    restore_value: no
+    initial_value: "true"

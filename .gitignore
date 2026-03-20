@@ -11,6 +11,10 @@ user_profile.yaml
 *.backup
 *.bak
 
+# TypeScript build cache
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.py[cod]
