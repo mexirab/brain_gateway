@@ -34,6 +34,8 @@ TERMINAL_TOOLS = {
     "update_data",
     "create_calendar_event",
     "brain_dump",
+    "decompose_task",
+    "task_step",
 }
 
 

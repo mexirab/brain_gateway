@@ -144,12 +144,18 @@ def get_unified_system_prompt(personal_context: str = "", mode: str = "explainer
     tone = get_tone_constraint(user)
     mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
 
+    from task_decomposition import get_active_tasks_context
+
     context_section = ""
     if personal_context:
         context_section = f"""
 PERSONAL CONTEXT (from {user}'s notes):
 {personal_context}
 """
+
+    active_tasks = get_active_tasks_context()
+    if active_tasks:
+        context_section += f"\n{active_tasks}\n"
 
     return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
 
@@ -180,6 +186,8 @@ AVAILABLE TOOLS:
 14. finance_status - Check Financial Quest Board status (budget, XP, streak, spending)
 15. check_system - Check Brain Gateway system status and logs
 16. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
+17. decompose_task - Break a big or vague task into concrete micro-steps with time estimates
+18. task_step - Advance a decomposed task: mark step done, skip, get next step, list active tasks, or abandon
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -197,6 +205,8 @@ WHEN TO USE TOOLS:
 - search_email: When user searches for specific emails
 - finance_status: When user asks about budget, spending, or financial game progress
 - check_system: When user asks about system behavior, errors, or status
+- decompose_task: When user says "break this down", "what are the steps", mentions a big/vague task, or feels overwhelmed by a task
+- task_step: When user says "done", "next step", "skip", "what was I working on", or wants to abandon a decomposed task
 
 IMPORTANT RULES:
 - For greetings (hi, hello, good morning) — just respond warmly, NO tools

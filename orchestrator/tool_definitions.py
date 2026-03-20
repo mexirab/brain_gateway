@@ -404,6 +404,45 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "decompose_task",
+            "description": "Break a large or ambiguous task into concrete micro-steps with time estimates. Use when user mentions a task that seems big, vague, or overwhelming, or when they explicitly ask to break something down.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The task to decompose"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["full_list", "next_step_only"],
+                        "description": "full_list shows all steps, next_step_only shows one at a time (default: next_step_only)",
+                    },
+                    "context": {"type": "string", "description": "Optional context about the task"},
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_step",
+            "description": "Advance a decomposed task: complete current step, skip it, get next step, list active tasks, or abandon the task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The task ID (e.g., 'abc12345')"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["done", "skip", "next", "list", "abandon"],
+                        "description": "done=mark step complete, skip=skip step, next=show next step, list=show all active tasks, abandon=stop tracking",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_system",
             "description": "Check Brain Gateway system status, recent activity, and logs. Use when the user asks about system behavior like 'did my morning briefing run?', 'are my reminders working?', 'what happened with the calendar?', 'any temperature alerts?', 'is everything running?', 'any errors?'.",
             "parameters": {

@@ -49,6 +49,7 @@ from shared import (
     ha_client,
     scheduler,
 )
+from task_decomposition import abandon_task, complete_step, decompose_task, get_next_step, list_active_tasks, skip_step
 from web_search import get_search_client
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,12 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await tool_finance_status(arguments.get("include_details", False))
         elif tool_name == "brain_dump":
             return await tool_brain_dump(arguments.get("items", []))
+        elif tool_name == "decompose_task":
+            return await tool_decompose_task(
+                arguments.get("task", ""), arguments.get("mode", "next_step_only"), arguments.get("context", "")
+            )
+        elif tool_name == "task_step":
+            return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
         elif tool_name == "check_system":
             from system_diagnostics import check_system
 
@@ -661,6 +668,38 @@ async def tool_finance_status(include_details: bool = False) -> str:
     except Exception as e:
         logger.error(f"[FINANCE] Failed to get status: {e}")
         return f"Error checking finance status: {str(e)}"
+
+
+async def tool_decompose_task(task: str, mode: str = "next_step_only", context: str = "") -> str:
+    """Break a task into micro-steps using the model."""
+    if not task:
+        return "Please tell me what task you'd like me to break down."
+
+    if mode not in ("full_list", "next_step_only"):
+        mode = "next_step_only"
+
+    logger.info("[TASK_DECOMP] Decomposing: '%s' (mode=%s)", task[:100], mode)
+    return await decompose_task(task, mode, context)
+
+
+def tool_task_step(task_id: str, action: str) -> str:
+    """Advance a decomposed task (done/skip/next/list/abandon)."""
+    if action == "list":
+        return list_active_tasks()
+
+    if not task_id:
+        return "Please provide a task ID. Say 'what am I working on' to see active tasks."
+
+    if action == "done":
+        return complete_step(task_id)
+    elif action == "skip":
+        return skip_step(task_id)
+    elif action == "next":
+        return get_next_step(task_id)
+    elif action == "abandon":
+        return abandon_task(task_id)
+    else:
+        return f"Unknown action '{action}'. Use: done, skip, next, list, or abandon."
 
 
 async def tool_brain_dump(items: list) -> str:

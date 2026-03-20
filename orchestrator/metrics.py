@@ -343,3 +343,29 @@ BRAIN_DUMP_ERRORS = Counter(
     "Brain dump processing errors",
     ["operation"],  # route, rag_upsert
 )
+
+# -- Task Decomposition -------------------------------------------------------
+TASK_DECOMP_TASKS_CREATED = Counter(
+    "bgw_task_decomp_tasks_created_total",
+    "Tasks decomposed into micro-steps",
+)
+
+TASK_DECOMP_STEPS_COMPLETED = Counter(
+    "bgw_task_decomp_steps_completed_total",
+    "Task decomposition steps completed",
+)
+
+TASK_DECOMP_STEPS_SKIPPED = Counter(
+    "bgw_task_decomp_steps_skipped_total",
+    "Task decomposition steps skipped",
+)
+
+TASK_DECOMP_TASKS_ABANDONED = Counter(
+    "bgw_task_decomp_tasks_abandoned_total",
+    "Decomposed tasks abandoned",
+)
+
+TASK_DECOMP_ERRORS = Counter(
+    "bgw_task_decomp_errors_total",
+    "Task decomposition errors",
+)
