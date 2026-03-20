@@ -81,6 +81,7 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
+| orchestrator/ambient_manager.py | Ambient awareness: aggregated status, periodic TTS summaries, LED control |
 | orchestrator/selfcare_manager.py | Self-care nudges: meals, meds, hydration, movement with smart suppression |
 | orchestrator/tests/test_selfcare_manager.py | Self-care manager unit tests (logging, nudge timing, quiet hours) |
 | orchestrator/context_tracker.py | Interruption recovery: context stack, bookmarks, auto-capture, check-in timer |
@@ -197,6 +198,21 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | MODEL_SSH_USER | - | SSH user for model server |
 | MODEL_START_CMD | - | Command to start model server via SSH |
 | MODEL_STOP_CMD | - | Command to stop model server via SSH |
+
+## Ambient Awareness Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| AMBIENT_ENABLED | true | Enable ambient summaries |
+| AMBIENT_SUMMARY_TIMES | 10:00,12:00,14:00,16:00 | TTS summary times |
+| AMBIENT_LED_ENTITY | (empty) | HA entity for LED status (disabled if empty) |
+| AMBIENT_SPEAKER | (empty) | Speaker for ambient summaries (default if empty) |
+
+## Ambient Awareness API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/ambient/status | Aggregated ambient status (schedule, focus, tasks, LED color) |
 
 ## Self-Care Nudge Environment Variables
 

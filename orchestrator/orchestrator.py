@@ -538,6 +538,43 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"[ROUTINE] Failed to schedule routine triggers: {e}")
 
+    # Schedule ambient awareness jobs (F-010)
+    if shared.AMBIENT_ENABLED:
+        from background_jobs import ambient_summary, update_ambient_led
+
+        # Periodic TTS summaries at configured times
+        for _time_str in shared.AMBIENT_SUMMARY_TIMES.split(","):
+            _time_str = _time_str.strip()
+            if not _time_str:
+                continue
+            try:
+                _h, _m = map(int, _time_str.split(":"))
+                scheduler.add_job(
+                    ambient_summary,
+                    trigger="cron",
+                    hour=_h,
+                    minute=_m,
+                    id=f"ambient_summary_{_h:02d}{_m:02d}",
+                    name=f"Ambient summary at {_time_str}",
+                    replace_existing=True,
+                )
+            except Exception as e:
+                logger.warning(f"[AMBIENT] Failed to schedule summary at {_time_str}: {e}")
+
+        # LED update every 5 min (if entity configured)
+        if shared.AMBIENT_LED_ENTITY:
+            scheduler.add_job(
+                update_ambient_led,
+                trigger="interval",
+                minutes=5,
+                id="ambient_led_update",
+                name="Ambient LED update",
+                replace_existing=True,
+            )
+            logger.info(f"[SCHEDULER] Ambient LED update every 5 min on {shared.AMBIENT_LED_ENTITY}")
+
+        logger.info(f"[SCHEDULER] Ambient summaries at {shared.AMBIENT_SUMMARY_TIMES}")
+
     # Schedule self-care nudge checks (F-008)
     if shared.SELFCARE_ENABLED:
         from background_jobs import check_selfcare

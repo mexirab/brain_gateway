@@ -790,6 +790,50 @@ async def check_closet_temperature():
 
 
 # ---------------------------------------------------------------------------
+# Ambient Awareness (F-010)
+# ---------------------------------------------------------------------------
+
+
+async def ambient_summary():
+    """Announce brief ambient status summary via TTS."""
+    try:
+        # Respect quiet hours
+        from datetime import time as _time
+        from zoneinfo import ZoneInfo
+
+        from ambient_manager import build_ambient_summary_text
+
+        tz = ZoneInfo(shared.TIMEZONE)
+        now_tz = datetime.now(tz)
+        quiet_start = _time(int(shared.QUIET_HOURS_START.split(":")[0]), int(shared.QUIET_HOURS_START.split(":")[1]))
+        quiet_end = _time(int(shared.QUIET_HOURS_END.split(":")[0]), int(shared.QUIET_HOURS_END.split(":")[1]))
+        current = now_tz.time()
+        if quiet_start <= quiet_end:
+            if quiet_start <= current <= quiet_end:
+                return
+        elif current >= quiet_start or current <= quiet_end:
+            return
+
+        summary = await build_ambient_summary_text()
+        speaker = shared.AMBIENT_SPEAKER or None
+        await _announce_voice(summary, speaker=speaker)
+        logger.info("[AMBIENT] Summary announced")
+    except Exception as e:
+        logger.error(f"[AMBIENT] Summary failed: {e}")
+
+
+async def update_ambient_led():
+    """Update LED status indicator based on current state."""
+    try:
+        from ambient_manager import get_ambient_status, set_ambient_led
+
+        status = await get_ambient_status()
+        await set_ambient_led(status["led_color"])
+    except Exception as e:
+        logger.error(f"[AMBIENT] LED update failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Self-Care Nudges (F-008)
 # ---------------------------------------------------------------------------
 

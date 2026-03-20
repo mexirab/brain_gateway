@@ -8,6 +8,7 @@ import type {
   ProgressToday,
   ProgressWeek,
   ProgressStreaks,
+  AmbientStatus,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -55,4 +56,5 @@ export const api = {
   progressToday: () => fetcher<ProgressToday>('/api/progress/today'),
   progressWeek: () => fetcher<ProgressWeek>('/api/progress/week'),
   progressStreaks: () => fetcher<ProgressStreaks>('/api/progress/streaks'),
+  ambientStatus: () => fetcher<AmbientStatus>('/api/ambient/status'),
 };

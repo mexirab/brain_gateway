@@ -1,7 +1,7 @@
 # F-010: Ambient Awareness Mode
 
 **Priority:** P2 — Nice to Have
-**Status:** Partially implemented (dashboard exists, periodic summaries and LED status not yet)
+**Status:** Done
 **Depends on:** All other features (aggregates status), Frontend (done), Calendar (done), TTS (done), HA (done)
 **Blocks:** None (terminal feature)
 

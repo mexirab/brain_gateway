@@ -160,3 +160,19 @@ export interface Streak {
 export interface ProgressStreaks {
   streaks: Streak[];
 }
+
+// Ambient Awareness (F-010)
+export interface AmbientStatus {
+  timestamp: string;
+  schedule_density: 'clear' | 'light' | 'busy' | 'unknown';
+  events_remaining: number;
+  next_event: { title: string; start: string; minutes_away: number } | null;
+  focus_active: boolean;
+  focus_task?: string;
+  routine_active: boolean;
+  routine_name?: string;
+  pending_reminders: number;
+  selfcare_overdue: string[];
+  active_task: string | null;
+  led_color: string;
+}

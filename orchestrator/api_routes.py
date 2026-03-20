@@ -713,6 +713,20 @@ async def sync_phone_calendar(req: Request):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Ambient Awareness (F-010)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/ambient/status")
+async def get_ambient_status_endpoint():
+    """Aggregated ambient status for dashboard and LED."""
+    from ambient_manager import get_ambient_status
+
+    status = await get_ambient_status()
+    return JSONResponse(status)
+
+
 @router.get("/api/progress/today")
 async def get_progress_today():
     """Today's progress stats."""

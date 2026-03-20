@@ -345,6 +345,14 @@ ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "tru
 # ---------------------------------------------------------------------------
 # Self-care nudges configuration (F-008)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Ambient awareness configuration (F-010)
+# ---------------------------------------------------------------------------
+AMBIENT_ENABLED = os.environ.get("AMBIENT_ENABLED", "true").lower() == "true"
+AMBIENT_SUMMARY_TIMES = os.environ.get("AMBIENT_SUMMARY_TIMES", "10:00,12:00,14:00,16:00")
+AMBIENT_LED_ENTITY = os.environ.get("AMBIENT_LED_ENTITY", "")
+AMBIENT_SPEAKER = os.environ.get("AMBIENT_SPEAKER", "")
+
 SELFCARE_ENABLED = os.environ.get("SELFCARE_ENABLED", "true").lower() == "true"
 MEAL_NUDGE_HOURS = int(os.environ.get("MEAL_NUDGE_HOURS", "4"))
 HYDRATION_INTERVAL = int(os.environ.get("HYDRATION_INTERVAL", "90"))
