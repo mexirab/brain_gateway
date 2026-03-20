@@ -27,6 +27,34 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Mode router | Intent-based coaching: explainer/mirror/counterbalance/challenge/baseline | Working |
 | HTTPS access | Tailscale Serve → valid TLS cert → mobile mic support | Working |
 | TTS pacing | Sentence pause injection + paragraph splitting for calmer speech | Working |
+| Brain dump (F-001) | Voice-first capture & routing → categorize, dedup, store in RAG or set reminders | Working |
+| Time-aware nudges (F-002) | Tiered calendar countdown alerts with escalating urgency | Working |
+| Task decomposition (F-003) | Break tasks into ADHD-friendly micro-steps with time buffers | Working |
+| Body doubling (F-004) | Focus sessions with sprints, check-ins, ambient audio, Pi-hole blocking | Working |
+| Progress tracking (F-005) | Dopamine-aware streaks, XP, celebrations for completed tasks | Working |
+| Routine scaffolding (F-006) | Morning/evening routine scaffolding with step-by-step prompts | Working |
+| Interruption recovery (F-007) | Context bookmarks & recovery prompts after interruptions | Working |
+| Self-care nudges (F-008) | Meal, medication, hydration & movement reminders | Working |
+| Decision simplifier (F-009) | Choice paralysis helper — narrow options, structured comparison | Working |
+| Ambient awareness (F-010) | Periodic environmental/schedule summaries in the background | Working |
+| Announcement observability | Announcement history, metrics, per-speaker tracking | Working |
+
+## ADHD Feature Suite — DONE
+
+All 10 ADHD-informed features (F-001 through F-010) are complete and deployed. Each feature was built from a self-contained implementation spec with interaction examples, tool schemas, TTS templates, and testing checklists. See [jess-features/README.md](jess-features/README.md) for the full build order, dependency graph, and per-feature specs.
+
+| ID | Feature | Tools |
+|----|---------|-------|
+| F-001 | Brain Dump — voice-first capture, categorize, dedup, route to RAG or reminders | `brain_dump` |
+| F-002 | Time-Aware Nudges — tiered calendar countdown alerts with escalating urgency | (background job) |
+| F-003 | Task Decomposition — break tasks into ADHD-friendly micro-steps with time buffer | `decompose_task`, `task_step` |
+| F-004 | Body Doubling & Focus Sessions — sprints, check-ins, ambient audio, Pi-hole blocking | `start_focus`, `stop_focus`, `focus_status`, `focus_sprint` |
+| F-005 | Dopamine-Aware Progress Tracking — streaks, XP, celebrations | (integrated) |
+| F-006 | Routine Scaffolding — morning/evening routines with step-by-step prompts | (integrated) |
+| F-007 | Interruption Recovery — context bookmarks & recovery after interruptions | (integrated) |
+| F-008 | Self-Care Nudges — meal, medication, hydration & movement reminders | (background job) |
+| F-009 | Decision Simplifier — choice paralysis helper, structured comparison | (integrated) |
+| F-010 | Ambient Awareness — periodic environmental/schedule summaries | (background job) |
 
 ## Known Issues / TODOs
 
@@ -125,7 +153,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - Gmail → new important emails → summarize and notify
 - Calendar → upcoming events → pre-reminders (✅ done)
 - Bills/deadlines from ingested documents → warning notifications
-- Medication schedule → daily reminders at set times
+- ~~Medication schedule → daily reminders at set times~~ ✅ Done (F-008 self-care nudges)
 
 ### Proactive notifications
 - Push to Google speakers via HA media_player TTS
@@ -133,14 +161,14 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - Quiet hours: no announcements during sleep, configurable
 
 ### Task capture and follow-up
-- "Hey Jess, I need to call the insurance company" → stored as task
-- Jess follows up: "You mentioned calling the insurance company yesterday. Want me to remind you at a good time today?"
-- Gentle nagging with escalation for overdue items (ADHD-friendly, not guilt-inducing)
+- ~~"Hey Jess, I need to call the insurance company" → stored as task~~ ✅ Done (F-001 brain dump)
+- ~~Jess follows up: "You mentioned calling the insurance company yesterday. Want me to remind you at a good time today?"~~ ✅ Done (F-001 brain dump + reminders)
+- ~~Gentle nagging with escalation for overdue items (ADHD-friendly, not guilt-inducing)~~ ✅ Done (F-002 time nudges + F-005 progress tracking)
 - ClickUp integration for task visibility on phone
 
 ### Context awareness
-- Track focus sessions → "What was I working on before lunch?"
-- Time-of-day awareness → suggest dinner ideas in the evening
+- ~~Track focus sessions → "What was I working on before lunch?"~~ ✅ Done (F-007 interruption recovery)
+- ~~Time-of-day awareness → suggest dinner ideas in the evening~~ ✅ Done (F-006 routine scaffolding + F-010 ambient awareness)
 - Location awareness (future) → remind about errands when leaving
 
 ### OpenClaw consideration

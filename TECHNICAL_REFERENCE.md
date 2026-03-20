@@ -23,6 +23,22 @@ API specs and schemas for implementation.
 | `/api/focus/start` | POST | Start focus session via API |
 | `/api/focus/stop` | POST | Stop focus session via API |
 | `/api/audio/{filename}` | GET | Serve audio files (reminders, TTS) |
+| `/api/email-to-calendar/run` | POST | Manually trigger email-to-calendar extraction |
+| `/api/announce` | POST | Trigger TTS announcement via voice system |
+| `/api/calendar/today` | GET | Today's calendar events (phone sync + Google fallback) |
+| `/api/calendar/sync` | GET/POST/PUT | Phone calendar sync (GET=status, POST/PUT=receive events) |
+| `/api/temperatures` | GET | Temperature sensor readings from HA |
+| `/api/memory/learned` | GET | List auto-learned facts (optional `?category=`, `?limit=`) |
+| `/api/memory/learned/{doc_id}` | DELETE | Delete a single learned fact |
+| `/api/memory/learned` | DELETE | Wipe all learned facts (`?confirm=true` required) |
+| `/api/memory/learned/stats` | GET | Auto-learn statistics (counts by category) |
+| `/api/memory/learned/toggle` | POST | Enable/disable auto-learn at runtime |
+| `/api/progress/today` | GET | Today's progress stats |
+| `/api/progress/week` | GET | This week's stats and trend vs prior week |
+| `/api/progress/streaks` | GET | Active streaks |
+| `/api/announcements/history` | GET | Recent announcement history (optional `?limit=`, `?type=`) |
+| `/api/announcements/stats` | GET | Success rates, per-speaker breakdown, latency |
+| `/api/ambient/status` | GET | Aggregated ambient status (schedule, focus, tasks, LED color) |
 
 ### HA Command Format
 
@@ -112,6 +128,62 @@ API specs and schemas for implementation.
 - `duration_minutes` (int, optional): Default 60
 - `description` (string, optional): Event description
 - `location` (string, optional): Event location
+
+### focus_sprint
+```json
+{"action": "next_sprint", "duration_minutes": 25}
+```
+- `action` (string, required): `next_sprint`, `extend`, or `end_session`
+- `duration_minutes` (int, optional): Override sprint length or minutes to add for extend
+
+### start_routine
+```json
+{"routine_id": "morning"}
+```
+- `routine_id` (string, required): `morning` or `evening`
+
+### routine_action
+```json
+{"action": "done"}
+```
+- `action` (string, required): `done`, `skip`, `pause`, `resume`, `stop`, or `status`
+
+### routine_status
+```json
+{}
+```
+
+### selfcare_log
+```json
+{"action": "meal", "detail": "lunch"}
+```
+- `action` (string, required): `meal`, `medication`, `water`, or `movement`
+- `detail` (string, optional): Medication name or meal type
+
+### decide_for_me
+```json
+{"domain": "work", "constraints": "under 30 minutes"}
+```
+- `domain` (string, required): `work`, `food`, `general`, or `overwhelm`
+- `constraints` (string, optional): Constraints like "quick", "healthy", "under 30 minutes"
+
+### bookmark_context
+```json
+{"description": "writing the API docs"}
+```
+- `description` (string, optional): What the user is working on (auto-detected from active focus/task if omitted)
+
+### recall_context
+```json
+{"count": 3}
+```
+- `count` (int, optional): Number of recent contexts to return (default: 3)
+
+### check_system
+```json
+{"query": "system_health"}
+```
+- `query` (string, required): `morning_briefing`, `calendar_poll`, `email_poll`, `reminders`, `focus_timer`, `temperature`, `system_health`, or `recent_errors`
 
 ### memory/add
 ```json

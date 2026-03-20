@@ -65,7 +65,9 @@ All tools are called directly by the single model in one agentic loop.
 | decide_for_me | Decision simplifier: gathers context for 1-2 concrete recommendations |
 | selfcare_log | Log meals, meds, water, movement for self-care nudge tracking |
 | bookmark_context / recall_context | Interruption recovery: save and recall work context |
-| brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
+| brain_dump | Capture & route thoughts/tasks/ideas to RAG or reminders |
+| check_system | System diagnostics: logs, health, recent errors |
+| finance_status | Budget, spending, XP/levels from YNAB integration |
 
 ## Key Files
 
@@ -91,15 +93,28 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/progress_tracker.py | Progress tracking: daily stats, streaks, personal bests, daily/weekly TTS summaries |
 | orchestrator/tests/test_progress_tracker.py | Progress tracker unit tests (events, streaks, summaries, personal bests) |
 | orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
-| orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking |
+| orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking, body doubling sprints |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
-| orchestrator/api_routes.py | Secondary REST endpoints (health, metrics, memory, reminders, focus) |
-| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling, temperature alerts |
+| orchestrator/api_routes.py | REST endpoints (health, metrics, memory, reminders, focus, progress, announcements, ambient) |
+| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling, temperature alerts, selfcare, ambient summaries |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/mode_router.py | Intent-based mode router |
 | orchestrator/google_calendar.py | Google Calendar API v3 client |
 | orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client |
+| orchestrator/reminder_manager.py | TTS announcements, reminders, announcement history tracking |
+| orchestrator/state_store.py | SQLite persistence: reminders, focus sessions, notifications, announcement history |
+| orchestrator/cloud_brain.py | CloudBrain class: model routing, fallback, unified loop orchestration |
+| orchestrator/llm_backend.py | LLM backend initialization and configuration |
+| orchestrator/data_manager.py | YAML data management: medications, projects |
+| orchestrator/finance_manager.py | YNAB integration, budget tracking, XP/levels |
+| orchestrator/schemas.py | Pydantic models for API request/response validation |
+| orchestrator/web_search.py | SearXNG search client |
+| orchestrator/system_diagnostics.py | System health checks, log analysis |
+| orchestrator/fast_path.py | Fast path handler for simple commands (lights, greetings) |
+| orchestrator/user_profile.py | User profile loader from YAML |
+| orchestrator/log_config.py | Structured JSON logging configuration |
+| orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
 | scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
@@ -139,6 +154,14 @@ docker compose up -d --build --force-recreate frontend
 
 # Re-index RAG documents
 docker exec brain-orchestrator python scripts/reindex_rag.py
+
+# Run tests (inside Docker — full deps available)
+docker exec brain-orchestrator pip install pytest pytest-asyncio -q
+docker cp orchestrator/tests brain-orchestrator:/app/tests
+docker exec brain-orchestrator python -m pytest tests/ -v
+
+# Run specific test file
+docker exec brain-orchestrator python -m pytest tests/test_progress_tracker.py -v
 ```
 
 ## Detailed Docs
@@ -157,7 +180,8 @@ docker exec brain-orchestrator python scripts/reindex_rag.py
 | **TECHNICAL_REFERENCE.md** | API specs, schemas |
 | **ROADMAP.md** | Feature roadmap and what's done/planned |
 | **monitoring/README.md** | Monitoring setup |
-| **jess-features/README.md** | ADHD feature roadmap (F-001 through F-010) — build order, dependencies, per-feature implementation specs |
+| **docs/JESS_QUICK_START.md** | One-page user guide: everything Jess can do |
+| **jess-features/README.md** | ADHD feature specs (F-001 through F-010) — all 10 complete |
 
 ## Jess Feature Specs
 
@@ -213,6 +237,13 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | /api/ambient/status | Aggregated ambient status (schedule, focus, tasks, LED color) |
+
+## Announcement History API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/announcements/history?limit=50&type= | Recent announcement history (text, speaker, success, latency) |
+| GET | /api/announcements/stats | Success rates, per-speaker breakdown, avg latency, today's count |
 
 ## Self-Care Nudge Environment Variables
 

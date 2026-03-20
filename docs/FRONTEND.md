@@ -20,6 +20,8 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 - **Reminders card** -> pending reminders with complete action
 - **Focus timer card** -> current session with start/stop controls
 - **Temperature card** -> server closet vs kitchen ambient temp, heat delta, estimated cooling cost
+- **Progress card** -> today's stats (tasks completed, focus minutes, brain dumps), 7-day bar chart, active streaks with flame icons, weekly trend arrow. Polls `/api/progress/today`, `/api/progress/week`, `/api/progress/streaks` every 60s
+- **Announcement History card** -> recent TTS announcements with type color-coding, speaker name, success/failure icons, stats bar (success count, failures, fallbacks, avg latency). Polls `/api/announcements/history` and `/api/announcements/stats` every 30s
 
 ## Finance System (YNAB Integration)
 
@@ -44,3 +46,5 @@ docker compose up -d --build --force-recreate frontend
 
 - `frontend/src/components/architecture/SystemDiagram.tsx` — Interactive animated SVG system architecture diagram
 - `frontend/src/components/dashboard/TemperatureCard.tsx` — Server closet temperature monitoring widget
+- `frontend/src/components/dashboard/ProgressCard.tsx` — Daily stats, 7-day bar chart, streaks with flame icons
+- `frontend/src/components/dashboard/AnnouncementHistoryCard.tsx` — TTS announcement history with type color-coding and stats
