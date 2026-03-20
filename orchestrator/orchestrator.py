@@ -501,6 +501,43 @@ async def startup_event():
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
 
+    # Initialize routine manager (F-006)
+    if shared.ROUTINE_ENABLED:
+        from background_jobs import trigger_routine
+        from routine_manager import load_routines
+
+        await load_routines(shared.ROUTINES_YAML_PATH)
+
+        # Schedule routine triggers from YAML
+        try:
+            import yaml
+
+            with open(shared.ROUTINES_YAML_PATH) as f:
+                _routines_data = yaml.safe_load(f) or {}
+            for _rid, _rdef in _routines_data.get("routines", {}).items():
+                _trigger = _rdef.get("trigger", {})
+                if _trigger.get("type") == "scheduled":
+                    _t = _trigger["time"]
+                    _hour, _minute = map(int, _t.split(":"))
+                    _days = _trigger.get("days", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
+                    _dow = ",".join(d[:3].lower() for d in _days)
+                    scheduler.add_job(
+                        trigger_routine,
+                        trigger="cron",
+                        hour=_hour,
+                        minute=_minute,
+                        day_of_week=_dow,
+                        args=[_rid],
+                        id=f"routine_{_rid}",
+                        name=f"Routine trigger: {_rid}",
+                        replace_existing=True,
+                    )
+                    logger.info(f"[SCHEDULER] Routine '{_rid}' scheduled at {_t} ({_dow})")
+        except FileNotFoundError:
+            logger.warning(f"[ROUTINE] Routines file not found: {shared.ROUTINES_YAML_PATH}")
+        except Exception as e:
+            logger.warning(f"[ROUTINE] Failed to schedule routine triggers: {e}")
+
     # Schedule progress tracking jobs (F-005)
     if shared.PROGRESS_ENABLED:
         from background_jobs import daily_progress_summary, weekly_progress_digest

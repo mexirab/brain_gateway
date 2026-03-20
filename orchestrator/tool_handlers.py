@@ -132,6 +132,18 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             )
         elif tool_name == "task_step":
             return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
+        elif tool_name == "start_routine":
+            from routine_manager import start_routine
+
+            return await start_routine(arguments.get("routine_id", ""))
+        elif tool_name == "routine_action":
+            from routine_manager import advance_step
+
+            return await advance_step(arguments.get("action", "done"))
+        elif tool_name == "routine_status":
+            from routine_manager import get_routine_status
+
+            return await get_routine_status()
         elif tool_name == "check_system":
             from system_diagnostics import check_system
 

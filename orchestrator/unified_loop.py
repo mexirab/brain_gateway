@@ -37,6 +37,8 @@ TERMINAL_TOOLS = {
     "brain_dump",
     "decompose_task",
     "task_step",
+    "start_routine",
+    "routine_action",
 }
 
 

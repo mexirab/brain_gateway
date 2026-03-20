@@ -789,6 +789,29 @@ async def check_closet_temperature():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Routine Scaffolding (F-006)
+# ---------------------------------------------------------------------------
+
+
+async def trigger_routine(routine_id: str):
+    """Called by APScheduler at routine trigger time."""
+    try:
+        from routine_manager import _active_session, start_routine
+
+        if _active_session is not None:
+            logger.info(f"[ROUTINE] Skipping scheduled trigger for '{routine_id}' — session already active")
+            return
+        if shared.current_focus_session.get("active"):
+            logger.info(f"[ROUTINE] Skipping scheduled trigger for '{routine_id}' — focus session active")
+            return
+        logger.info(f"[ROUTINE] Scheduled trigger: {routine_id}")
+        result = await start_routine(routine_id, triggered_by="scheduled")
+        logger.info(f"[ROUTINE] Started: {result[:80]}")
+    except Exception as e:
+        logger.error(f"[ROUTINE] Scheduled trigger failed for '{routine_id}': {e}")
+
+
 async def daily_progress_summary():
     """Announce daily progress stats via TTS at configured time."""
     try:

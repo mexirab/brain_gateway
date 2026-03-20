@@ -1,7 +1,7 @@
 # F-006: Context-Aware Routine Scaffolding
 
 **Priority:** P1 — Should Have
-**Status:** Not started
+**Status:** Done
 **Depends on:** TTS (done), APScheduler (done), Google Calendar (done), HA (done)
 **Blocks:** F-005 Progress Tracking, F-008 Self-Care Nudges
 

@@ -1,0 +1,59 @@
+routines:
+  morning:
+    display_name: "Morning Routine"
+    trigger:
+      type: scheduled
+      time: "07:00"
+      days: [mon, tue, wed, thu, fri, sat, sun]
+    speaker: "media_player.bedroom_pair"
+    nudge_delay_minutes: 10
+    steps:
+      - id: meds
+        label: "Take your meds"
+        est_minutes: 2
+        skippable: false
+        ha_action:
+          entity_id: "light.bedroom"
+          service: "turn_on"
+          data:
+            brightness: 200
+            color_temp_kelvin: 4000
+      - id: shower
+        label: "Shower"
+        est_minutes: 15
+        skippable: true
+      - id: breakfast
+        label: "Eat breakfast"
+        est_minutes: 20
+        skippable: true
+        fallback_label: "Grab something quick"
+        fallback_threshold_minutes: 30
+      - id: calendar_check
+        label: "Check your calendar and top task"
+        est_minutes: 5
+        skippable: true
+        include_calendar_summary: true
+
+  evening:
+    display_name: "Evening Routine"
+    trigger:
+      type: scheduled
+      time: "21:00"
+      days: [mon, tue, wed, thu, fri, sat, sun]
+    speaker: "media_player.bedroom_pair"
+    nudge_delay_minutes: 15
+    steps:
+      - id: evening_meds
+        label: "Take your evening meds"
+        est_minutes: 2
+        skippable: false
+      - id: tomorrow_prep
+        label: "Quick look at tomorrow's calendar"
+        est_minutes: 3
+        skippable: true
+        include_calendar_summary: true
+        calendar_days_ahead: 1
+      - id: screens_off
+        label: "Screens away"
+        est_minutes: 0
+        skippable: true

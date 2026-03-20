@@ -482,6 +482,50 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "start_routine",
+            "description": "Start a morning or evening routine — guides the user step by step via voice.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "routine_id": {
+                        "type": "string",
+                        "enum": ["morning", "evening"],
+                        "description": "Which routine to start",
+                    }
+                },
+                "required": ["routine_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "routine_action",
+            "description": "Advance the active routine: mark step done, skip it, pause/resume, stop early, or check status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["done", "skip", "pause", "resume", "stop", "status"],
+                        "description": "done/skip=advance, pause/resume=hold nudges, stop=end early, status=repeat current step",
+                    }
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "routine_status",
+            "description": "Check the status of the active routine session.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_system",
             "description": "Check Brain Gateway system status, recent activity, and logs. Use when the user asks about system behavior like 'did my morning briefing run?', 'are my reminders working?', 'what happened with the calendar?', 'any temperature alerts?', 'is everything running?', 'any errors?'.",
             "parameters": {

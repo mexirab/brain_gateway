@@ -331,6 +331,14 @@ _auto_learn_conversations: Dict[str, list] = {}
 # ---------------------------------------------------------------------------
 # Progress tracking configuration (F-005)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Routine scaffolding configuration (F-006)
+# ---------------------------------------------------------------------------
+ROUTINES_YAML_PATH = os.environ.get("ROUTINES_YAML_PATH", "/app/data/routines.yaml")
+ROUTINE_ENABLED = os.environ.get("ROUTINE_ENABLED", "true").lower() == "true"
+ROUTINE_NUDGE_MAX = int(os.environ.get("ROUTINE_NUDGE_MAX", "3"))
+ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "true"
+
 PROGRESS_ENABLED = os.environ.get("PROGRESS_ENABLED", "true").lower() == "true"
 DAILY_SUMMARY_TIME = os.environ.get("DAILY_SUMMARY_TIME", "18:00")
 WEEKLY_SUMMARY_DAY = os.environ.get("WEEKLY_SUMMARY_DAY", "sunday")

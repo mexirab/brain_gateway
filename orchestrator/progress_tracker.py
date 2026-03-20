@@ -48,7 +48,7 @@ _EVENT_COLUMN_MAP = {
     "focus_complete": "focus_sessions",
     "focus_partial": None,  # only adds focus_minutes
     "reminder_done": "reminders_done",
-    "routine_done": "routine_steps",
+    "routine_done": "routine_steps",  # F-006
 }
 
 # Map event_type -> streak category (None = no streak tracking)
@@ -58,7 +58,7 @@ _EVENT_STREAK_MAP = {
     "focus_complete": "focus",
     "focus_partial": None,
     "reminder_done": None,
-    "routine_done": "routine",
+    "routine_done": "routine",  # F-006
 }
 
 # TTS encouragements for daily summaries

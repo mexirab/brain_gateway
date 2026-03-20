@@ -157,6 +157,12 @@ PERSONAL CONTEXT (from {user}'s notes):
     if active_tasks:
         context_section += f"\n{active_tasks}\n"
 
+    from routine_manager import get_active_routine_context
+
+    routine_context = get_active_routine_context()
+    if routine_context:
+        context_section += f"\n{routine_context}\n"
+
     return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
 
 PERSONALITY:
@@ -189,6 +195,9 @@ AVAILABLE TOOLS:
 17. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
 18. decompose_task - Break a big or vague task into concrete micro-steps with time estimates
 19. task_step - Advance a decomposed task: mark step done, skip, get next step, list active tasks, or abandon
+20. start_routine - Start a morning or evening routine with step-by-step TTS guidance
+21. routine_action - Advance the active routine: done, skip, pause, resume, stop, or status
+22. routine_status - Check current routine progress
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -209,6 +218,9 @@ WHEN TO USE TOOLS:
 - check_system: When user asks about system behavior, errors, or status
 - decompose_task: When user says "break this down", "what are the steps", mentions a big/vague task, or feels overwhelmed by a task
 - task_step: When user says "done", "next step", "skip", "what was I working on", or wants to abandon a decomposed task
+- start_routine: When user says "start morning routine", "let's do the routine", "I'm up", or the morning/evening routine is auto-triggered
+- routine_action: When user says "done", "next", "finished", "skip", "pause routine", "resume routine", "stop routine" during an active routine
+- routine_status: When user asks "where am I in the routine" or "what's the current step"
 
 IMPORTANT RULES:
 - For greetings (hi, hello, good morning) — just respond warmly, NO tools

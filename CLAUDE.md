@@ -61,6 +61,7 @@ All tools are called directly by the single model in one agentic loop.
 | check_calendar / create_calendar_event | Google Calendar read/write |
 | check_email / search_email | Gmail inbox (read-only) |
 | decompose_task / task_step | Break tasks into micro-steps, advance through them |
+| start_routine / routine_action / routine_status | Step-by-step morning/evening routines with TTS guidance |
 | brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
 
 ## Key Files
@@ -77,6 +78,8 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
+| orchestrator/routine_manager.py | Routine scaffolding: morning/evening step-by-step TTS guidance, nudges, calendar awareness |
+| orchestrator/tests/test_routine_manager.py | Routine manager unit tests (session lifecycle, steps, nudges, pause/resume) |
 | orchestrator/progress_tracker.py | Progress tracking: daily stats, streaks, personal bests, daily/weekly TTS summaries |
 | orchestrator/tests/test_progress_tracker.py | Progress tracker unit tests (events, streaks, summaries, personal bests) |
 | orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
@@ -187,6 +190,15 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | MODEL_SSH_USER | - | SSH user for model server |
 | MODEL_START_CMD | - | Command to start model server via SSH |
 | MODEL_STOP_CMD | - | Command to stop model server via SSH |
+
+## Routine Scaffolding Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| ROUTINES_YAML_PATH | /app/data/routines.yaml | Routine definitions file |
+| ROUTINE_ENABLED | true | Enable scheduled routine triggers |
+| ROUTINE_NUDGE_MAX | 3 | Max nudges per step before auto-skip option |
+| ROUTINE_AUTO_SKIP | false | Auto-skip after max nudges (default: wait for user) |
 
 ## Progress Tracking Environment Variables
 

@@ -75,6 +75,8 @@ services:
       - finance-data:/app/data:rw
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
+      # Routine definitions (F-006)
+      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/data/routines.yaml:/app/data/routines.yaml:ro
     environment:
       # Primary model (conversation + tools)
       - MODEL_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_MODEL_PORT:-8080}/v1
