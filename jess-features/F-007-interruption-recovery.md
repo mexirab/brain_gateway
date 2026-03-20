@@ -1,7 +1,7 @@
 # F-007: Interruption Recovery
 
 **Priority:** P1 — Should Have
-**Status:** Not started
+**Status:** Done
 **Depends on:** F-003 Task Decomposition, F-004 Focus Sessions, TTS (done)
 **Blocks:** None
 

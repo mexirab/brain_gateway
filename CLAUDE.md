@@ -62,6 +62,7 @@ All tools are called directly by the single model in one agentic loop.
 | check_email / search_email | Gmail inbox (read-only) |
 | decompose_task / task_step | Break tasks into micro-steps, advance through them |
 | start_routine / routine_action / routine_status | Step-by-step morning/evening routines with TTS guidance |
+| bookmark_context / recall_context | Interruption recovery: save and recall work context |
 | brain_dump | Nemotron / unified | Capture & route thoughts/tasks/ideas to RAG or reminders |
 
 ## Key Files
@@ -78,6 +79,8 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
+| orchestrator/context_tracker.py | Interruption recovery: context stack, bookmarks, auto-capture, check-in timer |
+| orchestrator/tests/test_context_tracker.py | Context tracker unit tests (bookmarks, recall, prompt context) |
 | orchestrator/routine_manager.py | Routine scaffolding: morning/evening step-by-step TTS guidance, nudges, calendar awareness |
 | orchestrator/tests/test_routine_manager.py | Routine manager unit tests (session lifecycle, steps, nudges, pause/resume) |
 | orchestrator/progress_tracker.py | Progress tracking: daily stats, streaks, personal bests, daily/weekly TTS summaries |
@@ -190,6 +193,13 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | MODEL_SSH_USER | - | SSH user for model server |
 | MODEL_START_CMD | - | Command to start model server via SSH |
 | MODEL_STOP_CMD | - | Command to stop model server via SSH |
+
+## Interruption Recovery Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| INTERRUPT_CHECKIN_DELAY | 5 | Minutes after interruption before TTS check-in |
+| CONTEXT_STACK_SIZE | 10 | Max rolling context entries |
 
 ## Routine Scaffolding Environment Variables
 

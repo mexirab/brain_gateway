@@ -132,6 +132,26 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             )
         elif tool_name == "task_step":
             return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
+        elif tool_name == "bookmark_context":
+            from context_tracker import bookmark_context
+
+            result = await bookmark_context(arguments.get("description"))
+            desc = result["description"]
+            delay = result["checkin_delay"]
+            return (
+                f"Got it — bookmarking your spot. You were working on {desc}. "
+                f"I'll check in with you in {delay} minutes."
+            )
+        elif tool_name == "recall_context":
+            from context_tracker import get_recent_context
+
+            entries = await get_recent_context(arguments.get("count", 3))
+            if not entries:
+                return "I don't have any recent context recorded yet."
+            lines = ["Here's what you were working on:"]
+            for i, e in enumerate(entries, 1):
+                lines.append(f"{i}. {e['description']} — {e['when']}")
+            return "\n".join(lines)
         elif tool_name == "start_routine":
             from routine_manager import start_routine
 

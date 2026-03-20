@@ -213,6 +213,22 @@ def complete_step(task_id: str) -> str:
     if not next_step:
         return _format_completion_summary(task)
 
+    # Record context for interruption recovery (F-007)
+    try:
+        import asyncio as _asyncio
+
+        import context_tracker as _ct
+
+        _asyncio.ensure_future(
+            _ct.record_context(
+                description=task.original_text,
+                detail=next_step.description,
+                task_id=task_id,
+            )
+        )
+    except Exception:
+        pass
+
     total = len(task.steps)
     completed_count = sum(1 for s in task.steps if s.completed)
     return (

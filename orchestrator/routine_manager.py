@@ -154,6 +154,16 @@ async def start_routine(routine_id: str, triggered_by: str = "user") -> str:
         nudge_delay_minutes=nudge_delay,
     )
 
+    # Record context for interruption recovery (F-007)
+    try:
+        import asyncio as _asyncio
+
+        import context_tracker as _ct
+
+        _asyncio.ensure_future(_ct.record_context(description=f"{display_name} routine"))
+    except Exception as e:
+        logger.warning(f"[ROUTINE] Context tracking failed: {e}")
+
     # Get calendar context for time awareness
     buffer_minutes, next_event = await _get_calendar_buffer()
 

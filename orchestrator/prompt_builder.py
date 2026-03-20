@@ -163,6 +163,12 @@ PERSONAL CONTEXT (from {user}'s notes):
     if routine_context:
         context_section += f"\n{routine_context}\n"
 
+    from context_tracker import get_active_context_summary
+
+    interrupt_context = get_active_context_summary()
+    if interrupt_context:
+        context_section += f"\n{interrupt_context}\n"
+
     return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
 
 PERSONALITY:
@@ -198,6 +204,8 @@ AVAILABLE TOOLS:
 20. start_routine - Start a morning or evening routine with step-by-step TTS guidance
 21. routine_action - Advance the active routine: done, skip, pause, resume, stop, or status
 22. routine_status - Check current routine progress
+23. bookmark_context - Save current work context before stepping away (interruption recovery)
+24. recall_context - Recall recent work context when returning from an interruption
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -221,6 +229,8 @@ WHEN TO USE TOOLS:
 - start_routine: When user says "start morning routine", "let's do the routine", "I'm up", or the morning/evening routine is auto-triggered
 - routine_action: When user says "done", "next", "finished", "skip", "pause routine", "resume routine", "stop routine" during an active routine
 - routine_status: When user asks "where am I in the routine" or "what's the current step"
+- bookmark_context: When user says "I need to take a call", "stepping away", "be right back", "brb", "I need to handle something"
+- recall_context: When user says "what was I doing?", "where was I?", "what was I working on?", "I'm back", "just got back"
 
 IMPORTANT RULES:
 - For greetings (hi, hello, good morning) — just respond warmly, NO tools

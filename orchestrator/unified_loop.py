@@ -39,6 +39,7 @@ TERMINAL_TOOLS = {
     "task_step",
     "start_routine",
     "routine_action",
+    "bookmark_context",
 }
 
 

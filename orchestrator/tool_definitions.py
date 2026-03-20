@@ -526,6 +526,38 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "bookmark_context",
+            "description": "Bookmark current work context before an interruption. Use when user says 'I need to take a call', 'stepping away', 'be right back', 'brb', 'I need to handle something'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "What the user is working on (auto-detected from active focus/task if omitted)",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_context",
+            "description": "Recall what user was working on recently. Use when they ask 'what was I doing?', 'where was I?', 'what was I working on?', 'I just got back'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of recent contexts to return (default: 3)",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_system",
             "description": "Check Brain Gateway system status, recent activity, and logs. Use when the user asks about system behavior like 'did my morning briefing run?', 'are my reminders working?', 'what happened with the calendar?', 'any temperature alerts?', 'is everything running?', 'any errors?'.",
             "parameters": {

@@ -291,6 +291,16 @@ async def tool_start_focus(
     )
     state_store.save_focus_session(current_focus_session)
 
+    # Record context for interruption recovery (F-007)
+    try:
+        import asyncio as _asyncio
+
+        import context_tracker as _ct
+
+        _asyncio.ensure_future(_ct.record_context(description=task, focus_session_id=job_id))
+    except Exception as e:
+        logger.warning(f"[FOCUS] Context tracking failed: {e}")
+
     FOCUS_SESSIONS_STARTED.labels(soundscape=effective_audio).inc()
     FOCUS_ACTIVE.set(1)
     logger.info(

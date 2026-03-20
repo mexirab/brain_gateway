@@ -339,6 +339,12 @@ ROUTINE_ENABLED = os.environ.get("ROUTINE_ENABLED", "true").lower() == "true"
 ROUTINE_NUDGE_MAX = int(os.environ.get("ROUTINE_NUDGE_MAX", "3"))
 ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "true"
 
+# ---------------------------------------------------------------------------
+# Interruption recovery configuration (F-007)
+# ---------------------------------------------------------------------------
+INTERRUPT_CHECKIN_DELAY = int(os.environ.get("INTERRUPT_CHECKIN_DELAY", "5"))
+CONTEXT_STACK_SIZE = int(os.environ.get("CONTEXT_STACK_SIZE", "10"))
+
 PROGRESS_ENABLED = os.environ.get("PROGRESS_ENABLED", "true").lower() == "true"
 DAILY_SUMMARY_TIME = os.environ.get("DAILY_SUMMARY_TIME", "18:00")
 WEEKLY_SUMMARY_DAY = os.environ.get("WEEKLY_SUMMARY_DAY", "sunday")
