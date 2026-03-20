@@ -1,7 +1,7 @@
 # F-002: Proactive Time-Aware Nudges
 
 **Priority:** P0 — Must Have
-**Status:** Mostly implemented — needs tiered countdown and transition scaffolding
+**Status:** Done
 **Depends on:** Calendar (done), TTS (done), travel-time alerts (done), APScheduler (done)
 **Blocks:** None (standalone enhancement)
 

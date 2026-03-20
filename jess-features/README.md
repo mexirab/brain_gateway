@@ -11,7 +11,7 @@ Implementation specs for Claude Code. One file per feature.
 | ID | Feature | Priority | Spec | Status |
 |----|---------|----------|------|--------|
 | F-001 | [Voice-First Brain Dump](./F-001-brain-dump.md) | P0 | Ready | Done |
-| F-002 | [Proactive Time-Aware Nudges](./F-002-time-nudges.md) | P0 | Ready | Partial — needs tiered countdown |
+| F-002 | [Proactive Time-Aware Nudges](./F-002-time-nudges.md) | P0 | Ready | Done |
 | F-003 | [Task Decomposition Engine](./F-003-task-decomposition.md) | P0 | Ready | Done |
 | F-004 | [Body Doubling & Focus Sessions](./F-004-body-doubling.md) | P1 | Ready | Done |
 | F-005 | [Dopamine-Aware Progress Tracking](./F-005-progress-tracking.md) | P1 | Ready | Done |
