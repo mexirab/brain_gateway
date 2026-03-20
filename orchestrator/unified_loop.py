@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 TERMINAL_TOOLS = {
     "start_focus",
     "stop_focus",
+    "focus_sprint",
     "set_reminder",
     "cancel_reminder",
     "home_assistant",

@@ -201,7 +201,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "start_focus",
-            "description": "Start a focus timer (Pomodoro) with Endel focus audio and distraction blocking. Announces break time via voice when timer ends. Helps with ADHD time blindness and hyperfocus protection.",
+            "description": "Start a body doubling focus session with Pomodoro timer, ambient audio, check-ins, and distraction blocking. Supports multi-sprint sessions. Announces break time via voice when sprint ends.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -224,6 +224,23 @@ STATIC_TOOLS = [
                         "type": "boolean",
                         "description": "ALWAYS true unless user explicitly says 'without blocking' or 'no blocking'. Do not set to false unless explicitly requested.",
                     },
+                    "check_ins": {
+                        "type": "boolean",
+                        "description": "Enable periodic check-ins during the session (default: true)",
+                    },
+                    "check_in_interval": {
+                        "type": "integer",
+                        "description": "Minutes between check-ins (default: 15). Only used when check_ins is true.",
+                    },
+                    "audio": {
+                        "type": "string",
+                        "enum": ["endel", "lofi", "coffee_shop", "silence"],
+                        "description": "Ambient audio source. endel=Endel focus sounds (default), lofi=lo-fi stream, coffee_shop=ambient cafe, silence=no audio",
+                    },
+                    "sprints": {
+                        "type": "integer",
+                        "description": "Number of sprints to plan (default: 1). Set 2-6 for a multi-sprint body doubling session.",
+                    },
                 },
                 "required": ["task"],
             },
@@ -243,6 +260,28 @@ STATIC_TOOLS = [
             "name": "focus_status",
             "description": "Check how much time is left in the current focus session.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "focus_sprint",
+            "description": "Manage sprint transitions in an active multi-sprint focus session. Use 'next_sprint' when the user says 'next sprint' or 'start next sprint'. Use 'extend' when they want more time on the current sprint. Use 'end_session' when they want to finish and see their summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["next_sprint", "extend", "end_session"],
+                        "description": "next_sprint=start next sprint, extend=add time to current sprint, end_session=finish and announce total summary",
+                    },
+                    "duration_minutes": {
+                        "type": "integer",
+                        "description": "Override sprint length for next sprint, or minutes to add for extend",
+                    },
+                },
+                "required": ["action"],
+            },
         },
     },
     {

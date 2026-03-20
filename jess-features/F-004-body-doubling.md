@@ -1,7 +1,7 @@
 # F-004: Body Doubling & Focus Sessions
 
 **Priority:** P1 — Should Have
-**Status:** Partially implemented (focus timer works, no check-ins or ambient audio options)
+**Status:** Done
 **Depends on:** Focus timer (done), TTS (done), Endel (done), APScheduler (done)
 **Blocks:** F-005 Progress Tracking
 

@@ -55,7 +55,8 @@ All tools are called directly by the single model in one agentic loop.
 | search_memory | ChromaDB RAG query |
 | set_reminder / cancel_reminder | Voice/phone reminders |
 | update_data | Update meds/projects YAML |
-| start_focus / stop_focus / focus_status | Pomodoro timer + Endel + Pi-hole |
+| start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio, Pi-hole blocking |
+| focus_sprint | Continue next sprint, extend current, or end session with summary |
 | web_search | Search the web via SearXNG |
 | check_calendar / create_calendar_event | Google Calendar read/write |
 | check_email / search_email | Gmail inbox (read-only) |

@@ -193,6 +193,14 @@ current_focus_session = {
     "job_id": None,
     "audio_player": None,
     "block_sites": False,
+    # F-004 body doubling additions
+    "task_description": None,
+    "sprint_count": 0,
+    "sprints_planned": None,
+    "check_in_interval": None,
+    "check_in_job_id": None,
+    "total_focus_minutes": 0,
+    "audio_source": "endel",
 }
 
 # Endel focus audio configuration
@@ -200,6 +208,10 @@ ENDEL_API_URL = "https://app.endel.io/api/pacific"
 ENDEL_MODES = ["focus", "deeper-focus", "study", "colored-noises"]
 FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", profile.focus_audio_player)
 ENDEL_ENABLED = os.environ.get("ENDEL_ENABLED", "true").lower() == "true"
+
+# Non-Endel audio stream URLs (F-004)
+FOCUS_AUDIO_LOFI_URL = os.environ.get("FOCUS_AUDIO_LOFI_URL", "")
+FOCUS_AUDIO_COFFEE_URL = os.environ.get("FOCUS_AUDIO_COFFEE_URL", "")
 
 # ---------------------------------------------------------------------------
 # APScheduler

@@ -11,7 +11,7 @@ from typing import Any, Dict
 import shared
 from brain_dump_manager import process_brain_dump
 from data_manager import handle_update_data
-from focus_manager import tool_focus_status, tool_start_focus, tool_stop_focus
+from focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
 from metrics import (
@@ -88,11 +88,20 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
                 arguments.get("speaker"),
                 arguments.get("soundscape", "focus"),
                 arguments.get("block_sites", True),
+                arguments.get("check_ins", True),
+                arguments.get("check_in_interval", 15),
+                arguments.get("audio"),
+                arguments.get("sprints", 1),
             )
         elif tool_name == "stop_focus":
             return await tool_stop_focus()
         elif tool_name == "focus_status":
             return await tool_focus_status()
+        elif tool_name == "focus_sprint":
+            return await tool_focus_sprint(
+                arguments.get("action", ""),
+                arguments.get("duration_minutes"),
+            )
         elif tool_name == "web_search":
             return await tool_web_search(
                 arguments.get("query", ""), arguments.get("category", "general"), arguments.get("time_range")

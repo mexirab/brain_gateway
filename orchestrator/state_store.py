@@ -38,7 +38,14 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
     break_duration_minutes INTEGER,
     job_id TEXT,
     audio_player TEXT,
-    block_sites INTEGER NOT NULL DEFAULT 0
+    block_sites INTEGER NOT NULL DEFAULT 0,
+    task_description TEXT,
+    sprint_count INTEGER NOT NULL DEFAULT 0,
+    sprints_planned INTEGER,
+    check_in_interval INTEGER,
+    check_in_job_id TEXT,
+    total_focus_minutes INTEGER NOT NULL DEFAULT 0,
+    audio_source TEXT NOT NULL DEFAULT 'endel'
 );
 
 CREATE TABLE IF NOT EXISTS notification_tracking (
@@ -70,6 +77,21 @@ def init_db():
         row = conn.execute("SELECT COUNT(*) FROM focus_sessions").fetchone()
         if row[0] == 0:
             conn.execute("INSERT INTO focus_sessions (id) VALUES (1)")
+        # F-004 migration: add new columns if they don't exist yet
+        _f004_cols = [
+            ("task_description", "TEXT"),
+            ("sprint_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("sprints_planned", "INTEGER"),
+            ("check_in_interval", "INTEGER"),
+            ("check_in_job_id", "TEXT"),
+            ("total_focus_minutes", "INTEGER NOT NULL DEFAULT 0"),
+            ("audio_source", "TEXT NOT NULL DEFAULT 'endel'"),
+        ]
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(focus_sessions)").fetchall()}
+        for col_name, col_def in _f004_cols:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE focus_sessions ADD COLUMN {col_name} {col_def}")
+                logger.info(f"[STATE] Migrated focus_sessions: added {col_name}")
     logger.info(f"[STATE] Database initialized at {DB_PATH}")
 
 
@@ -140,7 +162,10 @@ def save_focus_session(session: Dict[str, Any]) -> None:
         conn.execute(
             """UPDATE focus_sessions SET
                 active = ?, task = ?, started_at = ?, duration_minutes = ?,
-                break_duration_minutes = ?, job_id = ?, audio_player = ?, block_sites = ?
+                break_duration_minutes = ?, job_id = ?, audio_player = ?, block_sites = ?,
+                task_description = ?, sprint_count = ?, sprints_planned = ?,
+                check_in_interval = ?, check_in_job_id = ?, total_focus_minutes = ?,
+                audio_source = ?
                WHERE id = 1""",
             (
                 1 if session.get("active") else 0,
@@ -151,6 +176,13 @@ def save_focus_session(session: Dict[str, Any]) -> None:
                 session.get("job_id"),
                 session.get("audio_player"),
                 1 if session.get("block_sites") else 0,
+                session.get("task_description"),
+                session.get("sprint_count", 0),
+                session.get("sprints_planned"),
+                session.get("check_in_interval"),
+                session.get("check_in_job_id"),
+                session.get("total_focus_minutes", 0),
+                session.get("audio_source", "endel"),
             ),
         )
 
@@ -169,6 +201,13 @@ def load_focus_session() -> Dict[str, Any]:
                 "job_id": None,
                 "audio_player": None,
                 "block_sites": False,
+                "task_description": None,
+                "sprint_count": 0,
+                "sprints_planned": None,
+                "check_in_interval": None,
+                "check_in_job_id": None,
+                "total_focus_minutes": 0,
+                "audio_source": "endel",
             }
         started = datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
         return {
@@ -180,6 +219,13 @@ def load_focus_session() -> Dict[str, Any]:
             "job_id": row["job_id"],
             "audio_player": row["audio_player"],
             "block_sites": bool(row["block_sites"]),
+            "task_description": row["task_description"],
+            "sprint_count": row["sprint_count"] or 0,
+            "sprints_planned": row["sprints_planned"],
+            "check_in_interval": row["check_in_interval"],
+            "check_in_job_id": row["check_in_job_id"],
+            "total_focus_minutes": row["total_focus_minutes"] or 0,
+            "audio_source": row["audio_source"] or "endel",
         }
 
 
@@ -189,7 +235,10 @@ def clear_focus_session() -> None:
         conn.execute(
             """UPDATE focus_sessions SET
                 active = 0, task = NULL, started_at = NULL, duration_minutes = NULL,
-                break_duration_minutes = NULL, job_id = NULL, audio_player = NULL, block_sites = 0
+                break_duration_minutes = NULL, job_id = NULL, audio_player = NULL, block_sites = 0,
+                task_description = NULL, sprint_count = 0, sprints_planned = NULL,
+                check_in_interval = NULL, check_in_job_id = NULL, total_focus_minutes = 0,
+                audio_source = 'endel'
                WHERE id = 1"""
         )
 

@@ -175,19 +175,20 @@ AVAILABLE TOOLS:
 3. update_data - Update {user}'s medications or projects
 4. set_reminder - Set a reminder that will be announced on speakers and/or sent to their phone
 5. cancel_reminder - Cancel a pending reminder by its ID
-6. start_focus - Start a Pomodoro focus timer with Endel audio and site blocking. ALWAYS enables site blocking unless user explicitly says "without blocking" or "no blocking".
+6. start_focus - Start a body doubling focus session with timer, ambient audio, check-ins, and site blocking. Supports multi-sprint sessions with lo-fi, coffee shop, or Endel audio.
 7. stop_focus - Stop the current focus timer early
 8. focus_status - Check how much time is left in the current focus session
-9. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses)
-10. check_calendar - Check {user}'s Google Calendar for upcoming events
-11. create_calendar_event - Create a new event on {user}'s Google Calendar
-12. check_email - Check {user}'s Gmail inbox for recent or unread emails
-13. search_email - Search {user}'s Gmail with specific criteria
-14. finance_status - Check Financial Quest Board status (budget, XP, streak, spending)
-15. check_system - Check Brain Gateway system status and logs
-16. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
-17. decompose_task - Break a big or vague task into concrete micro-steps with time estimates
-18. task_step - Advance a decomposed task: mark step done, skip, get next step, list active tasks, or abandon
+9. focus_sprint - Manage sprint transitions: next sprint, extend current sprint, or end session with summary
+10. web_search - Search the web for real-world information (events, news, weather, restaurants, sports, businesses)
+11. check_calendar - Check {user}'s Google Calendar for upcoming events
+12. create_calendar_event - Create a new event on {user}'s Google Calendar
+13. check_email - Check {user}'s Gmail inbox for recent or unread emails
+14. search_email - Search {user}'s Gmail with specific criteria
+15. finance_status - Check Financial Quest Board status (budget, XP, streak, spending)
+16. check_system - Check Brain Gateway system status and logs
+17. brain_dump - Capture thoughts, tasks, ideas, or reminders from a brain dump
+18. decompose_task - Break a big or vague task into concrete micro-steps with time estimates
+19. task_step - Advance a decomposed task: mark step done, skip, get next step, list active tasks, or abandon
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -195,9 +196,10 @@ WHEN TO USE TOOLS:
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
 - brain_dump: When user says "brain dump", "remember that", "capture", "note to self", or lists multiple things to remember/do at once
-- start_focus: When user wants to start a focus timer, pomodoro, or work session
+- start_focus: When user wants to start a focus timer, pomodoro, body doubling session, or work session. Use sprints > 1 for body doubling.
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
+- focus_sprint: When user says "next sprint", "extend", "add more time", or "end session" / "I'm done" during a multi-sprint focus session
 - web_search: For real-world questions - events, news, weather, restaurants, sports scores, businesses
 - check_calendar: When user asks about their schedule, calendar, or upcoming events
 - create_calendar_event: When user wants to add, schedule, or create a calendar event
