@@ -389,7 +389,7 @@ async def run_email_to_calendar():
 async def announce_tts(body: AnnounceRequest):
     """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
     try:
-        await _announce_voice(body.text, speaker=body.speaker)
+        await _announce_voice(body.text, speaker=body.speaker, announcement_type="manual")
         logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'}: {body.text[:80]}")
         return {"ok": True, "text": body.text, "speaker": body.speaker or "default"}
     except Exception as e:
@@ -711,6 +711,28 @@ async def sync_phone_calendar(req: Request):
 # ---------------------------------------------------------------------------
 # Progress Tracking (F-005)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Announcement History
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/announcements/history")
+async def get_announcements_history(limit: int = 50, type: str = None):
+    """Recent announcement history with speaker, success, and latency."""
+    from state_store import get_announcement_history
+
+    history = get_announcement_history(limit=limit, announcement_type=type)
+    return JSONResponse(history)
+
+
+@router.get("/api/announcements/stats")
+async def get_announcements_stats():
+    """Announcement statistics: success rates, speaker breakdown, latency."""
+    from state_store import get_announcement_stats
+
+    return JSONResponse(get_announcement_stats())
 
 
 # ---------------------------------------------------------------------------

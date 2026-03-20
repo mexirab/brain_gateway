@@ -8,6 +8,8 @@ import type {
   ProgressToday,
   ProgressWeek,
   ProgressStreaks,
+  AnnouncementEntry,
+  AnnouncementStats,
   AmbientStatus,
 } from './types';
 
@@ -56,5 +58,8 @@ export const api = {
   progressToday: () => fetcher<ProgressToday>('/api/progress/today'),
   progressWeek: () => fetcher<ProgressWeek>('/api/progress/week'),
   progressStreaks: () => fetcher<ProgressStreaks>('/api/progress/streaks'),
+  announcementHistory: (limit = 20) =>
+    fetcher<AnnouncementEntry[]>(`/api/announcements/history?limit=${limit}`),
+  announcementStats: () => fetcher<AnnouncementStats>('/api/announcements/stats'),
   ambientStatus: () => fetcher<AmbientStatus>('/api/ambient/status'),
 };

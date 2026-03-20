@@ -185,21 +185,31 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 FALLBACK_SPEAKER = os.environ.get("FALLBACK_SPEAKER", "media_player.dining_room_pair")
 
 
-async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, Any]:
+async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
     Uses the configured TTS backend to generate audio,
     then plays it on a Home Assistant media_player.
     Falls back to FALLBACK_SPEAKER if primary speaker returns an error.
+
+    Args:
+        text: The text to announce.
+        speaker: Target speaker entity (defaults to REMINDER_SPEAKER).
+        announcement_type: Category for tracking (calendar, reminder, focus, progress, ambient, etc.).
     """
+    import time as _time
+
     import shared
 
     headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+    t0 = _time.time()
+    fallback_used = False
 
     try:
         backend = shared.tts_backend
         if backend is None:
+            _record_announcement(text, announcement_type, None, False, "TTS backend not initialized", None, False)
             return {"success": False, "error": "TTS backend not initialized"}
 
         # Generate audio via backend
@@ -241,7 +251,12 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
                     if ha_response.status_code == 200:
                         if try_speaker != target_speaker:
                             logger.warning(f"Primary speaker {target_speaker} failed, used fallback {try_speaker}")
+                            fallback_used = True
+                        latency_ms = int((_time.time() - t0) * 1000)
                         logger.info(f"Played announcement on {try_speaker}")
+                        _record_announcement(
+                            text, announcement_type, try_speaker, True, None, latency_ms, fallback_used
+                        )
                         return {"success": True, "speaker": try_speaker}
                     else:
                         last_error = f"HA returned {ha_response.status_code} for {try_speaker}"
@@ -250,11 +265,64 @@ async def _announce_voice(text: str, speaker: str | None = None) -> Dict[str, An
                     last_error = f"Connection error for {try_speaker}: {speaker_err}"
                     logger.warning(f"play_media failed: {last_error}")
 
+        latency_ms = int((_time.time() - t0) * 1000)
+        _record_announcement(text, announcement_type, target_speaker, False, last_error, latency_ms, fallback_used)
         return {"success": False, "error": last_error}
 
     except Exception as e:
+        latency_ms = int((_time.time() - t0) * 1000)
         logger.error(f"Voice announcement failed: {e}")
+        _record_announcement(text, announcement_type, None, False, str(e), latency_ms, False)
         return {"success": False, "error": str(e)}
+
+
+def _record_announcement(
+    text: str,
+    announcement_type: str,
+    speaker: str | None,
+    success: bool,
+    error: str | None,
+    latency_ms: int | None,
+    fallback_used: bool,
+) -> None:
+    """Record announcement to DB and metrics (fire-and-forget)."""
+    try:
+        import state_store
+
+        state_store.record_announcement(
+            text=text,
+            announcement_type=announcement_type,
+            speaker=speaker,
+            success=success,
+            error=error,
+            latency_ms=latency_ms,
+            fallback_used=fallback_used,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to record announcement: {e}")
+
+    try:
+        from metrics import TTS_ANNOUNCEMENTS_TOTAL, TTS_ERRORS_TOTAL, TTS_FALLBACK_TOTAL, TTS_LATENCY
+
+        TTS_ANNOUNCEMENTS_TOTAL.labels(
+            type=announcement_type,
+            speaker=speaker or "none",
+            success="true" if success else "false",
+        ).inc()
+
+        if latency_ms is not None:
+            TTS_LATENCY.observe(latency_ms / 1000)
+
+        if fallback_used:
+            TTS_FALLBACK_TOTAL.inc()
+
+        if not success and error:
+            error_type = (
+                "ha_error" if "HA returned" in error else "connection" if "Connection" in error else "tts_error"
+            )
+            TTS_ERRORS_TOTAL.labels(error_type=error_type).inc()
+    except Exception:
+        pass
 
 
 async def _send_notification(text: str) -> Dict[str, Any]:

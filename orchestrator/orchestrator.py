@@ -363,6 +363,7 @@ async def startup_event():
     # Initialize persistent state store (SQLite)
     state_store.init_db()
     state_store.clear_stale_notifications(older_than_hours=48)
+    state_store.cleanup_old_announcements(keep_days=30)
 
     # Initialize progress tracking DB (F-005)
     import progress_tracker

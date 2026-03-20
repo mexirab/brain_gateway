@@ -161,6 +161,31 @@ export interface ProgressStreaks {
   streaks: Streak[];
 }
 
+// Announcement History
+export interface AnnouncementEntry {
+  id: number;
+  timestamp: string;
+  text: string;
+  announcement_type: string;
+  speaker: string | null;
+  success: number;
+  error: string | null;
+  latency_ms: number | null;
+  fallback_used: number;
+}
+
+export interface AnnouncementStats {
+  total: number;
+  successes: number;
+  failures: number;
+  fallbacks_used: number;
+  success_rate: number;
+  avg_latency_ms: number | null;
+  today_count: number;
+  by_type: Record<string, { total: number; success: number }>;
+  by_speaker: Record<string, { total: number; success: number }>;
+}
+
 // Ambient Awareness (F-010)
 export interface AmbientStatus {
   timestamp: string;

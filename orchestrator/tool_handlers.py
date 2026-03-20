@@ -520,7 +520,7 @@ async def deliver_reminder_job(reminder_id: str):
 
     voice_ok = True
     if target in ["voice", "both"]:
-        result = await _announce_voice(spoken_text)
+        result = await _announce_voice(spoken_text, announcement_type="reminder")
         voice_ok = result.get("success", False)
         if not voice_ok:
             logger.error(

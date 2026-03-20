@@ -52,6 +52,21 @@ CREATE TABLE IF NOT EXISTS notification_tracking (
     key TEXT PRIMARY KEY,
     notified_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS announcement_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    text TEXT NOT NULL,
+    announcement_type TEXT NOT NULL DEFAULT 'unknown',
+    speaker TEXT,
+    success INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    latency_ms INTEGER,
+    fallback_used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_announcement_timestamp ON announcement_history(timestamp);
+CREATE INDEX IF NOT EXISTS idx_announcement_type ON announcement_history(announcement_type);
 """
 
 
@@ -279,4 +294,107 @@ def clear_notifications_by_prefix(prefix: str) -> int:
     """Remove all notification tracking entries matching a prefix (e.g., 'temp:')."""
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM notification_tracking WHERE key LIKE ?", (f"{prefix}%",))
+        return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Announcement History
+# ---------------------------------------------------------------------------
+
+
+def record_announcement(
+    text: str,
+    announcement_type: str = "unknown",
+    speaker: Optional[str] = None,
+    success: bool = True,
+    error: Optional[str] = None,
+    latency_ms: Optional[int] = None,
+    fallback_used: bool = False,
+) -> None:
+    """Record a TTS announcement in the history table."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO announcement_history
+               (timestamp, text, announcement_type, speaker, success, error, latency_ms, fallback_used)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                datetime.now().isoformat(),
+                text[:500],  # cap text length
+                announcement_type,
+                speaker,
+                1 if success else 0,
+                error,
+                latency_ms,
+                1 if fallback_used else 0,
+            ),
+        )
+
+
+def get_announcement_history(limit: int = 50, announcement_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get recent announcement history."""
+    with get_db() as conn:
+        if announcement_type:
+            rows = conn.execute(
+                "SELECT * FROM announcement_history WHERE announcement_type = ? ORDER BY timestamp DESC LIMIT ?",
+                (announcement_type, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM announcement_history ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_announcement_stats() -> Dict[str, Any]:
+    """Get announcement statistics."""
+    with get_db() as conn:
+        # Total counts
+        total = conn.execute("SELECT COUNT(*) FROM announcement_history").fetchone()[0]
+        successes = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE success = 1").fetchone()[0]
+        failures = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE success = 0").fetchone()[0]
+        fallbacks = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE fallback_used = 1").fetchone()[0]
+
+        # By type
+        type_rows = conn.execute(
+            "SELECT announcement_type, COUNT(*) as cnt, SUM(success) as ok "
+            "FROM announcement_history GROUP BY announcement_type"
+        ).fetchall()
+
+        # By speaker
+        speaker_rows = conn.execute(
+            "SELECT speaker, COUNT(*) as cnt, SUM(success) as ok "
+            "FROM announcement_history WHERE speaker IS NOT NULL GROUP BY speaker"
+        ).fetchall()
+
+        # Average latency
+        avg_latency = conn.execute(
+            "SELECT AVG(latency_ms) FROM announcement_history WHERE latency_ms IS NOT NULL"
+        ).fetchone()[0]
+
+        # Today's count
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_count = conn.execute(
+            "SELECT COUNT(*) FROM announcement_history WHERE timestamp >= ?",
+            (today,),
+        ).fetchone()[0]
+
+    return {
+        "total": total,
+        "successes": successes,
+        "failures": failures,
+        "fallbacks_used": fallbacks,
+        "success_rate": round(successes / total * 100, 1) if total > 0 else 100.0,
+        "avg_latency_ms": round(avg_latency) if avg_latency else None,
+        "today_count": today_count,
+        "by_type": {r["announcement_type"]: {"total": r["cnt"], "success": r["ok"]} for r in type_rows},
+        "by_speaker": {r["speaker"]: {"total": r["cnt"], "success": r["ok"]} for r in speaker_rows},
+    }
+
+
+def cleanup_old_announcements(keep_days: int = 30) -> int:
+    """Remove announcements older than keep_days."""
+    cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM announcement_history WHERE timestamp < ?", (cutoff,))
         return cursor.rowcount

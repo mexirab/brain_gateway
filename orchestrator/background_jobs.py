@@ -127,7 +127,7 @@ async def poll_calendar():
                             f"{profile.user_name}, you should leave now for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
-                        result = await _announce_voice(message)
+                        result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
                             state_store.mark_notified(travel_key)
                             state_store.mark_notified(f"cal:{event.id}:leave_now")
@@ -149,7 +149,7 @@ async def poll_calendar():
                             f"{leave_by_min} minutes for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
                         )
-                        result = await _announce_voice(message)
+                        result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
                             state_store.mark_notified(travel_key)
                             CALENDAR_POLL_EVENTS_FOUND.inc()
@@ -196,7 +196,7 @@ async def poll_calendar():
                         if event.location and best_tier > 5:
                             message += f" at {event.location}"
 
-                        result = await _announce_voice(message)
+                        result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
                             state_store.mark_notified(tier_key)
                             # Also mark all larger tiers as notified (catch-up)
@@ -234,7 +234,7 @@ async def poll_calendar():
                 message = _SINGLE_MESSAGE.format(name=profile.user_name, title=event.title, time_str=time_str)
                 if event.location:
                     message += f" at {event.location}"
-                result = await _announce_voice(message)
+                result = await _announce_voice(message, announcement_type="calendar")
                 if result.get("success"):
                     state_store.mark_notified(cal_key)
                     CALENDAR_POLL_EVENTS_FOUND.inc()
@@ -356,7 +356,7 @@ async def morning_briefing():
         if pending:
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
 
-        await _announce_voice(" ".join(parts), speaker=shared.MORNING_BRIEFING_SPEAKER)
+        await _announce_voice(" ".join(parts), speaker=shared.MORNING_BRIEFING_SPEAKER, announcement_type="briefing")
         logger.info(
             f"[MORNING_BRIEFING] Delivered on {shared.MORNING_BRIEFING_SPEAKER}: {len(briefing_events)} events, {len(pending)} reminders"
         )
@@ -395,7 +395,7 @@ async def poll_email():
                 sender = msg.sender
 
             announcement = f"New email from {sender}: {msg.subject}"
-            await _announce_voice(announcement)
+            await _announce_voice(announcement, announcement_type="email")
             state_store.mark_notified(email_key)
             new_count += 1
             logger.info(f"[EMAIL_POLL] Announced: {msg.subject} from {sender}", extra={"component": "gmail"})
@@ -661,7 +661,7 @@ async def weekly_spending_summary():
             f"and a {game['streak_months']} month streak."
         )
 
-        await _announce_voice(" ".join(parts))
+        await _announce_voice(" ".join(parts), announcement_type="email")
         logger.info(f"[WEEKLY_SUMMARY] Delivered: ${spent:.2f}/{limit:.2f} ({pct:.0f}%)")
 
     except Exception as e:
@@ -715,7 +715,7 @@ async def midmonth_budget_warning():
                 f"${remaining:.0f} left for the rest of the month. Keep it steady!"
             )
 
-        await _announce_voice(message)
+        await _announce_voice(message, announcement_type="finance")
         logger.info(f"[MIDMONTH] Warning delivered: {pct:.0f}% spent")
 
     except Exception as e:
@@ -761,7 +761,8 @@ async def check_closet_temperature():
         if temp >= 85 and not state_store.is_notified("temp:closet_85"):
             await _announce_voice(
                 f"Warning! Server closet temperature is {temp:.0f} degrees. "
-                f"That's dangerously hot. Check the ventilation or shut down non-essential nodes."
+                f"That's dangerously hot. Check the ventilation or shut down non-essential nodes.",
+                announcement_type="temperature",
             )
             state_store.mark_notified("temp:closet_85")
             logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — URGENT alert sent")
@@ -769,7 +770,8 @@ async def check_closet_temperature():
         elif temp >= 80 and not state_store.is_notified("temp:closet_80"):
             await _announce_voice(
                 f"Heads up {profile.user_name}. The server closet is at {temp:.0f} degrees. "
-                f"That's getting warm. You might want to check the airflow."
+                f"That's getting warm. You might want to check the airflow.",
+                announcement_type="temperature",
             )
             state_store.mark_notified("temp:closet_80")
             logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — warning alert sent")
@@ -816,7 +818,7 @@ async def ambient_summary():
 
         summary = await build_ambient_summary_text()
         speaker = shared.AMBIENT_SPEAKER or None
-        await _announce_voice(summary, speaker=speaker)
+        await _announce_voice(summary, speaker=speaker, announcement_type="ambient")
         logger.info("[AMBIENT] Summary announced")
     except Exception as e:
         logger.error(f"[AMBIENT] Summary failed: {e}")
@@ -877,7 +879,7 @@ async def daily_progress_summary():
         import progress_tracker
 
         summary = await progress_tracker.daily_summary()
-        await _announce_voice(summary)
+        await _announce_voice(summary, announcement_type="progress")
         logger.info("[PROGRESS] Daily summary announced")
     except Exception as e:
         logger.error(f"[PROGRESS] Daily summary failed: {e}")
@@ -889,7 +891,7 @@ async def weekly_progress_digest():
         import progress_tracker
 
         summary = await progress_tracker.weekly_summary()
-        await _announce_voice(summary)
+        await _announce_voice(summary, announcement_type="progress")
         logger.info("[PROGRESS] Weekly digest announced")
     except Exception as e:
         logger.error(f"[PROGRESS] Weekly digest failed: {e}")

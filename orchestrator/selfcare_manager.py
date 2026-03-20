@@ -112,7 +112,7 @@ async def check_selfcare() -> None:
         nudge = _check_hydration(now)
 
     if nudge:
-        await _announce_voice(nudge)
+        await _announce_voice(nudge, announcement_type="selfcare")
         logger.info(f"[SELFCARE] Nudge: {nudge[:60]}", extra={"component": "selfcare"})
 
 

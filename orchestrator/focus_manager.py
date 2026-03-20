@@ -153,7 +153,7 @@ async def deliver_check_in():
             message = "Still in the zone? Keep going — you're doing great."
 
         logger.info(f"[FOCUS] Check-in: task='{task_desc}'", extra={"component": "focus"})
-        await _announce_voice(message)
+        await _announce_voice(message, announcement_type="focus")
     except Exception as e:
         logger.error(f"[FOCUS] Check-in delivery failed: {e}", extra={"component": "focus"})
 
@@ -447,7 +447,7 @@ async def tool_focus_sprint(action: str, duration_minutes: int = None) -> str:
 
         _reset_focus_session()
         FOCUS_ACTIVE.set(0)
-        await _announce_voice(summary_text)
+        await _announce_voice(summary_text, announcement_type="focus")
         return summary_text
 
     elif action == "extend":
@@ -535,7 +535,7 @@ async def tool_focus_sprint(action: str, duration_minutes: int = None) -> str:
         FOCUS_SESSIONS_STARTED.labels(soundscape=audio_source).inc()
 
         msg = f"Sprint {sprint_num} starting! {sprint_duration} minutes on {task}. Let's go."
-        await _announce_voice(msg)
+        await _announce_voice(msg, announcement_type="focus")
         return msg
 
     else:
@@ -575,7 +575,7 @@ async def deliver_focus_break(task: str, break_duration: int):
     # Multi-sprint: check if session is complete
     if sprints_planned and sprint_count >= sprints_planned:
         summary = _build_session_summary()
-        await _announce_voice(summary)
+        await _announce_voice(summary, announcement_type="focus")
         total = current_focus_session.get("total_focus_minutes", 0)
         _reset_focus_session()
         FOCUS_SESSIONS_COMPLETED.inc()
@@ -603,7 +603,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         f"Time's up on sprint {sprint_count}! {break_duration} minute break. Say 'next sprint' to continue.",
     ]
     message = random.choice(messages)
-    await _announce_voice(message)
+    await _announce_voice(message, announcement_type="focus")
 
     # Legacy single-sprint: reset fully
     if sprints_planned is None:

@@ -214,7 +214,7 @@ async def check_and_announce_streaks() -> None:
             try:
                 from reminder_manager import _announce_voice
 
-                await _announce_voice(message)
+                await _announce_voice(message, announcement_type="progress")
                 state_store.mark_notified(notif_key)
                 logger.info(f"[PROGRESS] Streak milestone announced: {category} = {current}")
 

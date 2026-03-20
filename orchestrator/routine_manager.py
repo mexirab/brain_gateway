@@ -179,7 +179,7 @@ async def start_routine(routine_id: str, triggered_by: str = "user") -> str:
         is_late=is_late,
         steps_remaining=len(steps),
     )
-    await _announce_voice(announcement, speaker=speaker)
+    await _announce_voice(announcement, speaker=speaker, announcement_type="routine")
 
     # Fire HA action for first step
     await _fire_step_ha_action(step)
@@ -254,7 +254,7 @@ async def advance_step(action: str = "done") -> str:
         is_late=is_late,
         steps_remaining=steps_remaining,
     )
-    await _announce_voice(announcement, speaker=_active_session.speaker)
+    await _announce_voice(announcement, speaker=_active_session.speaker, announcement_type="routine")
 
     # Fire HA action
     await _fire_step_ha_action(next_step)
@@ -272,7 +272,7 @@ async def _pause_routine() -> str:
     _active_session.paused = True
     _cancel_nudge()
     msg = "Routine paused. Say 'resume routine' when you're ready."
-    await _announce_voice(msg, speaker=_active_session.speaker)
+    await _announce_voice(msg, speaker=_active_session.speaker, announcement_type="routine")
     return msg
 
 
@@ -285,7 +285,7 @@ async def _resume_routine() -> str:
     _active_session.paused = False
     step = _active_session.steps[_active_session.current_step_index]
     msg = f"Routine resumed. You're on: {step.label}. Let me know when you're done."
-    await _announce_voice(msg, speaker=_active_session.speaker)
+    await _announce_voice(msg, speaker=_active_session.speaker, announcement_type="routine")
     _schedule_nudge(_active_session.nudge_delay_minutes)
     return msg
 
@@ -305,7 +305,7 @@ async def _stop_routine() -> str:
     _record_routine_progress()
 
     msg = f"{name} stopped. {completed} of {total} steps done."
-    await _announce_voice(msg, speaker=_active_session.speaker)
+    await _announce_voice(msg, speaker=_active_session.speaker, announcement_type="routine")
 
     _active_session = None
     return msg
@@ -337,7 +337,7 @@ async def _complete_routine() -> str:
     parts.append("Have a good one.")
     msg = " ".join(parts)
 
-    await _announce_voice(msg, speaker=_active_session.speaker)
+    await _announce_voice(msg, speaker=_active_session.speaker, announcement_type="routine")
 
     # Record progress
     _record_routine_progress()
@@ -465,7 +465,7 @@ async def _deliver_nudge() -> None:
     idx = min(_active_session.nudge_count - 1, len(_NUDGE_TEMPLATES) - 1)
     message = _NUDGE_TEMPLATES[idx].format(label=step.label)
 
-    await _announce_voice(message, speaker=_active_session.speaker)
+    await _announce_voice(message, speaker=_active_session.speaker, announcement_type="routine")
     logger.info(
         f"[ROUTINE] Nudge {_active_session.nudge_count} for step '{step.id}'",
         extra={"component": "routine"},
