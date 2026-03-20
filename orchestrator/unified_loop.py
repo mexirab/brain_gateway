@@ -56,7 +56,7 @@ def parse_xml_tool_calls(content: str) -> List[Dict[str, Any]]:
     """
     tool_calls = []
     # Greedy match between tags to handle nested JSON objects like {"arguments": {"key": "val"}}
-    pattern = r"<tool_call>\s*(\{.*\})\s*</tool_call>"
+    pattern = r"<tool_call>\s*(.*?)\s*</tool_call>"
     matches = re.findall(pattern, content, re.DOTALL)
 
     for i, match in enumerate(matches):

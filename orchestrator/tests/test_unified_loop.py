@@ -234,8 +234,8 @@ class TestRunUnifiedToolLoop:
         mock_call_model = AsyncMock(return_value=_make_llm_response("The weather is sunny today."))
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", new_callable=AsyncMock),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", new_callable=AsyncMock),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -266,8 +266,8 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Temperature: 75F, Condition: Sunny")
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -286,17 +286,18 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool.assert_called_once_with("web_search", {"query": "Austin weather"})
 
     @pytest.mark.asyncio
-    async def test_terminal_tool_returns_directly(self):
-        """Terminal tools (e.g. home_assistant) return result without extra LLM call."""
+    async def test_terminal_tool_returns_with_summary(self):
+        """Terminal tools (e.g. home_assistant) execute, then model summarizes."""
         tool_call = _make_tool_call("home_assistant", {"entity_id": "light.office"}, "call_1")
         resp_with_tool = _make_llm_response(content="", tool_calls=[tool_call])
+        resp_summary = _make_llm_response("Done! I've turned on the office light.")
 
-        mock_call_model = AsyncMock(return_value=resp_with_tool)
+        mock_call_model = AsyncMock(side_effect=[resp_with_tool, resp_summary])
         mock_execute_tool = AsyncMock(return_value="Turned on light.office")
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -310,10 +311,10 @@ class TestRunUnifiedToolLoop:
                 max_rounds=5,
             )
 
-        assert "home_assistant" in result
-        assert "Turned on light.office" in result
-        # Only one LLM call (no follow-up needed for terminal tools)
-        mock_call_model.assert_called_once()
+        assert "office light" in result.lower()
+        mock_execute_tool.assert_called_once_with("home_assistant", {"entity_id": "light.office"})
+        # Two LLM calls: one to get tool call, one to summarize
+        assert mock_call_model.call_count == 2
 
     @pytest.mark.asyncio
     async def test_duplicate_call_dedup(self):
@@ -331,8 +332,8 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Search result: found it")
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -366,8 +367,8 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock()
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -397,8 +398,8 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="result")
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -430,8 +431,8 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Medication: Adderall 20mg daily")
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -454,8 +455,8 @@ class TestRunUnifiedToolLoop:
         mock_call_model = AsyncMock(side_effect=Exception("Connection refused"))
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", new_callable=AsyncMock),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", new_callable=AsyncMock),
         ):
             from unified_loop import run_unified_tool_loop
 
@@ -483,8 +484,8 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(side_effect=RuntimeError("API timeout"))
 
         with (
-            patch("unified_loop.call_model", mock_call_model),
-            patch("unified_loop.execute_tool", mock_execute_tool),
+            patch("orchestrator.call_model", mock_call_model),
+            patch("tool_handlers.execute_tool", mock_execute_tool),
         ):
             from unified_loop import run_unified_tool_loop
 

@@ -652,7 +652,7 @@ class TestRunAutoLearn:
             ]
         }
 
-        with patch("auto_learn.call_model", return_value=llm_response) as mock_call:
+        with patch("orchestrator.call_model", return_value=llm_response) as mock_call:
             msgs = [
                 {"role": "user", "content": "I always use dark mode on everything, it's so much easier on my eyes"},
                 {"role": "assistant", "content": "Dark mode is great for reducing eye strain!"},
@@ -696,7 +696,7 @@ class TestRunAutoLearn:
             ]
         }
 
-        with patch("auto_learn.call_model", return_value=llm_response):
+        with patch("orchestrator.call_model", return_value=llm_response):
             msgs = [
                 {"role": "user", "content": "My card is 4111 1111 1111 1111 and I love Italian food"},
                 {"role": "assistant", "content": "Noted!"},
