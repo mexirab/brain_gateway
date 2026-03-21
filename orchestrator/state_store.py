@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS announcement_history (
 CREATE INDEX IF NOT EXISTS idx_announcement_timestamp ON announcement_history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_announcement_type ON announcement_history(announcement_type);
 
+CREATE TABLE IF NOT EXISTS shopping_list (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item TEXT NOT NULL,
+    list_name TEXT NOT NULL DEFAULT 'grocery',
+    checked INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL,
+    checked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_shopping_list_name ON shopping_list(list_name);
+
 CREATE TABLE IF NOT EXISTS selfcare_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action TEXT NOT NULL,
@@ -475,3 +486,68 @@ def get_selfcare_today(action: Optional[str] = None) -> List[Dict[str, Any]]:
                 (today,),
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Shopping / grocery list
+# ---------------------------------------------------------------------------
+
+
+def add_shopping_item(item: str, list_name: str = "grocery") -> Dict[str, Any]:
+    """Add an item to a shopping list. Returns the created item."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO shopping_list (item, list_name, added_at) VALUES (?, ?, ?)",
+            (item[:200], list_name[:50], datetime.now().isoformat()),
+        )
+        row = conn.execute("SELECT * FROM shopping_list WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return dict(row)
+
+
+def get_shopping_list(list_name: Optional[str] = None, include_checked: bool = False) -> List[Dict[str, Any]]:
+    """Get shopping list items, optionally filtered by list name."""
+    with get_db() as conn:
+        if list_name and include_checked:
+            rows = conn.execute(
+                "SELECT * FROM shopping_list WHERE list_name = ? ORDER BY checked ASC, added_at DESC",
+                (list_name,),
+            ).fetchall()
+        elif list_name:
+            rows = conn.execute(
+                "SELECT * FROM shopping_list WHERE list_name = ? AND checked = 0 ORDER BY added_at DESC",
+                (list_name,),
+            ).fetchall()
+        elif include_checked:
+            rows = conn.execute("SELECT * FROM shopping_list ORDER BY list_name, checked ASC, added_at DESC").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM shopping_list WHERE checked = 0 ORDER BY list_name, added_at DESC"
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def check_shopping_item(item_id: int, checked: bool = True) -> bool:
+    """Toggle checked state on a shopping list item."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE shopping_list SET checked = ?, checked_at = ? WHERE id = ?",
+            (1 if checked else 0, datetime.now().isoformat() if checked else None, item_id),
+        )
+        return cursor.rowcount > 0
+
+
+def remove_shopping_item(item_id: int) -> bool:
+    """Delete a shopping list item."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM shopping_list WHERE id = ?", (item_id,))
+        return cursor.rowcount > 0
+
+
+def clear_checked_items(list_name: Optional[str] = None) -> int:
+    """Remove all checked items, optionally from a specific list."""
+    with get_db() as conn:
+        if list_name:
+            cursor = conn.execute("DELETE FROM shopping_list WHERE checked = 1 AND list_name = ?", (list_name,))
+        else:
+            cursor = conn.execute("DELETE FROM shopping_list WHERE checked = 1")
+        return cursor.rowcount

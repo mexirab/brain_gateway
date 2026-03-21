@@ -176,6 +176,10 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await check_system(arguments.get("query", "system_health"))
         elif tool_name == "analyze_image":
             return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
+        elif tool_name == "shopping_list":
+            import asyncio
+
+            return await asyncio.to_thread(_handle_shopping_list, arguments)
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -187,6 +191,63 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         return f"Error executing {tool_name}: {str(e)}"
     finally:
         TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
+
+
+def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
+    """Handle shopping/grocery list tool calls."""
+    from state_store import (
+        add_shopping_item,
+        check_shopping_item,
+        clear_checked_items,
+        get_shopping_list,
+        remove_shopping_item,
+    )
+
+    action = arguments.get("action", "list")
+    list_name = arguments.get("list_name", "grocery").lower().strip()
+
+    if action == "add":
+        item = arguments.get("item", "").strip()
+        if not item:
+            return "No item specified."
+        result = add_shopping_item(item, list_name)
+        return f"Added '{result['item']}' to your {list_name} list."
+
+    elif action == "list":
+        items = get_shopping_list(list_name=list_name if list_name != "all" else None)
+        if not items:
+            return f"Your {list_name} list is empty."
+        lines = [f"Your {list_name} list ({len(items)} items):"]
+        for it in items:
+            lines.append(f"  - {it['item']} (id: {it['id']})")
+        return "\n".join(lines)
+
+    elif action == "check":
+        item_id = arguments.get("item_id")
+        if not item_id:
+            return "No item_id specified."
+        ok = check_shopping_item(int(item_id), checked=True)
+        return "Checked off." if ok else "Item not found."
+
+    elif action == "uncheck":
+        item_id = arguments.get("item_id")
+        if not item_id:
+            return "No item_id specified."
+        ok = check_shopping_item(int(item_id), checked=False)
+        return "Unchecked." if ok else "Item not found."
+
+    elif action == "remove":
+        item_id = arguments.get("item_id")
+        if not item_id:
+            return "No item_id specified."
+        ok = remove_shopping_item(int(item_id))
+        return "Removed." if ok else "Item not found."
+
+    elif action == "clear_checked":
+        count = clear_checked_items(list_name if list_name != "all" else None)
+        return f"Cleared {count} checked item(s)."
+
+    return f"Unknown action: {action}"
 
 
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:

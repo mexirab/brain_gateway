@@ -186,6 +186,16 @@ export interface AnnouncementStats {
   by_speaker: Record<string, { total: number; success: number }>;
 }
 
+// Shopping List
+export interface ShoppingItem {
+  id: number;
+  item: string;
+  list_name: string;
+  checked: number;
+  added_at: string;
+  checked_at: string | null;
+}
+
 // Ambient Awareness (F-010)
 export interface AmbientStatus {
   timestamp: string;

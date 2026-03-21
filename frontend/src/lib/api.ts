@@ -11,6 +11,7 @@ import type {
   AnnouncementEntry,
   AnnouncementStats,
   AmbientStatus,
+  ShoppingItem,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -66,4 +67,25 @@ export const api = {
       method: 'DELETE',
     }),
   ambientStatus: () => fetcher<AmbientStatus>('/api/ambient/status'),
+  shoppingList: (listName?: string, includeChecked = false) =>
+    fetcher<ShoppingItem[]>(
+      `/api/shopping?include_checked=${includeChecked}${listName ? `&list_name=${listName}` : ''}`,
+    ),
+  addShoppingItem: (item: string, listName = 'grocery') =>
+    fetcher<ShoppingItem>('/api/shopping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item, list_name: listName }),
+    }),
+  checkShoppingItem: (id: number) =>
+    fetcher<{ ok: boolean }>(`/api/shopping/${id}/check`, { method: 'POST' }),
+  uncheckShoppingItem: (id: number) =>
+    fetcher<{ ok: boolean }>(`/api/shopping/${id}/uncheck`, { method: 'POST' }),
+  deleteShoppingItem: (id: number) =>
+    fetcher<{ ok: boolean }>(`/api/shopping/${id}`, { method: 'DELETE' }),
+  clearCheckedItems: (listName?: string) =>
+    fetcher<{ ok: boolean; cleared: number }>(
+      `/api/shopping/checked${listName ? `?list_name=${listName}` : ''}`,
+      { method: 'DELETE' },
+    ),
 };

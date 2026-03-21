@@ -643,6 +643,36 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "shopping_list",
+            "description": "Manage the user's shopping/grocery list. ALWAYS call this when the user says 'add X to my shopping list', 'add X to my grocery list', 'what's on my list', 'remove X from my list', or 'clear checked items'. Supports multiple named lists (grocery, shopping, hardware, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "list", "remove", "check", "uncheck", "clear_checked"],
+                        "description": "Action to perform",
+                    },
+                    "item": {
+                        "type": "string",
+                        "description": "Item name (for add action)",
+                    },
+                    "item_id": {
+                        "type": "integer",
+                        "description": "Item ID (for remove/check/uncheck actions)",
+                    },
+                    "list_name": {
+                        "type": "string",
+                        "description": "List name: grocery, shopping, hardware, etc. Defaults to grocery.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 
