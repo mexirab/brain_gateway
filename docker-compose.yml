@@ -302,7 +302,7 @@ services:
       - gateway-net
 
   snapcast:
-    image: ghcr.io/snapcast/snapcast-server:latest
+    image: shuricksumy/snapcast:latest
     container_name: snapcast
     restart: unless-stopped
     logging: *default-logging
@@ -310,18 +310,15 @@ services:
       - "1704:1704"   # client connections
       - "1705:1705"   # JSON-RPC control API
       - "1780:1780"   # Snapweb UI
+    environment:
+      - ROLE=snapserver
     volumes:
       - /tmp/snapfifo_office:/tmp/snapfifo_office
       - /tmp/snapfifo_bedroom:/tmp/snapfifo_bedroom
       - /tmp/snapfifo_living:/tmp/snapfifo_living
       - /tmp/snapfifo_kitchen:/tmp/snapfifo_kitchen
       - /tmp/snapfifo_all:/tmp/snapfifo_all
-    command: >-
-      --stream.source pipe:///tmp/snapfifo_office?name=Office&sampleformat=24000:16:1&codec=flac
-      --stream.source pipe:///tmp/snapfifo_bedroom?name=Bedroom&sampleformat=24000:16:1&codec=flac
-      --stream.source pipe:///tmp/snapfifo_living?name=Living&sampleformat=24000:16:1&codec=flac
-      --stream.source pipe:///tmp/snapfifo_kitchen?name=Kitchen&sampleformat=24000:16:1&codec=flac
-      --stream.source pipe:///tmp/snapfifo_all?name=All&sampleformat=24000:16:1&codec=flac
+      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/snapcast/snapserver.conf:/etc/snapserver.conf:ro
     networks:
       - gateway-net
 
