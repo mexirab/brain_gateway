@@ -26,8 +26,42 @@ class SelfCareState:
     sitting_since: Optional[datetime] = None
 
 
-# Module state
+# Module state (restored from DB on import)
 _state = SelfCareState()
+
+
+def _restore_state() -> None:
+    """Restore selfcare state from persistent storage on startup."""
+    try:
+        from state_store import get_last_selfcare
+
+        last_meal = get_last_selfcare("meal")
+        if last_meal:
+            _state.last_meal_reported = last_meal
+            logger.info(f"[SELFCARE] Restored last meal: {last_meal.strftime('%-I:%M %p')}")
+
+        last_water = get_last_selfcare("water")
+        if last_water:
+            _state.last_hydration_nudge = last_water
+
+        last_movement = get_last_selfcare("movement")
+        if last_movement:
+            _state.last_movement_nudge = last_movement
+            _state.sitting_since = last_movement
+
+        # Restore today's med confirmations
+        from state_store import get_selfcare_today
+
+        today_meds = get_selfcare_today("medication")
+        for entry in today_meds:
+            med_name = (entry.get("detail") or "medication").lower()
+            _state.last_med_confirmation[med_name] = datetime.fromisoformat(entry["logged_at"])
+
+    except Exception as e:
+        logger.warning(f"[SELFCARE] Failed to restore state from DB: {e}")
+
+
+# Called from orchestrator.py startup_event() after state_store.init_db()
 
 
 # ---------------------------------------------------------------------------
@@ -36,19 +70,25 @@ _state = SelfCareState()
 
 
 async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
-    """Log a self-care action. Called by the selfcare_log tool."""
+    """Log a self-care action. Called by the selfcare_log tool.
+
+    Persists to SQLite so state survives orchestrator restarts.
+    """
+    from state_store import save_selfcare_log
+
     now = datetime.now()
 
     if action == "meal":
         _state.last_meal_reported = now
         meal_type = detail or "a meal"
+        save_selfcare_log("meal", meal_type)
         logger.info(f"[SELFCARE] Meal logged: {meal_type}", extra={"component": "selfcare"})
         return f"Logged — you had {meal_type}."
 
     elif action == "medication":
         med_name = detail or "medication"
         _state.last_med_confirmation[med_name.lower()] = now
-        # Figure out next schedule
+        save_selfcare_log("medication", med_name)
         next_sched = _get_next_med_schedule(med_name)
         logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})
         if next_sched:
@@ -57,12 +97,14 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
 
     elif action == "water":
         _state.last_hydration_nudge = now
+        save_selfcare_log("water", detail)
         logger.info("[SELFCARE] Hydration logged", extra={"component": "selfcare"})
         return "Logged — stay hydrated!"
 
     elif action == "movement":
         _state.last_movement_nudge = now
-        _state.sitting_since = now  # reset sitting timer
+        _state.sitting_since = now
+        save_selfcare_log("movement", detail)
         logger.info("[SELFCARE] Movement logged", extra={"component": "selfcare"})
         return "Logged — nice to get moving."
 

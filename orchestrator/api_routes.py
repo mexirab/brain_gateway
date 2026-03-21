@@ -723,6 +723,7 @@ async def get_announcements_history(limit: int = 50, type: str = None):
     """Recent announcement history with speaker, success, and latency."""
     from state_store import get_announcement_history
 
+    limit = max(1, min(limit, 500))
     history = get_announcement_history(limit=limit, announcement_type=type)
     return JSONResponse(history)
 
