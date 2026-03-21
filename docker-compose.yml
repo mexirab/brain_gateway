@@ -73,6 +73,12 @@ services:
       - brain-audio:/tmp/brain_audio:rw
       # Finance SQLite database
       - finance-data:/app/data:rw
+      # Snapcast named pipes for streaming TTS
+      - /tmp/snapfifo_office:/tmp/snapfifo_office
+      - /tmp/snapfifo_bedroom:/tmp/snapfifo_bedroom
+      - /tmp/snapfifo_living:/tmp/snapfifo_living
+      - /tmp/snapfifo_kitchen:/tmp/snapfifo_kitchen
+      - /tmp/snapfifo_all:/tmp/snapfifo_all
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
       # Routine definitions (F-006)
@@ -137,6 +143,9 @@ services:
       - YNAB_BUDGET_ID=${YNAB_BUDGET_ID:-}
       - YNAB_SYNC_INTERVAL=${YNAB_SYNC_INTERVAL:-30}
       - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
+      # Snapcast streaming TTS
+      - SNAPCAST_ENABLED=${SNAPCAST_ENABLED:-false}
+      - SNAPCAST_FIFO_BASE=${SNAPCAST_FIFO_BASE:-/tmp/snapfifo}
       # API authentication
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
       # Auto-learn from conversations
@@ -289,6 +298,30 @@ services:
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
     depends_on:
       - orchestrator
+    networks:
+      - gateway-net
+
+  snapcast:
+    image: ghcr.io/snapcast/snapcast-server:latest
+    container_name: snapcast
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "1704:1704"   # client connections
+      - "1705:1705"   # JSON-RPC control API
+      - "1780:1780"   # Snapweb UI
+    volumes:
+      - /tmp/snapfifo_office:/tmp/snapfifo_office
+      - /tmp/snapfifo_bedroom:/tmp/snapfifo_bedroom
+      - /tmp/snapfifo_living:/tmp/snapfifo_living
+      - /tmp/snapfifo_kitchen:/tmp/snapfifo_kitchen
+      - /tmp/snapfifo_all:/tmp/snapfifo_all
+    command: >-
+      --stream.source pipe:///tmp/snapfifo_office?name=Office&sampleformat=24000:16:1&codec=flac
+      --stream.source pipe:///tmp/snapfifo_bedroom?name=Bedroom&sampleformat=24000:16:1&codec=flac
+      --stream.source pipe:///tmp/snapfifo_living?name=Living&sampleformat=24000:16:1&codec=flac
+      --stream.source pipe:///tmp/snapfifo_kitchen?name=Kitchen&sampleformat=24000:16:1&codec=flac
+      --stream.source pipe:///tmp/snapfifo_all?name=All&sampleformat=24000:16:1&codec=flac
     networks:
       - gateway-net
 

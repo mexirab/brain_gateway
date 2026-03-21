@@ -348,6 +348,12 @@ ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "tru
 # ---------------------------------------------------------------------------
 # Ambient awareness configuration (F-010)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Snapcast streaming TTS
+# ---------------------------------------------------------------------------
+SNAPCAST_ENABLED = os.environ.get("SNAPCAST_ENABLED", "false").lower() == "true"
+SNAPCAST_FIFO_BASE = os.environ.get("SNAPCAST_FIFO_BASE", "/tmp/snapfifo")
+
 AMBIENT_ENABLED = os.environ.get("AMBIENT_ENABLED", "true").lower() == "true"
 AMBIENT_SUMMARY_TIMES = os.environ.get("AMBIENT_SUMMARY_TIMES", "10:00,12:00,14:00,16:00")
 AMBIENT_LED_ENTITY = os.environ.get("AMBIENT_LED_ENTITY", "")

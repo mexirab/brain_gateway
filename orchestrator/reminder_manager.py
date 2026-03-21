@@ -185,32 +185,102 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 FALLBACK_SPEAKER = os.environ.get("FALLBACK_SPEAKER", "media_player.dining_room_pair")
 
 
+def _resolve_snapcast_fifo(speaker: str | None) -> str:
+    """
+    Map a speaker name to the corresponding Snapcast named pipe.
+
+    Accepts:
+    - Room names: "office", "bedroom", "living", "kitchen", "all"
+    - HA entity IDs: "media_player.office_max" → extracts first token → "office"
+    - None / unrecognized → falls back to "all"
+    """
+    import shared
+
+    base = shared.SNAPCAST_FIFO_BASE  # e.g. /tmp/snapfifo
+    known_rooms = {"office", "bedroom", "living", "kitchen", "all"}
+
+    if not speaker:
+        return f"{base}_all"
+
+    # Direct room name match
+    room = speaker.lower().strip()
+    if room in known_rooms:
+        return f"{base}_{room}"
+
+    # Extract from HA entity_id (e.g. "media_player.office_max" → "office")
+    if "." in room:
+        room = room.split(".", 1)[1]  # "office_max"
+    # Take the first word as the room identifier
+    first_word = room.split("_")[0]
+    if first_word in known_rooms:
+        return f"{base}_{first_word}"
+
+    # Fallback: broadcast to all
+    return f"{base}_all"
+
+
 async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
-    Uses the configured TTS backend to generate audio,
-    then plays it on a Home Assistant media_player.
-    Falls back to FALLBACK_SPEAKER if primary speaker returns an error.
+    When SNAPCAST_ENABLED is true, streams TTS sentence-by-sentence directly
+    to the Snapcast named pipe for the target room (~1-2s to first audio).
+
+    When SNAPCAST_ENABLED is false, uses the existing Cast path: generates full
+    audio, saves to disk, serves via HTTP, and plays on an HA media_player.
 
     Args:
         text: The text to announce.
-        speaker: Target speaker entity (defaults to REMINDER_SPEAKER).
+        speaker: Target speaker entity or room name (defaults to REMINDER_SPEAKER).
         announcement_type: Category for tracking (calendar, reminder, focus, progress, ambient, etc.).
     """
     import time as _time
 
     import shared
 
-    headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
     t0 = _time.time()
-    fallback_used = False
 
     try:
         backend = shared.tts_backend
         if backend is None:
             _record_announcement(text, announcement_type, None, False, "TTS backend not initialized", None, False)
             return {"success": False, "error": "TTS backend not initialized"}
+
+        # =====================================================================
+        # Snapcast streaming path (low latency, sentence-by-sentence)
+        # =====================================================================
+        if shared.SNAPCAST_ENABLED and hasattr(backend, "synthesize_to_snapcast"):
+            fifo_path = _resolve_snapcast_fifo(speaker)
+            target_label = speaker or "all"
+            try:
+                result = await backend.synthesize_to_snapcast(text, fifo_path)
+                latency_ms = int((_time.time() - t0) * 1000)
+                logger.info(
+                    f"Streamed announcement to Snapcast pipe {fifo_path} "
+                    f"({result.get('bytes_written', 0)} bytes, {latency_ms}ms)"
+                )
+                _record_announcement(text, announcement_type, f"snapcast:{target_label}", True, None, latency_ms, False)
+                return {
+                    "success": True,
+                    "speaker": f"snapcast:{target_label}",
+                    "bytes_written": result.get("bytes_written", 0),
+                }
+            except FileNotFoundError:
+                error = f"Snapcast FIFO not found: {fifo_path}"
+                logger.error(error)
+                # Fall through to Cast path as fallback
+                logger.info("Falling back to Cast delivery path")
+            except Exception as e:
+                error = f"Snapcast stream failed: {e}"
+                logger.error(error)
+                # Fall through to Cast path as fallback
+                logger.info("Falling back to Cast delivery path")
+
+        # =====================================================================
+        # Cast delivery path (existing behavior — full file + HA media_player)
+        # =====================================================================
+        headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+        fallback_used = False
 
         # Generate audio via backend
         audio_bytes = await backend.synthesize(text)

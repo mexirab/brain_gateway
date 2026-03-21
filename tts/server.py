@@ -14,8 +14,10 @@ Endpoints:
 
 import os
 import io
+import re
 import logging
 import asyncio
+import struct
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -281,6 +283,25 @@ def generate_design_sync(
     return wavs[0], sr
 
 
+def split_sentences(text: str) -> List[str]:
+    """Split text into sentences on .!? boundaries, preserving punctuation."""
+    parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s.strip() for s in parts if s.strip()]
+
+
+def audio_to_pcm_bytes(audio_data) -> bytes:
+    """Convert audio numpy array to raw PCM int16 bytes."""
+    import numpy as np
+    # Normalize to int16 range
+    if audio_data.dtype != np.int16:
+        peak = max(abs(audio_data.max()), abs(audio_data.min()))
+        if peak > 0:
+            audio_data = (audio_data / peak * 32767).astype(np.int16)
+        else:
+            audio_data = audio_data.astype(np.int16)
+    return audio_data.tobytes()
+
+
 def audio_to_bytes(audio_data, sample_rate: int, format: str = "wav") -> bytes:
     """Convert audio numpy array to bytes."""
     buffer = io.BytesIO()
@@ -457,6 +478,66 @@ async def text_to_speech(request: TTSRequest):
     except Exception as e:
         logger.error(f"TTS generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tts/stream")
+async def text_to_speech_stream(request: TTSRequest):
+    """
+    Streaming TTS endpoint — generates audio sentence-by-sentence.
+
+    Returns raw PCM int16 mono audio at the model's sample rate.
+    The first sentence starts streaming before subsequent ones are generated,
+    enabling low-latency playback when piped to Snapcast.
+
+    Headers in response:
+    - X-Sample-Rate: sample rate (e.g. 24000)
+    - X-Channels: 1 (mono)
+    - X-Format: int16
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    if request.voice not in voice_clone_prompts:
+        available = list(voice_clone_prompts.keys()) if voice_clone_prompts else ["none"]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Voice '{request.voice}' not loaded. Available: {available}"
+        )
+
+    sentences = split_sentences(request.text)
+    if not sentences:
+        raise HTTPException(status_code=400, detail="No text to synthesize")
+
+    # Detect sample rate from a quick probe (model-dependent, usually 24000)
+    # We'll include it in response headers
+    sample_rate = 24000  # Qwen3-TTS default
+
+    async def generate():
+        loop = asyncio.get_event_loop()
+        for sentence in sentences:
+            try:
+                audio_data, sr = await loop.run_in_executor(
+                    executor,
+                    generate_audio_sync,
+                    sentence,
+                    request.voice,
+                    request.language,
+                    request.emotion,
+                )
+                yield audio_to_pcm_bytes(audio_data)
+            except Exception as e:
+                logger.error(f"Stream TTS failed for sentence '{sentence[:50]}': {e}")
+                break
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/octet-stream",
+        headers={
+            "X-Sample-Rate": str(sample_rate),
+            "X-Channels": "1",
+            "X-Format": "int16",
+        },
+    )
 
 
 @app.post("/tts/clone")
