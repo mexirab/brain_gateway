@@ -185,38 +185,44 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 FALLBACK_SPEAKER = os.environ.get("FALLBACK_SPEAKER", "media_player.dining_room_pair")
 
 
-def _resolve_snapcast_fifo(speaker: str | None) -> str:
+def _resolve_snapcast_fifos(speaker: str | None) -> list[str]:
     """
-    Map a speaker name to the corresponding Snapcast named pipe.
+    Map a speaker name to Snapcast named pipe path(s).
 
     Accepts:
-    - Room names: "office", "bedroom", "living", "kitchen", "all"
+    - Room names: "office", "bedroom", "living", "kitchen"
     - HA entity IDs: "media_player.office_max" → extracts first token → "office"
-    - None / unrecognized → falls back to "all"
+    - "all" / None / unrecognized → returns ALL room pipes (broadcast)
+
+    Returns a list of FIFO paths. For a specific room, returns one path.
+    For "all" or default, returns all room pipes so every client hears it
+    regardless of which stream they're subscribed to.
     """
     import shared
 
-    base = shared.SNAPCAST_FIFO_BASE  # e.g. /tmp/snapfifo
-    known_rooms = {"office", "bedroom", "living", "kitchen", "all"}
+    base = shared.SNAPCAST_FIFO_BASE  # e.g. /tmp/snapcast
+    rooms = ["office", "bedroom", "living", "kitchen"]
+    all_pipes = [f"{base}/{r}" for r in rooms]
 
     if not speaker:
-        return f"{base}/all"
+        return all_pipes
 
     # Direct room name match
     room = speaker.lower().strip()
-    if room in known_rooms:
-        return f"{base}/{room}"
+    if room == "all":
+        return all_pipes
+    if room in rooms:
+        return [f"{base}/{room}"]
 
     # Extract from HA entity_id (e.g. "media_player.office_max" → "office")
     if "." in room:
         room = room.split(".", 1)[1]  # "office_max"
-    # Take the first word as the room identifier
     first_word = room.split("_")[0]
-    if first_word in known_rooms:
-        return f"{base}_{first_word}"
+    if first_word in rooms:
+        return [f"{base}/{first_word}"]
 
-    # Fallback: broadcast to all
-    return f"{base}/all"
+    # Fallback: broadcast to all rooms
+    return all_pipes
 
 
 async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:
@@ -250,13 +256,13 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         # Snapcast streaming path (low latency, sentence-by-sentence)
         # =====================================================================
         if shared.SNAPCAST_ENABLED and hasattr(backend, "synthesize_to_snapcast"):
-            fifo_path = _resolve_snapcast_fifo(speaker)
+            fifo_paths = _resolve_snapcast_fifos(speaker)
             target_label = speaker or "all"
             try:
-                result = await backend.synthesize_to_snapcast(text, fifo_path)
+                result = await backend.synthesize_to_snapcast(text, fifo_paths)
                 latency_ms = int((_time.time() - t0) * 1000)
                 logger.info(
-                    f"Streamed announcement to Snapcast pipe {fifo_path} "
+                    f"Streamed announcement to {len(fifo_paths)} Snapcast pipe(s) "
                     f"({result.get('bytes_written', 0)} bytes, {latency_ms}ms)"
                 )
                 _record_announcement(text, announcement_type, f"snapcast:{target_label}", True, None, latency_ms, False)
@@ -266,7 +272,7 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
                     "bytes_written": result.get("bytes_written", 0),
                 }
             except FileNotFoundError:
-                error = f"Snapcast FIFO not found: {fifo_path}"
+                error = f"Snapcast FIFOs not found: {fifo_paths}"
                 logger.error(error)
                 # Fall through to Cast path as fallback
                 logger.info("Falling back to Cast delivery path")
