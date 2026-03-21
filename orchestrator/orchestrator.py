@@ -50,6 +50,7 @@ from cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
 from fast_path import try_fast_path
+from finance_manager import router as finance_router
 
 # Focus session management
 from focus_manager import deliver_focus_break
@@ -204,6 +205,7 @@ app.add_middleware(RateLimitMiddleware)
 
 # Mount the infrastructure API routes (health, metrics, HA, memory, reminders, focus, etc.)
 app.include_router(api_router)
+app.include_router(finance_router)
 
 
 # =============================================================================

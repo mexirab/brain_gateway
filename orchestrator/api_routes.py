@@ -735,6 +735,16 @@ async def get_announcements_stats():
     return JSONResponse(get_announcement_stats())
 
 
+@router.delete("/api/announcements/history")
+async def clear_announcements_history():
+    """Clear all announcement history."""
+    from state_store import clear_announcements
+
+    deleted = clear_announcements()
+    logger.info(f"[ANNOUNCE] Cleared {deleted} announcement(s)")
+    return JSONResponse({"ok": True, "deleted": deleted})
+
+
 # ---------------------------------------------------------------------------
 # Ambient Awareness (F-010)
 # ---------------------------------------------------------------------------

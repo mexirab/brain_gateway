@@ -398,3 +398,10 @@ def cleanup_old_announcements(keep_days: int = 30) -> int:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM announcement_history WHERE timestamp < ?", (cutoff,))
         return cursor.rowcount
+
+
+def clear_announcements() -> int:
+    """Delete all announcement history. Returns count of deleted rows."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM announcement_history")
+        return cursor.rowcount

@@ -61,5 +61,9 @@ export const api = {
   announcementHistory: (limit = 20) =>
     fetcher<AnnouncementEntry[]>(`/api/announcements/history?limit=${limit}`),
   announcementStats: () => fetcher<AnnouncementStats>('/api/announcements/stats'),
+  clearAnnouncements: () =>
+    fetcher<{ ok: boolean; deleted: number }>('/api/announcements/history', {
+      method: 'DELETE',
+    }),
   ambientStatus: () => fetcher<AmbientStatus>('/api/ambient/status'),
 };

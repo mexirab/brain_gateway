@@ -1,8 +1,9 @@
 import Link from 'next/link';
-import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/announcements', label: 'Announcements', icon: Volume2 },
   { href: '/finance', label: 'Finance', icon: Coins },
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/home', label: 'Home', icon: Home },
