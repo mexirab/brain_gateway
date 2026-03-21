@@ -85,6 +85,60 @@ class LocalHTTPBackend(TTSBackend):
         r.raise_for_status()
         return r.content
 
+    async def synthesize_to_snapcast(self, text: str, fifo_paths: str | list[str], voice: Optional[str] = None) -> dict:
+        """
+        Stream TTS audio sentence-by-sentence directly to Snapcast named pipe(s).
+
+        Uses the /tts/stream endpoint which yields raw PCM chunks per sentence.
+        Each chunk is written to all target FIFOs immediately, so the first
+        sentence plays while subsequent ones are still being synthesized.
+
+        When multiple pipes are given (broadcast), audio is generated once and
+        written to all pipes simultaneously.
+
+        Args:
+            text: Text to synthesize.
+            fifo_paths: One or more Snapcast named pipe paths.
+            voice: Override voice (uses config default if None).
+
+        Returns:
+            dict with success status and bytes_written count.
+        """
+        if isinstance(fifo_paths, str):
+            fifo_paths = [fifo_paths]
+
+        target_voice = voice or self.config.voice
+        bytes_written = 0
+
+        # Open all target FIFOs
+        fifos = []
+        for path in fifo_paths:
+            try:
+                fifos.append(open(path, "wb"))  # noqa: SIM115 – managed in finally block below
+            except FileNotFoundError:
+                logger.warning(f"Snapcast FIFO not found: {path}, skipping")
+
+        if not fifos:
+            raise FileNotFoundError(f"No Snapcast FIFOs available: {fifo_paths}")
+
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{self.config.url}/tts/stream",
+                json={"text": text, "voice": target_voice},
+                timeout=120,
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(chunk_size=4096):
+                    for fifo in fifos:
+                        fifo.write(chunk)
+                    bytes_written += len(chunk)
+        finally:
+            for fifo in fifos:
+                fifo.close()
+
+        return {"success": True, "bytes_written": bytes_written}
+
 
 class ElevenLabsBackend(TTSBackend):
     """

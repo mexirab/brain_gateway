@@ -3,6 +3,7 @@ Reminder Manager for Brain Gateway
 Handles voice reminder scheduling, storage, and delivery via Home Assistant.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -26,7 +27,15 @@ ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.248:8888")
 # Delivery targets (configurable via env and profile)
 _profile = get_profile()
 REMINDER_SPEAKER = os.environ.get("REMINDER_SPEAKER", _profile.default_speaker)
-MOBILE_NOTIFY = _profile.mobile_notify_service
+# Support both single service (backward compat) and list of services
+_NOTIFY_SERVICE_RE = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
+_MAX_NOTIFY_SERVICES = 10
+_raw_services = _profile.mobile_notify_services or (
+    [_profile.mobile_notify_service] if _profile.mobile_notify_service else []
+)
+MOBILE_NOTIFY_SERVICES: list[str] = [
+    s for s in _raw_services[:_MAX_NOTIFY_SERVICES] if isinstance(s, str) and _NOTIFY_SERVICE_RE.match(s)
+]
 
 
 # =============================================================================
@@ -185,32 +194,108 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 FALLBACK_SPEAKER = os.environ.get("FALLBACK_SPEAKER", "media_player.dining_room_pair")
 
 
+def _resolve_snapcast_fifos(speaker: str | None) -> list[str]:
+    """
+    Map a speaker name to Snapcast named pipe path(s).
+
+    Accepts:
+    - Room names: "office", "bedroom", "living", "kitchen"
+    - HA entity IDs: "media_player.office_max" → extracts first token → "office"
+    - "all" / None / unrecognized → returns ALL room pipes (broadcast)
+
+    Returns a list of FIFO paths. For a specific room, returns one path.
+    For "all" or default, returns all room pipes so every client hears it
+    regardless of which stream they're subscribed to.
+    """
+    import shared
+
+    base = shared.SNAPCAST_FIFO_BASE  # e.g. /tmp/snapcast
+    rooms = ["office", "bedroom", "living", "kitchen"]
+    all_pipes = [f"{base}/{r}" for r in rooms]
+
+    if not speaker:
+        return all_pipes
+
+    # Direct room name match
+    room = speaker.lower().strip()
+    if room == "all":
+        return all_pipes
+    if room in rooms:
+        return [f"{base}/{room}"]
+
+    # Extract from HA entity_id (e.g. "media_player.office_max" → "office")
+    if "." in room:
+        room = room.split(".", 1)[1]  # "office_max"
+    first_word = room.split("_")[0]
+    if first_word in rooms:
+        return [f"{base}/{first_word}"]
+
+    # Fallback: broadcast to all rooms
+    return all_pipes
+
+
 async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
-    Uses the configured TTS backend to generate audio,
-    then plays it on a Home Assistant media_player.
-    Falls back to FALLBACK_SPEAKER if primary speaker returns an error.
+    When SNAPCAST_ENABLED is true, streams TTS sentence-by-sentence directly
+    to the Snapcast named pipe for the target room (~1-2s to first audio).
+
+    When SNAPCAST_ENABLED is false, uses the existing Cast path: generates full
+    audio, saves to disk, serves via HTTP, and plays on an HA media_player.
 
     Args:
         text: The text to announce.
-        speaker: Target speaker entity (defaults to REMINDER_SPEAKER).
+        speaker: Target speaker entity or room name (defaults to REMINDER_SPEAKER).
         announcement_type: Category for tracking (calendar, reminder, focus, progress, ambient, etc.).
     """
     import time as _time
 
     import shared
 
-    headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
     t0 = _time.time()
-    fallback_used = False
 
     try:
         backend = shared.tts_backend
         if backend is None:
             _record_announcement(text, announcement_type, None, False, "TTS backend not initialized", None, False)
             return {"success": False, "error": "TTS backend not initialized"}
+
+        # =====================================================================
+        # Snapcast streaming path (low latency, sentence-by-sentence)
+        # =====================================================================
+        if shared.SNAPCAST_ENABLED and hasattr(backend, "synthesize_to_snapcast"):
+            fifo_paths = _resolve_snapcast_fifos(speaker)
+            target_label = speaker or "all"
+            try:
+                result = await backend.synthesize_to_snapcast(text, fifo_paths)
+                latency_ms = int((_time.time() - t0) * 1000)
+                logger.info(
+                    f"Streamed announcement to {len(fifo_paths)} Snapcast pipe(s) "
+                    f"({result.get('bytes_written', 0)} bytes, {latency_ms}ms)"
+                )
+                _record_announcement(text, announcement_type, f"snapcast:{target_label}", True, None, latency_ms, False)
+                return {
+                    "success": True,
+                    "speaker": f"snapcast:{target_label}",
+                    "bytes_written": result.get("bytes_written", 0),
+                }
+            except FileNotFoundError:
+                error = f"Snapcast FIFOs not found: {fifo_paths}"
+                logger.error(error)
+                # Fall through to Cast path as fallback
+                logger.info("Falling back to Cast delivery path")
+            except Exception as e:
+                error = f"Snapcast stream failed: {e}"
+                logger.error(error)
+                # Fall through to Cast path as fallback
+                logger.info("Falling back to Cast delivery path")
+
+        # =====================================================================
+        # Cast delivery path (existing behavior — full file + HA media_player)
+        # =====================================================================
+        headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+        fallback_used = False
 
         # Generate audio via backend
         audio_bytes = await backend.synthesize(text)
@@ -325,36 +410,75 @@ def _record_announcement(
         pass
 
 
+_raw_webui_url = os.environ.get("WEBUI_URL", "")
+WEBUI_URL = _raw_webui_url if re.match(r"^https?://", _raw_webui_url) else ""
+if _raw_webui_url and not WEBUI_URL:
+    logger.warning(f"[SECURITY] WEBUI_URL rejected (not http/https): {_raw_webui_url!r}")
+
+
 async def _send_notification(text: str) -> Dict[str, Any]:
-    """Send a mobile push notification via HA Companion App."""
+    """Send a mobile push notification to all configured phones via HA Companion App.
+
+    Includes a deep link to Open WebUI so tapping the notification opens the
+    chat interface. Works with both iOS and Android Companion Apps.
+    Fans out to all services in MOBILE_NOTIFY_SERVICES concurrently.
+    """
     headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
-    if not MOBILE_NOTIFY:
-        logger.warning("No mobile_notify_service configured, skipping notification")
-        return {"success": False, "error": "No mobile notification service configured"}
+    if not MOBILE_NOTIFY_SERVICES:
+        logger.warning("No mobile_notify_services configured, skipping notification")
+        return {"success": False, "error": "No mobile notification services configured"}
 
-    # Extract the service path from the full service name
-    # "notify.mobile_app_nadims_iphone" → "notify/mobile_app_nadims_iphone"
-    service_path = MOBILE_NOTIFY.replace(".", "/", 1)
+    # Build notification data with deep link for both platforms
+    notification_data: Dict[str, Any] = {
+        # iOS (HA Companion)
+        "push": {"sound": "default", "interruption-level": "time-sensitive"},
+    }
+    if WEBUI_URL:
+        # iOS: opens URL when notification is tapped
+        notification_data["url"] = WEBUI_URL
+        # Android: opens URL when notification is tapped
+        notification_data["clickAction"] = WEBUI_URL
 
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
+    payload = {
+        "message": text,
+        "title": _profile.notification_title,
+        "data": notification_data,
+    }
+
+    async def _post_one(client: httpx.AsyncClient, service: str) -> tuple[str, bool, str | None]:
+        service_path = service.replace(".", "/", 1)
+        try:
             response = await client.post(
                 f"{HA_URL}/api/services/{service_path}",
                 headers=headers,
-                json={
-                    "message": text,
-                    "title": _profile.notification_title,
-                    "data": {"push": {"sound": "default", "interruption-level": "time-sensitive"}},
-                },
+                json=payload,
             )
-
             if response.status_code == 200:
-                logger.info(f"Sent mobile notification: {text[:50]}...")
-                return {"success": True}
+                return service, True, None
+            return service, False, f"{service}: HA returned {response.status_code}"
+        except Exception as e:
+            return service, False, f"{service}: {e}"
+
+    successes = []
+    errors = []
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            results = await asyncio.gather(*[_post_one(client, s) for s in MOBILE_NOTIFY_SERVICES])
+        for svc, ok, err in results:
+            if ok:
+                successes.append(svc)
             else:
-                return {"success": False, "error": f"HA returned {response.status_code}"}
+                errors.append(err)
 
     except Exception as e:
         logger.error(f"Mobile notification failed: {e}")
         return {"success": False, "error": str(e)}
+
+    if successes:
+        logger.info(f"Sent notification to {len(successes)} phone(s): {text[:50]}...")
+    if errors:
+        logger.warning(f"Notification failed for: {errors}")
+
+    return {"success": len(successes) > 0, "delivered": successes, "errors": errors}

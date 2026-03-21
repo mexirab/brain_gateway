@@ -29,6 +29,9 @@ Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) han
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
 | Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
+| Snapcast (server) | 1704 | tcp://10.0.0.248:1704 (client connections) |
+| Snapcast (JSON-RPC) | 1705 | http://10.0.0.248:1705 |
+| Snapweb (UI) | 1780 | http://10.0.0.248:1780 |
 | Grafana | 3000 | http://localhost:3000/d/brain-gateway-overview (admin/braingw) |
 
 ## Architecture (v7 Unified)
@@ -289,6 +292,19 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | GET | /api/progress/today | Today's stats (tasks, focus, brain dumps) |
 | GET | /api/progress/week | This week's stats + trend vs prior week |
 | GET | /api/progress/streaks | Active streaks (task, focus, brain dump) |
+
+## Snapcast Streaming TTS Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| SNAPCAST_ENABLED | false | Enable Snapcast streaming TTS (replaces Cast delivery) |
+| SNAPCAST_FIFO_BASE | /tmp/snapcast | Base path for named pipes (per-room subdirectory) |
+
+## Notification Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| WEBUI_URL | (empty) | Deep link URL for notifications (opens Open WebUI on tap) |
 
 ## Auto-Learn Environment Variables
 

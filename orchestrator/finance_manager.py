@@ -422,13 +422,18 @@ async def get_budget_period(year_month: str):
 @router.post("/budget/manual-entry")
 async def add_manual_entry(req: Request):
     body = await req.json()
-    amount = body.get("amount", 0)
-    name = body.get("name", "Expense")
+    try:
+        amount = float(body.get("amount", 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "Amount must be a number"}, status_code=400)
+    name = str(body.get("name", "Expense"))[:200]
     category = body.get("category")
     is_discretionary = body.get("is_discretionary", True)
 
-    if amount <= 0:
-        return JSONResponse({"error": "Amount must be positive"}, status_code=400)
+    if amount <= 0 or amount > 100_000:
+        return JSONResponse({"error": "Amount must be between 0 and 100,000"}, status_code=400)
+    if not __import__("math").isfinite(amount):
+        return JSONResponse({"error": "Amount must be a finite number"}, status_code=400)
 
     with get_db() as conn:
         ym = _ensure_budget_period(conn)

@@ -723,6 +723,7 @@ async def get_announcements_history(limit: int = 50, type: str = None):
     """Recent announcement history with speaker, success, and latency."""
     from state_store import get_announcement_history
 
+    limit = max(1, min(limit, 500))
     history = get_announcement_history(limit=limit, announcement_type=type)
     return JSONResponse(history)
 
@@ -733,6 +734,16 @@ async def get_announcements_stats():
     from state_store import get_announcement_stats
 
     return JSONResponse(get_announcement_stats())
+
+
+@router.delete("/api/announcements/history")
+async def clear_announcements_history():
+    """Clear all announcement history."""
+    from state_store import clear_announcements
+
+    deleted = clear_announcements()
+    logger.info(f"[ANNOUNCE] Cleared {deleted} announcement(s)")
+    return JSONResponse({"ok": True, "deleted": deleted})
 
 
 # ---------------------------------------------------------------------------

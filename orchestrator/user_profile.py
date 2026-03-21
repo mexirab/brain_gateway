@@ -86,7 +86,8 @@ class UserProfile:
     speaker_aliases: Dict[str, str] = field(default_factory=dict)
 
     # Notifications
-    mobile_notify_service: str = ""
+    mobile_notify_service: str = ""  # deprecated: single service (backward compat)
+    mobile_notify_services: list[str] = field(default_factory=list)  # list of notify services
     notification_title: str = "Reminder"
 
     # Temperature sensors
@@ -128,6 +129,7 @@ class UserProfile:
             focus_audio_player=speakers.get("focus_audio", _DEFAULTS["speakers"]["focus_audio"]),
             speaker_aliases=speakers.get("aliases", {}),
             mobile_notify_service=notifications.get("mobile_service", _DEFAULTS["notifications"]["mobile_service"]),
+            mobile_notify_services=notifications.get("mobile_services", []),
             notification_title=notifications.get("title", _DEFAULTS["notifications"]["title"]),
             closet_temp_sensor=temp.get("closet", _DEFAULTS["sensors"]["temperature"]["closet"]),
             ambient_temp_sensor=temp.get("ambient", _DEFAULTS["sensors"]["temperature"]["ambient"]),

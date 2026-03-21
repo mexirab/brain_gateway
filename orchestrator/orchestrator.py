@@ -50,6 +50,7 @@ from cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
 from fast_path import try_fast_path
+from finance_manager import router as finance_router
 
 # Focus session management
 from focus_manager import deliver_focus_break
@@ -204,6 +205,7 @@ app.add_middleware(RateLimitMiddleware)
 
 # Mount the infrastructure API routes (health, metrics, HA, memory, reminders, focus, etc.)
 app.include_router(api_router)
+app.include_router(finance_router)
 
 
 # =============================================================================
@@ -364,6 +366,12 @@ async def startup_event():
     state_store.init_db()
     state_store.clear_stale_notifications(older_than_hours=48)
     state_store.cleanup_old_announcements(keep_days=30)
+    state_store.cleanup_old_selfcare(keep_days=90)
+
+    # Restore selfcare state from DB (must run after init_db creates tables)
+    from selfcare_manager import _restore_state as restore_selfcare
+
+    restore_selfcare()
 
     # Initialize progress tracking DB (F-005)
     import progress_tracker
@@ -620,6 +628,27 @@ async def startup_event():
             f"[SCHEDULER] Progress summary at {shared.DAILY_SUMMARY_TIME} daily, "
             f"digest {shared.WEEKLY_SUMMARY_DAY} {shared.WEEKLY_SUMMARY_TIME}"
         )
+
+    # Weekly DB maintenance (vacuum + cleanup, Sundays 3am)
+    async def _db_maintenance():
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, state_store.cleanup_old_announcements, 30)
+        await loop.run_in_executor(None, state_store.cleanup_old_selfcare, 90)
+        await loop.run_in_executor(None, state_store.vacuum_db)
+        logger.info("[DB] Weekly maintenance complete (cleanup + vacuum)")
+
+    scheduler.add_job(
+        _db_maintenance,
+        trigger="cron",
+        day_of_week="sun",
+        hour=3,
+        minute=0,
+        id="db_maintenance",
+        name="Weekly DB maintenance",
+        replace_existing=True,
+    )
 
 
 if __name__ == "__main__":

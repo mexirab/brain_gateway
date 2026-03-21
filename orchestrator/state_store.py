@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS announcement_history (
 
 CREATE INDEX IF NOT EXISTS idx_announcement_timestamp ON announcement_history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_announcement_type ON announcement_history(announcement_type);
+
+CREATE TABLE IF NOT EXISTS selfcare_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    logged_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_selfcare_action ON selfcare_log(action);
+CREATE INDEX IF NOT EXISTS idx_selfcare_logged_at ON selfcare_log(logged_at);
 """
 
 
@@ -398,3 +408,70 @@ def cleanup_old_announcements(keep_days: int = 30) -> int:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM announcement_history WHERE timestamp < ?", (cutoff,))
         return cursor.rowcount
+
+
+def clear_announcements() -> int:
+    """Delete all announcement history. Returns count of deleted rows."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM announcement_history")
+        return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Self-care log persistence
+# ---------------------------------------------------------------------------
+
+
+def save_selfcare_log(action: str, detail: Optional[str] = None) -> None:
+    """Persist a self-care action (meal, medication, water, movement)."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO selfcare_log (action, detail, logged_at) VALUES (?, ?, ?)",
+            (action, detail[:200] if detail else None, datetime.now().isoformat()),
+        )
+
+
+def get_last_selfcare(action: str) -> Optional[datetime]:
+    """Get the most recent timestamp for a given selfcare action."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT logged_at FROM selfcare_log WHERE action = ? ORDER BY logged_at DESC LIMIT 1",
+            (action,),
+        ).fetchone()
+        if row:
+            return datetime.fromisoformat(row["logged_at"])
+    return None
+
+
+def cleanup_old_selfcare(keep_days: int = 90) -> int:
+    """Remove selfcare log entries older than keep_days."""
+    cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM selfcare_log WHERE logged_at < ?", (cutoff,))
+        return cursor.rowcount
+
+
+def vacuum_db() -> None:
+    """Run VACUUM to reclaim disk space. Should be called periodically."""
+    conn = sqlite3.connect(DB_PATH, isolation_level=None)
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+
+
+def get_selfcare_today(action: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get today's selfcare log entries, optionally filtered by action."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        if action:
+            rows = conn.execute(
+                "SELECT * FROM selfcare_log WHERE action = ? AND logged_at >= ? ORDER BY logged_at DESC",
+                (action, today),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM selfcare_log WHERE logged_at >= ? ORDER BY logged_at DESC",
+                (today,),
+            ).fetchall()
+    return [dict(r) for r in rows]
