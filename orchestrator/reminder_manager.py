@@ -3,6 +3,7 @@ Reminder Manager for Brain Gateway
 Handles voice reminder scheduling, storage, and delivery via Home Assistant.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -26,7 +27,15 @@ ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.248:8888")
 # Delivery targets (configurable via env and profile)
 _profile = get_profile()
 REMINDER_SPEAKER = os.environ.get("REMINDER_SPEAKER", _profile.default_speaker)
-MOBILE_NOTIFY = _profile.mobile_notify_service
+# Support both single service (backward compat) and list of services
+_NOTIFY_SERVICE_RE = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
+_MAX_NOTIFY_SERVICES = 10
+_raw_services = _profile.mobile_notify_services or (
+    [_profile.mobile_notify_service] if _profile.mobile_notify_service else []
+)
+MOBILE_NOTIFY_SERVICES: list[str] = [
+    s for s in _raw_services[:_MAX_NOTIFY_SERVICES] if isinstance(s, str) and _NOTIFY_SERVICE_RE.match(s)
+]
 
 
 # =============================================================================
@@ -401,36 +410,75 @@ def _record_announcement(
         pass
 
 
+_raw_webui_url = os.environ.get("WEBUI_URL", "")
+WEBUI_URL = _raw_webui_url if re.match(r"^https?://", _raw_webui_url) else ""
+if _raw_webui_url and not WEBUI_URL:
+    logger.warning(f"[SECURITY] WEBUI_URL rejected (not http/https): {_raw_webui_url!r}")
+
+
 async def _send_notification(text: str) -> Dict[str, Any]:
-    """Send a mobile push notification via HA Companion App."""
+    """Send a mobile push notification to all configured phones via HA Companion App.
+
+    Includes a deep link to Open WebUI so tapping the notification opens the
+    chat interface. Works with both iOS and Android Companion Apps.
+    Fans out to all services in MOBILE_NOTIFY_SERVICES concurrently.
+    """
     headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
-    if not MOBILE_NOTIFY:
-        logger.warning("No mobile_notify_service configured, skipping notification")
-        return {"success": False, "error": "No mobile notification service configured"}
+    if not MOBILE_NOTIFY_SERVICES:
+        logger.warning("No mobile_notify_services configured, skipping notification")
+        return {"success": False, "error": "No mobile notification services configured"}
 
-    # Extract the service path from the full service name
-    # "notify.mobile_app_nadims_iphone" → "notify/mobile_app_nadims_iphone"
-    service_path = MOBILE_NOTIFY.replace(".", "/", 1)
+    # Build notification data with deep link for both platforms
+    notification_data: Dict[str, Any] = {
+        # iOS (HA Companion)
+        "push": {"sound": "default", "interruption-level": "time-sensitive"},
+    }
+    if WEBUI_URL:
+        # iOS: opens URL when notification is tapped
+        notification_data["url"] = WEBUI_URL
+        # Android: opens URL when notification is tapped
+        notification_data["clickAction"] = WEBUI_URL
 
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
+    payload = {
+        "message": text,
+        "title": _profile.notification_title,
+        "data": notification_data,
+    }
+
+    async def _post_one(client: httpx.AsyncClient, service: str) -> tuple[str, bool, str | None]:
+        service_path = service.replace(".", "/", 1)
+        try:
             response = await client.post(
                 f"{HA_URL}/api/services/{service_path}",
                 headers=headers,
-                json={
-                    "message": text,
-                    "title": _profile.notification_title,
-                    "data": {"push": {"sound": "default", "interruption-level": "time-sensitive"}},
-                },
+                json=payload,
             )
-
             if response.status_code == 200:
-                logger.info(f"Sent mobile notification: {text[:50]}...")
-                return {"success": True}
+                return service, True, None
+            return service, False, f"{service}: HA returned {response.status_code}"
+        except Exception as e:
+            return service, False, f"{service}: {e}"
+
+    successes = []
+    errors = []
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            results = await asyncio.gather(*[_post_one(client, s) for s in MOBILE_NOTIFY_SERVICES])
+        for svc, ok, err in results:
+            if ok:
+                successes.append(svc)
             else:
-                return {"success": False, "error": f"HA returned {response.status_code}"}
+                errors.append(err)
 
     except Exception as e:
         logger.error(f"Mobile notification failed: {e}")
         return {"success": False, "error": str(e)}
+
+    if successes:
+        logger.info(f"Sent notification to {len(successes)} phone(s): {text[:50]}...")
+    if errors:
+        logger.warning(f"Notification failed for: {errors}")
+
+    return {"success": len(successes) > 0, "delivered": successes, "errors": errors}

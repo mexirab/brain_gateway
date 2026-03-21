@@ -139,6 +139,8 @@ services:
       - YNAB_BUDGET_ID=${YNAB_BUDGET_ID:-}
       - YNAB_SYNC_INTERVAL=${YNAB_SYNC_INTERVAL:-30}
       - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
+      # Open WebUI deep link (for notification tap → chat)
+      - WEBUI_URL=${WEBUI_URL:-https://jupiter-amds.tail74fc4a.ts.net}
       # Snapcast streaming TTS
       - SNAPCAST_ENABLED=${SNAPCAST_ENABLED:-false}
       - SNAPCAST_FIFO_BASE=${SNAPCAST_FIFO_BASE:-/tmp/snapcast}

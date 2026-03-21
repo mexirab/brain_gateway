@@ -298,7 +298,13 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | SNAPCAST_ENABLED | false | Enable Snapcast streaming TTS (replaces Cast delivery) |
-| SNAPCAST_FIFO_BASE | /tmp/snapfifo | Base path for named pipes (appended with _office, _all, etc.) |
+| SNAPCAST_FIFO_BASE | /tmp/snapcast | Base path for named pipes (per-room subdirectory) |
+
+## Notification Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| WEBUI_URL | (empty) | Deep link URL for notifications (opens Open WebUI on tap) |
 
 ## Auto-Learn Environment Variables
 
