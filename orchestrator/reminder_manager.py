@@ -200,12 +200,12 @@ def _resolve_snapcast_fifo(speaker: str | None) -> str:
     known_rooms = {"office", "bedroom", "living", "kitchen", "all"}
 
     if not speaker:
-        return f"{base}_all"
+        return f"{base}/all"
 
     # Direct room name match
     room = speaker.lower().strip()
     if room in known_rooms:
-        return f"{base}_{room}"
+        return f"{base}/{room}"
 
     # Extract from HA entity_id (e.g. "media_player.office_max" → "office")
     if "." in room:
@@ -216,7 +216,7 @@ def _resolve_snapcast_fifo(speaker: str | None) -> str:
         return f"{base}_{first_word}"
 
     # Fallback: broadcast to all
-    return f"{base}_all"
+    return f"{base}/all"
 
 
 async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:

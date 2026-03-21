@@ -74,11 +74,7 @@ services:
       # Finance SQLite database
       - finance-data:/app/data:rw
       # Snapcast named pipes for streaming TTS
-      - /tmp/snapfifo_office:/tmp/snapfifo_office
-      - /tmp/snapfifo_bedroom:/tmp/snapfifo_bedroom
-      - /tmp/snapfifo_living:/tmp/snapfifo_living
-      - /tmp/snapfifo_kitchen:/tmp/snapfifo_kitchen
-      - /tmp/snapfifo_all:/tmp/snapfifo_all
+      - /tmp/snapcast:/tmp/snapcast
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
       # Routine definitions (F-006)
@@ -145,7 +141,7 @@ services:
       - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
       # Snapcast streaming TTS
       - SNAPCAST_ENABLED=${SNAPCAST_ENABLED:-false}
-      - SNAPCAST_FIFO_BASE=${SNAPCAST_FIFO_BASE:-/tmp/snapfifo}
+      - SNAPCAST_FIFO_BASE=${SNAPCAST_FIFO_BASE:-/tmp/snapcast}
       # API authentication
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
       # Auto-learn from conversations
@@ -313,11 +309,7 @@ services:
     environment:
       - ROLE=snapserver
     volumes:
-      - /tmp/snapfifo_office:/tmp/snapfifo_office
-      - /tmp/snapfifo_bedroom:/tmp/snapfifo_bedroom
-      - /tmp/snapfifo_living:/tmp/snapfifo_living
-      - /tmp/snapfifo_kitchen:/tmp/snapfifo_kitchen
-      - /tmp/snapfifo_all:/tmp/snapfifo_all
+      - /tmp/snapcast:/tmp/snapcast
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/snapcast/snapserver.conf:/etc/snapserver.conf:ro
     networks:
       - gateway-net
