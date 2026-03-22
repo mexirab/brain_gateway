@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import state_store
 from user_profile import get_profile
 
 logger = logging.getLogger(__name__)
@@ -146,8 +147,6 @@ def format_time_friendly(dt: datetime) -> str:
 # =============================================================================
 # PERSISTENT REMINDER STORAGE (SQLite via state_store)
 # =============================================================================
-
-import state_store
 
 
 def add_reminder(reminder_id: str, text: str, trigger_time: datetime, target: str = "both") -> Dict[str, Any]:
@@ -377,8 +376,6 @@ def _record_announcement(
 ) -> None:
     """Record announcement to DB and metrics (fire-and-forget)."""
     try:
-        import state_store
-
         state_store.record_announcement(
             text=text,
             announcement_type=announcement_type,
@@ -407,9 +404,12 @@ def _record_announcement(
             TTS_FALLBACK_TOTAL.inc()
 
         if not success and error:
-            error_type = (
-                "ha_error" if "HA returned" in error else "connection" if "Connection" in error else "tts_error"
-            )
+            if "HA returned" in error:
+                error_type = "ha_error"
+            elif "Connection" in error:
+                error_type = "connection"
+            else:
+                error_type = "tts_error"
             TTS_ERRORS_TOTAL.labels(error_type=error_type).inc()
     except Exception:
         pass

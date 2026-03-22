@@ -318,7 +318,7 @@ def clear_notifications_by_prefix(prefix: str) -> int:
         return cursor.rowcount
 
 
-def set_notification_flag(key: str, value: str = "true") -> None:
+def set_notification_flag(key: str) -> None:
     """Set a persistent flag in the notification_tracking table."""
     mark_notified(key)
 
@@ -528,23 +528,18 @@ def add_shopping_item(item: str, list_name: str = "grocery") -> Dict[str, Any]:
 
 def get_shopping_list(list_name: Optional[str] = None, include_checked: bool = False) -> List[Dict[str, Any]]:
     """Get shopping list items, optionally filtered by list name."""
+    clauses = []
+    params: list = []
+    if list_name:
+        clauses.append("list_name = ?")
+        params.append(list_name)
+    if not include_checked:
+        clauses.append("checked = 0")
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    order = "list_name, " if not list_name else ""
+    order += "checked ASC, added_at DESC" if include_checked else "added_at DESC"
     with get_db() as conn:
-        if list_name and include_checked:
-            rows = conn.execute(
-                "SELECT * FROM shopping_list WHERE list_name = ? ORDER BY checked ASC, added_at DESC",
-                (list_name,),
-            ).fetchall()
-        elif list_name:
-            rows = conn.execute(
-                "SELECT * FROM shopping_list WHERE list_name = ? AND checked = 0 ORDER BY added_at DESC",
-                (list_name,),
-            ).fetchall()
-        elif include_checked:
-            rows = conn.execute("SELECT * FROM shopping_list ORDER BY list_name, checked ASC, added_at DESC").fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM shopping_list WHERE checked = 0 ORDER BY list_name, added_at DESC"
-            ).fetchall()
+        rows = conn.execute(f"SELECT * FROM shopping_list{where} ORDER BY {order}", params).fetchall()
     return [dict(r) for r in rows]
 
 

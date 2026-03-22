@@ -6,7 +6,6 @@ import {
   Plus,
   Trash2,
   Check,
-  RotateCcw,
   Filter,
   X,
 } from 'lucide-react';

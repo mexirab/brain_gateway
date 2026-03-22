@@ -33,7 +33,7 @@ _state = SelfCareState()
 def _restore_state() -> None:
     """Restore selfcare state from persistent storage on startup."""
     try:
-        from state_store import get_last_selfcare
+        from state_store import get_last_selfcare, get_selfcare_today
 
         last_meal = get_last_selfcare("meal")
         if last_meal:
@@ -50,8 +50,6 @@ def _restore_state() -> None:
             _state.sitting_since = last_movement
 
         # Restore today's med confirmations
-        from state_store import get_selfcare_today
-
         today_meds = get_selfcare_today("medication")
         for entry in today_meds:
             med_name = (entry.get("detail") or "medication").lower()

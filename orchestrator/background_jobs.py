@@ -5,18 +5,18 @@ email-to-calendar event extraction, YNAB transaction sync.
 
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import httpx
+
 import shared
 import state_store
 from google_calendar import get_calendar_client
 from google_gmail import get_gmail_client
-from travel_time import get_travel_time
-
-logger = logging.getLogger(__name__)
 from metrics import (
     CALENDAR_POLL_EVENTS_FOUND,
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
@@ -28,6 +28,9 @@ from metrics import (
 )
 from reminder_manager import _announce_voice, list_pending_reminders
 from shared import TIMEZONE, profile
+from travel_time import get_travel_time
+
+logger = logging.getLogger(__name__)
 
 _LLM_URL = shared.MODEL_URL
 _LLM_MODEL = shared.MODEL_NAME
@@ -44,15 +47,9 @@ async def _get_weather_forecast() -> str | None:
     """
     global _NWS_FORECAST_URL
 
-    import httpx
-
     try:
         # Lazy resolve: geocode the grid endpoint once
         if _NWS_FORECAST_URL is None:
-            # Get coordinates from WEATHER_LAT/WEATHER_LON env vars
-            # or from the Nominatim free geocoder as fallback
-            import os
-
             lat = float(os.environ.get("WEATHER_LAT", "0"))
             lon = float(os.environ.get("WEATHER_LON", "0"))
 
@@ -875,11 +872,6 @@ async def check_closet_temperature():
 
 
 # ---------------------------------------------------------------------------
-# Progress Tracking (F-005)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Ambient Awareness (F-010)
 # ---------------------------------------------------------------------------
 
@@ -889,7 +881,6 @@ async def ambient_summary():
     try:
         # Respect quiet hours
         from datetime import time as _time
-        from zoneinfo import ZoneInfo
 
         from ambient_manager import build_ambient_summary_text
 

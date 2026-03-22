@@ -30,7 +30,6 @@ from metrics import (
     WEB_SEARCH_LATENCY,
     WEB_SEARCH_RESULTS,
 )
-from model_manager import check_model_health, start_model_server
 from prompt_builder import rag_context
 from reminder_manager import (
     _announce_voice,
@@ -44,8 +43,6 @@ from reminder_manager import (
     remove_reminder,
 )
 from shared import (
-    MODEL_NAME,
-    MODEL_URL,
     ha_client,
     scheduler,
 )
@@ -183,7 +180,7 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             import state_store
 
             if shared.DND_ACTIVE:
-                state_store.set_notification_flag("dnd_active", "true")
+                state_store.set_notification_flag("dnd_active")
                 logger.info("[DND] Sleep mode enabled — all announcements suppressed")
                 return "Sleep mode on. No more announcements tonight. Good night!"
             else:
@@ -236,26 +233,20 @@ def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
             lines.append(f"  - {it['item']} (id: {it['id']})")
         return "\n".join(lines)
 
-    elif action == "check":
+    elif action in ("check", "uncheck", "remove"):
         item_id = arguments.get("item_id")
         if not item_id:
             return "No item_id specified."
-        ok = check_shopping_item(int(item_id), checked=True)
-        return "Checked off." if ok else "Item not found."
-
-    elif action == "uncheck":
-        item_id = arguments.get("item_id")
-        if not item_id:
-            return "No item_id specified."
-        ok = check_shopping_item(int(item_id), checked=False)
-        return "Unchecked." if ok else "Item not found."
-
-    elif action == "remove":
-        item_id = arguments.get("item_id")
-        if not item_id:
-            return "No item_id specified."
-        ok = remove_shopping_item(int(item_id))
-        return "Removed." if ok else "Item not found."
+        iid = int(item_id)
+        if action == "check":
+            ok = check_shopping_item(iid, checked=True)
+            return "Checked off." if ok else "Item not found."
+        elif action == "uncheck":
+            ok = check_shopping_item(iid, checked=False)
+            return "Unchecked." if ok else "Item not found."
+        else:
+            ok = remove_shopping_item(iid)
+            return "Removed." if ok else "Item not found."
 
     elif action == "clear_checked":
         count = clear_checked_items(list_name if list_name != "all" else None)
@@ -496,56 +487,6 @@ async def tool_search_email(query: str, max_results: int = 10) -> str:
             lines.append(f"  Preview: {msg.snippet}")
 
     return "\n".join(lines)
-
-
-async def tool_ask_expert(question: str, context: str = "") -> str:
-    """Delegate a complex question to Helios 120B. Auto-starts if offline."""
-    from orchestrator import call_model
-
-    if not question:
-        return "No question provided"
-
-    logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
-    # Track model request for monitoring
-
-    if not await check_model_health():
-        started = await start_model_server()
-        if not started:
-            return "Expert model is offline and could not be started. Please try again later or start Helios manually."
-
-    messages = []
-    if context:
-        messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"})
-    else:
-        messages.append({"role": "user", "content": question})
-
-    system_prompt = """You are an expert assistant helping with complex reasoning, coding, and analysis.
-Provide detailed, thorough answers. Be precise and accurate."""
-
-    try:
-        response = await call_model(
-            MODEL_URL,
-            MODEL_NAME,
-            messages,
-            system=system_prompt,
-            timeout=300,
-        )
-
-        msg = response.get("choices", [{}])[0].get("message", {})
-        content = msg.get("content", "")
-        reasoning = msg.get("reasoning_content", "")
-
-        if content:
-            logger.info(f"[EXPERT] Helios responded ({len(content)} chars)")
-            return content
-        elif reasoning:
-            logger.info(f"[EXPERT] Helios responded with reasoning ({len(reasoning)} chars)")
-            return reasoning
-        else:
-            return "Expert model returned empty response"
-    except Exception as e:
-        logger.error(f"[EXPERT] Helios failed: {e}")
-        return f"Expert model unavailable: {str(e)}"
 
 
 def tool_update_data(arguments: Dict[str, Any]) -> str:

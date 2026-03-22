@@ -86,24 +86,6 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "ask_expert",
-            "description": "Delegate to the expert model (Helios 120B) for ANY question requiring knowledge or reasoning. Use this for: general knowledge (books, movies, history, science), coding, analysis, explanations, factual questions, creative writing, or ANYTHING you're not certain about. The expert has broad knowledge - use it liberally.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "The question or task to delegate to the expert model",
-                    },
-                    "context": {"type": "string", "description": "Optional additional context to help the expert"},
-                },
-                "required": ["question"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "update_data",
             "description": "Update the user's structured personal data (medications, projects). Use this when they ask to add, remove, or modify medications or project information.",
             "parameters": {
@@ -689,10 +671,5 @@ STATIC_TOOLS = [
 
 
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7).
-
-    Returns HA tool + all static tools, excluding ask_expert
-    (the unified model IS the expert — no delegation needed).
-    """
-    unified_tools = [t for t in STATIC_TOOLS if t["function"]["name"] != "ask_expert"]
-    return [get_ha_tool_definition()] + unified_tools
+    """Get all tools for unified mode (v7): HA tool + all static tools."""
+    return [get_ha_tool_definition()] + STATIC_TOOLS
