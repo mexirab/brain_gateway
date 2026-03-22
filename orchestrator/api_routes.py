@@ -389,7 +389,9 @@ async def run_email_to_calendar():
 async def announce_tts(body: AnnounceRequest):
     """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
     try:
-        await _announce_voice(body.text, speaker=body.speaker, announcement_type="manual")
+        result = await _announce_voice(body.text, speaker=body.speaker, announcement_type="manual")
+        if result.get("suppressed"):
+            return {"ok": True, "suppressed": True, "reason": result.get("reason")}
         logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'}: {body.text[:80]}")
         return {"ok": True, "text": body.text, "speaker": body.speaker or "default"}
     except Exception as e:

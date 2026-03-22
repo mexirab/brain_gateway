@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 import shared
-from reminder_manager import _announce_voice
+from reminder_manager import _announce_voice, _send_notification
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,7 @@ async def check_selfcare() -> None:
 
     if nudge:
         await _announce_voice(nudge, announcement_type="selfcare")
+        await _send_notification(nudge)
         logger.info(f"[SELFCARE] Nudge: {nudge[:60]}", extra={"component": "selfcare"})
 
 
@@ -173,26 +174,33 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
 
         current_hour = now_tz.hour
 
+        # Generic "medication" confirmation covers meds in the current window
+        generic = _state.last_med_confirmation.get("medication")
+
         # Morning meds: window 7:00-10:00
         if 7 <= current_hour < 10:
+            if generic and generic.date() == now.date() and generic.hour < 12:
+                return None  # generic morning confirmation
             for med in daily.get("morning", []):
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
                 last = _state.last_med_confirmation.get(med_name.lower())
-                if last and last.date() == now.date():
-                    continue  # already confirmed today
+                if last and last.date() == now.date() and last.hour < 12:
+                    continue  # confirmed this morning
                 return f"Hey, did you take your {med_name}?"
 
         # Evening meds: window 20:00-22:00
         if 20 <= current_hour < 22:
+            if generic and generic.date() == now.date() and generic.hour >= 17:
+                return None  # generic evening confirmation
             for med in daily.get("evening", []):
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
                 last = _state.last_med_confirmation.get(med_name.lower())
-                if last and last.date() == now.date():
-                    continue
+                if last and last.date() == now.date() and last.hour >= 17:
+                    continue  # confirmed this evening
                 return f"Hey, did you take your {med_name}?"
 
     except Exception as e:

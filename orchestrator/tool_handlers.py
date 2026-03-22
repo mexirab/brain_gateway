@@ -176,6 +176,20 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await check_system(arguments.get("query", "system_health"))
         elif tool_name == "analyze_image":
             return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
+        elif tool_name == "sleep_mode":
+            action = arguments.get("action", "on")
+            shared.DND_ACTIVE = action == "on"
+            # Persist so DND survives restarts
+            import state_store
+
+            if shared.DND_ACTIVE:
+                state_store.set_notification_flag("dnd_active", "true")
+                logger.info("[DND] Sleep mode enabled — all announcements suppressed")
+                return "Sleep mode on. No more announcements tonight. Good night!"
+            else:
+                state_store.clear_notification_flag("dnd_active")
+                logger.info("[DND] Sleep mode disabled — announcements resumed")
+                return "Good morning! Announcements are back on."
         elif tool_name == "shopping_list":
             import asyncio
 

@@ -255,6 +255,11 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
 
     t0 = _time.time()
 
+    # Do Not Disturb — suppress all announcements when user said goodnight
+    if shared.DND_ACTIVE:
+        logger.info(f"[DND] Suppressed announcement ({announcement_type}): {text[:60]}")
+        return {"success": True, "suppressed": True, "reason": "dnd_active"}
+
     try:
         backend = shared.tts_backend
         if backend is None:

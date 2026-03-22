@@ -354,6 +354,12 @@ ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "tru
 SNAPCAST_ENABLED = os.environ.get("SNAPCAST_ENABLED", "false").lower() == "true"
 SNAPCAST_FIFO_BASE = os.environ.get("SNAPCAST_FIFO_BASE", "/tmp/snapcast")
 
+# ---------------------------------------------------------------------------
+# Do Not Disturb (sleep mode) — suppresses all announcements
+# Persisted to state_store notification_tracking table (key: "dnd_active")
+# ---------------------------------------------------------------------------
+DND_ACTIVE = False  # set via goodnight tool, cleared on morning briefing
+
 AMBIENT_ENABLED = os.environ.get("AMBIENT_ENABLED", "true").lower() == "true"
 AMBIENT_SUMMARY_TIMES = os.environ.get("AMBIENT_SUMMARY_TIMES", "10:00,12:00,14:00,16:00")
 AMBIENT_LED_ENTITY = os.environ.get("AMBIENT_LED_ENTITY", "")

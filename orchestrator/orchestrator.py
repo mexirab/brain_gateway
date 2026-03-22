@@ -375,6 +375,11 @@ async def startup_event():
 
     restore_selfcare()
 
+    # Restore DND (sleep mode) state
+    shared.DND_ACTIVE = state_store.is_notified("dnd_active")
+    if shared.DND_ACTIVE:
+        logger.info("[DND] Restored sleep mode from DB — announcements suppressed")
+
     # Initialize progress tracking DB (F-005)
     import progress_tracker
 

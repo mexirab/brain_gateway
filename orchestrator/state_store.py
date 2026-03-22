@@ -318,6 +318,17 @@ def clear_notifications_by_prefix(prefix: str) -> int:
         return cursor.rowcount
 
 
+def set_notification_flag(key: str, value: str = "true") -> None:
+    """Set a persistent flag in the notification_tracking table."""
+    mark_notified(key)
+
+
+def clear_notification_flag(key: str) -> None:
+    """Clear a persistent flag from the notification_tracking table."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM notification_tracking WHERE key = ?", (key,))
+
+
 # ---------------------------------------------------------------------------
 # Announcement History
 # ---------------------------------------------------------------------------
@@ -434,11 +445,22 @@ def clear_announcements() -> int:
 
 
 def save_selfcare_log(action: str, detail: Optional[str] = None) -> None:
-    """Persist a self-care action (meal, medication, water, movement)."""
+    """Persist a self-care action (meal, medication, water, movement).
+
+    Deduplicates: skips if the same action+detail was logged in the last 5 minutes.
+    """
+    cutoff = (datetime.now() - timedelta(minutes=5)).isoformat()
+    truncated = detail[:200] if detail else None
     with get_db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM selfcare_log WHERE action = ? AND detail IS ? AND logged_at > ? LIMIT 1",
+            (action, truncated, cutoff),
+        ).fetchone()
+        if existing:
+            return  # duplicate within 5 minutes
         conn.execute(
             "INSERT INTO selfcare_log (action, detail, logged_at) VALUES (?, ?, ?)",
-            (action, detail[:200] if detail else None, datetime.now().isoformat()),
+            (action, truncated, datetime.now().isoformat()),
         )
 
 
