@@ -289,16 +289,38 @@ def split_sentences(text: str) -> List[str]:
     return [s.strip() for s in parts if s.strip()]
 
 
+TTS_GAIN_DB = float(os.environ.get("TTS_GAIN_DB", "6"))
+
+
 def audio_to_pcm_bytes(audio_data) -> bytes:
-    """Convert audio numpy array to raw PCM int16 bytes."""
+    """Convert audio numpy array to raw PCM int16 bytes with loudness boost.
+
+    Applies peak normalization then a configurable gain (TTS_GAIN_DB, default +6 dB)
+    with a limiter to prevent clipping.  This raises average loudness significantly
+    for TTS audio that has a high peak-to-RMS ratio.
+    """
     import numpy as np
-    # Normalize to int16 range
-    if audio_data.dtype != np.int16:
-        peak = max(abs(audio_data.max()), abs(audio_data.min()))
-        if peak > 0:
-            audio_data = (audio_data / peak * 32767).astype(np.int16)
-        else:
-            audio_data = audio_data.astype(np.int16)
+
+    if audio_data.dtype == np.int16:
+        audio_data = audio_data.astype(np.float64)
+
+    # Peak-normalize to [-1, 1]
+    peak = max(abs(audio_data.max()), abs(audio_data.min()))
+    if peak > 0:
+        audio_data = audio_data / peak
+    else:
+        return (audio_data.astype(np.int16)).tobytes()
+
+    # Apply gain boost
+    if TTS_GAIN_DB != 0:
+        gain = 10 ** (TTS_GAIN_DB / 20)
+        audio_data = audio_data * gain
+
+    # Soft-clip (tanh limiter) to avoid harsh digital clipping
+    audio_data = np.tanh(audio_data)
+
+    # Scale to int16
+    audio_data = (audio_data * 32767).astype(np.int16)
     return audio_data.tobytes()
 
 
