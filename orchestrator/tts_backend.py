@@ -14,8 +14,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 import httpx
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Snapcast expects 48kHz; TTS produces 24kHz.  Resample by duplicating samples (2x).
+_TTS_SAMPLE_RATE = 24000
+_SNAP_SAMPLE_RATE = 48000
+_UPSAMPLE_FACTOR = _SNAP_SAMPLE_RATE // _TTS_SAMPLE_RATE  # 2
 
 
 @dataclass
@@ -130,9 +136,18 @@ class LocalHTTPBackend(TTSBackend):
             ) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes(chunk_size=4096):
+                    # Resample 24kHz → 48kHz by repeating each sample
+                    samples = np.frombuffer(chunk, dtype=np.int16)
+                    upsampled = np.repeat(samples, _UPSAMPLE_FACTOR).tobytes()
                     for fifo in fifos:
-                        fifo.write(chunk)
-                    bytes_written += len(chunk)
+                        fifo.write(upsampled)
+                    bytes_written += len(upsampled)
+
+            # Pad with 3s of silence so Snapcast clients finish playing
+            # the buffered audio before the stream goes idle
+            silence = bytes(_SNAP_SAMPLE_RATE * 2 * 3)  # 3s @ 48kHz 16-bit mono
+            for fifo in fifos:
+                fifo.write(silence)
         finally:
             for fifo in fifos:
                 fifo.close()

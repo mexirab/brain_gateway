@@ -169,7 +169,14 @@ PERSONAL CONTEXT (from {user}'s notes):
     if interrupt_context:
         context_section += f"\n{interrupt_context}\n"
 
+    from datetime import datetime
+
+    now = datetime.now()
+    date_str = now.strftime("%A, %B %-d, %Y at %-I:%M %p")
+
     return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
+
+CURRENT DATE/TIME: {date_str}
 
 PERSONALITY:
 - {profile.assistant_personality}
