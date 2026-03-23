@@ -195,6 +195,10 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             import asyncio
 
             return await asyncio.to_thread(_handle_shopping_list, arguments)
+        elif tool_name == "document_vault":
+            import asyncio
+
+            return await asyncio.to_thread(_handle_document_vault, arguments)
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -852,3 +856,93 @@ async def tool_analyze_image(query: str) -> str:
 
     logger.info("[VISION_TOOL] Re-analyzing cached image with query: %s", query[:100])
     return await analyze_image(image_data, query)
+def _handle_document_vault(arguments: Dict[str, Any]) -> str:
+    """Handle document_vault tool calls."""
+    from state_store import get_document, list_documents, update_document
+
+    action = arguments.get("action", "list")
+
+    if action == "search":
+        query = arguments.get("query", "")
+        if not query:
+            return "No search query provided."
+        docs = list_documents(search=query, limit=10)
+        if not docs:
+            return f"No documents found matching '{query}'."
+        lines = [f"Found {len(docs)} document(s):"]
+        for d in docs:
+            size_kb = d["file_size"] // 1024
+            lines.append(
+                f"- **{d['title']}** (id: {d['id']}, {d['category']}, {size_kb} KB, uploaded {d['uploaded_at'][:10]})"
+            )
+            if d.get("tags"):
+                lines.append(f"  Tags: {d['tags']}")
+            if d.get("notes"):
+                lines.append(f"  Notes: {d['notes']}")
+        return "\n".join(lines)
+
+    elif action == "list":
+        category = arguments.get("category")
+        docs = list_documents(category=category, limit=20)
+        if not docs:
+            label = f"in category '{category}'" if category else ""
+            return f"No documents found {label}."
+        lines = [f"{len(docs)} document(s){f' in {category}' if category else ''}:"]
+        for d in docs:
+            lines.append(f"- **{d['title']}** (id: {d['id']}, {d['category']}, uploaded {d['uploaded_at'][:10]})")
+            if d.get("notes"):
+                lines.append(f"  Notes: {d['notes']}")
+        return "\n".join(lines)
+
+    elif action == "update":
+        doc_id = arguments.get("doc_id", "")
+        if not doc_id:
+            # Try to find the document by searching
+            return "I need a document ID to update. Use search first to find the document."
+
+        doc = get_document(doc_id)
+        if not doc:
+            return f"Document not found: {doc_id}"
+
+        updates: Dict[str, Any] = {}
+        if "notes" in arguments:
+            updates["notes"] = arguments["notes"]
+        if "title" in arguments:
+            updates["title"] = arguments["title"]
+        if "category" in arguments:
+            updates["category"] = arguments["category"]
+
+        if not updates:
+            return "No updates provided."
+
+        update_document(doc_id, updates)
+
+        # Re-index notes in RAG so they're searchable
+        if "notes" in updates and updates["notes"]:
+            try:
+                import shared
+
+                rag_id = doc.get("rag_doc_id") or f"vault_{doc_id}"
+                notes_id = f"{rag_id}_notes"
+                embedding = shared.embedding_model.encode(updates["notes"], normalize_embeddings=True).tolist()
+                shared.collection.upsert(
+                    documents=[updates["notes"]],
+                    embeddings=[embedding],
+                    metadatas=[
+                        {
+                            "source": "document_vault",
+                            "category": doc["category"],
+                            "title": doc["title"],
+                            "vault_doc_id": doc_id,
+                            "kind": "chunk",
+                        }
+                    ],
+                    ids=[notes_id],
+                )
+            except Exception:
+                pass  # RAG index failure shouldn't block the update
+
+        updated_fields = ", ".join(updates.keys())
+        return f"Updated {updated_fields} on '{doc.get('title', doc_id)}'."
+
+    return f"Unknown action: {action}"

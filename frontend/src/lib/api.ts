@@ -14,6 +14,8 @@ import type {
   ShoppingItem,
   Conversation,
   SavedMessage,
+  VaultDocument,
+  DocumentCategory,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -117,4 +119,30 @@ export const api = {
     }),
   deleteConversation: (convId: string) =>
     fetcher<{ ok: boolean }>(`/api/chat/conversations/${convId}`, { method: 'DELETE' }),
+  // Document Vault
+  documents: (category?: string, search?: string, limit = 50) =>
+    fetcher<VaultDocument[]>(
+      `/api/documents?limit=${limit}${category ? `&category=${category}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}`,
+    ),
+  document: (id: string) => fetcher<VaultDocument>(`/api/documents/${id}`),
+  uploadDocument: async (file: File, title: string, category: string, tags: string, notes: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('title', title);
+    form.append('category', category);
+    form.append('tags', tags);
+    form.append('notes', notes);
+    const res = await fetch(`${PROXY}/api/documents`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    return res.json() as Promise<VaultDocument>;
+  },
+  updateDocument: (id: string, updates: Partial<VaultDocument>) =>
+    fetcher<{ ok: boolean }>(`/api/documents/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }),
+  deleteDocument: (id: string) =>
+    fetcher<{ ok: boolean }>(`/api/documents/${id}`, { method: 'DELETE' }),
+  documentCategories: () => fetcher<DocumentCategory[]>('/api/documents/categories'),
 };

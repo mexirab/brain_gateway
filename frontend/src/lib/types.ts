@@ -212,6 +212,28 @@ export interface AmbientStatus {
   led_color: string;
 }
 
+// Document Vault
+export interface VaultDocument {
+  id: string;
+  title: string;
+  category: string;
+  tags: string;
+  notes: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number;
+  extracted_text?: string | null;
+  rag_doc_id: string | null;
+  uploaded_at: string;
+  updated_at: string;
+}
+
+export interface DocumentCategory {
+  category: string;
+  count: number;
+}
+
 // Chat Conversations
 export interface Conversation {
   id: string;

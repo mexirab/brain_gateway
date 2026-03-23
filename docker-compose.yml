@@ -75,6 +75,8 @@ services:
       - finance-data:/app/data:rw
       # Snapcast named pipes for streaming TTS
       - /tmp/snapcast:/tmp/snapcast
+      # Document vault storage (1.8TB USB drive)
+      - /mnt/documents:/mnt/documents:rw
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
       # Routine definitions (F-006)

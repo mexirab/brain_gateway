@@ -125,18 +125,25 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 MAX_BODY_SIZE = int(
     os.environ.get("MAX_BODY_SIZE", 15_000_000)
 )  # 15MB default (supports vision: 10MB image + base64 overhead)
+MAX_BODY_SIZE = int(os.environ.get("MAX_BODY_SIZE", 1_000_000))  # 1MB default (HA sends all entity states)
+MAX_UPLOAD_SIZE = int(os.environ.get("DOCUMENT_MAX_SIZE_MB", 100)) * 1024 * 1024  # for file uploads
+
+# Paths that accept large uploads (documents, STT audio)
+_LARGE_UPLOAD_PATHS = {"/api/documents", "/api/stt/transcribe"}
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject request bodies larger than MAX_BODY_SIZE."""
+    """Reject request bodies larger than MAX_BODY_SIZE (or MAX_UPLOAD_SIZE for file uploads)."""
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length:
+            path = request.url.path
+            limit = MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE
             try:
-                if int(content_length) > MAX_BODY_SIZE:
+                if int(content_length) > limit:
                     return JSONResponse(
-                        {"error": f"Request body too large (max {MAX_BODY_SIZE} bytes)"},
+                        {"error": f"Request body too large (max {limit} bytes)"},
                         status_code=413,
                     )
             except ValueError:

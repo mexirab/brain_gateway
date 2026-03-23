@@ -109,6 +109,25 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    tags TEXT,
+    notes TEXT,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    extracted_text TEXT,
+    rag_doc_id TEXT,
+    uploaded_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+CREATE INDEX IF NOT EXISTS idx_documents_uploaded ON documents(uploaded_at);
 """
 
 
@@ -660,5 +679,98 @@ def get_conversation_messages(conv_id: str) -> List[Dict[str, Any]]:
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at", (conv_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Document Vault
+# ---------------------------------------------------------------------------
+
+
+def save_document(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Save a document record."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO documents
+               (id, title, category, tags, notes, file_name, file_path, file_type, file_size,
+                extracted_text, rag_doc_id, uploaded_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                doc["id"],
+                doc["title"],
+                doc["category"],
+                doc.get("tags", ""),
+                doc.get("notes", ""),
+                doc["file_name"],
+                doc["file_path"],
+                doc["file_type"],
+                doc["file_size"],
+                doc.get("extracted_text"),
+                doc.get("rag_doc_id"),
+                doc["uploaded_at"],
+                doc["updated_at"],
+            ),
+        )
+    return doc
+
+
+def get_document(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single document by ID."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_documents(
+    category: Optional[str] = None, search: Optional[str] = None, limit: int = 50, offset: int = 0
+) -> List[Dict[str, Any]]:
+    """List documents with optional category filter and text search."""
+    query = "SELECT * FROM documents WHERE 1=1"
+    params: list = []
+    if category:
+        query += " AND category = ?"
+        params.append(category)
+    if search:
+        query += " AND (title LIKE ? OR tags LIKE ? OR notes LIKE ?)"
+        term = f"%{search}%"
+        params.extend([term, term, term])
+    query += " ORDER BY uploaded_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_document(doc_id: str, updates: Dict[str, Any]) -> bool:
+    """Update document metadata (title, category, tags, notes)."""
+    allowed = {"title", "category", "tags", "notes"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return False
+    fields["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [doc_id]
+    with get_db() as conn:
+        cursor = conn.execute(f"UPDATE documents SET {set_clause} WHERE id = ?", values)  # noqa: S608
+        return cursor.rowcount > 0
+
+
+def delete_document(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Delete a document, returning it first for file cleanup."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if not row:
+            return None
+        doc = dict(row)
+        conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+        return doc
+
+
+def get_document_categories() -> List[Dict[str, Any]]:
+    """Get document counts per category."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT category, COUNT(*) as count FROM documents GROUP BY category ORDER BY count DESC"
         ).fetchall()
         return [dict(r) for r in rows]

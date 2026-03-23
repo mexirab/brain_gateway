@@ -667,6 +667,45 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "document_vault",
+            "description": "Search, browse, or update documents in the user's vault (car titles, medical records, financial docs, insurance, etc.). Use 'search' to find documents, 'list' to browse by category, 'update' to add/replace notes on a document. When the user provides details about a document (VIN, account number, policy info), use 'update' to save those as notes. Documents are also findable via search_memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "list", "update"],
+                        "description": "search = find documents by query, list = browse by category, update = add/replace notes or metadata on a document",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (for search action)",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["auto", "financial", "medical", "legal", "insurance", "personal", "housing", "other"],
+                        "description": "Category filter (for list action)",
+                    },
+                    "doc_id": {
+                        "type": "string",
+                        "description": "Document ID (for update action — get this from search/list results)",
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Notes to save on the document (for update action). Will replace existing notes.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New title for the document (for update action, optional)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 
