@@ -53,7 +53,9 @@ def _restore_state() -> None:
         today_meds = get_selfcare_today("medication")
         for entry in today_meds:
             med_name = (entry.get("detail") or "medication").lower()
-            _state.last_med_confirmation[med_name] = datetime.fromisoformat(entry["logged_at"])
+            logged_at = datetime.fromisoformat(entry["logged_at"])
+            _state.last_med_confirmation[med_name] = logged_at
+            _expand_med_confirmation(med_name, logged_at)
 
     except Exception as e:
         logger.warning(f"[SELFCARE] Failed to restore state from DB: {e}")
@@ -86,6 +88,8 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
     elif action == "medication":
         med_name = detail or "medication"
         _state.last_med_confirmation[med_name.lower()] = now
+        # Also mark individual meds if a group phrase like "morning meds" was used
+        _expand_med_confirmation(med_name, now)
         save_selfcare_log("medication", med_name)
         next_sched = _get_next_med_schedule(med_name)
         logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})
@@ -296,6 +300,38 @@ async def get_selfcare_status() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _expand_med_confirmation(detail: str, when: datetime) -> None:
+    """If detail is a group phrase (e.g. 'morning meds'), also confirm each
+    individual medication in that schedule window.  Also handles detail strings
+    that mention specific meds by name (e.g. 'morning meds (Vyvanse, Wellbutrin)')."""
+    try:
+        from data_manager import get_medications
+
+        meds_data = get_medications()
+        daily = meds_data.get("daily", {})
+        detail_lower = detail.lower()
+
+        # "morning meds" → confirm all morning meds; same for "evening meds"
+        for window in ("morning", "evening"):
+            if window in detail_lower and "med" in detail_lower:
+                for med in daily.get(window, []):
+                    name = med.get("name", "").lower()
+                    if name:
+                        _state.last_med_confirmation[name] = when
+
+        # Also check if any individual med name appears in the detail string
+        for window_meds in daily.values():
+            if not isinstance(window_meds, list):
+                continue
+            for med in window_meds:
+                name = med.get("name", "").lower()
+                if name and name in detail_lower:
+                    _state.last_med_confirmation[name] = when
+
+    except Exception:
+        pass
 
 
 def _get_next_med_schedule(med_name: str) -> Optional[str]:

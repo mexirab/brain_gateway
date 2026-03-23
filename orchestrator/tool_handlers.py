@@ -2,6 +2,7 @@
 Tool execution handlers: dispatcher + all tool_* functions.
 """
 
+import json
 import logging
 import time
 import uuid
@@ -132,8 +133,11 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         elif tool_name == "decide_for_me":
             return await tool_decide_for_me(arguments)
         elif tool_name == "selfcare_log":
-            from selfcare_manager import log_selfcare
+            from selfcare_manager import get_selfcare_status, log_selfcare
 
+            if arguments.get("action") == "check":
+                status = await get_selfcare_status()
+                return json.dumps(status)
             return await log_selfcare(arguments.get("action", ""), arguments.get("detail"))
         elif tool_name == "bookmark_context":
             from context_tracker import bookmark_context

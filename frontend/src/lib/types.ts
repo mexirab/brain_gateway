@@ -211,3 +211,21 @@ export interface AmbientStatus {
   active_task: string | null;
   led_color: string;
 }
+
+// Chat Conversations
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedMessage {
+  id: number;
+  conversation_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  routing: string | null;
+  announcement_type: string | null;
+  created_at: string;
+}

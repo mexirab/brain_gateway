@@ -12,6 +12,8 @@ import type {
   AnnouncementStats,
   AmbientStatus,
   ShoppingItem,
+  Conversation,
+  SavedMessage,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -88,4 +90,31 @@ export const api = {
       `/api/shopping/checked${listName ? `?list_name=${listName}` : ''}`,
       { method: 'DELETE' },
     ),
+  // Chat conversations
+  listConversations: (limit = 50) =>
+    fetcher<Conversation[]>(`/api/chat/conversations?limit=${limit}`),
+  createConversation: (title: string) =>
+    fetcher<Conversation>('/api/chat/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }),
+  getConversationMessages: (convId: string) =>
+    fetcher<{ conversation: Conversation; messages: SavedMessage[] }>(
+      `/api/chat/conversations/${convId}/messages`,
+    ),
+  saveMessage: (convId: string, role: string, content: string, routing?: unknown, announcementType?: string) =>
+    fetcher<SavedMessage>(`/api/chat/conversations/${convId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, content, routing, announcement_type: announcementType }),
+    }),
+  updateConversation: (convId: string, title: string) =>
+    fetcher<{ ok: boolean }>(`/api/chat/conversations/${convId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }),
+  deleteConversation: (convId: string) =>
+    fetcher<{ ok: boolean }>(`/api/chat/conversations/${convId}`, { method: 'DELETE' }),
 };

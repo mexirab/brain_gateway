@@ -8,8 +8,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, File, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 import shared
@@ -850,9 +850,7 @@ async def get_progress_streaks():
     return JSONResponse(get_streaks())
 
 
-# =============================================================================
 # VISION / IMAGE RECOGNITION
-# =============================================================================
 
 
 @router.post("/api/vision/analyze")
@@ -966,3 +964,127 @@ async def vision_status():
             "model": shared.VISION_MODEL_NAME,
         }
     )
+# ---------------------------------------------------------------------------
+# Voice: STT + TTS proxy endpoints for chat page
+# ---------------------------------------------------------------------------
+
+STT_URL = os.environ.get("STT_URL", "http://10.0.0.173:8003")
+
+
+MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/api/stt/transcribe")
+async def stt_transcribe(file: UploadFile = File(...)):
+    """Proxy audio to STT service for transcription."""
+    audio_data = await file.read()
+    if len(audio_data) > MAX_AUDIO_UPLOAD:
+        return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
+    r = await shared._http.post(
+        f"{STT_URL}/v1/audio/transcriptions",
+        files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
+        data={"model": "whisper-1"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+@router.post("/api/tts/synthesize")
+async def tts_synthesize(request: Request):
+    """Synthesize text to speech and return WAV audio."""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text:
+        return JSONResponse({"error": "No text provided"}, status_code=400)
+    backend = shared.tts_backend
+    if not backend:
+        return JSONResponse({"error": "TTS not available"}, status_code=503)
+    audio_bytes = await backend.synthesize(text)
+    return Response(content=audio_bytes, media_type="audio/wav")
+
+
+# ---------------------------------------------------------------------------
+# Chat conversation history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/chat/conversations")
+async def list_chat_conversations(limit: int = 50):
+    """List all conversations, most recent first."""
+    from state_store import list_conversations
+
+    return JSONResponse(list_conversations(min(limit, 200)))
+
+
+@router.post("/api/chat/conversations")
+async def create_chat_conversation(request: Request):
+    """Create a new conversation."""
+    import uuid
+
+    from state_store import create_conversation
+
+    body = await request.json()
+    title = body.get("title", "New Chat")
+    conv_id = str(uuid.uuid4())
+    return JSONResponse(create_conversation(conv_id, title))
+
+
+@router.get("/api/chat/conversations/{conv_id}/messages")
+async def get_chat_messages(conv_id: str):
+    """Get all messages in a conversation."""
+    from state_store import get_conversation, get_conversation_messages
+
+    conv = get_conversation(conv_id)
+    if not conv:
+        return JSONResponse({"error": "Conversation not found"}, status_code=404)
+    messages = get_conversation_messages(conv_id)
+    return JSONResponse({"conversation": conv, "messages": messages})
+
+
+@router.post("/api/chat/conversations/{conv_id}/messages")
+async def add_chat_message(conv_id: str, request: Request):
+    """Save a message to a conversation."""
+    from state_store import get_conversation, save_chat_message
+
+    conv = get_conversation(conv_id)
+    if not conv:
+        return JSONResponse({"error": "Conversation not found"}, status_code=404)
+    body = await request.json()
+    role = body.get("role", "user")
+    content = body.get("content", "")
+    routing = body.get("routing")
+    announcement_type = body.get("announcement_type")
+    if not content:
+        return JSONResponse({"error": "No content"}, status_code=400)
+    import json
+
+    routing_str = json.dumps(routing) if routing else None
+    msg = save_chat_message(conv_id, role, content, routing_str, announcement_type)
+    return JSONResponse(msg)
+
+
+@router.put("/api/chat/conversations/{conv_id}")
+async def update_chat_conversation(conv_id: str, request: Request):
+    """Update conversation title."""
+    from state_store import update_conversation_title
+
+    body = await request.json()
+    title = body.get("title", "")
+    if not title:
+        return JSONResponse({"error": "No title"}, status_code=400)
+    ok = update_conversation_title(conv_id, title)
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@router.delete("/api/chat/conversations/{conv_id}")
+async def delete_chat_conversation(conv_id: str):
+    """Delete a conversation and all its messages."""
+    from state_store import delete_conversation
+
+    ok = delete_conversation(conv_id)
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})

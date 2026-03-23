@@ -531,14 +531,14 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "selfcare_log",
-            "description": "Log a self-care action: meal eaten, medication taken, water drunk, or movement done. ALWAYS call this when user mentions eating (had lunch, grabbed a snack, just ate), taking medication (took my meds, yes I took it), drinking water, or exercising. Must be logged even if you also respond conversationally.",
+            "description": "Log a self-care action OR check current status. ALWAYS call this when user mentions eating (had lunch, grabbed a snack, just ate), taking medication (took my meds, yes I took it), drinking water, or exercising. Use action='check' when user asks 'did I take my meds?', 'what have I logged today?', 'have I eaten?'. Must be logged even if you also respond conversationally.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["meal", "medication", "water", "movement"],
-                        "description": "Type of self-care action",
+                        "enum": ["meal", "medication", "water", "movement", "check"],
+                        "description": "Type of self-care action. Use 'check' to query what's been logged today without logging anything new.",
                     },
                     "detail": {
                         "type": "string",

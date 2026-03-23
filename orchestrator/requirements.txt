@@ -5,6 +5,7 @@ uvicorn[standard]>=0.41,<1.0
 httpx>=0.28,<1.0
 python-dotenv>=1.2,<2.0
 pydantic>=2.12,<3.0
+python-multipart>=0.0.18,<1.0
 pydantic-settings>=2.13,<3.0
 
 # AI/ML

@@ -9,6 +9,19 @@ function isAuthed(request: NextRequest): boolean {
   return request.cookies.get(COOKIE_NAME)?.value === TOKEN;
 }
 
+/** Return binary response directly instead of parsing as JSON. */
+function isBinaryResponse(res: Response): boolean {
+  const ct = res.headers.get('content-type') || '';
+  return ct.startsWith('audio/') || ct.startsWith('image/') || ct === 'application/octet-stream';
+}
+
+function binaryResponse(res: Response, ct: string): Response {
+  return new Response(res.body, {
+    status: res.status,
+    headers: { 'Content-Type': ct },
+  });
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
@@ -25,6 +38,11 @@ export async function GET(
   const res = await fetch(url.toString(), {
     headers: { 'Authorization': `Bearer ${API_TOKEN}` },
   });
+
+  if (isBinaryResponse(res)) {
+    return binaryResponse(res, res.headers.get('content-type')!);
+  }
+
   const data = await res.json();
   return NextResponse.json(data, { status: res.status });
 }
@@ -41,8 +59,12 @@ export async function POST(
   const targetPath = '/' + path.join('/');
   const url = new URL(targetPath, ORCHESTRATOR_URL);
 
-  const body = await request.text();
   const contentType = request.headers.get('content-type') || 'application/json';
+
+  // Multipart form-data: forward raw bytes to preserve boundary
+  const body = contentType.includes('multipart/')
+    ? Buffer.from(await request.arrayBuffer())
+    : await request.text();
 
   const res = await fetch(url.toString(), {
     method: 'POST',
@@ -60,6 +82,11 @@ export async function POST(
         Connection: 'keep-alive',
       },
     });
+  }
+
+  // Handle binary responses (TTS audio)
+  if (isBinaryResponse(res)) {
+    return binaryResponse(res, res.headers.get('content-type')!);
   }
 
   const data = await res.json();

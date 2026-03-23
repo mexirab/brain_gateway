@@ -253,6 +253,24 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | GET | /api/announcements/history?limit=50&type= | Recent announcement history (text, speaker, success, latency) |
 | GET | /api/announcements/stats | Success rates, per-speaker breakdown, avg latency, today's count |
 
+## Chat History API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/chat/conversations?limit=50 | List conversations (most recent first) |
+| POST | /api/chat/conversations | Create conversation: `{title}` |
+| GET | /api/chat/conversations/:id/messages | Get conversation + messages |
+| POST | /api/chat/conversations/:id/messages | Save message: `{role, content, routing?, announcement_type?}` |
+| PUT | /api/chat/conversations/:id | Update title: `{title}` |
+| DELETE | /api/chat/conversations/:id | Delete conversation + messages |
+
+## Voice API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | /api/stt/transcribe | Proxy audio to Whisper STT (multipart, max 10MB) |
+| POST | /api/tts/synthesize | Synthesize text to WAV: `{text}` |
+
 ## Self-Care Nudge Environment Variables
 
 | Variable | Default | Purpose |

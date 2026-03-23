@@ -88,6 +88,27 @@ CREATE TABLE IF NOT EXISTS selfcare_log (
 
 CREATE INDEX IF NOT EXISTS idx_selfcare_action ON selfcare_log(action);
 CREATE INDEX IF NOT EXISTS idx_selfcare_logged_at ON selfcare_log(logged_at);
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_conv_updated ON chat_conversations(updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    routing TEXT,
+    announcement_type TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id);
 """
 
 
@@ -97,6 +118,7 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
         conn.commit()
@@ -568,3 +590,75 @@ def clear_checked_items(list_name: Optional[str] = None) -> int:
         else:
             cursor = conn.execute("DELETE FROM shopping_list WHERE checked = 1")
         return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Chat Conversations
+# ---------------------------------------------------------------------------
+
+
+def create_conversation(conv_id: str, title: str) -> Dict[str, Any]:
+    """Create a new chat conversation."""
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO chat_conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (conv_id, title, now, now),
+        )
+    return {"id": conv_id, "title": title, "created_at": now, "updated_at": now}
+
+
+def list_conversations(limit: int = 50) -> List[Dict[str, Any]]:
+    """List conversations ordered by most recently updated."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM chat_conversations ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single conversation by ID."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM chat_conversations WHERE id = ?", (conv_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_conversation_title(conv_id: str, title: str) -> bool:
+    """Update a conversation's title."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE chat_conversations SET title = ?, updated_at = ? WHERE id = ?",
+            (title, datetime.now().isoformat(), conv_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_conversation(conv_id: str) -> bool:
+    """Delete a conversation and its messages."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM chat_messages WHERE conversation_id = ?", (conv_id,))
+        cursor = conn.execute("DELETE FROM chat_conversations WHERE id = ?", (conv_id,))
+        return cursor.rowcount > 0
+
+
+def save_chat_message(
+    conv_id: str, role: str, content: str, routing: Optional[str] = None, announcement_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """Save a message to a conversation and bump updated_at."""
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO chat_messages (conversation_id, role, content, routing, announcement_type, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (conv_id, role, content, routing, announcement_type, now),
+        )
+        conn.execute("UPDATE chat_conversations SET updated_at = ? WHERE id = ?", (now, conv_id))
+        return {"id": cursor.lastrowid, "conversation_id": conv_id, "role": role, "content": content, "created_at": now}
+
+
+def get_conversation_messages(conv_id: str) -> List[Dict[str, Any]]:
+    """Get all messages in a conversation."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at", (conv_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
