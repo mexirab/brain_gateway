@@ -122,14 +122,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 # Maximum request body size (bytes) — rejects oversized payloads before LLM processing
-MAX_BODY_SIZE = int(
-    os.environ.get("MAX_BODY_SIZE", 15_000_000)
-)  # 15MB default (supports vision: 10MB image + base64 overhead)
 MAX_BODY_SIZE = int(os.environ.get("MAX_BODY_SIZE", 1_000_000))  # 1MB default (HA sends all entity states)
 MAX_UPLOAD_SIZE = int(os.environ.get("DOCUMENT_MAX_SIZE_MB", 100)) * 1024 * 1024  # for file uploads
 
 # Paths that accept large uploads (documents, STT audio)
-_LARGE_UPLOAD_PATHS = {"/api/documents", "/api/stt/transcribe"}
+_LARGE_UPLOAD_PATHS = {"/api/documents", "/api/stt/transcribe", "/api/vision/analyze", "/v1/chat/completions", "/chat/completions"}
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):

@@ -622,6 +622,12 @@ STATIC_TOOLS = [
                     }
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "sleep_mode",
             "description": "Enable or disable Do Not Disturb / sleep mode. ALWAYS call this when the user says goodnight, bedtime, going to sleep, or I'm done for the night (action=on). Also call when user says good morning, I'm up, or wake up (action=off). When enabled, ALL announcements (reminders, selfcare nudges, routine prompts) are suppressed until morning.",
             "parameters": {
