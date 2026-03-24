@@ -115,14 +115,23 @@ def save_uploaded_file(file_bytes: bytes, original_name: str, category: str) -> 
     return f"{category}/{filename}"
 
 
+def _safe_vault_path(relative_path: str) -> Path:
+    """Resolve a vault-relative path and verify it stays inside the vault (prevents path traversal)."""
+    full = (Path(VAULT_PATH) / relative_path).resolve()
+    vault_root = Path(VAULT_PATH).resolve()
+    if not str(full).startswith(str(vault_root)):
+        raise ValueError(f"Path traversal detected: {relative_path}")
+    return full
+
+
 def get_full_path(relative_path: str) -> str:
     """Get the absolute path for a vault-relative path."""
-    return str(Path(VAULT_PATH) / relative_path)
+    return str(_safe_vault_path(relative_path))
 
 
 def delete_file(relative_path: str) -> bool:
     """Delete a file from the vault."""
-    full = Path(VAULT_PATH) / relative_path
+    full = _safe_vault_path(relative_path)
     if full.exists():
         full.unlink()
         return True
