@@ -73,6 +73,8 @@ All tools are called directly by the single model in one agentic loop.
 | check_system | System diagnostics: logs, health, recent errors |
 | finance_status | Budget, spending, XP/levels from YNAB integration |
 | analyze_image | Re-analyze or ask follow-up questions about a shared image |
+| shopping_list | Add/check/remove items from shopping/grocery lists |
+| sleep_mode | Do Not Disturb: suppress all announcements until morning |
 
 ## Key Files
 
@@ -89,7 +91,7 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
 | orchestrator/ambient_manager.py | Ambient awareness: aggregated status, periodic TTS summaries, LED control |
-| orchestrator/selfcare_manager.py | Self-care nudges: meals, meds, hydration, movement with smart suppression |
+| orchestrator/selfcare_manager.py | Self-care nudges: meals, meds, hydration, movement — persisted to SQLite, phone notifications |
 | orchestrator/tests/test_selfcare_manager.py | Self-care manager unit tests (logging, nudge timing, quiet hours) |
 | orchestrator/context_tracker.py | Interruption recovery: context stack, bookmarks, auto-capture, check-in timer |
 | orchestrator/tests/test_context_tracker.py | Context tracker unit tests (bookmarks, recall, prompt context) |
@@ -100,15 +102,15 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking, body doubling sprints |
 | orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
-| orchestrator/api_routes.py | REST endpoints (health, metrics, memory, reminders, focus, progress, announcements, ambient) |
-| orchestrator/background_jobs.py | Calendar polling, morning briefing, email polling, temperature alerts, selfcare, ambient summaries |
+| orchestrator/api_routes.py | REST endpoints (health, metrics, memory, reminders, focus, progress, announcements, ambient, shopping) |
+| orchestrator/background_jobs.py | Calendar polling, morning briefing (weather), email polling, temperature alerts, selfcare, ambient, DB maintenance |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/mode_router.py | Intent-based mode router |
 | orchestrator/google_calendar.py | Google Calendar API v3 client |
 | orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
 | orchestrator/pihole_client.py | Pi-hole v6 multi-instance client |
-| orchestrator/reminder_manager.py | TTS announcements, reminders, announcement history tracking |
-| orchestrator/state_store.py | SQLite persistence: reminders, focus sessions, notifications, announcement history |
+| orchestrator/reminder_manager.py | TTS announcements, reminders, announcement history, DND gate, multi-phone notifications |
+| orchestrator/state_store.py | SQLite persistence: reminders, focus sessions, notifications, announcements, selfcare, shopping |
 | orchestrator/cloud_brain.py | CloudBrain class: model routing, fallback, unified loop orchestration |
 | orchestrator/llm_backend.py | LLM backend initialization and configuration |
 | orchestrator/data_manager.py | YAML data management: medications, projects |
@@ -121,7 +123,6 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/fast_path.py | Fast path handler for simple commands (lights, greetings) |
 | orchestrator/user_profile.py | User profile loader from YAML |
 | orchestrator/log_config.py | Structured JSON logging configuration |
-| orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
 | scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
@@ -252,6 +253,24 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | GET | /api/announcements/history?limit=50&type= | Recent announcement history (text, speaker, success, latency) |
 | GET | /api/announcements/stats | Success rates, per-speaker breakdown, avg latency, today's count |
 
+## Chat History API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/chat/conversations?limit=50 | List conversations (most recent first) |
+| POST | /api/chat/conversations | Create conversation: `{title}` |
+| GET | /api/chat/conversations/:id/messages | Get conversation + messages |
+| POST | /api/chat/conversations/:id/messages | Save message: `{role, content, routing?, announcement_type?}` |
+| PUT | /api/chat/conversations/:id | Update title: `{title}` |
+| DELETE | /api/chat/conversations/:id | Delete conversation + messages |
+
+## Voice API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | /api/stt/transcribe | Proxy audio to Whisper STT (multipart, max 10MB) |
+| POST | /api/tts/synthesize | Synthesize text to WAV: `{text}` |
+
 ## Self-Care Nudge Environment Variables
 
 | Variable | Default | Purpose |
@@ -326,6 +345,38 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | WEBUI_URL | (empty) | Deep link URL for notifications (opens Open WebUI on tap) |
+
+## Shopping List API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/shopping?list_name=&include_checked= | Get shopping list items |
+| POST | /api/shopping | Add item: `{item, list_name}` |
+| POST | /api/shopping/{id}/check | Check off item |
+| POST | /api/shopping/{id}/uncheck | Uncheck item |
+| DELETE | /api/shopping/checked?list_name= | Clear all checked items |
+| DELETE | /api/shopping/{id} | Delete item |
+
+## Sleep Mode (Do Not Disturb)
+
+Say "goodnight" or "bedtime" → `sleep_mode` tool activates DND. All TTS announcements
+and phone notifications are suppressed. State persists to SQLite across restarts.
+Auto-clears when morning briefing fires (5-11am). Say "good morning" to manually disable.
+
+## Weather in Morning Briefing
+
+Morning briefing includes weather forecast from the National Weather Service API.
+Home address is geocoded via Nominatim (free, no API key). Override with env vars:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| WEATHER_LAT | (geocoded) | Latitude for weather forecast |
+| WEATHER_LON | (geocoded) | Longitude for weather forecast |
+
+## DB Maintenance
+
+Weekly scheduled job (Sundays 3am): cleans announcements (>30 days), selfcare logs
+(>90 days), and runs VACUUM. Also runs cleanup on startup.
 
 ## Auto-Learn Environment Variables
 

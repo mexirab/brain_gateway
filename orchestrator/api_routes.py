@@ -8,8 +8,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 import shared
@@ -389,7 +389,9 @@ async def run_email_to_calendar():
 async def announce_tts(body: AnnounceRequest):
     """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
     try:
-        await _announce_voice(body.text, speaker=body.speaker, announcement_type="manual")
+        result = await _announce_voice(body.text, speaker=body.speaker, announcement_type="manual")
+        if result.get("suppressed"):
+            return {"ok": True, "suppressed": True, "reason": result.get("reason")}
         logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'}: {body.text[:80]}")
         return {"ok": True, "text": body.text, "speaker": body.speaker or "default"}
     except Exception as e:
@@ -747,6 +749,70 @@ async def clear_announcements_history():
 
 
 # ---------------------------------------------------------------------------
+# Shopping / Grocery List
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/shopping")
+async def get_shopping(list_name: str = None, include_checked: bool = False):
+    """Get shopping list items."""
+    from state_store import get_shopping_list
+
+    items = get_shopping_list(list_name=list_name, include_checked=include_checked)
+    return JSONResponse(items)
+
+
+@router.post("/api/shopping")
+async def add_shopping(req: Request):
+    """Add an item to the shopping list."""
+    from state_store import add_shopping_item
+
+    body = await req.json()
+    item = str(body.get("item", "")).strip()[:200]
+    list_name = str(body.get("list_name", "grocery")).strip()[:50]
+    if not item:
+        return JSONResponse({"error": "Item is required"}, status_code=400)
+    result = add_shopping_item(item, list_name)
+    return JSONResponse(result)
+
+
+@router.post("/api/shopping/{item_id}/check")
+async def check_shopping(item_id: int):
+    """Check off a shopping list item."""
+    from state_store import check_shopping_item
+
+    ok = check_shopping_item(item_id, checked=True)
+    return JSONResponse({"ok": ok})
+
+
+@router.post("/api/shopping/{item_id}/uncheck")
+async def uncheck_shopping(item_id: int):
+    """Uncheck a shopping list item."""
+    from state_store import check_shopping_item
+
+    ok = check_shopping_item(item_id, checked=False)
+    return JSONResponse({"ok": ok})
+
+
+@router.delete("/api/shopping/checked")
+async def clear_checked(list_name: str = None):
+    """Clear all checked items."""
+    from state_store import clear_checked_items
+
+    count = clear_checked_items(list_name)
+    return JSONResponse({"ok": True, "cleared": count})
+
+
+@router.delete("/api/shopping/{item_id}")
+async def delete_shopping(item_id: int):
+    """Delete a shopping list item."""
+    from state_store import remove_shopping_item
+
+    ok = remove_shopping_item(item_id)
+    return JSONResponse({"ok": ok})
+
+
+# ---------------------------------------------------------------------------
 # Ambient Awareness (F-010)
 # ---------------------------------------------------------------------------
 
@@ -784,9 +850,7 @@ async def get_progress_streaks():
     return JSONResponse(get_streaks())
 
 
-# =============================================================================
 # VISION / IMAGE RECOGNITION
-# =============================================================================
 
 
 @router.post("/api/vision/analyze")
@@ -900,3 +964,323 @@ async def vision_status():
             "model": shared.VISION_MODEL_NAME,
         }
     )
+# ---------------------------------------------------------------------------
+# Voice: STT + TTS proxy endpoints for chat page
+# ---------------------------------------------------------------------------
+
+STT_URL = os.environ.get("STT_URL", "http://10.0.0.173:8003")
+
+
+MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/api/stt/transcribe")
+async def stt_transcribe(file: UploadFile = File(...)):
+    """Proxy audio to STT service for transcription."""
+    audio_data = await file.read()
+    if len(audio_data) > MAX_AUDIO_UPLOAD:
+        return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
+    r = await shared._http.post(
+        f"{STT_URL}/v1/audio/transcriptions",
+        files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
+        data={"model": "whisper-1"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+@router.post("/api/tts/synthesize")
+async def tts_synthesize(request: Request):
+    """Synthesize text to speech and return WAV audio."""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text:
+        return JSONResponse({"error": "No text provided"}, status_code=400)
+    backend = shared.tts_backend
+    if not backend:
+        return JSONResponse({"error": "TTS not available"}, status_code=503)
+    audio_bytes = await backend.synthesize(text)
+    return Response(content=audio_bytes, media_type="audio/wav")
+
+
+# ---------------------------------------------------------------------------
+# Chat conversation history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/chat/conversations")
+async def list_chat_conversations(limit: int = 50):
+    """List all conversations, most recent first."""
+    from state_store import list_conversations
+
+    return JSONResponse(list_conversations(min(limit, 200)))
+
+
+@router.post("/api/chat/conversations")
+async def create_chat_conversation(request: Request):
+    """Create a new conversation."""
+    import uuid
+
+    from state_store import create_conversation
+
+    body = await request.json()
+    title = body.get("title", "New Chat")
+    conv_id = str(uuid.uuid4())
+    return JSONResponse(create_conversation(conv_id, title))
+
+
+@router.get("/api/chat/conversations/{conv_id}/messages")
+async def get_chat_messages(conv_id: str):
+    """Get all messages in a conversation."""
+    from state_store import get_conversation, get_conversation_messages
+
+    conv = get_conversation(conv_id)
+    if not conv:
+        return JSONResponse({"error": "Conversation not found"}, status_code=404)
+    messages = get_conversation_messages(conv_id)
+    return JSONResponse({"conversation": conv, "messages": messages})
+
+
+@router.post("/api/chat/conversations/{conv_id}/messages")
+async def add_chat_message(conv_id: str, request: Request):
+    """Save a message to a conversation."""
+    from state_store import get_conversation, save_chat_message
+
+    conv = get_conversation(conv_id)
+    if not conv:
+        return JSONResponse({"error": "Conversation not found"}, status_code=404)
+    body = await request.json()
+    role = body.get("role", "user")
+    content = body.get("content", "")
+    routing = body.get("routing")
+    announcement_type = body.get("announcement_type")
+    if not content:
+        return JSONResponse({"error": "No content"}, status_code=400)
+    import json
+
+    routing_str = json.dumps(routing) if routing else None
+    msg = save_chat_message(conv_id, role, content, routing_str, announcement_type)
+    return JSONResponse(msg)
+
+
+@router.put("/api/chat/conversations/{conv_id}")
+async def update_chat_conversation(conv_id: str, request: Request):
+    """Update conversation title."""
+    from state_store import update_conversation_title
+
+    body = await request.json()
+    title = body.get("title", "")
+    if not title:
+        return JSONResponse({"error": "No title"}, status_code=400)
+    ok = update_conversation_title(conv_id, title)
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@router.delete("/api/chat/conversations/{conv_id}")
+async def delete_chat_conversation(conv_id: str):
+    """Delete a conversation and all its messages."""
+    from state_store import delete_conversation
+
+    ok = delete_conversation(conv_id)
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Document Vault
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/documents")
+async def list_docs(category: str = "", search: str = "", limit: int = 50, offset: int = 0):
+    """List documents with optional filtering."""
+    from state_store import list_documents
+
+    docs = list_documents(category=category or None, search=search or None, limit=min(limit, 200), offset=offset)
+    # Don't send full extracted_text in list view
+    for d in docs:
+        d.pop("extracted_text", None)
+    return JSONResponse(docs)
+
+
+@router.get("/api/documents/categories")
+async def document_categories():
+    """Document counts per category."""
+    from state_store import get_document_categories
+
+    return JSONResponse(get_document_categories())
+
+
+@router.get("/api/documents/{doc_id}")
+async def get_doc(doc_id: str):
+    """Get a single document with full metadata."""
+    from state_store import get_document
+
+    doc = get_document(doc_id)
+    if not doc:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse(doc)
+
+
+@router.post("/api/documents")
+async def upload_document(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    category: str = Form("other"),
+    tags: str = Form(""),
+    notes: str = Form(""),
+):
+    """Upload a document to the vault."""
+    import uuid
+
+    from document_processor import extract_text, save_uploaded_file, validate_upload
+    from state_store import save_document
+
+    file_bytes = await file.read()
+    filename = file.filename or "upload"
+
+    # Validate
+    error = validate_upload(file_bytes, filename, category)
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+
+    # Save file to disk
+    relative_path = save_uploaded_file(file_bytes, filename, category)
+
+    # Extract text
+    from document_processor import get_full_path
+
+    extracted = extract_text(get_full_path(relative_path))
+
+    # Index in RAG
+    rag_doc_id = None
+    try:
+        doc_uuid = str(uuid.uuid4())
+        rag_doc_id = f"vault_{doc_uuid}"
+        if extracted and shared.collection is not None:
+            # Chunk long documents
+            chunks = _chunk_text(extracted, 2000, 200)
+            ids = [f"{rag_doc_id}_chunk_{i}" for i in range(len(chunks))]
+            embeddings = [shared.embedding_model.encode(c, normalize_embeddings=True).tolist() for c in chunks]
+            metadatas = [
+                {
+                    "source": "document_vault",
+                    "category": category,
+                    "title": title,
+                    "vault_doc_id": doc_uuid,
+                    "kind": "chunk",
+                }
+                for _ in chunks
+            ]
+            shared.collection.add(documents=chunks, embeddings=embeddings, metadatas=metadatas, ids=ids)
+            logger.info(f"[DOCVAULT] Indexed {len(chunks)} chunks for '{title}'")
+    except Exception as e:
+        logger.warning(f"[DOCVAULT] RAG indexing failed: {e}")
+
+    # Save metadata to SQLite
+    now = datetime.now().isoformat()
+    ext = os.path.splitext(filename)[1].lower()
+    doc = save_document(
+        {
+            "id": doc_uuid,
+            "title": title,
+            "category": category,
+            "tags": tags,
+            "notes": notes,
+            "file_name": filename,
+            "file_path": relative_path,
+            "file_type": ext,
+            "file_size": len(file_bytes),
+            "extracted_text": extracted,
+            "rag_doc_id": rag_doc_id,
+            "uploaded_at": now,
+            "updated_at": now,
+        }
+    )
+
+    logger.info(f"[DOCVAULT] Uploaded '{title}' ({category}, {len(file_bytes)} bytes, {len(extracted)} chars text)")
+    doc.pop("extracted_text", None)
+    return JSONResponse(doc)
+
+
+@router.put("/api/documents/{doc_id}")
+async def update_doc(doc_id: str, request: Request):
+    """Update document metadata."""
+    from state_store import update_document
+
+    body = await request.json()
+    ok = update_document(doc_id, body)
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@router.delete("/api/documents/{doc_id}")
+async def delete_doc(doc_id: str):
+    """Delete a document (file + metadata + RAG)."""
+    from document_processor import delete_file
+    from state_store import delete_document
+
+    doc = delete_document(doc_id)
+    if not doc:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    # Delete file from disk
+    delete_file(doc["file_path"])
+
+    # Remove from RAG
+    try:
+        if doc.get("rag_doc_id") and shared.collection is not None:
+            # Delete all chunks with matching prefix
+            all_ids = shared.collection.get(where={"vault_doc_id": doc["id"]})
+            if all_ids and all_ids["ids"]:
+                shared.collection.delete(ids=all_ids["ids"])
+    except Exception as e:
+        logger.warning(f"[DOCVAULT] RAG cleanup failed: {e}")
+
+    return JSONResponse({"ok": True})
+
+
+@router.get("/api/documents/{doc_id}/download")
+async def download_doc(doc_id: str):
+    """Download the original document file."""
+    from document_processor import get_full_path
+    from state_store import get_document
+
+    doc = get_document(doc_id)
+    if not doc:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    full_path = get_full_path(doc["file_path"])
+    if not os.path.exists(full_path):
+        return JSONResponse({"error": "File missing"}, status_code=404)
+    return FileResponse(full_path, filename=doc["file_name"])
+
+
+@router.get("/api/documents/{doc_id}/text")
+async def get_doc_text(doc_id: str):
+    """Get extracted text for a document."""
+    from state_store import get_document
+
+    doc = get_document(doc_id)
+    if not doc:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse({"text": doc.get("extracted_text") or ""})
+
+
+def _chunk_text(text: str, chunk_size: int = 2000, overlap: int = 200) -> list[str]:
+    """Split text into chunks with overlap."""
+    if len(text) <= chunk_size:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        if chunk.strip():
+            chunks.append(chunk.strip())
+        start = end - overlap
+    return chunks or [text]

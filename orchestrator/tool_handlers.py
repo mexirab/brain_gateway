@@ -2,6 +2,7 @@
 Tool execution handlers: dispatcher + all tool_* functions.
 """
 
+import json
 import logging
 import time
 import uuid
@@ -30,7 +31,6 @@ from metrics import (
     WEB_SEARCH_LATENCY,
     WEB_SEARCH_RESULTS,
 )
-from model_manager import check_model_health, start_model_server
 from prompt_builder import rag_context
 from reminder_manager import (
     _announce_voice,
@@ -44,8 +44,6 @@ from reminder_manager import (
     remove_reminder,
 )
 from shared import (
-    MODEL_NAME,
-    MODEL_URL,
     ha_client,
     scheduler,
 )
@@ -135,8 +133,11 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         elif tool_name == "decide_for_me":
             return await tool_decide_for_me(arguments)
         elif tool_name == "selfcare_log":
-            from selfcare_manager import log_selfcare
+            from selfcare_manager import get_selfcare_status, log_selfcare
 
+            if arguments.get("action") == "check":
+                status = await get_selfcare_status()
+                return json.dumps(status)
             return await log_selfcare(arguments.get("action", ""), arguments.get("detail"))
         elif tool_name == "bookmark_context":
             from context_tracker import bookmark_context
@@ -176,8 +177,28 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await check_system(arguments.get("query", "system_health"))
         elif tool_name == "analyze_image":
             return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
+        elif tool_name == "sleep_mode":
+            action = arguments.get("action", "on")
+            shared.DND_ACTIVE = action == "on"
+            # Persist so DND survives restarts
+            import state_store
+
+            if shared.DND_ACTIVE:
+                state_store.set_notification_flag("dnd_active")
+                logger.info("[DND] Sleep mode enabled — all announcements suppressed")
+                return "Sleep mode on. No more announcements tonight. Good night!"
+            else:
+                state_store.clear_notification_flag("dnd_active")
+                logger.info("[DND] Sleep mode disabled — announcements resumed")
+                return "Good morning! Announcements are back on."
+        elif tool_name == "shopping_list":
+            import asyncio
+
+            return await asyncio.to_thread(_handle_shopping_list, arguments)
         elif tool_name == "document_vault":
-            return _handle_document_vault(arguments)
+            import asyncio
+
+            return await asyncio.to_thread(_handle_document_vault, arguments)
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -189,6 +210,57 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         return f"Error executing {tool_name}: {str(e)}"
     finally:
         TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
+
+
+def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
+    """Handle shopping/grocery list tool calls."""
+    from state_store import (
+        add_shopping_item,
+        check_shopping_item,
+        clear_checked_items,
+        get_shopping_list,
+        remove_shopping_item,
+    )
+
+    action = arguments.get("action", "list")
+    list_name = arguments.get("list_name", "grocery").lower().strip()
+
+    if action == "add":
+        item = arguments.get("item", "").strip()
+        if not item:
+            return "No item specified."
+        result = add_shopping_item(item, list_name)
+        return f"Added '{result['item']}' to your {list_name} list."
+
+    elif action == "list":
+        items = get_shopping_list(list_name=list_name if list_name != "all" else None)
+        if not items:
+            return f"Your {list_name} list is empty."
+        lines = [f"Your {list_name} list ({len(items)} items):"]
+        for it in items:
+            lines.append(f"  - {it['item']} (id: {it['id']})")
+        return "\n".join(lines)
+
+    elif action in ("check", "uncheck", "remove"):
+        item_id = arguments.get("item_id")
+        if not item_id:
+            return "No item_id specified."
+        iid = int(item_id)
+        if action == "check":
+            ok = check_shopping_item(iid, checked=True)
+            return "Checked off." if ok else "Item not found."
+        elif action == "uncheck":
+            ok = check_shopping_item(iid, checked=False)
+            return "Unchecked." if ok else "Item not found."
+        else:
+            ok = remove_shopping_item(iid)
+            return "Removed." if ok else "Item not found."
+
+    elif action == "clear_checked":
+        count = clear_checked_items(list_name if list_name != "all" else None)
+        return f"Cleared {count} checked item(s)."
+
+    return f"Unknown action: {action}"
 
 
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
@@ -423,56 +495,6 @@ async def tool_search_email(query: str, max_results: int = 10) -> str:
             lines.append(f"  Preview: {msg.snippet}")
 
     return "\n".join(lines)
-
-
-async def tool_ask_expert(question: str, context: str = "") -> str:
-    """Delegate a complex question to Helios 120B. Auto-starts if offline."""
-    from orchestrator import call_model
-
-    if not question:
-        return "No question provided"
-
-    logger.info(f"[EXPERT] Delegating to Helios: {question[:100]}...")
-    # Track model request for monitoring
-
-    if not await check_model_health():
-        started = await start_model_server()
-        if not started:
-            return "Expert model is offline and could not be started. Please try again later or start Helios manually."
-
-    messages = []
-    if context:
-        messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"})
-    else:
-        messages.append({"role": "user", "content": question})
-
-    system_prompt = """You are an expert assistant helping with complex reasoning, coding, and analysis.
-Provide detailed, thorough answers. Be precise and accurate."""
-
-    try:
-        response = await call_model(
-            MODEL_URL,
-            MODEL_NAME,
-            messages,
-            system=system_prompt,
-            timeout=300,
-        )
-
-        msg = response.get("choices", [{}])[0].get("message", {})
-        content = msg.get("content", "")
-        reasoning = msg.get("reasoning_content", "")
-
-        if content:
-            logger.info(f"[EXPERT] Helios responded ({len(content)} chars)")
-            return content
-        elif reasoning:
-            logger.info(f"[EXPERT] Helios responded with reasoning ({len(reasoning)} chars)")
-            return reasoning
-        else:
-            return "Expert model returned empty response"
-    except Exception as e:
-        logger.error(f"[EXPERT] Helios failed: {e}")
-        return f"Expert model unavailable: {str(e)}"
 
 
 def tool_update_data(arguments: Dict[str, Any]) -> str:
@@ -834,28 +856,94 @@ async def tool_analyze_image(query: str) -> str:
 
     logger.info("[VISION_TOOL] Re-analyzing cached image with query: %s", query[:100])
     return await analyze_image(image_data, query)
-
-
 def _handle_document_vault(arguments: Dict[str, Any]) -> str:
-    """Handle document_vault tool calls: create, search, update."""
-    from state_store import get_document, list_documents, save_document
+    """Handle document_vault tool calls."""
+    from state_store import get_document, list_documents, save_document, update_document
 
-    action = arguments.get("action", "")
+    action = arguments.get("action", "list")
 
     if action == "search":
         query = arguments.get("query", "")
         if not query:
-            return "A search query is required."
+            return "No search query provided."
         docs = list_documents(search=query, limit=10)
         if not docs:
             return f"No documents found matching '{query}'."
-        results = []
+        lines = [f"Found {len(docs)} document(s):"]
         for d in docs:
-            snippet = (d.get("notes") or d.get("extracted_text") or "")[:200]
-            results.append(
-                f"• **{d['title']}** (id: {d['id']}, category: {d.get('category', 'personal')})\n  {snippet}"
+            size_kb = d["file_size"] // 1024
+            lines.append(
+                f"- **{d['title']}** (id: {d['id']}, {d['category']}, {size_kb} KB, uploaded {d['uploaded_at'][:10]})"
             )
-        return f"Found {len(docs)} document(s):\n\n" + "\n\n".join(results)
+            if d.get("tags"):
+                lines.append(f"  Tags: {d['tags']}")
+            if d.get("notes"):
+                lines.append(f"  Notes: {d['notes']}")
+        return "\n".join(lines)
+
+    elif action == "list":
+        category = arguments.get("category")
+        docs = list_documents(category=category, limit=20)
+        if not docs:
+            label = f"in category '{category}'" if category else ""
+            return f"No documents found {label}."
+        lines = [f"{len(docs)} document(s){f' in {category}' if category else ''}:"]
+        for d in docs:
+            lines.append(f"- **{d['title']}** (id: {d['id']}, {d['category']}, uploaded {d['uploaded_at'][:10]})")
+            if d.get("notes"):
+                lines.append(f"  Notes: {d['notes']}")
+        return "\n".join(lines)
+
+    elif action == "update":
+        doc_id = arguments.get("doc_id", "")
+        if not doc_id:
+            # Try to find the document by searching
+            return "I need a document ID to update. Use search first to find the document."
+
+        doc = get_document(doc_id)
+        if not doc:
+            return f"Document not found: {doc_id}"
+
+        updates: Dict[str, Any] = {}
+        if "notes" in arguments:
+            updates["notes"] = arguments["notes"]
+        if "title" in arguments:
+            updates["title"] = arguments["title"]
+        if "category" in arguments:
+            updates["category"] = arguments["category"]
+
+        if not updates:
+            return "No updates provided."
+
+        update_document(doc_id, updates)
+
+        # Re-index notes in RAG so they're searchable
+        if "notes" in updates and updates["notes"]:
+            try:
+                import shared
+
+                rag_id = doc.get("rag_doc_id") or f"vault_{doc_id}"
+                notes_id = f"{rag_id}_notes"
+                embedding = shared.embedding_model.encode(updates["notes"], normalize_embeddings=True).tolist()
+                shared.collection.upsert(
+                    documents=[updates["notes"]],
+                    embeddings=[embedding],
+                    metadatas=[
+                        {
+                            "source": "document_vault",
+                            "category": doc["category"],
+                            "title": doc["title"],
+                            "vault_doc_id": doc_id,
+                            "kind": "chunk",
+                        }
+                    ],
+                    ids=[notes_id],
+                )
+            except Exception:
+                pass  # RAG index failure shouldn't block the update
+
+        updated_fields = ", ".join(updates.keys())
+        return f"Updated {updated_fields} on '{doc.get('title', doc_id)}'."
 
     elif action == "create":
         title = arguments.get("title", "")
@@ -865,15 +953,14 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
         if not notes:
             return "Notes/content is required to create a document."
         category = arguments.get("category", "personal")
-        valid_categories = {"personal", "financial", "medical", "legal", "insurance", "housing", "other"}
-        if category not in valid_categories:
+        if category not in {"auto", "financial", "medical", "legal", "insurance", "personal", "housing", "other"}:
             category = "personal"
 
         import uuid
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         doc_id = uuid.uuid4().hex[:12]
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         doc = {
             "id": doc_id,
             "title": title,
@@ -893,6 +980,8 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
 
         # Index in RAG for searchability
         try:
+            import shared
+
             embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
             shared.collection.upsert(
                 documents=[notes],
@@ -909,60 +998,9 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
                 ids=[f"vault_{doc_id}"],
             )
         except Exception as e:
-            logger.warning("[DOCVAULT] RAG indexing failed for new doc: %s", e)
+            logger.warning(f"[DOCVAULT] RAG indexing failed for new doc: {e}")
 
-        return f'Created document "{title}" (id: {doc_id}, category: {category}). It\'s saved and searchable.'
+        return f"Created document \"{title}\" (id: {doc_id}, category: {category}). It's saved and searchable."
 
-    elif action == "update":
-        doc_id = arguments.get("doc_id", "")
-        if not doc_id:
-            return "A doc_id is required to update a document."
-        doc = get_document(doc_id)
-        if not doc:
-            return f"No document found with id '{doc_id}'."
-
-        from datetime import datetime
-
-        updates = {}
-        if "title" in arguments:
-            updates["title"] = arguments["title"]
-        if "notes" in arguments:
-            updates["notes"] = arguments["notes"]
-            updates["extracted_text"] = arguments["notes"]
-            updates["file_size"] = len(arguments["notes"].encode("utf-8"))
-        if "category" in arguments:
-            updates["category"] = arguments["category"]
-
-        if not updates:
-            return "No fields to update. Provide title, notes, or category."
-
-        updates["updated_at"] = datetime.now(UTC).isoformat()
-        doc.update(updates)
-        save_document(doc)
-
-        # Re-index in RAG if notes changed
-        if "notes" in arguments:
-            try:
-                notes = arguments["notes"]
-                embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
-                shared.collection.upsert(
-                    documents=[notes],
-                    embeddings=[embedding],
-                    metadatas=[
-                        {
-                            "source": "document_vault",
-                            "category": doc.get("category", "personal"),
-                            "title": doc.get("title", ""),
-                            "vault_doc_id": doc_id,
-                            "kind": "chunk",
-                        }
-                    ],
-                    ids=[f"vault_{doc_id}"],
-                )
-            except Exception:
-                pass  # RAG index failure shouldn't block the update
-
-        updated_fields = ", ".join(updates.keys())
-        return f"Updated {updated_fields} on '{doc.get('title', doc_id)}'."
 
     return f"Unknown action: {action}"

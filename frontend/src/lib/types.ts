@@ -186,6 +186,16 @@ export interface AnnouncementStats {
   by_speaker: Record<string, { total: number; success: number }>;
 }
 
+// Shopping List
+export interface ShoppingItem {
+  id: number;
+  item: string;
+  list_name: string;
+  checked: number;
+  added_at: string;
+  checked_at: string | null;
+}
+
 // Ambient Awareness (F-010)
 export interface AmbientStatus {
   timestamp: string;
@@ -200,4 +210,44 @@ export interface AmbientStatus {
   selfcare_overdue: string[];
   active_task: string | null;
   led_color: string;
+}
+
+// Document Vault
+export interface VaultDocument {
+  id: string;
+  title: string;
+  category: string;
+  tags: string;
+  notes: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number;
+  extracted_text?: string | null;
+  rag_doc_id: string | null;
+  uploaded_at: string;
+  updated_at: string;
+}
+
+export interface DocumentCategory {
+  category: string;
+  count: number;
+}
+
+// Chat Conversations
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedMessage {
+  id: number;
+  conversation_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  routing: string | null;
+  announcement_type: string | null;
+  created_at: string;
 }

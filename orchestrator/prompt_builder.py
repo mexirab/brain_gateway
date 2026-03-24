@@ -169,7 +169,14 @@ PERSONAL CONTEXT (from {user}'s notes):
     if interrupt_context:
         context_section += f"\n{interrupt_context}\n"
 
+    from datetime import datetime
+
+    now = datetime.now()
+    date_str = now.strftime("%A, %B %-d, %Y at %-I:%M %p")
+
     return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
+
+CURRENT DATE/TIME: {date_str}
 
 PERSONALITY:
 - {profile.assistant_personality}
@@ -232,7 +239,9 @@ WHEN TO USE TOOLS:
 - routine_action: When user says "done", "next", "finished", "skip", "pause routine", "resume routine", "stop routine" during an active routine
 - routine_status: When user asks "where am I in the routine" or "what's the current step"
 - decide_for_me: When user says "what should I do", "what should I work on", "I'm overwhelmed", "I can't decide", "what should I eat", or seems stuck with choice paralysis
-- selfcare_log: ALWAYS call this when user mentions eating, meals, meds, water, or exercise. Examples: "I ate", "had lunch", "I took my meds", "yes I took it", "just had a sandwich", "drank water", "went for a walk", "grabbed a snack", "just ate". This MUST be logged even if you also respond conversationally.
+- selfcare_log: ALWAYS call this when user mentions eating, meals, meds, water, or exercise. Examples: "I ate", "had lunch", "I took my meds", "yes I took it", "just had a sandwich", "drank water", "went for a walk", "grabbed a snack", "just ate". This MUST be logged even if you also respond conversationally. Use action="check" when user asks "did I take my meds?", "have I eaten?", "what have I logged today?" — returns current status without logging anything.
+- ANNOUNCEMENT ACKNOWLEDGMENTS: When you see a prior "[Jess announced - ...]" message in the conversation and the user replies with a short ack like "okay", "done", "I just did", "yep", "already did", "took it" — infer what they're confirming from the announcement context and call the appropriate tool (selfcare_log for meds/meals/water/movement, or respond that the reminder is noted). Don't ask them to clarify if the context is obvious.
+- document_vault: Use 'search' when user asks about a stored document ("where's my car title?", "what's my VIN?"). Use 'update' when user provides details about a document ("my VIN is XXXXX", "add this to my car title"). First search to find the doc and get its ID, then update with the notes. The notes field is indexed in RAG so the info becomes searchable.
 - bookmark_context: When user says "I need to take a call", "stepping away", "be right back", "brb", "I need to handle something"
 - recall_context: When user says "what was I doing?", "where was I?", "what was I working on?", "I'm back", "just got back"
 

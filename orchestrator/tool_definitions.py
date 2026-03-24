@@ -86,24 +86,6 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "ask_expert",
-            "description": "Delegate to the expert model (Helios 120B) for ANY question requiring knowledge or reasoning. Use this for: general knowledge (books, movies, history, science), coding, analysis, explanations, factual questions, creative writing, or ANYTHING you're not certain about. The expert has broad knowledge - use it liberally.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "The question or task to delegate to the expert model",
-                    },
-                    "context": {"type": "string", "description": "Optional additional context to help the expert"},
-                },
-                "required": ["question"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "update_data",
             "description": "Update the user's structured personal data (medications, projects). Use this when they ask to add, remove, or modify medications or project information.",
             "parameters": {
@@ -549,14 +531,14 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "selfcare_log",
-            "description": "Log a self-care action: meal eaten, medication taken, water drunk, or movement done. ALWAYS call this when user mentions eating (had lunch, grabbed a snack, just ate), taking medication (took my meds, yes I took it), drinking water, or exercising. Must be logged even if you also respond conversationally.",
+            "description": "Log a self-care action OR check current status. ALWAYS call this when user mentions eating (had lunch, grabbed a snack, just ate), taking medication (took my meds, yes I took it), drinking water, or exercising. Use action='check' when user asks 'did I take my meds?', 'what have I logged today?', 'have I eaten?'. Must be logged even if you also respond conversationally.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["meal", "medication", "water", "movement"],
-                        "description": "Type of self-care action",
+                        "enum": ["meal", "medication", "water", "movement", "check"],
+                        "description": "Type of self-care action. Use 'check' to query what's been logged today without logging anything new.",
                     },
                     "detail": {
                         "type": "string",
@@ -646,44 +628,84 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "document_vault",
-            "description": "Create, search, and update personal documents (e.g., food inventory, notes, lists). Documents are stored permanently and indexed in RAG for searchability. Use 'create' to make a new document, 'search' to find existing ones, 'update' to modify content.",
+            "name": "sleep_mode",
+            "description": "Enable or disable Do Not Disturb / sleep mode. ALWAYS call this when the user says goodnight, bedtime, going to sleep, or I'm done for the night (action=on). Also call when user says good morning, I'm up, or wake up (action=off). When enabled, ALL announcements (reminders, selfcare nudges, routine prompts) are suppressed until morning.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["create", "search", "update"],
-                        "description": "Action to perform: 'create' a new document, 'search' for existing documents, or 'update' an existing document.",
+                        "enum": ["on", "off"],
+                        "description": "on = enable DND (goodnight), off = disable DND (good morning)",
                     },
-                    "title": {
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shopping_list",
+            "description": "Manage the user's shopping/grocery list. ALWAYS call this when the user says 'add X to my shopping list', 'add X to my grocery list', 'what's on my list', 'remove X from my list', or 'clear checked items'. Supports multiple named lists (grocery, shopping, hardware, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
                         "type": "string",
-                        "description": "Document title (required for create, optional for search).",
+                        "enum": ["add", "list", "remove", "check", "uncheck", "clear_checked"],
+                        "description": "Action to perform",
                     },
-                    "notes": {
+                    "item": {
                         "type": "string",
-                        "description": "Document content in markdown (required for create).",
+                        "description": "Item name (for add action)",
+                    },
+                    "item_id": {
+                        "type": "integer",
+                        "description": "Item ID (for remove/check/uncheck actions)",
+                    },
+                    "list_name": {
+                        "type": "string",
+                        "description": "List name: grocery, shopping, hardware, etc. Defaults to grocery.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "document_vault",
+            "description": "Search, browse, create, or update documents in the user's vault. Use 'create' to make a new document (food inventory, personal lists, notes). Use 'search' to find documents, 'list' to browse by category, 'update' to add/replace notes on a document. When the user provides details about a document (VIN, account number, policy info), use 'update' to save those as notes. Documents are also findable via search_memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "list", "update", "create"],
+                        "description": "search = find documents by query, list = browse by category, update = add/replace notes or metadata on a document, create = create a new text-based document (food inventory, lists, notes)",
                     },
                     "query": {
                         "type": "string",
-                        "description": "Search query text (required for search).",
-                    },
-                    "doc_id": {
-                        "type": "string",
-                        "description": "Document ID to update (required for update).",
+                        "description": "Search query (for search action)",
                     },
                     "category": {
                         "type": "string",
-                        "enum": [
-                            "personal",
-                            "financial",
-                            "medical",
-                            "legal",
-                            "insurance",
-                            "housing",
-                            "other",
-                        ],
-                        "description": "Document category (default: personal).",
+                        "enum": ["auto", "financial", "medical", "legal", "insurance", "personal", "housing", "other"],
+                        "description": "Category filter (for list action)",
+                    },
+                    "doc_id": {
+                        "type": "string",
+                        "description": "Document ID (for update action — get this from search/list results)",
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Notes to save on the document (for update action). Will replace existing notes.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New title for the document (for update action, optional)",
                     },
                 },
                 "required": ["action"],
@@ -694,10 +716,5 @@ STATIC_TOOLS = [
 
 
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7).
-
-    Returns HA tool + all static tools, excluding ask_expert
-    (the unified model IS the expert — no delegation needed).
-    """
-    unified_tools = [t for t in STATIC_TOOLS if t["function"]["name"] != "ask_expert"]
-    return [get_ha_tool_definition()] + unified_tools
+    """Get all tools for unified mode (v7): HA tool + all static tools."""
+    return [get_ha_tool_definition()] + STATIC_TOOLS

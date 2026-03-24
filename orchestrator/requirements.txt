@@ -5,6 +5,7 @@ uvicorn[standard]>=0.41,<1.0
 httpx>=0.28,<1.0
 python-dotenv>=1.2,<2.0
 pydantic>=2.12,<3.0
+python-multipart>=0.0.18,<1.0
 pydantic-settings>=2.13,<3.0
 
 # AI/ML
@@ -27,6 +28,11 @@ prometheus-client>=0.21,<1.0
 
 # Encryption
 cryptography>=44.0,<45.0
+
+# Document processing
+PyMuPDF>=1.25,<2.0
+pytesseract>=0.3,<1.0
+Pillow>=11.0,<12.0
 
 # Integrations
 ynab>=4.0,<5.0

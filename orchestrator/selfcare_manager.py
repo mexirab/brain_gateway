@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 import shared
-from reminder_manager import _announce_voice
+from reminder_manager import _announce_voice, _send_notification
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _state = SelfCareState()
 def _restore_state() -> None:
     """Restore selfcare state from persistent storage on startup."""
     try:
-        from state_store import get_last_selfcare
+        from state_store import get_last_selfcare, get_selfcare_today
 
         last_meal = get_last_selfcare("meal")
         if last_meal:
@@ -50,12 +50,12 @@ def _restore_state() -> None:
             _state.sitting_since = last_movement
 
         # Restore today's med confirmations
-        from state_store import get_selfcare_today
-
         today_meds = get_selfcare_today("medication")
         for entry in today_meds:
             med_name = (entry.get("detail") or "medication").lower()
-            _state.last_med_confirmation[med_name] = datetime.fromisoformat(entry["logged_at"])
+            logged_at = datetime.fromisoformat(entry["logged_at"])
+            _state.last_med_confirmation[med_name] = logged_at
+            _expand_med_confirmation(med_name, logged_at)
 
     except Exception as e:
         logger.warning(f"[SELFCARE] Failed to restore state from DB: {e}")
@@ -88,6 +88,8 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
     elif action == "medication":
         med_name = detail or "medication"
         _state.last_med_confirmation[med_name.lower()] = now
+        # Also mark individual meds if a group phrase like "morning meds" was used
+        _expand_med_confirmation(med_name, now)
         save_selfcare_log("medication", med_name)
         next_sched = _get_next_med_schedule(med_name)
         logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})
@@ -155,6 +157,7 @@ async def check_selfcare() -> None:
 
     if nudge:
         await _announce_voice(nudge, announcement_type="selfcare")
+        await _send_notification(nudge)
         logger.info(f"[SELFCARE] Nudge: {nudge[:60]}", extra={"component": "selfcare"})
 
 
@@ -173,26 +176,33 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
 
         current_hour = now_tz.hour
 
+        # Generic "medication" confirmation covers meds in the current window
+        generic = _state.last_med_confirmation.get("medication")
+
         # Morning meds: window 7:00-10:00
         if 7 <= current_hour < 10:
+            if generic and generic.date() == now.date() and generic.hour < 12:
+                return None  # generic morning confirmation
             for med in daily.get("morning", []):
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
                 last = _state.last_med_confirmation.get(med_name.lower())
-                if last and last.date() == now.date():
-                    continue  # already confirmed today
+                if last and last.date() == now.date() and last.hour < 12:
+                    continue  # confirmed this morning
                 return f"Hey, did you take your {med_name}?"
 
         # Evening meds: window 20:00-22:00
         if 20 <= current_hour < 22:
+            if generic and generic.date() == now.date() and generic.hour >= 17:
+                return None  # generic evening confirmation
             for med in daily.get("evening", []):
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
                 last = _state.last_med_confirmation.get(med_name.lower())
-                if last and last.date() == now.date():
-                    continue
+                if last and last.date() == now.date() and last.hour >= 17:
+                    continue  # confirmed this evening
                 return f"Hey, did you take your {med_name}?"
 
     except Exception as e:
@@ -290,6 +300,38 @@ async def get_selfcare_status() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _expand_med_confirmation(detail: str, when: datetime) -> None:
+    """If detail is a group phrase (e.g. 'morning meds'), also confirm each
+    individual medication in that schedule window.  Also handles detail strings
+    that mention specific meds by name (e.g. 'morning meds (Vyvanse, Wellbutrin)')."""
+    try:
+        from data_manager import get_medications
+
+        meds_data = get_medications()
+        daily = meds_data.get("daily", {})
+        detail_lower = detail.lower()
+
+        # "morning meds" → confirm all morning meds; same for "evening meds"
+        for window in ("morning", "evening"):
+            if window in detail_lower and "med" in detail_lower:
+                for med in daily.get(window, []):
+                    name = med.get("name", "").lower()
+                    if name:
+                        _state.last_med_confirmation[name] = when
+
+        # Also check if any individual med name appears in the detail string
+        for window_meds in daily.values():
+            if not isinstance(window_meds, list):
+                continue
+            for med in window_meds:
+                name = med.get("name", "").lower()
+                if name and name in detail_lower:
+                    _state.last_med_confirmation[name] = when
+
+    except Exception:
+        pass
 
 
 def _get_next_med_schedule(med_name: str) -> Optional[str]:

@@ -5,10 +5,13 @@ email-to-calendar event extraction, YNAB transaction sync.
 
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import httpx
 
 import shared
 import state_store
@@ -25,13 +28,84 @@ from metrics import (
 )
 from reminder_manager import _announce_voice, list_pending_reminders
 from shared import TIMEZONE, profile
+from travel_time import get_travel_time
+
+logger = logging.getLogger(__name__)
 
 _LLM_URL = shared.MODEL_URL
 _LLM_MODEL = shared.MODEL_NAME
 
-from travel_time import get_travel_time
+# NWS Weather API (free, no key needed, US only)
+_NWS_FORECAST_URL = None  # resolved lazily from lat/lon
 
-logger = logging.getLogger(__name__)
+
+async def _get_weather_forecast() -> str | None:
+    """Fetch today's weather forecast from the National Weather Service API.
+
+    Uses the user's home address coordinates. Returns a spoken-friendly
+    summary or None on failure.
+    """
+    global _NWS_FORECAST_URL
+
+    try:
+        # Lazy resolve: geocode the grid endpoint once
+        if _NWS_FORECAST_URL is None:
+            lat = float(os.environ.get("WEATHER_LAT", "0"))
+            lon = float(os.environ.get("WEATHER_LON", "0"))
+
+            if lat == 0.0 and lon == 0.0 and shared.profile.home_address:
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r = await client.get(
+                            "https://nominatim.openstreetmap.org/search",
+                            params={"q": shared.profile.home_address, "format": "json", "limit": 1},
+                            headers={"User-Agent": "BrainGateway/1.0 (personal assistant)"},
+                        )
+                        if r.status_code == 200:
+                            results = r.json()
+                            if results:
+                                lat, lon = float(results[0]["lat"]), float(results[0]["lon"])
+                except Exception:
+                    pass
+
+            if lat == 0.0 and lon == 0.0:
+                return None
+
+            # Get NWS grid point
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                r = await client.get(
+                    f"https://api.weather.gov/points/{lat},{lon}",
+                    headers={"User-Agent": "BrainGateway/1.0 (personal assistant)"},
+                )
+                if r.status_code == 200:
+                    _NWS_FORECAST_URL = r.json()["properties"]["forecast"]
+                else:
+                    logger.warning(f"[WEATHER] NWS points failed: {r.status_code}")
+                    return None
+
+        # Fetch forecast
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(
+                _NWS_FORECAST_URL,
+                headers={"User-Agent": "BrainGateway/1.0 (personal assistant)"},
+            )
+            if r.status_code != 200:
+                return None
+
+            periods = r.json()["properties"]["periods"]
+            # Get today's daytime forecast (first period)
+            if periods:
+                p = periods[0]
+                temp = p["temperature"]
+                unit = p["temperatureUnit"]
+                short = p["shortForecast"]
+                return f"Weather today: {short}, high of {temp} degrees {unit}."
+
+    except Exception as e:
+        logger.warning(f"[WEATHER] Forecast fetch failed: {e}")
+
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Tiered countdown nudges (F-002)
@@ -338,8 +412,19 @@ async def morning_briefing():
         # Sort by time (all-day first, then by start time)
         briefing_events.sort(key=lambda e: (not e["all_day"], e["start"]))
 
+        # Auto-clear DND (sleep mode) on morning briefing (only during morning hours)
+        if shared.DND_ACTIVE and 5 <= datetime.now(tz).hour <= 11:
+            shared.DND_ACTIVE = False
+            state_store.clear_notification_flag("dnd_active")
+            logger.info("[DND] Auto-cleared sleep mode for morning briefing")
+
         # Build announcement
         parts = [f"Good morning {profile.user_name}!"]
+
+        # Weather forecast
+        weather = await _get_weather_forecast()
+        if weather:
+            parts.append(weather)
 
         if briefing_events:
             parts.append(f"You have {len(briefing_events)} event{'s' if len(briefing_events) > 1 else ''} today.")
@@ -787,11 +872,6 @@ async def check_closet_temperature():
 
 
 # ---------------------------------------------------------------------------
-# Progress Tracking (F-005)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Ambient Awareness (F-010)
 # ---------------------------------------------------------------------------
 
@@ -801,7 +881,6 @@ async def ambient_summary():
     try:
         # Respect quiet hours
         from datetime import time as _time
-        from zoneinfo import ZoneInfo
 
         from ambient_manager import build_ambient_summary_text
 
