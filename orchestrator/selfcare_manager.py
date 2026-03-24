@@ -127,6 +127,14 @@ async def check_selfcare() -> None:
     tz = ZoneInfo(shared.TIMEZONE)
     now_tz = datetime.now(tz)
 
+    # Reset movement/hydration timers daily so overnight hours don't accumulate
+    if _state.sitting_since and _state.sitting_since.date() < now.date():
+        _state.sitting_since = now
+    if _state.last_hydration_nudge and _state.last_hydration_nudge.date() < now.date():
+        _state.last_hydration_nudge = now
+    if _state.last_movement_nudge and _state.last_movement_nudge.date() < now.date():
+        _state.last_movement_nudge = now
+
     # Quiet hours check
     quiet_start = _parse_time(shared.QUIET_HOURS_START)
     quiet_end = _parse_time(shared.QUIET_HOURS_END)
