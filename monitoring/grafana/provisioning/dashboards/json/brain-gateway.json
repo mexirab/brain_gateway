@@ -2497,11 +2497,11 @@
       },
       "targets": [
         {
-          "expr": "bgw_helios_idle_seconds",
+          "expr": "bgw_model_online{model=\"primary\"}",
           "refId": "A"
         }
       ],
-      "title": "Helios Idle Time",
+      "title": "Primary Model Status",
       "type": "stat"
     },
     {
@@ -4329,7 +4329,7 @@
       },
       "targets": [
         {
-          "expr": "{container=\"brain-orchestrator\"} | json | component =~ \"hybrid|mode_router|llm|fast_path\"",
+          "expr": "{container=\"brain-orchestrator\"} | json | component =~ \"unified|mode_router|llm|fast_path\"",
           "refId": "A"
         }
       ],

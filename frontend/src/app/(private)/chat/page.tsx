@@ -30,9 +30,11 @@ export default function ChatPage() {
   const activeConvIdRef = useRef<string | null>(null);
   const { isSpeaking, ttsEnabled, setTtsEnabled, speak } = useTTSPlayback();
   const ttsEnabledRef = useRef(false);
+  const messagesRef = useRef<DisplayMessage[]>([]);
 
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { activeConvIdRef.current = activeConvId; }, [activeConvId]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -151,8 +153,9 @@ export default function ChatPage() {
     // Persist user message
     api.saveMessage(convId, 'user', text).catch(() => {});
 
+    // Use ref to avoid stale closure — messages may change between click and here
     const chatHistory: ChatMessage[] = [
-      ...messages.map((m) => ({
+      ...messagesRef.current.map((m) => ({
         role: m.role,
         content: m.announcement
           ? `[Jess announced - ${m.announcement.announcement_type}]: ${m.content}`

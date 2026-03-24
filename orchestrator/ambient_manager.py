@@ -79,7 +79,7 @@ async def get_ambient_status() -> Dict[str, Any]:
         from reminder_manager import list_pending_reminders
 
         pending = list_pending_reminders()
-        status["pending_reminders"] = pending.get("count", 0)
+        status["pending_reminders"] = len(pending)
     except Exception:
         status["pending_reminders"] = 0
 
