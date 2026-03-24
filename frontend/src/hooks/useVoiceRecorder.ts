@@ -41,6 +41,9 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
       recorder.start();
       setIsRecording(true);
     } catch (err) {
+      // Release mic if acquired before the error (e.g. MediaRecorder constructor throws)
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
       setError(err instanceof Error ? err.message : 'Microphone access denied');
     }
   }, []);

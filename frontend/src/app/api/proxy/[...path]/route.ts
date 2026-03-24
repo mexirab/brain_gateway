@@ -114,6 +114,7 @@ export async function PUT(
     body,
   });
 
+  if (res.status === 204) return new Response(null, { status: 204 });
   const data = await res.json();
   return NextResponse.json(data, { status: res.status });
 }
@@ -135,6 +136,7 @@ export async function DELETE(
     method: 'DELETE',
     headers: { 'Authorization': `Bearer ${API_TOKEN}` },
   });
+  if (res.status === 204) return new Response(null, { status: 204 });
   const data = await res.json();
   return NextResponse.json(data, { status: res.status });
 }

@@ -126,7 +126,13 @@ MAX_BODY_SIZE = int(os.environ.get("MAX_BODY_SIZE", 1_000_000))  # 1MB default (
 MAX_UPLOAD_SIZE = int(os.environ.get("DOCUMENT_MAX_SIZE_MB", 100)) * 1024 * 1024  # for file uploads
 
 # Paths that accept large uploads (documents, STT audio)
-_LARGE_UPLOAD_PATHS = {"/api/documents", "/api/stt/transcribe", "/api/vision/analyze", "/v1/chat/completions", "/chat/completions"}
+_LARGE_UPLOAD_PATHS = {
+    "/api/documents",
+    "/api/stt/transcribe",
+    "/api/vision/analyze",
+    "/v1/chat/completions",
+    "/chat/completions",
+}
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -173,6 +179,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Purge entries older than the window
         while window and window[0] < now - RATE_LIMIT_WINDOW:
             window.popleft()
+        # Remove empty entries to prevent unbounded dict growth
+        if not window:
+            del _rate_limit_store[client_ip]
+
+        if client_ip not in _rate_limit_store:
+            _rate_limit_store[client_ip] = collections.deque()
+            window = _rate_limit_store[client_ip]
 
         if len(window) >= RATE_LIMIT_MAX:
             return JSONResponse(
@@ -285,8 +298,13 @@ async def chat_completions(req: Request):
     """
     from schemas import ChatRequest
 
-    body = await req.json()
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
     raw_msgs = body.get("messages", [])
+    if not isinstance(raw_msgs, list):
+        return JSONResponse({"error": "messages must be an array"}, status_code=400)
     logger.info(
         "[CHAT] Incoming %d messages: %s",
         len(raw_msgs),
@@ -644,11 +662,12 @@ async def startup_event():
     async def _db_maintenance():
         import asyncio
 
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, state_store.cleanup_old_announcements, 30)
-        await loop.run_in_executor(None, state_store.cleanup_old_selfcare, 90)
-        await loop.run_in_executor(None, state_store.vacuum_db)
-        logger.info("[DB] Weekly maintenance complete (cleanup + vacuum)")
+        await asyncio.to_thread(state_store.cleanup_old_announcements, 30)
+        await asyncio.to_thread(state_store.cleanup_old_selfcare, 90)
+        await asyncio.to_thread(state_store.vacuum_db)
+        # Clean up stale audio files from Cast TTS path
+        await asyncio.to_thread(_cleanup_audio_files)
+        logger.info("[DB] Weekly maintenance complete (cleanup + vacuum + audio)")
 
     scheduler.add_job(
         _db_maintenance,
@@ -660,6 +679,25 @@ async def startup_event():
         name="Weekly DB maintenance",
         replace_existing=True,
     )
+
+
+def _cleanup_audio_files(max_age_hours: int = 1) -> None:
+    """Remove old TTS audio files from /tmp/brain_audio."""
+    import contextlib
+
+    audio_dir = "/tmp/brain_audio"
+    if not os.path.isdir(audio_dir):
+        return
+    cutoff = time.time() - (max_age_hours * 3600)
+    count = 0
+    for f in os.listdir(audio_dir):
+        fp = os.path.join(audio_dir, f)
+        with contextlib.suppress(OSError):
+            if os.path.getmtime(fp) < cutoff:
+                os.remove(fp)
+                count += 1
+    if count:
+        logger.info(f"[CLEANUP] Removed {count} stale audio files from {audio_dir}")
 
 
 if __name__ == "__main__":

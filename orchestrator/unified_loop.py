@@ -15,9 +15,6 @@ from metrics import (
     LLM_CALL_COUNT,
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
-    TOOL_CALL_COUNT,
-    TOOL_CALL_ERRORS,
-    TOOL_CALL_LATENCY,
     TOOL_ROUNDS,
 )
 from shared import MAX_TOOL_ROUNDS
@@ -246,16 +243,12 @@ async def run_unified_tool_loop(
             call_key = (tool_name, json.dumps(arguments, sort_keys=True))
             executed_calls.add(call_key)
 
-            TOOL_CALL_COUNT.labels(tool=tool_name).inc()
-            _tool_t0 = time.time()
+            # Metrics are recorded inside execute_tool() — no double-counting here
             try:
                 result = await execute_tool(tool_name, arguments)
             except Exception as e:
-                TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
                 logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
-                # Return generic message to model/user — full details logged above
                 result = f"The {tool_name} tool encountered an error. Please try again."
-            TOOL_CALL_LATENCY.labels(tool=tool_name).observe(time.time() - _tool_t0)
             tool_results.append((tool_call.get("id", f"call_{round_num}"), tool_name, result))
 
             if tool_name in TERMINAL_TOOLS:

@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
+from zoneinfo import ZoneInfo
 
 import shared
 from brain_dump_manager import process_brain_dump
@@ -574,7 +575,7 @@ async def deliver_reminder_job(reminder_id: str):
             REMINDERS_DELIVERED.inc()
             mark_reminder_completed(reminder_id)
         else:
-            retry_time = datetime.now(shared.TIMEZONE) + timedelta(minutes=2)
+            retry_time = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=2)
             try:
                 scheduler.add_job(
                     deliver_reminder_job,
@@ -856,6 +857,8 @@ async def tool_analyze_image(query: str) -> str:
 
     logger.info("[VISION_TOOL] Re-analyzing cached image with query: %s", query[:100])
     return await analyze_image(image_data, query)
+
+
 def _handle_document_vault(arguments: Dict[str, Any]) -> str:
     """Handle document_vault tool calls."""
     from state_store import get_document, list_documents, save_document, update_document
@@ -957,10 +960,10 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
             category = "personal"
 
         import uuid
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         doc_id = uuid.uuid4().hex[:12]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         doc = {
             "id": doc_id,
             "title": title,
@@ -1000,7 +1003,6 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
         except Exception as e:
             logger.warning(f"[DOCVAULT] RAG indexing failed for new doc: {e}")
 
-        return f"Created document \"{title}\" (id: {doc_id}, category: {category}). It's saved and searchable."
-
+        return f'Created document "{title}" (id: {doc_id}, category: {category}). It\'s saved and searchable.'
 
     return f"Unknown action: {action}"

@@ -18,6 +18,7 @@ export default function useTTSPlayback(): UseTTSPlaybackReturn {
   const [ttsEnabled, setTtsEnabledState] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Hydrate from localStorage after mount
   useEffect(() => {
@@ -30,6 +31,8 @@ export default function useTTSPlayback(): UseTTSPlaybackReturn {
   }, []);
 
   const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -43,11 +46,14 @@ export default function useTTSPlayback(): UseTTSPlaybackReturn {
 
   const speak = useCallback(async (text: string) => {
     stop();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const res = await fetch(`${PROXY}/api/tts/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
+        signal: controller.signal,
       });
       if (!res.ok) return;
 
@@ -64,7 +70,8 @@ export default function useTTSPlayback(): UseTTSPlaybackReturn {
       };
       setIsSpeaking(true);
       await audio.play();
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       setIsSpeaking(false);
     }
   }, [stop]);

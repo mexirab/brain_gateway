@@ -46,8 +46,13 @@ export default function DocumentsPage() {
   useEffect(() => { fetchDocs(); }, [category, search]);
 
   const handleDelete = async (id: string) => {
-    await api.deleteDocument(id);
-    setDocs((prev) => prev.filter((d) => d.id !== id));
+    if (!confirm('Delete this document permanently?')) return;
+    try {
+      await api.deleteDocument(id);
+      setDocs((prev) => prev.filter((d) => d.id !== id));
+    } catch {
+      /* silent — doc stays in list */
+    }
   };
 
   return (
