@@ -858,7 +858,7 @@ async def tool_analyze_image(query: str) -> str:
     return await analyze_image(image_data, query)
 def _handle_document_vault(arguments: Dict[str, Any]) -> str:
     """Handle document_vault tool calls."""
-    from state_store import get_document, list_documents, update_document
+    from state_store import get_document, list_documents, save_document, update_document
 
     action = arguments.get("action", "list")
 
@@ -944,5 +944,63 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
 
         updated_fields = ", ".join(updates.keys())
         return f"Updated {updated_fields} on '{doc.get('title', doc_id)}'."
+
+    elif action == "create":
+        title = arguments.get("title", "")
+        if not title:
+            return "A title is required to create a document."
+        notes = arguments.get("notes", "")
+        if not notes:
+            return "Notes/content is required to create a document."
+        category = arguments.get("category", "personal")
+        if category not in {"auto", "financial", "medical", "legal", "insurance", "personal", "housing", "other"}:
+            category = "personal"
+
+        import uuid
+        from datetime import datetime, timezone
+
+        doc_id = uuid.uuid4().hex[:12]
+        now = datetime.now(timezone.utc).isoformat()
+        doc = {
+            "id": doc_id,
+            "title": title,
+            "category": category,
+            "tags": arguments.get("tags", ""),
+            "notes": notes,
+            "file_name": f"{title.lower().replace(' ', '_')}.txt",
+            "file_path": "",
+            "file_type": "text/plain",
+            "file_size": len(notes.encode("utf-8")),
+            "extracted_text": notes,
+            "rag_doc_id": f"vault_{doc_id}",
+            "uploaded_at": now,
+            "updated_at": now,
+        }
+        save_document(doc)
+
+        # Index in RAG for searchability
+        try:
+            import shared
+
+            embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
+            shared.collection.upsert(
+                documents=[notes],
+                embeddings=[embedding],
+                metadatas=[
+                    {
+                        "source": "document_vault",
+                        "category": category,
+                        "title": title,
+                        "vault_doc_id": doc_id,
+                        "kind": "chunk",
+                    }
+                ],
+                ids=[f"vault_{doc_id}"],
+            )
+        except Exception as e:
+            logger.warning(f"[DOCVAULT] RAG indexing failed for new doc: {e}")
+
+        return f"Created document \"{title}\" (id: {doc_id}, category: {category}). It's saved and searchable."
+
 
     return f"Unknown action: {action}"

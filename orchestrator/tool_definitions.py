@@ -677,14 +677,14 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "document_vault",
-            "description": "Search, browse, or update documents in the user's vault (car titles, medical records, financial docs, insurance, etc.). Use 'search' to find documents, 'list' to browse by category, 'update' to add/replace notes on a document. When the user provides details about a document (VIN, account number, policy info), use 'update' to save those as notes. Documents are also findable via search_memory.",
+            "description": "Search, browse, create, or update documents in the user's vault. Use 'create' to make a new document (food inventory, personal lists, notes). Use 'search' to find documents, 'list' to browse by category, 'update' to add/replace notes on a document. When the user provides details about a document (VIN, account number, policy info), use 'update' to save those as notes. Documents are also findable via search_memory.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["search", "list", "update"],
-                        "description": "search = find documents by query, list = browse by category, update = add/replace notes or metadata on a document",
+                        "enum": ["search", "list", "update", "create"],
+                        "description": "search = find documents by query, list = browse by category, update = add/replace notes or metadata on a document, create = create a new text-based document (food inventory, lists, notes)",
                     },
                     "query": {
                         "type": "string",
