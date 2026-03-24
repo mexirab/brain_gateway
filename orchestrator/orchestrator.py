@@ -101,7 +101,7 @@ if not API_TOKEN:
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer token on all endpoints except public ones."""
 
-    PUBLIC_PATHS = {"/health", "/metrics"}
+    PUBLIC_PATHS = {"/health"}
     PUBLIC_PREFIXES = ("/api/audio/",)  # Google speakers fetch audio without auth
 
     async def dispatch(self, request: Request, call_next):
@@ -208,7 +208,7 @@ _http: httpx.AsyncClient = None
 # FASTAPI APP
 # =============================================================================
 
-app = FastAPI(title="Brain Gateway", version="7.0")
+app = FastAPI(title="Brain Gateway", version="7.0", docs_url=None, redoc_url=None, openapi_url=None)
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3001").split(",")
 app.add_middleware(
