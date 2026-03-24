@@ -154,6 +154,12 @@ services:
       - AUTO_LEARN_MARKDOWN=${AUTO_LEARN_MARKDOWN:-true}
       - AUTO_LEARN_ENCRYPT=${AUTO_LEARN_ENCRYPT:-true}
       - AUTO_LEARN_ENCRYPTION_KEY=${AUTO_LEARN_ENCRYPTION_KEY:-}
+      # Vision / image recognition (Qwen2.5-VL-7B via llama.cpp on Saturn RTX 3080)
+      - VISION_ENABLED=${VISION_ENABLED:-true}
+      - VISION_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:8010/v1
+      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-Qwen2.5-VL-7B-Instruct-q4_k_m.gguf}
+      - VISION_MAX_IMAGE_SIZE=${VISION_MAX_IMAGE_SIZE:-10485760}
+      - VISION_TIMEOUT=${VISION_TIMEOUT:-60}
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
     networks:

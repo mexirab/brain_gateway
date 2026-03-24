@@ -406,3 +406,22 @@ PROGRESS_STREAK_MILESTONES = Counter(
     "Streak milestone announcements triggered",
     ["category"],
 )
+
+# -- Vision / Image Recognition -----------------------------------------------
+VISION_REQUEST_COUNT = Counter(
+    "bgw_vision_requests_total",
+    "Vision model analysis requests",
+    ["status"],  # success, error, disabled
+)
+
+VISION_REQUEST_LATENCY = Histogram(
+    "bgw_vision_request_duration_seconds",
+    "Vision model request latency",
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0],
+)
+
+VISION_IMAGE_SIZE = Histogram(
+    "bgw_vision_image_size_bytes",
+    "Size of images sent to vision model",
+    buckets=[10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000],
+)

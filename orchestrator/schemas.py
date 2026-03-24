@@ -39,12 +39,20 @@ class ChatMessage(BaseModel):
 
     @field_validator("content", mode="before")
     @classmethod
-    def normalize_content(cls, v: Any) -> str:
-        """Accept OpenAI multi-part content format and flatten to string.
+    def normalize_content(cls, v: Any) -> str | list:
+        """Accept OpenAI multi-part content format.
+
+        If the list contains image_url parts, preserve the full list so images
+        can be routed to the vision model downstream.
 
         HA's llama_conversation sends: [{"type": "text", "text": "..."}]
         """
         if isinstance(v, list):
+            has_image = any(isinstance(item, dict) and item.get("type") == "image_url" for item in v)
+            if has_image:
+                # Preserve the full multipart content (images + text)
+                return v
+            # Text-only list: flatten to string as before
             parts = []
             for item in v:
                 if isinstance(item, dict) and item.get("type") == "text":

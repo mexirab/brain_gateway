@@ -174,6 +174,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             from system_diagnostics import check_system
 
             return await check_system(arguments.get("query", "system_health"))
+        elif tool_name == "analyze_image":
+            return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -815,3 +817,18 @@ async def tool_brain_dump(items: list) -> str:
     logger.info("[BRAIN_DUMP] Processing %d items", len(items))
     result = await process_brain_dump(items)
     return result.summary
+
+
+async def tool_analyze_image(query: str) -> str:
+    """Re-analyze the most recently shared image with a new query."""
+    from vision_handler import analyze_image
+
+    if not shared._vision_image_cache:
+        return "No image available. The user needs to share an image first."
+
+    # Use the most recently cached image
+    last_key = list(shared._vision_image_cache.keys())[-1]
+    image_data = shared._vision_image_cache[last_key]
+
+    logger.info("[VISION_TOOL] Re-analyzing cached image with query: %s", query[:100])
+    return await analyze_image(image_data, query)

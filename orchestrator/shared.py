@@ -373,3 +373,15 @@ PROGRESS_ENABLED = os.environ.get("PROGRESS_ENABLED", "true").lower() == "true"
 DAILY_SUMMARY_TIME = os.environ.get("DAILY_SUMMARY_TIME", "18:00")
 WEEKLY_SUMMARY_DAY = os.environ.get("WEEKLY_SUMMARY_DAY", "sunday")
 WEEKLY_SUMMARY_TIME = os.environ.get("WEEKLY_SUMMARY_TIME", "19:00")
+
+# ---------------------------------------------------------------------------
+# Vision / image recognition (dedicated model on Saturn)
+# ---------------------------------------------------------------------------
+VISION_ENABLED = os.environ.get("VISION_ENABLED", "true").lower() == "true"
+VISION_MODEL_URL = os.environ.get("VISION_MODEL_URL", "http://10.0.0.58:8010/v1")
+VISION_MODEL_NAME = os.environ.get("VISION_MODEL_NAME", "Qwen2.5-VL-7B-Instruct-q4_k_m.gguf")
+VISION_MAX_IMAGE_SIZE = int(os.environ.get("VISION_MAX_IMAGE_SIZE", str(10 * 1024 * 1024)))  # 10 MB
+VISION_TIMEOUT = int(os.environ.get("VISION_TIMEOUT", "60"))
+
+# Per-session image cache for follow-up analysis (keyed by session hash)
+_vision_image_cache: Dict[str, str] = {}

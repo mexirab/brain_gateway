@@ -162,6 +162,10 @@ def conversation_has_opt_out(messages: List[Dict]) -> bool:
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
+        if isinstance(content, list):
+            # Extract text from multipart content (images + text)
+            parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            content = " ".join(parts)
         if isinstance(content, str):
             text_lower = content.lower()
             if any(phrase in text_lower for phrase in _PRIVACY_PHRASES):

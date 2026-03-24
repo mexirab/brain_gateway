@@ -626,6 +626,23 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_image",
+            "description": "Re-analyze or ask a follow-up question about the most recently shared image. Use when the user asks a follow-up question about a photo they already sent (e.g., 'what brand is that cereal?' after sending a pantry photo). The initial image analysis happens automatically — only call this tool for follow-up queries on the same image.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Specific question or analysis to perform on the image (e.g., 'list all vegetables', 'what brand is that cereal?', 'read the text on the label')",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 

@@ -136,6 +136,9 @@ class CloudBrain:
         is_voice: bool = False,
     ) -> Any:
         """Inner unified flow (separated for clean metrics wrapping)."""
+        # --- Vision: detect and process images before the main loop ---
+        messages = await self._process_vision(messages, routing_info)
+
         # Route intent
         intent = self._mode_router.route(user_text)
         routing_info["intent_mode"] = intent.mode
@@ -305,6 +308,66 @@ class CloudBrain:
             }
         )
 
+    # --- Vision processing ---
+
+    async def _process_vision(self, messages: List[Dict], routing_info: Dict) -> List[Dict]:
+        """Detect images in messages, analyze via vision model, replace with text descriptions.
+
+        Images are sent to the dedicated vision model on Saturn. The text description
+        replaces the image content so Helios can reason about it with tools.
+        """
+        if not shared.VISION_ENABLED:
+            return messages
+
+        from vision_handler import analyze_image, extract_images_from_messages
+
+        images = extract_images_from_messages(messages)
+        if not images:
+            return messages
+
+        logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
+        routing_info["vision_images"] = len(images)
+
+        # Process images and collect descriptions per message index
+        processed_msgs = [m.copy() for m in messages]
+        descriptions_by_idx: Dict[int, list] = {}
+
+        for img_info in images:
+            idx = img_info["msg_index"]
+            prompt = img_info["text"] or "Describe this image in detail, including any text visible."
+            image_url = img_info["image_url"]
+
+            # Cache the image for follow-up tool calls (key from image data, not prompt)
+            cache_key = hashlib.sha256(image_url[:200].encode()).hexdigest()[:12]
+            shared._vision_image_cache[cache_key] = image_url
+            # Cap cache at 5 entries
+            while len(shared._vision_image_cache) > 5:
+                oldest = next(iter(shared._vision_image_cache))
+                shared._vision_image_cache.pop(oldest, None)
+
+            description = await analyze_image(image_url, prompt)
+            descriptions_by_idx.setdefault(idx, []).append(description)
+
+        # Replace multipart content with all image descriptions for that message
+        for idx, descs in descriptions_by_idx.items():
+            original_text = ""
+            for img in images:
+                if img["msg_index"] == idx and img["text"]:
+                    original_text = img["text"]
+                    break
+            analysis_parts = [f"[Image {i + 1} Analysis]\n{d}" for i, d in enumerate(descs)]
+            replacement = "\n\n".join(analysis_parts)
+            if original_text:
+                replacement = f"{original_text}\n\n{replacement}"
+
+            processed_msgs[idx] = {
+                "role": "user",
+                "content": replacement,
+            }
+
+        logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
+        return processed_msgs
+
     # --- Helpers ---
 
     def _schedule_auto_learn(self, messages: List[Dict]):
@@ -319,6 +382,12 @@ class CloudBrain:
                     content = m.get("content", "")
                     if isinstance(content, str):
                         first_user = content[:100]
+                    elif isinstance(content, list):
+                        # Extract text from multipart content (images + text)
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                first_user = part.get("text", "")[:100]
+                                break
                     break
             msg_count = sum(1 for m in messages if m.get("role") == "user")
             session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}:{msg_count}".encode()).hexdigest()[:16]

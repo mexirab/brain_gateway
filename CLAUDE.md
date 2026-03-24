@@ -7,7 +7,7 @@ Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) han
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Reserve capacity, Pi-hole secondary |
+| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080), fallback LLM (RTX 3090), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS + STT (GPU0), ComfyUI/Conjure (GPU1) |
 | Helios | 10.0.0.195 | - | RTX 5090 | Qwen3.5-27B (conversation + tools), always-on |
 | HA | 10.0.0.106 | - | - | Home Assistant |
@@ -27,6 +27,7 @@ Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) han
 | Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
 | Wyoming Whisper (STT) | 10300 | tcp://10.0.0.248:10300 |
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
+| Vision Model (Qwen2.5-VL-7B) | 8010 | http://10.0.0.58:8010 |
 | Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
 | Snapcast (server) | 1704 | tcp://10.0.0.248:1704 (client connections) |
@@ -71,6 +72,7 @@ All tools are called directly by the single model in one agentic loop.
 | brain_dump | Capture & route thoughts/tasks/ideas to RAG or reminders |
 | check_system | System diagnostics: logs, health, recent errors |
 | finance_status | Budget, spending, XP/levels from YNAB integration |
+| analyze_image | Re-analyze or ask follow-up questions about a shared image |
 
 ## Key Files
 
@@ -112,6 +114,8 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/data_manager.py | YAML data management: medications, projects |
 | orchestrator/finance_manager.py | YNAB integration, budget tracking, XP/levels |
 | orchestrator/schemas.py | Pydantic models for API request/response validation |
+| orchestrator/vision_handler.py | Vision model client: image analysis, OCR, scene understanding |
+| orchestrator/tests/test_vision_handler.py | Vision handler unit tests |
 | orchestrator/web_search.py | SearXNG search client |
 | orchestrator/system_diagnostics.py | System health checks, log analysis |
 | orchestrator/fast_path.py | Fast path handler for simple commands (lights, greetings) |
@@ -299,6 +303,23 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 |----------|---------|---------|
 | SNAPCAST_ENABLED | false | Enable Snapcast streaming TTS (replaces Cast delivery) |
 | SNAPCAST_FIFO_BASE | /tmp/snapcast | Base path for named pipes (per-room subdirectory) |
+
+## Vision / Image Recognition Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| VISION_ENABLED | true | Enable/disable image analysis feature |
+| VISION_MODEL_URL | http://10.0.0.58:8010/v1 | Vision model endpoint (Qwen2.5-VL-7B on Saturn RTX 3080) |
+| VISION_MODEL_NAME | Qwen2.5-VL-7B-Instruct-q4_k_m.gguf | Vision model identifier |
+| VISION_MAX_IMAGE_SIZE | 10485760 | Maximum image upload size in bytes (10MB) |
+| VISION_TIMEOUT | 60 | Vision model request timeout in seconds |
+
+## Vision API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | /api/vision/analyze | Analyze an image (multipart form or JSON with base64) |
+| GET | /api/vision/status | Vision model health and configuration |
 
 ## Notification Environment Variables
 
