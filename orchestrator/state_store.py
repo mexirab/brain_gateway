@@ -77,6 +77,25 @@ CREATE TABLE IF NOT EXISTS selfcare_log (
 
 CREATE INDEX IF NOT EXISTS idx_selfcare_action ON selfcare_log(action);
 CREATE INDEX IF NOT EXISTS idx_selfcare_logged_at ON selfcare_log(logged_at);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    category TEXT DEFAULT 'personal',
+    tags TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    file_name TEXT DEFAULT '',
+    file_path TEXT DEFAULT '',
+    file_type TEXT DEFAULT 'text/plain',
+    file_size INTEGER DEFAULT 0,
+    extracted_text TEXT DEFAULT '',
+    rag_doc_id TEXT DEFAULT '',
+    uploaded_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_title ON documents(title);
+CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
 """
 
 
@@ -475,3 +494,73 @@ def get_selfcare_today(action: Optional[str] = None) -> List[Dict[str, Any]]:
                 (today,),
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- Document Vault ---
+
+
+def save_document(doc: dict) -> dict:
+    """Save or upsert a document record."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO documents
+               (id, title, category, tags, notes, file_name, file_path, file_type, file_size,
+                extracted_text, rag_doc_id, uploaded_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                doc["id"],
+                doc["title"],
+                doc.get("category", "personal"),
+                doc.get("tags", ""),
+                doc.get("notes", ""),
+                doc.get("file_name", ""),
+                doc.get("file_path", ""),
+                doc.get("file_type", "text/plain"),
+                doc.get("file_size", 0),
+                doc.get("extracted_text", ""),
+                doc.get("rag_doc_id", ""),
+                doc["uploaded_at"],
+                doc["updated_at"],
+            ),
+        )
+    return doc
+
+
+def get_document(doc_id: str) -> Optional[dict]:
+    """Get a single document by ID."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_documents(search: str = "", category: str = "", limit: int = 20) -> list[dict]:
+    """List documents with optional search and category filter."""
+    with get_db() as conn:
+        if search and category:
+            rows = conn.execute(
+                "SELECT * FROM documents WHERE category = ? AND (title LIKE ? OR notes LIKE ?) ORDER BY updated_at DESC LIMIT ?",
+                (category, f"%{search}%", f"%{search}%", limit),
+            ).fetchall()
+        elif search:
+            rows = conn.execute(
+                "SELECT * FROM documents WHERE title LIKE ? OR notes LIKE ? ORDER BY updated_at DESC LIMIT ?",
+                (f"%{search}%", f"%{search}%", limit),
+            ).fetchall()
+        elif category:
+            rows = conn.execute(
+                "SELECT * FROM documents WHERE category = ? ORDER BY updated_at DESC LIMIT ?",
+                (category, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM documents ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_document(doc_id: str) -> bool:
+    """Delete a document by ID."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+    return cursor.rowcount > 0
