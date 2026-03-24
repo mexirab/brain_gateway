@@ -64,8 +64,6 @@ export default function ChatPage() {
       }));
       setMessages(display);
       setActiveConvId(convId);
-      // Seed announcement watermark from latest
-      initRef.current = false;
     } catch { /* ignore */ }
   }, []);
 
@@ -73,7 +71,6 @@ export default function ChatPage() {
   const createNewChat = useCallback(async () => {
     setMessages([]);
     setActiveConvId(null);
-    initRef.current = false;
   }, []);
 
   // Delete conversation
