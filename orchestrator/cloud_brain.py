@@ -366,6 +366,24 @@ class CloudBrain:
             }
 
         logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
+
+        # Strip any remaining base64/image content from ALL messages before sending to text-only LLM
+        # Open WebUI resends full conversation history including old images
+        for i, msg in enumerate(processed_msgs):
+            content = msg.get("content")
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif isinstance(part, dict) and part.get("type") == "image_url":
+                        text_parts.append("[Previously shared image]")
+                if text_parts:
+                    processed_msgs[i] = {
+                        "role": msg.get("role", "user"),
+                        "content": "\n".join(text_parts),
+                    }
+
         return processed_msgs
 
     # --- Helpers ---
