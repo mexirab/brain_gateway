@@ -145,6 +145,13 @@ class LocalHTTPBackend(TTSBackend):
         audio_bytes = bytes(audio_buffer)
 
         def _write_to_fifos() -> None:
+            import contextlib
+            import fcntl
+            import time
+
+            F_SETPIPE_SZ = 1031
+            PIPE_BUF_SIZE = 1_048_576  # 1MB — kernel max
+
             fifos = []
             for path in fifo_paths:
                 try:
@@ -154,8 +161,15 @@ class LocalHTTPBackend(TTSBackend):
             if not fifos:
                 raise FileNotFoundError(f"No Snapcast FIFOs available: {fifo_paths}")
             try:
+                # Maximize pipe buffer so Snapcast can read the full audio
+                for fifo in fifos:
+                    with contextlib.suppress(OSError):
+                        fcntl.fcntl(fifo.fileno(), F_SETPIPE_SZ, PIPE_BUF_SIZE)
                 for fifo in fifos:
                     fifo.write(audio_bytes)
+                    fifo.flush()
+                # Give Snapcast time to read before closing the pipe
+                time.sleep(max(len(audio_bytes) / (_SNAP_SAMPLE_RATE * 2) + 2, 5))
             finally:
                 for fifo in fifos:
                     fifo.close()
