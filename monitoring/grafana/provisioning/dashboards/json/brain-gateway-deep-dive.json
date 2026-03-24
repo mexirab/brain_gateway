@@ -73,8 +73,8 @@
       "gridPos": {"h": 5, "w": 6, "x": 12, "y": 9},
       "id": 12,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "bgw_helios_idle_seconds", "refId": "A"}],
-      "title": "Helios Idle Time",
+      "targets": [{"expr": "bgw_model_online{model=\"primary\"}", "refId": "A"}],
+      "title": "Primary Model Status",
       "type": "stat"
     },
     {

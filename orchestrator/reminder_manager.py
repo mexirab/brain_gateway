@@ -391,9 +391,11 @@ def _record_announcement(
     try:
         from metrics import TTS_ANNOUNCEMENTS_TOTAL, TTS_ERRORS_TOTAL, TTS_FALLBACK_TOTAL, TTS_LATENCY
 
+        # Sanitize speaker label to prevent Prometheus cardinality explosion from untrusted input
+        safe_speaker = re.sub(r"[^a-zA-Z0-9_:.\-]", "_", speaker or "none")[:50]
         TTS_ANNOUNCEMENTS_TOTAL.labels(
             type=announcement_type,
-            speaker=speaker or "none",
+            speaker=safe_speaker,
             success="true" if success else "false",
         ).inc()
 

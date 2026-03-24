@@ -43,6 +43,7 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - ./prometheus/api_token:/etc/prometheus/api_token:ro
       - /mnt/logging/prometheus:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
