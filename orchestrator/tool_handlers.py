@@ -5,7 +5,7 @@ Tool execution handlers: dispatcher + all tool_* functions.
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
 
 import shared
@@ -176,6 +176,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             return await check_system(arguments.get("query", "system_health"))
         elif tool_name == "analyze_image":
             return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
+        elif tool_name == "document_vault":
+            return _handle_document_vault(arguments)
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -832,3 +834,135 @@ async def tool_analyze_image(query: str) -> str:
 
     logger.info("[VISION_TOOL] Re-analyzing cached image with query: %s", query[:100])
     return await analyze_image(image_data, query)
+
+
+def _handle_document_vault(arguments: Dict[str, Any]) -> str:
+    """Handle document_vault tool calls: create, search, update."""
+    from state_store import get_document, list_documents, save_document
+
+    action = arguments.get("action", "")
+
+    if action == "search":
+        query = arguments.get("query", "")
+        if not query:
+            return "A search query is required."
+        docs = list_documents(search=query, limit=10)
+        if not docs:
+            return f"No documents found matching '{query}'."
+        results = []
+        for d in docs:
+            snippet = (d.get("notes") or d.get("extracted_text") or "")[:200]
+            results.append(
+                f"• **{d['title']}** (id: {d['id']}, category: {d.get('category', 'personal')})\n  {snippet}"
+            )
+        return f"Found {len(docs)} document(s):\n\n" + "\n\n".join(results)
+
+    elif action == "create":
+        title = arguments.get("title", "")
+        if not title:
+            return "A title is required to create a document."
+        notes = arguments.get("notes", "")
+        if not notes:
+            return "Notes/content is required to create a document."
+        category = arguments.get("category", "personal")
+        valid_categories = {"personal", "financial", "medical", "legal", "insurance", "housing", "other"}
+        if category not in valid_categories:
+            category = "personal"
+
+        import uuid
+        from datetime import datetime
+
+        doc_id = uuid.uuid4().hex[:12]
+        now = datetime.now(UTC).isoformat()
+        doc = {
+            "id": doc_id,
+            "title": title,
+            "category": category,
+            "tags": arguments.get("tags", ""),
+            "notes": notes,
+            "file_name": f"{title.lower().replace(' ', '_')}.txt",
+            "file_path": "",
+            "file_type": "text/plain",
+            "file_size": len(notes.encode("utf-8")),
+            "extracted_text": notes,
+            "rag_doc_id": f"vault_{doc_id}",
+            "uploaded_at": now,
+            "updated_at": now,
+        }
+        save_document(doc)
+
+        # Index in RAG for searchability
+        try:
+            embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
+            shared.collection.upsert(
+                documents=[notes],
+                embeddings=[embedding],
+                metadatas=[
+                    {
+                        "source": "document_vault",
+                        "category": category,
+                        "title": title,
+                        "vault_doc_id": doc_id,
+                        "kind": "chunk",
+                    }
+                ],
+                ids=[f"vault_{doc_id}"],
+            )
+        except Exception as e:
+            logger.warning("[DOCVAULT] RAG indexing failed for new doc: %s", e)
+
+        return f'Created document "{title}" (id: {doc_id}, category: {category}). It\'s saved and searchable.'
+
+    elif action == "update":
+        doc_id = arguments.get("doc_id", "")
+        if not doc_id:
+            return "A doc_id is required to update a document."
+        doc = get_document(doc_id)
+        if not doc:
+            return f"No document found with id '{doc_id}'."
+
+        from datetime import datetime
+
+        updates = {}
+        if "title" in arguments:
+            updates["title"] = arguments["title"]
+        if "notes" in arguments:
+            updates["notes"] = arguments["notes"]
+            updates["extracted_text"] = arguments["notes"]
+            updates["file_size"] = len(arguments["notes"].encode("utf-8"))
+        if "category" in arguments:
+            updates["category"] = arguments["category"]
+
+        if not updates:
+            return "No fields to update. Provide title, notes, or category."
+
+        updates["updated_at"] = datetime.now(UTC).isoformat()
+        doc.update(updates)
+        save_document(doc)
+
+        # Re-index in RAG if notes changed
+        if "notes" in arguments:
+            try:
+                notes = arguments["notes"]
+                embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
+                shared.collection.upsert(
+                    documents=[notes],
+                    embeddings=[embedding],
+                    metadatas=[
+                        {
+                            "source": "document_vault",
+                            "category": doc.get("category", "personal"),
+                            "title": doc.get("title", ""),
+                            "vault_doc_id": doc_id,
+                            "kind": "chunk",
+                        }
+                    ],
+                    ids=[f"vault_{doc_id}"],
+                )
+            except Exception:
+                pass  # RAG index failure shouldn't block the update
+
+        updated_fields = ", ".join(updates.keys())
+        return f"Updated {updated_fields} on '{doc.get('title', doc_id)}'."
+
+    return f"Unknown action: {action}"

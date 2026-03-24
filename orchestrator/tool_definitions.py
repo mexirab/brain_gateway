@@ -643,6 +643,53 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "document_vault",
+            "description": "Create, search, and update personal documents (e.g., food inventory, notes, lists). Documents are stored permanently and indexed in RAG for searchability. Use 'create' to make a new document, 'search' to find existing ones, 'update' to modify content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["create", "search", "update"],
+                        "description": "Action to perform: 'create' a new document, 'search' for existing documents, or 'update' an existing document.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Document title (required for create, optional for search).",
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Document content in markdown (required for create).",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query text (required for search).",
+                    },
+                    "doc_id": {
+                        "type": "string",
+                        "description": "Document ID to update (required for update).",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "personal",
+                            "financial",
+                            "medical",
+                            "legal",
+                            "insurance",
+                            "housing",
+                            "other",
+                        ],
+                        "description": "Document category (default: personal).",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 
