@@ -169,6 +169,15 @@ PERSONAL CONTEXT (from {user}'s notes):
     if interrupt_context:
         context_section += f"\n{interrupt_context}\n"
 
+    try:
+        from presence_tracker import get_presence_prompt_context
+
+        presence_ctx = get_presence_prompt_context()
+        if presence_ctx:
+            context_section += f"\nLOCATION: {presence_ctx}\n"
+    except Exception:
+        pass
+
     from datetime import datetime
 
     now = datetime.now()

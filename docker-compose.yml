@@ -162,6 +162,14 @@ services:
       - VISION_MODEL_NAME=${VISION_MODEL_NAME:-Qwen2.5-VL-7B-Instruct-q4_k_m.gguf}
       - VISION_MAX_IMAGE_SIZE=${VISION_MAX_IMAGE_SIZE:-10485760}
       - VISION_TIMEOUT=${VISION_TIMEOUT:-60}
+      # Presence awareness
+      - PRESENCE_ENABLED=${PRESENCE_ENABLED:-true}
+      - PRESENCE_ENTITY=${PRESENCE_ENTITY:-person.nadim}
+      - PRESENCE_MOTION_SENSORS=${PRESENCE_MOTION_SENSORS:-{"kitchen":"binary_sensor.kitchen_motion","closet":"binary_sensor.closet_motion","dining":"device_tracker.presence_sensor_fp2_0e56"}}
+      - PRESENCE_POLL_INTERVAL=${PRESENCE_POLL_INTERVAL:-60}
+      - PRESENCE_TARGETED_TTS=${PRESENCE_TARGETED_TTS:-true}
+      - PRESENCE_WELCOME_HOME=${PRESENCE_WELCOME_HOME:-true}
+      - PRESENCE_WELCOME_COOLDOWN=${PRESENCE_WELCOME_COOLDOWN:-30}
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
     networks:

@@ -964,6 +964,21 @@ async def vision_status():
             "model": shared.VISION_MODEL_NAME,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Presence awareness
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/presence/status")
+async def presence_status():
+    """Get current presence state (home/away, room, last motion)."""
+    from presence_tracker import get_presence
+
+    return JSONResponse(get_presence())
+
+
 # ---------------------------------------------------------------------------
 # Voice: STT + TTS proxy endpoints for chat page
 # ---------------------------------------------------------------------------

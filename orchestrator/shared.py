@@ -355,6 +355,20 @@ SNAPCAST_ENABLED = os.environ.get("SNAPCAST_ENABLED", "false").lower() == "true"
 SNAPCAST_FIFO_BASE = os.environ.get("SNAPCAST_FIFO_BASE", "/tmp/snapcast")
 
 # ---------------------------------------------------------------------------
+# Presence awareness
+# ---------------------------------------------------------------------------
+PRESENCE_ENABLED = os.environ.get("PRESENCE_ENABLED", "true").lower() == "true"
+PRESENCE_ENTITY = os.environ.get("PRESENCE_ENTITY", "person.nadim")
+PRESENCE_MOTION_SENSORS = os.environ.get(
+    "PRESENCE_MOTION_SENSORS",
+    '{"kitchen":"binary_sensor.kitchen_motion","closet":"binary_sensor.closet_motion","dining":"device_tracker.presence_sensor_fp2_0e56"}',
+)
+PRESENCE_POLL_INTERVAL = int(os.environ.get("PRESENCE_POLL_INTERVAL", "60"))
+PRESENCE_TARGETED_TTS = os.environ.get("PRESENCE_TARGETED_TTS", "true").lower() == "true"
+PRESENCE_WELCOME_HOME = os.environ.get("PRESENCE_WELCOME_HOME", "true").lower() == "true"
+PRESENCE_WELCOME_COOLDOWN = int(os.environ.get("PRESENCE_WELCOME_COOLDOWN", "30"))
+
+# ---------------------------------------------------------------------------
 # Do Not Disturb (sleep mode) — suppresses all announcements
 # Persisted to state_store notification_tracking table (key: "dnd_active")
 # ---------------------------------------------------------------------------

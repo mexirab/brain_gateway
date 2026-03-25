@@ -127,6 +127,16 @@ async def check_selfcare() -> None:
     tz = ZoneInfo(shared.TIMEZONE)
     now_tz = datetime.now(tz)
 
+    # Skip nudges when not home
+    if shared.PRESENCE_ENABLED:
+        try:
+            from presence_tracker import get_presence
+
+            if not get_presence().get("is_home", True):
+                return
+        except Exception:
+            pass
+
     # Reset movement/hydration timers daily so overnight hours don't accumulate
     if _state.sitting_since and _state.sitting_since.date() < now.date():
         _state.sitting_since = now

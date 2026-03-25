@@ -269,8 +269,20 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         # Snapcast streaming path (low latency, sentence-by-sentence)
         # =====================================================================
         if shared.SNAPCAST_ENABLED and hasattr(backend, "synthesize_to_snapcast"):
-            fifo_paths = _resolve_snapcast_fifos(speaker)
-            target_label = speaker or "all"
+            # Room-targeted TTS: if no specific speaker requested, use detected room
+            effective_speaker = speaker
+            if not effective_speaker and shared.PRESENCE_TARGETED_TTS:
+                try:
+                    from presence_tracker import get_presence
+
+                    p = get_presence()
+                    if p.get("current_room"):
+                        effective_speaker = p["current_room"]
+                        logger.info(f"[PRESENCE] Targeting TTS to {effective_speaker}")
+                except Exception:
+                    pass
+            fifo_paths = _resolve_snapcast_fifos(effective_speaker)
+            target_label = effective_speaker or "all"
             try:
                 result = await backend.synthesize_to_snapcast(text, fifo_paths)
                 latency_ms = int((_time.time() - t0) * 1000)

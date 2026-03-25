@@ -627,6 +627,41 @@ async def startup_event():
         )
         logger.info("[SCHEDULER] Self-care nudges every 15 min")
 
+    # Schedule presence polling
+    if shared.PRESENCE_ENABLED:
+        from presence_tracker import poll_presence
+
+        async def _presence_poll_with_welcome():
+            await poll_presence()
+            # Check for welcome home greeting
+            try:
+                from presence_tracker import check_welcome_home
+
+                if check_welcome_home() and not shared.DND_ACTIVE:
+                    from reminder_manager import _announce_voice
+
+                    # Build a brief welcome status
+                    from state_store import get_pending_reminders
+
+                    pending = get_pending_reminders()
+                    parts = ["Welcome home!"]
+                    if pending:
+                        parts.append(f"You have {len(pending)} pending reminder{'s' if len(pending) != 1 else ''}.")
+                    await _announce_voice(" ".join(parts), announcement_type="greeting")
+                    logger.info("[PRESENCE] Welcome home greeting delivered")
+            except Exception as e:
+                logger.warning(f"[PRESENCE] Welcome home error: {e}")
+
+        scheduler.add_job(
+            _presence_poll_with_welcome,
+            trigger="interval",
+            seconds=shared.PRESENCE_POLL_INTERVAL,
+            id="presence_poll",
+            name="Presence polling",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Presence polling every {shared.PRESENCE_POLL_INTERVAL}s")
+
     # Schedule progress tracking jobs (F-005)
     if shared.PROGRESS_ENABLED:
         from background_jobs import daily_progress_summary, weekly_progress_digest
