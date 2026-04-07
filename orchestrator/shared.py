@@ -19,6 +19,7 @@ from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
 from config import settings
+from focus_state import FocusSession
 from ha_integration import HomeAssistantClient
 from llm_backend import LLMBackend, LLMConfig, create_backend
 from tts_backend import TTSBackend, TTSConfig, create_tts_backend
@@ -173,26 +174,9 @@ _ha_tool_cache_time: float = 0.0
 _HA_TOOL_CACHE_TTL: float = 300.0  # 5 minutes
 
 # ---------------------------------------------------------------------------
-# Focus timer state (Pomodoro)
+# Focus timer state (Pomodoro) — FocusSession supports dict-style access
 # ---------------------------------------------------------------------------
-current_focus_session = {
-    "active": False,
-    "task": None,
-    "started": None,
-    "duration": None,
-    "break_duration": None,
-    "job_id": None,
-    "audio_player": None,
-    "block_sites": False,
-    # F-004 body doubling additions
-    "task_description": None,
-    "sprint_count": 0,
-    "sprints_planned": None,
-    "check_in_interval": None,
-    "check_in_job_id": None,
-    "total_focus_minutes": 0,
-    "audio_source": "endel",
-}
+current_focus_session = FocusSession()
 
 # Endel focus audio configuration
 ENDEL_API_URL = "https://app.endel.io/api/pacific"
