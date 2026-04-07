@@ -55,7 +55,21 @@ logger = logging.getLogger(__name__)
 
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
-    """Execute a tool and return the result as a string."""
+    """Execute a tool and return the result as a string.
+
+    Checks the tool registry first (for tools migrated to @register_tool),
+    then falls back to the legacy if-elif chain for unmigrated tools.
+    """
+    from tool_registry import execute_tool as _registry_execute
+    from tool_registry import (
+        is_registered,
+    )
+
+    # Prefer registry — migrated tools go through the decorator pipeline
+    if is_registered(tool_name):
+        return await _registry_execute(tool_name, arguments)
+
+    # Legacy dispatcher — tools below will be migrated to @register_tool over time
     TOOL_CALL_COUNT.labels(tool=tool_name).inc()
     _tool_t0 = time.time()
     logger.info(
@@ -1006,3 +1020,234 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
         return f'Created document "{title}" (id: {doc_id}, category: {category}). It\'s saved and searchable.'
 
     return f"Unknown action: {action}"
+
+
+# ---------------------------------------------------------------------------
+# Tool registry registrations
+# Migrated tools use @register_tool and go through the registry pipeline
+# instead of the legacy if-elif chain above.
+# ---------------------------------------------------------------------------
+from tool_registry import register_tool
+
+
+@register_tool("search_memory")
+def _reg_search_memory(arguments: dict) -> str:
+    return tool_search_memory(arguments.get("query", ""))
+
+
+@register_tool("home_assistant")
+async def _reg_home_assistant(arguments: dict) -> str:
+    return await tool_home_assistant(
+        arguments.get("entity_id", ""), arguments.get("service", ""), arguments.get("data", {})
+    )
+
+
+@register_tool("update_data")
+def _reg_update_data(arguments: dict) -> str:
+    return tool_update_data(arguments)
+
+
+@register_tool("set_reminder")
+async def _reg_set_reminder(arguments: dict) -> str:
+    return await tool_set_reminder(
+        arguments.get("reminder_text", ""), arguments.get("time", ""), arguments.get("target", "both")
+    )
+
+
+@register_tool("cancel_reminder")
+async def _reg_cancel_reminder(arguments: dict) -> str:
+    return await tool_cancel_reminder(arguments.get("reminder_id", ""))
+
+
+@register_tool("start_focus")
+async def _reg_start_focus(arguments: dict) -> str:
+    return await tool_start_focus(
+        arguments.get("task", "your task"),
+        arguments.get("duration", 25),
+        arguments.get("break_duration", 5),
+        arguments.get("speaker"),
+        arguments.get("soundscape", "focus"),
+        arguments.get("block_sites", True),
+        arguments.get("check_ins", True),
+        arguments.get("check_in_interval", 15),
+        arguments.get("audio"),
+        arguments.get("sprints", 1),
+    )
+
+
+@register_tool("stop_focus")
+async def _reg_stop_focus(arguments: dict) -> str:
+    return await tool_stop_focus()
+
+
+@register_tool("focus_status")
+async def _reg_focus_status(arguments: dict) -> str:
+    return await tool_focus_status()
+
+
+@register_tool("focus_sprint")
+async def _reg_focus_sprint(arguments: dict) -> str:
+    return await tool_focus_sprint(arguments.get("action", ""), arguments.get("duration_minutes"))
+
+
+@register_tool("web_search")
+async def _reg_web_search(arguments: dict) -> str:
+    return await tool_web_search(
+        arguments.get("query", ""), arguments.get("category", "general"), arguments.get("time_range")
+    )
+
+
+@register_tool("check_calendar")
+async def _reg_check_calendar(arguments: dict) -> str:
+    return await tool_check_calendar(arguments.get("days_ahead", 7))
+
+
+@register_tool("create_calendar_event")
+async def _reg_create_calendar_event(arguments: dict) -> str:
+    return await tool_create_calendar_event(
+        arguments.get("title", ""),
+        arguments.get("start_time", ""),
+        arguments.get("duration_minutes", 60),
+        arguments.get("description", ""),
+        arguments.get("location", ""),
+    )
+
+
+@register_tool("check_email")
+async def _reg_check_email(arguments: dict) -> str:
+    return await tool_check_email(
+        arguments.get("query", ""), arguments.get("max_results", 10), arguments.get("unread_only", False)
+    )
+
+
+@register_tool("search_email")
+async def _reg_search_email(arguments: dict) -> str:
+    return await tool_search_email(arguments.get("query", ""), arguments.get("max_results", 10))
+
+
+@register_tool("finance_status")
+async def _reg_finance_status(arguments: dict) -> str:
+    return await tool_finance_status(arguments.get("include_details", False))
+
+
+@register_tool("brain_dump")
+async def _reg_brain_dump(arguments: dict) -> str:
+    return await tool_brain_dump(arguments.get("items", []))
+
+
+@register_tool("decompose_task")
+async def _reg_decompose_task(arguments: dict) -> str:
+    return await tool_decompose_task(
+        arguments.get("task", ""), arguments.get("mode", "next_step_only"), arguments.get("context", "")
+    )
+
+
+@register_tool("task_step")
+def _reg_task_step(arguments: dict) -> str:
+    return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
+
+
+@register_tool("decide_for_me")
+async def _reg_decide_for_me(arguments: dict) -> str:
+    return await tool_decide_for_me(arguments)
+
+
+@register_tool("selfcare_log")
+async def _reg_selfcare_log(arguments: dict) -> str:
+    from selfcare_manager import get_selfcare_status, log_selfcare
+
+    if arguments.get("action") == "check":
+        status = await get_selfcare_status()
+        return json.dumps(status)
+    return await log_selfcare(arguments.get("action", ""), arguments.get("detail"))
+
+
+@register_tool("bookmark_context")
+async def _reg_bookmark_context(arguments: dict) -> str:
+    from context_tracker import bookmark_context
+
+    result = await bookmark_context(arguments.get("description"))
+    desc = result["description"]
+    delay = result["checkin_delay"]
+    return f"Got it — bookmarking your spot. You were working on {desc}. I'll check in with you in {delay} minutes."
+
+
+@register_tool("recall_context")
+async def _reg_recall_context(arguments: dict) -> str:
+    from context_tracker import get_recent_context
+
+    entries = await get_recent_context(arguments.get("count", 3))
+    if not entries:
+        return "I don't have any recent context recorded yet."
+    lines = ["Here's what you were working on:"]
+    for i, e in enumerate(entries, 1):
+        lines.append(f"{i}. {e['description']} — {e['when']}")
+    return "\n".join(lines)
+
+
+@register_tool("start_routine")
+async def _reg_start_routine(arguments: dict) -> str:
+    from routine_manager import start_routine
+
+    return await start_routine(arguments.get("routine_id", ""))
+
+
+@register_tool("routine_action")
+async def _reg_routine_action(arguments: dict) -> str:
+    from routine_manager import advance_step
+
+    return await advance_step(arguments.get("action", "done"))
+
+
+@register_tool("routine_status")
+async def _reg_routine_status(arguments: dict) -> str:
+    from routine_manager import get_routine_status
+
+    return await get_routine_status()
+
+
+@register_tool("check_system")
+async def _reg_check_system(arguments: dict) -> str:
+    from system_diagnostics import check_system
+
+    return await check_system(arguments.get("query", "system_health"))
+
+
+@register_tool("analyze_image")
+async def _reg_analyze_image(arguments: dict) -> str:
+    return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
+
+
+@register_tool("sleep_mode")
+async def _reg_sleep_mode(arguments: dict) -> str:
+    import state_store
+
+    action = arguments.get("action", "on")
+    shared.DND_ACTIVE = action == "on"
+    if shared.DND_ACTIVE:
+        state_store.set_notification_flag("dnd_active")
+        logger.info("[DND] Sleep mode enabled — all announcements suppressed")
+        return "Sleep mode on. No more announcements tonight. Good night!"
+    else:
+        state_store.clear_notification_flag("dnd_active")
+        logger.info("[DND] Sleep mode disabled — announcements resumed")
+        return "Good morning! Announcements are back on."
+
+
+@register_tool("shopping_list")
+async def _reg_shopping_list(arguments: dict) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(_handle_shopping_list, arguments)
+
+
+@register_tool("document_vault")
+async def _reg_document_vault(arguments: dict) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(_handle_document_vault, arguments)
+
+
+@register_tool("ask_expert")
+def _reg_ask_expert(arguments: dict) -> str:
+    return "ask_expert is not available — the primary model handles all queries directly."
