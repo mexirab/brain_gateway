@@ -1,10 +1,11 @@
 # Brain Gateway Docker Compose
 # ============================
-# Environment variables loaded from .env file (create from .env.example)
+# Environment variables loaded from .env file.
+# Run scripts/setup.sh to generate .env, or copy from .env.example.
 #
 # Usage:
-#   cp .env.example .env
-#   # Edit .env with your values
+#   ./scripts/setup.sh   # interactive setup (recommended)
+#   # OR: cp .env.example .env && edit .env
 #   docker compose up -d
 
 # Shared logging config to reduce disk I/O
@@ -31,15 +32,15 @@ services:
       - OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
       - OPENAI_API_KEY=${API_TOKEN:?API_TOKEN must be set in .env}
       - REDIS_URL=redis://redis:6379/0
-      # TTS configuration - Qwen3-TTS on Uranus
+      # TTS configuration (requires TTS_HOST or NODE_TTS_IP in .env)
       - AUDIO_TTS_ENGINE=openai
-      - AUDIO_TTS_OPENAI_API_BASE_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}/v1
+      - AUDIO_TTS_OPENAI_API_BASE_URL=${TTS_URL:-http://${NODE_TTS_IP}:${SERVICE_TTS_PORT:-8002}}/v1
       - AUDIO_TTS_OPENAI_API_KEY=local
       - AUDIO_TTS_VOICE=${TTS_VOICE:-jessica}
       - AUDIO_TTS_SPLIT_ON=paragraph
-      # STT configuration - Whisper on Uranus
+      # STT configuration (requires STT_HOST or NODE_STT_IP in .env)
       - AUDIO_STT_ENGINE=openai
-      - AUDIO_STT_OPENAI_API_BASE_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_STT_PORT:-8003}/v1
+      - AUDIO_STT_OPENAI_API_BASE_URL=${STT_URL:-http://${NODE_STT_IP}:${SERVICE_STT_PORT:-8003}}/v1
       - AUDIO_STT_OPENAI_API_KEY=local
       - AUDIO_STT_MODEL=whisper-1
     depends_on:
@@ -59,90 +60,90 @@ services:
       - "${SERVICE_ORCHESTRATOR_PORT:-8888}:8888"
     volumes:
       # Mount ChromaDB data
-      - ${USER_HOME:-/home/labadmin}/.local/share/chroma:/chroma:rw
+      - ${CHROMA_HOST_PATH:-./data/chroma}:/chroma:rw
       # Mount env file
-      - ${USER_HOME:-/home/labadmin}/brain_gateway/.env:/app/.env:ro
+      - ${GATEWAY_ROOT_PATH:-.}/.env:/app/.env:ro
       # Mount RAG data for write access (medications, projects)
-      - ${RAG_BASE:-/home/labadmin/rag/nadim_rag}:/rag:rw
-      # Mount SSH keys for Helios auto-start
-      - ${USER_HOME:-/home/labadmin}/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
-      - ${USER_HOME:-/home/labadmin}/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      - ${RAG_BASE:-./data/rag}:/rag:rw
+      # Mount SSH keys for remote model server management (optional)
+      - ${SSH_KEY_PATH:-/dev/null}:/root/.ssh/id_ed25519:ro
+      - ${SSH_KNOWN_HOSTS:-/dev/null}:/root/.ssh/known_hosts:ro
       # Mount Google OAuth2 credentials (rw needed for token refresh)
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/credentials:/app/credentials:rw
+      - ${GATEWAY_ROOT_PATH:-.}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
-      # Finance SQLite database
+      # Application data (SQLite databases, etc.)
       - finance-data:/app/data:rw
-      # Snapcast named pipes for streaming TTS
-      - /tmp/snapcast:/tmp/snapcast
-      # Document vault storage (1.8TB USB drive)
-      - /mnt/documents:/mnt/documents:rw
+      # Snapcast named pipes for streaming TTS (optional)
+      - ${SNAPCAST_FIFO_HOST:-/tmp/snapcast}:/tmp/snapcast
+      # Document vault storage (optional)
+      - ${DOCUMENTS_PATH:-./data/documents}:/mnt/documents:rw
       # User profile (personal config — names, speakers, sensors, etc.)
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/user_profile.yaml:/app/user_profile.yaml:ro
+      - ${GATEWAY_ROOT_PATH:-.}/user_profile.yaml:/app/user_profile.yaml:ro
       # Routine definitions (F-006)
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/data/routines.yaml:/app/data/routines.yaml:ro
+      - ${GATEWAY_ROOT_PATH:-.}/data/routines.yaml:/app/data/routines.yaml:ro
     environment:
-      # Primary model (conversation + tools)
-      - MODEL_URL=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_MODEL_PORT:-8080}/v1
-      - MODEL_NAME=${MODEL_NAME:-Qwen3.5-27B}
-      # Fallback model (used when primary is unavailable)
-      - FALLBACK_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:8001/v1
-      - FALLBACK_MODEL_NAME=${FALLBACK_MODEL_NAME:-Qwen3.5-9B}
+      # Primary model (conversation + tools) — set MODEL_URL in .env
+      - MODEL_URL=${MODEL_URL:-http://localhost:8080/v1}
+      - MODEL_NAME=${MODEL_NAME:-}
+      # Fallback model (empty = disabled)
+      - FALLBACK_MODEL_URL=${FALLBACK_MODEL_URL:-}
+      - FALLBACK_MODEL_NAME=${FALLBACK_MODEL_NAME:-}
       # Embedding model
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-ai/nomic-embed-text-v2-moe}
-      # Home Assistant
-      - HA_URL=http://${NODE_HA_IP:-10.0.0.106}:8123
-      - HA_TOKEN=${HA_TOKEN:?HA_TOKEN must be set in .env}
+      # Home Assistant (empty = disabled)
+      - HA_URL=${HA_URL:-}
+      - HA_TOKEN=${HA_TOKEN:-}
       # ChromaDB / RAG
       - CHROMA_PERSIST=/chroma/personal_rag
-      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-nadim_rag}
+      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-personal_rag}
       - MIN_COS=${MIN_COS:-0.20}
       - TOP_K=${TOP_K:-25}
       - RAG_BASE=/rag
-      # TTS
-      - TTS_URL=http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}
+      # TTS (empty = disabled)
+      - TTS_URL=${TTS_URL:-}
       - TTS_VOICE=${TTS_VOICE:-jessica}
-      # Callback URL
-      - ORCHESTRATOR_URL=http://${NODE_JUPITER_IP:-10.0.0.248}:${SERVICE_ORCHESTRATOR_PORT:-8888}
-      # SSH for remote model server management
-      - NODE_HELIOS_IP=${NODE_HELIOS_IP:-10.0.0.195}
-      - MODEL_SSH_USER=${MODEL_SSH_USER:-labadmin}
-      # Reminders
-      - REMINDER_SPEAKER=${REMINDER_SPEAKER:-media_player.all_speakers}
-      - FALLBACK_SPEAKER=${FALLBACK_SPEAKER:-media_player.dining_room_pair}
+      # Callback URL (used for HA notifications pointing back to orchestrator)
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://localhost:${SERVICE_ORCHESTRATOR_PORT:-8888}}
+      # SSH for remote model server management (empty = disabled)
+      - MODEL_SERVER_IP=${MODEL_SERVER_IP:-}
+      - MODEL_SSH_USER=${MODEL_SSH_USER:-}
+      # Reminders (empty speaker = skip TTS announcements)
+      - REMINDER_SPEAKER=${REMINDER_SPEAKER:-}
+      - FALLBACK_SPEAKER=${FALLBACK_SPEAKER:-}
       - TZ=${TZ:-America/Chicago}
       # Agentic settings
       - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}
-      # Pi-hole focus blocking (comma-separated for multi-instance)
-      - PIHOLE_URLS=${PIHOLE_URLS:-http://10.0.0.248:${PIHOLE_WEB_PORT:-8053},http://10.0.0.58:${PIHOLE_WEB_PORT:-8053}}
+      # Pi-hole focus blocking (empty = disabled)
+      - PIHOLE_URLS=${PIHOLE_URLS:-}
       - PIHOLE_PASSWORD=${PIHOLE_PASSWORD:-}
       - PIHOLE_FOCUS_GROUP=${PIHOLE_FOCUS_GROUP:-focus_blocklist}
-      - FOCUS_BLOCKING_ENABLED=${FOCUS_BLOCKING_ENABLED:-true}
-      # Focus audio
-      - FOCUS_AUDIO_PLAYER=${FOCUS_AUDIO_PLAYER:-media_player.office_speaker}
+      - FOCUS_BLOCKING_ENABLED=${FOCUS_BLOCKING_ENABLED:-false}
+      # Focus audio (empty = disabled)
+      - FOCUS_AUDIO_PLAYER=${FOCUS_AUDIO_PLAYER:-}
       # SearXNG web search
       - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
       - SEARXNG_MAX_RESULTS=${SEARXNG_MAX_RESULTS:-5}
-      # Google Calendar
+      # Google Calendar (empty paths = disabled)
       - GOOGLE_CREDENTIALS_PATH=${GOOGLE_CREDENTIALS_PATH:-/app/credentials/google_credentials.json}
       - GOOGLE_TOKEN_PATH=${GOOGLE_TOKEN_PATH:-/app/credentials/google_token.json}
       - CALENDAR_POLL_INTERVAL=${CALENDAR_POLL_INTERVAL:-5}
       - CALENDAR_TIERED_ALERTS=${CALENDAR_TIERED_ALERTS:-true}
       - CALENDAR_ALERT_TIERS=${CALENDAR_ALERT_TIERS:-60,30,15,5}
       - MORNING_BRIEFING_TIME=${MORNING_BRIEFING_TIME:-07:00}
-      - MORNING_BRIEFING_ENABLED=${MORNING_BRIEFING_ENABLED:-true}
-      - MORNING_BRIEFING_SPEAKER=${MORNING_BRIEFING_SPEAKER:-media_player.bedroom_pair}
+      - MORNING_BRIEFING_ENABLED=${MORNING_BRIEFING_ENABLED:-false}
+      - MORNING_BRIEFING_SPEAKER=${MORNING_BRIEFING_SPEAKER:-}
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
       - TRAVEL_TIME_BUFFER=${TRAVEL_TIME_BUFFER:-10}
       # Finance
       - FINANCE_DB_PATH=/app/data/finance.db
-      # YNAB integration
+      # YNAB integration (empty = disabled)
       - YNAB_ACCESS_TOKEN=${YNAB_ACCESS_TOKEN:-}
       - YNAB_BUDGET_ID=${YNAB_BUDGET_ID:-}
       - YNAB_SYNC_INTERVAL=${YNAB_SYNC_INTERVAL:-30}
       - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
       # Open WebUI deep link (for notification tap → chat)
-      - WEBUI_URL=${WEBUI_URL:-https://jupiter-amds.tail74fc4a.ts.net}
+      - WEBUI_URL=${WEBUI_URL:-}
       # Snapcast streaming TTS
       - SNAPCAST_ENABLED=${SNAPCAST_ENABLED:-false}
       - SNAPCAST_FIFO_BASE=${SNAPCAST_FIFO_BASE:-/tmp/snapcast}
@@ -156,22 +157,22 @@ services:
       - AUTO_LEARN_MARKDOWN=${AUTO_LEARN_MARKDOWN:-true}
       - AUTO_LEARN_ENCRYPT=${AUTO_LEARN_ENCRYPT:-true}
       - AUTO_LEARN_ENCRYPTION_KEY=${AUTO_LEARN_ENCRYPTION_KEY:-}
-      # Vision / image recognition (Qwen2.5-VL-7B via llama.cpp on Saturn RTX 3080)
-      - VISION_ENABLED=${VISION_ENABLED:-true}
-      - VISION_MODEL_URL=http://${NODE_SATURN_IP:-10.0.0.58}:8010/v1
-      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-Qwen2.5-VL-7B-Instruct-q4_k_m.gguf}
+      # Vision / image recognition (empty URL = disabled)
+      - VISION_ENABLED=${VISION_ENABLED:-false}
+      - VISION_MODEL_URL=${VISION_MODEL_URL:-}
+      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-}
       - VISION_MAX_IMAGE_SIZE=${VISION_MAX_IMAGE_SIZE:-10485760}
       - VISION_TIMEOUT=${VISION_TIMEOUT:-60}
-      # Presence awareness
-      - PRESENCE_ENABLED=${PRESENCE_ENABLED:-true}
-      - PRESENCE_ENTITY=${PRESENCE_ENTITY:-person.nadim}
-      - PRESENCE_MOTION_SENSORS=${PRESENCE_MOTION_SENSORS:-{"kitchen":"binary_sensor.kitchen_motion","closet":"binary_sensor.closet_motion","dining":"device_tracker.presence_sensor_fp2_0e56"}}
+      # Presence awareness (empty entity = disabled)
+      - PRESENCE_ENABLED=${PRESENCE_ENABLED:-false}
+      - PRESENCE_ENTITY=${PRESENCE_ENTITY:-}
+      - PRESENCE_MOTION_SENSORS=${PRESENCE_MOTION_SENSORS:-{}}
       - PRESENCE_POLL_INTERVAL=${PRESENCE_POLL_INTERVAL:-60}
       - PRESENCE_TARGETED_TTS=${PRESENCE_TARGETED_TTS:-true}
       - PRESENCE_WELCOME_HOME=${PRESENCE_WELCOME_HOME:-true}
       - PRESENCE_WELCOME_COOLDOWN=${PRESENCE_WELCOME_COOLDOWN:-30}
       # CORS for frontend
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.0.0.248:3001,https://convivialprophet.com}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001}
     networks:
       - gateway-net
     healthcheck:
@@ -191,8 +192,8 @@ services:
       - ./litellm-config.yaml:/app/config.yaml:ro
     environment:
       # Derived URLs for litellm-config.yaml os.environ/ references
-      - MODEL_API_BASE=http://${NODE_HELIOS_IP:-10.0.0.195}:${SERVICE_MODEL_PORT:-8080}/v1
-      - FALLBACK_API_BASE=http://${NODE_SATURN_IP:-10.0.0.58}:8001/v1
+      - MODEL_API_BASE=${MODEL_URL:-http://localhost:${SERVICE_MODEL_PORT:-8080}/v1}
+      - FALLBACK_API_BASE=${FALLBACK_MODEL_URL:-}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
     command: --config /app/config.yaml --port 4000
     networks:
@@ -239,8 +240,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      - PRIMARY=http://10.0.0.248:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
-      - REPLICAS=http://10.0.0.58:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
+      - PRIMARY=${PIHOLE_PRIMARY:-}
+      - REPLICAS=${PIHOLE_REPLICAS:-}
       - FULL_SYNC=true
       - RUN_GRAVITY=true
       - CRON=*/15 * * * *
@@ -254,7 +255,7 @@ services:
       - "${SEARXNG_PORT:-8090}:8080"
     volumes:
       - searxng-data:/etc/searxng
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ${GATEWAY_ROOT_PATH:-.}/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8090}/
     networks:
@@ -273,7 +274,7 @@ services:
       - TZ=${TZ:-America/Chicago}
     command: >-
       --uri tcp://0.0.0.0:10300
-      --stt-url http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_STT_PORT:-8003}
+      --stt-url ${STT_URL:-http://localhost:${SERVICE_STT_PORT:-8003}}
       --language en
     networks:
       - gateway-net
@@ -291,7 +292,7 @@ services:
       - TZ=${TZ:-America/Chicago}
     command: >-
       --uri tcp://0.0.0.0:10301
-      --tts-url http://${NODE_URANUS_IP:-10.0.0.173}:${SERVICE_TTS_PORT:-8002}
+      --tts-url ${TTS_URL:-http://localhost:${SERVICE_TTS_PORT:-8002}}
       --voice ${TTS_VOICE:-jessica}
     networks:
       - gateway-net
@@ -307,7 +308,7 @@ services:
       - "${SERVICE_FRONTEND_PORT:-3001}:3001"
     environment:
       - ORCHESTRATOR_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}
-      - NEXT_PUBLIC_ORCHESTRATOR_URL=http://${NODE_JUPITER_IP:-10.0.0.248}:${SERVICE_ORCHESTRATOR_PORT:-8888}
+      - NEXT_PUBLIC_ORCHESTRATOR_URL=${PUBLIC_URL:-http://localhost:${SERVICE_ORCHESTRATOR_PORT:-8888}}
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-changeme}
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
     depends_on:
@@ -328,7 +329,7 @@ services:
       - ROLE=snapserver
     volumes:
       - /tmp/snapcast:/tmp/snapcast
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/snapcast/snapserver.conf:/etc/snapserver.conf:ro
+      - ${GATEWAY_ROOT_PATH:-.}/snapcast/snapserver.conf:/etc/snapserver.conf:ro
     networks:
       - gateway-net
 
@@ -340,7 +341,7 @@ services:
     ports:
       - "${SERVICE_MODEL_SERVER_PORT:-8080}:80"
     volumes:
-      - ${GATEWAY_ROOT_PATH:-/opt/jupiter/gateway_mvp}/models:/usr/share/nginx/html:ro
+      - ${GATEWAY_ROOT_PATH:-.}/models:/usr/share/nginx/html:ro
     networks:
       - gateway-net
 

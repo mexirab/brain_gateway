@@ -6,7 +6,6 @@ Manages the primary model server (any GPU node running llama.cpp, vLLM, etc.).
 
 import asyncio
 import logging
-import os
 import time
 
 import shared
@@ -79,10 +78,16 @@ async def start_model_server() -> bool:
     _t0 = time.time()
     logger.info("[MODEL] Model server is offline, attempting to start...", extra={"component": "model"})
 
-    server_ip = os.environ.get("MODEL_SERVER_IP", os.environ.get("NODE_HELIOS_IP", "10.0.0.195"))
-    ssh_user = os.environ.get("MODEL_SSH_USER", "labadmin")
-    ssh_key = os.environ.get("MODEL_SSH_KEY", "/root/.ssh/id_ed25519")
-    start_cmd = os.environ.get("MODEL_START_CMD", "sudo systemctl start llama-server")
+    from config import settings
+
+    server_ip = settings.model_server_ip
+    ssh_user = settings.model_ssh_user
+    ssh_key = settings.model_ssh_key
+    start_cmd = settings.model_start_cmd
+
+    if not server_ip or not ssh_user:
+        logger.warning("[MODEL] model_server_ip or model_ssh_user not configured — cannot start model via SSH")
+        return False
 
     if not _validate_ssh_cmd(start_cmd, "start"):
         return False
@@ -136,10 +141,16 @@ async def stop_model_server() -> bool:
     MODEL_STOP_COUNT.inc()
     logger.info("[MODEL] Stopping model server to save power...", extra={"component": "model"})
 
-    server_ip = os.environ.get("MODEL_SERVER_IP", os.environ.get("NODE_HELIOS_IP", "10.0.0.195"))
-    ssh_user = os.environ.get("MODEL_SSH_USER", "labadmin")
-    ssh_key = os.environ.get("MODEL_SSH_KEY", "/root/.ssh/id_ed25519")
-    stop_cmd = os.environ.get("MODEL_STOP_CMD", "sudo systemctl stop llama-server")
+    from config import settings
+
+    server_ip = settings.model_server_ip
+    ssh_user = settings.model_ssh_user
+    ssh_key = settings.model_ssh_key
+    stop_cmd = settings.model_stop_cmd
+
+    if not server_ip or not ssh_user:
+        logger.warning("[MODEL] model_server_ip or model_ssh_user not configured — cannot stop model via SSH")
+        return False
 
     if not _validate_ssh_cmd(stop_cmd, "stop"):
         return False

@@ -25,7 +25,7 @@ class LLMConfig:
     """Configuration for a single LLM endpoint."""
 
     backend: str  # "openai_compatible", "anthropic", "openai"
-    url: str  # base URL (e.g., "http://10.0.0.195:8080/v1")
+    url: str  # base URL (e.g., "http://localhost:8080/v1")
     model: str  # model name
     api_key: str = ""  # for cloud APIs
     temperature: float = 0.3

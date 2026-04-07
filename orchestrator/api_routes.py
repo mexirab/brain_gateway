@@ -983,7 +983,7 @@ async def presence_status():
 # Voice: STT + TTS proxy endpoints for chat page
 # ---------------------------------------------------------------------------
 
-STT_URL = os.environ.get("STT_URL", "http://10.0.0.173:8003")
+STT_URL = os.environ.get("STT_URL", "")
 
 
 MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB

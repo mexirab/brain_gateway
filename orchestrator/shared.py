@@ -2,7 +2,8 @@
 Shared state for the Brain Gateway orchestrator modules.
 
 All cross-module state lives here so modules can import what they need
-without circular dependencies.
+without circular dependencies.  Configuration comes from config.py (Pydantic
+Settings); this module re-exports constants for backward compatibility.
 """
 
 import logging
@@ -14,17 +15,14 @@ import chromadb
 import httpx
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from chromadb.config import Settings
-from dotenv import load_dotenv
+from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
+from config import settings
 from ha_integration import HomeAssistantClient
 from llm_backend import LLMBackend, LLMConfig, create_backend
 from tts_backend import TTSBackend, TTSConfig, create_tts_backend
 from user_profile import get_profile
-
-# Load environment (fallback for local dev; Docker passes env vars directly)
-load_dotenv("/app/.env", override=False)
 
 # ---------------------------------------------------------------------------
 # User profile (loaded once at import time)
@@ -34,20 +32,13 @@ profile = get_profile()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Model endpoints (v7 unified)
+# Backward-compatible constant aliases (prefer `settings.x` in new code)
 # ---------------------------------------------------------------------------
-# Primary model (conversation + tools)
-MODEL_URL = os.environ.get("MODEL_URL", "http://10.0.0.195:8080/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen3.5-27B")
-
-# Fallback model (used when primary is unavailable)
-FALLBACK_MODEL_URL = os.environ.get("FALLBACK_MODEL_URL", "http://10.0.0.58:8001/v1")
-FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "Qwen3.5-9B")
-
-# ---------------------------------------------------------------------------
-# Embedding model (configurable)
-# ---------------------------------------------------------------------------
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "nomic-ai/nomic-embed-text-v2-moe")
+MODEL_URL = settings.model_url
+MODEL_NAME = settings.model_name
+FALLBACK_MODEL_URL = settings.fallback_model_url
+FALLBACK_MODEL_NAME = settings.fallback_model_name
+EMBEDDING_MODEL_NAME = settings.embedding_model
 
 # ---------------------------------------------------------------------------
 # LLM Backend instances (initialized in startup_event after _http is ready)
@@ -115,8 +106,8 @@ def init_backends(http_client: httpx.AsyncClient):
         logger.info("[LLM] No fallback model configured")
 
     # --- TTS backend ---
-    TTS_URL = os.environ.get("TTS_URL", "http://10.0.0.173:8002")
-    TTS_VOICE = os.environ.get("TTS_VOICE", profile.assistant_voice)
+    TTS_URL = settings.tts_url
+    TTS_VOICE = settings.tts_voice or profile.assistant_voice
 
     tts_cfg = yaml_data.get("tts", {})
     tts_config = TTSConfig(
@@ -145,21 +136,21 @@ def _resolve_api_key(value: str) -> str:
 # ---------------------------------------------------------------------------
 # Home Assistant
 # ---------------------------------------------------------------------------
-HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
-HA_TOKEN = os.environ.get("HA_TOKEN", "")
+HA_URL = settings.ha_url
+HA_TOKEN = settings.ha_token
 ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 
 # ---------------------------------------------------------------------------
 # RAG / ChromaDB
 # ---------------------------------------------------------------------------
-CHROMA_PERSIST = os.environ.get("CHROMA_PERSIST", "/home/labadmin/.local/share/chroma/personal_rag")
-CHROMA_COLLECTION = os.environ.get("CHROMA_COLLECTION", "nadim_rag")
-MIN_COS = float(os.environ.get("MIN_COS", "0.30"))
-TOP_K = int(os.environ.get("TOP_K", "6"))
+CHROMA_PERSIST = settings.chroma_persist
+CHROMA_COLLECTION = settings.chroma_collection
+MIN_COS = settings.min_cos
+TOP_K = settings.top_k
 
 chroma = chromadb.PersistentClient(
     path=os.path.expanduser(CHROMA_PERSIST),
-    settings=Settings(anonymized_telemetry=False),
+    settings=ChromaSettings(anonymized_telemetry=False),
 )
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
 embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=True)
@@ -167,7 +158,7 @@ embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=Tr
 # ---------------------------------------------------------------------------
 # Agentic settings
 # ---------------------------------------------------------------------------
-MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))
+MAX_TOOL_ROUNDS = settings.max_tool_rounds
 
 # ---------------------------------------------------------------------------
 # Shared httpx client (initialized in startup_event)
@@ -206,17 +197,15 @@ current_focus_session = {
 # Endel focus audio configuration
 ENDEL_API_URL = "https://app.endel.io/api/pacific"
 ENDEL_MODES = ["focus", "deeper-focus", "study", "colored-noises"]
-FOCUS_AUDIO_PLAYER = os.environ.get("FOCUS_AUDIO_PLAYER", profile.focus_audio_player)
-ENDEL_ENABLED = os.environ.get("ENDEL_ENABLED", "true").lower() == "true"
-
-# Non-Endel audio stream URLs (F-004)
-FOCUS_AUDIO_LOFI_URL = os.environ.get("FOCUS_AUDIO_LOFI_URL", "")
-FOCUS_AUDIO_COFFEE_URL = os.environ.get("FOCUS_AUDIO_COFFEE_URL", "")
+FOCUS_AUDIO_PLAYER = settings.focus_audio_player or profile.focus_audio_player
+ENDEL_ENABLED = settings.endel_enabled
+FOCUS_AUDIO_LOFI_URL = settings.focus_audio_lofi_url
+FOCUS_AUDIO_COFFEE_URL = settings.focus_audio_coffee_url
 
 # ---------------------------------------------------------------------------
 # APScheduler
 # ---------------------------------------------------------------------------
-TIMEZONE = os.environ.get("TZ", "America/Chicago")
+TIMEZONE = settings.tz
 scheduler = AsyncIOScheduler(
     jobstores={"default": MemoryJobStore()},
     timezone=TIMEZONE,
@@ -225,45 +214,35 @@ scheduler = AsyncIOScheduler(
 # ---------------------------------------------------------------------------
 # Calendar polling config
 # ---------------------------------------------------------------------------
-try:
-    CALENDAR_POLL_INTERVAL = int(os.environ.get("CALENDAR_POLL_INTERVAL", "5"))
-except ValueError:
-    CALENDAR_POLL_INTERVAL = 5
-CALENDAR_TIERED_ALERTS = os.environ.get("CALENDAR_TIERED_ALERTS", "true").lower() == "true"
-_DEFAULT_TIERS = [60, 30, 15, 5]
-try:
-    CALENDAR_ALERT_TIERS = [int(x) for x in os.environ.get("CALENDAR_ALERT_TIERS", "60,30,15,5").split(",")]
-except ValueError:
-    CALENDAR_ALERT_TIERS = _DEFAULT_TIERS
-MORNING_BRIEFING_TIME = os.environ.get("MORNING_BRIEFING_TIME", "07:00")
-MORNING_BRIEFING_ENABLED = os.environ.get("MORNING_BRIEFING_ENABLED", "true").lower() == "true"
-MORNING_BRIEFING_SPEAKER = os.environ.get("MORNING_BRIEFING_SPEAKER", profile.morning_briefing_speaker)
+CALENDAR_POLL_INTERVAL = settings.calendar_poll_interval
+CALENDAR_TIERED_ALERTS = settings.calendar_tiered_alerts
+CALENDAR_ALERT_TIERS = settings.alert_tiers
+MORNING_BRIEFING_TIME = settings.morning_briefing_time
+MORNING_BRIEFING_ENABLED = settings.morning_briefing_enabled
+MORNING_BRIEFING_SPEAKER = settings.morning_briefing_speaker or profile.morning_briefing_speaker
 
 # ---------------------------------------------------------------------------
 # Email polling config
 # ---------------------------------------------------------------------------
-try:
-    EMAIL_POLL_INTERVAL = int(os.environ.get("EMAIL_POLL_INTERVAL", "30"))
-except ValueError:
-    EMAIL_POLL_INTERVAL = 30
-EMAIL_POLL_ENABLED = os.environ.get("EMAIL_POLL_ENABLED", "true").lower() == "true"
+EMAIL_POLL_INTERVAL = settings.email_poll_interval
+EMAIL_POLL_ENABLED = settings.email_poll_enabled
 
 # ---------------------------------------------------------------------------
 # Temperature monitoring
 # ---------------------------------------------------------------------------
-CLOSET_TEMP_WARNING = float(os.environ.get("CLOSET_TEMP_WARNING", str(profile.temp_warning)))
-CLOSET_TEMP_CRITICAL = float(os.environ.get("CLOSET_TEMP_CRITICAL", str(profile.temp_critical)))
+CLOSET_TEMP_WARNING = settings.closet_temp_warning
+CLOSET_TEMP_CRITICAL = settings.closet_temp_critical
 
 # ---------------------------------------------------------------------------
 # Email-to-calendar config
 # ---------------------------------------------------------------------------
-EMAIL_TO_CALENDAR_ENABLED = os.environ.get("EMAIL_TO_CALENDAR_ENABLED", "true").lower() == "true"
-EMAIL_TO_CALENDAR_INTERVAL = int(os.environ.get("EMAIL_TO_CALENDAR_INTERVAL", "60"))
+EMAIL_TO_CALENDAR_ENABLED = settings.email_to_calendar_enabled
+EMAIL_TO_CALENDAR_INTERVAL = settings.email_to_calendar_interval
 
 # ---------------------------------------------------------------------------
 # Phone calendar sync (iPhone Shortcut pushes consolidated calendar)
 # ---------------------------------------------------------------------------
-PHONE_CALENDAR_SYNC_ENABLED = os.environ.get("PHONE_CALENDAR_SYNC_ENABLED", "true").lower() == "true"
+PHONE_CALENDAR_SYNC_ENABLED = settings.phone_calendar_sync_enabled
 
 # Cached events from last phone sync (list of dicts)
 # Persisted to disk so they survive orchestrator restarts
@@ -271,7 +250,7 @@ _phone_calendar_events: list = []
 _phone_calendar_sync_time: float = 0.0
 
 PHONE_CALENDAR_FILE = os.path.join(
-    os.environ.get("FINANCE_DB_PATH", "/app/data/finance.db").rsplit("/", 1)[0],
+    os.path.dirname(settings.finance_db_path),
     "phone_calendar.json",
 )
 
@@ -310,98 +289,82 @@ def _save_phone_calendar():
 # ---------------------------------------------------------------------------
 # Travel time config (Google Maps Directions API)
 # ---------------------------------------------------------------------------
-GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-HOME_ADDRESS = os.environ.get("HOME_ADDRESS", profile.home_address)
-TRAVEL_TIME_BUFFER = int(os.environ.get("TRAVEL_TIME_BUFFER", "10"))  # extra minutes
+GOOGLE_MAPS_API_KEY = settings.google_maps_api_key
+HOME_ADDRESS = settings.home_address or profile.home_address
+TRAVEL_TIME_BUFFER = settings.travel_time_buffer
 
 # ---------------------------------------------------------------------------
 # Auto-learn configuration
 # ---------------------------------------------------------------------------
-AUTO_LEARN_ENABLED = os.environ.get("AUTO_LEARN_ENABLED", "true").lower() == "true"
-AUTO_LEARN_DELAY_MINUTES = int(os.environ.get("AUTO_LEARN_DELAY_MINUTES", "10"))
-AUTO_LEARN_MAX_FACTS = int(os.environ.get("AUTO_LEARN_MAX_FACTS", "5"))
-AUTO_LEARN_DEDUP_THRESHOLD = float(os.environ.get("AUTO_LEARN_DEDUP_THRESHOLD", "0.85"))
-AUTO_LEARN_MARKDOWN = os.environ.get("AUTO_LEARN_MARKDOWN", "false").lower() == "true"
-AUTO_LEARN_ENCRYPT = os.environ.get("AUTO_LEARN_ENCRYPT", "true").lower() == "true"
-AUTO_LEARN_ENCRYPTION_KEY = os.environ.get("AUTO_LEARN_ENCRYPTION_KEY", "")
+AUTO_LEARN_ENABLED = settings.auto_learn_enabled
+AUTO_LEARN_DELAY_MINUTES = settings.auto_learn_delay_minutes
+AUTO_LEARN_MAX_FACTS = settings.auto_learn_max_facts
+AUTO_LEARN_DEDUP_THRESHOLD = settings.auto_learn_dedup_threshold
+AUTO_LEARN_MARKDOWN = settings.auto_learn_markdown
+AUTO_LEARN_ENCRYPT = settings.auto_learn_encrypt
+AUTO_LEARN_ENCRYPTION_KEY = settings.auto_learn_encryption_key
 
 # In-memory conversation buffer for auto-learn (never written to disk)
 _auto_learn_conversations: Dict[str, list] = {}
 
 # ---------------------------------------------------------------------------
-# Progress tracking configuration (F-005)
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # Routine scaffolding configuration (F-006)
 # ---------------------------------------------------------------------------
-ROUTINES_YAML_PATH = os.environ.get("ROUTINES_YAML_PATH", "/app/data/routines.yaml")
-ROUTINE_ENABLED = os.environ.get("ROUTINE_ENABLED", "true").lower() == "true"
-ROUTINE_NUDGE_MAX = int(os.environ.get("ROUTINE_NUDGE_MAX", "3"))
-ROUTINE_AUTO_SKIP = os.environ.get("ROUTINE_AUTO_SKIP", "false").lower() == "true"
+ROUTINES_YAML_PATH = settings.routines_yaml_path
+ROUTINE_ENABLED = settings.routine_enabled
+ROUTINE_NUDGE_MAX = settings.routine_nudge_max
+ROUTINE_AUTO_SKIP = settings.routine_auto_skip
 
-# ---------------------------------------------------------------------------
-# Interruption recovery configuration (F-007)
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Self-care nudges configuration (F-008)
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Ambient awareness configuration (F-010)
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Snapcast streaming TTS
 # ---------------------------------------------------------------------------
-SNAPCAST_ENABLED = os.environ.get("SNAPCAST_ENABLED", "false").lower() == "true"
-SNAPCAST_FIFO_BASE = os.environ.get("SNAPCAST_FIFO_BASE", "/tmp/snapcast")
+SNAPCAST_ENABLED = settings.snapcast_enabled
+SNAPCAST_FIFO_BASE = settings.snapcast_fifo_base
 
 # ---------------------------------------------------------------------------
 # Presence awareness
 # ---------------------------------------------------------------------------
-PRESENCE_ENABLED = os.environ.get("PRESENCE_ENABLED", "true").lower() == "true"
-PRESENCE_ENTITY = os.environ.get("PRESENCE_ENTITY", "person.nadim")
-PRESENCE_MOTION_SENSORS = os.environ.get(
-    "PRESENCE_MOTION_SENSORS",
-    '{"kitchen":"binary_sensor.kitchen_motion","closet":"binary_sensor.closet_motion","dining":"device_tracker.presence_sensor_fp2_0e56"}',
-)
-PRESENCE_POLL_INTERVAL = int(os.environ.get("PRESENCE_POLL_INTERVAL", "60"))
-PRESENCE_TARGETED_TTS = os.environ.get("PRESENCE_TARGETED_TTS", "true").lower() == "true"
-PRESENCE_WELCOME_HOME = os.environ.get("PRESENCE_WELCOME_HOME", "true").lower() == "true"
-PRESENCE_WELCOME_COOLDOWN = int(os.environ.get("PRESENCE_WELCOME_COOLDOWN", "30"))
+PRESENCE_ENABLED = settings.presence_enabled
+PRESENCE_ENTITY = settings.presence_entity
+PRESENCE_MOTION_SENSORS = settings.presence_motion_sensors
+PRESENCE_POLL_INTERVAL = settings.presence_poll_interval
+PRESENCE_TARGETED_TTS = settings.presence_targeted_tts
+PRESENCE_WELCOME_HOME = settings.presence_welcome_home
+PRESENCE_WELCOME_COOLDOWN = settings.presence_welcome_cooldown
 
 # ---------------------------------------------------------------------------
 # Do Not Disturb (sleep mode) — suppresses all announcements
-# Persisted to state_store notification_tracking table (key: "dnd_active")
 # ---------------------------------------------------------------------------
-DND_ACTIVE = False  # set via goodnight tool, cleared on morning briefing
+DND_ACTIVE = False  # runtime state, set via goodnight tool
 
-AMBIENT_ENABLED = os.environ.get("AMBIENT_ENABLED", "true").lower() == "true"
-AMBIENT_SUMMARY_TIMES = os.environ.get("AMBIENT_SUMMARY_TIMES", "10:00,12:00,14:00,16:00")
-AMBIENT_LED_ENTITY = os.environ.get("AMBIENT_LED_ENTITY", "")
-AMBIENT_SPEAKER = os.environ.get("AMBIENT_SPEAKER", "")
+AMBIENT_ENABLED = settings.ambient_enabled
+AMBIENT_SUMMARY_TIMES = settings.ambient_summary_times
+AMBIENT_LED_ENTITY = settings.ambient_led_entity
+AMBIENT_SPEAKER = settings.ambient_speaker
 
-SELFCARE_ENABLED = os.environ.get("SELFCARE_ENABLED", "true").lower() == "true"
-MEAL_NUDGE_HOURS = int(os.environ.get("MEAL_NUDGE_HOURS", "4"))
-HYDRATION_INTERVAL = int(os.environ.get("HYDRATION_INTERVAL", "90"))
-MOVEMENT_INTERVAL = int(os.environ.get("MOVEMENT_INTERVAL", "90"))
-QUIET_HOURS_START = os.environ.get("QUIET_HOURS_START", "22:00")
-QUIET_HOURS_END = os.environ.get("QUIET_HOURS_END", "07:00")
+SELFCARE_ENABLED = settings.selfcare_enabled
+MEAL_NUDGE_HOURS = settings.meal_nudge_hours
+HYDRATION_INTERVAL = settings.hydration_interval
+MOVEMENT_INTERVAL = settings.movement_interval
+QUIET_HOURS_START = settings.quiet_hours_start
+QUIET_HOURS_END = settings.quiet_hours_end
 
-INTERRUPT_CHECKIN_DELAY = int(os.environ.get("INTERRUPT_CHECKIN_DELAY", "5"))
-CONTEXT_STACK_SIZE = int(os.environ.get("CONTEXT_STACK_SIZE", "10"))
+INTERRUPT_CHECKIN_DELAY = settings.interrupt_checkin_delay
+CONTEXT_STACK_SIZE = settings.context_stack_size
 
-PROGRESS_ENABLED = os.environ.get("PROGRESS_ENABLED", "true").lower() == "true"
-DAILY_SUMMARY_TIME = os.environ.get("DAILY_SUMMARY_TIME", "18:00")
-WEEKLY_SUMMARY_DAY = os.environ.get("WEEKLY_SUMMARY_DAY", "sunday")
-WEEKLY_SUMMARY_TIME = os.environ.get("WEEKLY_SUMMARY_TIME", "19:00")
+PROGRESS_ENABLED = settings.progress_enabled
+DAILY_SUMMARY_TIME = settings.daily_summary_time
+WEEKLY_SUMMARY_DAY = settings.weekly_summary_day
+WEEKLY_SUMMARY_TIME = settings.weekly_summary_time
 
 # ---------------------------------------------------------------------------
-# Vision / image recognition (dedicated model on Saturn)
+# Vision / image recognition
 # ---------------------------------------------------------------------------
-VISION_ENABLED = os.environ.get("VISION_ENABLED", "true").lower() == "true"
-VISION_MODEL_URL = os.environ.get("VISION_MODEL_URL", "http://10.0.0.58:8010/v1")
-VISION_MODEL_NAME = os.environ.get("VISION_MODEL_NAME", "Qwen2.5-VL-7B-Instruct-q4_k_m.gguf")
-VISION_MAX_IMAGE_SIZE = int(os.environ.get("VISION_MAX_IMAGE_SIZE", str(10 * 1024 * 1024)))  # 10 MB
-VISION_TIMEOUT = int(os.environ.get("VISION_TIMEOUT", "60"))
+VISION_ENABLED = settings.vision_enabled
+VISION_MODEL_URL = settings.vision_model_url
+VISION_MODEL_NAME = settings.vision_model_name
+VISION_MAX_IMAGE_SIZE = settings.vision_max_image_size
+VISION_TIMEOUT = settings.vision_timeout
 
 # Per-session image cache for follow-up analysis (keyed by session hash)
 _vision_image_cache: Dict[str, str] = {}

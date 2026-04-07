@@ -142,21 +142,25 @@ FALLBACK_ONLINE = Gauge(
     "Whether the fallback model is currently online (1=yes, 0=no)",
 )
 
-HELIOS_START_COUNT = Counter(
-    "bgw_helios_starts_total",
-    "Number of times Helios was auto-started",
+MODEL_SERVER_START_COUNT = Counter(
+    "bgw_model_server_starts_total",
+    "Number of times the model server was auto-started via SSH",
 )
+# Backward-compat aliases for existing imports
+HELIOS_START_COUNT = MODEL_SERVER_START_COUNT
 
-HELIOS_STOP_COUNT = Counter(
-    "bgw_helios_stops_total",
-    "Number of times Helios was auto-stopped",
+MODEL_SERVER_STOP_COUNT = Counter(
+    "bgw_model_server_stops_total",
+    "Number of times the model server was auto-stopped via SSH",
 )
+HELIOS_STOP_COUNT = MODEL_SERVER_STOP_COUNT
 
-HELIOS_START_LATENCY = Histogram(
-    "bgw_helios_start_duration_seconds",
-    "Time to start Helios and get it ready",
+MODEL_SERVER_START_LATENCY = Histogram(
+    "bgw_model_server_start_duration_seconds",
+    "Time to start the model server and get it ready",
     buckets=[5, 10, 20, 30, 60, 90, 120, 180],
 )
+HELIOS_START_LATENCY = MODEL_SERVER_START_LATENCY
 
 # -- Reminders ---------------------------------------------------------------
 REMINDERS_SET = Counter(

@@ -14,7 +14,7 @@ import pytest
 
 mock_shared = MagicMock()
 mock_shared.VISION_ENABLED = True
-mock_shared.VISION_MODEL_URL = "http://10.0.0.58:8010/v1"
+mock_shared.VISION_MODEL_URL = "http://localhost:8010/v1"
 mock_shared.VISION_MODEL_NAME = "Qwen3-VL-8B-Instruct"
 mock_shared.VISION_MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
 mock_shared.VISION_TIMEOUT = 60

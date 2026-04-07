@@ -8,7 +8,7 @@ Home Assistant Integration Module v2
 Usage:
     from ha_integration import HomeAssistantClient
 
-    ha = HomeAssistantClient(url="http://10.0.0.106:8123", token="...")
+    ha = HomeAssistantClient(url="http://your-ha-host:8123", token="...")
     await ha.refresh_entities()  # Call once at startup
 
     result = await ha.execute_command("turn on the living room lights")
@@ -198,7 +198,7 @@ class HomeAssistantClient:
         token: Optional[str] = None,
         cache_ttl_seconds: int = 300,  # Refresh entity cache every 5 minutes
     ):
-        self.url = (url or os.environ.get("HA_URL", "http://10.0.0.106:8123")).rstrip("/")
+        self.url = (url or os.environ.get("HA_URL", "")).rstrip("/")
         self.token = token or os.environ.get("HA_TOKEN", "")
         self.cache_ttl = timedelta(seconds=cache_ttl_seconds)
 

@@ -18,12 +18,14 @@ from user_profile import get_profile
 
 logger = logging.getLogger(__name__)
 
-# Home Assistant config
-HA_URL = os.environ.get("HA_URL", "http://10.0.0.106:8123")
-HA_TOKEN = os.environ.get("HA_TOKEN", "")
+# Home Assistant config — sourced from centralized settings
+from config import settings as _settings
+
+HA_URL = _settings.ha_url
+HA_TOKEN = _settings.ha_token
 
 # Orchestrator URL (for HA to call back)
-ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://10.0.0.248:8888")
+ORCHESTRATOR_URL = _settings.orchestrator_url
 
 # Delivery targets (configurable via env and profile)
 _profile = get_profile()

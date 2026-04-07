@@ -13,7 +13,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # Paths - configurable via environment
-RAG_BASE = os.environ.get("RAG_BASE", "/home/labadmin/rag/nadim_rag")
+RAG_BASE = os.environ.get("RAG_BASE", "/app/data/rag")
 MEDICATIONS_YAML = os.path.join(RAG_BASE, "10_profile", "medications.yaml")
 MEDICATIONS_MD = os.path.join(RAG_BASE, "10_profile", "medications.md")
 PROJECTS_YAML = os.path.join(RAG_BASE, "30_projects", "projects.yaml")

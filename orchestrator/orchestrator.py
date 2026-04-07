@@ -92,10 +92,12 @@ from unified_loop import run_unified_tool_loop
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
-# API authentication
-API_TOKEN = os.environ.get("API_TOKEN", "")
+# API authentication — from centralized config
+from config import settings as _cfg
+
+API_TOKEN = _cfg.api_token
 if not API_TOKEN:
-    raise RuntimeError("API_TOKEN environment variable is required — set it in .env")
+    raise RuntimeError("API_TOKEN environment variable is required — set it in .env or run scripts/setup.sh")
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
@@ -318,7 +320,7 @@ async def chat_completions(req: Request):
     # and enable voice mode (concise responses, no markdown).
     is_voice = False
     client_ip = req.client.host if req.client else ""
-    ha_ip = os.environ.get("HA_HOST", "10.0.0.106").replace("http://", "").split(":")[0]
+    ha_ip = os.environ.get("HA_URL", "").replace("http://", "").replace("https://", "").split(":")[0]
     first_content = str(raw_msgs[0].get("content", "")) if raw_msgs else ""
     is_ha_request = client_ip == ha_ip or first_content.startswith("You are 'Al'")
     if is_ha_request:
