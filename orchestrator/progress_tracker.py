@@ -9,7 +9,6 @@ and API data for the frontend dashboard.
 import logging
 import os
 import sqlite3
-from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -71,25 +70,18 @@ _ENCOURAGEMENTS = [
 ]
 
 
-@contextmanager
 def get_db():
     """Get a SQLite connection with row factory."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    from db import get_db as _get_db
+
+    return _get_db(DB_PATH, foreign_keys=False)
 
 
 def init_db() -> None:
     """Initialize progress database schema."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with get_db() as conn:
-        conn.executescript(SCHEMA_SQL)
-    logger.info(f"[PROGRESS] Database initialized at {DB_PATH}")
+    from db import init_db as _init_db
+
+    _init_db(DB_PATH, SCHEMA_SQL, foreign_keys=False)
 
 
 def record_event(event_type: str, metadata: Optional[Dict[str, Any]] = None) -> None:

@@ -9,8 +9,6 @@ Uses the same pattern as finance_manager.py (contextmanager + WAL mode).
 
 import logging
 import os
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -131,25 +129,19 @@ CREATE INDEX IF NOT EXISTS idx_documents_uploaded ON documents(uploaded_at);
 """
 
 
-@contextmanager
 def get_db():
     """Get a SQLite connection with row factory."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    from db import get_db as _get_db
+
+    return _get_db(DB_PATH, foreign_keys=True)
 
 
 def init_db():
     """Initialize database schema."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    from db import init_db as _init_db
+
+    _init_db(DB_PATH, SCHEMA_SQL, foreign_keys=True)
     with get_db() as conn:
-        conn.executescript(SCHEMA_SQL)
         # Seed empty focus session if not exists
         row = conn.execute("SELECT COUNT(*) FROM focus_sessions").fetchone()
         if row[0] == 0:
@@ -527,11 +519,9 @@ def cleanup_old_selfcare(keep_days: int = 90) -> int:
 
 def vacuum_db() -> None:
     """Run VACUUM to reclaim disk space. Should be called periodically."""
-    conn = sqlite3.connect(DB_PATH, isolation_level=None)
-    try:
-        conn.execute("VACUUM")
-    finally:
-        conn.close()
+    from db import vacuum_db as _vacuum_db
+
+    _vacuum_db(DB_PATH)
 
 
 def get_selfcare_today(action: Optional[str] = None) -> List[Dict[str, Any]]:

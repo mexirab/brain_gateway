@@ -13,8 +13,6 @@ Gamified finance tracking for ADHD support:
 
 import logging
 import os
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime
 
 import httpx
@@ -172,25 +170,19 @@ XP_AWARDS = {
 WINDFALL_MONTHS = {"03": "bonus", "06": "espp", "10": "bonus", "12": "espp"}
 
 
-@contextmanager
 def get_db():
     """Get a SQLite connection with row factory."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    from db import get_db as _get_db
+
+    return _get_db(DB_PATH, foreign_keys=False)
 
 
 def init_db():
     """Initialize database schema and seed data."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with get_db() as conn:
-        conn.executescript(SCHEMA_SQL)
+    from db import init_db as _init_db
 
+    _init_db(DB_PATH, SCHEMA_SQL, foreign_keys=False)
+    with get_db() as conn:
         # Seed default config if empty
         row = conn.execute("SELECT COUNT(*) FROM finance_config").fetchone()
         if row[0] == 0:
