@@ -237,7 +237,10 @@ from exceptions import BrainGatewayError, TransientError
 async def brain_gateway_error_handler(request: Request, exc: BrainGatewayError):
     """Map typed exceptions to appropriate HTTP status codes."""
     status = 503 if isinstance(exc, TransientError) else 400
-    return JSONResponse({"ok": False, "error": str(exc)}, status_code=status)
+    # Log full detail server-side; return generic message to client
+    logger.error("[API] %s: %s", type(exc).__name__, exc)
+    user_msg = "Service temporarily unavailable" if isinstance(exc, TransientError) else "Request failed"
+    return JSONResponse({"ok": False, "error": user_msg}, status_code=status)
 
 
 # =============================================================================

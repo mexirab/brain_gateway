@@ -33,7 +33,7 @@ prompt() {
     else
         read -r -p "$(echo -e "${GREEN}$prompt_text${NC}: ")" value
     fi
-    eval "$var_name='$value'"
+    printf -v "$var_name" '%s' "$value"
 }
 
 prompt_secret() {
@@ -41,7 +41,7 @@ prompt_secret() {
     local value
     read -r -s -p "$(echo -e "${GREEN}$prompt_text${NC}: ")" value
     echo ""
-    eval "$var_name='$value'"
+    printf -v "$var_name" '%s' "$value"
 }
 
 test_url() {

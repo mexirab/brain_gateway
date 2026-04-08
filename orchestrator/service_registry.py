@@ -20,10 +20,18 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 import httpx
+from prometheus_client import Gauge
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Prometheus gauge: 1 = healthy, 0 = unhealthy, per service
+SERVICE_HEALTHY = Gauge(
+    "bgw_service_healthy",
+    "Whether an external service is reachable (1=healthy, 0=unhealthy)",
+    ["service"],
+)
 
 
 @dataclass
@@ -38,9 +46,10 @@ class ServiceInfo:
     features_when_down: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
+        """Return public-safe summary (no internal URLs)."""
         return {
             "name": self.name,
-            "url": self.url or "(not configured)",
+            "configured": bool(self.url),
             "healthy": self.healthy,
             "last_check_ago": f"{int(time.time() - self.last_check)}s" if self.last_check else "never",
             "last_error": self.last_error,
@@ -100,8 +109,6 @@ class ServiceRegistry:
         svc = self._services.get(service_name)
         if not svc:
             return False
-        # Unconfigured services are "healthy" in the sense that they're
-        # intentionally disabled — don't log warnings about them
         if not svc.url:
             return False
         return svc.healthy
@@ -133,7 +140,7 @@ class ServiceRegistry:
             "unconfigured": unconfigured,
         }
 
-    async def check_service(self, name: str, timeout: float = 5.0) -> bool:
+    async def check_service(self, name: str, client: httpx.AsyncClient | None = None, timeout: float = 5.0) -> bool:
         """Run a health check on a single service."""
         svc = self._services.get(name)
         if not svc or not svc.url:
@@ -151,10 +158,14 @@ class ServiceRegistry:
             health_url = f"{url}/"
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.get(health_url)
+            _client = client or httpx.AsyncClient(timeout=timeout)
+            try:
+                r = await _client.get(health_url)
                 svc.healthy = r.status_code < 500
                 svc.last_error = "" if svc.healthy else f"HTTP {r.status_code}"
+            finally:
+                if not client:
+                    await _client.aclose()
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             svc.healthy = False
             svc.last_error = str(e)[:100]
@@ -163,26 +174,29 @@ class ServiceRegistry:
             svc.last_error = str(e)[:100]
 
         svc.last_check = time.time()
+        SERVICE_HEALTHY.labels(service=name).set(1 if svc.healthy else 0)
         return svc.healthy
 
     async def check_all(self) -> Dict[str, bool]:
-        """Check all configured services concurrently."""
+        """Check all configured services concurrently with a shared HTTP client."""
         results = {}
-        tasks = []
         names = []
+        tasks = []
 
-        for name, svc in self._services.items():
-            if svc.url:
-                tasks.append(self.check_service(name))
-                names.append(name)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for name, svc in self._services.items():
+                if svc.url:
+                    tasks.append(self.check_service(name, client=client))
+                    names.append(name)
 
-        if tasks:
-            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-            for name, outcome in zip(names, outcomes, strict=False):
-                if isinstance(outcome, Exception):
-                    results[name] = False
-                else:
-                    results[name] = outcome
+            if tasks:
+                outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+                for name, outcome in zip(names, outcomes, strict=False):
+                    if isinstance(outcome, Exception):
+                        results[name] = False
+                        SERVICE_HEALTHY.labels(service=name).set(0)
+                    else:
+                        results[name] = outcome
 
         # Log summary
         healthy = [n for n, ok in results.items() if ok]

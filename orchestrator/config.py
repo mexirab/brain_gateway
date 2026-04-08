@@ -229,4 +229,11 @@ class Settings(BaseSettings):
 
 
 # Module-level singleton — import this everywhere
-settings = Settings()
+try:
+    settings = Settings()
+except Exception as e:
+    import sys
+
+    print(f"FATAL: Failed to load configuration: {e}", file=sys.stderr)
+    print("Check your .env file or run scripts/setup.sh to generate one.", file=sys.stderr)
+    sys.exit(1)

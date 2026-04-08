@@ -61,12 +61,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     """
     TOOL_CALL_COUNT.labels(tool=tool_name).inc()
     _t0 = time.time()
-    logger.info(
-        "[TOOL] Executing: %s with args: %s",
-        tool_name,
-        arguments,
-        extra={"component": "tool", "tool_name": tool_name},
-    )
+    logger.info("[TOOL] Executing: %s", tool_name, extra={"component": "tool", "tool_name": tool_name})
+    logger.debug("[TOOL] %s args: %s", tool_name, arguments)
 
     from exceptions import ExternalServiceError, TransientError
 
