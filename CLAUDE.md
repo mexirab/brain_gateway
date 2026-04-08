@@ -49,6 +49,8 @@ User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
 
 **Flow:** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Optional fallback model if primary is unavailable. Helios is always-on (no auto-shutdown).
 
+**Infrastructure:** `config.py` centralizes all env vars via Pydantic Settings. `tool_registry.py` provides decorator-based tool registration (replaces legacy if-elif dispatch). `service_registry.py` auto-detects healthy services and disables tools when dependencies are down. `exceptions.py` defines a typed exception hierarchy for consistent error handling.
+
 ## Tools
 
 All tools are called directly by the single model in one agentic loop.
@@ -87,7 +89,13 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/unified_loop.py | v7 unified agentic loop: single model conversation + tool execution |
 | orchestrator/model_manager.py | Model health, SSH start/stop |
 | orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
-| orchestrator/shared.py | Module-level shared state (http client, scheduler, config) |
+| orchestrator/config.py | Centralized Pydantic Settings: all env vars in one place |
+| orchestrator/db.py | Shared SQLite context manager (used by all DB consumers) |
+| orchestrator/exceptions.py | Exception hierarchy: BrainGatewayError, TransientError, ToolError, etc. |
+| orchestrator/service_registry.py | Service health tracking: auto-detect healthy services, disable tools when down |
+| orchestrator/tool_registry.py | Decorator-based tool registration (replaces legacy if-elif dispatch) |
+| orchestrator/focus_state.py | FocusSession dataclass (replaces raw dict in shared.py) |
+| orchestrator/shared.py | Module-level shared state (imports from config.py, exports backward-compat aliases) |
 | orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
 | orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
 | orchestrator/ambient_manager.py | Ambient awareness: aggregated status, periodic TTS summaries, LED control |
@@ -101,9 +109,17 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/tests/test_progress_tracker.py | Progress tracker unit tests (events, streaks, summaries, personal bests) |
 | orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
 | orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking, body doubling sprints |
-| orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions |
-| orchestrator/api_routes.py | REST endpoints (health, metrics, memory, reminders, focus, progress, announcements, ambient, shopping) |
-| orchestrator/background_jobs.py | Calendar polling, morning briefing (weather), email polling, temperature alerts, selfcare, ambient, DB maintenance |
+| orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions (uses tool_registry, legacy if-elif removed) |
+| orchestrator/api_routes.py | REST endpoints: thin facade, imports from domain route modules |
+| orchestrator/routes_calendar.py | Calendar API routes (split from api_routes.py) |
+| orchestrator/routes_chat.py | Chat conversation API routes |
+| orchestrator/routes_documents.py | Document vault API routes |
+| orchestrator/routes_shopping.py | Shopping list API routes |
+| orchestrator/routes_vision.py | Vision/STT/TTS API routes |
+| orchestrator/background_jobs.py | Background jobs: thin re-export facade, imports from domain job modules |
+| orchestrator/jobs_calendar.py | Calendar/email/weather background jobs (split from background_jobs.py) |
+| orchestrator/jobs_finance.py | YNAB sync background jobs |
+| orchestrator/jobs_monitoring.py | Temperature/ambient/selfcare background jobs |
 | orchestrator/ha_integration.py | HA entity discovery + call_service() |
 | orchestrator/mode_router.py | Intent-based mode router |
 | orchestrator/google_calendar.py | Google Calendar API v3 client |
@@ -126,8 +142,9 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/travel_time.py | Google Maps Directions API client |
 | orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
 | scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
+| scripts/setup.sh | Interactive setup wizard: generates .env + user_profile.yaml |
 | scripts/setup-jupiter-claude.sh | One-time Jupiter Claude Code setup (hooks, ruff, permissions) |
-| docker-compose.yml | Service stack |
+| docker-compose.yml | Service stack (env-var driven, no hardcoded IPs) |
 | .env | Environment config (from .env.example) |
 
 ## Key Paths
@@ -144,6 +161,9 @@ All tools are called directly by the single model in one agentic loop.
 ## Common Commands
 
 ```bash
+# First-time setup (generates .env + user_profile.yaml)
+bash scripts/setup.sh
+
 # Start/rebuild
 docker compose up -d
 docker compose up -d --build orchestrator
