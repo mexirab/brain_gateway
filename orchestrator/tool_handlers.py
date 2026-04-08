@@ -1075,18 +1075,56 @@ async def _reg_analyze_image(arguments: dict) -> str:
 
 @register_tool("sleep_mode")
 async def _reg_sleep_mode(arguments: dict) -> str:
+    import contextlib
+
     import state_store
+    from shared import scheduler
 
     action = arguments.get("action", "on")
+    duration_hours = arguments.get("duration_hours")
     shared.DND_ACTIVE = action == "on"
+
+    # Cancel any existing auto-unmute job
+    with contextlib.suppress(Exception):
+        scheduler.remove_job("dnd_auto_unmute")
+
     if shared.DND_ACTIVE:
         state_store.set_notification_flag("dnd_active")
-        logger.info("[DND] Sleep mode enabled — all announcements suppressed")
-        return "Sleep mode on. No more announcements tonight. Good night!"
+
+        if duration_hours:
+            # Schedule auto-unmute
+            from datetime import datetime, timedelta
+
+            unmute_at = datetime.now() + timedelta(hours=float(duration_hours))
+            scheduler.add_job(
+                _auto_unmute_dnd,
+                "date",
+                run_date=unmute_at,
+                id="dnd_auto_unmute",
+                replace_existing=True,
+            )
+            hrs = float(duration_hours)
+            label = f"{hrs:.0f} hour{'s' if hrs != 1 else ''}" if hrs == int(hrs) else f"{hrs} hours"
+            logger.info("[DND] Muted for %s (until %s)", label, unmute_at.strftime("%I:%M %p"))
+            return (
+                f"Muted all announcements for {label}. I'll unmute automatically at {unmute_at.strftime('%I:%M %p')}."
+            )
+        else:
+            logger.info("[DND] Sleep mode enabled — all announcements suppressed")
+            return "Muted. No announcements until you tell me to unmute or say good morning."
     else:
         state_store.clear_notification_flag("dnd_active")
-        logger.info("[DND] Sleep mode disabled — announcements resumed")
-        return "Good morning! Announcements are back on."
+        logger.info("[DND] Announcements resumed")
+        return "Unmuted! Announcements are back on."
+
+
+async def _auto_unmute_dnd():
+    """Auto-unmute callback for timed DND."""
+    import state_store
+
+    shared.DND_ACTIVE = False
+    state_store.clear_notification_flag("dnd_active")
+    logger.info("[DND] Auto-unmuted after timed mute")
 
 
 @register_tool("shopping_list")

@@ -655,14 +655,18 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "sleep_mode",
-            "description": "Enable or disable Do Not Disturb / sleep mode. ALWAYS call this when the user says goodnight, bedtime, going to sleep, or I'm done for the night (action=on). Also call when user says good morning, I'm up, or wake up (action=off). When enabled, ALL announcements (reminders, selfcare nudges, routine prompts) are suppressed until morning.",
+            "description": "Enable or disable Do Not Disturb / mute mode. Use when: goodnight/bedtime (action=on), good morning/wake up (action=off), or 'mute for X hours' / 'be quiet' / 'people are over' / 'guests' (action=on with duration_hours). When enabled, ALL speaker announcements are suppressed. Auto-unmutes after duration_hours if set.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["on", "off"],
-                        "description": "on = enable DND (goodnight), off = disable DND (good morning)",
+                        "description": "on = mute all announcements, off = unmute",
+                    },
+                    "duration_hours": {
+                        "type": "number",
+                        "description": "Hours to stay muted before auto-unmuting. Omit for indefinite (until morning or manual off).",
                     },
                 },
                 "required": ["action"],
