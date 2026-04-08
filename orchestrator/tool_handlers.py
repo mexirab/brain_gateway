@@ -891,6 +891,17 @@ def _reg_update_data(arguments: dict) -> str:
     return tool_update_data(arguments)
 
 
+@register_tool("update_memory")
+async def _reg_update_memory(arguments: dict) -> str:
+    from memory_manager import update_memory
+
+    return await update_memory(
+        correction=arguments.get("correction", ""),
+        search_query=arguments.get("search_query", ""),
+        category=arguments.get("category", "general"),
+    )
+
+
 @register_tool("set_reminder")
 async def _reg_set_reminder(arguments: dict) -> str:
     return await tool_set_reminder(

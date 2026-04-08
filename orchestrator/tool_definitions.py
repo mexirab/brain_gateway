@@ -86,6 +86,32 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "update_memory",
+            "description": "Update or correct information in memory. Use when the user says something you know is different from what you have stored, or when explicitly asked to remember/update something. Searches for outdated facts and replaces them with the correction.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "correction": {
+                        "type": "string",
+                        "description": "The correct/updated information to store",
+                    },
+                    "search_query": {
+                        "type": "string",
+                        "description": "What to search for to find the outdated fact(s) to replace",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["identity", "preference", "health", "routine", "project", "technical", "general"],
+                        "description": "Category of the fact being corrected",
+                    },
+                },
+                "required": ["correction", "search_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_data",
             "description": "Update the user's structured personal data (medications, projects). Use this when they ask to add, remove, or modify medications or project information.",
             "parameters": {

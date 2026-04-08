@@ -224,10 +224,12 @@ AVAILABLE TOOLS:
 24. selfcare_log - Log a self-care action (meal, medication, water, movement)
 25. bookmark_context - Save current work context before stepping away (interruption recovery)
 26. recall_context - Recall recent work context when returning from an interruption
+27. update_memory - Correct or update a fact in memory. Finds outdated info and replaces it.
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
 - search_memory: For personal info (projects, routines, preferences, medications, schedules)
+- update_memory: When user corrects you ("actually...", "that's wrong...", "we changed...", "remember that..."), or says something different from what you have stored. Use this to fix your knowledge.
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
 - brain_dump: When user says "brain dump", "remember that", "capture", "note to self", or lists multiple things to remember/do at once
