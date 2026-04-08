@@ -424,6 +424,11 @@ async def startup_event():
     shared._http = _http  # ensure shared module has the http client too
     shared.init_backends(_http)
 
+    # Check external service health (non-blocking, logs results)
+    from service_registry import check_all_services
+
+    await check_all_services()
+
     # Load HA entities at startup
     logger.info("[orchestrator] Loading Home Assistant entities...")
     count = await ha_client.refresh_entities()

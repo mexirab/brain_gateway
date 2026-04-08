@@ -594,3 +594,16 @@ async def presence_status():
     from presence_tracker import get_presence
 
     return JSONResponse(get_presence())
+
+
+# ---------------------------------------------------------------------------
+# Service health
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/services")
+async def get_services_status():
+    """Service health status — shows which external services are reachable."""
+    from service_registry import services
+
+    return JSONResponse(services.status_summary())
