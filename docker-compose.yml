@@ -39,7 +39,7 @@ services:
       - AUDIO_TTS_OPENAI_API_BASE_URL=${TTS_URL:-http://${NODE_TTS_IP}:${SERVICE_TTS_PORT:-8002}}/v1
       - AUDIO_TTS_OPENAI_API_KEY=local
       - AUDIO_TTS_VOICE=${TTS_VOICE:-jessica}
-      - AUDIO_TTS_SPLIT_ON=paragraph
+      - AUDIO_TTS_SPLIT_ON=sentence
       # STT configuration (requires STT_HOST or NODE_STT_IP in .env)
       - AUDIO_STT_ENGINE=openai
       - AUDIO_STT_OPENAI_API_BASE_URL=${STT_URL:-http://${NODE_STT_IP}:${SERVICE_STT_PORT:-8003}}/v1
