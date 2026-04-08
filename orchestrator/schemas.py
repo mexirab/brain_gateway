@@ -6,6 +6,7 @@ All API endpoints should use these models instead of raw dicts.
 
 from typing import Any, Optional
 
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,25 @@ class APIResponse(BaseModel):
 class ErrorResponse(BaseModel):
     ok: bool = False
     error: str
+
+
+# ---------------------------------------------------------------------------
+# Response helpers — use in route handlers for consistent JSON shape
+# ---------------------------------------------------------------------------
+
+
+def ok_response(data: dict = None, **kwargs) -> JSONResponse:
+    """Return a success JSONResponse with {ok: true, ...data}."""
+    body = {"ok": True}
+    if data:
+        body.update(data)
+    body.update(kwargs)
+    return JSONResponse(body)
+
+
+def error_response(message: str, status_code: int = 400) -> JSONResponse:
+    """Return an error JSONResponse with {ok: false, error: message}."""
+    return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
 # ---------------------------------------------------------------------------

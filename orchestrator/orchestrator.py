@@ -229,6 +229,17 @@ app.include_router(api_router)
 app.include_router(finance_router)
 
 
+# Global exception handler for typed Brain Gateway errors
+from exceptions import BrainGatewayError, TransientError
+
+
+@app.exception_handler(BrainGatewayError)
+async def brain_gateway_error_handler(request: Request, exc: BrainGatewayError):
+    """Map typed exceptions to appropriate HTTP status codes."""
+    status = 503 if isinstance(exc, TransientError) else 400
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=status)
+
+
 # =============================================================================
 # LLM BACKEND RESOLUTION (unique to orchestrator.py)
 # =============================================================================
