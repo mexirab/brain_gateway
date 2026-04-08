@@ -1,15 +1,21 @@
 """
 Secondary REST API endpoints (health, metrics, memory, reminders, focus, audio, HA).
+
+Domain-specific routes are split into separate modules and included as sub-routers:
+- routes_calendar: /api/calendar/*, /api/email-to-calendar/*
+- routes_chat: /api/chat/*
+- routes_documents: /api/documents/*
+- routes_shopping: /api/shopping/*
+- routes_vision: /api/vision/*, /api/stt/*, /api/tts/*
 """
 
 import logging
 import os
-import time
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 import shared
@@ -26,6 +32,11 @@ from metrics import (
 from model_manager import check_model_health
 from prompt_builder import rag_context
 from reminder_manager import _announce_voice, list_pending_reminders, mark_reminder_completed
+from routes_calendar import router as calendar_router
+from routes_chat import router as chat_router
+from routes_documents import router as documents_router
+from routes_shopping import router as shopping_router
+from routes_vision import router as vision_router
 from schemas import (
     AnnounceRequest,
     FocusStartRequest,
@@ -59,6 +70,13 @@ from tool_handlers import deliver_reminder_job
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Include domain-specific sub-routers
+router.include_router(calendar_router)
+router.include_router(chat_router)
+router.include_router(documents_router)
+router.include_router(shopping_router)
+router.include_router(vision_router)
 
 
 @router.get("/health")
@@ -372,19 +390,6 @@ async def serve_audio(filename: str):
     return JSONResponse({"error": "Audio file not found"}, status_code=404)
 
 
-@router.post("/api/email-to-calendar/run")
-async def run_email_to_calendar():
-    """Manually trigger email-to-calendar extraction."""
-    from background_jobs import process_emails_for_events
-
-    try:
-        await process_emails_for_events()
-        return {"ok": True, "message": "Email-to-calendar scan completed"}
-    except Exception as e:
-        logger.error(f"[EMAIL_TO_CAL] Manual trigger error: {e}")
-        return JSONResponse({"error": "Email-to-calendar scan failed"}, status_code=500)
-
-
 @router.post("/api/announce")
 async def announce_tts(body: AnnounceRequest):
     """Trigger a TTS announcement via the voice system (for dashboard milestones, etc.)."""
@@ -397,139 +402,6 @@ async def announce_tts(body: AnnounceRequest):
     except Exception as e:
         logger.error(f"[ANNOUNCE] Failed: {e}")
         return JSONResponse({"ok": False, "error": "TTS announcement failed"}, status_code=500)
-
-
-@router.get("/api/calendar/today")
-async def calendar_today():
-    """Get today's calendar events for the dashboard.
-
-    Merges events from two sources:
-    1. Phone calendar sync (iPhone Shortcut — Outlook + Google + iCloud)
-    2. Google Calendar API (fallback if phone sync is stale/missing)
-
-    Phone sync is preferred when fresh (<24h old) since it aggregates all
-    iPhone calendars. Google Calendar is used as fallback. Events are
-    deduplicated by title + start time to avoid duplicates when Google
-    events appear in both sources.
-    """
-    import re
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo(profile.timezone)
-    today = datetime.now(tz).date()
-    merged: list[dict] = []
-    seen: set[str] = set()  # "title|start_iso" for dedup
-    source = "none"
-
-    def _parse_phone_datetime(s: str) -> datetime:
-        """Parse date strings from iPhone Shortcuts.
-
-        Handles formats like:
-        - "Mar 4, 2026 at 10:00\u202fAM"  (narrow no-break space before AM/PM)
-        - "Mar 4, 2026 at 1:00 PM"         (regular space)
-        - "2026-03-04T10:00:00"            (ISO format)
-        """
-        if not s:
-            raise ValueError("empty date string")
-        # Try ISO first
-        try:
-            return datetime.fromisoformat(s)
-        except ValueError:
-            pass
-        # Normalize unicode spaces and "at" keyword
-        cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
-        # Remove extra whitespace
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        # Try common iOS Shortcut formats
-        for fmt in (
-            "%b %d, %Y %I:%M %p",  # "Mar 4, 2026 1:00 PM"
-            "%B %d, %Y %I:%M %p",  # "March 4, 2026 1:00 PM"
-            "%m/%d/%Y %I:%M %p",  # "03/04/2026 1:00 PM"
-            "%b %d, %Y",  # "Mar 4, 2026" (all-day)
-        ):
-            try:
-                return datetime.strptime(cleaned, fmt)
-            except ValueError:
-                continue
-        raise ValueError(f"unrecognized date format: {s!r}")
-
-    # Source 1: Phone calendar sync (has ALL calendars)
-    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-    if shared._phone_calendar_events and phone_age < 86400:
-        source = "phone"
-        for ev in shared._phone_calendar_events:
-            try:
-                start_str = ev.get("start", "")
-                start = _parse_phone_datetime(start_str)
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=tz)
-                if start.date() != today:
-                    continue
-
-                end_str = ev.get("end", "")
-                end = None
-                if end_str:
-                    try:
-                        end = _parse_phone_datetime(end_str)
-                        if end.tzinfo is None:
-                            end = end.replace(tzinfo=tz)
-                    except ValueError:
-                        pass
-
-                title = ev.get("title", "(No title)")
-                dedup_key = f"{title.lower().strip()}|{start.isoformat()}"
-                if dedup_key in seen:
-                    continue
-                seen.add(dedup_key)
-
-                # Handle trailing-space key from iOS ("calendar " vs "calendar")
-                cal_name = ev.get("calendar") or ev.get("calendar ") or ""
-
-                merged.append(
-                    {
-                        "id": ev.get("id", f"phone_{len(merged)}"),
-                        "title": title.strip(),
-                        "start": start.isoformat(),
-                        "end": end.isoformat() if end else start.isoformat(),
-                        "location": ev.get("location") or None,
-                        "description": ev.get("description") or None,
-                        "all_day": ev.get("all_day", False),
-                        "calendar": cal_name.strip(),
-                        "source": "phone",
-                    }
-                )
-            except (ValueError, TypeError) as exc:
-                logger.warning(f"[CALENDAR] Skipping phone event: {exc} — raw: {ev}")
-                continue
-    else:
-        # Source 2: Google Calendar API (fallback)
-        source = "google"
-        cal = get_calendar_client()
-        if cal and cal.is_configured:
-            result = await cal.list_events(days_ahead=1)
-            if result.success:
-                for e in result.events:
-                    title = e.title
-                    dedup_key = f"{title.lower()}|{e.start.isoformat()}"
-                    seen.add(dedup_key)
-                    merged.append(
-                        {
-                            "id": e.id,
-                            "title": title,
-                            "start": e.start.isoformat(),
-                            "end": e.end.isoformat(),
-                            "location": e.location or None,
-                            "description": e.description or None,
-                            "all_day": e.all_day,
-                            "calendar": "Google",
-                            "source": "google",
-                        }
-                    )
-
-    # Sort by start time (all-day events first, then by time)
-    merged.sort(key=lambda e: (0 if e.get("all_day") else 1, e["start"]))
-
-    return {"events": merged, "source": source, "count": len(merged)}
 
 
 @router.get("/api/temperatures")
@@ -635,81 +507,6 @@ async def toggle_auto_learn():
     return {"ok": True, "auto_learn_enabled": shared.AUTO_LEARN_ENABLED}
 
 
-@router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])
-async def sync_phone_calendar(req: Request):
-    """Receive consolidated calendar events from iPhone Shortcut, or return status.
-
-    GET: Returns sync status (last sync time, event count).
-    POST/PUT: Receives calendar events from iPhone Shortcut.
-
-    Accepts multiple body formats for flexibility with iOS Shortcuts:
-    1. {"events": [...]}           — wrapped in events key
-    2. [...]                       — bare list at top level
-    3. {"events": {"0": {...}}}    — iOS dict-of-dicts (auto-converted)
-    4. {"events": {single event}}  — single event dict (auto-wrapped)
-    """
-    # GET or no body → return status
-    if req.method == "GET":
-        sync_age = ""
-        if shared._phone_calendar_sync_time > 0:
-            age_min = int((time.time() - shared._phone_calendar_sync_time) / 60)
-            sync_age = f"{age_min} minutes ago"
-        else:
-            sync_age = "never"
-        return {
-            "synced": shared._phone_calendar_sync_time > 0,
-            "last_sync": sync_age,
-            "event_count": len(shared._phone_calendar_events),
-        }
-
-    # POST/PUT → receive events
-    # iOS Shortcuts sends one event per request inside a Repeat loop.
-    # Accumulate events arriving within 60s as a single batch.
-    try:
-        raw_body = await req.body()
-        if not raw_body:
-            return JSONResponse({"error": "empty body"}, status_code=400)
-
-        body = await req.json()
-
-        # Normalize: accept multiple input shapes from iOS Shortcuts
-        if isinstance(body, list):
-            events = body
-        elif isinstance(body, dict):
-            events = body.get("events", body)
-            if isinstance(events, dict):
-                if all(isinstance(v, dict) for v in events.values()):
-                    events = list(events.values())
-                else:
-                    events = [events]
-        else:
-            return JSONResponse({"error": f"unexpected body type: {type(body).__name__}"}, status_code=400)
-
-        if not isinstance(events, list):
-            events = [events]
-
-        # If last sync was >60s ago, start a new batch; otherwise append
-        now = time.time()
-        if now - shared._phone_calendar_sync_time > 60:
-            shared._phone_calendar_events = events
-            logger.info(f"[PHONE_SYNC] New batch started with {len(events)} event(s)")
-        else:
-            shared._phone_calendar_events.extend(events)
-            logger.info(f"[PHONE_SYNC] Appended {len(events)} event(s), total now {len(shared._phone_calendar_events)}")
-
-        shared._phone_calendar_sync_time = now
-        shared._save_phone_calendar()
-
-        return {
-            "ok": True,
-            "events_received": len(shared._phone_calendar_events),
-            "message": f"Synced {len(shared._phone_calendar_events)} calendar events",
-        }
-    except Exception as e:
-        logger.error(f"[PHONE_SYNC] Error: {e}")
-        return JSONResponse({"error": "Calendar sync failed"}, status_code=500)
-
-
 # ---------------------------------------------------------------------------
 # Progress Tracking (F-005)
 # ---------------------------------------------------------------------------
@@ -746,70 +543,6 @@ async def clear_announcements_history():
     deleted = clear_announcements()
     logger.info(f"[ANNOUNCE] Cleared {deleted} announcement(s)")
     return JSONResponse({"ok": True, "deleted": deleted})
-
-
-# ---------------------------------------------------------------------------
-# Shopping / Grocery List
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/shopping")
-async def get_shopping(list_name: str = None, include_checked: bool = False):
-    """Get shopping list items."""
-    from state_store import get_shopping_list
-
-    items = get_shopping_list(list_name=list_name, include_checked=include_checked)
-    return JSONResponse(items)
-
-
-@router.post("/api/shopping")
-async def add_shopping(req: Request):
-    """Add an item to the shopping list."""
-    from state_store import add_shopping_item
-
-    body = await req.json()
-    item = str(body.get("item", "")).strip()[:200]
-    list_name = str(body.get("list_name", "grocery")).strip()[:50]
-    if not item:
-        return JSONResponse({"error": "Item is required"}, status_code=400)
-    result = add_shopping_item(item, list_name)
-    return JSONResponse(result)
-
-
-@router.post("/api/shopping/{item_id}/check")
-async def check_shopping(item_id: int):
-    """Check off a shopping list item."""
-    from state_store import check_shopping_item
-
-    ok = check_shopping_item(item_id, checked=True)
-    return JSONResponse({"ok": ok})
-
-
-@router.post("/api/shopping/{item_id}/uncheck")
-async def uncheck_shopping(item_id: int):
-    """Uncheck a shopping list item."""
-    from state_store import check_shopping_item
-
-    ok = check_shopping_item(item_id, checked=False)
-    return JSONResponse({"ok": ok})
-
-
-@router.delete("/api/shopping/checked")
-async def clear_checked(list_name: str = None):
-    """Clear all checked items."""
-    from state_store import clear_checked_items
-
-    count = clear_checked_items(list_name)
-    return JSONResponse({"ok": True, "cleared": count})
-
-
-@router.delete("/api/shopping/{item_id}")
-async def delete_shopping(item_id: int):
-    """Delete a shopping list item."""
-    from state_store import remove_shopping_item
-
-    ok = remove_shopping_item(item_id)
-    return JSONResponse({"ok": ok})
 
 
 # ---------------------------------------------------------------------------
@@ -850,122 +583,6 @@ async def get_progress_streaks():
     return JSONResponse(get_streaks())
 
 
-# VISION / IMAGE RECOGNITION
-
-
-@router.post("/api/vision/analyze")
-async def vision_analyze(request: Request):
-    """Analyze an uploaded image using the vision model.
-
-    Accepts multipart form data with:
-    - image: Image file (JPEG, PNG, WebP, GIF)
-    - prompt: Optional text prompt (default: describe the image)
-    """
-    import base64
-
-    from vision_handler import SUPPORTED_MIME_TYPES, analyze_image
-
-    logger = logging.getLogger(__name__)
-
-    if not shared.VISION_ENABLED:
-        return JSONResponse({"ok": False, "error": "Vision is disabled"}, status_code=503)
-
-    content_type = request.headers.get("content-type", "")
-
-    if "multipart/form-data" in content_type:
-        # Check Content-Length header before reading body to reject oversized uploads early
-        content_length = int(request.headers.get("content-length", "0") or "0")
-        if content_length > shared.VISION_MAX_IMAGE_SIZE:
-            max_mb = shared.VISION_MAX_IMAGE_SIZE / (1024 * 1024)
-            return JSONResponse(
-                {"ok": False, "error": f"Upload too large. Maximum: {max_mb:.0f}MB"},
-                status_code=413,
-            )
-
-        form = await request.form()
-        image_file = form.get("image")
-        prompt = form.get("prompt", "Describe this image in detail, including any text visible.")
-
-        if not image_file:
-            return JSONResponse({"ok": False, "error": "No image file provided"}, status_code=400)
-
-        # Read and validate size
-        image_bytes = await image_file.read()
-        if len(image_bytes) > shared.VISION_MAX_IMAGE_SIZE:
-            max_mb = shared.VISION_MAX_IMAGE_SIZE / (1024 * 1024)
-            return JSONResponse(
-                {"ok": False, "error": f"Image too large. Maximum: {max_mb:.0f}MB"},
-                status_code=413,
-            )
-
-        # Detect MIME type from filename or content-type
-        file_ct = getattr(image_file, "content_type", "") or ""
-        if file_ct not in SUPPORTED_MIME_TYPES:
-            filename = getattr(image_file, "filename", "") or ""
-            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-            from vision_handler import _EXT_TO_MIME
-
-            file_ct = _EXT_TO_MIME.get(ext, "")
-            if not file_ct:
-                return JSONResponse(
-                    {"ok": False, "error": "Unsupported image type. Supported: JPEG, PNG, WebP, GIF."},
-                    status_code=400,
-                )
-
-        b64_data = base64.b64encode(image_bytes).decode("ascii")
-        image_data = f"data:{file_ct};base64,{b64_data}"
-        logger.info("[VISION_API] Multipart upload: %s, %d bytes", file_ct, len(image_bytes))
-
-    elif "application/json" in content_type:
-        body = await request.json()
-        image_data = body.get("image", "")
-        prompt = body.get("prompt", "Describe this image in detail, including any text visible.")
-        if not image_data:
-            return JSONResponse({"ok": False, "error": "No image data provided"}, status_code=400)
-        # SSRF prevention: only accept data URIs or raw base64, not http:// URLs
-        from vision_handler import _is_safe_image_url
-
-        if not _is_safe_image_url(image_data):
-            return JSONResponse(
-                {"ok": False, "error": "Only base64 image data or data: URIs accepted (not URLs)"},
-                status_code=400,
-            )
-        # Size guard: ~1.33x base64 overhead; check before expensive processing
-        max_b64_len = int(shared.VISION_MAX_IMAGE_SIZE * 1.4)
-        if len(image_data) > max_b64_len:
-            max_mb = shared.VISION_MAX_IMAGE_SIZE / (1024 * 1024)
-            return JSONResponse(
-                {"ok": False, "error": f"Image data too large. Maximum: {max_mb:.0f}MB"},
-                status_code=413,
-            )
-        logger.info("[VISION_API] JSON request, image data %d chars", len(image_data))
-    else:
-        return JSONResponse(
-            {"ok": False, "error": "Send multipart/form-data with 'image' file, or JSON with 'image' (base64)"},
-            status_code=400,
-        )
-
-    result = await analyze_image(image_data, prompt)
-    logger.info("[VISION_API] Analysis complete, %d chars result", len(result))
-    return JSONResponse({"ok": True, "analysis": result})
-
-
-@router.get("/api/vision/status")
-async def vision_status():
-    """Check vision model availability."""
-    from vision_handler import check_vision_health
-
-    healthy = await check_vision_health()
-    return JSONResponse(
-        {
-            "ok": True,
-            "enabled": shared.VISION_ENABLED,
-            "healthy": healthy,
-            "model": shared.VISION_MODEL_NAME,
-        }
-    )
-
-
 # ---------------------------------------------------------------------------
 # Presence awareness
 # ---------------------------------------------------------------------------
@@ -977,325 +594,3 @@ async def presence_status():
     from presence_tracker import get_presence
 
     return JSONResponse(get_presence())
-
-
-# ---------------------------------------------------------------------------
-# Voice: STT + TTS proxy endpoints for chat page
-# ---------------------------------------------------------------------------
-
-STT_URL = os.environ.get("STT_URL", "")
-
-
-MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB
-
-
-@router.post("/api/stt/transcribe")
-async def stt_transcribe(file: UploadFile = File(...)):
-    """Proxy audio to STT service for transcription."""
-    audio_data = await file.read()
-    if len(audio_data) > MAX_AUDIO_UPLOAD:
-        return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
-    r = await shared._http.post(
-        f"{STT_URL}/v1/audio/transcriptions",
-        files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
-        data={"model": "whisper-1"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-@router.post("/api/tts/synthesize")
-async def tts_synthesize(request: Request):
-    """Synthesize text to speech and return WAV audio."""
-    body = await request.json()
-    text = body.get("text", "")
-    if not text:
-        return JSONResponse({"error": "No text provided"}, status_code=400)
-    backend = shared.tts_backend
-    if not backend:
-        return JSONResponse({"error": "TTS not available"}, status_code=503)
-    audio_bytes = await backend.synthesize(text)
-    return Response(content=audio_bytes, media_type="audio/wav")
-
-
-# ---------------------------------------------------------------------------
-# Chat conversation history
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/chat/conversations")
-async def list_chat_conversations(limit: int = 50):
-    """List all conversations, most recent first."""
-    from state_store import list_conversations
-
-    return JSONResponse(list_conversations(min(limit, 200)))
-
-
-@router.post("/api/chat/conversations")
-async def create_chat_conversation(request: Request):
-    """Create a new conversation."""
-    import uuid
-
-    from state_store import create_conversation
-
-    body = await request.json()
-    title = body.get("title", "New Chat")
-    conv_id = str(uuid.uuid4())
-    return JSONResponse(create_conversation(conv_id, title))
-
-
-@router.get("/api/chat/conversations/{conv_id}/messages")
-async def get_chat_messages(conv_id: str):
-    """Get all messages in a conversation."""
-    from state_store import get_conversation, get_conversation_messages
-
-    conv = get_conversation(conv_id)
-    if not conv:
-        return JSONResponse({"error": "Conversation not found"}, status_code=404)
-    messages = get_conversation_messages(conv_id)
-    return JSONResponse({"conversation": conv, "messages": messages})
-
-
-@router.post("/api/chat/conversations/{conv_id}/messages")
-async def add_chat_message(conv_id: str, request: Request):
-    """Save a message to a conversation."""
-    from state_store import get_conversation, save_chat_message
-
-    conv = get_conversation(conv_id)
-    if not conv:
-        return JSONResponse({"error": "Conversation not found"}, status_code=404)
-    body = await request.json()
-    role = body.get("role", "user")
-    content = body.get("content", "")
-    routing = body.get("routing")
-    announcement_type = body.get("announcement_type")
-    if not content:
-        return JSONResponse({"error": "No content"}, status_code=400)
-    import json
-
-    routing_str = json.dumps(routing) if routing else None
-    msg = save_chat_message(conv_id, role, content, routing_str, announcement_type)
-    return JSONResponse(msg)
-
-
-@router.put("/api/chat/conversations/{conv_id}")
-async def update_chat_conversation(conv_id: str, request: Request):
-    """Update conversation title."""
-    from state_store import update_conversation_title
-
-    body = await request.json()
-    title = body.get("title", "")
-    if not title:
-        return JSONResponse({"error": "No title"}, status_code=400)
-    ok = update_conversation_title(conv_id, title)
-    if not ok:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse({"ok": True})
-
-
-@router.delete("/api/chat/conversations/{conv_id}")
-async def delete_chat_conversation(conv_id: str):
-    """Delete a conversation and all its messages."""
-    from state_store import delete_conversation
-
-    ok = delete_conversation(conv_id)
-    if not ok:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse({"ok": True})
-
-
-# ---------------------------------------------------------------------------
-# Document Vault
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/documents")
-async def list_docs(category: str = "", search: str = "", limit: int = 50, offset: int = 0):
-    """List documents with optional filtering."""
-    from state_store import list_documents
-
-    docs = list_documents(category=category or None, search=search or None, limit=min(limit, 200), offset=offset)
-    # Don't send full extracted_text in list view
-    for d in docs:
-        d.pop("extracted_text", None)
-    return JSONResponse(docs)
-
-
-@router.get("/api/documents/categories")
-async def document_categories():
-    """Document counts per category."""
-    from state_store import get_document_categories
-
-    return JSONResponse(get_document_categories())
-
-
-@router.get("/api/documents/{doc_id}")
-async def get_doc(doc_id: str):
-    """Get a single document with full metadata."""
-    from state_store import get_document
-
-    doc = get_document(doc_id)
-    if not doc:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse(doc)
-
-
-@router.post("/api/documents")
-async def upload_document(
-    file: UploadFile = File(...),
-    title: str = Form(...),
-    category: str = Form("other"),
-    tags: str = Form(""),
-    notes: str = Form(""),
-):
-    """Upload a document to the vault."""
-    import uuid
-
-    from document_processor import extract_text, save_uploaded_file, validate_upload
-    from state_store import save_document
-
-    file_bytes = await file.read()
-    filename = file.filename or "upload"
-
-    # Validate
-    error = validate_upload(file_bytes, filename, category)
-    if error:
-        return JSONResponse({"error": error}, status_code=400)
-
-    # Save file to disk
-    relative_path = save_uploaded_file(file_bytes, filename, category)
-
-    # Extract text
-    from document_processor import get_full_path
-
-    extracted = extract_text(get_full_path(relative_path))
-
-    # Index in RAG
-    rag_doc_id = None
-    try:
-        doc_uuid = str(uuid.uuid4())
-        rag_doc_id = f"vault_{doc_uuid}"
-        if extracted and shared.collection is not None:
-            # Chunk long documents
-            chunks = _chunk_text(extracted, 2000, 200)
-            ids = [f"{rag_doc_id}_chunk_{i}" for i in range(len(chunks))]
-            embeddings = [shared.embedding_model.encode(c, normalize_embeddings=True).tolist() for c in chunks]
-            metadatas = [
-                {
-                    "source": "document_vault",
-                    "category": category,
-                    "title": title,
-                    "vault_doc_id": doc_uuid,
-                    "kind": "chunk",
-                }
-                for _ in chunks
-            ]
-            shared.collection.add(documents=chunks, embeddings=embeddings, metadatas=metadatas, ids=ids)
-            logger.info(f"[DOCVAULT] Indexed {len(chunks)} chunks for '{title}'")
-    except Exception as e:
-        logger.warning(f"[DOCVAULT] RAG indexing failed: {e}")
-
-    # Save metadata to SQLite
-    now = datetime.now().isoformat()
-    ext = os.path.splitext(filename)[1].lower()
-    doc = save_document(
-        {
-            "id": doc_uuid,
-            "title": title,
-            "category": category,
-            "tags": tags,
-            "notes": notes,
-            "file_name": filename,
-            "file_path": relative_path,
-            "file_type": ext,
-            "file_size": len(file_bytes),
-            "extracted_text": extracted,
-            "rag_doc_id": rag_doc_id,
-            "uploaded_at": now,
-            "updated_at": now,
-        }
-    )
-
-    logger.info(f"[DOCVAULT] Uploaded '{title}' ({category}, {len(file_bytes)} bytes, {len(extracted)} chars text)")
-    doc.pop("extracted_text", None)
-    return JSONResponse(doc)
-
-
-@router.put("/api/documents/{doc_id}")
-async def update_doc(doc_id: str, request: Request):
-    """Update document metadata."""
-    from state_store import update_document
-
-    body = await request.json()
-    ok = update_document(doc_id, body)
-    if not ok:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse({"ok": True})
-
-
-@router.delete("/api/documents/{doc_id}")
-async def delete_doc(doc_id: str):
-    """Delete a document (file + metadata + RAG)."""
-    from document_processor import delete_file
-    from state_store import delete_document
-
-    doc = delete_document(doc_id)
-    if not doc:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-
-    # Delete file from disk
-    delete_file(doc["file_path"])
-
-    # Remove from RAG
-    try:
-        if doc.get("rag_doc_id") and shared.collection is not None:
-            # Delete all chunks with matching prefix
-            all_ids = shared.collection.get(where={"vault_doc_id": doc["id"]})
-            if all_ids and all_ids["ids"]:
-                shared.collection.delete(ids=all_ids["ids"])
-    except Exception as e:
-        logger.warning(f"[DOCVAULT] RAG cleanup failed: {e}")
-
-    return JSONResponse({"ok": True})
-
-
-@router.get("/api/documents/{doc_id}/download")
-async def download_doc(doc_id: str):
-    """Download the original document file."""
-    from document_processor import get_full_path
-    from state_store import get_document
-
-    doc = get_document(doc_id)
-    if not doc:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    full_path = get_full_path(doc["file_path"])
-    if not os.path.exists(full_path):
-        return JSONResponse({"error": "File missing"}, status_code=404)
-    return FileResponse(full_path, filename=doc["file_name"])
-
-
-@router.get("/api/documents/{doc_id}/text")
-async def get_doc_text(doc_id: str):
-    """Get extracted text for a document."""
-    from state_store import get_document
-
-    doc = get_document(doc_id)
-    if not doc:
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    return JSONResponse({"text": doc.get("extracted_text") or ""})
-
-
-def _chunk_text(text: str, chunk_size: int = 2000, overlap: int = 200) -> list[str]:
-    """Split text into chunks with overlap."""
-    if len(text) <= chunk_size:
-        return [text]
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        if chunk.strip():
-            chunks.append(chunk.strip())
-        start = end - overlap
-    return chunks or [text]
