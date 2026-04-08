@@ -272,6 +272,8 @@ services:
     container_name: wyoming-whisper
     restart: unless-stopped
     logging: *default-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${WYOMING_WHISPER_PORT:-10300}:10300"
     environment:
@@ -290,6 +292,8 @@ services:
     container_name: wyoming-jessica-tts
     restart: unless-stopped
     logging: *default-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${WYOMING_JESSICA_PORT:-10301}:10301"
     environment:
