@@ -65,8 +65,8 @@ async def _get_weather_forecast() -> str | None:
                             results = r.json()
                             if results:
                                 lat, lon = float(results[0]["lat"]), float(results[0]["lon"])
-                except Exception:
-                    pass
+                except (httpx.HTTPError, httpx.TimeoutException, ValueError) as e:
+                    logger.debug("[WEATHER] Geocoding failed: %s", e)
 
             if lat == 0.0 and lon == 0.0:
                 return None
@@ -101,8 +101,10 @@ async def _get_weather_forecast() -> str | None:
                 short = p["shortForecast"]
                 return f"Weather today: {short}, high of {temp} degrees {unit}."
 
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, KeyError, IndexError) as e:
         logger.warning(f"[WEATHER] Forecast fetch failed: {e}")
+    except Exception as e:
+        logger.error(f"[WEATHER] Unexpected error: {e}", exc_info=True)
 
     return None
 
@@ -319,8 +321,10 @@ async def poll_calendar():
                         extra={"component": "calendar"},
                     )
 
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        logger.warning(f"[CALENDAR_POLL] Calendar API unavailable: {e}")
     except Exception as e:
-        logger.error(f"[CALENDAR_POLL] Error: {e}", exc_info=True)
+        logger.error(f"[CALENDAR_POLL] Unexpected error: {e}", exc_info=True)
 
 
 def _parse_phone_datetime(s: str, tz=None) -> datetime:

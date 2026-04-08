@@ -68,6 +68,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         extra={"component": "tool", "tool_name": tool_name},
     )
 
+    from exceptions import ExternalServiceError, TransientError
+
     handler = _registry.get(tool_name)
     if not handler:
         TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
@@ -82,6 +84,17 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         else:
             result = handler(arguments)
         return result
+    except TransientError as e:
+        TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
+        svc = e.service if isinstance(e, ExternalServiceError) else "unknown"
+        logger.warning(
+            "[TOOL] Transient error in %s (%s): %s",
+            tool_name,
+            svc,
+            e,
+            extra={"component": "tool", "tool_name": tool_name, "error_type": "transient"},
+        )
+        return f"Service temporarily unavailable: {e}"
     except Exception as e:
         TOOL_CALL_ERRORS.labels(tool=tool_name).inc()
         logger.error(
