@@ -509,7 +509,7 @@ async def text_to_speech_stream(request: TTSRequest):
 
     Returns raw PCM int16 mono audio at the model's sample rate.
     The first sentence starts streaming before subsequent ones are generated,
-    enabling low-latency playback when piped to Snapcast.
+    enabling low-latency playback for streaming consumers.
 
     Headers in response:
     - X-Sample-Rate: sample rate (e.g. 24000)

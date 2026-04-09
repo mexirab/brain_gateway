@@ -47,7 +47,6 @@ def _make_mock_shared():
     mock.tts_backend.audio_format = "audio/wav"
     mock.TIMEZONE = "America/Chicago"
     mock.DND_ACTIVE = False
-    mock.SNAPCAST_ENABLED = False
     return mock
 
 

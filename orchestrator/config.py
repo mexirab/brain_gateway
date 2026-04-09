@@ -184,10 +184,6 @@ class Settings(BaseSettings):
     vision_max_image_size: int = 10 * 1024 * 1024
     vision_timeout: int = 60
 
-    # -- Snapcast ----------------------------------------------------------------
-    snapcast_enabled: bool = False
-    snapcast_fifo_base: str = "/tmp/snapcast"
-
     # -- Do Not Disturb ----------------------------------------------------------
     # (runtime state, not env var — but included for completeness)
 

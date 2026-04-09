@@ -8,21 +8,14 @@ Call sites do NOT change. They still call _announce_voice(text, speaker).
 The backend handles API translation transparently.
 """
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
 import httpx
-import numpy as np
 
 logger = logging.getLogger(__name__)
-
-# Snapcast expects 48kHz; TTS produces 24kHz.  Resample by duplicating samples (2x).
-_TTS_SAMPLE_RATE = 24000
-_SNAP_SAMPLE_RATE = 48000
-_UPSAMPLE_FACTOR = _SNAP_SAMPLE_RATE // _TTS_SAMPLE_RATE  # 2
 
 
 @dataclass
@@ -91,92 +84,6 @@ class LocalHTTPBackend(TTSBackend):
         )
         r.raise_for_status()
         return r.content
-
-    async def synthesize_to_snapcast(self, text: str, fifo_paths: str | list[str], voice: Optional[str] = None) -> dict:
-        """
-        Synthesize TTS audio and write to Snapcast named pipe(s).
-
-        Pre-buffers the full audio before writing so that Snapcast clients
-        receive a complete stream and don't hit buffer underruns on long
-        announcements (e.g. morning briefing).
-
-        Uses the /tts/stream endpoint which yields raw PCM chunks per sentence.
-        When multiple pipes are given (broadcast), audio is generated once and
-        written to all pipes simultaneously.
-
-        Args:
-            text: Text to synthesize.
-            fifo_paths: One or more Snapcast named pipe paths.
-            voice: Override voice (uses config default if None).
-
-        Returns:
-            dict with success status and bytes_written count.
-        """
-        if isinstance(fifo_paths, str):
-            fifo_paths = [fifo_paths]
-
-        target_voice = voice or self.config.voice
-
-        # Pre-buffer all audio so Snapcast gets the complete stream at once.
-        # Streaming chunk-by-chunk caused buffer underruns on long announcements
-        # because TTS synthesis is slower than real-time playback.
-        audio_buffer = bytearray()
-
-        async with self._http.stream(
-            "POST",
-            f"{self.config.url}/tts/stream",
-            json={"text": text, "voice": target_voice},
-            timeout=120,
-        ) as response:
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes(chunk_size=4096):
-                # Resample 24kHz → 48kHz by repeating each sample
-                samples = np.frombuffer(chunk, dtype=np.int16)
-                upsampled = np.repeat(samples, _UPSAMPLE_FACTOR).tobytes()
-                audio_buffer.extend(upsampled)
-
-        # Pad with 3s of silence so Snapcast clients finish playing
-        # the buffered audio before the stream goes idle
-        audio_buffer.extend(bytes(_SNAP_SAMPLE_RATE * 2 * 3))  # 3s @ 48kHz 16-bit mono
-
-        # Write the complete audio to all FIFOs at once.
-        # FIFO open/write is blocking (waits for reader) — run off the event loop.
-        bytes_written = len(audio_buffer)
-        audio_bytes = bytes(audio_buffer)
-
-        def _write_to_fifos() -> None:
-            import contextlib
-            import fcntl
-            import time
-
-            F_SETPIPE_SZ = 1031
-            PIPE_BUF_SIZE = 1_048_576  # 1MB — kernel max
-
-            fifos = []
-            for path in fifo_paths:
-                try:
-                    fifos.append(open(path, "wb"))  # noqa: SIM115
-                except FileNotFoundError:
-                    logger.warning(f"Snapcast FIFO not found: {path}, skipping")
-            if not fifos:
-                raise FileNotFoundError(f"No Snapcast FIFOs available: {fifo_paths}")
-            try:
-                # Maximize pipe buffer so Snapcast can read the full audio
-                for fifo in fifos:
-                    with contextlib.suppress(OSError):
-                        fcntl.fcntl(fifo.fileno(), F_SETPIPE_SZ, PIPE_BUF_SIZE)
-                for fifo in fifos:
-                    fifo.write(audio_bytes)
-                    fifo.flush()
-                # Give Snapcast time to read before closing the pipe
-                time.sleep(max(len(audio_bytes) / (_SNAP_SAMPLE_RATE * 2) + 2, 5))
-            finally:
-                for fifo in fifos:
-                    fifo.close()
-
-        await asyncio.to_thread(_write_to_fifos)
-
-        return {"success": True, "bytes_written": bytes_written}
 
 
 class ElevenLabsBackend(TTSBackend):

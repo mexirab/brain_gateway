@@ -78,8 +78,6 @@ services:
       - brain-audio:/tmp/brain_audio:rw
       # Application data (SQLite databases, etc.)
       - finance-data:/app/data:rw
-      # Snapcast named pipes for streaming TTS (optional)
-      - ${SNAPCAST_FIFO_HOST:-/tmp/snapcast}:/tmp/snapcast
       # Document vault storage (optional)
       - ${DOCUMENTS_PATH:-./data/documents}:/mnt/documents:rw
       # User profile (personal config — names, speakers, sensors, etc.)
@@ -148,9 +146,6 @@ services:
       - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
       # Open WebUI deep link (for notification tap → chat)
       - WEBUI_URL=${WEBUI_URL:-}
-      # Snapcast streaming TTS
-      - SNAPCAST_ENABLED=${SNAPCAST_ENABLED:-false}
-      - SNAPCAST_FIFO_BASE=${SNAPCAST_FIFO_BASE:-/tmp/snapcast}
       # API authentication
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
       # Auto-learn from conversations
@@ -321,23 +316,6 @@ services:
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
     depends_on:
       - orchestrator
-    networks:
-      - gateway-net
-
-  snapcast:
-    image: shuricksumy/snapcast:latest
-    container_name: snapcast
-    restart: unless-stopped
-    logging: *default-logging
-    ports:
-      - "1704:1704"   # client connections
-      - "1705:1705"   # JSON-RPC control API
-      - "1780:1780"   # Snapweb UI
-    environment:
-      - ROLE=snapserver
-    volumes:
-      - /tmp/snapcast:/tmp/snapcast
-      - ${GATEWAY_ROOT_PATH:-.}/snapcast/snapserver.conf:/etc/snapserver.conf:ro
     networks:
       - gateway-net
 

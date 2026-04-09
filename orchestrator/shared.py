@@ -300,12 +300,6 @@ ROUTINE_NUDGE_MAX = settings.routine_nudge_max
 ROUTINE_AUTO_SKIP = settings.routine_auto_skip
 
 # ---------------------------------------------------------------------------
-# Snapcast streaming TTS
-# ---------------------------------------------------------------------------
-SNAPCAST_ENABLED = settings.snapcast_enabled
-SNAPCAST_FIFO_BASE = settings.snapcast_fifo_base
-
-# ---------------------------------------------------------------------------
 # Presence awareness
 # ---------------------------------------------------------------------------
 PRESENCE_ENABLED = settings.presence_enabled

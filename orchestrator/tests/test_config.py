@@ -36,7 +36,6 @@ class TestSettingsDefaults:
     def test_default_booleans(self):
         s = self._make_settings()
         assert s.selfcare_enabled is True
-        assert s.snapcast_enabled is False
         assert s.vision_enabled is False
 
     def test_default_empty_strings(self):

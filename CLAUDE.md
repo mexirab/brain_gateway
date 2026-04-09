@@ -1,15 +1,15 @@
 # Brain Gateway
 
-Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) handles both conversation and tools in one unified agentic loop. v6 hybrid mode has been removed.
+Personal AI assistant for ADHD support. Primary model (Qwen3-VL-30B-A3B abliterated on Helios RTX PRO 5000) handles conversation, tools, and vision in one unified agentic loop. v6 hybrid mode has been removed.
 
 ## Cluster
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
-| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080), fallback LLM (RTX 3090), Pi-hole secondary |
-| Uranus | 10.0.0.173 | - | 2x RTX 5080 | TTS + STT (GPU0), ComfyUI/Conjure (GPU1) |
-| Helios | 10.0.0.195 | - | RTX 5090 | Qwen3.5-27B (conversation + tools), always-on |
+| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080), Pi-hole secondary |
+| Uranus | 10.0.0.173 | - | 2x RTX 5080 | ComfyUI/Conjure (GPU1) |
+| Helios | 10.0.0.195 | - | RTX 5090 + RTX PRO 5000 | Primary LLM: Qwen3-VL-30B-A3B abliterated (PRO 5000, port 8081), TTS + STT (5090), always-on |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
@@ -20,9 +20,9 @@ Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) han
 | Open WebUI (HTTPS) | 443 | https://jupiter-amds.tail74fc4a.ts.net (Tailscale) |
 | Open WebUI (HTTP) | 80 | http://localhost |
 | Orchestrator | 8888 | http://localhost:8888 |
-| Helios (primary model) | 8080 | http://10.0.0.195:8080/v1 |
-| TTS | 8002 | http://10.0.0.173:8002 |
-| STT | 8003 | http://10.0.0.173:8003 |
+| Helios primary (Qwen3-VL-30B-A3B abliterated) | 8081 | http://10.0.0.195:8081/v1 |
+| TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
+| STT (Whisper) | 8003 | http://10.0.0.195:8003 |
 | Pi-hole (Jupiter) | 53/8053 | http://10.0.0.248:8053/admin |
 | Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
 | Wyoming Whisper (STT) | 10300 | tcp://10.0.0.248:10300 |
@@ -30,15 +30,12 @@ Personal AI assistant for ADHD support. Single model (Qwen3.5-27B on Helios) han
 | Vision Model (Qwen2.5-VL-7B) | 8010 | http://10.0.0.58:8010 |
 | Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
-| Snapcast (server) | 1704 | tcp://10.0.0.248:1704 (client connections) |
-| Snapcast (JSON-RPC) | 1705 | http://10.0.0.248:1705 |
-| Snapweb (UI) | 1780 | http://10.0.0.248:1780 |
 | Grafana | 3000 | http://localhost:3000/d/brain-gateway-overview (admin/braingw) |
 
 ## Architecture (v7 Unified)
 
 ```
-User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
+User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3-VL-30B-A3B abliterated)
                                                          |
                                           conversation + tool calls in one loop
                                                          |
@@ -47,7 +44,7 @@ User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
               home_assistant  search_memory  set_reminder  web_search  check_calendar
 ```
 
-**Flow:** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Optional fallback model if primary is unavailable. Helios is always-on (no auto-shutdown).
+**Flow:** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Helios is always-on (no auto-shutdown).
 
 **Infrastructure:** `config.py` centralizes all env vars via Pydantic Settings. `tool_registry.py` provides decorator-based tool registration (replaces legacy if-elif dispatch). `service_registry.py` auto-detects healthy services and disables tools when dependencies are down. `exceptions.py` defines a typed exception hierarchy for consistent error handling.
 
@@ -335,13 +332,6 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | GET | /api/progress/today | Today's stats (tasks, focus, brain dumps) |
 | GET | /api/progress/week | This week's stats + trend vs prior week |
 | GET | /api/progress/streaks | Active streaks (task, focus, brain dump) |
-
-## Snapcast Streaming TTS Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| SNAPCAST_ENABLED | false | Enable Snapcast streaming TTS (replaces Cast delivery) |
-| SNAPCAST_FIFO_BASE | /tmp/snapcast | Base path for named pipes (per-room subdirectory) |
 
 ## Vision / Image Recognition Environment Variables
 
