@@ -227,7 +227,6 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         # Cast delivery path — generate audio, serve via HTTP, play on HA media_player
         # =====================================================================
         headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
-        fallback_used = False
 
         # Generate audio via backend
         audio_bytes = await backend.synthesize(text)
@@ -244,16 +243,20 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
 
         audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
 
-        # Build speaker list: primary, then fallback if different
-        target_speaker = speaker or REMINDER_SPEAKER
-        speakers_to_try = [target_speaker]
-        if FALLBACK_SPEAKER and target_speaker != FALLBACK_SPEAKER:
-            speakers_to_try.append(FALLBACK_SPEAKER)
+        # Build speaker list.
+        # When a specific speaker is passed by the caller, use just that one.
+        # Otherwise use REMINDER_SPEAKER which may be comma-separated for
+        # multi-room broadcast (avoids Google Home group issues with soundbars).
+        if speaker:
+            broadcast_speakers = [speaker]
+        else:
+            broadcast_speakers = [s.strip() for s in REMINDER_SPEAKER.split(",") if s.strip()]
 
-        # Try each speaker until one succeeds
+        # Cast to all target speakers (don't stop at first success)
+        succeeded = []
         last_error = None
         async with httpx.AsyncClient(timeout=30) as client:
-            for try_speaker in speakers_to_try:
+            for try_speaker in broadcast_speakers:
                 try:
                     ha_response = await client.post(
                         f"{HA_URL}/api/services/media_player/play_media",
@@ -266,15 +269,8 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
                     )
 
                     if ha_response.status_code == 200:
-                        if try_speaker != target_speaker:
-                            logger.warning(f"Primary speaker {target_speaker} failed, used fallback {try_speaker}")
-                            fallback_used = True
-                        latency_ms = int((_time.time() - t0) * 1000)
                         logger.info(f"Played announcement on {try_speaker}")
-                        _record_announcement(
-                            text, announcement_type, try_speaker, True, None, latency_ms, fallback_used
-                        )
-                        return {"success": True, "speaker": try_speaker}
+                        succeeded.append(try_speaker)
                     else:
                         last_error = f"HA returned {ha_response.status_code} for {try_speaker}"
                         logger.warning(f"play_media failed: {last_error}")
@@ -283,7 +279,20 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
                     logger.warning(f"play_media failed: {last_error}")
 
         latency_ms = int((_time.time() - t0) * 1000)
-        _record_announcement(text, announcement_type, target_speaker, False, last_error, latency_ms, fallback_used)
+        if succeeded:
+            speaker_label = ",".join(succeeded)
+            _record_announcement(text, announcement_type, speaker_label, True, None, latency_ms, False)
+            return {"success": True, "speaker": speaker_label}
+
+        _record_announcement(
+            text,
+            announcement_type,
+            broadcast_speakers[0] if broadcast_speakers else "unknown",
+            False,
+            last_error,
+            latency_ms,
+            False,
+        )
         return {"success": False, "error": last_error}
 
     except Exception as e:
