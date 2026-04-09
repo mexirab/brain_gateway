@@ -81,6 +81,62 @@ def parse_xml_tool_calls(content: str) -> List[Dict[str, Any]]:
     return tool_calls
 
 
+# ---------------------------------------------------------------------------
+# Selfcare safety net — auto-log if model skips the tool call
+# ---------------------------------------------------------------------------
+
+_MEAL_PATTERNS = re.compile(
+    r"\b(i\s+ate|i\s+had|i\s+just\s+ate|i\s+just\s+had|had\s+breakfast|had\s+lunch|had\s+dinner|"
+    r"had\s+a\s+snack|grabbed\s+a\s+snack|had\s+some\s+food|ate\s+breakfast|ate\s+lunch|ate\s+dinner|"
+    r"i\s+ate\s+\w+|just\s+had\s+a\s+sandwich|had\s+a\s+meal|i\s+already\s+ate|already\s+had\s+breakfast|"
+    r"already\s+had\s+lunch|already\s+had\s+dinner)\b",
+    re.IGNORECASE,
+)
+_MED_PATTERNS = re.compile(
+    r"\b(i\s+took\s+my\s+meds|took\s+my\s+medication|i\s+took\s+it|yes\s+i\s+took\s+it|"
+    r"already\s+took\s+it|took\s+my\s+vyvanse|took\s+my\s+adderall|took\s+my\s+wellbutrin|"
+    r"i\s+took\s+the\s+meds|meds\s+taken|took\s+meds)\b",
+    re.IGNORECASE,
+)
+_WATER_PATTERNS = re.compile(
+    r"\b(drank\s+water|had\s+water|i\s+drank|staying\s+hydrated|just\s+had\s+water|"
+    r"had\s+some\s+water|drinking\s+water)\b",
+    re.IGNORECASE,
+)
+_MOVEMENT_PATTERNS = re.compile(
+    r"\b(went\s+for\s+a\s+walk|took\s+a\s+walk|i\s+walked|just\s+walked|"
+    r"did\s+some\s+exercise|went\s+for\s+a\s+run|i\s+stretched|did\s+yoga)\b",
+    re.IGNORECASE,
+)
+
+
+def _last_user_text(messages: list) -> str:
+    """Extract the last user message text."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            text = msg["content"]
+            # Skip Open WebUI auto-generated prompts (tags, follow-ups, titles)
+            if text.startswith("### Task:"):
+                continue
+            return text
+    return ""
+
+
+def _detect_selfcare_action(text: str) -> dict | None:
+    """Detect selfcare actions from user text. Returns tool args or None."""
+    if not text:
+        return None
+    if _MEAL_PATTERNS.search(text):
+        return {"action": "meal", "detail": "meal (auto-detected)"}
+    if _MED_PATTERNS.search(text):
+        return {"action": "medication", "detail": "medication (auto-detected)"}
+    if _WATER_PATTERNS.search(text):
+        return {"action": "water"}
+    if _MOVEMENT_PATTERNS.search(text):
+        return {"action": "movement"}
+    return None
+
+
 async def run_unified_tool_loop(
     messages: List[Dict],
     system_prompt: str,
@@ -164,6 +220,19 @@ async def run_unified_tool_loop(
             TOOL_ROUNDS.observe(round_num + 1)
             result = clean_response(content)
             logger.info("[%s] Final response: %s...", label, result[:100])
+
+            # Safety net: if user mentioned meals/meds/water/movement but model
+            # skipped selfcare_log, call it automatically so nudges stop.
+            if "selfcare_log" in valid_tool_names and round_num == 0:
+                user_text = _last_user_text(messages)
+                auto_action = _detect_selfcare_action(user_text)
+                if auto_action:
+                    logger.info("[%s] Auto-calling selfcare_log (model skipped it): %s", label, auto_action)
+                    try:
+                        await execute_tool("selfcare_log", auto_action)
+                    except Exception as e:
+                        logger.warning("[%s] Auto selfcare_log failed: %s", label, e)
+
             return result
 
         # Filter out duplicate calls (already executed in a previous round)
