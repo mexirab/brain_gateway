@@ -21,7 +21,7 @@ def get_ha_tool_definition() -> Dict[str, Any]:
         return shared._ha_tool_cache
 
     entity_lines = []
-    for domain in ["light", "switch", "fan", "climate", "cover", "scene", "lock"]:
+    for domain in ["light", "switch", "fan", "climate", "cover", "scene", "lock", "media_player"]:
         entities = ha_client.get_entities_by_domain(domain)
         for e in entities:
             entity_lines.append(f"  - {e.entity_id} ({e.friendly_name})")
@@ -43,6 +43,7 @@ SERVICES:
 - climate: set_temperature (temperature: int)
 - cover: open_cover, close_cover
 - scene: turn_on
+- media_player: play_media (media_content_id: URL, media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
 
 COLORS: rgb_color as [R,G,B]. Blue=[0,0,255], Red=[255,0,0], Green=[0,255,0], Purple=[128,0,128], Yellow=[255,255,0], Orange=[255,165,0], Pink=[255,192,203], White=[255,255,255]
 BRIGHTNESS: 0-255 scale. 50%=128, 75%=191, 100%=255""",
