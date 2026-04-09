@@ -144,6 +144,9 @@ async def check_selfcare() -> None:
         _state.last_hydration_nudge = now
     if _state.last_movement_nudge and _state.last_movement_nudge.date() < now.date():
         _state.last_movement_nudge = now
+    if _state.last_meal_reported and _state.last_meal_reported.date() < now.date():
+        logger.debug("[SELFCARE] Daily reset: clearing last_meal_reported from yesterday")
+        _state.last_meal_reported = None
 
     # Quiet hours check
     quiet_start = _parse_time(shared.QUIET_HOURS_START)
@@ -246,10 +249,14 @@ def _check_meals(now: datetime) -> Optional[str]:
     hours_since = (now - _state.last_meal_reported).total_seconds() / 3600
     if hours_since >= meal_hours:
         last_str = _state.last_meal_reported.strftime("%-I:%M %p")
-        return (
-            f"It's been about {int(hours_since)} hours since you last ate (around {last_str}). "
-            f"Time for a snack or meal."
-        )
+        hour = now.hour
+        if hour < 14:
+            suggestion = f"Lunch time! You had something around {last_str} — what sounds good for lunch?"
+        elif hour < 17:
+            suggestion = f"Afternoon snack? Last meal was around {last_str}."
+        else:
+            suggestion = f"Dinner time! Last meal was around {last_str}."
+        return suggestion
 
     return None
 

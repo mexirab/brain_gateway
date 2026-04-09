@@ -122,13 +122,29 @@ class TestMealCheck:
         result = sm._check_meals(now)
         assert result is None
 
-    def test_nudge_after_hours_since_meal(self, sm, mock_shared):
+    def test_nudge_after_hours_since_meal_lunch(self, sm, mock_shared):
         mock_shared.MEAL_NUDGE_HOURS = 4
         sm._state.last_meal_reported = datetime(2026, 3, 20, 8, 0)
-        now = datetime(2026, 3, 20, 13, 0)  # 5 hours later
+        now = datetime(2026, 3, 20, 13, 0)  # 5 hours later, 1pm
         result = sm._check_meals(now)
         assert result is not None
-        assert "hours" in result
+        assert "lunch" in result.lower()
+
+    def test_nudge_after_hours_since_meal_dinner(self, sm, mock_shared):
+        mock_shared.MEAL_NUDGE_HOURS = 4
+        sm._state.last_meal_reported = datetime(2026, 3, 20, 12, 0)
+        now = datetime(2026, 3, 20, 18, 0)  # 6 hours later, 6pm
+        result = sm._check_meals(now)
+        assert result is not None
+        assert "dinner" in result.lower()
+
+    def test_nudge_afternoon_snack(self, sm, mock_shared):
+        mock_shared.MEAL_NUDGE_HOURS = 4
+        sm._state.last_meal_reported = datetime(2026, 3, 20, 10, 0)
+        now = datetime(2026, 3, 20, 15, 0)  # 5 hours later, 3pm
+        result = sm._check_meals(now)
+        assert result is not None
+        assert "snack" in result.lower()
 
     def test_no_nudge_recent_meal(self, sm, mock_shared):
         mock_shared.MEAL_NUDGE_HOURS = 4
@@ -136,6 +152,35 @@ class TestMealCheck:
         now = datetime(2026, 3, 20, 13, 0)  # 1 hour later
         result = sm._check_meals(now)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Daily reset
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestDailyReset:
+    @pytest.mark.asyncio
+    async def test_meal_reset_on_new_day(self, sm, mock_shared):
+        """last_meal_reported should reset to None at day boundary."""
+        mock_shared.PRESENCE_ENABLED = False
+        sm._state.last_meal_reported = datetime(2026, 3, 19, 20, 0)  # yesterday 8pm
+        sm._state.sitting_since = datetime(2026, 3, 19, 20, 0)
+        sm._state.last_hydration_nudge = datetime(2026, 3, 19, 20, 0)
+        sm._state.last_movement_nudge = datetime(2026, 3, 19, 20, 0)
+
+        with (
+            patch.object(sm, "_check_meds", return_value=None),
+            patch.object(sm, "_check_meals", wraps=sm._check_meals) as mock_meals,
+            patch.object(sm, "_check_movement", return_value=None),
+            patch.object(sm, "_check_hydration", return_value=None),
+            patch.object(sm, "_send_notification", new_callable=AsyncMock),
+        ):
+            await sm.check_selfcare()
+
+        # After check_selfcare runs on a new day, meal state should be cleared
+        assert sm._state.last_meal_reported is None
 
 
 # ---------------------------------------------------------------------------
