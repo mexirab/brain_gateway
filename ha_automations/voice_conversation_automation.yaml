@@ -39,10 +39,10 @@
           {% set device = trigger.device_id | default('') %}
           {% set room_map = {
             'atom_echo_jess': states('input_select.jess_default_speaker'),
-            'atom_echo_office': 'media_player.office_speaker',
-            'atom_echo_bedroom': 'media_player.bedroom_speaker',
-            'atom_echo_kitchen': 'media_player.kitchen_speaker',
-            'atom_echo_living': 'media_player.living_room_speaker'
+            'atom_echo_office': 'media_player.office_max',
+            'atom_echo_bedroom': 'media_player.bedroom_pair',
+            'atom_echo_kitchen': 'media_player.kitchen_display',
+            'atom_echo_living': 'media_player.living_room_speakers'
           } %}
           {% if device in room_map %}
             {{ room_map[device] }}

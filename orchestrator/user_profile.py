@@ -31,9 +31,9 @@ _DEFAULTS = {
         "personality": "warm, friendly, supportive ADHD coach",
     },
     "speakers": {
-        "default": "media_player.office_speaker",
+        "default": "media_player.office_max",
         "morning_briefing": "media_player.bedroom_pair",
-        "focus_audio": "media_player.dining_room_max",
+        "focus_audio": "media_player.office_max",
         "aliases": {},
     },
     "notifications": {
@@ -80,9 +80,9 @@ class UserProfile:
     assistant_personality: str = "warm, friendly, supportive ADHD coach"
 
     # Speaker entity IDs
-    default_speaker: str = "media_player.office_speaker"
+    default_speaker: str = "media_player.office_max"
     morning_briefing_speaker: str = "media_player.bedroom_pair"
-    focus_audio_player: str = "media_player.dining_room_max"
+    focus_audio_player: str = "media_player.office_max"
     speaker_aliases: Dict[str, str] = field(default_factory=dict)
 
     # Notifications

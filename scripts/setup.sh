@@ -301,8 +301,8 @@ speakers:
   morning_briefing: "$MORNING_BRIEFING_SPEAKER"
   focus_audio: "$FOCUS_AUDIO_PLAYER"
   aliases: {}
-    # office: "media_player.office_speaker"
-    # bedroom: "media_player.bedroom_speaker"
+    # office: "media_player.office_max"
+    # bedroom: "media_player.bedroom_pair"
 
 # Mobile notifications (fill in your HA notify service)
 mobile_notify_services: []

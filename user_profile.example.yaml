@@ -16,11 +16,11 @@ assistant:
   personality: "warm, friendly, supportive ADHD coach"
 
 speakers:
-  default: "media_player.office_speaker"          # Reminders, announcements
+  default: "media_player.office_max"               # Reminders, announcements
   morning_briefing: "media_player.bedroom_pair"   # Morning briefing speaker
-  focus_audio: "media_player.dining_room_max"     # Endel focus audio
+  focus_audio: "media_player.office_max"           # Focus session audio
   aliases:                                         # Friendly name → entity_id
-    office: "media_player.dining_room_max"
+    office: "media_player.office_max"
     bedroom: "media_player.bedroom_pair"
     kitchen: "media_player.kitchen_display"
     # living room: "media_player.living_room_speakers"

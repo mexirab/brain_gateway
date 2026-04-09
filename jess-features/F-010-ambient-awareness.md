@@ -127,7 +127,7 @@ Add to existing dashboard:
 | `AMBIENT_ENABLED` | `true` | Enable ambient summaries |
 | `AMBIENT_SUMMARY_TIMES` | `10:00,12:00,14:00,16:00` | TTS summary times |
 | `AMBIENT_LED_ENTITY` | `` | HA entity for LED (empty = disabled) |
-| `AMBIENT_SPEAKER` | `media_player.office_speaker` | Speaker for summaries |
+| `AMBIENT_SPEAKER` | `media_player.office_max` | Speaker for summaries |
 
 ---
 

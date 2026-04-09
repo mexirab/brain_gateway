@@ -19,7 +19,7 @@
 substitutions:
   name: atom-echo-jess
   friendly_name: Jess Voice Assistant
-  tts_speaker: media_player.all_speakers
+  tts_speaker: media_player.whole_home
 
 esphome:
   name: ${name}
@@ -168,9 +168,9 @@ micro_wake_word:
   models:
     - model: okay_nabu
       id: okay_nabu
-    # Custom "Hey Jess" wake word (served by model-server on Jupiter):
-    # - model: http://10.0.0.248:8080/hey_jess.json
-    #   id: hey_jess
+    # Custom "Hey Jess" wake word (served by model-server on Helios)
+    - model: http://10.0.0.195:8085/hey_jess.json
+      id: hey_jess
   on_wake_word_detected:
     # Amp on → beep → wait for beep → amp off → start VA
     - switch.turn_on: speaker_amp
