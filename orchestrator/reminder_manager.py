@@ -271,9 +271,9 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         # Snapcast streaming path (low latency, sentence-by-sentence)
         # =====================================================================
         if shared.SNAPCAST_ENABLED and hasattr(backend, "synthesize_to_snapcast"):
-            # Room-targeted TTS: if no specific speaker requested, use detected room
-            effective_speaker = speaker
-            if not effective_speaker and shared.PRESENCE_TARGETED_TTS:
+            # Room-targeted TTS: if no specific speaker requested, try presence then default
+            effective_speaker = speaker or REMINDER_SPEAKER
+            if not speaker and shared.PRESENCE_TARGETED_TTS:
                 try:
                     from presence_tracker import get_presence
 
