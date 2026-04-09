@@ -744,7 +744,39 @@ STATIC_TOOLS = [
     },
 ]
 
+# Code agent tool — added dynamically when enabled
+_CODE_AGENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "code_agent",
+        "description": (
+            "Delegate a coding task to the code agent: troubleshoot issues, read source code, "
+            "search for patterns, run tests, or make changes to the Brain Gateway codebase. "
+            "Use this when the user asks about how something works in the code, asks you to "
+            "fix a bug, investigate an error, or implement a feature."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Description of what to investigate or implement",
+                },
+                "apply_changes": {
+                    "type": "boolean",
+                    "description": "If true, the agent can write files. If false (default), diagnosis and investigation only.",
+                    "default": False,
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
+
 
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7): HA tool + all static tools."""
-    return [get_ha_tool_definition()] + STATIC_TOOLS
+    """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent."""
+    tools = [get_ha_tool_definition()] + STATIC_TOOLS
+    if shared.CODE_AGENT_ENABLED:
+        tools.append(_CODE_AGENT_TOOL)
+    return tools

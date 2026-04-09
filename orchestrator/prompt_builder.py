@@ -256,6 +256,7 @@ WHEN TO USE TOOLS:
 - document_vault: Use 'search' when user asks about a stored document ("where's my car title?", "what's my VIN?"). Use 'update' when user provides details about a document ("my VIN is XXXXX", "add this to my car title"). First search to find the doc and get its ID, then update with the notes. The notes field is indexed in RAG so the info becomes searchable.
 - bookmark_context: When user says "I need to take a call", "stepping away", "be right back", "brb", "I need to handle something"
 - recall_context: When user says "what was I doing?", "where was I?", "what was I working on?", "I'm back", "just got back"
+- code_agent: When user asks about how something works in your code, asks you to troubleshoot a code issue, investigate a bug, look at a specific file, search the codebase, run tests, or implement a change. Examples: "how do meal nudges work?", "look at selfcare_manager.py", "why is the calendar polling failing?", "search for where reminders are sent", "run the tests". Use apply_changes=true ONLY when user explicitly asks you to make changes.
 
 DECISION HELPER (decide_for_me):
 - When using decide_for_me: return ONE concrete recommendation for work/overwhelm, or TWO options max for food/general

@@ -184,6 +184,13 @@ class Settings(BaseSettings):
     vision_max_image_size: int = 10 * 1024 * 1024
     vision_timeout: int = 60
 
+    # -- Code Agent --------------------------------------------------------------
+    code_agent_enabled: bool = False
+    code_agent_model_url: str = ""
+    code_agent_model_name: str = ""
+    code_agent_codebase_path: str = "/opt/helios/gateway_mvp"
+    code_agent_max_rounds: int = 10
+
     # -- Do Not Disturb ----------------------------------------------------------
     # (runtime state, not env var — but included for completeness)
 

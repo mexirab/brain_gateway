@@ -311,6 +311,15 @@ PRESENCE_WELCOME_HOME = settings.presence_welcome_home
 PRESENCE_WELCOME_COOLDOWN = settings.presence_welcome_cooldown
 
 # ---------------------------------------------------------------------------
+# Code Agent (coding-focused model for self-troubleshooting)
+# ---------------------------------------------------------------------------
+CODE_AGENT_ENABLED = settings.code_agent_enabled
+CODE_AGENT_MODEL_URL = settings.code_agent_model_url
+CODE_AGENT_MODEL_NAME = settings.code_agent_model_name
+CODE_AGENT_CODEBASE_PATH = settings.code_agent_codebase_path
+CODE_AGENT_MAX_ROUNDS = settings.code_agent_max_rounds
+
+# ---------------------------------------------------------------------------
 # Do Not Disturb (sleep mode) — suppresses all announcements
 # ---------------------------------------------------------------------------
 DND_ACTIVE = False  # runtime state, set via goodnight tool

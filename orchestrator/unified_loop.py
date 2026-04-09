@@ -38,6 +38,7 @@ TERMINAL_TOOLS = {
     "routine_action",
     "bookmark_context",
     "selfcare_log",
+    "code_agent",
 }
 
 

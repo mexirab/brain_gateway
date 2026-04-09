@@ -1144,3 +1144,10 @@ async def _reg_document_vault(arguments: dict) -> str:
 @register_tool("ask_expert")
 def _reg_ask_expert(arguments: dict) -> str:
     return "ask_expert is not available — the primary model handles all queries directly."
+
+
+# Import code_agent to register its @register_tool handler
+import contextlib
+
+with contextlib.suppress(ImportError):
+    import code_agent  # noqa: F401
