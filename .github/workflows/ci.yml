@@ -66,7 +66,7 @@ jobs:
         run: docker build -t brain-orchestrator:test orchestrator/
 
   deploy:
-    name: Deploy to Jupiter
+    name: Deploy to Helios
     runs-on: ubuntu-latest
     needs: [lint-python, test-python, lint-frontend, docker-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -77,11 +77,11 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.JUPITER_TAILSCALE_IP }}
+          host: ${{ secrets.HELIOS_SSH_HOST }}
           username: labadmin
-          key: ${{ secrets.JUPITER_SSH_KEY }}
+          key: ${{ secrets.HELIOS_SSH_KEY }}
           script: |
-            cd /opt/jupiter/gateway_mvp
+            cd /opt/helios/gateway_mvp
             git pull --ff-only
 
             CHANGED=$(git diff --name-only HEAD~1 HEAD)

@@ -1,41 +1,37 @@
 export const ORCHESTRATOR_URL =
   process.env.ORCHESTRATOR_URL || 'http://localhost:8888';
 
-export const PUBLIC_ORCHESTRATOR_URL =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || 'http://localhost:8888';
-
 export const CLUSTER_NODES = [
   {
-    id: 'jupiter',
-    name: 'Jupiter',
-    ip: '10.0.0.248',
-    gpu: null,
-    role: 'Gateway & Docker host',
-    services: ['Orchestrator', 'Open WebUI', 'Pi-hole', 'SearXNG', 'Frontend'],
+    id: 'helios',
+    name: 'Helios',
+    ip: '10.0.0.195',
+    gpu: 'RTX 5090 + RTX PRO 5000',
+    role: 'Gateway + Primary LLM + TTS/STT',
+    services: [
+      'Orchestrator',
+      'Open WebUI',
+      'Qwen3-VL-30B-A3B',
+      'Qwen3-TTS',
+      'Whisper STT',
+      'Frontend',
+    ],
   },
   {
     id: 'saturn',
     name: 'Saturn',
     ip: '10.0.0.58',
-    gpu: 'RTX 3090',
-    role: 'Qwen3.5-9B (fallback)',
-    services: ['llama.cpp', 'Pi-hole secondary'],
+    gpu: 'RTX 3080 + RTX 3090',
+    role: 'Vision model',
+    services: ['Qwen2.5-VL-7B', 'Pi-hole secondary'],
   },
   {
     id: 'uranus',
     name: 'Uranus',
     ip: '10.0.0.173',
     gpu: '2x RTX 5080',
-    role: 'TTS & STT',
-    services: ['Qwen3-TTS (Jessica)', 'Whisper STT'],
-  },
-  {
-    id: 'helios',
-    name: 'Helios',
-    ip: '10.0.0.195',
-    gpu: 'RTX 5090',
-    role: 'Qwen3.5-27B (brain)',
-    services: ['llama.cpp'],
+    role: 'ComfyUI / Conjure',
+    services: ['ComfyUI'],
   },
   {
     id: 'ha',

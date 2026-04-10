@@ -1,5 +1,8 @@
+# NOTE: This Caddyfile is NOT currently wired into docker-compose.yml.
+# It's a reference config. Update hostnames + add a caddy service to activate.
+
 # Main brain interface
-http://jupiter:3000 {
+http://helios:3000 {
     reverse_proxy open-webui:8080
 }
 

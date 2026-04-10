@@ -239,7 +239,7 @@ The sentence pause injection (`/home/labadmin/server.py` on Uranus) inserts `...
 ## HTTPS (Tailscale Serve)
 
 ```
-Phone/Browser → https://jupiter-amds.tail74fc4a.ts.net (port 443)
+Phone/Browser → https://helios.tail74fc4a.ts.net (port 443)
                     │
               Tailscale Serve (TLS termination, auto-cert)
                     │

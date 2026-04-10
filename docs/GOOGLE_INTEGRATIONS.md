@@ -18,10 +18,10 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
      --credentials credentials/google_credentials.json \
      --token-output credentials/google_token.json
    ```
-5. Copy credentials to Jupiter:
+5. Copy credentials to Helios:
    ```bash
-   scp credentials/google_credentials.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
-   scp credentials/google_token.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
+   scp credentials/google_credentials.json labadmin@10.0.0.195:/opt/helios/gateway_mvp/credentials/
+   scp credentials/google_token.json labadmin@10.0.0.195:/opt/helios/gateway_mvp/credentials/
    ```
 6. Restart orchestrator: `docker compose restart orchestrator`
 

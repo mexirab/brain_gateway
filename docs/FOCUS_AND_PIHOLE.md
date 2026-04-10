@@ -33,12 +33,12 @@ ADHD-friendly focus timer with ambient audio and site blocking:
 
 ## Pi-hole DNS (whole-house)
 
-Redundant Pi-hole v6 pair synced via Nebula Sync. Jupiter is primary, Saturn is secondary.
+Redundant Pi-hole v6 pair synced via Nebula Sync. Helios is primary, Saturn is secondary.
 
-| Item | Jupiter (primary) | Saturn (secondary) |
+| Item | Helios (primary) | Saturn (secondary) |
 |------|-------------------|-------------------|
-| Admin UI | http://10.0.0.248:8053/admin | http://10.0.0.58:8053/admin |
-| DNS | 10.0.0.248:53 | 10.0.0.58:53 |
+| Admin UI | http://10.0.0.195:8053/admin | http://10.0.0.58:8053/admin |
+| DNS | 10.0.0.195:53 | 10.0.0.58:53 |
 | Upstream | 8.8.8.8, 8.8.4.4 | 8.8.8.8, 8.8.4.4 |
 | Docker project | `gateway_mvp` | `pihole` |
 | Compose file | `docker-compose.yml` | `saturn/docker-compose.pihole.yml` |

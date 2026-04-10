@@ -10,7 +10,7 @@ cp .env.example .env
 vim .env  # Set HA_TOKEN, LITELLM_MASTER_KEY
 
 # Start services
-cd /opt/jupiter/gateway_mvp
+cd /opt/helios/gateway_mvp
 docker compose up -d
 
 # Check health
@@ -23,28 +23,26 @@ open http://localhost
 ## Architecture
 
 ```
-┌─ ALWAYS-ON ──────────────────────────────────────────────┐
-│  Jupiter → Orchestrator → Nemotron-8B (Saturn)           │
-│                │                                          │
-│                ├─► ChromaDB (RAG)                        │
-│                ├─► Home Assistant                         │
-│                └─► TTS/STT (Uranus)                       │
-└──────────────────────────────────────────────────────────┘
-┌─ ON-DEMAND (saves ~150W) ────────────────────────────────┐
-│  Helios (Qwen3-32B) ◄── Auto-starts when needed            │
+┌─ HELIOS (always-on) ─────────────────────────────────────┐
+│  Orchestrator → Qwen3-VL-30B-A3B (unified loop)           │
+│        │                                                  │
+│        ├─► ChromaDB (RAG)                                 │
+│        ├─► Home Assistant                                 │
+│        ├─► TTS (Qwen3-TTS) / STT (Whisper)                │
+│        └─► Vision model (Saturn, Qwen2.5-VL-7B)           │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Hybrid Flow (v6):** Helios handles conversation naturally. For actions, delegates to Nemotron via `ask_orchestrator` tool.
+**v7 Unified Flow:** Single primary model (Qwen3-VL-30B-A3B on Helios) handles conversation and tool execution in one agentic loop. See `ARCHITECTURE.md`.
 
 ## Cluster
 
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
-| Jupiter | 10.0.0.248 | - | Gateway, Docker |
-| Saturn | 10.0.0.58 | RTX 3090 | Nemotron-8B brain |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | TTS + STT |
-| Helios | 10.0.0.195 | RTX 5090 | Qwen3-32B expert |
+| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Gateway, Docker host, Primary LLM (Qwen3-VL-30B-A3B), TTS + STT |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (Qwen2.5-VL-7B), Pi-hole secondary |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | ComfyUI / Conjure |
+| HA | 10.0.0.106 | - | Home Assistant |
 
 ## Features
 

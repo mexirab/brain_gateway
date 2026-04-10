@@ -6,29 +6,29 @@ Personal AI assistant for ADHD support. Primary model (Qwen3-VL-30B-A3B ablitera
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
-| Jupiter | 10.0.0.248 | 100.102.29.14 | - | Gateway, Docker host |
+| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Gateway + Docker host**, Primary LLM: Qwen3-VL-30B-A3B abliterated (PRO 5000, port 8081), TTS + STT (5090), always-on |
 | Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | ComfyUI/Conjure (GPU1) |
-| Helios | 10.0.0.195 | - | RTX 5090 + RTX PRO 5000 | Primary LLM: Qwen3-VL-30B-A3B abliterated (PRO 5000, port 8081), TTS + STT (5090), always-on |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
+| ~~Jupiter~~ | ~~10.0.0.248~~ | - | - | Retired — all services migrated to Helios |
 
 ## Services
 
 | Service | Port | URL |
 |---------|------|-----|
-| Open WebUI (HTTPS) | 443 | https://jupiter-amds.tail74fc4a.ts.net (Tailscale) |
-| Open WebUI (HTTP) | 80 | http://localhost |
-| Orchestrator | 8888 | http://localhost:8888 |
+| Open WebUI (HTTPS) | 443 | https://helios.tail74fc4a.ts.net (Tailscale, tailnet-only) |
+| Open WebUI (HTTP) | 80 | http://10.0.0.195 |
+| Orchestrator | 8888 | http://10.0.0.195:8888 |
 | Helios primary (Qwen3-VL-30B-A3B abliterated) | 8081 | http://10.0.0.195:8081/v1 |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
 | STT (Whisper) | 8003 | http://10.0.0.195:8003 |
-| Pi-hole (Jupiter) | 53/8053 | http://10.0.0.248:8053/admin |
+| Pi-hole (Helios) | 53/8053 | http://10.0.0.195:8053/admin |
 | Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
-| Wyoming Whisper (STT) | 10300 | tcp://10.0.0.248:10300 |
-| Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.248:10301 |
+| Wyoming Whisper (STT) | 10300 | tcp://10.0.0.195:10300 |
+| Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.195:10301 |
 | Vision Model (Qwen2.5-VL-7B) | 8010 | http://10.0.0.58:8010 |
-| Frontend (dashboard) | 3001 | http://10.0.0.248:3001 (future: convivialprophet.com) |
+| Frontend (dashboard) | 3001 | http://helios.tail74fc4a.ts.net:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://localhost:8090 |
 | Grafana | 3000 | http://localhost:3000/d/brain-gateway-overview (admin/braingw) |
 
@@ -147,12 +147,12 @@ All tools are called directly by the single model in one agentic loop.
 ## Key Paths
 
 ```
-/opt/jupiter/gateway_mvp/           # Project root on Jupiter
+/opt/helios/gateway_mvp/            # Project root on Helios
 ~/.env                              # Secrets (HA_TOKEN, LITELLM_KEY)
 ~/rag/nadim_rag/                    # RAG source documents (154 docs indexed)
 ~/.local/share/chroma/personal_rag/ # ChromaDB persistence
-/opt/jupiter/gateway_mvp/credentials/  # Google OAuth2 creds (gitignored)
-/opt/jupiter/gateway_mvp/certs/     # Tailscale TLS certs (gitignored)
+/opt/helios/gateway_mvp/credentials/   # Google OAuth2 creds (gitignored)
+/opt/helios/gateway_mvp/certs/         # Tailscale TLS certs (gitignored)
 ```
 
 ## Common Commands
@@ -171,8 +171,8 @@ docker logs brain-orchestrator --tail 50 -f
 # Health
 curl http://localhost:8888/health
 
-# Remote deploy from Mac (via Tailscale)
-ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && git pull && docker compose up -d --build orchestrator"
+# Remote deploy from Mac (via Tailscale or LAN)
+ssh labadmin@10.0.0.195 "cd /opt/helios/gateway_mvp && git pull && docker compose up -d --build orchestrator"
 
 # Frontend rebuild
 docker compose up -d --build --force-recreate frontend
@@ -231,8 +231,8 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - Docker project: `gateway_mvp` (default from directory name)
 - Helios is always-on (no auto-shutdown); can be manually started/stopped via SSH
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
-- Jupiter SSH: `labadmin@100.102.29.14` (Tailscale) or `labadmin@10.0.0.248` (LAN)
-- Uranus SSH (from Jupiter): `ssh labadmin@10.0.0.173`
+- Helios SSH: `labadmin@10.0.0.195` (LAN) or `labadmin@helios.tail74fc4a.ts.net` (Tailscale)
+- Uranus SSH (from Helios): `ssh labadmin@10.0.0.173`
 
 ## Model Environment Variables
 

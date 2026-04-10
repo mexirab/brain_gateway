@@ -12,11 +12,11 @@ sudo tailscale serve --bg http://localhost:80
 sudo tailscale serve --https=443 off
 
 # Cert renewal (auto-managed, but manual if needed)
-sudo tailscale cert --cert-file /opt/jupiter/gateway_mvp/certs/jupiter.crt \
-  --key-file /opt/jupiter/gateway_mvp/certs/jupiter.key jupiter-amds.tail74fc4a.ts.net
+sudo tailscale cert --cert-file /opt/helios/gateway_mvp/certs/helios.crt \
+  --key-file /opt/helios/gateway_mvp/certs/helios.key helios.tail74fc4a.ts.net
 ```
 
-**URL:** `https://jupiter-amds.tail74fc4a.ts.net/` (must use domain, not IP, for valid cert)
+**URL:** `https://helios.tail74fc4a.ts.net/` (must use domain, not IP, for valid cert)
 
 ## RAG Personal Knowledge
 
@@ -31,7 +31,7 @@ sudo tailscale cert --cert-file /opt/jupiter/gateway_mvp/certs/jupiter.crt \
 
 ```bash
 # RAG reindex
-cd /opt/jupiter/gateway_mvp/rag && python ingest_rag.py \
+cd /opt/helios/gateway_mvp/rag && python ingest_rag.py \
   --source ~/rag/nadim_rag \
   --persist ~/.local/share/chroma/personal_rag \
   --collection nadim_rag

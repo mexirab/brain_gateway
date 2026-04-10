@@ -22,9 +22,9 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
 
 **Key components:**
 - **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
-- **Wake word manifest:** `hey_jess.json` served via nginx model-server at http://10.0.0.248:8080/hey_jess.json
-- **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Jupiter)
-- **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol -> HTTP Jessica TTS on Uranus
+- **Wake word manifest:** `hey_jess.json` served via nginx model-server at http://10.0.0.195:8080/hey_jess.json
+- **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Helios)
+- **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol -> HTTP Jessica TTS on Helios
 - **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions
 
 **Multi-room deployment:**

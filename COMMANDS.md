@@ -8,7 +8,7 @@ Quick reference for common operations. See `CLAUDE.md` for architecture overview
 
 ### Rebuild orchestrator after code changes
 ```bash
-cd /opt/jupiter/gateway_mvp
+cd /opt/helios/gateway_mvp
 docker compose down
 docker compose build --no-cache orchestrator
 docker compose up -d
@@ -47,7 +47,7 @@ curl -s http://localhost:8888/v1/chat/completions \
   -d '{"model": "brain", "messages": [{"role": "user", "content": "Turn on bedroom lights and set to blue at 50%"}]}' | jq .
 ```
 
-### List HA entities available to Nemotron
+### List HA entities available to the primary model
 ```bash
 curl http://localhost:8888/api/ha/entities | jq .
 ```
@@ -58,7 +58,7 @@ curl http://localhost:8888/api/ha/entities | jq .
 
 ### Start/stop monitoring stack
 ```bash
-cd /opt/jupiter/gateway_mvp/monitoring
+cd /opt/helios/gateway_mvp/monitoring
 docker compose -p monitoring up -d    # Start
 docker compose -p monitoring down     # Stop
 ```
@@ -82,7 +82,7 @@ docker compose -p monitoring down     # Stop
 
 ### Hardware audit across cluster
 ```bash
-/opt/jupiter/gateway_mvp/monitoring/lab_hw_audit.sh
+/opt/helios/gateway_mvp/monitoring/lab_hw_audit.sh
 ```
 
 ---
@@ -98,11 +98,11 @@ python3 -m venv /tmp/google-auth-venv
   --token-output credentials/google_token.json
 ```
 
-### Copy credentials to Jupiter
+### Copy credentials to Helios
 ```bash
-scp credentials/google_credentials.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
-scp credentials/google_token.json labadmin@100.102.29.14:/opt/jupiter/gateway_mvp/credentials/
-ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && docker compose restart orchestrator"
+scp credentials/google_credentials.json labadmin@10.0.0.195:/opt/helios/gateway_mvp/credentials/
+scp credentials/google_token.json labadmin@10.0.0.195:/opt/helios/gateway_mvp/credentials/
+ssh labadmin@10.0.0.195 "cd /opt/helios/gateway_mvp && docker compose restart orchestrator"
 ```
 
 ### Check calendar status
@@ -120,29 +120,20 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
-## Helios (Qwen3-32B Expert Model)
+## Helios Primary Model (Qwen3-VL-30B-A3B abliterated)
 
-Helios auto-starts on demand and stops after 30 min idle to save ~150W.
-
-### Check status
-```bash
-./scripts/helios-status.sh
-```
-
-### Manual start (for deep conversations)
-```bash
-./scripts/start-helios.sh
-```
-
-### Manual stop (save power)
-```bash
-./scripts/stop-helios.sh
-```
+Helios is always-on in v7. The primary model serves on port 8081 (llama-server on RTX PRO 5000).
 
 ### Check via API
 ```bash
 curl -s http://localhost:8888/health | jq .primary_status
-# "online" or "offline (auto-starts on demand)"
+curl -s http://10.0.0.195:8081/v1/models
+```
+
+### Manual start/stop (systemd on Helios, if needed)
+```bash
+ssh labadmin@10.0.0.195 "sudo systemctl status llama-server"
+ssh labadmin@10.0.0.195 "sudo systemctl restart llama-server"
 ```
 
 ---
@@ -157,19 +148,12 @@ curl -X POST http://10.0.0.173:8002/tts \
   --output test.wav
 ```
 
-### Manage TTS/STT services on Uranus
+### Manage TTS/STT services on Helios
 ```bash
-# SSH to Uranus (from Jupiter, not direct)
-ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 '<command>'"
-
-# Check status
-ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl status qwen-tts'"
-
-# Restart TTS (e.g., after pacing changes)
-ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'sudo systemctl restart qwen-tts'"
-
-# View logs
-ssh labadmin@100.102.29.14 "ssh labadmin@10.0.0.173 'journalctl -u qwen-tts --no-pager -n 50'"
+# TTS and STT now run on Helios (RTX 5090), not Uranus.
+ssh labadmin@10.0.0.195 "sudo systemctl status qwen-tts"
+ssh labadmin@10.0.0.195 "sudo systemctl restart qwen-tts"
+ssh labadmin@10.0.0.195 "journalctl -u qwen-tts --no-pager -n 50"
 ```
 
 ### Load a new voice clone
@@ -190,22 +174,22 @@ curl -X POST http://10.0.0.173:8002/voices/load \
 
 ### Check status
 ```bash
-ssh labadmin@100.102.29.14 "tailscale serve status"
+ssh labadmin@10.0.0.195 "tailscale serve status"
 ```
 
 ### Enable HTTPS (already running, persists across reboots)
 ```bash
-ssh labadmin@100.102.29.14 "sudo tailscale serve --bg http://localhost:80"
+ssh labadmin@10.0.0.195 "sudo tailscale serve --bg http://localhost:80"
 ```
 
 ### Disable HTTPS
 ```bash
-ssh labadmin@100.102.29.14 "sudo tailscale serve --https=443 off"
+ssh labadmin@10.0.0.195 "sudo tailscale serve --https=443 off"
 ```
 
 ### Access URL
 ```
-https://jupiter-amds.tail74fc4a.ts.net/
+https://helios.tail74fc4a.ts.net/
 ```
 
 ---
@@ -214,14 +198,14 @@ https://jupiter-amds.tail74fc4a.ts.net/
 
 ### Re-index RAG after adding documents
 ```bash
-# Copy new docs to Jupiter first, then run inside the orchestrator container:
-ssh labadmin@100.102.29.14 "docker exec brain-orchestrator python /app/ingest_rag.py \
+# Copy new docs to Helios first, then run inside the orchestrator container:
+ssh labadmin@10.0.0.195 "docker exec brain-orchestrator python /app/ingest_rag.py \
   --source /rag \
   --persist /chroma/personal_rag \
   --collection nadim_rag"
 
 # Restart orchestrator to pick up changes
-ssh labadmin@100.102.29.14 "cd /opt/jupiter/gateway_mvp && docker compose restart orchestrator"
+ssh labadmin@10.0.0.195 "cd /opt/helios/gateway_mvp && docker compose restart orchestrator"
 ```
 
 ### Check RAG doc count
