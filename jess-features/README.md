@@ -2,8 +2,8 @@
 
 Implementation specs for Claude Code. One file per feature.
 
-**Codebase:** Brain Gateway (`/opt/jupiter/gateway_mvp/`)
-**Architecture:** v7 unified mode — single model (Qwen3.5-27B on Helios) handles conversation + tools in one agentic loop via `unified_loop.py`. Falls back to Saturn (Nemotron-8B) if Helios unavailable.
+**Codebase:** Brain Gateway (`/opt/helios/gateway_mvp/`)
+**Architecture:** v7 unified mode — single model (Qwen3.5-27B on Helios GPU1 RTX PRO 5000) handles conversation + tools in one agentic loop via `unified_loop.py`.
 **Core principle:** *If I have to open an app, I'll never go back to check it.*
 
 ## Features

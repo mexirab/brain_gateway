@@ -51,7 +51,7 @@ User Request → Orchestrator
 |---------|--------|
 | `tool_home_assistant()` | → `ha_client.call_service()` |
 | `tool_search_memory()` | → `rag_context()` |
-| `tool_ask_expert()` | → Helios Qwen3-32B (auto-starts if needed) |
+| `tool_ask_expert()` | → stub, returns "not available" (v7 unified loop handles all queries on the primary model) |
 | `tool_update_data()` | → `data_manager.handle_update_data()` |
 | `tool_set_reminder()` | → APScheduler + TTS + HA notification |
 | `tool_cancel_reminder()` | → Remove pending reminder by ID |
@@ -215,13 +215,13 @@ _announce_voice(text, speaker=None)
     → Speaker output
 ```
 
-**Current limitation:** Voice pipeline routes to Nemotron directly. Should route through orchestrator for hybrid Helios+Nemotron quality. Requires HA UI change.
+## TTS / STT (Helios, GPU1 RTX PRO 5000 Blackwell)
 
-## TTS / STT (Uranus)
+Both TTS and STT run on Helios as systemd services, pinned to GPU1 alongside the primary LLM (Qwen3.5-27B). They share GPU1 via their respective env vars (`QWEN_TTS_DEVICE=cuda:1`, `WHISPER_DEVICE=cuda:1`).
 
 ```
-GPU 0: Qwen3-TTS (port 8002) - Jessica voice clone
-GPU 1: Whisper STT (port 8003) - OpenAI-compatible
+qwen-tts    (port 8002) - Jessica voice clone (Qwen3-TTS-1.7B-Base)
+whisper-stt (port 8003) - OpenAI-compatible (Whisper medium)
 ```
 
 **TTS pacing pipeline:**
@@ -234,7 +234,7 @@ Open WebUI → split on paragraph (\n\n) → TTS server
                                     Qwen3-TTS → audio
 ```
 
-The sentence pause injection (`/home/labadmin/server.py` on Uranus) inserts `...` between sentences before Qwen3-TTS processes the text. This produces calmer, more natural speech. Service: `qwen-tts` (systemd).
+The sentence pause injection (`/home/labadmin/server.py` on Helios) inserts `...` between sentences before Qwen3-TTS processes the text. This produces calmer, more natural speech. Service: `qwen-tts` (systemd).
 
 ## HTTPS (Tailscale Serve)
 

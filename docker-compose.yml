@@ -82,8 +82,9 @@ services:
       - ${DOCUMENTS_PATH:-./data/documents}:/mnt/documents:rw
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-.}/user_profile.yaml:/app/user_profile.yaml:ro
-      # Routine definitions (F-006)
-      - ${GATEWAY_ROOT_PATH:-.}/data/routines.yaml:/app/data/routines.yaml:ro
+      # Routine definitions (F-006) — mounted outside /app/data to avoid
+      # colliding with the finance-data named volume on line 80.
+      - ${GATEWAY_ROOT_PATH:-.}/data/routines.yaml:/app/config/routines.yaml:ro
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/helios/gateway_mvp:ro
     environment:

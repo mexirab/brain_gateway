@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# One-time setup for Claude Code dev environment on Jupiter.
+# One-time setup for Claude Code dev environment on Helios.
 # Run after cloning or when settings need to be refreshed.
 #
-# Usage: bash scripts/setup-jupiter-claude.sh
+# Usage: bash scripts/setup-helios-claude.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "=== Jupiter Claude Code Setup ==="
+echo "=== Helios Claude Code Setup ==="
 
 # Step 1: Install git hooks
 echo "[1/3] Installing git hooks..."

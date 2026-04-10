@@ -120,14 +120,14 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
-## Helios Primary Model (Qwen3-VL-30B-A3B abliterated)
+## Helios Primary Model (Qwen3.5-27B)
 
-Helios is always-on in v7. The primary model serves on port 8081 (llama-server on RTX PRO 5000).
+Helios is always-on in v7. The primary model serves on port 8080 (llama-server on GPU1 RTX PRO 5000 Blackwell).
 
 ### Check via API
 ```bash
 curl -s http://localhost:8888/health | jq .primary_status
-curl -s http://10.0.0.195:8081/v1/models
+curl -s http://10.0.0.195:8080/v1/models
 ```
 
 ### Manual start/stop (systemd on Helios, if needed)

@@ -47,6 +47,8 @@ else
 fi
 
 # Set defaults for any unset variables
+# NODE_JUPITER_IP is retained for backward compatibility with any legacy scripts
+# that still reference it, but is not used by current templates.
 export NODE_JUPITER_IP="${NODE_JUPITER_IP:-10.0.0.248}"
 export NODE_SATURN_IP="${NODE_SATURN_IP:-10.0.0.58}"
 export NODE_URANUS_IP="${NODE_URANUS_IP:-10.0.0.173}"
@@ -55,16 +57,13 @@ export NODE_HA_IP="${NODE_HA_IP:-10.0.0.106}"
 export SERVICE_ORCHESTRATOR_PORT="${SERVICE_ORCHESTRATOR_PORT:-8888}"
 export SERVICE_TTS_PORT="${SERVICE_TTS_PORT:-8002}"
 export SERVICE_STT_PORT="${SERVICE_STT_PORT:-8003}"
-export SERVICE_NEMOTRON_PORT="${SERVICE_NEMOTRON_PORT:-8001}"
-export SERVICE_HELIOS_PORT="${SERVICE_HELIOS_PORT:-8080}"
 export MONITORING_GPU_EXPORTER_PORT="${MONITORING_GPU_EXPORTER_PORT:-9400}"
 
 echo ""
 echo "Using configuration:"
-echo "  NODE_JUPITER_IP: ${NODE_JUPITER_IP}"
-echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}"
-echo "  NODE_URANUS_IP:  ${NODE_URANUS_IP}"
-echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}"
+echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}  (gateway, primary LLM, TTS/STT, coder)"
+echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}  (vision)"
+echo "  NODE_URANUS_IP:  ${NODE_URANUS_IP}  (ComfyUI)"
 echo ""
 
 # Define template -> output mappings
@@ -88,7 +87,7 @@ for template in "${!TEMPLATES[@]}"; do
 
     # Generate config using envsubst
     # Only substitute defined variables, not shell variables like $2
-    envsubst '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${SERVICE_NEMOTRON_PORT} ${SERVICE_HELIOS_PORT} ${MONITORING_GPU_EXPORTER_PORT}' \
+    envsubst '${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT}' \
         < "$template" > "$output"
 
     echo -e "  ${GREEN}OK${NC}: $(basename "$template") -> $(basename "$output")"

@@ -64,13 +64,13 @@ wyoming:
 # REST Commands for Brain Gateway
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.248:8888/v1/chat/completions"
+    url: "http://10.0.0.195:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
     payload: >
       {
-        "model": "nemotron",
+        "model": "brain",
         "messages": [
           {
             "role": "system",
@@ -87,17 +87,17 @@ rest_command:
     timeout: 30
 
   brain_gateway_expert:
-    url: "http://10.0.0.248:8888/v1/chat/completions"
+    url: "http://10.0.0.195:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
     payload: >
       {
-        "model": "nemotron",
+        "model": "brain",
         "messages": [
           {
             "role": "system",
-            "content": "You are Jess with access to the Helios expert (Qwen3-32B model). For this complex question, take your time and provide a thorough, thoughtful response. Use the ask_expert tool if needed."
+            "content": "You are Jess. For this complex question, take your time and provide a thorough, thoughtful response."
           },
           {
             "role": "user",
@@ -110,18 +110,15 @@ rest_command:
     timeout: 120
 
   generate_morning_briefing:
-    url: "http://10.0.0.248:8888/api/briefing/morning"
+    url: "http://10.0.0.195:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"
     payload: '{"generate_tts": false}'
     content_type: "application/json"
 
-# Shell Commands for Helios Control
-shell_command:
-  start_helios: "/opt/jupiter/gateway_mvp/scripts/start-helios.sh"
-  stop_helios: "/opt/jupiter/gateway_mvp/scripts/stop-helios.sh"
-  helios_status: "/opt/jupiter/gateway_mvp/scripts/helios-status.sh"
+# Helios is always-on in v7 — no start/stop/status shell commands needed.
+# (v6 used Helios as an on-demand "expert" model that auto-started; that flow is retired.)
 
 # Input Helpers
 input_boolean:

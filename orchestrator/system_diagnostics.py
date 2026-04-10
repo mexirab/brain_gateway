@@ -21,7 +21,7 @@ async def check_system(query: str) -> str:
     """
     Main dispatcher for system self-diagnosis queries.
 
-    Called by Nemotron tool loop when user asks about system behavior.
+    Called by the primary model tool loop when user asks about system behavior.
     """
     handlers = {
         "morning_briefing": _check_morning_briefing,

@@ -2,24 +2,24 @@
 # ==================================================
 # Add these sections to your configuration.yaml
 #
-# Voice Pipeline: Voice PE -> STT (Uranus) -> Brain Gateway -> TTS (Uranus) -> Voice PE
+# Voice Pipeline: Voice PE -> STT (Helios) -> Brain Gateway -> TTS (Helios) -> Voice PE
 
 # -----------------------------------------------------------------------------
 # REST Commands - Brain Gateway Integration
 # -----------------------------------------------------------------------------
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.248:8888/v1/chat/completions"
+    url: "http://10.0.0.195:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
     payload: >
       {
-        "model": "nemotron",
+        "model": "brain",
         "messages": [
           {
             "role": "system",
-            "content": "You are a supportive ADHD assistant named Brain. Be warm, encouraging, and concise. Help with medication reminders, motivation, and getting out of spirals. Keep responses brief and conversational for voice interaction. Speak naturally like a supportive friend."
+            "content": "You are a supportive ADHD assistant named Jess. Be warm, encouraging, and concise. Help with medication reminders, motivation, and getting out of spirals. Keep responses brief and conversational for voice interaction. Speak naturally like a supportive friend."
           },
           {
             "role": "user",
@@ -32,7 +32,7 @@ rest_command:
     timeout: 30
 
   generate_morning_briefing:
-    url: "http://10.0.0.248:8888/api/briefing/morning"
+    url: "http://10.0.0.195:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -40,19 +40,9 @@ rest_command:
     content_type: "application/json"
 
 # -----------------------------------------------------------------------------
-# Shell Commands - For Helios Control via Voice
+# Helios is always-on in v7 — no shell commands for start/stop/status needed.
+# (v6 used Helios as an on-demand "expert" model that auto-started; that flow is retired.)
 # -----------------------------------------------------------------------------
-shell_command:
-  start_helios: "ssh nadim@10.0.0.248 '/opt/jupiter/gateway_mvp/scripts/start-helios.sh'"
-  stop_helios: "ssh nadim@10.0.0.248 '/opt/jupiter/gateway_mvp/scripts/stop-helios.sh'"
-
-# -----------------------------------------------------------------------------
-# Input Helpers - For Voice Assistant State
-# -----------------------------------------------------------------------------
-input_boolean:
-  helios_expert_mode:
-    name: Helios Expert Mode
-    icon: mdi:brain
 
 # -----------------------------------------------------------------------------
 # Template Sensors - Brain Gateway Status
@@ -69,29 +59,13 @@ template:
           {% endif %}
         icon: mdi:brain
 
-      - name: "Helios Expert Status"
-        unique_id: helios_expert_status
-        state: >
-          {% if is_state('binary_sensor.helios_health', 'on') %}
-            Running
-          {% else %}
-            Stopped (saves 150W)
-          {% endif %}
-        icon: mdi:chip
-
 # -----------------------------------------------------------------------------
 # Binary Sensors - Health Monitoring
 # -----------------------------------------------------------------------------
 binary_sensor:
   - platform: ping
-    host: 10.0.0.248
-    name: Brain Gateway Health
-    count: 2
-    scan_interval: 60
-
-  - platform: ping
     host: 10.0.0.195
-    name: Helios Health
+    name: Brain Gateway Health
     count: 2
     scan_interval: 60
 
@@ -101,11 +75,10 @@ binary_sensor:
 sensor:
   - platform: rest
     name: Brain Gateway Details
-    resource: http://10.0.0.248:8888/health
+    resource: http://10.0.0.195:8888/health
     json_attributes:
       - status
-      - nemotron
       - chromadb
       - home_assistant
-    value_template: "{{ value_json.status }}"
+    value_template: "{{ value_json.ok }}"
     scan_interval: 300

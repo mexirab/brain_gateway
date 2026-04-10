@@ -1,5 +1,7 @@
 # v7 Unified Architecture Deployment Runbook
 
+> **⚠️ HISTORICAL DOC.** This was the one-time runbook for migrating from v6 hybrid to v7 unified back when the stack lived on Jupiter. The stack has since been migrated to Helios (`/opt/helios/gateway_mvp/`) and the primary model is running as Qwen3.5-27B on GPU1 (RTX PRO 5000). Keep as reference only; do not execute.
+
 Migrates Brain Gateway from v6 hybrid (Helios Qwen3-32B + Nemotron-8B) to v7 unified (Qwen3.5-27B primary + Qwen3.5-9B fallback).
 
 **Prerequisites:** PR #12 merged to `main` on Jupiter.

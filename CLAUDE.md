@@ -1,12 +1,12 @@
 # Brain Gateway
 
-Personal AI assistant for ADHD support. Primary model (Qwen3-VL-30B-A3B abliterated on Helios RTX PRO 5000) handles conversation, tools, and vision in one unified agentic loop. v6 hybrid mode has been removed.
+Personal AI assistant for ADHD support. Primary model (Qwen3.5-27B on Helios RTX PRO 5000) handles conversation and tools in one unified agentic loop. v6 hybrid mode has been removed.
 
 ## Cluster
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
-| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Gateway + Docker host**, Primary LLM: Qwen3-VL-30B-A3B abliterated (PRO 5000, port 8081), TTS + STT (5090), always-on |
+| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Gateway + Docker host**, Primary LLM: Qwen3.5-27B (GPU1 RTX PRO 5000, port 8080), TTS + STT (GPU1), Code agent: Qwen2.5-Coder-32B (GPU0 RTX 5090, port 8082), always-on |
 | Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | ComfyUI/Conjure (GPU1) |
 | HA | 10.0.0.106 | - | - | Home Assistant |
@@ -20,7 +20,8 @@ Personal AI assistant for ADHD support. Primary model (Qwen3-VL-30B-A3B ablitera
 | Open WebUI (HTTPS) | 443 | https://helios.tail74fc4a.ts.net (Tailscale, tailnet-only) |
 | Open WebUI (HTTP) | 80 | http://10.0.0.195 |
 | Orchestrator | 8888 | http://10.0.0.195:8888 |
-| Helios primary (Qwen3-VL-30B-A3B abliterated) | 8081 | http://10.0.0.195:8081/v1 |
+| Primary LLM (Qwen3.5-27B) | 8080 | http://10.0.0.195:8080/v1 |
+| Code agent (Qwen2.5-Coder-32B) | 8082 | http://10.0.0.195:8082/v1 |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
 | STT (Whisper) | 8003 | http://10.0.0.195:8003 |
 | Pi-hole (Helios) | 53/8053 | http://10.0.0.195:8053/admin |
@@ -35,7 +36,7 @@ Personal AI assistant for ADHD support. Primary model (Qwen3-VL-30B-A3B ablitera
 ## Architecture (v7 Unified)
 
 ```
-User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3-VL-30B-A3B abliterated)
+User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
                                                          |
                                           conversation + tool calls in one loop
                                                          |
@@ -140,7 +141,7 @@ All tools are called directly by the single model in one agentic loop.
 | orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
 | scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
 | scripts/setup.sh | Interactive setup wizard: generates .env + user_profile.yaml |
-| scripts/setup-jupiter-claude.sh | One-time Jupiter Claude Code setup (hooks, ruff, permissions) |
+| scripts/setup-helios-claude.sh | One-time Helios Claude Code setup (hooks, ruff, permissions) |
 | docker-compose.yml | Service stack (env-var driven, no hardcoded IPs) |
 | .env | Environment config (from .env.example) |
 
@@ -233,6 +234,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Helios SSH: `labadmin@10.0.0.195` (LAN) or `labadmin@helios.tail74fc4a.ts.net` (Tailscale)
 - Uranus SSH (from Helios): `ssh labadmin@10.0.0.173`
+- **Model history:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. `llama-server-moe.service` is disabled but the unit file remains on disk as historical reference.
 
 ## Model Environment Variables
 
@@ -310,7 +312,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| ROUTINES_YAML_PATH | /app/data/routines.yaml | Routine definitions file |
+| ROUTINES_YAML_PATH | /app/config/routines.yaml | Routine definitions file |
 | ROUTINE_ENABLED | true | Enable scheduled routine triggers |
 | ROUTINE_NUDGE_MAX | 3 | Max nudges per step before auto-skip option |
 | ROUTINE_AUTO_SKIP | false | Auto-skip after max nudges (default: wait for user) |

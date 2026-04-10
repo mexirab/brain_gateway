@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-GRAFANA_HOST="${GRAFANA_HOST:-10.0.0.248:3000}"
+GRAFANA_HOST="${GRAFANA_HOST:-10.0.0.195:3000}"
 DASHBOARD_UID="${GRAFANA_DASHBOARD:-brain-gateway-overview}"
 GRAFANA_URL="http://${GRAFANA_HOST}/d/${DASHBOARD_UID}?orgId=1&kiosk&refresh=30s"
 

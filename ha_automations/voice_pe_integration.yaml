@@ -4,9 +4,9 @@
 # Voice Pipeline: Voice PE -> Wyoming STT -> Brain Gateway -> Wyoming TTS -> Voice PE
 #
 # Services:
-#   - STT (Whisper): Uranus 10.0.0.173:8003
-#   - TTS (Jessica/Qwen3): Uranus 10.0.0.173:8002
-#   - Brain Gateway: Jupiter 10.0.0.248:8888
+#   - STT (Whisper): Helios 10.0.0.195:8003
+#   - TTS (Jessica/Qwen3): Helios 10.0.0.195:8002
+#   - Brain Gateway: Helios 10.0.0.195:8888
 
 # =============================================================================
 # STEP 1: Add to configuration.yaml
@@ -22,13 +22,13 @@ wyoming:
 # --------------------------------
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.248:8888/v1/chat/completions"
+    url: "http://10.0.0.195:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
     payload: >
       {
-        "model": "nemotron",
+        "model": "brain",
         "messages": [
           {
             "role": "system",
@@ -44,7 +44,7 @@ rest_command:
     content_type: "application/json"
 
   generate_morning_briefing:
-    url: "http://10.0.0.248:8888/api/briefing/morning"
+    url: "http://10.0.0.195:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"

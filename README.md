@@ -24,22 +24,23 @@ open http://localhost
 
 ```
 ┌─ HELIOS (always-on) ─────────────────────────────────────┐
-│  Orchestrator → Qwen3-VL-30B-A3B (unified loop)           │
+│  Orchestrator → Qwen3.5-27B (unified loop)                │
 │        │                                                  │
 │        ├─► ChromaDB (RAG)                                 │
 │        ├─► Home Assistant                                 │
 │        ├─► TTS (Qwen3-TTS) / STT (Whisper)                │
+│        ├─► Code agent (Qwen2.5-Coder-32B on GPU0)         │
 │        └─► Vision model (Saturn, Qwen2.5-VL-7B)           │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**v7 Unified Flow:** Single primary model (Qwen3-VL-30B-A3B on Helios) handles conversation and tool execution in one agentic loop. See `ARCHITECTURE.md`.
+**v7 Unified Flow:** Single primary model (Qwen3.5-27B on Helios RTX PRO 5000) handles conversation and tool execution in one agentic loop. See `ARCHITECTURE.md`.
 
 ## Cluster
 
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
-| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Gateway, Docker host, Primary LLM (Qwen3-VL-30B-A3B), TTS + STT |
+| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Gateway, Docker host, Primary LLM (Qwen3.5-27B on PRO 5000), TTS + STT (PRO 5000), Code agent (Qwen2.5-Coder-32B on RTX 5090) |
 | Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (Qwen2.5-VL-7B), Pi-hole secondary |
 | Uranus | 10.0.0.173 | 2x RTX 5080 | ComfyUI / Conjure |
 | HA | 10.0.0.106 | - | Home Assistant |

@@ -214,7 +214,7 @@ A shell script (`scripts/morning_briefing.sh`) handles morning briefings:
 4. Plays on HA speaker via `media_player.play_media`
 
 ```bash
-/opt/jupiter/gateway_mvp/scripts/morning_briefing.sh
+/opt/helios/gateway_mvp/scripts/morning_briefing.sh
 ```
 
 ### Open WebUI Integration

@@ -1,4 +1,4 @@
-# /opt/jupiter/gateway_mvp/litellm-config.yaml
+# /opt/helios/gateway_mvp/litellm-config.yaml
 # LiteLLM proxy routes Open WebUI requests to the primary model (Helios)
 #
 # Environment variables are passed through from docker-compose.yml:

@@ -1,6 +1,6 @@
 # Hardware Optimization Deployment Checklist
 
-> **⚠️ STALE — v6 hybrid era doc.** References Nemotron-8B, `llama-server`, `start-helios.sh`, and Helios-off-by-default — all removed in v7. Use only as a historical reference. Current architecture: single unified model (Qwen3-VL-30B-A3B) on Helios, always-on, see `CLAUDE.md` and `ARCHITECTURE.md`.
+> **⚠️ STALE — v6 hybrid era doc.** References Nemotron-8B, `start-helios.sh`, and Helios-off-by-default — all removed in v7. Use only as a historical reference. Current architecture: single unified model (Qwen3.5-27B) on Helios, always-on, see `CLAUDE.md` and `ARCHITECTURE.md`.
 
 This checklist covers deploying the optimized architecture for voice-first ADHD support.
 

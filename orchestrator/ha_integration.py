@@ -634,7 +634,7 @@ class HomeAssistantClient:
         """
         Call a Home Assistant service directly (no NLP parsing).
 
-        This is the simplified interface for when Nemotron provides structured calls.
+        This is the simplified interface for when the primary model provides structured calls.
 
         Args:
             entity_id: e.g., "light.bedroom_fan_lights"

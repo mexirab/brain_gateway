@@ -138,7 +138,9 @@ class Settings(BaseSettings):
     auto_learn_encryption_key: str = ""
 
     # -- Routines (F-006) --------------------------------------------------------
-    routines_yaml_path: str = "/app/data/routines.yaml"
+    # NOTE: /app/data is a named Docker volume (finance-data); config files ship
+    # from the repo and get bind-mounted into /app/config/ instead.
+    routines_yaml_path: str = "/app/config/routines.yaml"
     routine_enabled: bool = True
     routine_nudge_max: int = 3
     routine_auto_skip: bool = False

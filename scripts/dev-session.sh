@@ -15,12 +15,12 @@ PROJECT="${1:-brain}"
 case "$PROJECT" in
     brain)
         SESSION="brain-dev"
-        DIR="/opt/jupiter/gateway_mvp"
+        DIR="/opt/helios/gateway_mvp"
         LOG_CONTAINER="brain-orchestrator"
         ;;
     conjure)
         SESSION="conjure-dev"
-        DIR="/opt/jupiter/conjure"
+        DIR="/opt/helios/conjure"
         LOG_CONTAINER=""
         ;;
     *)

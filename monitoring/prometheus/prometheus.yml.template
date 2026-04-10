@@ -8,15 +8,12 @@
 # After editing this template, run:
 #   ./scripts/generate-configs.sh
 #
-# Network Architecture (Voice-First ADHD Support):
+# Network Architecture (v7 unified):
 #
-# ALWAYS-ON:
-#   Jupiter:  ${NODE_JUPITER_IP} (Orchestrator, no GPU)
-#   Saturn:   ${NODE_SATURN_IP}  (Nemotron-8B brain on RTX 3090)
-#   Uranus:   ${NODE_URANUS_IP}  (TTS on GPU 0, STT on GPU 1 - 2x RTX 5080)
-#
-# OFF BY DEFAULT (saves ~150W):
-#   Helios:   ${NODE_HELIOS_IP}  (Expert 120B on RTX 5090 + RAM)
+#   Helios:  ${NODE_HELIOS_IP}  (Gateway + Docker host + Primary LLM on RTX PRO 5000,
+#                                 TTS/STT on PRO 5000, Code agent on RTX 5090)
+#   Saturn:  ${NODE_SATURN_IP}  (Vision model Qwen2.5-VL-7B on RTX 3080)
+#   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
   scrape_interval: 15s
@@ -30,80 +27,53 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
         labels:
-          node: 'jupiter'
+          node: 'helios'
 
   # ============================================
   # NODE EXPORTERS - System Metrics
   # ============================================
   - job_name: 'node-exporter'
     static_configs:
-      # Jupiter (Docker host, no GPU)
-      - targets: ['node-exporter:9100']
-        labels:
-          node: 'jupiter'
-          role: 'gateway'
-
-      # Helios (Large models, RTX 5090 32GB)
+      # Helios (Gateway + primary LLM + TTS/STT + coder)
       - targets: ['${NODE_HELIOS_IP}:9100']
         labels:
           node: 'helios'
-          role: 'expert'
-          gpu: 'rtx5090'
+          role: 'gateway'
+          gpu: 'rtx5090+rtx-pro-5000'
 
-      # Uranus (2x RTX 5080 16GB each - available)
-      - targets: ['${NODE_URANUS_IP}:9100']
-        labels:
-          node: 'uranus'
-          role: 'available'
-          gpu: '2x-rtx5080'
-
-      # Saturn (Nemotron brain on RTX 3090, RTX 3080 available)
+      # Saturn (Vision model on RTX 3080)
       - targets: ['${NODE_SATURN_IP}:9100']
         labels:
           node: 'saturn'
-          role: 'brain'
+          role: 'vision'
           gpu: 'rtx3080+rtx3090'
 
-      # Jupiter (No GPU currently)
-      - targets: ['${NODE_JUPITER_IP}:9100']
+      # Uranus (ComfyUI / Conjure on 2x RTX 5080)
+      - targets: ['${NODE_URANUS_IP}:9100']
         labels:
-          node: 'jupiter'
-          role: 'compute'
+          node: 'uranus'
+          role: 'comfyui'
+          gpu: '2x-rtx5080'
 
   # ============================================
   # GPU EXPORTERS - NVIDIA Metrics
   # ============================================
   - job_name: 'gpu-exporter'
     static_configs:
-      # Helios GPU (Expert model - RTX 5090)
       - targets: ['${NODE_HELIOS_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'helios'
-          gpu: 'rtx5090'
+          gpu: 'rtx5090+rtx-pro-5000'
 
-      # Uranus GPUs (Nemotron - 2x RTX 5080)
       - targets: ['${NODE_URANUS_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'uranus'
           gpu: '2x-rtx5080'
 
-      # Saturn GPUs (RTX 3080 + RTX 3090)
       - targets: ['${NODE_SATURN_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'saturn'
           gpu: 'rtx3080+rtx3090'
-
-  # ============================================
-  # LLM SERVICE METRICS (vLLM exposes /metrics)
-  # ============================================
-  - job_name: 'llm-services'
-    metrics_path: /metrics
-    static_configs:
-      # Nemotron on Saturn (vLLM exposes metrics)
-      - targets: ['${NODE_SATURN_IP}:${SERVICE_NEMOTRON_PORT}']
-        labels:
-          service: 'nemotron'
-          node: 'saturn'
 
   # ============================================
   # HTTP HEALTH PROBES (Blackbox Exporter)
@@ -115,28 +85,28 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       # Brain Gateway Orchestrator
-      - targets: ['http://${NODE_JUPITER_IP}:${SERVICE_ORCHESTRATOR_PORT}/health']
+      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_ORCHESTRATOR_PORT}/health']
         labels:
           service: 'orchestrator'
-          node: 'jupiter'
+          node: 'helios'
 
-      # TTS (Qwen3-TTS on Uranus GPU 0)
-      - targets: ['http://${NODE_URANUS_IP}:${SERVICE_TTS_PORT}/health']
+      # TTS (Qwen3-TTS on Helios GPU1)
+      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
         labels:
           service: 'tts'
-          node: 'uranus'
+          node: 'helios'
 
-      # STT (Whisper on Uranus GPU 1)
-      - targets: ['http://${NODE_URANUS_IP}:${SERVICE_STT_PORT}/health']
+      # STT (Whisper on Helios GPU1)
+      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_STT_PORT}/health']
         labels:
           service: 'stt'
-          node: 'uranus'
-
-      # Helios Expert Model (OFF by default)
-      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_HELIOS_PORT}/health']
-        labels:
-          service: 'helios'
           node: 'helios'
+
+      # Vision model (Saturn)
+      - targets: ['http://${NODE_SATURN_IP}:8010/v1/models']
+        labels:
+          service: 'vision'
+          node: 'saturn'
 
     relabel_configs:
       - source_labels: [__address__]
@@ -146,5 +116,6 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115  # Blackbox exporter address
 
-  # NOTE: Orchestrator, LiteLLM, and Helios LLM don't expose /metrics
-  # Monitor them via logs in Loki instead
+  # NOTE: llama-server instances (primary on 8080, coder on 8082) don't expose
+  # Prometheus /metrics by default. Monitor them via logs in Loki instead, or
+  # via the orchestrator's own metrics endpoint if enabled.

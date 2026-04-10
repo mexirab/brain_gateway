@@ -11,7 +11,7 @@ User=labadmin
 Environment=WAYLAND_DISPLAY=wayland-0
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-Environment=GRAFANA_URL=http://10.0.0.248:3000/playlists/play/1?kiosk=tv
+Environment=GRAFANA_URL=http://10.0.0.195:3000/playlists/play/1?kiosk=tv
 ExecStartPre=/usr/bin/sleep 5
 ExecStart=/home/labadmin/kiosk/kiosk.sh
 Restart=on-failure
