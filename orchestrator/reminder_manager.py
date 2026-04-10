@@ -244,13 +244,26 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
 
         # Build speaker list.
-        # When a specific speaker is passed by the caller, use just that one.
-        # Otherwise use REMINDER_SPEAKER which may be comma-separated for
-        # multi-room broadcast (avoids Google Home group issues with soundbars).
-        if speaker:
-            broadcast_speakers = [speaker]
+        # The caller may pass:
+        #   - a single entity_id       -> wrapped as [entity_id]
+        #   - a comma-separated string -> split into a list
+        #   - the literal "all"        -> alias for REMINDER_SPEAKER (multi-room broadcast)
+        #   - None / empty             -> fall through to REMINDER_SPEAKER
+        # REMINDER_SPEAKER itself may be comma-separated for multi-room broadcast
+        # (avoids Google Home group issues with soundbars).
+        def _split_speakers(value: str) -> list[str]:
+            return [s.strip() for s in value.split(",") if s.strip()]
+
+        if speaker and speaker.strip().lower() != "all":
+            broadcast_speakers = _split_speakers(speaker)
         else:
-            broadcast_speakers = [s.strip() for s in REMINDER_SPEAKER.split(",") if s.strip()]
+            broadcast_speakers = _split_speakers(REMINDER_SPEAKER)
+
+        if not broadcast_speakers:
+            err = "No speakers configured (REMINDER_SPEAKER is empty)"
+            logger.error(err)
+            _record_announcement(text, announcement_type, None, False, err, None, False)
+            return {"success": False, "error": err}
 
         # Cast to all target speakers (don't stop at first success)
         succeeded = []
