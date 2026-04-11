@@ -2,6 +2,7 @@
 Shared test fixtures for Brain Gateway test suite.
 """
 
+import importlib.util
 import os
 import sys
 import tempfile
@@ -30,8 +31,39 @@ os.environ.setdefault("PIHOLE_PASSWORD", "test-pihole-password")
 
 import pytest  # noqa: E402
 
-# Ensure orchestrator modules are importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ensure orchestrator modules are importable. Use an absolute path so this
+# doesn't depend on the pytest invocation CWD.
+_ORCHESTRATOR_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _ORCHESTRATOR_DIR not in sys.path:
+    sys.path.insert(0, _ORCHESTRATOR_DIR)
+
+
+def _preload_module(name: str) -> None:
+    """
+    Force-load orchestrator/<name>.py into sys.modules under the bare module
+    name, so subsequent `from <name> import X` calls hit the cache and never
+    search sys.path. Works around a CI-only bug where pytest-asyncio's import
+    context somehow resolves `from exceptions import BrainGatewayError` to a
+    different (namespace-package-like) `exceptions` module with unknown
+    __file__, producing `ImportError: cannot import name 'BrainGatewayError'
+    from 'exceptions' (unknown location)`.
+    """
+    if name in sys.modules:
+        return
+    path = os.path.join(_ORCHESTRATOR_DIR, f"{name}.py")
+    if not os.path.isfile(path):
+        return
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        return
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+
+
+# Preload modules whose bare-name imports have collided with something on
+# CI's sys.path. Extend this list if more modules start failing similarly.
+_preload_module("exceptions")
 
 
 @pytest.fixture(scope="session", autouse=True)
