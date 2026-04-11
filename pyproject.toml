@@ -2,6 +2,24 @@
 target-version = "py311"
 line-length = 120
 src = ["orchestrator"]
+# Only lint orchestrator/. The astral-sh/ruff-action@v3 appends the workspace
+# path to its positional args, which would otherwise make ruff also scan legacy
+# standalone scripts under ha_automations/, rag/, tts/, scripts/ (reindex_rag,
+# etc.), pi-kiosk/, and tools/ that were never meant to conform to the strict
+# orchestrator rule set. Keep this exclude list narrow and project-rooted.
+extend-exclude = [
+    "ha_automations",
+    "rag",
+    "tts",
+    "pi-kiosk",
+    "models",
+    "monitoring",
+    "frontend",
+    "data",
+    "credentials",
+    "certs",
+    "scripts/reindex_rag.py",
+]
 
 [tool.ruff.lint]
 select = [
