@@ -34,6 +34,23 @@ import pytest  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _init_state_store_schema():
+    """
+    Initialize the state_store SQLite schema once per test session.
+
+    test_selfcare_manager (and anything else that writes to state_store's DB)
+    expects the `selfcare_log` table to exist. In production this happens via
+    orchestrator.py's startup path; in unit tests we call init_db() directly.
+    Runs after the env-var setup at the top of this file, so STATE_DB_PATH
+    is already pointed at a temp file.
+    """
+    import state_store
+
+    state_store.init_db()
+    yield
+
+
 @pytest.fixture
 def tmp_db(tmp_path):
     """Provide a temporary SQLite database path for state_store tests."""
