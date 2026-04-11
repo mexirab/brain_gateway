@@ -6,12 +6,12 @@ Personal AI assistant for ADHD support. Primary model (Qwen3.5-27B on Helios RTX
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
-| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Gateway + Docker host**, Primary LLM: Qwen3.5-27B (GPU1 RTX PRO 5000, port 8080), TTS + STT (GPU1), Code agent: Qwen2.5-Coder-32B (GPU0 RTX 5090, port 8082), always-on |
-| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080), Pi-hole secondary |
+| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Brain gateway + Docker host**, Primary LLM: Qwen3.5-27B (GPU1 RTX PRO 5000, port 8080), TTS + STT (GPU1), Code agent: Qwen2.5-Coder-32B (GPU0 RTX 5090, port 8082), always-on |
+| Jupiter | 10.0.0.248 | jupiter.tail74fc4a.ts.net | - | **Pi-hole primary + Monitoring host** (Prometheus, Grafana, Loki, Promtail, Blackbox exporter), nebula-sync, Conjure API |
+| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080, Qwen2.5-VL-7B), Pi-hole secondary |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | ComfyUI/Conjure (GPU1) |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
-| ~~Jupiter~~ | ~~10.0.0.248~~ | - | - | Retired — all services migrated to Helios |
 
 ## Services
 
@@ -24,14 +24,16 @@ Personal AI assistant for ADHD support. Primary model (Qwen3.5-27B on Helios RTX
 | Code agent (Qwen2.5-Coder-32B) | 8082 | http://10.0.0.195:8082/v1 |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
 | STT (Whisper) | 8003 | http://10.0.0.195:8003 |
-| Pi-hole (Helios) | 53/8053 | http://10.0.0.195:8053/admin |
-| Pi-hole (Saturn) | 53/8053 | http://10.0.0.58:8053/admin |
+| Pi-hole (Jupiter primary) | 53/8053 | http://10.0.0.248:8053/admin |
+| Pi-hole (Saturn secondary) | 53/8053 | http://10.0.0.58:8053/admin |
+| Grafana (Jupiter) | 3000 | http://10.0.0.248:3000/d/brain-gateway-overview |
+| Prometheus (Jupiter) | 9090 | http://10.0.0.248:9090 |
+| Loki (Jupiter) | 3100 | http://10.0.0.248:3100 |
 | Wyoming Whisper (STT) | 10300 | tcp://10.0.0.195:10300 |
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.195:10301 |
 | Vision Model (Qwen2.5-VL-7B) | 8010 | http://10.0.0.58:8010 |
 | Frontend (dashboard) | 3001 | http://helios.tail74fc4a.ts.net:3001 (future: convivialprophet.com) |
-| SearXNG | 8090 | http://localhost:8090 |
-| Grafana | 3000 | http://localhost:3000/d/brain-gateway-overview (admin/braingw) |
+| SearXNG | 8090 | http://10.0.0.195:8090 (Helios) |
 
 ## Architecture (v7 Unified)
 

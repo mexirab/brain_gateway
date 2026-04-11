@@ -8,16 +8,21 @@
 # After editing this template, run:
 #   ./scripts/generate-configs.sh
 #
-# Network Architecture (v7 unified):
+# Network Architecture (v7 unified + split deployment):
 #
-#   Helios:  ${NODE_HELIOS_IP}  (Gateway + Docker host + Primary LLM on RTX PRO 5000,
-#                                 TTS/STT on PRO 5000, Code agent on RTX 5090)
-#   Saturn:  ${NODE_SATURN_IP}  (Vision model Qwen2.5-VL-7B on RTX 3080)
+#   Jupiter: ${NODE_JUPITER_IP} (Pi-hole primary, monitoring stack — prometheus/grafana/loki,
+#                                 conjure API, netdata)
+#   Helios:  ${NODE_HELIOS_IP}  (Brain gateway, primary LLM on RTX PRO 5000, TTS/STT on PRO 5000,
+#                                 code agent Qwen2.5-Coder-32B on RTX 5090, always-on)
+#   Saturn:  ${NODE_SATURN_IP}  (Vision model Qwen2.5-VL-7B on RTX 3080, Pi-hole secondary)
 #   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
 
 scrape_configs:
   # ============================================
@@ -27,13 +32,19 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
         labels:
-          node: 'helios'
+          node: 'jupiter'
 
   # ============================================
   # NODE EXPORTERS - System Metrics
   # ============================================
   - job_name: 'node-exporter'
     static_configs:
+      # Jupiter (Pi-hole primary + monitoring stack, no GPU)
+      - targets: ['${NODE_JUPITER_IP}:9100']
+        labels:
+          node: 'jupiter'
+          role: 'monitoring+pihole'
+
       # Helios (Gateway + primary LLM + TTS/STT + coder)
       - targets: ['${NODE_HELIOS_IP}:9100']
         labels:
@@ -41,19 +52,19 @@ scrape_configs:
           role: 'gateway'
           gpu: 'rtx5090+rtx-pro-5000'
 
-      # Saturn (Vision model on RTX 3080)
-      - targets: ['${NODE_SATURN_IP}:9100']
-        labels:
-          node: 'saturn'
-          role: 'vision'
-          gpu: 'rtx3080+rtx3090'
-
       # Uranus (ComfyUI / Conjure on 2x RTX 5080)
       - targets: ['${NODE_URANUS_IP}:9100']
         labels:
           node: 'uranus'
           role: 'comfyui'
           gpu: '2x-rtx5080'
+
+      # Saturn (Vision model + Pi-hole secondary)
+      - targets: ['${NODE_SATURN_IP}:9100']
+        labels:
+          node: 'saturn'
+          role: 'vision+pihole-secondary'
+          gpu: 'rtx3080+rtx3090'
 
   # ============================================
   # GPU EXPORTERS - NVIDIA Metrics
@@ -76,15 +87,26 @@ scrape_configs:
           gpu: 'rtx3080+rtx3090'
 
   # ============================================
+  # CONJURE API METRICS
+  # ============================================
+  # Conjure runs as a bare PM2 process on Jupiter (port 5050).
+  - job_name: 'conjure'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['${NODE_JUPITER_IP}:5050']
+        labels:
+          service: 'conjure-api'
+          node: 'jupiter'
+
+  # ============================================
   # HTTP HEALTH PROBES (Blackbox Exporter)
   # ============================================
-  # Requires blackbox exporter running in monitoring stack
   - job_name: 'blackbox-http'
     metrics_path: /probe
     params:
       module: [http_2xx]
     static_configs:
-      # Brain Gateway Orchestrator
+      # Brain Gateway Orchestrator (Helios)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_ORCHESTRATOR_PORT}/health']
         labels:
           service: 'orchestrator'
@@ -102,11 +124,29 @@ scrape_configs:
           service: 'stt'
           node: 'helios'
 
-      # Vision model (Saturn)
+      # Primary LLM (llama-server on Helios GPU1)
+      - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
+        labels:
+          service: 'llama-primary'
+          node: 'helios'
+
+      # Code agent (llama-server on Helios GPU0)
+      - targets: ['http://${NODE_HELIOS_IP}:8082/v1/models']
+        labels:
+          service: 'llama-coder'
+          node: 'helios'
+
+      # Vision model (Qwen2.5-VL-7B on Saturn)
       - targets: ['http://${NODE_SATURN_IP}:8010/v1/models']
         labels:
           service: 'vision'
           node: 'saturn'
+
+      # Conjure API (PM2 on Jupiter)
+      - targets: ['http://${NODE_JUPITER_IP}:5050/health']
+        labels:
+          service: 'conjure'
+          node: 'jupiter'
 
     relabel_configs:
       - source_labels: [__address__]
@@ -114,8 +154,46 @@ scrape_configs:
       - source_labels: [__param_target]
         target_label: instance
       - target_label: __address__
-        replacement: blackbox-exporter:9115  # Blackbox exporter address
+        replacement: blackbox-exporter:9115
 
-  # NOTE: llama-server instances (primary on 8080, coder on 8082) don't expose
-  # Prometheus /metrics by default. Monitor them via logs in Loki instead, or
-  # via the orchestrator's own metrics endpoint if enabled.
+  # ============================================
+  # BRAIN GATEWAY ORCHESTRATOR METRICS
+  # ============================================
+  - job_name: 'orchestrator'
+    metrics_path: /metrics
+    scrape_interval: 15s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/api_token
+    static_configs:
+      - targets: ['${NODE_HELIOS_IP}:${SERVICE_ORCHESTRATOR_PORT}']
+        labels:
+          service: 'orchestrator'
+          node: 'helios'
+
+  # ============================================
+  # NETDATA - Detailed System Metrics
+  # ============================================
+  - job_name: 'netdata'
+    metrics_path: /api/v1/allmetrics
+    params:
+      format: [prometheus]
+    honor_labels: true
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${NODE_JUPITER_IP}:19999']
+        labels:
+          node: 'jupiter'
+          source: 'netdata'
+      - targets: ['${NODE_SATURN_IP}:19999']
+        labels:
+          node: 'saturn'
+          source: 'netdata'
+      - targets: ['${NODE_URANUS_IP}:19999']
+        labels:
+          node: 'uranus'
+          source: 'netdata'
+      - targets: ['${NODE_HELIOS_IP}:19999']
+        labels:
+          node: 'helios'
+          source: 'netdata'

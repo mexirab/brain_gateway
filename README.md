@@ -40,7 +40,8 @@ open http://localhost
 
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
-| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Gateway, Docker host, Primary LLM (Qwen3.5-27B on PRO 5000), TTS + STT (PRO 5000), Code agent (Qwen2.5-Coder-32B on RTX 5090) |
+| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Brain gateway, Docker host, Primary LLM (Qwen3.5-27B on PRO 5000), TTS + STT (PRO 5000), Code agent (Qwen2.5-Coder-32B on RTX 5090) |
+| Jupiter | 10.0.0.248 | - | Pi-hole primary, monitoring stack (Prometheus, Grafana, Loki, Blackbox), nebula-sync, Conjure API |
 | Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (Qwen2.5-VL-7B), Pi-hole secondary |
 | Uranus | 10.0.0.173 | 2x RTX 5080 | ComfyUI / Conjure |
 | HA | 10.0.0.106 | - | Home Assistant |

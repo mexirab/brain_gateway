@@ -4,12 +4,14 @@
 # scripts/generate-configs.sh. Manual hand-edits are OK in a pinch but will
 # be overwritten on the next regeneration.
 #
-# Network Architecture (v7 unified):
+# Network Architecture (v7 unified + split deployment):
 #
-#   Helios:   10.0.0.195 (Gateway + Docker host + Primary LLM on RTX PRO 5000,
-#                         TTS/STT on PRO 5000, Code agent on RTX 5090)
-#   Saturn:   10.0.0.58  (Vision model Qwen2.5-VL-7B on RTX 3080)
-#   Uranus:   10.0.0.173 (ComfyUI/Conjure on 2x RTX 5080)
+#   Jupiter: 10.0.0.248 (Pi-hole primary, monitoring stack — prometheus/grafana/loki,
+#                         conjure API, netdata)
+#   Helios:  10.0.0.195 (Brain gateway, primary LLM on RTX PRO 5000, TTS/STT on PRO 5000,
+#                         code agent Qwen2.5-Coder-32B on RTX 5090, always-on)
+#   Saturn:  10.0.0.58  (Vision model Qwen2.5-VL-7B on RTX 3080, Pi-hole secondary)
+#   Uranus:  10.0.0.173 (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
   scrape_interval: 15s
@@ -26,13 +28,19 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
         labels:
-          node: 'helios'
+          node: 'jupiter'
 
   # ============================================
   # NODE EXPORTERS - System Metrics
   # ============================================
   - job_name: 'node-exporter'
     static_configs:
+      # Jupiter (Pi-hole primary + monitoring stack, no GPU)
+      - targets: ['10.0.0.248:9100']
+        labels:
+          node: 'jupiter'
+          role: 'monitoring+pihole'
+
       # Helios (Gateway + primary LLM + TTS/STT + coder)
       - targets: ['10.0.0.195:9100']
         labels:
@@ -47,11 +55,11 @@ scrape_configs:
           role: 'comfyui'
           gpu: '2x-rtx5080'
 
-      # Saturn (Vision model on RTX 3080)
+      # Saturn (Vision model + Pi-hole secondary)
       - targets: ['10.0.0.58:9100']
         labels:
           node: 'saturn'
-          role: 'vision'
+          role: 'vision+pihole-secondary'
           gpu: 'rtx3080+rtx3090'
 
   # ============================================
@@ -75,15 +83,26 @@ scrape_configs:
           gpu: 'rtx3080+rtx3090'
 
   # ============================================
+  # CONJURE API METRICS
+  # ============================================
+  # Conjure runs as a bare PM2 process on Jupiter (port 5050).
+  - job_name: 'conjure'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['10.0.0.248:5050']
+        labels:
+          service: 'conjure-api'
+          node: 'jupiter'
+
+  # ============================================
   # HTTP HEALTH PROBES (Blackbox Exporter)
   # ============================================
-  # Requires blackbox exporter running in monitoring stack
   - job_name: 'blackbox-http'
     metrics_path: /probe
     params:
       module: [http_2xx]
     static_configs:
-      # Brain Gateway Orchestrator
+      # Brain Gateway Orchestrator (Helios)
       - targets: ['http://10.0.0.195:8888/health']
         labels:
           service: 'orchestrator'
@@ -101,11 +120,29 @@ scrape_configs:
           service: 'stt'
           node: 'helios'
 
-      # Vision model (Saturn Qwen2.5-VL-7B)
+      # Primary LLM (llama-server on Helios GPU1)
+      - targets: ['http://10.0.0.195:8080/v1/models']
+        labels:
+          service: 'llama-primary'
+          node: 'helios'
+
+      # Code agent (llama-server on Helios GPU0)
+      - targets: ['http://10.0.0.195:8082/v1/models']
+        labels:
+          service: 'llama-coder'
+          node: 'helios'
+
+      # Vision model (Qwen2.5-VL-7B on Saturn)
       - targets: ['http://10.0.0.58:8010/v1/models']
         labels:
           service: 'vision'
           node: 'saturn'
+
+      # Conjure API (PM2 on Jupiter)
+      - targets: ['http://10.0.0.248:5050/health']
+        labels:
+          service: 'conjure'
+          node: 'jupiter'
 
     relabel_configs:
       - source_labels: [__address__]
@@ -113,7 +150,7 @@ scrape_configs:
       - source_labels: [__param_target]
         target_label: instance
       - target_label: __address__
-        replacement: blackbox-exporter:9115  # Blackbox exporter address
+        replacement: blackbox-exporter:9115
 
   # ============================================
   # BRAIN GATEWAY ORCHESTRATOR METRICS
@@ -140,9 +177,9 @@ scrape_configs:
     honor_labels: true
     scrape_interval: 30s
     static_configs:
-      - targets: ['10.0.0.195:19999']
+      - targets: ['10.0.0.248:19999']
         labels:
-          node: 'helios'
+          node: 'jupiter'
           source: 'netdata'
       - targets: ['10.0.0.58:19999']
         labels:
@@ -151,4 +188,8 @@ scrape_configs:
       - targets: ['10.0.0.173:19999']
         labels:
           node: 'uranus'
+          source: 'netdata'
+      - targets: ['10.0.0.195:19999']
+        labels:
+          node: 'helios'
           source: 'netdata'

@@ -24,7 +24,7 @@ PI_USER="${CALLISTO_SSH_USER:-labadmin}"
 PI_DIR="/home/${PI_USER}/kiosk"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-HELIOS_IP="${NODE_HELIOS_IP:-10.0.0.195}"
+JUPITER_IP="${NODE_JUPITER_IP:-10.0.0.248}"
 GRAFANA_PORT="${MONITORING_GRAFANA_PORT:-3000}"
 
 # Load .env if present
@@ -73,7 +73,7 @@ EOF"
         echo ""
         echo "==> Kiosk deployed!"
         echo "    Pi:      ${PI_IP}"
-        echo "    Grafana: http://${HELIOS_IP}:${GRAFANA_PORT}"
+        echo "    Grafana: http://${JUPITER_IP}:${GRAFANA_PORT}"
         echo "    Manage:  ./pi-kiosk/deploy.sh {status|restart|stop|screenshot}"
         ;;
 
