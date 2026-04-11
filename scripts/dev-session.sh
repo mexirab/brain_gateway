@@ -57,20 +57,22 @@ if [ "$LOCAL" != "$REMOTE" ]; then
     git pull --ff-only
 fi
 
+# tmux uses 0-based window indices by default. new-session creates window 0
+# automatically; we rename it to 'claude' and add 'logs' + 'shell' as 1 and 2.
 tmux new-session -d -s "$SESSION" -c "$DIR"
 
-# Window 1: Claude Code
-tmux rename-window -t "$SESSION:1" "claude"
-tmux send-keys -t "$SESSION:1" "claude" C-m
+# Window 0: Claude Code
+tmux rename-window -t "$SESSION:0" "claude"
+tmux send-keys -t "$SESSION:0" "claude" C-m
 
-# Window 2: Docker logs (if applicable)
+# Window 1: Docker logs (if applicable)
 if [ -n "$LOG_CONTAINER" ]; then
     tmux new-window -t "$SESSION" -n "logs" -c "$DIR"
-    tmux send-keys -t "$SESSION:2" "docker logs $LOG_CONTAINER --tail 50 -f" C-m
+    tmux send-keys -t "$SESSION:1" "docker logs $LOG_CONTAINER --tail 50 -f" C-m
 fi
 
-# Window 3: Shell
+# Window 2: Shell (or window 1 if no log container)
 tmux new-window -t "$SESSION" -n "shell" -c "$DIR"
 
-tmux select-window -t "$SESSION:1"
+tmux select-window -t "$SESSION:0"
 exec tmux attach -t "$SESSION"
