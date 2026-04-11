@@ -67,33 +67,56 @@ jobs:
 
   deploy:
     name: Deploy to Helios
-    runs-on: ubuntu-latest
+    # Self-hosted runner on Helios itself. Registered as `actions.runner.mexirab-brain_gateway.helios.service`
+    # in systemd on Helios, polls GitHub Actions for jobs, executes them locally as labadmin.
+    # No SSH from cloud runners, no public exposure, no secrets to manage.
+    runs-on: [self-hosted, linux, helios]
     needs: [lint-python, test-python, lint-frontend, docker-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # The runner already runs on Helios with docker access, so we don't need
+    # a checkout step — we operate directly on /opt/helios/gateway_mvp.
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HELIOS_SSH_HOST }}
-          username: labadmin
-          key: ${{ secrets.HELIOS_SSH_KEY }}
-          script: |
-            cd /opt/helios/gateway_mvp
-            git pull --ff-only
+      - name: Pull latest main
+        run: |
+          cd /opt/helios/gateway_mvp
+          BEFORE=$(git rev-parse HEAD)
+          git pull --ff-only
+          AFTER=$(git rev-parse HEAD)
+          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
+          echo "after=$AFTER" >> "$GITHUB_OUTPUT"
+        id: pull
 
-            CHANGED=$(git diff --name-only HEAD~1 HEAD)
+      - name: Rebuild changed services
+        run: |
+          cd /opt/helios/gateway_mvp
+          BEFORE="${{ steps.pull.outputs.before }}"
+          AFTER="${{ steps.pull.outputs.after }}"
 
-            if echo "$CHANGED" | grep -q "^orchestrator/"; then
-              echo "Rebuilding orchestrator..."
-              docker compose up -d --build orchestrator
-            fi
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "No new commits, nothing to rebuild."
+            exit 0
+          fi
 
-            if echo "$CHANGED" | grep -q "^frontend/"; then
-              echo "Rebuilding frontend..."
-              docker compose up -d --build --force-recreate frontend
-            fi
+          CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+          echo "Changed files:"
+          echo "$CHANGED"
 
-            echo "Deploy complete at $(date)"
+          if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$"; then
+            echo "::group::Rebuilding orchestrator"
+            docker compose up -d --build orchestrator
+            echo "::endgroup::"
+          fi
+
+          if echo "$CHANGED" | grep -qE "^frontend/|^docker-compose\.yml$"; then
+            echo "::group::Rebuilding frontend"
+            docker compose up -d --build --force-recreate frontend
+            echo "::endgroup::"
+          fi
+
+          echo "Deploy complete at $(date -Iseconds)"
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -sSf http://localhost:8888/health > /dev/null && echo "orchestrator healthy"
+          curl -sSf -o /dev/null http://localhost:3001 && echo "frontend reachable"
