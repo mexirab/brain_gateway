@@ -112,7 +112,6 @@ echo -e "${BLUE}=== Secrets (Required) ===${NC}"
 echo "These values are required for the gateway to function."
 echo ""
 prompt_secret "HA_TOKEN" "Home Assistant Token"
-prompt_secret "LITELLM_MASTER_KEY" "LiteLLM Master Key"
 prompt_secret "GF_SECURITY_ADMIN_PASSWORD" "Grafana Admin Password"
 
 echo ""

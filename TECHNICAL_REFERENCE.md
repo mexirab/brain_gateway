@@ -223,7 +223,7 @@ See `.env.example` for full list. Key vars:
 |----------|---------|
 | NODE_*_IP | Cluster node IPs |
 | HA_TOKEN | Home Assistant token |
-| LITELLM_MASTER_KEY | LiteLLM auth |
+| API_TOKEN | Orchestrator API auth |
 | CHROMA_PERSIST | ChromaDB path |
 | MIN_COS, TOP_K | RAG params |
 | GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |

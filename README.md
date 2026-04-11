@@ -7,7 +7,7 @@ Personal AI assistant optimized for ADHD support. Voice-first interface with Hom
 ```bash
 # Configure environment
 cp .env.example .env
-vim .env  # Set HA_TOKEN, LITELLM_MASTER_KEY
+vim .env  # Set HA_TOKEN, API_TOKEN, PIHOLE_PASSWORD, GF_SECURITY_ADMIN_PASSWORD
 
 # Start services
 cd /opt/helios/gateway_mvp
@@ -63,7 +63,8 @@ All settings in `.env` (see `.env.example` for full list):
 | Variable | Purpose |
 |----------|---------|
 | HA_TOKEN | Home Assistant long-lived token |
-| LITELLM_MASTER_KEY | API authentication |
+| API_TOKEN | Orchestrator API authentication |
+| PIHOLE_PASSWORD | Pi-hole v6 web admin + API password |
 | NODE_*_IP | Cluster node addresses |
 | RAG_BASE | Personal documents path |
 

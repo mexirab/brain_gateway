@@ -22,7 +22,7 @@ scrape_configs:
     relabel_configs:
       # Keep only relevant containers (brain-* and monitoring containers)
       - source_labels: ['__meta_docker_container_name']
-        regex: '/(brain-.*|open-webui.*|litellm.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
+        regex: '/(brain-.*|open-webui.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
         action: keep
 
       # Extract container name as label

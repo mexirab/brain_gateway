@@ -151,7 +151,7 @@ All tools are called directly by the single model in one agentic loop.
 
 ```
 /opt/helios/gateway_mvp/            # Project root on Helios
-~/.env                              # Secrets (HA_TOKEN, LITELLM_KEY)
+~/.env                              # Secrets (HA_TOKEN, API_TOKEN, PIHOLE_PASSWORD)
 ~/rag/nadim_rag/                    # RAG source documents (154 docs indexed)
 ~/.local/share/chroma/personal_rag/ # ChromaDB persistence
 /opt/helios/gateway_mvp/credentials/   # Google OAuth2 creds (gitignored)

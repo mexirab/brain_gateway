@@ -30,7 +30,7 @@ services:
     environment:
       - WEBUI_AUTH=False
       - WEBUI_NAME=${WEBUI_NAME:-Brain Gateway}
-      # Point to orchestrator instead of litellm directly
+      # Route Open WebUI OpenAI-compatible calls through the orchestrator
       - OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
       - OPENAI_API_KEY=${API_TOKEN:?API_TOKEN must be set in .env}
       - REDIS_URL=redis://redis:6379/0
@@ -188,26 +188,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: litellm
-    restart: unless-stopped
-    logging: *default-logging
-    ports:
-      - "${SERVICE_LITELLM_PORT:-4000}:4000"
-    volumes:
-      - ./litellm-config.yaml:/app/config.yaml:ro
-    environment:
-      # Derived URLs for litellm-config.yaml os.environ/ references
-      - MODEL_API_BASE=${MODEL_URL:-http://localhost:${SERVICE_MODEL_PORT:-8080}/v1}
-      - FALLBACK_API_BASE=${FALLBACK_MODEL_URL:-}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
-    command: --config /app/config.yaml --port 4000
-    networks:
-      - gateway-net
-    depends_on:
-      - redis
 
   redis:
     image: redis:7-alpine

@@ -106,7 +106,6 @@ check_endpoint() {
 echo ""
 echo -e "${BLUE}=== Required Secrets ===${NC}"
 check_required "HA_TOKEN" "Home Assistant access token"
-check_required "LITELLM_MASTER_KEY" "LiteLLM API key"
 check_required "GF_SECURITY_ADMIN_PASSWORD" "Grafana admin password"
 
 echo ""
