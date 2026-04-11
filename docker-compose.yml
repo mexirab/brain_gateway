@@ -248,11 +248,23 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      - PRIMARY=${PIHOLE_PRIMARY:-}
-      - REPLICAS=${PIHOLE_REPLICAS:-}
+      # Derive nebula-sync endpoints from existing env vars so the password
+      # only needs to be set once. Format is url|password (pipe-separated).
+      - PRIMARY=http://${NODE_JUPITER_IP:-10.0.0.248}:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
+      - REPLICAS=http://${NODE_SATURN_IP:-10.0.0.58}:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
       - FULL_SYNC=true
       - RUN_GRAVITY=true
-      - CRON=*/15 * * * *
+      # IMPORTANT: Pi-hole v6's /api/teleporter import endpoint unconditionally
+      # restarts FTL on the replica, which takes the webserver down for ~7 minutes.
+      # This is Pi-hole behavior — partial sync mode doesn't avoid it because
+      # nebula-sync still POSTs to /api/teleporter in both modes.
+      #
+      # Sync frequency is therefore a direct tradeoff between replica uptime
+      # and config freshness. Daily at 4am off-peak means Saturn is up >99.5%
+      # of the time instead of ~50%, at the cost of up to 24h staleness on
+      # block lists (which change less than weekly in practice).
+      # If you need an immediate sync, `docker restart nebula-sync`.
+      - CRON=0 4 * * *
       - TZ=${TZ:-America/Chicago}
   searxng:
     image: searxng/searxng:latest
