@@ -191,11 +191,11 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 
 ```
 _announce_voice(text, speaker=None)
-  - speaker param overrides default (REMINDER_SPEAKER)
-  - Falls back to FALLBACK_SPEAKER on connection or HTTP errors
-  - Reminders → REMINDER_SPEAKER (default), auto-retry once + phone fallback
+  - speaker param overrides default (REMINDER_SPEAKER), may be comma-separated
+    or the literal "all" (alias for REMINDER_SPEAKER list)
   - Morning briefing → bedroom pair (MORNING_BRIEFING_SPEAKER)
   - /api/announce → optional speaker in request body
+  - Broadcasts to every entity in the list; succeeds if at least one works
 ```
 
 ## ChromaDB / RAG

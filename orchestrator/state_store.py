@@ -59,8 +59,10 @@ CREATE TABLE IF NOT EXISTS announcement_history (
     speaker TEXT,
     success INTEGER NOT NULL DEFAULT 1,
     error TEXT,
-    latency_ms INTEGER,
-    fallback_used INTEGER NOT NULL DEFAULT 0
+    latency_ms INTEGER
+    -- note: legacy deployments may still have a fallback_used column.
+    -- It's harmless (default 0, never written by current code) and dropped
+    -- by the natural db-wipe cycle.
 );
 
 CREATE INDEX IF NOT EXISTS idx_announcement_timestamp ON announcement_history(timestamp);
@@ -374,14 +376,13 @@ def record_announcement(
     success: bool = True,
     error: Optional[str] = None,
     latency_ms: Optional[int] = None,
-    fallback_used: bool = False,
 ) -> None:
     """Record a TTS announcement in the history table."""
     with get_db() as conn:
         conn.execute(
             """INSERT INTO announcement_history
-               (timestamp, text, announcement_type, speaker, success, error, latency_ms, fallback_used)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (timestamp, text, announcement_type, speaker, success, error, latency_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.now().isoformat(),
                 text[:500],  # cap text length
@@ -390,7 +391,6 @@ def record_announcement(
                 1 if success else 0,
                 error,
                 latency_ms,
-                1 if fallback_used else 0,
             ),
         )
 
@@ -418,7 +418,6 @@ def get_announcement_stats() -> Dict[str, Any]:
         total = conn.execute("SELECT COUNT(*) FROM announcement_history").fetchone()[0]
         successes = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE success = 1").fetchone()[0]
         failures = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE success = 0").fetchone()[0]
-        fallbacks = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE fallback_used = 1").fetchone()[0]
 
         # By type
         type_rows = conn.execute(
@@ -448,7 +447,6 @@ def get_announcement_stats() -> Dict[str, Any]:
         "total": total,
         "successes": successes,
         "failures": failures,
-        "fallbacks_used": fallbacks,
         "success_rate": round(successes / total * 100, 1) if total > 0 else 100.0,
         "avg_latency_ms": round(avg_latency) if avg_latency else None,
         "today_count": today_count,

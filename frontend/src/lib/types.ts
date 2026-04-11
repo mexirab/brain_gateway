@@ -171,14 +171,12 @@ export interface AnnouncementEntry {
   success: number;
   error: string | null;
   latency_ms: number | null;
-  fallback_used: number;
 }
 
 export interface AnnouncementStats {
   total: number;
   successes: number;
   failures: number;
-  fallbacks_used: number;
   success_rate: number;
   avg_latency_ms: number | null;
   today_count: number;

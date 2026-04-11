@@ -388,11 +388,6 @@ TTS_LATENCY = Histogram(
     buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0],
 )
 
-TTS_FALLBACK_TOTAL = Counter(
-    "bgw_tts_fallback_total",
-    "TTS announcements that used fallback speaker",
-)
-
 TTS_ERRORS_TOTAL = Counter(
     "bgw_tts_errors_total",
     "TTS announcement failures",

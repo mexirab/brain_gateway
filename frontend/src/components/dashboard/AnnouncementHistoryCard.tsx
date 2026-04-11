@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Volume2, CheckCircle, XCircle, ArrowRightLeft } from 'lucide-react';
+import { Volume2, CheckCircle, XCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { AnnouncementEntry, AnnouncementStats } from '@/lib/types';
 
@@ -95,12 +95,6 @@ export default function AnnouncementHistoryCard() {
                 <span className="flex items-center gap-1">
                   <XCircle size={12} className="text-red-400" />
                   {stats.failures}
-                </span>
-              )}
-              {stats.fallbacks_used > 0 && (
-                <span className="flex items-center gap-1">
-                  <ArrowRightLeft size={12} className="text-amber-400" />
-                  {stats.fallbacks_used} fallback
                 </span>
               )}
               {stats.avg_latency_ms && (

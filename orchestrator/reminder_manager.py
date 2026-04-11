@@ -192,9 +192,6 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 # =============================================================================
 
 
-FALLBACK_SPEAKER = os.environ.get("FALLBACK_SPEAKER", "media_player.dining_room_pair")
-
-
 async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
@@ -220,7 +217,7 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
     try:
         backend = shared.tts_backend
         if backend is None:
-            _record_announcement(text, announcement_type, None, False, "TTS backend not initialized", None, False)
+            _record_announcement(text, announcement_type, None, False, "TTS backend not initialized", None)
             return {"success": False, "error": "TTS backend not initialized"}
 
         # =====================================================================
@@ -262,7 +259,7 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         if not broadcast_speakers:
             err = "No speakers configured (REMINDER_SPEAKER is empty)"
             logger.error(err)
-            _record_announcement(text, announcement_type, None, False, err, None, False)
+            _record_announcement(text, announcement_type, None, False, err, None)
             return {"success": False, "error": err}
 
         # Cast to all target speakers (don't stop at first success)
@@ -294,7 +291,7 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         latency_ms = int((_time.time() - t0) * 1000)
         if succeeded:
             speaker_label = ",".join(succeeded)
-            _record_announcement(text, announcement_type, speaker_label, True, None, latency_ms, False)
+            _record_announcement(text, announcement_type, speaker_label, True, None, latency_ms)
             return {"success": True, "speaker": speaker_label}
 
         _record_announcement(
@@ -304,14 +301,13 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
             False,
             last_error,
             latency_ms,
-            False,
         )
         return {"success": False, "error": last_error}
 
     except Exception as e:
         latency_ms = int((_time.time() - t0) * 1000)
         logger.error(f"Voice announcement failed: {e}")
-        _record_announcement(text, announcement_type, None, False, str(e), latency_ms, False)
+        _record_announcement(text, announcement_type, None, False, str(e), latency_ms)
         return {"success": False, "error": str(e)}
 
 
@@ -322,7 +318,6 @@ def _record_announcement(
     success: bool,
     error: str | None,
     latency_ms: int | None,
-    fallback_used: bool,
 ) -> None:
     """Record announcement to DB and metrics (fire-and-forget)."""
     try:
@@ -333,13 +328,12 @@ def _record_announcement(
             success=success,
             error=error,
             latency_ms=latency_ms,
-            fallback_used=fallback_used,
         )
     except Exception as e:
         logger.warning(f"Failed to record announcement: {e}")
 
     try:
-        from metrics import TTS_ANNOUNCEMENTS_TOTAL, TTS_ERRORS_TOTAL, TTS_FALLBACK_TOTAL, TTS_LATENCY
+        from metrics import TTS_ANNOUNCEMENTS_TOTAL, TTS_ERRORS_TOTAL, TTS_LATENCY
 
         # Sanitize speaker label to prevent Prometheus cardinality explosion from untrusted input
         safe_speaker = re.sub(r"[^a-zA-Z0-9_:.\-]", "_", speaker or "none")[:50]
@@ -351,9 +345,6 @@ def _record_announcement(
 
         if latency_ms is not None:
             TTS_LATENCY.observe(latency_ms / 1000)
-
-        if fallback_used:
-            TTS_FALLBACK_TOTAL.inc()
 
         if not success and error:
             if "HA returned" in error:

@@ -113,9 +113,8 @@ services:
       # SSH for remote model server management (empty = disabled)
       - MODEL_SERVER_IP=${MODEL_SERVER_IP:-}
       - MODEL_SSH_USER=${MODEL_SSH_USER:-}
-      # Reminders (empty speaker = skip TTS announcements)
+      # Reminders (empty speaker = skip TTS announcements; may be comma-separated)
       - REMINDER_SPEAKER=${REMINDER_SPEAKER:-}
-      - FALLBACK_SPEAKER=${FALLBACK_SPEAKER:-}
       - TZ=${TZ:-America/Chicago}
       # Agentic settings
       - MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS:-5}

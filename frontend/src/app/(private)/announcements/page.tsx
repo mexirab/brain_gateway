@@ -5,7 +5,6 @@ import {
   Volume2,
   CheckCircle,
   XCircle,
-  ArrowRightLeft,
   Trash2,
   Filter,
 } from 'lucide-react';
@@ -179,12 +178,6 @@ export default function AnnouncementsPage() {
             <div className="flex items-center gap-2">
               <XCircle size={14} className="text-red-400" />
               <span className="text-red-400">{stats.failures}</span>
-            </div>
-          )}
-          {stats.fallbacks_used > 0 && (
-            <div className="flex items-center gap-2">
-              <ArrowRightLeft size={14} className="text-amber-400" />
-              <span className="text-zinc-400">{stats.fallbacks_used} fallback</span>
             </div>
           )}
           {stats.avg_latency_ms && (

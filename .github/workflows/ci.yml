@@ -34,22 +34,17 @@ jobs:
           pip install pytest pytest-asyncio
       - name: Run tests
         working-directory: orchestrator
-        # TODO: re-enable these files after the pre-existing failures are fixed.
-        # They were hidden for months because the CI pipeline never reached the test
-        # phase. Tracked so the next person knows where to start.
-        #   - test_task_decomposition.py / test_unified_loop.py / test_auto_learn.py:
-        #     ImportError: cannot import name 'BrainGatewayError' from 'exceptions'
-        #     (unknown location). Only happens in CI with pytest-asyncio installed;
-        #     locally these tests are skipped so the bug was invisible. Suspect a
-        #     pytest-asyncio import-mode interaction with sys.path manipulation.
-        #   - test_tts_fallback.py: 2 real assertion failures in fallback dispatch
-        #     logic that need code investigation.
+        # TODO: re-enable these files after the pre-existing import error is
+        # fixed. They fail in CI with `ImportError: cannot import name
+        # 'BrainGatewayError' from 'exceptions' (unknown location)` but are
+        # skipped locally because pytest-asyncio isn't installed there — a
+        # combination that hid the issue while CI was broken upstream.
+        # Suspect a pytest-asyncio import-mode interaction with sys.path.
         run: |
           python -m pytest tests/ -v \
             --ignore=tests/test_task_decomposition.py \
             --ignore=tests/test_unified_loop.py \
-            --ignore=tests/test_auto_learn.py \
-            --ignore=tests/test_tts_fallback.py
+            --ignore=tests/test_auto_learn.py
 
   lint-frontend:
     name: Frontend Lint & Type Check
