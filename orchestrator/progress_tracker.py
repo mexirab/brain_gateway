@@ -72,14 +72,14 @@ _ENCOURAGEMENTS = [
 
 def get_db():
     """Get a SQLite connection with row factory."""
-    from db import get_db as _get_db
+    from orchestrator.db import get_db as _get_db
 
     return _get_db(DB_PATH, foreign_keys=False)
 
 
 def init_db() -> None:
     """Initialize progress database schema."""
-    from db import init_db as _init_db
+    from orchestrator.db import init_db as _init_db
 
     _init_db(DB_PATH, SCHEMA_SQL, foreign_keys=False)
 
@@ -135,7 +135,7 @@ def record_event(event_type: str, metadata: Optional[Dict[str, Any]] = None) -> 
 
         # Increment Prometheus metric (deferred import to avoid circular)
         try:
-            from metrics import PROGRESS_EVENTS_RECORDED
+            from orchestrator.metrics import PROGRESS_EVENTS_RECORDED
 
             PROGRESS_EVENTS_RECORDED.labels(event_type=event_type).inc()
         except Exception:
@@ -181,7 +181,7 @@ def _update_streak(conn: sqlite3.Connection, category: str, today: str, now: str
 async def check_and_announce_streaks() -> None:
     """Check for streak milestones and announce via TTS. Fire-and-forget."""
     try:
-        import state_store
+        from orchestrator import state_store
 
         today = date.today().isoformat()
 
@@ -204,14 +204,14 @@ async def check_and_announce_streaks() -> None:
             message = f"{friendly} streak: {current} days in a row!"
 
             try:
-                from reminder_manager import _announce_voice
+                from orchestrator.reminder_manager import _announce_voice
 
                 await _announce_voice(message, announcement_type="progress")
                 state_store.mark_notified(notif_key)
                 logger.info(f"[PROGRESS] Streak milestone announced: {category} = {current}")
 
                 try:
-                    from metrics import PROGRESS_STREAK_MILESTONES
+                    from orchestrator.metrics import PROGRESS_STREAK_MILESTONES
 
                     PROGRESS_STREAK_MILESTONES.labels(category=category).inc()
                 except Exception:

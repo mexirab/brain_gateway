@@ -4,7 +4,7 @@ Centralized configuration for Brain Gateway.
 All environment variables are defined here with typed defaults.
 Import `settings` to access configuration anywhere:
 
-    from config import settings
+    from orchestrator.config import settings
     url = settings.model_url
 """
 

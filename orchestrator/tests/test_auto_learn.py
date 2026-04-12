@@ -21,7 +21,7 @@ import pytest
 def _can_import_auto_learn():
     """Check if auto_learn can be imported (requires chromadb + full dependency chain)."""
     try:
-        import auto_learn  # noqa: F401
+        from orchestrator import auto_learn  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -518,7 +518,7 @@ class TestExtractionPrompt:
     @_skip_no_deps
     def test_delimiter_wrapping(self):
         """Verify extraction prompt uses <<<>>> delimiters."""
-        from auto_learn import _EXTRACTION_PROMPT
+        from orchestrator.auto_learn import _EXTRACTION_PROMPT
 
         assert "<<<" in _EXTRACTION_PROMPT
         assert ">>>" in _EXTRACTION_PROMPT
@@ -535,19 +535,19 @@ class TestAutoLearnModule:
     """Tests that import from auto_learn directly (where safe to do so)."""
 
     def test_contains_sensitive_data_matches_module(self):
-        from auto_learn import _contains_sensitive_data as module_fn
+        from orchestrator.auto_learn import _contains_sensitive_data as module_fn
 
         assert module_fn("My card is 4111 1111 1111 1111")
         assert not module_fn("I like pizza")
 
     def test_conversation_has_opt_out_matches_module(self):
-        from auto_learn import conversation_has_opt_out as module_fn
+        from orchestrator.auto_learn import conversation_has_opt_out as module_fn
 
         msgs = [{"role": "user", "content": "Don't remember this"}]
         assert module_fn(msgs)
 
     def test_format_conversation_matches_module(self):
-        from auto_learn import _format_conversation as module_fn
+        from orchestrator.auto_learn import _format_conversation as module_fn
 
         msgs = [
             {"role": "system", "content": "sys"},
@@ -558,7 +558,7 @@ class TestAutoLearnModule:
         assert result == "User: hi\nAssistant: hello"
 
     def test_parse_facts_json_matches_module(self):
-        from auto_learn import _parse_facts_json as module_fn
+        from orchestrator.auto_learn import _parse_facts_json as module_fn
 
         raw = '[{"fact": "test", "category": "x", "confidence": "high", "source_quote": "q"}]'
         result = module_fn(raw)
@@ -578,7 +578,7 @@ class TestRunAutoLearn:
     @pytest.fixture
     def mock_shared(self):
         """Mock shared module dependencies."""
-        with patch("auto_learn.shared") as mock:
+        with patch("orchestrator.auto_learn.shared") as mock:
             mock.AUTO_LEARN_ENABLED = True
             mock.AUTO_LEARN_ENCRYPT = False
             mock.AUTO_LEARN_MARKDOWN = False
@@ -609,7 +609,7 @@ class TestRunAutoLearn:
 
     @pytest.mark.asyncio
     async def test_opt_out_skips_extraction(self, mock_shared):
-        from auto_learn import run_auto_learn
+        from orchestrator.auto_learn import run_auto_learn
 
         msgs = [
             {"role": "user", "content": "My favorite color is blue"},
@@ -622,7 +622,7 @@ class TestRunAutoLearn:
 
     @pytest.mark.asyncio
     async def test_short_conversation_skips(self, mock_shared):
-        from auto_learn import run_auto_learn
+        from orchestrator.auto_learn import run_auto_learn
 
         msgs = [{"role": "user", "content": "Hi"}]
         await run_auto_learn(msgs)
@@ -630,7 +630,7 @@ class TestRunAutoLearn:
 
     @pytest.mark.asyncio
     async def test_extract_and_store_fact(self, mock_shared):
-        from auto_learn import extract_facts, store_fact
+        from orchestrator.auto_learn import extract_facts, store_fact
 
         # Mock the LLM call
         llm_response = {
@@ -652,7 +652,7 @@ class TestRunAutoLearn:
             ]
         }
 
-        with patch("orchestrator.call_model", return_value=llm_response) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", return_value=llm_response) as mock_call:
             msgs = [
                 {"role": "user", "content": "I always use dark mode on everything, it's so much easier on my eyes"},
                 {"role": "assistant", "content": "Dark mode is great for reducing eye strain!"},
@@ -669,7 +669,7 @@ class TestRunAutoLearn:
 
     @pytest.mark.asyncio
     async def test_sensitive_fact_filtered(self, mock_shared):
-        from auto_learn import extract_facts
+        from orchestrator.auto_learn import extract_facts
 
         llm_response = {
             "choices": [
@@ -696,7 +696,7 @@ class TestRunAutoLearn:
             ]
         }
 
-        with patch("orchestrator.call_model", return_value=llm_response):
+        with patch("orchestrator.orchestrator.call_model", return_value=llm_response):
             msgs = [
                 {"role": "user", "content": "My card is 4111 1111 1111 1111 and I love Italian food"},
                 {"role": "assistant", "content": "Noted!"},
@@ -708,7 +708,7 @@ class TestRunAutoLearn:
 
     @pytest.mark.asyncio
     async def test_duplicate_fact_skipped(self, mock_shared):
-        from auto_learn import is_duplicate
+        from orchestrator.auto_learn import is_duplicate
 
         # Simulate existing fact with high cosine similarity
         mock_shared.collection.query.return_value = {
@@ -721,7 +721,7 @@ class TestRunAutoLearn:
 
     @pytest.mark.asyncio
     async def test_non_duplicate_fact_passes(self, mock_shared):
-        from auto_learn import is_duplicate
+        from orchestrator.auto_learn import is_duplicate
 
         mock_shared.collection.query.return_value = {
             "documents": [["User likes coffee"]],

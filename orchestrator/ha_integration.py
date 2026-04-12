@@ -6,7 +6,7 @@ Home Assistant Integration Module v2
 - No hardcoded entity mappings!
 
 Usage:
-    from ha_integration import HomeAssistantClient
+    from orchestrator.ha_integration import HomeAssistantClient
 
     ha = HomeAssistantClient(url="http://your-ha-host:8123", token="...")
     await ha.refresh_entities()  # Call once at startup

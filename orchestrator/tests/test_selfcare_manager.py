@@ -13,7 +13,7 @@ import pytest
 
 def _can_import():
     try:
-        import selfcare_manager  # noqa: F401
+        from orchestrator import selfcare_manager  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -32,8 +32,8 @@ def reset_state():
     if not _can_import():
         pytest.skip("deps unavailable")
 
-    import selfcare_manager
-    from selfcare_manager import SelfCareState
+    from orchestrator import selfcare_manager
+    from orchestrator.selfcare_manager import SelfCareState
 
     selfcare_manager._state = SelfCareState()
 

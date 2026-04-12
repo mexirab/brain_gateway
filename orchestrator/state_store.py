@@ -133,14 +133,14 @@ CREATE INDEX IF NOT EXISTS idx_documents_uploaded ON documents(uploaded_at);
 
 def get_db():
     """Get a SQLite connection with row factory."""
-    from db import get_db as _get_db
+    from orchestrator.db import get_db as _get_db
 
     return _get_db(DB_PATH, foreign_keys=True)
 
 
 def init_db():
     """Initialize database schema."""
-    from db import init_db as _init_db
+    from orchestrator.db import init_db as _init_db
 
     _init_db(DB_PATH, SCHEMA_SQL, foreign_keys=True)
     with get_db() as conn:
@@ -517,7 +517,7 @@ def cleanup_old_selfcare(keep_days: int = 90) -> int:
 
 def vacuum_db() -> None:
     """Run VACUUM to reclaim disk space. Should be called periodically."""
-    from db import vacuum_db as _vacuum_db
+    from orchestrator.db import vacuum_db as _vacuum_db
 
     _vacuum_db(DB_PATH)
 

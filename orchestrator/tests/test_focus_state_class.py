@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from focus_state import FocusSession
+from orchestrator.focus_state import FocusSession
 
 
 class TestDictStyleAccess:

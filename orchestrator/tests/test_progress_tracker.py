@@ -21,7 +21,7 @@ def tmp_db(tmp_path):
     """Use a temporary database for each test."""
     db_path = str(tmp_path / "test_progress.db")
     with patch.dict(os.environ, {"PROGRESS_DB_PATH": db_path}):
-        import progress_tracker
+        from orchestrator import progress_tracker
 
         progress_tracker.DB_PATH = db_path
         progress_tracker.init_db()

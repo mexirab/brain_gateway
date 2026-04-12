@@ -8,14 +8,14 @@ import asyncio
 import logging
 import time
 
-import shared
-from metrics import (
+from orchestrator import shared
+from orchestrator.metrics import (
     HELIOS_START_COUNT as MODEL_START_COUNT,
 )
-from metrics import (
+from orchestrator.metrics import (
     HELIOS_START_LATENCY as MODEL_START_LATENCY,
 )
-from metrics import (
+from orchestrator.metrics import (
     HELIOS_STOP_COUNT as MODEL_STOP_COUNT,
 )
 
@@ -78,7 +78,7 @@ async def start_model_server() -> bool:
     _t0 = time.time()
     logger.info("[MODEL] Model server is offline, attempting to start...", extra={"component": "model"})
 
-    from config import settings
+    from orchestrator.config import settings
 
     server_ip = settings.model_server_ip
     ssh_user = settings.model_ssh_user
@@ -141,7 +141,7 @@ async def stop_model_server() -> bool:
     MODEL_STOP_COUNT.inc()
     logger.info("[MODEL] Stopping model server to save power...", extra={"component": "model"})
 
-    from config import settings
+    from orchestrator.config import settings
 
     server_ip = settings.model_server_ip
     ssh_user = settings.model_ssh_user

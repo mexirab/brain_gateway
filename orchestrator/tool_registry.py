@@ -5,7 +5,7 @@ Provides a decorator-based registration system and a unified execute_tool()
 function that replaces the if-elif chain in tool_handlers.py.
 
 Usage:
-    from tool_registry import register_tool, execute_tool
+    from orchestrator.tool_registry import register_tool, execute_tool
 
     @register_tool("my_tool")
     async def handle_my_tool(arguments: dict) -> str:
@@ -18,7 +18,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, List
 
-from metrics import TOOL_CALL_COUNT, TOOL_CALL_ERRORS, TOOL_CALL_LATENCY
+from orchestrator.metrics import TOOL_CALL_COUNT, TOOL_CALL_ERRORS, TOOL_CALL_LATENCY
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     logger.info("[TOOL] Executing: %s", tool_name, extra={"component": "tool", "tool_name": tool_name})
     logger.debug("[TOOL] %s args: %s", tool_name, arguments)
 
-    from exceptions import ExternalServiceError, TransientError
+    from orchestrator.exceptions import ExternalServiceError, TransientError
 
     handler = _registry.get(tool_name)
     if not handler:

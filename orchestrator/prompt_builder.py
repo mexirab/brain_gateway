@@ -9,9 +9,9 @@ import logging
 import time
 from typing import Any, Dict, List
 
-from metrics import RAG_QUERY_COUNT, RAG_QUERY_LATENCY, RAG_RESULTS_RETURNED
-from mode_router import MODE_PROMPTS, get_tone_constraint
-from shared import (
+from orchestrator.metrics import RAG_QUERY_COUNT, RAG_QUERY_LATENCY, RAG_RESULTS_RETURNED
+from orchestrator.mode_router import MODE_PROMPTS, get_tone_constraint
+from orchestrator.shared import (
     MIN_COS,
     TOP_K,
     collection,
@@ -144,7 +144,7 @@ def get_unified_system_prompt(personal_context: str = "", mode: str = "explainer
     tone = get_tone_constraint(user)
     mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
 
-    from task_decomposition import get_active_tasks_context
+    from orchestrator.task_decomposition import get_active_tasks_context
 
     context_section = ""
     if personal_context:
@@ -157,20 +157,20 @@ PERSONAL CONTEXT (from {user}'s notes):
     if active_tasks:
         context_section += f"\n{active_tasks}\n"
 
-    from routine_manager import get_active_routine_context
+    from orchestrator.routine_manager import get_active_routine_context
 
     routine_context = get_active_routine_context()
     if routine_context:
         context_section += f"\n{routine_context}\n"
 
-    from context_tracker import get_active_context_summary
+    from orchestrator.context_tracker import get_active_context_summary
 
     interrupt_context = get_active_context_summary()
     if interrupt_context:
         context_section += f"\n{interrupt_context}\n"
 
     try:
-        from presence_tracker import get_presence_prompt_context
+        from orchestrator.presence_tracker import get_presence_prompt_context
 
         presence_ctx = get_presence_prompt_context()
         if presence_ctx:

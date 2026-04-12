@@ -7,11 +7,10 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import shared
-import state_store
-from metrics import TEMPERATURE_DELTA, TEMPERATURE_GAUGE
-from reminder_manager import _announce_voice
-from shared import profile
+from orchestrator import shared, state_store
+from orchestrator.metrics import TEMPERATURE_DELTA, TEMPERATURE_GAUGE
+from orchestrator.reminder_manager import _announce_voice
+from orchestrator.shared import profile
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ async def check_closet_temperature():
     - 80 degrees F: warning (GPU heat building up)
     - 85 degrees F: urgent (risk of thermal throttling)
     """
-    from shared import HA_TOKEN, HA_URL
+    from orchestrator.shared import HA_TOKEN, HA_URL
 
     try:
         resp = await shared._http.get(
@@ -91,7 +90,7 @@ async def ambient_summary():
         # Respect quiet hours
         from datetime import time as _time
 
-        from ambient_manager import build_ambient_summary_text
+        from orchestrator.ambient_manager import build_ambient_summary_text
 
         tz = ZoneInfo(shared.TIMEZONE)
         now_tz = datetime.now(tz)
@@ -115,7 +114,7 @@ async def ambient_summary():
 async def update_ambient_led():
     """Update LED status indicator based on current state."""
     try:
-        from ambient_manager import get_ambient_status, set_ambient_led
+        from orchestrator.ambient_manager import get_ambient_status, set_ambient_led
 
         status = await get_ambient_status()
         await set_ambient_led(status["led_color"])
@@ -131,7 +130,7 @@ async def update_ambient_led():
 async def check_selfcare():
     """Every 15 min: check meal, meds, hydration, movement."""
     try:
-        from selfcare_manager import check_selfcare as _check
+        from orchestrator.selfcare_manager import check_selfcare as _check
 
         await _check()
     except Exception as e:
@@ -146,7 +145,7 @@ async def check_selfcare():
 async def trigger_routine(routine_id: str):
     """Called by APScheduler at routine trigger time."""
     try:
-        from routine_manager import _active_session, start_routine
+        from orchestrator.routine_manager import _active_session, start_routine
 
         if _active_session is not None:
             logger.info(f"[ROUTINE] Skipping scheduled trigger for '{routine_id}' — session already active")
@@ -164,7 +163,7 @@ async def trigger_routine(routine_id: str):
 async def daily_progress_summary():
     """Announce daily progress stats via TTS at configured time."""
     try:
-        import progress_tracker
+        from orchestrator import progress_tracker
 
         summary = await progress_tracker.daily_summary()
         await _announce_voice(summary, announcement_type="progress")
@@ -176,7 +175,7 @@ async def daily_progress_summary():
 async def weekly_progress_digest():
     """Announce weekly progress digest via TTS."""
     try:
-        import progress_tracker
+        from orchestrator import progress_tracker
 
         summary = await progress_tracker.weekly_summary()
         await _announce_voice(summary, announcement_type="progress")

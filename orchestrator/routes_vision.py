@@ -6,7 +6,7 @@ import os
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-import shared
+from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ async def vision_analyze(request: Request):
     """
     import base64
 
-    from vision_handler import SUPPORTED_MIME_TYPES, analyze_image
+    from orchestrator.vision_handler import SUPPORTED_MIME_TYPES, analyze_image
 
     if not shared.VISION_ENABLED:
         return JSONResponse({"ok": False, "error": "Vision is disabled"}, status_code=503)
@@ -66,7 +66,7 @@ async def vision_analyze(request: Request):
         if file_ct not in SUPPORTED_MIME_TYPES:
             filename = getattr(image_file, "filename", "") or ""
             ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-            from vision_handler import _EXT_TO_MIME
+            from orchestrator.vision_handler import _EXT_TO_MIME
 
             file_ct = _EXT_TO_MIME.get(ext, "")
             if not file_ct:
@@ -86,7 +86,7 @@ async def vision_analyze(request: Request):
         if not image_data:
             return JSONResponse({"ok": False, "error": "No image data provided"}, status_code=400)
         # SSRF prevention: only accept data URIs or raw base64, not http:// URLs
-        from vision_handler import _is_safe_image_url
+        from orchestrator.vision_handler import _is_safe_image_url
 
         if not _is_safe_image_url(image_data):
             return JSONResponse(
@@ -116,7 +116,7 @@ async def vision_analyze(request: Request):
 @router.get("/api/vision/status")
 async def vision_status():
     """Check vision model availability."""
-    from vision_handler import check_vision_health
+    from orchestrator.vision_handler import check_vision_health
 
     healthy = await check_vision_health()
     return JSONResponse(

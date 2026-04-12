@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
-import shared
+from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ async def get_ambient_status() -> Dict[str, Any]:
 
     # Schedule density + next event
     try:
-        from google_calendar import get_calendar_client
+        from orchestrator.google_calendar import get_calendar_client
 
         client = get_calendar_client(http_client=shared._http)
         if client and client.is_configured:
@@ -66,7 +66,7 @@ async def get_ambient_status() -> Dict[str, Any]:
 
     # Routine
     try:
-        from routine_manager import _active_session
+        from orchestrator.routine_manager import _active_session
 
         status["routine_active"] = _active_session is not None
         if _active_session:
@@ -76,7 +76,7 @@ async def get_ambient_status() -> Dict[str, Any]:
 
     # Pending reminders
     try:
-        from reminder_manager import list_pending_reminders
+        from orchestrator.reminder_manager import list_pending_reminders
 
         pending = list_pending_reminders()
         status["pending_reminders"] = len(pending)
@@ -85,7 +85,7 @@ async def get_ambient_status() -> Dict[str, Any]:
 
     # Self-care overdue items
     try:
-        from selfcare_manager import get_selfcare_status
+        from orchestrator.selfcare_manager import get_selfcare_status
 
         sc = await get_selfcare_status()
         overdue = []
@@ -104,7 +104,7 @@ async def get_ambient_status() -> Dict[str, Any]:
 
     # Active task context
     try:
-        from context_tracker import _context_stack
+        from orchestrator.context_tracker import _context_stack
 
         if _context_stack:
             status["active_task"] = _context_stack[-1].description
@@ -202,7 +202,7 @@ async def set_ambient_led(color: str) -> None:
     color_data = _LED_COLORS.get(color, _LED_COLORS["green"])
 
     try:
-        from ha_integration import ha_client
+        from orchestrator.ha_integration import ha_client
 
         result = await ha_client.call_service(entity_id, "turn_on", color_data)
         if result.success:

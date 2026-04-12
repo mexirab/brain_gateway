@@ -10,13 +10,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
-import shared
-from brain_dump_manager import process_brain_dump
-from data_manager import handle_update_data
-from focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
-from google_calendar import get_calendar_client
-from google_gmail import get_gmail_client
-from metrics import (
+from orchestrator import shared
+from orchestrator.brain_dump_manager import process_brain_dump
+from orchestrator.data_manager import handle_update_data
+from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
+from orchestrator.google_calendar import get_calendar_client
+from orchestrator.google_gmail import get_gmail_client
+from orchestrator.metrics import (
     CALENDAR_API_CALLS,
     CALENDAR_API_ERRORS,
     CALENDAR_API_LATENCY,
@@ -29,8 +29,8 @@ from metrics import (
     WEB_SEARCH_LATENCY,
     WEB_SEARCH_RESULTS,
 )
-from prompt_builder import rag_context
-from reminder_manager import (
+from orchestrator.prompt_builder import rag_context
+from orchestrator.reminder_manager import (
     _announce_voice,
     _send_notification,
     add_reminder,
@@ -41,12 +41,19 @@ from reminder_manager import (
     parse_time_expression,
     remove_reminder,
 )
-from shared import (
+from orchestrator.shared import (
     ha_client,
     scheduler,
 )
-from task_decomposition import abandon_task, complete_step, decompose_task, get_next_step, list_active_tasks, skip_step
-from web_search import get_search_client
+from orchestrator.task_decomposition import (
+    abandon_task,
+    complete_step,
+    decompose_task,
+    get_next_step,
+    list_active_tasks,
+    skip_step,
+)
+from orchestrator.web_search import get_search_client
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +64,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     Checks the tool registry first (for tools migrated to @register_tool),
     then falls back to the legacy if-elif chain for unmigrated tools.
     """
-    from tool_registry import execute_tool as _registry_execute
-    from tool_registry import (
+    from orchestrator.tool_registry import execute_tool as _registry_execute
+    from orchestrator.tool_registry import (
         is_registered,
     )
 
@@ -73,7 +80,7 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
 
 def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
     """Handle shopping/grocery list tool calls."""
-    from state_store import (
+    from orchestrator.state_store import (
         add_shopping_item,
         check_shopping_item,
         clear_checked_items,
@@ -399,7 +406,7 @@ async def deliver_reminder_job(reminder_id: str):
 
     text = reminder.get("text", "You have a reminder")
     target = reminder.get("target", "both")
-    from shared import profile
+    from orchestrator.shared import profile
 
     spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
@@ -521,7 +528,7 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
 
 async def tool_finance_status(include_details: bool = False) -> str:
     """Check Financial Quest Board status: budget, XP, streak, side quests."""
-    from finance_manager import (
+    from orchestrator.finance_manager import (
         _ensure_budget_period,
         _get_level_info,
         _is_ynab_configured,
@@ -661,7 +668,7 @@ async def tool_decide_for_me(arguments: Dict[str, Any]) -> str:
 
             # Self-care state (for overwhelm triage)
             try:
-                from selfcare_manager import get_selfcare_status
+                from orchestrator.selfcare_manager import get_selfcare_status
 
                 context["selfcare"] = await get_selfcare_status()
             except Exception:
@@ -675,7 +682,7 @@ async def tool_decide_for_me(arguments: Dict[str, Any]) -> str:
         if domain == "food":
             # Search RAG for food preferences
             try:
-                from prompt_builder import rag_context
+                from orchestrator.prompt_builder import rag_context
 
                 prefs = await rag_context("food preferences dietary restrictions allergies")
                 if prefs:
@@ -704,7 +711,7 @@ async def tool_brain_dump(items: list) -> str:
 
 async def tool_analyze_image(query: str) -> str:
     """Re-analyze the most recently shared image with a new query."""
-    from vision_handler import analyze_image
+    from orchestrator.vision_handler import analyze_image
 
     if not shared._vision_image_cache:
         return "No image available. The user needs to share an image first."
@@ -719,7 +726,7 @@ async def tool_analyze_image(query: str) -> str:
 
 def _handle_document_vault(arguments: Dict[str, Any]) -> str:
     """Handle document_vault tool calls."""
-    from state_store import get_document, list_documents, save_document, update_document
+    from orchestrator.state_store import get_document, list_documents, save_document, update_document
 
     action = arguments.get("action", "list")
 
@@ -781,7 +788,7 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
         # Re-index notes in RAG so they're searchable
         if "notes" in updates and updates["notes"]:
             try:
-                import shared
+                from orchestrator import shared
 
                 rag_id = doc.get("rag_doc_id") or f"vault_{doc_id}"
                 notes_id = f"{rag_id}_notes"
@@ -841,7 +848,7 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
 
         # Index in RAG for searchability
         try:
-            import shared
+            from orchestrator import shared
 
             embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
             shared.collection.upsert(
@@ -871,7 +878,7 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
 # Migrated tools use @register_tool and go through the registry pipeline
 # instead of the legacy if-elif chain above.
 # ---------------------------------------------------------------------------
-from tool_registry import register_tool
+from orchestrator.tool_registry import register_tool
 
 
 @register_tool("search_memory")
@@ -893,7 +900,7 @@ def _reg_update_data(arguments: dict) -> str:
 
 @register_tool("update_memory")
 async def _reg_update_memory(arguments: dict) -> str:
-    from memory_manager import update_memory
+    from orchestrator.memory_manager import update_memory
 
     return await update_memory(
         correction=arguments.get("correction", ""),
@@ -1009,7 +1016,7 @@ async def _reg_decide_for_me(arguments: dict) -> str:
 
 @register_tool("selfcare_log")
 async def _reg_selfcare_log(arguments: dict) -> str:
-    from selfcare_manager import get_selfcare_status, log_selfcare
+    from orchestrator.selfcare_manager import get_selfcare_status, log_selfcare
 
     if arguments.get("action") == "check":
         status = await get_selfcare_status()
@@ -1019,7 +1026,7 @@ async def _reg_selfcare_log(arguments: dict) -> str:
 
 @register_tool("bookmark_context")
 async def _reg_bookmark_context(arguments: dict) -> str:
-    from context_tracker import bookmark_context
+    from orchestrator.context_tracker import bookmark_context
 
     result = await bookmark_context(arguments.get("description"))
     desc = result["description"]
@@ -1029,7 +1036,7 @@ async def _reg_bookmark_context(arguments: dict) -> str:
 
 @register_tool("recall_context")
 async def _reg_recall_context(arguments: dict) -> str:
-    from context_tracker import get_recent_context
+    from orchestrator.context_tracker import get_recent_context
 
     entries = await get_recent_context(arguments.get("count", 3))
     if not entries:
@@ -1042,28 +1049,28 @@ async def _reg_recall_context(arguments: dict) -> str:
 
 @register_tool("start_routine")
 async def _reg_start_routine(arguments: dict) -> str:
-    from routine_manager import start_routine
+    from orchestrator.routine_manager import start_routine
 
     return await start_routine(arguments.get("routine_id", ""))
 
 
 @register_tool("routine_action")
 async def _reg_routine_action(arguments: dict) -> str:
-    from routine_manager import advance_step
+    from orchestrator.routine_manager import advance_step
 
     return await advance_step(arguments.get("action", "done"))
 
 
 @register_tool("routine_status")
 async def _reg_routine_status(arguments: dict) -> str:
-    from routine_manager import get_routine_status
+    from orchestrator.routine_manager import get_routine_status
 
     return await get_routine_status()
 
 
 @register_tool("check_system")
 async def _reg_check_system(arguments: dict) -> str:
-    from system_diagnostics import check_system
+    from orchestrator.system_diagnostics import check_system
 
     return await check_system(arguments.get("query", "system_health"))
 
@@ -1077,8 +1084,8 @@ async def _reg_analyze_image(arguments: dict) -> str:
 async def _reg_sleep_mode(arguments: dict) -> str:
     import contextlib
 
-    import state_store
-    from shared import scheduler
+    from orchestrator import state_store
+    from orchestrator.shared import scheduler
 
     action = arguments.get("action", "on")
     duration_hours = arguments.get("duration_hours")
@@ -1120,7 +1127,7 @@ async def _reg_sleep_mode(arguments: dict) -> str:
 
 async def _auto_unmute_dnd():
     """Auto-unmute callback for timed DND."""
-    import state_store
+    from orchestrator import state_store
 
     shared.DND_ACTIVE = False
     state_store.clear_notification_flag("dnd_active")
@@ -1150,4 +1157,4 @@ def _reg_ask_expert(arguments: dict) -> str:
 import contextlib
 
 with contextlib.suppress(ImportError):
-    import code_agent  # noqa: F401
+    from orchestrator import code_agent  # noqa: F401

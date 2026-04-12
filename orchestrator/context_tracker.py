@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-import shared
-from reminder_manager import _announce_voice
-from shared import profile
+from orchestrator import shared
+from orchestrator.reminder_manager import _announce_voice
+from orchestrator.shared import profile
 
 logger = logging.getLogger(__name__)
 

@@ -19,7 +19,7 @@ import pytest
 
 def _can_import_focus_manager():
     try:
-        import focus_manager  # noqa: F401
+        from orchestrator import focus_manager  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -38,7 +38,7 @@ _skip_no_deps = pytest.mark.skipif(
 
 
 def _make_pihole_result(success=True, message="ok"):
-    from pihole_client import PiHoleResult
+    from orchestrator.pihole_client import PiHoleResult
 
     return PiHoleResult(success=success, message=message)
 
@@ -108,8 +108,7 @@ def _default_session():
 @pytest.fixture
 def patched_focus(mock_pihole, mock_ha, mock_scheduler, mock_state_store, mock_announce):
     """Patch all external deps and provide a clean session dict."""
-    import focus_manager
-    import shared
+    from orchestrator import focus_manager, shared
 
     session = _default_session()
     original_session = shared.current_focus_session.copy()
@@ -118,22 +117,22 @@ def patched_focus(mock_pihole, mock_ha, mock_scheduler, mock_state_store, mock_a
         patch.object(shared, "current_focus_session", session),
         patch.object(shared, "ha_client", mock_ha),
         patch.object(shared, "scheduler", mock_scheduler),
-        patch("focus_manager.ha_client", mock_ha),
-        patch("focus_manager.scheduler", mock_scheduler),
-        patch("focus_manager.get_pihole_client", return_value=mock_pihole),
-        patch("focus_manager._announce_voice", mock_announce),
-        patch("focus_manager.state_store", mock_state_store),
-        patch("focus_manager.current_focus_session", session),
-        patch("focus_manager.FOCUS_AUDIO_PLAYER", "media_player.office"),
-        patch("focus_manager.FOCUS_AUDIO_LOFI_URL", "http://lofi.stream/listen"),
-        patch("focus_manager.FOCUS_AUDIO_COFFEE_URL", "http://coffee.stream/listen"),
-        patch("focus_manager.ENDEL_ENABLED", True),
-        patch("focus_manager.FOCUS_SESSIONS_STARTED", MagicMock()),
-        patch("focus_manager.FOCUS_SESSIONS_COMPLETED", MagicMock()),
-        patch("focus_manager.FOCUS_SESSIONS_STOPPED_EARLY", MagicMock()),
-        patch("focus_manager.FOCUS_SESSION_DURATION", MagicMock()),
-        patch("focus_manager.FOCUS_ACTIVE", MagicMock()),
-        patch("focus_manager.PIHOLE_BLOCKING_TOGGLES", MagicMock()),
+        patch("orchestrator.focus_manager.ha_client", mock_ha),
+        patch("orchestrator.focus_manager.scheduler", mock_scheduler),
+        patch("orchestrator.focus_manager.get_pihole_client", return_value=mock_pihole),
+        patch("orchestrator.focus_manager._announce_voice", mock_announce),
+        patch("orchestrator.focus_manager.state_store", mock_state_store),
+        patch("orchestrator.focus_manager.current_focus_session", session),
+        patch("orchestrator.focus_manager.FOCUS_AUDIO_PLAYER", "media_player.office"),
+        patch("orchestrator.focus_manager.FOCUS_AUDIO_LOFI_URL", "http://lofi.stream/listen"),
+        patch("orchestrator.focus_manager.FOCUS_AUDIO_COFFEE_URL", "http://coffee.stream/listen"),
+        patch("orchestrator.focus_manager.ENDEL_ENABLED", True),
+        patch("orchestrator.focus_manager.FOCUS_SESSIONS_STARTED", MagicMock()),
+        patch("orchestrator.focus_manager.FOCUS_SESSIONS_COMPLETED", MagicMock()),
+        patch("orchestrator.focus_manager.FOCUS_SESSIONS_STOPPED_EARLY", MagicMock()),
+        patch("orchestrator.focus_manager.FOCUS_SESSION_DURATION", MagicMock()),
+        patch("orchestrator.focus_manager.FOCUS_ACTIVE", MagicMock()),
+        patch("orchestrator.focus_manager.PIHOLE_BLOCKING_TOGGLES", MagicMock()),
     ):
         yield {
             "session": session,
@@ -448,7 +447,11 @@ class TestDeliverFocusBreakAllComplete:
         )
 
         fm = patched_focus["focus_manager"]
-        with patch.object(fm, "random") if hasattr(fm, "random") else patch("focus_manager.random") as mock_rand:
+        with (
+            patch.object(fm, "random")
+            if hasattr(fm, "random")
+            else patch("orchestrator.focus_manager.random") as mock_rand
+        ):
             mock_rand.choice = lambda x: x[0]
             await fm.deliver_focus_break("Study", 5)
 
@@ -642,7 +645,7 @@ class TestFocusSprintEndSession:
         )
 
         fm = patched_focus["focus_manager"]
-        with patch("focus_manager.random") as mock_rand:
+        with patch("orchestrator.focus_manager.random") as mock_rand:
             mock_rand.choice = lambda x: x[0]
             result = await fm.tool_focus_sprint(action="end_session")
 
@@ -750,7 +753,7 @@ class TestBuildSessionSummary:
         )
 
         fm = patched_focus["focus_manager"]
-        with patch("focus_manager.random") as mock_rand:
+        with patch("orchestrator.focus_manager.random") as mock_rand:
             mock_rand.choice = lambda x: x[0]
             result = fm._build_session_summary()
 
@@ -773,7 +776,7 @@ class TestBuildSessionSummary:
         )
 
         fm = patched_focus["focus_manager"]
-        with patch("focus_manager.random") as mock_rand:
+        with patch("orchestrator.focus_manager.random") as mock_rand:
             mock_rand.choice = lambda x: x[0]
             result = fm._build_session_summary()
 
@@ -795,7 +798,7 @@ class TestBuildSessionSummary:
         )
 
         fm = patched_focus["focus_manager"]
-        with patch("focus_manager.random") as mock_rand:
+        with patch("orchestrator.focus_manager.random") as mock_rand:
             mock_rand.choice = lambda x: x[0]
             result = fm._build_session_summary()
 

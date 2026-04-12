@@ -10,7 +10,7 @@ from datetime import datetime
 
 class TestReminderCRUD:
     def test_save_and_get_reminder(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("test1", "Take meds", "2026-03-12T09:00:00", "voice")
         rem = state_store.get_reminder("test1")
@@ -20,12 +20,12 @@ class TestReminderCRUD:
         assert rem["status"] == "pending"
 
     def test_get_nonexistent_reminder(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         assert state_store.get_reminder("nonexistent") is None
 
     def test_get_pending_reminders(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("r1", "Task 1", "2026-03-12T09:00:00")
         state_store.save_reminder("r2", "Task 2", "2026-03-12T10:00:00")
@@ -37,7 +37,7 @@ class TestReminderCRUD:
         assert pending[2]["id"] == "r3"
 
     def test_complete_reminder(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("r1", "Task 1", "2026-03-12T09:00:00")
         assert state_store.complete_reminder("r1")
@@ -46,12 +46,12 @@ class TestReminderCRUD:
         assert rem["completed_at"] is not None
 
     def test_complete_nonexistent(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         assert not state_store.complete_reminder("nonexistent")
 
     def test_cancel_reminder(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("r1", "Task 1", "2026-03-12T09:00:00")
         assert state_store.cancel_reminder("r1")
@@ -59,19 +59,19 @@ class TestReminderCRUD:
         assert rem["status"] == "cancelled"
 
     def test_delete_reminder(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("r1", "Task 1", "2026-03-12T09:00:00")
         assert state_store.delete_reminder("r1")
         assert state_store.get_reminder("r1") is None
 
     def test_delete_nonexistent(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         assert not state_store.delete_reminder("nonexistent")
 
     def test_completed_not_in_pending(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("r1", "Task 1", "2026-03-12T09:00:00")
         state_store.complete_reminder("r1")
@@ -80,7 +80,7 @@ class TestReminderCRUD:
 
     def test_save_reminder_upsert(self, tmp_db):
         """INSERT OR REPLACE should update existing reminder."""
-        import state_store
+        from orchestrator import state_store
 
         state_store.save_reminder("r1", "Original", "2026-03-12T09:00:00")
         state_store.save_reminder("r1", "Updated", "2026-03-12T10:00:00")
@@ -90,7 +90,7 @@ class TestReminderCRUD:
 
 class TestFocusSession:
     def test_save_and_load_active(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         session = {
             "active": True,
@@ -111,14 +111,14 @@ class TestFocusSession:
         assert loaded["block_sites"] is True
 
     def test_load_default_inactive(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         loaded = state_store.load_focus_session()
         assert loaded["active"] is False
         assert loaded["task"] is None
 
     def test_clear_focus_session(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         session = {
             "active": True,
@@ -138,23 +138,24 @@ class TestFocusSession:
 
 class TestNotificationTracking:
     def test_mark_and_check(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         assert not state_store.is_notified("cal:event123")
         state_store.mark_notified("cal:event123")
         assert state_store.is_notified("cal:event123")
 
     def test_clear_stale(self, tmp_db):
-        import state_store
+        from orchestrator import (
+            state_store,  # Mark a notification then clear entries older than 0 hours (should clear everything)
+        )
 
-        # Mark a notification then clear entries older than 0 hours (should clear everything)
         state_store.mark_notified("old:event")
         count = state_store.clear_stale_notifications(older_than_hours=0)
         assert count >= 1
         assert not state_store.is_notified("old:event")
 
     def test_clear_by_prefix(self, tmp_db):
-        import state_store
+        from orchestrator import state_store
 
         state_store.mark_notified("temp:closet_80")
         state_store.mark_notified("temp:closet_85")

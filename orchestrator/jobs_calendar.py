@@ -15,20 +15,19 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-import shared
-import state_store
-from google_calendar import get_calendar_client
-from google_gmail import get_gmail_client
-from metrics import (
+from orchestrator import shared, state_store
+from orchestrator.google_calendar import get_calendar_client
+from orchestrator.google_gmail import get_gmail_client
+from orchestrator.metrics import (
     CALENDAR_POLL_EVENTS_FOUND,
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
     GMAIL_API_CALLS,
     GMAIL_API_ERRORS,
 )
-from reminder_manager import _announce_voice, list_pending_reminders
-from shared import TIMEZONE, profile
-from travel_time import get_travel_time
+from orchestrator.reminder_manager import _announce_voice, list_pending_reminders
+from orchestrator.shared import TIMEZONE, profile
+from orchestrator.travel_time import get_travel_time
 
 logger = logging.getLogger(__name__)
 
@@ -557,7 +556,7 @@ async def process_emails_for_events():
         logger.info(f"[EMAIL_TO_CAL] Scanning {len(new_msgs)} new emails for events")
 
         # Deferred import to avoid circular dependency
-        from orchestrator import call_model
+        from orchestrator.orchestrator import call_model
 
         created_count = 0
         for msg in new_msgs:

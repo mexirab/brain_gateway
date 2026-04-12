@@ -13,14 +13,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List
 
-from metrics import (
+from orchestrator.metrics import (
     BRAIN_DUMP_DUPLICATES_SKIPPED,
     BRAIN_DUMP_ERRORS,
     BRAIN_DUMP_ITEMS_CAPTURED,
     BRAIN_DUMP_ITEMS_ROUTED,
     BRAIN_DUMP_RAG_LATENCY,
 )
-from shared import collection, embedding_model
+from orchestrator.shared import collection, embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +73,9 @@ async def route_item(item: CapturedItem) -> str:
 
 async def _route_to_reminder(item: CapturedItem) -> str:
     """Route item to the reminder system."""
-    from reminder_manager import add_reminder, parse_time_expression
-    from shared import scheduler
-    from tool_handlers import deliver_reminder_job
+    from orchestrator.reminder_manager import add_reminder, parse_time_expression
+    from orchestrator.shared import scheduler
+    from orchestrator.tool_handlers import deliver_reminder_job
 
     time_map = {
         "now": "in 5 minutes",
@@ -279,7 +279,7 @@ async def process_brain_dump(items_raw: List[Dict[str, Any]]) -> BrainDumpResult
         try:
             import asyncio
 
-            import progress_tracker
+            from orchestrator import progress_tracker
 
             progress_tracker.record_event("brain_dump", {"count": routed_count})
             asyncio.ensure_future(progress_tracker.check_and_announce_streaks())

@@ -10,7 +10,7 @@ import pytest
 # Ensure orchestrator package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from db import get_db, init_db, vacuum_db
+from orchestrator.db import get_db, init_db, vacuum_db
 
 
 class TestGetDb:

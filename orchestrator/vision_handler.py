@@ -11,8 +11,8 @@ from typing import Optional
 
 import httpx
 
-import shared
-from metrics import VISION_IMAGE_SIZE, VISION_REQUEST_COUNT, VISION_REQUEST_LATENCY
+from orchestrator import shared
+from orchestrator.metrics import VISION_IMAGE_SIZE, VISION_REQUEST_COUNT, VISION_REQUEST_LATENCY
 
 logger = logging.getLogger(__name__)
 

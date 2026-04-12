@@ -12,7 +12,7 @@ import pytest
 
 def _can_import():
     try:
-        import context_tracker  # noqa: F401
+        from orchestrator import context_tracker  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -31,7 +31,7 @@ def reset_state():
     if not _can_import():
         pytest.skip("deps unavailable")
 
-    import context_tracker
+    from orchestrator import context_tracker
 
     context_tracker._context_stack.clear()
     context_tracker._interrupted = False
@@ -45,7 +45,7 @@ def reset_state():
         mock_shared.current_focus_session = {"active": False}
         mock_shared.INTERRUPT_CHECKIN_DELAY = 5
         mock_shared.CONTEXT_STACK_SIZE = 10
-        mock_shared.scheduler = patch("context_tracker.shared.scheduler").start()
+        mock_shared.scheduler = patch("orchestrator.context_tracker.shared.scheduler").start()
         mock_shared.profile.user_name = "Nadim"
 
         yield {"module": context_tracker, "mock_shared": mock_shared}

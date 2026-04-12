@@ -15,8 +15,8 @@ import re
 import subprocess
 from pathlib import Path
 
-import shared
-from tool_registry import register_tool
+from orchestrator import shared
+from orchestrator.tool_registry import register_tool
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +377,7 @@ async def _run_code_agent_loop(
     max_rounds: int = None,
 ) -> str:
     """Run the inner agentic loop with the coding model."""
-    from orchestrator import call_model
+    from orchestrator.orchestrator import call_model
 
     model_url = shared.CODE_AGENT_MODEL_URL
     model_name = shared.CODE_AGENT_MODEL_NAME

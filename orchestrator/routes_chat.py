@@ -13,7 +13,7 @@ router = APIRouter()
 @router.get("/api/chat/conversations")
 async def list_chat_conversations(limit: int = 50):
     """List all conversations, most recent first."""
-    from state_store import list_conversations
+    from orchestrator.state_store import list_conversations
 
     return JSONResponse(list_conversations(min(limit, 200)))
 
@@ -23,7 +23,7 @@ async def create_chat_conversation(request: Request):
     """Create a new conversation."""
     import uuid
 
-    from state_store import create_conversation
+    from orchestrator.state_store import create_conversation
 
     body = await request.json()
     title = body.get("title", "New Chat")
@@ -34,7 +34,7 @@ async def create_chat_conversation(request: Request):
 @router.get("/api/chat/conversations/{conv_id}/messages")
 async def get_chat_messages(conv_id: str):
     """Get all messages in a conversation."""
-    from state_store import get_conversation, get_conversation_messages
+    from orchestrator.state_store import get_conversation, get_conversation_messages
 
     conv = get_conversation(conv_id)
     if not conv:
@@ -46,7 +46,7 @@ async def get_chat_messages(conv_id: str):
 @router.post("/api/chat/conversations/{conv_id}/messages")
 async def add_chat_message(conv_id: str, request: Request):
     """Save a message to a conversation."""
-    from state_store import get_conversation, save_chat_message
+    from orchestrator.state_store import get_conversation, save_chat_message
 
     conv = get_conversation(conv_id)
     if not conv:
@@ -68,7 +68,7 @@ async def add_chat_message(conv_id: str, request: Request):
 @router.put("/api/chat/conversations/{conv_id}")
 async def update_chat_conversation(conv_id: str, request: Request):
     """Update conversation title."""
-    from state_store import update_conversation_title
+    from orchestrator.state_store import update_conversation_title
 
     body = await request.json()
     title = body.get("title", "")
@@ -83,7 +83,7 @@ async def update_chat_conversation(conv_id: str, request: Request):
 @router.delete("/api/chat/conversations/{conv_id}")
 async def delete_chat_conversation(conv_id: str):
     """Delete a conversation and all its messages."""
-    from state_store import delete_conversation
+    from orchestrator.state_store import delete_conversation
 
     ok = delete_conversation(conv_id)
     if not ok:

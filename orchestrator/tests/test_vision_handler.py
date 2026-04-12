@@ -3,30 +3,11 @@ Unit tests for vision_handler.py — image analysis routing to dedicated vision 
 """
 
 import base64
-
-# ---------------------------------------------------------------------------
-# Mock shared module before importing vision_handler
-# ---------------------------------------------------------------------------
-import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-mock_shared = MagicMock()
-mock_shared.VISION_ENABLED = True
-mock_shared.VISION_MODEL_URL = "http://localhost:8010/v1"
-mock_shared.VISION_MODEL_NAME = "Qwen3-VL-8B-Instruct"
-mock_shared.VISION_MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
-mock_shared.VISION_TIMEOUT = 60
-mock_shared._http = None
-mock_shared._vision_image_cache = {}
-sys.modules["shared"] = mock_shared
-
-mock_metrics = MagicMock()
-sys.modules["metrics"] = mock_metrics
-
-# Now import the module under test
-from vision_handler import (
+from orchestrator.vision_handler import (
     _estimate_image_size,
     _parse_data_uri,
     analyze_image,
@@ -34,9 +15,22 @@ from vision_handler import (
     extract_images_from_messages,
 )
 
-# ---------------------------------------------------------------------------
-# _parse_data_uri
-# ---------------------------------------------------------------------------
+SHARED_PATH = "orchestrator.vision_handler.shared"
+
+
+@pytest.fixture(autouse=True)
+def _mock_shared():
+    """Patch shared module inside vision_handler for every test."""
+    mock = MagicMock()
+    mock.VISION_ENABLED = True
+    mock.VISION_MODEL_URL = "http://localhost:8010/v1"
+    mock.VISION_MODEL_NAME = "Qwen3-VL-8B-Instruct"
+    mock.VISION_MAX_IMAGE_SIZE = 10 * 1024 * 1024
+    mock.VISION_TIMEOUT = 60
+    mock._http = None
+    mock._vision_image_cache = {}
+    with patch(SHARED_PATH, mock):
+        yield mock
 
 
 class TestParseDataUri:
@@ -61,25 +55,14 @@ class TestParseDataUri:
         assert data == "UklGR"
 
 
-# ---------------------------------------------------------------------------
-# _estimate_image_size
-# ---------------------------------------------------------------------------
-
-
 class TestEstimateImageSize:
     def test_small_image(self):
         b64 = base64.b64encode(b"x" * 100).decode()
         size = _estimate_image_size(b64)
-        # Should be approximately 100 bytes
         assert 90 <= size <= 110
 
     def test_empty_string(self):
         assert _estimate_image_size("") == 0
-
-
-# ---------------------------------------------------------------------------
-# extract_images_from_messages
-# ---------------------------------------------------------------------------
 
 
 class TestExtractImages:
@@ -166,18 +149,12 @@ class TestExtractImages:
         assert images[0]["text"] == ""
 
 
-# ---------------------------------------------------------------------------
-# analyze_image
-# ---------------------------------------------------------------------------
-
-
 class TestAnalyzeImage:
     @pytest.mark.asyncio
-    async def test_vision_disabled(self):
-        mock_shared.VISION_ENABLED = False
+    async def test_vision_disabled(self, _mock_shared):
+        _mock_shared.VISION_ENABLED = False
         result = await analyze_image("data:image/jpeg;base64,test", "describe")
         assert "disabled" in result.lower()
-        mock_shared.VISION_ENABLED = True
 
     @pytest.mark.asyncio
     async def test_unsupported_mime_type(self):
@@ -189,9 +166,8 @@ class TestAnalyzeImage:
         assert "Unsupported" in result
 
     @pytest.mark.asyncio
-    async def test_image_too_large(self):
-        mock_shared.VISION_MAX_IMAGE_SIZE = 100  # 100 bytes
-        # Create a base64 string that decodes to >100 bytes
+    async def test_image_too_large(self, _mock_shared):
+        _mock_shared.VISION_MAX_IMAGE_SIZE = 100
         large_b64 = base64.b64encode(b"x" * 200).decode()
         result = await analyze_image(
             f"data:image/jpeg;base64,{large_b64}",
@@ -199,7 +175,6 @@ class TestAnalyzeImage:
             http_client=AsyncMock(),
         )
         assert "too large" in result.lower()
-        mock_shared.VISION_MAX_IMAGE_SIZE = 10 * 1024 * 1024  # restore
 
     @pytest.mark.asyncio
     async def test_successful_analysis(self):
@@ -221,13 +196,11 @@ class TestAnalyzeImage:
         assert "pantry" in result
         assert "pasta" in result
 
-        # Verify the API was called with correct structure
         call_args = mock_client.post.call_args
         payload = call_args.kwargs.get("json") or call_args[1].get("json")
         assert payload["model"] == "Qwen3-VL-8B-Instruct"
         assert len(payload["messages"]) == 1
         assert payload["messages"][0]["role"] == "user"
-        # Should have text + image_url parts
         content = payload["messages"][0]["content"]
         assert any(p["type"] == "text" for p in content)
         assert any(p["type"] == "image_url" for p in content)
@@ -268,23 +241,17 @@ class TestAnalyzeImage:
         assert "error" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_no_http_client(self):
-        mock_shared._http = None
+    async def test_no_http_client(self, _mock_shared):
+        _mock_shared._http = None
         result = await analyze_image("data:image/jpeg;base64,test", "describe")
         assert "unavailable" in result.lower()
 
 
-# ---------------------------------------------------------------------------
-# check_vision_health
-# ---------------------------------------------------------------------------
-
-
 class TestCheckVisionHealth:
     @pytest.mark.asyncio
-    async def test_disabled(self):
-        mock_shared.VISION_ENABLED = False
+    async def test_disabled(self, _mock_shared):
+        _mock_shared.VISION_ENABLED = False
         assert await check_vision_health() is False
-        mock_shared.VISION_ENABLED = True
 
     @pytest.mark.asyncio
     async def test_healthy(self):

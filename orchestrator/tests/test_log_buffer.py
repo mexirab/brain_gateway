@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from log_buffer import LogRingBuffer
+from orchestrator.log_buffer import LogRingBuffer
 
 
 @pytest.fixture

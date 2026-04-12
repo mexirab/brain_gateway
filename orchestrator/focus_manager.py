@@ -11,9 +11,8 @@ import random
 from datetime import datetime, timedelta
 from typing import Optional
 
-import shared
-import state_store
-from metrics import (
+from orchestrator import shared, state_store
+from orchestrator.metrics import (
     FOCUS_ACTIVE,
     FOCUS_SESSION_DURATION,
     FOCUS_SESSIONS_COMPLETED,
@@ -21,9 +20,9 @@ from metrics import (
     FOCUS_SESSIONS_STOPPED_EARLY,
     PIHOLE_BLOCKING_TOGGLES,
 )
-from pihole_client import get_pihole_client
-from reminder_manager import _announce_voice
-from shared import (
+from orchestrator.pihole_client import get_pihole_client
+from orchestrator.reminder_manager import _announce_voice
+from orchestrator.shared import (
     ENDEL_API_URL,
     ENDEL_ENABLED,
     ENDEL_MODES,
@@ -295,7 +294,7 @@ async def tool_start_focus(
     try:
         import asyncio as _asyncio
 
-        import context_tracker as _ct
+        from orchestrator import context_tracker as _ct
 
         _asyncio.ensure_future(_ct.record_context(description=task, focus_session_id=job_id))
     except Exception as e:
@@ -375,7 +374,7 @@ async def tool_stop_focus() -> str:
     # Record partial focus event (F-005) — only if meaningful time spent
     if int(elapsed) >= 5:
         try:
-            import progress_tracker
+            from orchestrator import progress_tracker
 
             progress_tracker.record_event("focus_partial", {"minutes": int(elapsed)})
         except Exception as e:
@@ -438,7 +437,7 @@ async def tool_focus_sprint(action: str, duration_minutes: int = None) -> str:
         try:
             import asyncio as _asyncio
 
-            import progress_tracker
+            from orchestrator import progress_tracker
 
             progress_tracker.record_event("focus_complete", {"minutes": total, "sprints": sprints_done})
             _asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
@@ -586,7 +585,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         try:
             import asyncio as _asyncio
 
-            import progress_tracker
+            from orchestrator import progress_tracker
 
             progress_tracker.record_event("focus_complete", {"minutes": total, "sprints": sprint_count})
             _asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
@@ -618,7 +617,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         try:
             import asyncio as _asyncio
 
-            import progress_tracker
+            from orchestrator import progress_tracker
 
             progress_tracker.record_event("focus_complete", {"minutes": planned_duration or 0, "sprints": 1})
             _asyncio.ensure_future(progress_tracker.check_and_announce_streaks())

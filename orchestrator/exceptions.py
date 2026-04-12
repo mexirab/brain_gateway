@@ -6,7 +6,7 @@ between transient failures (retry), config issues (fix and redeploy),
 and tool execution errors.
 
 Usage:
-    from exceptions import TransientError, ExternalServiceError, ToolNotFoundError
+    from orchestrator.exceptions import TransientError, ExternalServiceError, ToolNotFoundError
 
     raise ExternalServiceError("calendar", "Google Calendar API returned 503")
     raise ToolNotFoundError("unknown_tool")

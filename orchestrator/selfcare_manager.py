@@ -11,8 +11,8 @@ from datetime import datetime, time
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
-import shared
-from reminder_manager import _announce_voice, _send_notification
+from orchestrator import shared
+from orchestrator.reminder_manager import _announce_voice, _send_notification
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _state = SelfCareState()
 def _restore_state() -> None:
     """Restore selfcare state from persistent storage on startup."""
     try:
-        from state_store import get_last_selfcare, get_selfcare_today
+        from orchestrator.state_store import get_last_selfcare, get_selfcare_today
 
         last_meal = get_last_selfcare("meal")
         if last_meal:
@@ -74,7 +74,7 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
 
     Persists to SQLite so state survives orchestrator restarts.
     """
-    from state_store import save_selfcare_log
+    from orchestrator.state_store import save_selfcare_log
 
     now = datetime.now()
 
@@ -130,7 +130,7 @@ async def check_selfcare() -> None:
     # Skip nudges when not home
     if shared.PRESENCE_ENABLED:
         try:
-            from presence_tracker import get_presence
+            from orchestrator.presence_tracker import get_presence
 
             if not get_presence().get("is_home", True):
                 return
@@ -160,7 +160,7 @@ async def check_selfcare() -> None:
 
     # Don't nudge during active routine
     try:
-        from routine_manager import _active_session
+        from orchestrator.routine_manager import _active_session
 
         if _active_session is not None:
             return
@@ -190,7 +190,7 @@ async def check_selfcare() -> None:
 def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
     """Check if any medication is due and not confirmed."""
     try:
-        from data_manager import get_medications
+        from orchestrator.data_manager import get_medications
 
         meds_data = get_medications()
         daily = meds_data.get("daily", {})
@@ -332,7 +332,7 @@ def _expand_med_confirmation(detail: str, when: datetime) -> None:
     individual medication in that schedule window.  Also handles detail strings
     that mention specific meds by name (e.g. 'morning meds (Vyvanse, Wellbutrin)')."""
     try:
-        from data_manager import get_medications
+        from orchestrator.data_manager import get_medications
 
         meds_data = get_medications()
         daily = meds_data.get("daily", {})
@@ -362,7 +362,7 @@ def _expand_med_confirmation(detail: str, when: datetime) -> None:
 def _get_next_med_schedule(med_name: str) -> Optional[str]:
     """Determine the next medication schedule for a given med."""
     try:
-        from data_manager import get_medications
+        from orchestrator.data_manager import get_medications
 
         meds_data = get_medications()
         daily = meds_data.get("daily", {})

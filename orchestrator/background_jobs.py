@@ -8,7 +8,7 @@ All implementations live in domain-specific modules:
 """
 
 # Re-exports for backward compatibility
-from jobs_calendar import (  # noqa: F401
+from orchestrator.jobs_calendar import (  # noqa: F401
     _get_prep_hint,
     _get_weather_forecast,
     _is_focus_related,
@@ -19,12 +19,12 @@ from jobs_calendar import (  # noqa: F401
     poll_email,
     process_emails_for_events,
 )
-from jobs_finance import (  # noqa: F401
+from orchestrator.jobs_finance import (  # noqa: F401
     midmonth_budget_warning,
     sync_ynab_transactions,
     weekly_spending_summary,
 )
-from jobs_monitoring import (  # noqa: F401
+from orchestrator.jobs_monitoring import (  # noqa: F401
     ambient_summary,
     check_closet_temperature,
     check_selfcare,

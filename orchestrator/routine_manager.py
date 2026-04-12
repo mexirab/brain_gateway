@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import shared
-from reminder_manager import _announce_voice
-from shared import profile
+from orchestrator import shared
+from orchestrator.reminder_manager import _announce_voice
+from orchestrator.shared import profile
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ async def start_routine(routine_id: str, triggered_by: str = "user") -> str:
     try:
         import asyncio as _asyncio
 
-        import context_tracker as _ct
+        from orchestrator import context_tracker as _ct
 
         _asyncio.ensure_future(_ct.record_context(description=f"{display_name} routine"))
     except Exception as e:
@@ -358,7 +358,7 @@ def _record_routine_progress():
     try:
         import asyncio
 
-        import progress_tracker
+        from orchestrator import progress_tracker
 
         completed = len(_active_session.completed_steps)
         progress_tracker.record_event(
@@ -511,7 +511,7 @@ async def _fire_step_ha_action(step: RoutineStep) -> None:
     if not step.ha_action:
         return
     try:
-        from ha_integration import ha_client
+        from orchestrator.ha_integration import ha_client
 
         entity_id = step.ha_action.get("entity_id", "")
         service = step.ha_action.get("service", "")
@@ -536,7 +536,7 @@ async def _get_calendar_buffer() -> tuple:
     try:
         from zoneinfo import ZoneInfo
 
-        from google_calendar import get_calendar_client
+        from orchestrator.google_calendar import get_calendar_client
 
         client = get_calendar_client(http_client=shared._http)
         if not client or not client.is_configured:
@@ -564,7 +564,7 @@ async def _get_calendar_buffer() -> tuple:
 async def _get_calendar_summary_text(days_ahead: int = 0) -> str:
     """Get a brief calendar summary for step announcements."""
     try:
-        from google_calendar import get_calendar_client
+        from orchestrator.google_calendar import get_calendar_client
 
         client = get_calendar_client(http_client=shared._http)
         if not client or not client.is_configured:

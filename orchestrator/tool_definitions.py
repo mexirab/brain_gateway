@@ -9,8 +9,8 @@ import logging
 import time
 from typing import Any, Dict, List
 
-import shared
-from shared import _HA_TOOL_CACHE_TTL, ha_client
+from orchestrator import shared
+from orchestrator.shared import _HA_TOOL_CACHE_TTL, ha_client
 
 logger = logging.getLogger(__name__)
 

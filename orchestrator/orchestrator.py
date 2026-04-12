@@ -25,12 +25,12 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Configure structured JSON logging
-from log_config import configure_logging
+from orchestrator.log_config import configure_logging
 
 configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-from log_buffer import log_ring
+from orchestrator.log_buffer import log_ring
 
 logging.getLogger().addHandler(log_ring)
 
@@ -38,36 +38,36 @@ logging.getLogger().addHandler(log_ring)
 
 # Infrastructure
 # Shared state (singletons initialized at module level in shared.py)
-import shared
-import state_store
-
-# REST API routes (infrastructure endpoints)
-from api_routes import router as api_router
+from orchestrator import (
+    shared,
+    state_store,  # REST API routes (infrastructure endpoints)
+)
+from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
-from background_jobs import morning_briefing, poll_calendar
-from cloud_brain import CloudBrain
+from orchestrator.background_jobs import morning_briefing, poll_calendar
+from orchestrator.cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
-from fast_path import try_fast_path
-from finance_manager import router as finance_router
+from orchestrator.fast_path import try_fast_path
+from orchestrator.finance_manager import router as finance_router
 
 # Focus session management
-from focus_manager import deliver_focus_break
-from google_calendar import get_calendar_client
+from orchestrator.focus_manager import deliver_focus_break
+from orchestrator.google_calendar import get_calendar_client
 
 # Model lifecycle management
-from model_manager import check_model_health, start_model_server
-from pihole_client import get_pihole_client
+from orchestrator.model_manager import check_model_health, start_model_server
+from orchestrator.pihole_client import get_pihole_client
 
 # Prompts, RAG, helpers
-from prompt_builder import (
+from orchestrator.prompt_builder import (
     get_unified_system_prompt,
     is_greeting,
     last_user_text,
     rag_context,
 )
-from shared import (
+from orchestrator.shared import (
     CALENDAR_POLL_INTERVAL,
     FALLBACK_MODEL_NAME,
     FALLBACK_MODEL_URL,
@@ -81,19 +81,19 @@ from shared import (
 )
 
 # Tool definitions (schemas for unified mode)
-from tool_definitions import get_all_tools
+from orchestrator.tool_definitions import get_all_tools
 
 # Tool execution dispatcher
-from tool_handlers import deliver_reminder_job
+from orchestrator.tool_handlers import deliver_reminder_job
 
 # Unified tool loop (v7)
-from unified_loop import run_unified_tool_loop
+from orchestrator.unified_loop import run_unified_tool_loop
 
 # Load environment
 load_dotenv(os.path.expanduser("~/brain_gateway/.env"))
 
 # API authentication — from centralized config
-from config import settings as _cfg
+from orchestrator.config import settings as _cfg
 
 API_TOKEN = _cfg.api_token
 if not API_TOKEN:
@@ -230,7 +230,7 @@ app.include_router(finance_router)
 
 
 # Global exception handler for typed Brain Gateway errors
-from exceptions import BrainGatewayError, TransientError
+from orchestrator.exceptions import BrainGatewayError, TransientError
 
 
 @app.exception_handler(BrainGatewayError)
@@ -287,7 +287,7 @@ async def stream_final_response(url: str, model: str, messages: List[Dict], syst
 
 def _resolve_backend(url: str, model: str):
     """Pick the backend whose URL matches the call."""
-    from llm_backend import LLMConfig, OpenAICompatibleBackend
+    from orchestrator.llm_backend import LLMConfig, OpenAICompatibleBackend
 
     if shared.primary_backend and url == shared.primary_backend.config.url:
         return shared.primary_backend
@@ -312,7 +312,7 @@ async def chat_completions(req: Request):
 
     Delegates to CloudBrain for the full chat flow.
     """
-    from schemas import ChatRequest
+    from orchestrator.schemas import ChatRequest
 
     try:
         body = await req.json()
@@ -409,7 +409,7 @@ async def startup_event():
     state_store.cleanup_old_selfcare(keep_days=90)
 
     # Restore selfcare state from DB (must run after init_db creates tables)
-    from selfcare_manager import _restore_state as restore_selfcare
+    from orchestrator.selfcare_manager import _restore_state as restore_selfcare
 
     restore_selfcare()
 
@@ -419,7 +419,7 @@ async def startup_event():
         logger.info("[DND] Restored sleep mode from DB — announcements suppressed")
 
     # Initialize progress tracking DB (F-005)
-    import progress_tracker
+    from orchestrator import progress_tracker
 
     progress_tracker.init_db()
 
@@ -428,7 +428,7 @@ async def startup_event():
     shared.init_backends(_http)
 
     # Check external service health (non-blocking, logs results)
-    from service_registry import check_all_services
+    from orchestrator.service_registry import check_all_services
 
     await check_all_services()
 
@@ -562,8 +562,8 @@ async def startup_event():
 
     # Initialize routine manager (F-006)
     if shared.ROUTINE_ENABLED:
-        from background_jobs import trigger_routine
-        from routine_manager import load_routines
+        from orchestrator.background_jobs import trigger_routine
+        from orchestrator.routine_manager import load_routines
 
         await load_routines(shared.ROUTINES_YAML_PATH)
 
@@ -599,7 +599,7 @@ async def startup_event():
 
     # Schedule ambient awareness jobs (F-010)
     if shared.AMBIENT_ENABLED:
-        from background_jobs import ambient_summary, update_ambient_led
+        from orchestrator.background_jobs import ambient_summary, update_ambient_led
 
         # Periodic TTS summaries at configured times
         for _time_str in shared.AMBIENT_SUMMARY_TIMES.split(","):
@@ -636,7 +636,7 @@ async def startup_event():
 
     # Schedule self-care nudge checks (F-008)
     if shared.SELFCARE_ENABLED:
-        from background_jobs import check_selfcare
+        from orchestrator.background_jobs import check_selfcare
 
         scheduler.add_job(
             check_selfcare,
@@ -650,19 +650,19 @@ async def startup_event():
 
     # Schedule presence polling
     if shared.PRESENCE_ENABLED:
-        from presence_tracker import poll_presence
+        from orchestrator.presence_tracker import poll_presence
 
         async def _presence_poll_with_welcome():
             await poll_presence()
             # Check for welcome home greeting
             try:
-                from presence_tracker import check_welcome_home
+                from orchestrator.presence_tracker import check_welcome_home
 
                 if check_welcome_home() and not shared.DND_ACTIVE:
-                    from reminder_manager import _announce_voice
+                    from orchestrator.reminder_manager import _announce_voice
 
                     # Build a brief welcome status
-                    from state_store import get_pending_reminders
+                    from orchestrator.state_store import get_pending_reminders
 
                     pending = get_pending_reminders()
                     parts = ["Welcome home!"]
@@ -685,7 +685,7 @@ async def startup_event():
 
     # Schedule progress tracking jobs (F-005)
     if shared.PROGRESS_ENABLED:
-        from background_jobs import daily_progress_summary, weekly_progress_digest
+        from orchestrator.background_jobs import daily_progress_summary, weekly_progress_digest
 
         ds_hour, ds_minute = map(int, shared.DAILY_SUMMARY_TIME.split(":"))
         scheduler.add_job(

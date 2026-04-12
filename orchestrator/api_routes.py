@@ -18,10 +18,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-import shared
-from focus_manager import tool_start_focus, tool_stop_focus
-from google_calendar import get_calendar_client
-from metrics import (
+from orchestrator import shared
+from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
+from orchestrator.google_calendar import get_calendar_client
+from orchestrator.metrics import (
     FALLBACK_ONLINE,
     FOCUS_ACTIVE,
     HELIOS_ONLINE,
@@ -29,22 +29,22 @@ from metrics import (
     TEMPERATURE_DELTA,
     TEMPERATURE_GAUGE,
 )
-from model_manager import check_model_health
-from prompt_builder import rag_context
-from reminder_manager import _announce_voice, list_pending_reminders, mark_reminder_completed
-from routes_calendar import router as calendar_router
-from routes_chat import router as chat_router
-from routes_documents import router as documents_router
-from routes_shopping import router as shopping_router
-from routes_vision import router as vision_router
-from schemas import (
+from orchestrator.model_manager import check_model_health
+from orchestrator.prompt_builder import rag_context
+from orchestrator.reminder_manager import _announce_voice, list_pending_reminders, mark_reminder_completed
+from orchestrator.routes_calendar import router as calendar_router
+from orchestrator.routes_chat import router as chat_router
+from orchestrator.routes_documents import router as documents_router
+from orchestrator.routes_shopping import router as shopping_router
+from orchestrator.routes_vision import router as vision_router
+from orchestrator.schemas import (
     AnnounceRequest,
     FocusStartRequest,
     HACommandRequest,
     MemoryAddRequest,
     ReminderTriggerRequest,
 )
-from shared import (
+from orchestrator.shared import (
     CALENDAR_POLL_INTERVAL,
     CHROMA_COLLECTION,
     CHROMA_PERSIST,
@@ -65,7 +65,7 @@ from shared import (
     profile,
     scheduler,
 )
-from tool_handlers import deliver_reminder_job
+from orchestrator.tool_handlers import deliver_reminder_job
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ async def health(req: Request):
         },
     }
 
-    from tool_definitions import get_all_tools  # late import: avoids circular import at module load
+    from orchestrator.tool_definitions import get_all_tools  # late import: avoids circular import at module load
 
     primary_online = await check_model_health()
 
@@ -459,7 +459,7 @@ async def get_temperatures():
 @router.get("/api/memory/learned")
 async def list_learned_facts(category: Optional[str] = None, limit: int = 100):
     """List auto-learned facts (decrypted)."""
-    from auto_learn import get_learned_facts
+    from orchestrator.auto_learn import get_learned_facts
 
     facts = get_learned_facts(category=category, limit=limit)
     return JSONResponse({"count": len(facts), "facts": facts})
@@ -468,7 +468,7 @@ async def list_learned_facts(category: Optional[str] = None, limit: int = 100):
 @router.delete("/api/memory/learned/{doc_id}")
 async def delete_learned_fact_api(doc_id: str):
     """Delete a single auto-learned fact."""
-    from auto_learn import delete_learned_fact
+    from orchestrator.auto_learn import delete_learned_fact
 
     success = delete_learned_fact(doc_id)
     if success:
@@ -484,7 +484,7 @@ async def wipe_learned_facts(confirm: bool = False):
             {"ok": False, "error": "Pass ?confirm=true to wipe all learned facts"},
             status_code=400,
         )
-    from auto_learn import delete_all_learned_facts
+    from orchestrator.auto_learn import delete_all_learned_facts
 
     count = delete_all_learned_facts()
     return {"ok": True, "deleted_count": count}
@@ -493,7 +493,7 @@ async def wipe_learned_facts(confirm: bool = False):
 @router.get("/api/memory/learned/stats")
 async def learned_facts_stats():
     """Get auto-learn statistics."""
-    from auto_learn import get_learned_stats
+    from orchestrator.auto_learn import get_learned_stats
 
     return JSONResponse(get_learned_stats())
 
@@ -520,7 +520,7 @@ async def toggle_auto_learn():
 @router.get("/api/announcements/history")
 async def get_announcements_history(limit: int = 50, type: str = None):
     """Recent announcement history with speaker, success, and latency."""
-    from state_store import get_announcement_history
+    from orchestrator.state_store import get_announcement_history
 
     limit = max(1, min(limit, 500))
     history = get_announcement_history(limit=limit, announcement_type=type)
@@ -530,7 +530,7 @@ async def get_announcements_history(limit: int = 50, type: str = None):
 @router.get("/api/announcements/stats")
 async def get_announcements_stats():
     """Announcement statistics: success rates, speaker breakdown, latency."""
-    from state_store import get_announcement_stats
+    from orchestrator.state_store import get_announcement_stats
 
     return JSONResponse(get_announcement_stats())
 
@@ -538,7 +538,7 @@ async def get_announcements_stats():
 @router.delete("/api/announcements/history")
 async def clear_announcements_history():
     """Clear all announcement history."""
-    from state_store import clear_announcements
+    from orchestrator.state_store import clear_announcements
 
     deleted = clear_announcements()
     logger.info(f"[ANNOUNCE] Cleared {deleted} announcement(s)")
@@ -553,7 +553,7 @@ async def clear_announcements_history():
 @router.get("/api/ambient/status")
 async def get_ambient_status_endpoint():
     """Aggregated ambient status for dashboard and LED."""
-    from ambient_manager import get_ambient_status
+    from orchestrator.ambient_manager import get_ambient_status
 
     status = await get_ambient_status()
     return JSONResponse(status)
@@ -562,7 +562,7 @@ async def get_ambient_status_endpoint():
 @router.get("/api/progress/today")
 async def get_progress_today():
     """Today's progress stats."""
-    from progress_tracker import get_today_stats
+    from orchestrator.progress_tracker import get_today_stats
 
     return JSONResponse(get_today_stats())
 
@@ -570,7 +570,7 @@ async def get_progress_today():
 @router.get("/api/progress/week")
 async def get_progress_week():
     """This week's stats and trend vs prior week."""
-    from progress_tracker import get_week_stats
+    from orchestrator.progress_tracker import get_week_stats
 
     return JSONResponse(get_week_stats())
 
@@ -578,7 +578,7 @@ async def get_progress_week():
 @router.get("/api/progress/streaks")
 async def get_progress_streaks():
     """Active streaks."""
-    from progress_tracker import get_streaks
+    from orchestrator.progress_tracker import get_streaks
 
     return JSONResponse(get_streaks())
 
@@ -591,7 +591,7 @@ async def get_progress_streaks():
 @router.get("/api/presence/status")
 async def presence_status():
     """Get current presence state (home/away, room, last motion)."""
-    from presence_tracker import get_presence
+    from orchestrator.presence_tracker import get_presence
 
     return JSONResponse(get_presence())
 
@@ -604,6 +604,6 @@ async def presence_status():
 @router.get("/api/services")
 async def get_services_status():
     """Service health status — shows which external services are reachable."""
-    from service_registry import services
+    from orchestrator.service_registry import services
 
     return JSONResponse(services.status_summary())

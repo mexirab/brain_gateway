@@ -8,9 +8,9 @@ from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-import shared
-from google_calendar import get_calendar_client
-from shared import profile
+from orchestrator import shared
+from orchestrator.google_calendar import get_calendar_client
+from orchestrator.shared import profile
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.post("/api/email-to-calendar/run")
 async def run_email_to_calendar():
     """Manually trigger email-to-calendar extraction."""
-    from background_jobs import process_emails_for_events
+    from orchestrator.background_jobs import process_emails_for_events
 
     try:
         await process_emails_for_events()

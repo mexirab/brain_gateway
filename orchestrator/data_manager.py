@@ -164,7 +164,7 @@ def update_medication(name: str, dose: str = None, purpose: str = None, notes: s
 
 def _generate_medications_md(data: Dict[str, Any]) -> None:
     """Regenerate medications.md from YAML data."""
-    from user_profile import get_profile
+    from orchestrator.user_profile import get_profile
 
     lines = [f"# {get_profile().user_name}'s Medications", ""]
 

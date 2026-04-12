@@ -19,7 +19,7 @@ import pytest
 def _can_import_unified_loop():
     """Check if unified_loop can be imported (requires metrics + shared)."""
     try:
-        import unified_loop  # noqa: F401
+        from orchestrator import unified_loop  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -40,42 +40,42 @@ _skip_no_deps = pytest.mark.skipif(
 @_skip_no_deps
 class TestCleanResponse:
     def test_strips_think_tags(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         text = "<think>internal reasoning here</think>Hello, how can I help?"
         assert clean_response(text) == "Hello, how can I help?"
 
     def test_strips_tool_call_tags(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         text = '<tool_call>{"name": "search", "arguments": {}}</tool_call>Here is the result.'
         assert clean_response(text) == "Here is the result."
 
     def test_strips_both_tags(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         text = "<think>thinking...</think>Some text<tool_call>{}</tool_call> and more."
         assert clean_response(text) == "Some text and more."
 
     def test_multiline_think_tag(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         text = "<think>\nline 1\nline 2\n</think>\nActual response"
         assert clean_response(text) == "Actual response"
 
     def test_no_tags_passthrough(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         text = "Just a normal response with no tags."
         assert clean_response(text) == "Just a normal response with no tags."
 
     def test_empty_string(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         assert clean_response("") == ""
 
     def test_whitespace_stripped(self):
-        from unified_loop import clean_response
+        from orchestrator.unified_loop import clean_response
 
         assert clean_response("  hello  ") == "hello"
 
@@ -88,7 +88,7 @@ class TestCleanResponse:
 @_skip_no_deps
 class TestParseXmlToolCalls:
     def test_single_valid_tool_call(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = '<tool_call>{"name": "web_search", "arguments": {"query": "weather"}}</tool_call>'
         result = parse_xml_tool_calls(content)
@@ -100,7 +100,7 @@ class TestParseXmlToolCalls:
         assert parsed_args == {"query": "weather"}
 
     def test_multiple_tool_calls(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = (
             '<tool_call>{"name": "search_memory", "arguments": {"query": "meds"}}</tool_call>'
@@ -114,24 +114,24 @@ class TestParseXmlToolCalls:
         assert result[1]["function"]["name"] == "check_calendar"
 
     def test_malformed_json_skipped(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = "<tool_call>{not valid json}</tool_call>"
         result = parse_xml_tool_calls(content)
         assert result == []
 
     def test_empty_content(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         assert parse_xml_tool_calls("") == []
 
     def test_no_tool_call_tags(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         assert parse_xml_tool_calls("Just a normal response.") == []
 
     def test_arguments_as_string_passthrough(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = '<tool_call>{"name": "test", "arguments": "raw_string_args"}</tool_call>'
         result = parse_xml_tool_calls(content)
@@ -139,7 +139,7 @@ class TestParseXmlToolCalls:
         assert result[0]["function"]["arguments"] == "raw_string_args"
 
     def test_arguments_as_dict_serialized(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = '<tool_call>{"name": "test", "arguments": {"key": "val"}}</tool_call>'
         result = parse_xml_tool_calls(content)
@@ -148,7 +148,7 @@ class TestParseXmlToolCalls:
         assert parsed == {"key": "val"}
 
     def test_missing_name_field(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = '<tool_call>{"arguments": {"q": "test"}}</tool_call>'
         result = parse_xml_tool_calls(content)
@@ -156,7 +156,7 @@ class TestParseXmlToolCalls:
         assert result[0]["function"]["name"] == ""
 
     def test_mixed_valid_and_invalid(self):
-        from unified_loop import parse_xml_tool_calls
+        from orchestrator.unified_loop import parse_xml_tool_calls
 
         content = (
             '<tool_call>{"name": "good_tool", "arguments": {}}</tool_call>'
@@ -234,10 +234,10 @@ class TestRunUnifiedToolLoop:
         mock_call_model = AsyncMock(return_value=_make_llm_response("The weather is sunny today."))
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", new_callable=AsyncMock),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", new_callable=AsyncMock),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "What's the weather?"}],
@@ -266,10 +266,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Temperature: 75F, Condition: Sunny")
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "What's the weather in Austin?"}],
@@ -296,10 +296,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Turned on light.office")
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "Turn on office light"}],
@@ -332,10 +332,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Search result: found it")
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "Search for test"}],
@@ -367,10 +367,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock()
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "Do something bad"}],
@@ -398,10 +398,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="result")
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "Keep searching"}],
@@ -431,10 +431,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(return_value="Medication: Adderall 20mg daily")
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "What meds am I on?"}],
@@ -455,10 +455,10 @@ class TestRunUnifiedToolLoop:
         mock_call_model = AsyncMock(side_effect=Exception("Connection refused"))
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", new_callable=AsyncMock),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", new_callable=AsyncMock),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "Hello"}],
@@ -484,10 +484,10 @@ class TestRunUnifiedToolLoop:
         mock_execute_tool = AsyncMock(side_effect=RuntimeError("API timeout"))
 
         with (
-            patch("orchestrator.call_model", mock_call_model),
-            patch("tool_handlers.execute_tool", mock_execute_tool),
+            patch("orchestrator.orchestrator.call_model", mock_call_model),
+            patch("orchestrator.tool_handlers.execute_tool", mock_execute_tool),
         ):
-            from unified_loop import run_unified_tool_loop
+            from orchestrator.unified_loop import run_unified_tool_loop
 
             result = await run_unified_tool_loop(
                 messages=[{"role": "user", "content": "Search something"}],

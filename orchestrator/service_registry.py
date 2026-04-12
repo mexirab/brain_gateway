@@ -5,7 +5,7 @@ Tracks health of external services and auto-disables features when
 services are unavailable. Runs health checks at startup and periodically.
 
 Usage:
-    from service_registry import services, check_all_services
+    from orchestrator.service_registry import services, check_all_services
 
     if services.is_healthy("tts"):
         await announce(...)
@@ -22,7 +22,7 @@ from typing import Dict, List
 import httpx
 from prometheus_client import Gauge
 
-from config import settings
+from orchestrator.config import settings
 
 logger = logging.getLogger(__name__)
 

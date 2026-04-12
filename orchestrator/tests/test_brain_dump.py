@@ -19,7 +19,7 @@ import pytest
 def _can_import_brain_dump():
     """Check if brain_dump_manager can be imported."""
     try:
-        import brain_dump_manager  # noqa: F401
+        from orchestrator import brain_dump_manager  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -70,15 +70,15 @@ def mock_scheduler():
 def patched_brain_dump(mock_collection, mock_embedding_model, mock_scheduler):
     """Patch shared state and reminder dependencies for brain_dump_manager."""
     with (
-        patch("brain_dump_manager.collection", mock_collection),
-        patch("brain_dump_manager.embedding_model", mock_embedding_model),
-        patch("brain_dump_manager.BRAIN_DUMP_ITEMS_CAPTURED", MagicMock()),
-        patch("brain_dump_manager.BRAIN_DUMP_ITEMS_ROUTED", MagicMock()),
-        patch("brain_dump_manager.BRAIN_DUMP_RAG_LATENCY", MagicMock()),
-        patch("brain_dump_manager.BRAIN_DUMP_DUPLICATES_SKIPPED", MagicMock()),
-        patch("brain_dump_manager.BRAIN_DUMP_ERRORS", MagicMock()),
+        patch("orchestrator.brain_dump_manager.collection", mock_collection),
+        patch("orchestrator.brain_dump_manager.embedding_model", mock_embedding_model),
+        patch("orchestrator.brain_dump_manager.BRAIN_DUMP_ITEMS_CAPTURED", MagicMock()),
+        patch("orchestrator.brain_dump_manager.BRAIN_DUMP_ITEMS_ROUTED", MagicMock()),
+        patch("orchestrator.brain_dump_manager.BRAIN_DUMP_RAG_LATENCY", MagicMock()),
+        patch("orchestrator.brain_dump_manager.BRAIN_DUMP_DUPLICATES_SKIPPED", MagicMock()),
+        patch("orchestrator.brain_dump_manager.BRAIN_DUMP_ERRORS", MagicMock()),
     ):
-        import brain_dump_manager
+        from orchestrator import brain_dump_manager
 
         yield brain_dump_manager, mock_collection, mock_embedding_model, mock_scheduler
 
@@ -95,7 +95,7 @@ class TestSingleItemDump:
         bdm, coll, emb, sched = patched_brain_dump
 
         with (
-            patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem,
+            patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem,
         ):
             mock_rem.return_value = "added as a reminder"
 
@@ -200,7 +200,11 @@ class TestCategorization:
     @pytest.mark.asyncio
     async def test_reminder_category(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock, return_value="added as a reminder"):
+        with patch(
+            "orchestrator.brain_dump_manager._route_to_reminder",
+            new_callable=AsyncMock,
+            return_value="added as a reminder",
+        ):
             result = await bdm.process_brain_dump([{"text": "call doctor at 3pm", "category": "reminder"}])
         assert result.items[0].category == "reminder"
 
@@ -240,7 +244,7 @@ class TestReminderRouting:
     async def test_reminder_category_routes_to_reminder(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
             mock_rem.return_value = "added as a reminder"
             result = await bdm.process_brain_dump(
                 [
@@ -255,7 +259,7 @@ class TestReminderRouting:
     async def test_urgent_task_routes_to_reminder(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
             mock_rem.return_value = "added as a reminder"
             result = await bdm.process_brain_dump(
                 [
@@ -269,7 +273,7 @@ class TestReminderRouting:
     async def test_today_errand_routes_to_reminder(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
             mock_rem.return_value = "added as a reminder"
             result = await bdm.process_brain_dump(
                 [
@@ -283,7 +287,7 @@ class TestReminderRouting:
     async def test_someday_task_goes_to_rag_not_reminder(self, patched_brain_dump):
         bdm, coll, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
             result = await bdm.process_brain_dump(
                 [
                     {"text": "reorganize bookshelf", "category": "task", "urgency": "someday"},
@@ -303,10 +307,10 @@ class TestReminderRouting:
         mock_trigger = datetime.now() + timedelta(minutes=5)
 
         with (
-            patch("reminder_manager.add_reminder") as mock_add,
-            patch("reminder_manager.parse_time_expression", return_value=(mock_trigger, None)),
-            patch("tool_handlers.deliver_reminder_job"),
-            patch("shared.scheduler") as mock_sched,
+            patch("orchestrator.reminder_manager.add_reminder") as mock_add,
+            patch("orchestrator.reminder_manager.parse_time_expression", return_value=(mock_trigger, None)),
+            patch("orchestrator.tool_handlers.deliver_reminder_job"),
+            patch("orchestrator.shared.scheduler") as mock_sched,
         ):
             item = bdm.CapturedItem(raw_text="call dentist", category="reminder", urgency="now")
             confirmation = await bdm._route_to_reminder(item)
@@ -585,7 +589,11 @@ class TestInputValidation:
     async def test_all_valid_categories_accepted(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock, return_value="added as a reminder"):
+        with patch(
+            "orchestrator.brain_dump_manager._route_to_reminder",
+            new_callable=AsyncMock,
+            return_value="added as a reminder",
+        ):
             items = [{"text": f"item for {cat}", "category": cat} for cat in bdm.VALID_CATEGORIES]
             result = await bdm.process_brain_dump(items)
 
@@ -730,7 +738,7 @@ class TestRouteItem:
     async def test_reminder_category_dispatches_to_reminder(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
             mock_rem.return_value = "added as a reminder"
             item = bdm.CapturedItem(raw_text="call mom", category="reminder")
             result = await bdm.route_item(item)
@@ -742,7 +750,7 @@ class TestRouteItem:
     async def test_task_with_now_urgency_dispatches_to_reminder(self, patched_brain_dump):
         bdm, *_ = patched_brain_dump
 
-        with patch("brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
             mock_rem.return_value = "added as a reminder"
             item = bdm.CapturedItem(raw_text="send email", category="task", urgency="now")
             result = await bdm.route_item(item)

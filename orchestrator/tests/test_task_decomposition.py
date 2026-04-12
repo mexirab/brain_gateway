@@ -19,7 +19,7 @@ import pytest
 def _can_import_task_decomp():
     """Check if task_decomposition can be imported."""
     try:
-        import task_decomposition  # noqa: F401
+        from orchestrator import task_decomposition  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -68,15 +68,14 @@ def _sample_steps(n=3, base_minutes=10):
 def patched_td():
     """Patch metrics and reset module state for each test."""
     with (
-        patch("task_decomposition.TASK_DECOMP_TASKS_CREATED", MagicMock()),
-        patch("task_decomposition.TASK_DECOMP_STEPS_COMPLETED", MagicMock()),
-        patch("task_decomposition.TASK_DECOMP_STEPS_SKIPPED", MagicMock()),
-        patch("task_decomposition.TASK_DECOMP_TASKS_ABANDONED", MagicMock()),
-        patch("task_decomposition.TASK_DECOMP_ERRORS", MagicMock()),
+        patch("orchestrator.task_decomposition.TASK_DECOMP_TASKS_CREATED", MagicMock()),
+        patch("orchestrator.task_decomposition.TASK_DECOMP_STEPS_COMPLETED", MagicMock()),
+        patch("orchestrator.task_decomposition.TASK_DECOMP_STEPS_SKIPPED", MagicMock()),
+        patch("orchestrator.task_decomposition.TASK_DECOMP_TASKS_ABANDONED", MagicMock()),
+        patch("orchestrator.task_decomposition.TASK_DECOMP_ERRORS", MagicMock()),
     ):
-        import task_decomposition
+        from orchestrator import task_decomposition  # Clear active tasks between tests
 
-        # Clear active tasks between tests
         task_decomposition._active_tasks.clear()
         yield task_decomposition
 
@@ -93,7 +92,7 @@ class TestDecomposeTask:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             result = await td.decompose_task("Clean the kitchen")
 
@@ -109,7 +108,7 @@ class TestDecomposeTask:
         td = patched_td
         steps = [{"description": "Do thing", "est_minutes": 10}]
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Some task")
 
@@ -122,7 +121,7 @@ class TestDecomposeTask:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             result = await td.decompose_task("File taxes")
 
@@ -135,7 +134,7 @@ class TestDecomposeTask:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             result = await td.decompose_task("Do laundry", mode="next_step_only")
 
@@ -148,7 +147,7 @@ class TestDecomposeTask:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             result = await td.decompose_task("Organize desk", mode="full_list")
 
@@ -164,7 +163,7 @@ class TestDecomposeTask:
         td = patched_td
         bad_response = {"choices": [{"message": {"content": "This is not JSON at all"}}]}
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = bad_response
             result = await td.decompose_task("Buy groceries")
 
@@ -179,7 +178,7 @@ class TestDecomposeTask:
         # Model returns a JSON object instead of a list
         bad_response = {"choices": [{"message": {"content": '{"step": "do thing"}'}}]}
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = bad_response
             result = await td.decompose_task("Fix bike")
 
@@ -190,7 +189,7 @@ class TestDecomposeTask:
     async def test_model_call_failure_returns_error_string(self, patched_td):
         td = patched_td
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.side_effect = RuntimeError("Connection refused")
             result = await td.decompose_task("Plan vacation")
 
@@ -203,7 +202,7 @@ class TestDecomposeTask:
         long_text = "x" * 2000
         steps = [{"description": "Do it", "est_minutes": 10}]
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task(long_text)
 
@@ -217,7 +216,7 @@ class TestDecomposeTask:
         fenced_content = f"```json\n{json.dumps(steps)}\n```"
         response = {"choices": [{"message": {"content": fenced_content}}]}
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = response
             result = await td.decompose_task("Paint the wall")
 
@@ -244,7 +243,7 @@ class TestGetNextStep:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Test task")
 
@@ -271,7 +270,7 @@ class TestCompleteStep:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Build shelf")
 
@@ -288,7 +287,7 @@ class TestCompleteStep:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Quick task")
 
@@ -318,7 +317,7 @@ class TestSkipStep:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Long project")
 
@@ -335,7 +334,7 @@ class TestSkipStep:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Skip everything")
 
@@ -360,7 +359,7 @@ class TestAbandonTask:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Abandoned task")
 
@@ -376,7 +375,7 @@ class TestAbandonTask:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Give up task")
 
@@ -395,7 +394,7 @@ class TestAbandonTask:
         td = patched_td
         steps = _sample_steps(3)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Partial task")
 
@@ -429,7 +428,7 @@ class TestListActiveTasks:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Only task")
 
@@ -443,7 +442,7 @@ class TestListActiveTasks:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Task A")
             await td.decompose_task("Task B")
@@ -471,7 +470,7 @@ class TestGetActiveTasksContext:
         td = patched_td
         steps = _sample_steps(2)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Context task")
 
@@ -493,7 +492,7 @@ class TestResourceCaps:
         td = patched_td
         steps = _sample_steps(1)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
 
             # Fill to MAX_ACTIVE_TASKS
@@ -520,7 +519,7 @@ class TestResourceCaps:
         # Generate more steps than the cap
         steps = _sample_steps(td.MAX_STEPS_PER_TASK + 10)
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Huge task")
 
@@ -540,7 +539,7 @@ class TestEstMinutesValidation:
         td = patched_td
         steps = [{"description": "Do thing", "est_minutes": "not a number"}]
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Weird input")
 
@@ -553,7 +552,7 @@ class TestEstMinutesValidation:
         td = patched_td
         steps = [{"description": "Tiny step", "est_minutes": -5}]
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Min clamp")
 
@@ -566,7 +565,7 @@ class TestEstMinutesValidation:
         td = patched_td
         steps = [{"description": "Huge step", "est_minutes": 999}]
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("Max clamp")
 
@@ -579,7 +578,7 @@ class TestEstMinutesValidation:
         td = patched_td
         steps = [{"description": "No time given"}]
 
-        with patch("orchestrator.call_model", new_callable=AsyncMock) as mock_call:
+        with patch("orchestrator.orchestrator.call_model", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = _make_model_response(steps)
             await td.decompose_task("No estimate")
 

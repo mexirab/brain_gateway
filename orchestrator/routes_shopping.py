@@ -13,7 +13,7 @@ router = APIRouter()
 @router.get("/api/shopping")
 async def get_shopping(list_name: str = None, include_checked: bool = False):
     """Get shopping list items."""
-    from state_store import get_shopping_list
+    from orchestrator.state_store import get_shopping_list
 
     items = get_shopping_list(list_name=list_name, include_checked=include_checked)
     return JSONResponse(items)
@@ -22,7 +22,7 @@ async def get_shopping(list_name: str = None, include_checked: bool = False):
 @router.post("/api/shopping")
 async def add_shopping(req: Request):
     """Add an item to the shopping list."""
-    from state_store import add_shopping_item
+    from orchestrator.state_store import add_shopping_item
 
     body = await req.json()
     item = str(body.get("item", "")).strip()[:200]
@@ -36,7 +36,7 @@ async def add_shopping(req: Request):
 @router.post("/api/shopping/{item_id}/check")
 async def check_shopping(item_id: int):
     """Check off a shopping list item."""
-    from state_store import check_shopping_item
+    from orchestrator.state_store import check_shopping_item
 
     ok = check_shopping_item(item_id, checked=True)
     return JSONResponse({"ok": ok})
@@ -45,7 +45,7 @@ async def check_shopping(item_id: int):
 @router.post("/api/shopping/{item_id}/uncheck")
 async def uncheck_shopping(item_id: int):
     """Uncheck a shopping list item."""
-    from state_store import check_shopping_item
+    from orchestrator.state_store import check_shopping_item
 
     ok = check_shopping_item(item_id, checked=False)
     return JSONResponse({"ok": ok})
@@ -54,7 +54,7 @@ async def uncheck_shopping(item_id: int):
 @router.delete("/api/shopping/checked")
 async def clear_checked(list_name: str = None):
     """Clear all checked items."""
-    from state_store import clear_checked_items
+    from orchestrator.state_store import clear_checked_items
 
     count = clear_checked_items(list_name)
     return JSONResponse({"ok": True, "cleared": count})
@@ -63,7 +63,7 @@ async def clear_checked(list_name: str = None):
 @router.delete("/api/shopping/{item_id}")
 async def delete_shopping(item_id: int):
     """Delete a shopping list item."""
-    from state_store import remove_shopping_item
+    from orchestrator.state_store import remove_shopping_item
 
     ok = remove_shopping_item(item_id)
     return JSONResponse({"ok": ok})

@@ -7,7 +7,7 @@ intensity detection, curiosity detection, and default routing.
 
 import pytest
 
-from mode_router import ModeRouter
+from orchestrator.mode_router import ModeRouter
 
 
 @pytest.fixture

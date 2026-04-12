@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
-import shared
-from metrics import (
+from orchestrator import shared
+from orchestrator.metrics import (
     TASK_DECOMP_ERRORS,
     TASK_DECOMP_STEPS_COMPLETED,
     TASK_DECOMP_STEPS_SKIPPED,
@@ -62,7 +62,7 @@ async def decompose_task(task_text: str, mode: str = "next_step_only", context: 
     Calls the LLM with a tight prompt to produce structured steps,
     then stores the result and returns a TTS-friendly summary.
     """
-    from orchestrator import call_model
+    from orchestrator.orchestrator import call_model
 
     if not task_text:
         return "Please tell me what task you'd like me to break down."
@@ -196,7 +196,7 @@ def complete_step(task_id: str) -> str:
 
     # Record task step completion (F-005)
     try:
-        import progress_tracker
+        from orchestrator import progress_tracker
 
         progress_tracker.record_event("task_done", {})
     except Exception as e:
@@ -217,7 +217,7 @@ def complete_step(task_id: str) -> str:
     try:
         import asyncio as _asyncio
 
-        import context_tracker as _ct
+        from orchestrator import context_tracker as _ct
 
         _asyncio.ensure_future(
             _ct.record_context(
@@ -381,7 +381,7 @@ def _format_completion_summary(task: DecomposedTask) -> str:
     try:
         import asyncio
 
-        import progress_tracker
+        from orchestrator import progress_tracker
 
         asyncio.ensure_future(progress_tracker.check_and_announce_streaks())
     except Exception:

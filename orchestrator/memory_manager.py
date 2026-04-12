@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import List, Tuple
 
-import shared
+from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 

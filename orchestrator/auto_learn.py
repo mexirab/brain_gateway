@@ -24,8 +24,8 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
-import shared
-from metrics import (
+from orchestrator import shared
+from orchestrator.metrics import (
     AUTO_LEARN_DUPLICATES_SKIPPED,
     AUTO_LEARN_EXTRACTION_LATENCY,
     AUTO_LEARN_EXTRACTIONS_TOTAL,
@@ -250,7 +250,7 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
     prompt = _EXTRACTION_PROMPT.replace("{conversation}", conversation_text)
 
     try:
-        from orchestrator import call_model
+        from orchestrator.orchestrator import call_model
 
         model_url = shared.MODEL_URL
         model_name = shared.MODEL_NAME

@@ -11,13 +11,13 @@ import re
 import time
 from typing import Any, Dict, List
 
-from metrics import (
+from orchestrator.metrics import (
     LLM_CALL_COUNT,
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
     TOOL_ROUNDS,
 )
-from shared import MAX_TOOL_ROUNDS
+from orchestrator.shared import MAX_TOOL_ROUNDS
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +170,8 @@ async def run_unified_tool_loop(
         Final text response from the model.
     """
     # Import here to avoid circular import (tool_handlers imports shared)
-    from orchestrator import call_model
-    from tool_handlers import execute_tool
+    from orchestrator.orchestrator import call_model
+    from orchestrator.tool_handlers import execute_tool
 
     # Voice mode: reduce max_tokens for shorter responses (faster TTS)
     # Keep thinking enabled — disabling it causes the model to skip tool calls

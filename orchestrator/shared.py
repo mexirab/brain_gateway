@@ -18,12 +18,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
-from config import settings
-from focus_state import FocusSession
-from ha_integration import HomeAssistantClient
-from llm_backend import LLMBackend, LLMConfig, create_backend
-from tts_backend import TTSBackend, TTSConfig, create_tts_backend
-from user_profile import get_profile
+from orchestrator.config import settings
+from orchestrator.focus_state import FocusSession
+from orchestrator.ha_integration import HomeAssistantClient
+from orchestrator.llm_backend import LLMBackend, LLMConfig, create_backend
+from orchestrator.tts_backend import TTSBackend, TTSConfig, create_tts_backend
+from orchestrator.user_profile import get_profile
 
 # ---------------------------------------------------------------------------
 # User profile (loaded once at import time)
@@ -67,7 +67,7 @@ def init_backends(http_client: httpx.AsyncClient):
     try:
         import yaml
 
-        from user_profile import _find_profile_path
+        from orchestrator.user_profile import _find_profile_path
 
         path = _find_profile_path()
         if path:

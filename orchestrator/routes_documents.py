@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-import shared
+from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ router = APIRouter()
 @router.get("/api/documents")
 async def list_docs(category: str = "", search: str = "", limit: int = 50, offset: int = 0):
     """List documents with optional filtering."""
-    from state_store import list_documents
+    from orchestrator.state_store import list_documents
 
     docs = list_documents(category=category or None, search=search or None, limit=min(limit, 200), offset=offset)
     # Don't send full extracted_text in list view
@@ -29,7 +29,7 @@ async def list_docs(category: str = "", search: str = "", limit: int = 50, offse
 @router.get("/api/documents/categories")
 async def document_categories():
     """Document counts per category."""
-    from state_store import get_document_categories
+    from orchestrator.state_store import get_document_categories
 
     return JSONResponse(get_document_categories())
 
@@ -37,7 +37,7 @@ async def document_categories():
 @router.get("/api/documents/{doc_id}")
 async def get_doc(doc_id: str):
     """Get a single document with full metadata."""
-    from state_store import get_document
+    from orchestrator.state_store import get_document
 
     doc = get_document(doc_id)
     if not doc:
@@ -56,8 +56,8 @@ async def upload_document(
     """Upload a document to the vault."""
     import uuid
 
-    from document_processor import extract_text, save_uploaded_file, validate_upload
-    from state_store import save_document
+    from orchestrator.document_processor import extract_text, save_uploaded_file, validate_upload
+    from orchestrator.state_store import save_document
 
     file_bytes = await file.read()
     filename = file.filename or "upload"
@@ -71,7 +71,7 @@ async def upload_document(
     relative_path = save_uploaded_file(file_bytes, filename, category)
 
     # Extract text
-    from document_processor import get_full_path
+    from orchestrator.document_processor import get_full_path
 
     extracted = extract_text(get_full_path(relative_path))
 
@@ -129,7 +129,7 @@ async def upload_document(
 @router.put("/api/documents/{doc_id}")
 async def update_doc(doc_id: str, request: Request):
     """Update document metadata."""
-    from state_store import update_document
+    from orchestrator.state_store import update_document
 
     body = await request.json()
     ok = update_document(doc_id, body)
@@ -141,8 +141,8 @@ async def update_doc(doc_id: str, request: Request):
 @router.delete("/api/documents/{doc_id}")
 async def delete_doc(doc_id: str):
     """Delete a document (file + metadata + RAG)."""
-    from document_processor import delete_file
-    from state_store import delete_document
+    from orchestrator.document_processor import delete_file
+    from orchestrator.state_store import delete_document
 
     doc = delete_document(doc_id)
     if not doc:
@@ -167,8 +167,8 @@ async def delete_doc(doc_id: str):
 @router.get("/api/documents/{doc_id}/download")
 async def download_doc(doc_id: str):
     """Download the original document file."""
-    from document_processor import get_full_path
-    from state_store import get_document
+    from orchestrator.document_processor import get_full_path
+    from orchestrator.state_store import get_document
 
     doc = get_document(doc_id)
     if not doc:
@@ -182,7 +182,7 @@ async def download_doc(doc_id: str):
 @router.get("/api/documents/{doc_id}/text")
 async def get_doc_text(doc_id: str):
     """Get extracted text for a document."""
-    from state_store import get_document
+    from orchestrator.state_store import get_document
 
     doc = get_document(doc_id)
     if not doc:

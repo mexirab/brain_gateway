@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from google_auth import get_credentials
+from orchestrator.google_auth import get_credentials
 
 logger = logging.getLogger(__name__)
 

@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
-import shared
-from metrics import (
+from orchestrator import shared
+from orchestrator.metrics import (
     ACTIVE_REQUESTS,
     FAST_PATH_COUNT,
     MODE_ROUTE_COUNT,
@@ -24,7 +24,7 @@ from metrics import (
     REQUEST_ERRORS,
     REQUEST_LATENCY,
 )
-from mode_router import get_mode_router
+from orchestrator.mode_router import get_mode_router
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,7 @@ class CloudBrain:
         if not shared.VISION_ENABLED:
             return messages
 
-        from vision_handler import analyze_image, extract_images_from_messages
+        from orchestrator.vision_handler import analyze_image, extract_images_from_messages
 
         images = extract_images_from_messages(messages)
         if not images:
@@ -441,7 +441,7 @@ class CloudBrain:
     @staticmethod
     async def _run_auto_learn_job(session_key: str):
         """Scheduler callback: run auto-learn and clear conversation cache."""
-        from auto_learn import run_auto_learn
+        from orchestrator.auto_learn import run_auto_learn
 
         messages = shared._auto_learn_conversations.pop(session_key, None)
         if messages:

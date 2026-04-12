@@ -17,7 +17,7 @@ import pytest
 
 def _can_import():
     try:
-        import routine_manager  # noqa: F401
+        from orchestrator import routine_manager  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -78,7 +78,7 @@ def setup_routine_manager():
     if not _can_import():
         pytest.skip("orchestrator deps not available")
 
-    import routine_manager
+    from orchestrator import routine_manager
 
     routine_manager._active_session = None
     routine_manager._routines = SAMPLE_ROUTINES["routines"]

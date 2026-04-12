@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-import shared
+from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 

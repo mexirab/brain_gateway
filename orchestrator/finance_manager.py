@@ -172,14 +172,14 @@ WINDFALL_MONTHS = {"03": "bonus", "06": "espp", "10": "bonus", "12": "espp"}
 
 def get_db():
     """Get a SQLite connection with row factory."""
-    from db import get_db as _get_db
+    from orchestrator.db import get_db as _get_db
 
     return _get_db(DB_PATH, foreign_keys=False)
 
 
 def init_db():
     """Initialize database schema and seed data."""
-    from db import init_db as _init_db
+    from orchestrator.db import init_db as _init_db
 
     _init_db(DB_PATH, SCHEMA_SQL, foreign_keys=False)
     with get_db() as conn:

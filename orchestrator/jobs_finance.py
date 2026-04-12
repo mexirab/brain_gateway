@@ -7,15 +7,15 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from reminder_manager import _announce_voice
-from shared import TIMEZONE, profile
+from orchestrator.reminder_manager import _announce_voice
+from orchestrator.shared import TIMEZONE, profile
 
 logger = logging.getLogger(__name__)
 
 
 async def sync_ynab_transactions():
     """Background job: sync transactions from YNAB."""
-    from finance_manager import _is_ynab_configured, ynab_sync_transactions
+    from orchestrator.finance_manager import _is_ynab_configured, ynab_sync_transactions
 
     if not _is_ynab_configured():
         return
@@ -30,7 +30,7 @@ async def sync_ynab_transactions():
 
 async def weekly_spending_summary():
     """Sunday evening: announce weekly spending summary via TTS."""
-    from finance_manager import (
+    from orchestrator.finance_manager import (
         _ensure_budget_period,
         _get_level_info,
         get_db,
@@ -81,7 +81,7 @@ async def weekly_spending_summary():
 
 async def midmonth_budget_warning():
     """Mid-month check: if over 60% of discretionary spent, announce warning via TTS."""
-    from finance_manager import _ensure_budget_period, get_db
+    from orchestrator.finance_manager import _ensure_budget_period, get_db
 
     tz = ZoneInfo(TIMEZONE)
     today = datetime.now(tz)

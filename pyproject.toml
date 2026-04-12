@@ -47,6 +47,10 @@ known-first-party = ["orchestrator"]
 "orchestrator/tests/**" = ["E", "F841"]       # relaxed for tests
 "orchestrator/background_jobs.py" = ["E741"]  # single-letter var in list comp
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["orchestrator/tests"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

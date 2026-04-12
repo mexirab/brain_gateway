@@ -1,20 +1,13 @@
 """Tests for orchestrator/exceptions.py — exception hierarchy and attributes."""
 
-import importlib
-import os
-
-# Force import from orchestrator dir (not stdlib 'exceptions')
-_mod_path = os.path.join(os.path.dirname(__file__), "..", "exceptions.py")
-_spec = importlib.util.spec_from_file_location("exceptions", _mod_path)
-_exceptions = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_exceptions)
-
-BrainGatewayError = _exceptions.BrainGatewayError
-ConfigError = _exceptions.ConfigError
-ExternalServiceError = _exceptions.ExternalServiceError
-ToolError = _exceptions.ToolError
-ToolNotFoundError = _exceptions.ToolNotFoundError
-TransientError = _exceptions.TransientError
+from orchestrator.exceptions import (
+    BrainGatewayError,
+    ConfigError,
+    ExternalServiceError,
+    ToolError,
+    ToolNotFoundError,
+    TransientError,
+)
 
 
 class TestHierarchy:

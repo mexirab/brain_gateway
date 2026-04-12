@@ -13,13 +13,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-import state_store
-from user_profile import get_profile
+from orchestrator import state_store
+from orchestrator.user_profile import get_profile
 
 logger = logging.getLogger(__name__)
 
 # Home Assistant config — sourced from centralized settings
-from config import settings as _settings
+from orchestrator.config import settings as _settings
 
 HA_URL = _settings.ha_url
 HA_TOKEN = _settings.ha_token
@@ -205,7 +205,7 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
     """
     import time as _time
 
-    import shared
+    from orchestrator import shared
 
     t0 = _time.time()
 
@@ -333,7 +333,7 @@ def _record_announcement(
         logger.warning(f"Failed to record announcement: {e}")
 
     try:
-        from metrics import TTS_ANNOUNCEMENTS_TOTAL, TTS_ERRORS_TOTAL, TTS_LATENCY
+        from orchestrator.metrics import TTS_ANNOUNCEMENTS_TOTAL, TTS_ERRORS_TOTAL, TTS_LATENCY
 
         # Sanitize speaker label to prevent Prometheus cardinality explosion from untrusted input
         safe_speaker = re.sub(r"[^a-zA-Z0-9_:.\-]", "_", speaker or "none")[:50]
