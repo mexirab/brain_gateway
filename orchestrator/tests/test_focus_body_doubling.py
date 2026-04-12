@@ -111,7 +111,7 @@ def patched_focus(mock_pihole, mock_ha, mock_scheduler, mock_state_store, mock_a
     from orchestrator import focus_manager, shared
 
     session = _default_session()
-    original_session = shared.current_focus_session.copy()
+    original_session = shared.current_focus_session.to_dict()
 
     with (
         patch.object(shared, "current_focus_session", session),
