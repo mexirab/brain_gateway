@@ -119,7 +119,6 @@ async def palace_stats():
 @router.post("/api/palace/mine")
 async def palace_mine(req: Request):
     """Trigger session mining for Claude Code sessions."""
-    from orchestrator.shared import get_palace
 
     body = await req.json() if req.headers.get("content-type", "").startswith("application/json") else {}
     session_path = body.get("session_path", "")

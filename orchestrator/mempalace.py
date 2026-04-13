@@ -228,9 +228,7 @@ class MemPalace:
             if where_filter:
                 kwargs["where"] = where_filter
 
-            results = await asyncio.to_thread(
-                lambda: self._collection.query(**kwargs)
-            )
+            results = await asyncio.to_thread(lambda: self._collection.query(**kwargs))
         except Exception as e:
             logger.error("[PALACE] Search failed: %s", e)
             PALACE_SEARCH_LATENCY.observe(time.time() - t0)
@@ -254,22 +252,21 @@ class MemPalace:
             # correction docs, and file markers bypass decrypt_text entirely,
             # which would otherwise return a "[encrypted — decryption failed]"
             # placeholder for legitimate plaintext data.
-            is_encrypted = (
-                str(meta.get("encrypted", "")).lower() == "true"
-                or doc.startswith("gAAAAAB")
-            )
+            is_encrypted = str(meta.get("encrypted", "")).lower() == "true" or doc.startswith("gAAAAAB")
             text = decrypt_text(doc) if is_encrypted else doc
-            memories.append({
-                "id": doc_id,
-                "text": text,
-                "wing": meta.get("wing", ""),
-                "room": meta.get("room", ""),
-                "source": meta.get("source", ""),
-                "category": meta.get("category", ""),
-                "confidence": meta.get("confidence", ""),
-                "score": round(cos_sim, 3),
-                "created_at": meta.get("created_at", ""),
-            })
+            memories.append(
+                {
+                    "id": doc_id,
+                    "text": text,
+                    "wing": meta.get("wing", ""),
+                    "room": meta.get("room", ""),
+                    "source": meta.get("source", ""),
+                    "category": meta.get("category", ""),
+                    "confidence": meta.get("confidence", ""),
+                    "score": round(cos_sim, 3),
+                    "created_at": meta.get("created_at", ""),
+                }
+            )
 
         PALACE_SEARCH_LATENCY.observe(time.time() - t0)
         logger.info("[PALACE] Search '%s' returned %d results (%.2fs)", query[:50], len(memories), time.time() - t0)
@@ -291,10 +288,7 @@ class MemPalace:
                 return None
             raw = docs[0]
             meta = metas[0] if metas else {}
-            is_encrypted = (
-                str((meta or {}).get("encrypted", "")).lower() == "true"
-                or raw.startswith("gAAAAAB")
-            )
+            is_encrypted = str((meta or {}).get("encrypted", "")).lower() == "true" or raw.startswith("gAAAAAB")
             text = decrypt_text(raw) if is_encrypted else raw
             return {
                 "id": doc_id,
@@ -395,9 +389,7 @@ class MemPalace:
             if where_filter:
                 kwargs["where"] = where_filter
 
-            results = await asyncio.to_thread(
-                lambda: self._collection.query(**kwargs)
-            )
+            results = await asyncio.to_thread(lambda: self._collection.query(**kwargs))
 
             docs = results.get("documents", [[]])[0]
             dists = results.get("distances", [[]])[0]

@@ -28,6 +28,7 @@ delta strategy: only files whose SHA-256 hash differs from the stored
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import os
@@ -94,7 +95,7 @@ def _split_markdown_by_headers(text: str) -> List[Tuple[str, str]]:
             if existing_lvl > lvl:
                 del parent_headers[existing_lvl]
 
-        context_parts = [parent_headers[l] for l in sorted(parent_headers.keys()) if l < lvl]
+        context_parts = [parent_headers[pl] for pl in sorted(parent_headers.keys()) if pl < lvl]
         if context_parts:
             chunk_content = "\n".join(context_parts) + f"\n\n{header_line}\n\n{body}"
         else:
@@ -194,7 +195,7 @@ def _run_ingest_sync() -> Dict[str, int]:
         metas = res.get("metadatas", [])
         if not ids:
             break
-        for doc_id, meta in zip(ids, metas):
+        for doc_id, meta in zip(ids, metas, strict=False):
             if doc_id.startswith("file::") and meta and "file_path" in meta:
                 existing_hash_by_rel[meta["file_path"]] = meta.get("file_hash", "")
         offset += len(ids)
@@ -221,17 +222,11 @@ def _run_ingest_sync() -> Dict[str, int]:
 
         # Changed or new: clear the old chunks and marker, queue new ones
         stats["deleted_chunks"] += _delete_by_file_path(rel)
-        try:
+        with contextlib.suppress(Exception):
             coll.delete(ids=[f"file::{rel}"])
-        except Exception:
-            pass
         stats["changed_files"] += 1
 
-        sections = (
-            _split_markdown_by_headers(raw)
-            if f.suffix.lower() == ".md"
-            else [("document", raw)]
-        )
+        sections = _split_markdown_by_headers(raw) if f.suffix.lower() == ".md" else [("document", raw)]
         filehash_prefix = h[:12]
         chunk_count = 0
         for sec_title, sec_text in sections:
@@ -266,10 +261,8 @@ def _run_ingest_sync() -> Dict[str, int]:
     removed = set(existing_hash_by_rel.keys()) - seen
     for rel in removed:
         stats["deleted_chunks"] += _delete_by_file_path(rel)
-        try:
+        with contextlib.suppress(Exception):
             coll.delete(ids=[f"file::{rel}"])
-        except Exception:
-            pass
         stats["changed_files"] += 1
 
     # 4. Batch upsert

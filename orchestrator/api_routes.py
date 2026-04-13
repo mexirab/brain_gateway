@@ -35,8 +35,8 @@ from orchestrator.reminder_manager import _announce_voice, list_pending_reminder
 from orchestrator.routes_calendar import router as calendar_router
 from orchestrator.routes_chat import router as chat_router
 from orchestrator.routes_documents import router as documents_router
-from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_palace import router as palace_router
+from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_vision import router as vision_router
 from orchestrator.schemas import (
     AnnounceRequest,
@@ -643,11 +643,11 @@ async def trigger_rag_ingest():
     Useful for testing and for one-off "I just edited a file and want it live
     right now" cases. Returns the same stats as the scheduled job.
     """
+    import asyncio
+    import time as _time
+
     from orchestrator.rag_ingest import _run_ingest_sync
 
-    import asyncio
-
-    import time as _time
     t0 = _time.time()
     stats = await asyncio.to_thread(_run_ingest_sync)
     return JSONResponse(

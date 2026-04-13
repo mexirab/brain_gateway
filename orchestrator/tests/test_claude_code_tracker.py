@@ -5,13 +5,12 @@ Tests pure/near-pure functions directly. State-store tests use an in-memory SQLi
 database via monkeypatching DB_PATH. Tracker tests mock state_store to avoid I/O.
 """
 
-import asyncio
 import json
 import os
 import sqlite3
 import time
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +22,7 @@ import pytest
 def _can_import_tracker():
     try:
         import orchestrator.claude_code_tracker  # noqa: F401
+
         return True
     except (ImportError, ModuleNotFoundError):
         return False
@@ -31,6 +31,7 @@ def _can_import_tracker():
 def _can_import_state_store():
     try:
         import orchestrator.state_store  # noqa: F401
+
         return True
     except (ImportError, ModuleNotFoundError):
         return False
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS claude_code_turns (
 def _make_in_memory_db():
     """Return a fresh in-memory SQLite path (shared-cache URI)."""
     import tempfile
+
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     # Initialize the table
@@ -84,7 +86,7 @@ def _make_jsonl_entry(role, text=None, tools=None, timestamp=None):
     content = []
     if text:
         content.append({"type": "text", "text": text})
-    for tool in (tools or []):
+    for tool in tools or []:
         content.append(tool)
     return {
         "type": role,
@@ -109,6 +111,7 @@ class TestNormalizeTurn:
 
     def setup_method(self):
         from orchestrator.claude_code_tracker import _normalize_turn
+
         self._normalize_turn = _normalize_turn
 
     def test_user_text_entry(self):
@@ -221,6 +224,7 @@ class TestFindLatestSessionFile:
 
     def setup_method(self):
         from orchestrator.claude_code_tracker import _find_latest_session_file
+
         self._find_latest_session_file = _find_latest_session_file
 
     def test_empty_dir_returns_none(self, tmp_path, monkeypatch):
@@ -315,6 +319,7 @@ class TestGetCurrentSessionTurns:
 
     def setup_method(self):
         from orchestrator.claude_code_tracker import get_current_session_turns
+
         self._get_current_session_turns = get_current_session_turns
 
     @pytest.fixture(autouse=True)
@@ -368,7 +373,6 @@ class TestGetCurrentSessionTurns:
         session_file.write_text(json.dumps(_make_jsonl_entry("assistant", text="should not be read")))
 
         # Mock os.path.getsize to report a huge size
-        import orchestrator.claude_code_tracker as tracker
         monkeypatch.setattr(
             "os.path.getsize",
             lambda p: 100 * 1024 * 1024 if str(p) == str(session_file) else os.stat(p).st_size,
@@ -388,6 +392,7 @@ class TestDetectProjectFromPath:
 
     def setup_method(self):
         from orchestrator.claude_code_tracker import _detect_project_from_path
+
         self._detect_project_from_path = _detect_project_from_path
 
     def test_standard_path_extracts_last_two_segments(self):
@@ -422,10 +427,12 @@ class TestStateStoreClaudeCodeTurns:
     @pytest.fixture(autouse=True)
     def _patch_db_path(self, tmp_path, monkeypatch):
         import orchestrator.state_store as ss
+
         db_path = str(tmp_path / "test_state.db")
         monkeypatch.setattr(ss, "DB_PATH", db_path)
         # Initialize the schema
         from orchestrator.db import init_db
+
         init_db(db_path, _CLAUDE_CODE_SCHEMA)
         self.db_path = db_path
 
@@ -445,7 +452,8 @@ class TestStateStoreClaudeCodeTurns:
         }
 
     def test_log_and_retrieve_turn(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_turns
+        from orchestrator.state_store import get_claude_code_turns, log_claude_code_turn
+
         turn = self._make_turn(content="wrote some code")
         row_id = log_claude_code_turn(turn)
         assert isinstance(row_id, int)
@@ -456,7 +464,8 @@ class TestStateStoreClaudeCodeTurns:
         assert turns[0]["content"] == "wrote some code"
 
     def test_time_filter_cuts_off_old_rows(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_turns
+        from orchestrator.state_store import get_claude_code_turns, log_claude_code_turn
+
         old_turn = self._make_turn(content="ancient history", delta_minutes=-200)
         recent_turn = self._make_turn(content="just now")
         log_claude_code_turn(old_turn)
@@ -468,7 +477,8 @@ class TestStateStoreClaudeCodeTurns:
         assert "ancient history" not in contents
 
     def test_project_filter(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_turns
+        from orchestrator.state_store import get_claude_code_turns, log_claude_code_turn
+
         log_claude_code_turn(self._make_turn(content="project A work", project="proj_a"))
         log_claude_code_turn(self._make_turn(content="project B work", project="proj_b"))
 
@@ -477,14 +487,16 @@ class TestStateStoreClaudeCodeTurns:
         assert len(turns_a) == 1
 
     def test_limit_respected(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_turns
+        from orchestrator.state_store import get_claude_code_turns, log_claude_code_turn
+
         for i in range(10):
             log_claude_code_turn(self._make_turn(content=f"turn {i}"))
         turns = get_claude_code_turns(since_minutes=60, limit=3)
         assert len(turns) == 3
 
     def test_tool_uses_and_files_decoded_as_lists(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_turns
+        from orchestrator.state_store import get_claude_code_turns, log_claude_code_turn
+
         turn = self._make_turn(
             files=["/opt/helios/gateway_mvp/foo.py", "/opt/helios/gateway_mvp/bar.py"],
             tools=["Edit", "Bash"],
@@ -497,7 +509,8 @@ class TestStateStoreClaudeCodeTurns:
         assert "Edit" in turns[0]["tool_uses"]
 
     def test_get_files_touched_deduplicates(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_files_touched
+        from orchestrator.state_store import get_claude_code_files_touched, log_claude_code_turn
+
         log_claude_code_turn(self._make_turn(files=["/a/foo.py", "/a/bar.py"]))
         log_claude_code_turn(self._make_turn(files=["/a/foo.py", "/a/baz.py"]))
 
@@ -507,7 +520,8 @@ class TestStateStoreClaudeCodeTurns:
         assert "/a/baz.py" in files
 
     def test_cleanup_deletes_old_turns(self):
-        from orchestrator.state_store import log_claude_code_turn, get_claude_code_turns, cleanup_old_claude_code_turns
+        from orchestrator.state_store import cleanup_old_claude_code_turns, get_claude_code_turns, log_claude_code_turn
+
         old_turn = self._make_turn(content="very old", delta_minutes=-60 * 24 * 10)  # 10 days ago
         recent_turn = self._make_turn(content="recent")
         log_claude_code_turn(old_turn)
@@ -534,6 +548,7 @@ class TestActivitySummaryAndFilesTouched:
 
     def test_summary_uses_buffer_when_populated(self):
         import orchestrator.claude_code_tracker as tracker
+
         mock_turns = [
             {
                 "timestamp": "2026-04-12T18:30:00",
@@ -550,25 +565,32 @@ class TestActivitySummaryAndFilesTouched:
 
     def test_summary_falls_back_to_live_file_when_buffer_empty(self, tmp_path):
         import orchestrator.claude_code_tracker as tracker
+
         # Write a minimal session file
         session_file = tmp_path / "session.jsonl"
         entry = _make_jsonl_entry("assistant", text="Working on fallback feature")
         session_file.write_text(json.dumps(entry) + "\n")
 
-        with patch("orchestrator.claude_code_tracker.get_claude_code_turns", return_value=[]):
-            with patch("orchestrator.claude_code_tracker._find_latest_session_file", return_value=str(session_file)):
-                summary = tracker.get_recent_activity_summary(minutes_back=60)
+        with (
+            patch("orchestrator.claude_code_tracker.get_claude_code_turns", return_value=[]),
+            patch("orchestrator.claude_code_tracker._find_latest_session_file", return_value=str(session_file)),
+        ):
+            summary = tracker.get_recent_activity_summary(minutes_back=60)
         assert "fallback feature" in summary
 
     def test_summary_returns_empty_string_when_both_sources_empty(self):
         import orchestrator.claude_code_tracker as tracker
-        with patch("orchestrator.claude_code_tracker.get_claude_code_turns", return_value=[]):
-            with patch("orchestrator.claude_code_tracker.get_current_session_turns", return_value=[]):
-                summary = tracker.get_recent_activity_summary(minutes_back=60)
+
+        with (
+            patch("orchestrator.claude_code_tracker.get_claude_code_turns", return_value=[]),
+            patch("orchestrator.claude_code_tracker.get_current_session_turns", return_value=[]),
+        ):
+            summary = tracker.get_recent_activity_summary(minutes_back=60)
         assert summary == ""
 
     def test_get_files_touched_uses_buffer_when_populated(self):
         import orchestrator.claude_code_tracker as tracker
+
         with patch(
             "orchestrator.claude_code_tracker.get_claude_code_files_touched",
             return_value=["/opt/helios/gateway_mvp/foo.py"],
@@ -578,14 +600,17 @@ class TestActivitySummaryAndFilesTouched:
 
     def test_get_files_touched_falls_back_to_live_file(self, tmp_path):
         import orchestrator.claude_code_tracker as tracker
+
         session_file = tmp_path / "session.jsonl"
         tools = [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/live/path/module.py"}}]
         entry = _make_jsonl_entry("assistant", text="editing", tools=tools)
         session_file.write_text(json.dumps(entry) + "\n")
 
-        with patch("orchestrator.claude_code_tracker.get_claude_code_files_touched", return_value=[]):
-            with patch("orchestrator.claude_code_tracker._find_latest_session_file", return_value=str(session_file)):
-                files = tracker.get_files_touched(minutes_back=60)
+        with (
+            patch("orchestrator.claude_code_tracker.get_claude_code_files_touched", return_value=[]),
+            patch("orchestrator.claude_code_tracker._find_latest_session_file", return_value=str(session_file)),
+        ):
+            files = tracker.get_files_touched(minutes_back=60)
         assert "/live/path/module.py" in files
 
 
@@ -608,6 +633,7 @@ class TestLogTurnFromHook:
     def test_session_id_resolves_file_under_root(self, tmp_path, monkeypatch):
         """Valid UUID session_id + matching file → parsed and logged."""
         import orchestrator.claude_code_tracker as tracker
+
         monkeypatch.setenv("CLAUDE_PROJECTS_PATH", str(tmp_path))
 
         proj = tmp_path / "-opt-helios-gateway-mvp"
@@ -629,6 +655,7 @@ class TestLogTurnFromHook:
     def test_direct_payload_fallback_when_session_id_missing(self):
         """No session_id → falls through to direct payload with coercion."""
         import orchestrator.claude_code_tracker as tracker
+
         payload = {
             "project": "gateway_mvp",
             "turn_type": "assistant",
@@ -647,6 +674,7 @@ class TestLogTurnFromHook:
     def test_direct_payload_fallback_when_session_file_missing(self, tmp_path, monkeypatch):
         """Valid session_id but no matching file → falls through to direct payload."""
         import orchestrator.claude_code_tracker as tracker
+
         monkeypatch.setenv("CLAUDE_PROJECTS_PATH", str(tmp_path))
 
         payload = {
@@ -665,6 +693,7 @@ class TestLogTurnFromHook:
         any file outside the root.
         """
         import orchestrator.claude_code_tracker as tracker
+
         monkeypatch.setenv("CLAUDE_PROJECTS_PATH", str(tmp_path))
 
         # Plant a valid session file under the root that we must NOT read
@@ -686,6 +715,7 @@ class TestLogTurnFromHook:
     def test_glob_injection_session_id_rejected(self):
         """A session_id containing a glob wildcard is rejected by the regex."""
         import orchestrator.claude_code_tracker as tracker
+
         payload = {"session_id": "*", "content": "attacker payload"}
         with patch("orchestrator.claude_code_tracker.log_claude_code_turn", return_value=1) as mock_log:
             tracker.log_turn_from_hook(payload)
@@ -696,6 +726,7 @@ class TestLogTurnFromHook:
     def test_non_list_tool_uses_coerced_safely(self):
         """A payload with non-list tool_uses should not crash; coerces to []."""
         import orchestrator.claude_code_tracker as tracker
+
         payload = {
             "content": "safe content",
             "tool_uses": "not a list",  # adversarial type
@@ -754,10 +785,12 @@ class TestSecurityHelpers:
 
     def test_resolve_under_root_rejects_empty_string(self):
         from orchestrator.claude_code_tracker import _resolve_under_root
+
         assert _resolve_under_root("") is None
 
     def test_resolve_under_root_rejects_none(self):
         from orchestrator.claude_code_tracker import _resolve_under_root
+
         assert _resolve_under_root(None) is None
 
     def test_find_session_file_by_id_valid_uuid(self, tmp_path, monkeypatch):
@@ -814,6 +847,7 @@ class TestSecurityHelpers:
 
     def test_is_reasonable_size_rejects_missing_file(self):
         from orchestrator.claude_code_tracker import _is_reasonable_size
+
         assert _is_reasonable_size("/no/such/file.jsonl") is False
 
     def test_is_reasonable_size_rejects_oversized(self, tmp_path, monkeypatch):

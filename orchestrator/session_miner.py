@@ -100,7 +100,10 @@ async def mine_sessions(session_path: str = "") -> Dict:
 
     logger.info(
         "[SESSION_MINER] Complete: %d sessions, %d extracted, %d stored, %d errors",
-        stats["total_sessions"], stats["extracted"], stats["stored"], stats["errors"],
+        stats["total_sessions"],
+        stats["extracted"],
+        stats["stored"],
+        stats["errors"],
     )
     return stats
 
@@ -162,11 +165,7 @@ def _parse_session_file(filepath: str) -> List[str]:
                     continue
                 content = entry.get("content", "")
                 if isinstance(content, list):
-                    text_parts = [
-                        p.get("text", "")
-                        for p in content
-                        if isinstance(p, dict) and p.get("type") == "text"
-                    ]
+                    text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
                     content = " ".join(text_parts)
                 if isinstance(content, str) and len(content.strip()) > 50:
                     messages.append(content.strip())
@@ -231,10 +230,7 @@ def _parse_insights_json(raw: str) -> List[Dict]:
     try:
         insights = json.loads(raw[start : end + 1])
         if isinstance(insights, list):
-            return [
-                i for i in insights
-                if isinstance(i, dict) and i.get("insight") and len(i["insight"]) >= 10
-            ][:10]
+            return [i for i in insights if isinstance(i, dict) and i.get("insight") and len(i["insight"]) >= 10][:10]
     except json.JSONDecodeError:
         pass
     return []

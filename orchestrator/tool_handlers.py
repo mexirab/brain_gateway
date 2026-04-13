@@ -1186,7 +1186,7 @@ def _reg_check_claude_activity(arguments: dict) -> str:
 
     if action == "recent":
         summary = get_recent_activity_summary(minutes_back=minutes_back)
-        return summary or "No Claude Code activity in the last {} minutes.".format(minutes_back)
+        return summary or f"No Claude Code activity in the last {minutes_back} minutes."
 
     if action == "current_session":
         turns = get_current_session_turns(n=10)

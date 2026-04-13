@@ -8,6 +8,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Use a user-writable ruff cache. The in-repo .ruff_cache/ may have been
+# created by a different user (root via docker exec, etc.), which would
+# cause "Permission denied" on subsequent invocations.
+export RUFF_CACHE_DIR="${RUFF_CACHE_DIR:-$HOME/.cache/ruff}"
+mkdir -p "$RUFF_CACHE_DIR" 2>/dev/null || true
+
 # Read the hook input JSON from stdin
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')

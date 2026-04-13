@@ -414,7 +414,9 @@ async def store_fact(fact: Dict) -> Optional[str]:
         _append_to_monthly_markdown(fact_text, category, confidence, now)
 
     AUTO_LEARN_FACTS_STORED.labels(category=category).inc()
-    logger.info("[AUTO_LEARN] Stored fact (category=%s, confidence=%s, wing=%s, id=%s)", category, confidence, wing, doc_id)
+    logger.info(
+        "[AUTO_LEARN] Stored fact (category=%s, confidence=%s, wing=%s, id=%s)", category, confidence, wing, doc_id
+    )
 
     return doc_id
 

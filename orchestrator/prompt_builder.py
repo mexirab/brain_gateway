@@ -85,7 +85,9 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
             pass  # palace unavailable — fall through and pass to ChromaDB
 
     filter_desc = f", wing={wing}, room={room}" if wing or room else ""
-    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}'{filter_desc})", extra={"component": "rag"})
+    logger.info(
+        f"[RAG] Searching for: '{query}' (original: '{original_query}'{filter_desc})", extra={"component": "rag"}
+    )
 
     try:
         query_embedding = embedding_model.encode(query, normalize_embeddings=True).tolist()
@@ -160,12 +162,12 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
         # so chunks written by older code paths still render correctly.
         display_doc = doc
         is_encrypted = (
-            (isinstance(meta, dict) and str(meta.get("encrypted", "")).lower() == "true")
-            or display_doc.startswith("gAAAAAB")
-        )
+            isinstance(meta, dict) and str(meta.get("encrypted", "")).lower() == "true"
+        ) or display_doc.startswith("gAAAAAB")
         if is_encrypted:
             try:
                 from orchestrator.auto_learn import decrypt_text
+
                 display_doc = decrypt_text(display_doc)
             except Exception as e:
                 logger.debug("[RAG] Decryption failed for chunk: %s", e)

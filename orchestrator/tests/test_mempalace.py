@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Import check helper
 # ---------------------------------------------------------------------------
@@ -20,6 +19,7 @@ import pytest
 def _can_import_mempalace():
     try:
         from orchestrator import mempalace  # noqa: F401
+
         return True
     except (ImportError, ModuleNotFoundError):
         return False
@@ -274,9 +274,7 @@ class TestStoreAndDedup:
             mock_shared.PALACE_DEDUP_THRESHOLD = 0.85
             mock_shared.AUTO_LEARN_ENCRYPT = False
             mock_shared.embedding_model = MagicMock()
-            mock_shared.embedding_model.encode.return_value = MagicMock(
-                tolist=MagicMock(return_value=[0.1] * 384)
-            )
+            mock_shared.embedding_model.encode.return_value = MagicMock(tolist=MagicMock(return_value=[0.1] * 384))
             palace = MemPalace()
 
         palace._config = {
@@ -306,9 +304,11 @@ class TestStoreAndDedup:
     def test_store_success(self):
         palace, mock_coll, mock_shared = self._make_palace_with_mocks()
 
-        with patch.object(palace, "_collection", mock_coll), \
-             patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x), \
-             patch("orchestrator.mempalace.shared", mock_shared):
+        with (
+            patch.object(palace, "_collection", mock_coll),
+            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
+            patch("orchestrator.mempalace.shared", mock_shared),
+        ):
             doc_id = asyncio.get_event_loop().run_until_complete(
                 palace.store("Takes Vyvanse 40mg daily", wing="personal", room="health")
             )
@@ -320,22 +320,16 @@ class TestStoreAndDedup:
     def test_store_too_short(self):
         palace, mock_coll, mock_shared = self._make_palace_with_mocks()
 
-        with patch.object(palace, "_collection", mock_coll), \
-             patch("orchestrator.mempalace.shared", mock_shared):
-            doc_id = asyncio.get_event_loop().run_until_complete(
-                palace.store("hi")
-            )
+        with patch.object(palace, "_collection", mock_coll), patch("orchestrator.mempalace.shared", mock_shared):
+            doc_id = asyncio.get_event_loop().run_until_complete(palace.store("hi"))
 
         assert doc_id is None
 
     def test_store_empty(self):
         palace, mock_coll, mock_shared = self._make_palace_with_mocks()
 
-        with patch.object(palace, "_collection", mock_coll), \
-             patch("orchestrator.mempalace.shared", mock_shared):
-            doc_id = asyncio.get_event_loop().run_until_complete(
-                palace.store("")
-            )
+        with patch.object(palace, "_collection", mock_coll), patch("orchestrator.mempalace.shared", mock_shared):
+            doc_id = asyncio.get_event_loop().run_until_complete(palace.store(""))
 
         assert doc_id is None
 
@@ -349,10 +343,12 @@ class TestStoreAndDedup:
             "ids": [["palace_existing"]],
         }
 
-        with patch.object(palace, "_collection", mock_coll), \
-             patch("orchestrator.mempalace.decrypt_text", side_effect=lambda x: x), \
-             patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x), \
-             patch("orchestrator.mempalace.shared", mock_shared):
+        with (
+            patch.object(palace, "_collection", mock_coll),
+            patch("orchestrator.mempalace.decrypt_text", side_effect=lambda x: x),
+            patch("orchestrator.mempalace.encrypt_text", side_effect=lambda x: x),
+            patch("orchestrator.mempalace.shared", mock_shared),
+        ):
             doc_id = asyncio.get_event_loop().run_until_complete(
                 palace.store("Takes Vyvanse 40mg daily", wing="personal", room="health")
             )
@@ -375,9 +371,7 @@ class TestSearch:
             mock_shared.PALACE_ENABLED = True
             mock_shared.PALACE_WAKEUP_ENABLED = False
             mock_shared.embedding_model = MagicMock()
-            mock_shared.embedding_model.encode.return_value = MagicMock(
-                tolist=MagicMock(return_value=[0.1] * 384)
-            )
+            mock_shared.embedding_model.encode.return_value = MagicMock(tolist=MagicMock(return_value=[0.1] * 384))
             palace = MemPalace()
 
         palace._config = {"wings": {}, "routing_rules": [], "wakeup": {"enabled": False}}
@@ -387,20 +381,34 @@ class TestSearch:
             "documents": [["Takes Vyvanse 40mg", "Prefers step-by-step"]],
             "distances": [[0.1, 0.3]],
             "ids": [["palace_1", "palace_2"]],
-            "metadatas": [[
-                {"wing": "personal", "room": "health", "source": "auto_learn",
-                 "category": "health", "confidence": "high", "created_at": "2026-04-12T10:00:00"},
-                {"wing": "jess", "room": "preferences", "source": "manual",
-                 "category": "preference", "confidence": "high", "created_at": "2026-04-11T10:00:00"},
-            ]],
+            "metadatas": [
+                [
+                    {
+                        "wing": "personal",
+                        "room": "health",
+                        "source": "auto_learn",
+                        "category": "health",
+                        "confidence": "high",
+                        "created_at": "2026-04-12T10:00:00",
+                    },
+                    {
+                        "wing": "jess",
+                        "room": "preferences",
+                        "source": "manual",
+                        "category": "preference",
+                        "confidence": "high",
+                        "created_at": "2026-04-11T10:00:00",
+                    },
+                ]
+            ],
         }
 
-        with patch.object(palace, "_collection", mock_coll), \
-             patch("orchestrator.mempalace.decrypt_text", side_effect=lambda x: x), \
-             patch("orchestrator.mempalace.shared", mock_shared):
-            results = asyncio.get_event_loop().run_until_complete(
-                palace.search("medication")
-            )
+        with (
+            patch.object(palace, "_collection", mock_coll),
+            patch("orchestrator.mempalace.decrypt_text", side_effect=lambda x: x),
+            patch("orchestrator.mempalace.shared", mock_shared),
+        ):
+            results = asyncio.get_event_loop().run_until_complete(palace.search("medication"))
 
         assert len(results) == 2
         assert results[0]["text"] == "Takes Vyvanse 40mg"
@@ -417,9 +425,7 @@ class TestSearch:
         palace._config = {"wings": {}, "routing_rules": [], "wakeup": {"enabled": False}}
 
         with patch("orchestrator.mempalace.shared", mock_shared):
-            results = asyncio.get_event_loop().run_until_complete(
-                palace.search("")
-            )
+            results = asyncio.get_event_loop().run_until_complete(palace.search(""))
 
         assert results == []
 
@@ -447,14 +453,25 @@ class TestCRUD:
         mock_coll = MagicMock()
         mock_coll.get.return_value = {
             "documents": ["Test memory"],
-            "metadatas": [{"wing": "personal", "room": "health", "source": "manual",
-                          "category": "health", "confidence": "high",
-                          "created_at": "2026-04-12", "updated_at": "2026-04-12",
-                          "project": "", "session_id": ""}],
+            "metadatas": [
+                {
+                    "wing": "personal",
+                    "room": "health",
+                    "source": "manual",
+                    "category": "health",
+                    "confidence": "high",
+                    "created_at": "2026-04-12",
+                    "updated_at": "2026-04-12",
+                    "project": "",
+                    "session_id": "",
+                }
+            ],
         }
 
-        with patch.object(palace, "_collection", mock_coll), \
-             patch("orchestrator.mempalace.decrypt_text", side_effect=lambda x: x):
+        with (
+            patch.object(palace, "_collection", mock_coll),
+            patch("orchestrator.mempalace.decrypt_text", side_effect=lambda x: x),
+        ):
             result = palace.get_by_id("palace_personal_health_123")
 
         assert result is not None
@@ -504,7 +521,11 @@ class TestWakeupContext:
             mock_shared.PALACE_YAML_PATH = "/nonexistent"
             palace = MemPalace()
 
-        palace._config = {"wings": {}, "routing_rules": [], "wakeup": {"enabled": True, "refresh_interval_minutes": 30, "priority_rooms": []}}
+        palace._config = {
+            "wings": {},
+            "routing_rules": [],
+            "wakeup": {"enabled": True, "refresh_interval_minutes": 30, "priority_rooms": []},
+        }
         import time
 
         palace._wakeup_cache = "cached content"

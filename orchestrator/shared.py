@@ -391,5 +391,6 @@ def get_palace():
         with _palace_lock:
             if _palace_instance is None:  # re-check inside the lock
                 from orchestrator.mempalace import MemPalace
+
                 _palace_instance = MemPalace()
     return _palace_instance
