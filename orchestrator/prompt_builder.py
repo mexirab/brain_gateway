@@ -9,6 +9,7 @@ import logging
 import time
 from typing import Any, Dict, List
 
+from orchestrator import shared
 from orchestrator.metrics import RAG_QUERY_COUNT, RAG_QUERY_LATENCY, RAG_RESULTS_RETURNED
 from orchestrator.mode_router import MODE_PROMPTS, get_tone_constraint
 from orchestrator.shared import (
