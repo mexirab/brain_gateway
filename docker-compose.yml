@@ -85,6 +85,11 @@ services:
       # Routine definitions (F-006) — mounted outside /app/data to avoid
       # colliding with the finance-data named volume on line 80.
       - ${GATEWAY_ROOT_PATH:-.}/data/routines.yaml:/app/config/routines.yaml:ro
+      # MemPalace structure config
+      - ${GATEWAY_ROOT_PATH:-.}/data/palace.yaml:/app/config/palace.yaml:ro
+      # Claude Code session files (read-only) — lets Jess see what Claude Code
+      # has been working on for self-troubleshooting + code_agent context
+      - ${CLAUDE_PROJECTS_PATH:-/home/labadmin/.claude/projects}:/root/.claude/projects:ro
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/helios/gateway_mvp:ro
     environment:
@@ -101,7 +106,7 @@ services:
       - HA_TOKEN=${HA_TOKEN:-}
       # ChromaDB / RAG
       - CHROMA_PERSIST=/chroma/personal_rag
-      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-personal_rag}
+      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-personal_rag}  # legacy, kept for migration reference
       - MIN_COS=${MIN_COS:-0.20}
       - TOP_K=${TOP_K:-25}
       - RAG_BASE=/rag
@@ -178,6 +183,12 @@ services:
       - PRESENCE_TARGETED_TTS=${PRESENCE_TARGETED_TTS:-true}
       - PRESENCE_WELCOME_HOME=${PRESENCE_WELCOME_HOME:-true}
       - PRESENCE_WELCOME_COOLDOWN=${PRESENCE_WELCOME_COOLDOWN:-30}
+      # MemPalace
+      - PALACE_ENABLED=${PALACE_ENABLED:-true}
+      - PALACE_COLLECTION=${PALACE_COLLECTION:-mempalace}
+      - PALACE_YAML_PATH=/app/config/palace.yaml
+      - PALACE_WAKEUP_ENABLED=${PALACE_WAKEUP_ENABLED:-true}
+      - PALACE_DEDUP_THRESHOLD=${PALACE_DEDUP_THRESHOLD:-0.85}
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001}
     networks:

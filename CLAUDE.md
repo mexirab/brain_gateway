@@ -49,7 +49,7 @@ User -> Open WebUI -> Orchestrator -> Unified Loop -> Model (Qwen3.5-27B)
 
 **Flow:** Single model handles conversation and tool execution in one agentic loop. No delegation between models. Helios is always-on (no auto-shutdown).
 
-**Infrastructure:** `config.py` centralizes all env vars via Pydantic Settings. `tool_registry.py` provides decorator-based tool registration (replaces legacy if-elif dispatch). `service_registry.py` auto-detects healthy services and disables tools when dependencies are down. `exceptions.py` defines a typed exception hierarchy for consistent error handling.
+**Infrastructure:** `config.py` centralizes all env vars via Pydantic Settings. `tool_registry.py` provides decorator-based tool registration (replaces legacy if-elif dispatch). `service_registry.py` auto-detects healthy services and disables tools when dependencies are down. `exceptions.py` defines a typed exception hierarchy for consistent error handling. All memory (RAG chunks, auto-learned facts, user corrections) lives in a single `mempalace` ChromaDB collection with wing/room metadata for structured organization.
 
 ## Tools
 
@@ -58,7 +58,7 @@ All tools are called directly by the single model in one agentic loop.
 | Tool | Purpose |
 |------|---------|
 | home_assistant | HA API: `{entity_id, service, data}` |
-| search_memory | ChromaDB RAG query |
+| search_memory | Unified memory palace search (semantic, optional wing/room filtering) |
 | set_reminder / cancel_reminder | Voice/phone reminders |
 | update_data | Update meds/projects YAML |
 | start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio, Pi-hole blocking |
@@ -82,6 +82,12 @@ All tools are called directly by the single model in one agentic loop.
 
 | File | Purpose |
 |------|---------|
+| orchestrator/mempalace.py | MemPalace: structured memory system (wings/rooms), store, search, wakeup context |
+| orchestrator/routes_palace.py | MemPalace REST API endpoints |
+| orchestrator/session_miner.py | Claude Code session log mining for palace insights |
+| orchestrator/tests/test_mempalace.py | MemPalace unit tests |
+| data/palace.yaml | Palace structure config (wings, rooms, routing rules) |
+| scripts/mempalace_mcp_server.py | Standalone MCP server for Claude Code palace access |
 | orchestrator/auto_learn.py | Auto-learn: extract facts from conversations, encrypt, store in RAG |
 | orchestrator/brain_dump_manager.py | Brain dump: capture, categorize, dedup, and route items to RAG or reminders |
 | orchestrator/tests/test_auto_learn.py | Auto-learn unit tests (sensitive data, privacy, JSON parsing, encryption) |
@@ -413,3 +419,85 @@ Weekly scheduled job (Sundays 3am): cleans announcements (>30 days), selfcare lo
 | DELETE | /api/memory/learned?confirm=true | Wipe all learned facts |
 | GET | /api/memory/learned/stats | Auto-learn statistics (counts by category) |
 | POST | /api/memory/learned/toggle | Enable/disable auto-learn at runtime |
+
+## MemPalace (Unified Memory System)
+
+MemPalace replaces the old flat `personal_rag` collection with a single unified `mempalace` ChromaDB collection. All memories — RAG document chunks, auto-learned facts, user corrections, document vault entries — live in one collection with wing/room metadata for structured organization. The `search_memory` tool supports optional wing/room filtering. Migration from the old collection is done via `reindex_rag.py --target-collection mempalace --add-palace-metadata`.
+
+## MemPalace Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| PALACE_ENABLED | true | Enable/disable MemPalace structured memory |
+| PALACE_COLLECTION | mempalace | ChromaDB collection name for palace |
+| PALACE_YAML_PATH | /app/config/palace.yaml | Palace structure config file |
+| PALACE_WAKEUP_ENABLED | true | Inject wakeup identity context into system prompts |
+| PALACE_WAKEUP_MAX_TOKENS | 170 | Max tokens for wakeup context block |
+| PALACE_DEDUP_THRESHOLD | 0.85 | Cosine similarity threshold for dedup |
+| PALACE_SESSION_MINE_PATH | (empty) | Path to Claude Code session logs for mining |
+
+## MemPalace API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/palace/search?query=&wing=&room=&n=5 | Semantic search across the palace |
+| POST | /api/palace/store | Store a memory: `{text, wing?, room?, source?, category?, project?}` |
+| GET | /api/palace/memory/{doc_id} | Get a single memory by ID |
+| DELETE | /api/palace/memory/{doc_id} | Delete a memory by ID |
+| GET | /api/palace/wings | Palace wing structure |
+| GET | /api/palace/wings/{wing}/rooms | Rooms in a wing with memory counts |
+| GET | /api/palace/stats | Memory counts by wing |
+| GET | /api/palace/wakeup | Compressed identity context for system prompts |
+| POST | /api/palace/migrate | Backfill auto_learn facts into the palace |
+| POST | /api/palace/mine | Trigger Claude Code session mining |
+
+## MemPalace MCP Server (Claude Code)
+
+```bash
+# Install MCP dependencies
+pip install -r scripts/requirements-mcp.txt
+
+# Register with Claude Code
+claude mcp add mempalace -- python3 /opt/helios/gateway_mvp/scripts/mempalace_mcp_server.py
+
+# Environment: ORCHESTRATOR_URL (default http://localhost:8888), API_TOKEN
+```
+
+MCP tools: `palace_search`, `palace_store`, `palace_list_wings`, `palace_list_rooms`, `palace_get_memory`, `palace_mine_sessions`
+
+## Claude Code Activity Tracking
+
+Jess can see what Claude Code has been working on, for self-troubleshooting and giving the local code_agent awareness of in-flight work. Data flow is one-way (Claude Code → Jess) and entirely local.
+
+**Two sources:**
+1. **Live session file** — `check_claude_activity` reads `~/.claude/projects/-opt-helios-gateway-mvp/*.jsonl` directly. No sync needed, always fresh.
+2. **SQLite rolling buffer** — a Stop hook POSTs each completed turn to the orchestrator. Seven-day retention (cleaned up by the weekly DB maintenance job).
+
+**Install the Stop hook** (optional, for proactive awareness):
+
+```json
+// ~/.claude/settings.json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/opt/helios/gateway_mvp/scripts/claude_code_stop_hook.sh"
+      }]
+    }]
+  }
+}
+```
+
+Environment: `ORCHESTRATOR_URL` (default `http://localhost:8888`), `API_TOKEN` (optional bearer auth).
+
+**Jess tool:** `check_claude_activity` with `action` ∈ {`recent`, `current_session`, `files_touched`} and optional `minutes_back`.
+
+**Code agent integration:** `code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt so the local coder knows what's in-flight before making changes.
+
+**REST endpoints:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | /api/claude_code/turn | Stop hook target — logs a turn to the buffer |
+| GET | /api/claude_code/recent?minutes=120&limit=20 | List recent turns for dashboards |

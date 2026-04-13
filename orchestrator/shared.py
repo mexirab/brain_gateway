@@ -145,7 +145,8 @@ ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 # RAG / ChromaDB
 # ---------------------------------------------------------------------------
 CHROMA_PERSIST = settings.chroma_persist
-CHROMA_COLLECTION = settings.chroma_collection
+CHROMA_COLLECTION = settings.palace_collection  # unified collection (was personal_rag)
+LEGACY_CHROMA_COLLECTION = settings.chroma_collection  # old collection name for migration
 MIN_COS = settings.min_cos
 TOP_K = settings.top_k
 
@@ -153,7 +154,10 @@ chroma = chromadb.PersistentClient(
     path=os.path.expanduser(CHROMA_PERSIST),
     settings=ChromaSettings(anonymized_telemetry=False),
 )
+# Primary collection: mempalace (unified — all memories, RAG chunks, auto-learn facts)
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
+# Legacy collection: personal_rag (read-only, for migration)
+legacy_collection = chroma.get_or_create_collection(LEGACY_CHROMA_COLLECTION)
 embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
 # ---------------------------------------------------------------------------
@@ -355,3 +359,30 @@ VISION_TIMEOUT = settings.vision_timeout
 
 # Per-session image cache for follow-up analysis (keyed by session hash)
 _vision_image_cache: Dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# MemPalace (unified memory system — replaces separate personal_rag)
+# ---------------------------------------------------------------------------
+PALACE_ENABLED = settings.palace_enabled
+PALACE_YAML_PATH = settings.palace_yaml_path
+PALACE_WAKEUP_ENABLED = settings.palace_wakeup_enabled
+PALACE_WAKEUP_MAX_TOKENS = settings.palace_wakeup_max_tokens
+PALACE_DEDUP_THRESHOLD = settings.palace_dedup_threshold
+
+
+def get_palace_collection():
+    """Get the unified palace collection (same as shared.collection)."""
+    return collection
+
+
+# Palace singleton (lazy — avoids import-time side effects)
+_palace_instance = None
+
+
+def get_palace():
+    """Get or create the MemPalace singleton."""
+    global _palace_instance
+    if _palace_instance is None:
+        from orchestrator.mempalace import MemPalace
+        _palace_instance = MemPalace()
+    return _palace_instance

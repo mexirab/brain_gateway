@@ -377,12 +377,22 @@ async def store_fact(fact: Dict) -> Optional[str]:
         lambda: shared.embedding_model.encode(fact_text, normalize_embeddings=True).tolist()
     )
 
+    # Route to palace wing/room
+    wing, room = "", ""
+    try:
+        palace = shared.get_palace()
+        wing, room = palace.route_to_room(fact_text)
+    except Exception:
+        pass
+
     metadata = {
         "source": "auto_learn",
         "category": category,
         "confidence": confidence,
         "learned_at": now.isoformat(),
         "kind": "chunk",
+        "wing": wing,
+        "room": room,
     }
 
     try:
@@ -402,7 +412,7 @@ async def store_fact(fact: Dict) -> Optional[str]:
         _append_to_monthly_markdown(fact_text, category, confidence, now)
 
     AUTO_LEARN_FACTS_STORED.labels(category=category).inc()
-    logger.info("[AUTO_LEARN] Stored fact (category=%s, confidence=%s, id=%s)", category, confidence, doc_id)
+    logger.info("[AUTO_LEARN] Stored fact (category=%s, confidence=%s, wing=%s, id=%s)", category, confidence, wing, doc_id)
 
     return doc_id
 

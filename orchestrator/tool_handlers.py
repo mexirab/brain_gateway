@@ -147,13 +147,14 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
         return f"Failed: {result.message}"
 
 
-def tool_search_memory(query: str) -> str:
-    """Search the personal knowledge base (RAG)."""
+def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
+    """Search the personal knowledge base (memory palace)."""
     if not query:
         return "No query provided"
 
-    logger.info(f"[MEMORY] Searching for: {query}")
-    context = rag_context(query)
+    filter_desc = f" (wing={wing}, room={room})" if wing or room else ""
+    logger.info(f"[MEMORY] Searching for: {query}{filter_desc}")
+    context = rag_context(query, wing=wing, room=room)
 
     if context:
         return f"Found relevant information:\n{context}"
@@ -792,6 +793,12 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
 
                 rag_id = doc.get("rag_doc_id") or f"vault_{doc_id}"
                 notes_id = f"{rag_id}_notes"
+                # Route to palace wing/room based on document category
+                wing_map = {
+                    "financial": ("personal", "finance"),
+                    "medical": ("personal", "health"),
+                }
+                doc_wing, doc_room = wing_map.get(doc["category"], ("personal", ""))
                 embedding = shared.embedding_model.encode(updates["notes"], normalize_embeddings=True).tolist()
                 shared.collection.upsert(
                     documents=[updates["notes"]],
@@ -803,6 +810,8 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
                             "title": doc["title"],
                             "vault_doc_id": doc_id,
                             "kind": "chunk",
+                            "wing": doc_wing,
+                            "room": doc_room,
                         }
                     ],
                     ids=[notes_id],
@@ -850,6 +859,11 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
         try:
             from orchestrator import shared
 
+            wing_map = {
+                "financial": ("personal", "finance"),
+                "medical": ("personal", "health"),
+            }
+            doc_wing, doc_room = wing_map.get(category, ("personal", ""))
             embedding = shared.embedding_model.encode(notes, normalize_embeddings=True).tolist()
             shared.collection.upsert(
                 documents=[notes],
@@ -861,6 +875,8 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
                         "title": title,
                         "vault_doc_id": doc_id,
                         "kind": "chunk",
+                        "wing": doc_wing,
+                        "room": doc_room,
                     }
                 ],
                 ids=[f"vault_{doc_id}"],
@@ -883,7 +899,11 @@ from orchestrator.tool_registry import register_tool
 
 @register_tool("search_memory")
 def _reg_search_memory(arguments: dict) -> str:
-    return tool_search_memory(arguments.get("query", ""))
+    return tool_search_memory(
+        arguments.get("query", ""),
+        wing=arguments.get("wing", ""),
+        room=arguments.get("room", ""),
+    )
 
 
 @register_tool("home_assistant")
@@ -1151,6 +1171,50 @@ async def _reg_document_vault(arguments: dict) -> str:
 @register_tool("ask_expert")
 def _reg_ask_expert(arguments: dict) -> str:
     return "ask_expert is not available — the primary model handles all queries directly."
+
+
+@register_tool("check_claude_activity")
+def _reg_check_claude_activity(arguments: dict) -> str:
+    from orchestrator.claude_code_tracker import (
+        get_current_session_turns,
+        get_files_touched,
+        get_recent_activity_summary,
+    )
+
+    action = arguments.get("action", "recent")
+    minutes_back = int(arguments.get("minutes_back") or 120)
+
+    if action == "recent":
+        summary = get_recent_activity_summary(minutes_back=minutes_back)
+        return summary or "No Claude Code activity in the last {} minutes.".format(minutes_back)
+
+    if action == "current_session":
+        turns = get_current_session_turns(n=10)
+        if not turns:
+            return "No active Claude Code session found."
+        lines = ["Current Claude Code session (last 10 turns):"]
+        for turn in turns:
+            ts = (turn.get("timestamp") or "")[:16]
+            turn_type = turn.get("turn_type", "")
+            content = (turn.get("content") or "")[:200]
+            tool_uses = turn.get("tool_uses") or []
+            files = turn.get("files_touched") or []
+            prefix = f"  [{ts}] {turn_type}:"
+            if content:
+                lines.append(f"{prefix} {content.splitlines()[0][:200]}")
+            if tool_uses:
+                lines.append(f"    tools: {', '.join(tool_uses[:5])}")
+            if files:
+                lines.append(f"    files: {', '.join(files[:5])}")
+        return "\n".join(lines)
+
+    if action == "files_touched":
+        files = get_files_touched(minutes_back=minutes_back)
+        if not files:
+            return f"No files touched by Claude Code in the last {minutes_back} minutes."
+        return "Files touched by Claude Code:\n" + "\n".join(f"  - {f}" for f in files[:30])
+
+    return f"Unknown action: {action}"
 
 
 # Import code_agent to register its @register_tool handler

@@ -348,6 +348,19 @@ def _build_coding_prompt(task: str, apply_changes: bool) -> str:
         except Exception:
             pass
 
+    # Pull recent Claude Code activity for context (what the primary coding
+    # assistant has been doing recently). This gives the local code_agent
+    # awareness of in-flight changes that may not yet be in git.
+    cc_activity = ""
+    try:
+        from orchestrator.claude_code_tracker import get_recent_activity_summary
+
+        summary = get_recent_activity_summary(minutes_back=180, max_chars=1200)
+        if summary:
+            cc_activity = f"\n\n{summary}\n(Claude Code is the primary coding assistant. Review this activity to understand recent in-flight work before making changes.)"
+    except Exception:
+        pass
+
     return f"""You are a coding agent for the Brain Gateway project (a personal AI assistant).
 Your job is to investigate, diagnose, and optionally fix issues in the codebase.
 
@@ -363,7 +376,8 @@ GUIDELINES:
 - If you find an issue, explain the root cause and propose a fix
 - {"When writing files, include the complete file contents (not just the changed lines)" if apply_changes else "Since this is read-only mode, describe what changes would fix the issue"}
 - Always end with a clear summary of what you found and what to do next
-{claude_md}"""
+- If recent Claude Code activity (below) shows in-flight changes to files you're touching, be careful not to overwrite them
+{claude_md}{cc_activity}"""
 
 
 # ---------------------------------------------------------------------------

@@ -56,8 +56,8 @@ def last_user_text(messages: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def rag_context(query: str) -> str:
-    """Query ChromaDB for relevant personal context."""
+def rag_context(query: str, wing: str = "", room: str = "") -> str:
+    """Query ChromaDB for relevant personal context, optionally filtered by wing/room."""
     original_query = query
     RAG_QUERY_COUNT.inc()
     _rag_t0 = time.time()
@@ -70,16 +70,30 @@ def rag_context(query: str) -> str:
         logger.warning(f"[RAG] Empty query after normalization (original: '{original_query}')")
         return ""
 
-    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}')", extra={"component": "rag"})
+    filter_desc = f", wing={wing}, room={room}" if wing or room else ""
+    logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}'{filter_desc})", extra={"component": "rag"})
 
     try:
         query_embedding = embedding_model.encode(query, normalize_embeddings=True).tolist()
 
-        res = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=TOP_K,
-            include=["documents", "metadatas", "distances"],
-        )
+        query_kwargs = {
+            "query_embeddings": [query_embedding],
+            "n_results": TOP_K,
+            "include": ["documents", "metadatas", "distances"],
+        }
+
+        # Build optional wing/room filter
+        conditions = []
+        if wing:
+            conditions.append({"wing": wing})
+        if room:
+            conditions.append({"room": room})
+        if len(conditions) == 1:
+            query_kwargs["where"] = conditions[0]
+        elif len(conditions) > 1:
+            query_kwargs["where"] = {"$and": conditions}
+
+        res = collection.query(**query_kwargs)
     except Exception as e:
         logger.error(f"[RAG] Query error: {e}", extra={"component": "rag", "error_type": type(e).__name__})
         RAG_QUERY_LATENCY.observe(time.time() - _rag_t0)
@@ -112,11 +126,18 @@ def rag_context(query: str) -> str:
             continue
 
         src = ""
+        location = ""
         if isinstance(meta, dict):
             src = meta.get("file_path") or meta.get("source") or ""
+            wing = meta.get("wing", "")
+            room = meta.get("room", "")
+            if wing:
+                location = f"{wing}/{room}" if room else wing
 
         entry = f"- {doc[:800]}"
-        if src:
+        if location:
+            entry += f"\n  (palace: {location})"
+        elif src:
             entry += f"\n  (source: {src})"
         if cos:
             entry += f" [relevance: {cos:.2f}]"
@@ -178,6 +199,18 @@ PERSONAL CONTEXT (from {user}'s notes):
     except Exception:
         pass
 
+    # MemPalace wakeup context
+    if shared.PALACE_ENABLED and shared.PALACE_WAKEUP_ENABLED:
+        try:
+            from orchestrator.shared import get_palace
+
+            palace = get_palace()
+            wakeup = palace.generate_wakeup_context()
+            if wakeup:
+                context_section += f"\nIDENTITY CONTEXT (from memory palace):\n{wakeup}\n"
+        except Exception:
+            pass
+
     from datetime import datetime
 
     now = datetime.now()
@@ -199,7 +232,7 @@ PERSONALITY:
 {context_section}
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, fans, thermostats, scenes)
-2. search_memory - Search {user}'s personal notes for context (projects, routines, medications)
+2. search_memory - Search {user}'s memory palace for context. Organized into wings (personal, brain_gateway, conjure, infrastructure, jess) with rooms (health, routines, architecture, etc.). Use wing/room to narrow searches.
 3. update_data - Update {user}'s medications or projects
 4. set_reminder - Set a reminder that will be announced on speakers and/or sent to their phone
 5. cancel_reminder - Cancel a pending reminder by its ID
@@ -225,10 +258,11 @@ AVAILABLE TOOLS:
 25. bookmark_context - Save current work context before stepping away (interruption recovery)
 26. recall_context - Recall recent work context when returning from an interruption
 27. update_memory - Correct or update a fact in memory. Finds outdated info and replaces it.
+28. check_claude_activity - See what Claude Code (the CLI coding assistant) has been working on. Use for self-troubleshooting when recent code changes might be relevant.
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
-- search_memory: For personal info (projects, routines, preferences, medications, schedules)
+- search_memory: For personal info (projects, routines, preferences, medications, schedules). Use wing param to narrow by domain (personal, brain_gateway, infrastructure, jess, conjure) and room for specific topics (health, routines, architecture, debugging).
 - update_memory: When user corrects you ("actually...", "that's wrong...", "we changed...", "remember that..."), or says something different from what you have stored. Use this to fix your knowledge.
 - update_data: When user wants to ADD, REMOVE, or UPDATE medications or projects
 - set_reminder: When user says "remind me to..." or asks for a reminder
@@ -256,6 +290,7 @@ WHEN TO USE TOOLS:
 - document_vault: Use 'search' when user asks about a stored document ("where's my car title?", "what's my VIN?"). Use 'update' when user provides details about a document ("my VIN is XXXXX", "add this to my car title"). First search to find the doc and get its ID, then update with the notes. The notes field is indexed in RAG so the info becomes searchable.
 - bookmark_context: When user says "I need to take a call", "stepping away", "be right back", "brb", "I need to handle something"
 - recall_context: When user says "what was I doing?", "where was I?", "what was I working on?", "I'm back", "just got back"
+- check_claude_activity: When {user} asks you to troubleshoot yourself, mentions something that "just broke" or "stopped working", or when a code-related question might be explained by recent Claude Code edits. Action="recent" gives you a compact summary of the last ~2 hours of activity. Action="files_touched" tells you which files changed. Use this BEFORE code_agent when the issue is potentially recent.
 - code_agent: When user asks about how something works in your code, asks you to troubleshoot a code issue, investigate a bug, look at a specific file, search the codebase, run tests, or implement a change. Examples: "how do meal nudges work?", "look at selfcare_manager.py", "why is the calendar polling failing?", "search for where reminders are sent", "run the tests". Use apply_changes=true ONLY when user explicitly asks you to make changes.
 
 DECISION HELPER (decide_for_me):

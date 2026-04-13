@@ -1,0 +1,129 @@
+# MemPalace Structure Configuration
+# ==================================
+# Defines the palace wings, rooms, routing rules, and wakeup context config.
+
+wings:
+  jess:
+    description: "Jess assistant behavior, preferences, personality"
+    rooms:
+      preferences:
+        description: "User preferences Jess has learned"
+        keywords: ["prefer", "like", "dislike", "favorite", "hate", "love", "want"]
+      personality:
+        description: "How Jess should behave, tone, style"
+        keywords: ["tone", "personality", "style", "voice", "respond", "talk"]
+      debugging:
+        description: "Issues, bugs, fixes related to Jess"
+        keywords: ["bug", "fix", "error", "broken", "issue", "crash", "fail"]
+
+  brain_gateway:
+    description: "Brain Gateway architecture, config, infrastructure"
+    rooms:
+      architecture:
+        description: "System design, data flow, component relationships"
+        keywords: ["architecture", "design", "flow", "component", "module", "system"]
+      configuration:
+        description: "Environment variables, settings, deployment"
+        keywords: ["config", "env", "setting", "deploy", "docker", "compose"]
+      tools:
+        description: "Tool implementations, schemas, behaviors"
+        keywords: ["tool", "handler", "schema", "function", "execute"]
+      models:
+        description: "LLM models, prompts, inference"
+        keywords: ["model", "llm", "prompt", "inference", "qwen", "token"]
+      debugging:
+        description: "Issues, fixes, troubleshooting"
+        keywords: ["bug", "fix", "error", "broken", "traceback", "exception"]
+
+  conjure:
+    description: "Conjure image generation project"
+    rooms:
+      architecture:
+        description: "Conjure system design and components"
+        keywords: ["conjure", "comfyui", "workflow", "pipeline"]
+      prompts:
+        description: "Image generation prompts and techniques"
+        keywords: ["prompt", "negative", "lora", "checkpoint", "sampler"]
+      debugging:
+        description: "Conjure issues and fixes"
+        keywords: ["bug", "fix", "error", "fail"]
+
+  infrastructure:
+    description: "Cluster hardware, networking, services"
+    rooms:
+      cluster:
+        description: "Helios cluster nodes, GPUs, roles"
+        keywords: ["helios", "jupiter", "saturn", "uranus", "gpu", "node", "cluster"]
+      networking:
+        description: "Tailscale, Pi-hole, DNS, ports"
+        keywords: ["tailscale", "pihole", "dns", "port", "network", "ip", "firewall"]
+      monitoring:
+        description: "Grafana, Prometheus, Loki, alerts"
+        keywords: ["grafana", "prometheus", "loki", "alert", "metric", "dashboard"]
+      docker:
+        description: "Docker containers, compose, volumes"
+        keywords: ["docker", "container", "compose", "volume", "image", "build"]
+
+  personal:
+    description: "Personal information, health, routines, life"
+    rooms:
+      health:
+        description: "Medications, conditions, appointments"
+        keywords: ["medication", "med", "health", "doctor", "adhd", "vyvanse", "prescription"]
+      routines:
+        description: "Daily routines, habits, schedules"
+        keywords: ["routine", "morning", "evening", "habit", "schedule", "daily"]
+      relationships:
+        description: "People, contacts, social"
+        keywords: ["friend", "family", "partner", "contact", "person", "people"]
+      goals:
+        description: "Goals, projects, aspirations"
+        keywords: ["goal", "project", "plan", "aspiration", "dream", "milestone"]
+      finance:
+        description: "Budget, spending, YNAB, financial"
+        keywords: ["budget", "money", "spend", "ynab", "finance", "savings", "cost"]
+
+# Routing rules: regex patterns matched against text to auto-route to wing/room.
+# Evaluated in order; first match wins. Falls back to keyword matching if no regex hits.
+routing_rules:
+  - pattern: "\\b(jess|assistant|voice|tts|announce)\\b"
+    wing: jess
+  - pattern: "\\b(conjure|comfyui|image gen|stable diffusion)\\b"
+    wing: conjure
+  - pattern: "\\b(helios|jupiter|saturn|uranus|callisto|gpu|rtx|cluster)\\b"
+    wing: infrastructure
+    room: cluster
+  - pattern: "\\b(tailscale|pihole|pi-hole|dns|firewall|network)\\b"
+    wing: infrastructure
+    room: networking
+  - pattern: "\\b(grafana|prometheus|loki|alert|metric|monitor)\\b"
+    wing: infrastructure
+    room: monitoring
+  - pattern: "\\b(docker|container|compose|dockerfile)\\b"
+    wing: infrastructure
+    room: docker
+  - pattern: "\\b(medication|med|vyvanse|adhd|health|doctor)\\b"
+    wing: personal
+    room: health
+  - pattern: "\\b(routine|morning routine|evening routine|habit)\\b"
+    wing: personal
+    room: routines
+  - pattern: "\\b(budget|ynab|money|spending|finance)\\b"
+    wing: personal
+    room: finance
+  - pattern: "\\b(orchestrator|tool|handler|config|api|endpoint|route)\\b"
+    wing: brain_gateway
+  - pattern: "\\b(model|llm|prompt|qwen|inference)\\b"
+    wing: brain_gateway
+    room: models
+
+# Wakeup context: compressed identity block injected into system prompts
+wakeup:
+  enabled: true
+  max_tokens: 170
+  refresh_interval_minutes: 30
+  priority_rooms:
+    - personal/health
+    - personal/routines
+    - jess/preferences
+    - brain_gateway/architecture

@@ -720,6 +720,7 @@ async def startup_event():
 
         await asyncio.to_thread(state_store.cleanup_old_announcements, 30)
         await asyncio.to_thread(state_store.cleanup_old_selfcare, 90)
+        await asyncio.to_thread(state_store.cleanup_old_claude_code_turns, 7)
         await asyncio.to_thread(state_store.vacuum_db)
         # Clean up stale audio files from Cast TTS path
         await asyncio.to_thread(_cleanup_audio_files)

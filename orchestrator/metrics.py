@@ -424,3 +424,26 @@ VISION_IMAGE_SIZE = Histogram(
     "Size of images sent to vision model",
     buckets=[10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000],
 )
+
+# -- MemPalace ---------------------------------------------------------------
+PALACE_STORES_TOTAL = Counter(
+    "bgw_palace_stores_total",
+    "Memories stored in the palace",
+    ["wing", "room"],
+)
+
+PALACE_SEARCHES_TOTAL = Counter(
+    "bgw_palace_searches_total",
+    "Palace search queries",
+)
+
+PALACE_SEARCH_LATENCY = Histogram(
+    "bgw_palace_search_duration_seconds",
+    "Palace search latency (embedding + ChromaDB)",
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0],
+)
+
+PALACE_MEMORIES_TOTAL = Gauge(
+    "bgw_palace_memories_total",
+    "Total memories in the palace",
+)

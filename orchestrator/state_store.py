@@ -128,6 +128,22 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
 CREATE INDEX IF NOT EXISTS idx_documents_uploaded ON documents(uploaded_at);
+
+CREATE TABLE IF NOT EXISTS claude_code_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    session_id TEXT,
+    project TEXT,
+    turn_type TEXT NOT NULL,
+    content TEXT,
+    tool_uses TEXT,
+    files_touched TEXT,
+    commit_hash TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_claude_code_timestamp ON claude_code_turns(timestamp);
+CREATE INDEX IF NOT EXISTS idx_claude_code_session ON claude_code_turns(session_id);
+CREATE INDEX IF NOT EXISTS idx_claude_code_project ON claude_code_turns(project);
 """
 
 
@@ -762,3 +778,89 @@ def get_document_categories() -> List[Dict[str, Any]]:
             "SELECT category, COUNT(*) as count FROM documents GROUP BY category ORDER BY count DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Claude Code turn tracking
+# ---------------------------------------------------------------------------
+
+
+def log_claude_code_turn(turn: Dict[str, Any]) -> int:
+    """Record a Claude Code turn (from Stop hook or session miner)."""
+    import json as _json
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO claude_code_turns
+               (timestamp, session_id, project, turn_type, content, tool_uses, files_touched, commit_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                turn.get("timestamp") or datetime.now().isoformat(),
+                turn.get("session_id", ""),
+                turn.get("project", ""),
+                turn.get("turn_type", "assistant"),
+                (turn.get("content") or "")[:10000],  # cap to 10k chars
+                _json.dumps(turn.get("tool_uses", [])),
+                _json.dumps(turn.get("files_touched", [])),
+                turn.get("commit_hash", ""),
+            ),
+        )
+        return cursor.lastrowid
+
+
+def get_claude_code_turns(
+    since_minutes: int = 60,
+    limit: int = 50,
+    project: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve recent Claude Code turns from the rolling buffer."""
+    import json as _json
+
+    cutoff = (datetime.now() - timedelta(minutes=since_minutes)).isoformat()
+
+    sql = "SELECT * FROM claude_code_turns WHERE timestamp >= ?"
+    params: List[Any] = [cutoff]
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    sql += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    turns = []
+    for row in rows:
+        d = dict(row)
+        # Decode JSON fields
+        for field in ("tool_uses", "files_touched"):
+            try:
+                d[field] = _json.loads(d[field]) if d[field] else []
+            except (ValueError, TypeError):
+                d[field] = []
+        turns.append(d)
+    return turns
+
+
+def get_claude_code_files_touched(since_minutes: int = 60, project: Optional[str] = None) -> List[str]:
+    """Return unique file paths touched by Claude Code in the time window."""
+    turns = get_claude_code_turns(since_minutes=since_minutes, limit=200, project=project)
+    seen = set()
+    files = []
+    for turn in turns:
+        for f in turn.get("files_touched", []):
+            if f and f not in seen:
+                seen.add(f)
+                files.append(f)
+    return files
+
+
+def cleanup_old_claude_code_turns(days: int = 7) -> int:
+    """Delete turns older than `days`. Returns count deleted."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM claude_code_turns WHERE timestamp < ?",
+            (cutoff,),
+        )
+        return cursor.rowcount

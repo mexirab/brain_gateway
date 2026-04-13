@@ -85,6 +85,18 @@ async def upload_document(
             chunks = _chunk_text(extracted, 2000, 200)
             ids = [f"{rag_doc_id}_chunk_{i}" for i in range(len(chunks))]
             embeddings = [shared.embedding_model.encode(c, normalize_embeddings=True).tolist() for c in chunks]
+            # Route document to palace wing/room based on category
+            wing_map = {
+                "financial": ("personal", "finance"),
+                "medical": ("personal", "health"),
+                "legal": ("personal", ""),
+                "insurance": ("personal", ""),
+                "personal": ("personal", ""),
+                "housing": ("personal", ""),
+                "other": ("personal", ""),
+                "auto": ("personal", ""),
+            }
+            doc_wing, doc_room = wing_map.get(category, ("personal", ""))
             metadatas = [
                 {
                     "source": "document_vault",
@@ -92,6 +104,8 @@ async def upload_document(
                     "title": title,
                     "vault_doc_id": doc_uuid,
                     "kind": "chunk",
+                    "wing": doc_wing,
+                    "room": doc_room,
                 }
                 for _ in chunks
             ]

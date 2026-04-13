@@ -2,20 +2,32 @@
 """
 Re-index RAG embeddings with a new embedding model.
 
-One-time migration script that reads all existing ChromaDB documents,
-re-embeds them with the specified model, and upserts vectors in-place
-(same doc IDs, same metadata). Runs test queries to verify quality.
+Reads all documents from a ChromaDB collection, re-embeds them with the
+specified model, and upserts vectors in-place (same doc IDs, same metadata).
+Runs test queries to verify quality.
+
+Supports --add-palace-metadata to route existing docs into palace wings/rooms
+based on their content and source metadata. Use this when migrating from the
+old personal_rag collection to the unified mempalace collection.
 
 Usage:
     python scripts/reindex_rag.py \
-        --persist ~/.local/share/chroma/personal_rag \
-        --collection nadim_rag \
+        --persist /chroma/personal_rag \
+        --collection mempalace \
         --embed-model nomic-ai/nomic-embed-text-v2-moe
+
+    # Migrate from old collection to palace with wing/room routing:
+    python scripts/reindex_rag.py \
+        --persist /chroma/personal_rag \
+        --collection personal_rag \
+        --target-collection mempalace \
+        --add-palace-metadata \
+        --palace-yaml /app/config/palace.yaml
 
     # Dry run (show stats without modifying):
     python scripts/reindex_rag.py \
-        --persist ~/.local/share/chroma/personal_rag \
-        --collection nadim_rag \
+        --persist /chroma/personal_rag \
+        --collection mempalace \
         --dry-run
 """
 
@@ -95,6 +107,106 @@ def run_test_queries(collection, model, queries):
     return results
 
 
+def _route_to_wing_room(doc_text, meta, routing_rules=None):
+    """Route a document to a palace wing/room based on content and metadata."""
+    import re as _re
+
+    # Already has palace metadata — keep it
+    if meta and meta.get("wing"):
+        return meta.get("wing", ""), meta.get("room", "")
+
+    text_lower = (doc_text or "")[:500].lower()
+    source = (meta or {}).get("source", "")
+    category = (meta or {}).get("category", "")
+
+    # Source-based routing
+    if source == "auto_learn":
+        # Try regex routing rules if available
+        if routing_rules:
+            for rule in routing_rules:
+                compiled = rule.get("_compiled")
+                if compiled and compiled.search(text_lower):
+                    return rule.get("wing", "personal"), rule.get("room", "")
+
+        # Category-based fallback for auto-learn
+        cat_map = {
+            "health": ("personal", "health"),
+            "medication": ("personal", "health"),
+            "routine": ("personal", "routines"),
+            "preference": ("jess", "preferences"),
+            "identity": ("personal", ""),
+            "work": ("brain_gateway", ""),
+            "technical": ("brain_gateway", ""),
+            "pattern": ("personal", ""),
+        }
+        if category in cat_map:
+            return cat_map[category]
+        return "personal", ""
+
+    if source == "document_vault":
+        vault_map = {
+            "financial": ("personal", "finance"),
+            "medical": ("personal", "health"),
+        }
+        if category in vault_map:
+            return vault_map[category]
+        return "personal", ""
+
+    if source == "user_correction":
+        # Try regex routing
+        if routing_rules:
+            for rule in routing_rules:
+                compiled = rule.get("_compiled")
+                if compiled and compiled.search(text_lower):
+                    return rule.get("wing", "personal"), rule.get("room", "")
+        return "personal", ""
+
+    # File-path based routing for RAG chunks
+    file_path = (meta or {}).get("file_path", "")
+    if file_path:
+        path_lower = file_path.lower()
+        if "profile" in path_lower or "identity" in path_lower:
+            return "personal", ""
+        if "medication" in path_lower or "health" in path_lower:
+            return "personal", "health"
+        if "routine" in path_lower or "pattern" in path_lower:
+            return "personal", "routines"
+        if "preference" in path_lower:
+            return "jess", "preferences"
+        if "finance" in path_lower or "budget" in path_lower:
+            return "personal", "finance"
+
+    # Try regex routing rules
+    if routing_rules:
+        for rule in routing_rules:
+            compiled = rule.get("_compiled")
+            if compiled and compiled.search(text_lower):
+                return rule.get("wing", "personal"), rule.get("room", "")
+
+    return "personal", ""
+
+
+def _load_routing_rules(palace_yaml_path):
+    """Load routing rules from palace.yaml."""
+    import re as _re
+
+    import yaml
+
+    try:
+        with open(palace_yaml_path) as f:
+            config = yaml.safe_load(f) or {}
+        rules = config.get("routing_rules", [])
+        for rule in rules:
+            try:
+                rule["_compiled"] = _re.compile(rule["pattern"], _re.IGNORECASE)
+            except Exception:
+                pass
+        return rules
+    except Exception as e:
+        print(f"Warning: could not load palace.yaml: {e}")
+        return []
+
+
 def main():
     ap = argparse.ArgumentParser(description="Re-index RAG embeddings with a new model")
     ap.add_argument(
@@ -105,7 +217,12 @@ def main():
     ap.add_argument(
         "--collection",
         required=True,
-        help="ChromaDB collection name",
+        help="Source ChromaDB collection name",
+    )
+    ap.add_argument(
+        "--target-collection",
+        default="",
+        help="Target collection name (if different from source — for migration)",
     )
     ap.add_argument(
         "--embed-model",
@@ -123,6 +240,16 @@ def main():
         action="store_true",
         help="Show stats and test queries without modifying data",
     )
+    ap.add_argument(
+        "--add-palace-metadata",
+        action="store_true",
+        help="Add wing/room metadata to documents based on content routing",
+    )
+    ap.add_argument(
+        "--palace-yaml",
+        default="data/palace.yaml",
+        help="Path to palace.yaml for routing rules (default: data/palace.yaml)",
+    )
     args = ap.parse_args()
 
     persist = Path(args.persist).expanduser().resolve()
@@ -130,12 +257,22 @@ def main():
         print(f"Error: persist directory does not exist: {persist}")
         sys.exit(1)
 
-    print(f"ChromaDB path: {persist}")
-    print(f"Collection:    {args.collection}")
-    print(f"Embed model:   {args.embed_model}")
-    print(f"Batch size:    {args.batch_size}")
-    print(f"Dry run:       {args.dry_run}")
+    target_collection_name = args.target_collection or args.collection
+
+    print(f"ChromaDB path:    {persist}")
+    print(f"Source collection: {args.collection}")
+    print(f"Target collection: {target_collection_name}")
+    print(f"Embed model:       {args.embed_model}")
+    print(f"Batch size:        {args.batch_size}")
+    print(f"Palace metadata:   {args.add_palace_metadata}")
+    print(f"Dry run:           {args.dry_run}")
     print()
+
+    # Load routing rules if palace metadata requested
+    routing_rules = []
+    if args.add_palace_metadata:
+        routing_rules = _load_routing_rules(args.palace_yaml)
+        print(f"Loaded {len(routing_rules)} routing rules from {args.palace_yaml}")
 
     # Connect to ChromaDB
     client = chromadb.PersistentClient(
@@ -182,25 +319,32 @@ def main():
         print("No changes made.")
         return
 
-    # Check if embedding dimension changed — need to recreate collection
+    # Determine target collection
+    if target_collection_name != args.collection:
+        target = client.get_or_create_collection(name=target_collection_name)
+        print(f"Target collection '{target_collection_name}' has {target.count()} existing docs")
+    else:
+        target = collection
+
+    # Check if embedding dimension changed — need to recreate target
     new_dim = model.get_sentence_embedding_dimension()
     try:
-        # Probe current collection dimension by querying with a dummy vector
         test_embed = model.encode(["test"], normalize_embeddings=True).tolist()
-        collection.query(query_embeddings=test_embed, n_results=1)
+        target.query(query_embeddings=test_embed, n_results=1)
     except Exception as e:
         if "dimension" in str(e).lower():
-            print(f"\nEmbedding dimension changed — recreating collection...")
-            client.delete_collection(name=args.collection)
-            collection = client.create_collection(name=args.collection)
+            print(f"\nEmbedding dimension changed — recreating target collection...")
+            client.delete_collection(name=target_collection_name)
+            target = client.create_collection(name=target_collection_name)
             print(f"Collection recreated (new dimension: {new_dim})")
         else:
             raise
 
     # Re-embed and upsert in batches
-    print(f"\nRe-embedding {len(all_ids)} documents...")
+    print(f"\nRe-embedding {len(all_ids)} documents into '{target_collection_name}'...")
     t0 = time.time()
     batches_done = 0
+    palace_routed = 0
 
     for i in tqdm(range(0, len(all_ids), args.batch_size), desc="Re-indexing"):
         batch_ids = all_ids[i : i + args.batch_size]
@@ -214,11 +358,24 @@ def main():
 
         v_ids, v_docs, v_metas = zip(*valid)
 
+        # Add palace metadata if requested
+        if args.add_palace_metadata:
+            updated_metas = []
+            for doc, meta in zip(v_docs, v_metas):
+                meta = dict(meta) if meta else {}
+                wing, room = _route_to_wing_room(doc, meta, routing_rules)
+                meta["wing"] = wing
+                meta["room"] = room
+                updated_metas.append(meta)
+                if wing:
+                    palace_routed += 1
+            v_metas = updated_metas
+
         # Generate new embeddings
         embeddings = model.encode(list(v_docs), normalize_embeddings=True).tolist()
 
-        # Upsert with new embeddings (same IDs, same docs, same metadata)
-        collection.upsert(
+        # Upsert with new embeddings
+        target.upsert(
             ids=list(v_ids),
             documents=list(v_docs),
             metadatas=list(v_metas),
@@ -228,11 +385,13 @@ def main():
 
     elapsed = time.time() - t0
     print(f"\nRe-indexing complete in {elapsed:.1f}s ({batches_done} batches)")
-    print(f"Total documents: {collection.count()}")
+    print(f"Total documents in target: {target.count()}")
+    if args.add_palace_metadata:
+        print(f"Palace-routed documents: {palace_routed}")
 
     # Run test queries with new embeddings
     print("\n--- Test queries (new embeddings) ---")
-    test_results = run_test_queries(collection, model, TEST_QUERIES)
+    test_results = run_test_queries(target, model, TEST_QUERIES)
     for qr in test_results:
         print(f"\nQuery: {qr['query']}")
         for r in qr["results"]:

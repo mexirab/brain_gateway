@@ -74,11 +74,20 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Search the user's personal knowledge base for relevant context. Use this when the user asks about personal information, projects, routines, preferences, medications, schedules, or anything that might be in their notes.",
+            "description": "Search the user's personal knowledge base (memory palace) for relevant context. Memories are organized into wings (personal, brain_gateway, conjure, infrastructure, jess) and rooms (health, routines, architecture, debugging, etc.). Use wing/room to narrow searches to a specific domain.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query to find relevant personal information"}
+                    "query": {"type": "string", "description": "Search query to find relevant personal information"},
+                    "wing": {
+                        "type": "string",
+                        "enum": ["personal", "brain_gateway", "conjure", "infrastructure", "jess"],
+                        "description": "Optional: narrow search to a specific domain/wing",
+                    },
+                    "room": {
+                        "type": "string",
+                        "description": "Optional: narrow search to a specific room within the wing (e.g., 'health', 'architecture', 'debugging')",
+                    },
                 },
                 "required": ["query"],
             },
@@ -737,6 +746,28 @@ STATIC_TOOLS = [
                     "title": {
                         "type": "string",
                         "description": "New title for the document (for update action, optional)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_claude_activity",
+            "description": "Check what Claude Code (the CLI coding assistant) has been working on recently. Use this when the user asks you to troubleshoot something that may have just changed, says 'what did I just do with Claude Code', mentions code they were editing, or asks you to help diagnose something that might be related to recent changes. Returns recent turns, files touched, or the current live session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["recent", "current_session", "files_touched"],
+                        "description": "recent = last N turns from the buffer (Stop hook required for freshest data); current_session = read live .jsonl session file directly; files_touched = list of files Claude Code has edited",
+                    },
+                    "minutes_back": {
+                        "type": "integer",
+                        "description": "How far back to look in minutes (default: 120)",
                     },
                 },
                 "required": ["action"],

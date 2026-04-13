@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # -- RAG / ChromaDB ----------------------------------------------------------
     chroma_persist: str = "/app/data/chroma"
-    chroma_collection: str = "personal_rag"
+    chroma_collection: str = "personal_rag"  # legacy collection name (for migration)
     min_cos: float = 0.30
     top_k: int = 6
     rag_base: str = "/app/data/rag"
@@ -185,6 +185,15 @@ class Settings(BaseSettings):
     vision_model_name: str = ""
     vision_max_image_size: int = 10 * 1024 * 1024
     vision_timeout: int = 60
+
+    # -- MemPalace ---------------------------------------------------------------
+    palace_enabled: bool = True
+    palace_collection: str = "mempalace"
+    palace_yaml_path: str = "/app/config/palace.yaml"
+    palace_wakeup_enabled: bool = True
+    palace_wakeup_max_tokens: int = 170
+    palace_dedup_threshold: float = 0.85
+    palace_session_mine_path: str = ""
 
     # -- Code Agent --------------------------------------------------------------
     code_agent_enabled: bool = False

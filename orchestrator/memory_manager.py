@@ -56,9 +56,17 @@ async def update_memory(correction: str, search_query: str, category: str = "gen
         deleted_summaries.append(doc_text[:80])
         logger.info("[MEMORY] Deleted conflicting fact: %s (sim=%.2f)", doc_id, similarity)
 
-    # 3. Store the corrected fact
+    # 3. Store the corrected fact (with palace routing)
     now = datetime.now()
     doc_id = f"correction_{now.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+    # Route to wing/room
+    wing, room = "", ""
+    try:
+        palace = shared.get_palace()
+        wing, room = palace.route_to_room(correction)
+    except Exception:
+        pass
 
     embedding = shared.embedding_model.encode(correction, normalize_embeddings=True).tolist()
     metadata = {
@@ -67,6 +75,8 @@ async def update_memory(correction: str, search_query: str, category: str = "gen
         "updated_at": now.isoformat(),
         "replaced_ids": json.dumps(deleted_ids) if deleted_ids else "[]",
         "kind": "chunk",
+        "wing": wing,
+        "room": room,
     }
 
     await asyncio.to_thread(

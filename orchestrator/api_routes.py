@@ -36,6 +36,7 @@ from orchestrator.routes_calendar import router as calendar_router
 from orchestrator.routes_chat import router as chat_router
 from orchestrator.routes_documents import router as documents_router
 from orchestrator.routes_shopping import router as shopping_router
+from orchestrator.routes_palace import router as palace_router
 from orchestrator.routes_vision import router as vision_router
 from orchestrator.schemas import (
     AnnounceRequest,
@@ -77,6 +78,7 @@ router.include_router(chat_router)
 router.include_router(documents_router)
 router.include_router(shopping_router)
 router.include_router(vision_router)
+router.include_router(palace_router)
 
 
 @router.get("/health")
@@ -594,6 +596,44 @@ async def presence_status():
     from orchestrator.presence_tracker import get_presence
 
     return JSONResponse(get_presence())
+
+
+# ---------------------------------------------------------------------------
+# Claude Code activity tracking
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/claude_code/turn")
+async def log_claude_code_turn_endpoint(req: Request):
+    """Receive a Claude Code turn from the Stop hook.
+
+    Stores the turn in the rolling SQLite buffer so Jess and the code_agent
+    can reference recent Claude Code activity.
+    """
+    from orchestrator.claude_code_tracker import log_turn_from_hook
+
+    try:
+        payload = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON payload"}, status_code=400)
+
+    try:
+        turn_id = log_turn_from_hook(payload)
+        return JSONResponse({"ok": True, "id": turn_id})
+    except Exception as e:
+        logger.error("[CC_TRACKER] Failed to log turn: %s", e)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.get("/api/claude_code/recent")
+async def get_recent_claude_code_activity(minutes: int = 120, limit: int = 20):
+    """Fetch recent Claude Code turns for dashboards/debugging."""
+    from orchestrator.state_store import get_claude_code_turns
+
+    minutes = max(1, min(minutes, 10080))  # cap at 1 week
+    limit = max(1, min(limit, 100))
+    turns = get_claude_code_turns(since_minutes=minutes, limit=limit)
+    return JSONResponse({"count": len(turns), "turns": turns})
 
 
 # ---------------------------------------------------------------------------
