@@ -56,7 +56,7 @@ async def update_memory(correction: str, search_query: str, category: str = "gen
         deleted_summaries.append(doc_text[:80])
         logger.info("[MEMORY] Deleted conflicting fact: %s (sim=%.2f)", doc_id, similarity)
 
-    # 3. Store the corrected fact (with palace routing + encryption)
+    # 3. Store the corrected fact (with palace routing, plaintext)
     now = datetime.now()
     doc_id = f"correction_{now.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
@@ -69,12 +69,12 @@ async def update_memory(correction: str, search_query: str, category: str = "gen
         except Exception as e:
             logger.warning("[MEMORY] Palace routing failed (non-fatal): %s", e)
 
-    # Encrypt the correction text at rest, consistent with auto_learn facts.
-    # The embedding is computed on the plaintext (for semantic search) but
-    # the stored document is the ciphertext.
-    from orchestrator.auto_learn import encrypt_text
-
-    encrypted_correction = encrypt_text(correction)
+    # Store the correction as plaintext. We intentionally do NOT encrypt
+    # here, even though auto_learn facts are encrypted: rag_context() reads
+    # directly from the collection without decrypting, and encrypting would
+    # mean the correction's text is never recoverable by the LLM on the
+    # next query. Keeping corrections plaintext is the simple fix. If we
+    # later teach rag_context to decrypt, this can flip back.
     embedding = shared.embedding_model.encode(correction, normalize_embeddings=True).tolist()
     metadata = {
         "source": "user_correction",
@@ -84,12 +84,12 @@ async def update_memory(correction: str, search_query: str, category: str = "gen
         "kind": "chunk",
         "wing": wing,
         "room": room,
-        "encrypted": "true" if shared.AUTO_LEARN_ENCRYPT else "false",
+        "encrypted": "false",
     }
 
     await asyncio.to_thread(
         shared.collection.upsert,
-        documents=[encrypted_correction],
+        documents=[correction],
         embeddings=[embedding],
         metadatas=[metadata],
         ids=[doc_id],
