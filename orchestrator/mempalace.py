@@ -468,64 +468,6 @@ class MemPalace:
         self._wakeup_cache_time = 0.0
 
     # ------------------------------------------------------------------
-    # Migration
-    # ------------------------------------------------------------------
-
-    async def migrate_auto_learn(self) -> Dict[str, int]:
-        """
-        Backfill existing auto_learn facts from the legacy personal_rag collection.
-
-        Reads all auto_learn documents from the old collection,
-        routes them to wing/room, and stores in the unified collection.
-        """
-        from orchestrator.auto_learn import decrypt_text as al_decrypt
-
-        stats = {"total": 0, "migrated": 0, "skipped_dup": 0, "errors": 0}
-
-        try:
-            results = shared.legacy_collection.get(
-                where={"source": "auto_learn"},
-                include=["documents", "metadatas"],
-                limit=1000,
-            )
-        except Exception as e:
-            logger.error("[PALACE] Migration query failed: %s", e)
-            return stats
-
-        docs = results.get("documents", [])
-        metas = results.get("metadatas", [])
-        ids = results.get("ids", [])
-
-        stats["total"] = len(docs)
-        logger.info("[PALACE] Migrating %d auto_learn facts", len(docs))
-
-        for doc, meta, old_id in zip(docs, metas, ids, strict=False):
-            if doc is None:
-                continue
-            try:
-                plaintext = al_decrypt(doc)
-                category = meta.get("category", "general")
-                doc_id = await self.store(
-                    text=plaintext,
-                    source="auto_learn_migration",
-                    category=category,
-                    confidence=meta.get("confidence", "medium"),
-                )
-                if doc_id:
-                    stats["migrated"] += 1
-                else:
-                    stats["skipped_dup"] += 1
-            except Exception as e:
-                stats["errors"] += 1
-                logger.warning("[PALACE] Migration error for %s: %s", old_id, e)
-
-        logger.info(
-            "[PALACE] Migration complete: %d total, %d migrated, %d dups, %d errors",
-            stats["total"], stats["migrated"], stats["skipped_dup"], stats["errors"],
-        )
-        return stats
-
-    # ------------------------------------------------------------------
     # Structure queries
     # ------------------------------------------------------------------
 

@@ -145,9 +145,12 @@ ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 # ---------------------------------------------------------------------------
 # RAG / ChromaDB
 # ---------------------------------------------------------------------------
+# Single unified collection for all memory: RAG document chunks, auto-learn
+# facts, user corrections, document vault entries. The old `nadim_rag`
+# collection was deleted on 2026-04-13 after confirming mempalace had
+# fully absorbed everything (see git log: "Clean up legacy nadim_rag").
 CHROMA_PERSIST = settings.chroma_persist
-CHROMA_COLLECTION = settings.palace_collection  # unified collection (was personal_rag)
-LEGACY_CHROMA_COLLECTION = settings.chroma_collection  # old collection name for migration
+CHROMA_COLLECTION = settings.palace_collection
 MIN_COS = settings.min_cos
 TOP_K = settings.top_k
 
@@ -155,10 +158,7 @@ chroma = chromadb.PersistentClient(
     path=os.path.expanduser(CHROMA_PERSIST),
     settings=ChromaSettings(anonymized_telemetry=False),
 )
-# Primary collection: mempalace (unified — all memories, RAG chunks, auto-learn facts)
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
-# Legacy collection: personal_rag (read-only, for migration)
-legacy_collection = chroma.get_or_create_collection(LEGACY_CHROMA_COLLECTION)
 embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
 # ---------------------------------------------------------------------------

@@ -116,16 +116,6 @@ async def palace_stats():
     return JSONResponse(palace.room_stats())
 
 
-@router.post("/api/palace/migrate")
-async def palace_migrate():
-    """Backfill auto_learn facts into the palace."""
-    from orchestrator.shared import get_palace
-
-    palace = get_palace()
-    stats = await palace.migrate_auto_learn()
-    return JSONResponse({"ok": True, **stats})
-
-
 @router.post("/api/palace/mine")
 async def palace_mine(req: Request):
     """Trigger session mining for Claude Code sessions."""

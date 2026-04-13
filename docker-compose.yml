@@ -108,7 +108,11 @@ services:
       - HA_TOKEN=${HA_TOKEN:-}
       # ChromaDB / RAG
       - CHROMA_PERSIST=/chroma/personal_rag
-      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-personal_rag}  # legacy, kept for migration reference
+      # CHROMA_COLLECTION was used by the pre-MemPalace flat RAG. Now
+      # unused at runtime (shared.py reads settings.palace_collection),
+      # but kept as an env var for any external tooling that still
+      # references the old collection name.
+      - CHROMA_COLLECTION=${CHROMA_COLLECTION:-mempalace}
       - MIN_COS=${MIN_COS:-0.20}
       - TOP_K=${TOP_K:-25}
       - RAG_BASE=/rag

@@ -422,7 +422,9 @@ Weekly scheduled job (Sundays 3am): cleans announcements (>30 days), selfcare lo
 
 ## MemPalace (Unified Memory System)
 
-MemPalace replaces the old flat `personal_rag` collection with a single unified `mempalace` ChromaDB collection. All memories — RAG document chunks, auto-learned facts, user corrections, document vault entries — live in one collection with wing/room metadata for structured organization. The `search_memory` tool supports optional wing/room filtering. Migration from the old collection is done via `reindex_rag.py --target-collection mempalace --add-palace-metadata`.
+MemPalace is the single unified `mempalace` ChromaDB collection used by the orchestrator. All memory — RAG document chunks, auto-learned facts, user corrections, document vault entries — lives here, with wing/room metadata for structured organization. The `search_memory` tool supports optional wing/room filtering. Source files in `~/rag/nadim_rag/` are auto-ingested every 2 minutes by the in-process `rag_ingest_watch` scheduler job (see `orchestrator/rag_ingest.py`). For on-demand ingestion: `POST /api/rag/ingest`.
+
+The legacy `nadim_rag` collection (pre-MemPalace, flat structure) was deleted on 2026-04-13 after verifying mempalace had fully absorbed it. See git log: "Clean up legacy nadim_rag collection" if you need historical context.
 
 ## MemPalace Environment Variables
 
@@ -447,8 +449,8 @@ MemPalace replaces the old flat `personal_rag` collection with a single unified 
 | GET | /api/palace/wings | Palace wing structure |
 | GET | /api/palace/wings/{wing}/rooms | Rooms in a wing with memory counts |
 | GET | /api/palace/stats | Memory counts by wing |
-| POST | /api/palace/migrate | Backfill auto_learn facts into the palace |
 | POST | /api/palace/mine | Trigger Claude Code session mining |
+| POST | /api/rag/ingest | Force immediate re-ingest of source files (bypasses 2-min scheduler) |
 
 ## MemPalace MCP Server (Claude Code)
 
