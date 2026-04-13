@@ -42,6 +42,14 @@ class MemPalace:
         self._routing_rules: List[Dict] = []
         self._wakeup_cache: Optional[str] = None
         self._wakeup_cache_time: float = 0.0
+        # Cache a reference to the shared chromadb collection as a plain
+        # instance attribute (not a @property). `shared.collection` is
+        # set once at module import time and never reassigned, so caching
+        # it here is safe. A plain attribute is also patchable via
+        # `unittest.mock.patch.object(palace, "_collection", mock)` in
+        # tests, which a read-only @property would reject with
+        # "has no deleter" on teardown.
+        self._collection = shared.collection
         self._load_config()
 
     # ------------------------------------------------------------------
@@ -76,10 +84,6 @@ class MemPalace:
         except Exception as e:
             logger.error("[PALACE] Failed to load config: %s", e)
             self._config = {"wings": {}, "routing_rules": [], "wakeup": {}}
-
-    @property
-    def _collection(self):
-        return shared.collection
 
     def is_known_wing(self, wing: str) -> bool:
         """Return True iff `wing` is a configured wing name."""
