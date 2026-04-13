@@ -336,10 +336,13 @@ class TestStoreAndDedup:
     def test_dedup_blocks_duplicate(self):
         palace, mock_coll, mock_shared = self._make_palace_with_mocks()
 
-        # Simulate a near-duplicate (cosine similarity > 0.85 means distance < 0.15)
+        # Simulate a near-duplicate. ChromaDB returns squared L2 distance,
+        # and cos_sim = 1 - dist/2 for normalized vectors. So cos_sim > 0.85
+        # means dist < 0.30. We use dist=0.05 → cos_sim=0.975, well above
+        # the 0.85 dedup threshold.
         mock_coll.query.return_value = {
             "documents": [["Takes Vyvanse 40mg daily"]],
-            "distances": [[0.05]],  # cos_sim = 0.95
+            "distances": [[0.05]],
             "ids": [["palace_existing"]],
         }
 
@@ -413,7 +416,9 @@ class TestSearch:
         assert len(results) == 2
         assert results[0]["text"] == "Takes Vyvanse 40mg"
         assert results[0]["wing"] == "personal"
-        assert results[0]["score"] == 0.9
+        # ChromaDB returns squared L2 distance; for unit-normalized vectors
+        # cos_sim = 1 - dist/2 (see commit d0d33fd). With dist=0.1, cos=0.95.
+        assert results[0]["score"] == 0.95
 
     def test_search_empty_query(self):
         from orchestrator.mempalace import MemPalace
