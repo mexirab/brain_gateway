@@ -3,9 +3,9 @@ Claude Code session tracker.
 
 Two data sources for awareness of what Claude Code has been doing:
 
-1. **Live session file** — reads the most recent .jsonl file from
-   ~/.claude/projects/<project>/ for up-to-the-minute context. No sync,
-   no storage, truth always fresh.
+1. **Live session file** — reads the most recent .jsonl file from the
+   mounted Claude Code projects directory for up-to-the-minute context.
+   No sync, no storage, truth always fresh.
 
 2. **SQLite rolling buffer** — Claude Code Stop hooks POST each completed
    turn to /api/claude_code/turn, which logs it here. Gives proactive
@@ -13,6 +13,14 @@ Two data sources for awareness of what Claude Code has been doing:
 
 Both sources are used by the `check_claude_activity` Jess tool and the
 code_agent prompt builder.
+
+**Security model:** all file reads are constrained to a single configured
+root (`CLAUDE_PROJECTS_PATH`, defaults to `/root/.claude/projects` inside
+the container). Any caller-supplied path — from a Stop hook, tool call,
+or REST endpoint — is rejected if it does not resolve (via `os.path.realpath`)
+under that root. The hook's `transcript_path` field is never trusted
+directly; we use `session_id` (validated as a UUID-like string) to locate
+the file ourselves.
 """
 
 import glob
@@ -31,11 +39,53 @@ from orchestrator.state_store import (
 
 logger = logging.getLogger(__name__)
 
-# Default location for Claude Code session files on the host
-_DEFAULT_SESSION_ROOT = os.path.expanduser("~/.claude/projects")
-
 # File-editing tools that indicate Claude Code touched a file
 _EDIT_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "Update"}
+
+# UUID-like session IDs only (prevents shell/path injection via the hook)
+_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
+
+
+def _claude_projects_root() -> str:
+    """Return the container-side Claude Code projects directory.
+
+    Reads from the CLAUDE_PROJECTS_PATH env var, falling back to the
+    conventional container mount point. This is the ONLY trusted root —
+    all session file reads must resolve under this path.
+    """
+    return os.environ.get("CLAUDE_PROJECTS_PATH", "/root/.claude/projects")
+
+
+def _resolve_under_root(path: str) -> Optional[str]:
+    """Return an absolute realpath iff it stays under the projects root.
+
+    Returns None if the path escapes the root, is missing, or is malformed.
+    Uses `os.path.realpath` to defeat symlink + ../ traversal attempts.
+    """
+    if not path:
+        return None
+    root = os.path.realpath(_claude_projects_root())
+    try:
+        resolved = os.path.realpath(path)
+    except (ValueError, OSError):
+        return None
+    if resolved != root and not resolved.startswith(root + os.sep):
+        return None
+    return resolved
+
+
+def _most_recent_jsonl(directory: str) -> Optional[str]:
+    """Return the most recently modified .jsonl file in `directory` (recursive)."""
+    try:
+        files = glob.glob(os.path.join(directory, "**", "*.jsonl"), recursive=True)
+    except Exception:
+        return None
+    if not files:
+        return None
+    try:
+        return max(files, key=os.path.getmtime)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -44,35 +94,57 @@ _EDIT_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "Update"}
 
 
 def _find_latest_session_file(project_dir: Optional[str] = None) -> Optional[str]:
-    """Find the most recently modified session .jsonl file for a project.
+    """Find the most recently modified session .jsonl under the projects root.
 
-    If project_dir is None, searches the current project directory by
-    matching the current working directory to Claude Code's path-encoded
-    project name (e.g. /opt/helios/gateway_mvp -> -opt-helios-gateway-mvp).
+    If `project_dir` is provided, it is validated to be under the configured
+    root and, if valid, scoped to that subdirectory. Otherwise all projects
+    under the root are scanned and the globally most-recent file wins.
+
+    Unlike the previous implementation, this does NOT use `os.getcwd()` —
+    the container's CWD (`/app`) is unrelated to the Claude Code project
+    encoding (`-opt-helios-gateway-mvp`). Path resolution is anchored to
+    a fixed configured root instead.
     """
-    if project_dir is None:
-        # Derive from current working directory
-        cwd = os.getcwd()
-        encoded = cwd.replace("/", "-")
-        project_dir = os.path.join(_DEFAULT_SESSION_ROOT, encoded)
+    root = _claude_projects_root()
+    if not os.path.isdir(root):
+        return None
 
-    if not os.path.isdir(project_dir):
-        # Fall back to scanning all projects
-        all_projects = sorted(
-            glob.glob(os.path.join(_DEFAULT_SESSION_ROOT, "*")),
-            key=os.path.getmtime,
-            reverse=True,
+    scope = root
+    if project_dir:
+        resolved = _resolve_under_root(project_dir)
+        if resolved and os.path.isdir(resolved):
+            scope = resolved
+        else:
+            logger.debug("[CC_TRACKER] project_dir outside root, scanning root: %s", project_dir)
+
+    return _most_recent_jsonl(scope)
+
+
+def _find_session_file_by_id(session_id: str) -> Optional[str]:
+    """Locate a session .jsonl by its UUID-like id under the projects root.
+
+    Validates the id matches a safe character set before interpolating it
+    into a glob pattern (prevents injection via `*`, `/`, `..`, etc.).
+    """
+    if not session_id or not _SESSION_ID_RE.match(session_id):
+        return None
+
+    root = _claude_projects_root()
+    if not os.path.isdir(root):
+        return None
+
+    try:
+        matches = glob.glob(
+            os.path.join(root, "**", f"{session_id}.jsonl"),
+            recursive=True,
         )
-        if not all_projects:
-            return None
-        project_dir = all_projects[0]
+    except Exception:
+        return None
+    if not matches:
+        return None
 
-    session_files = sorted(
-        glob.glob(os.path.join(project_dir, "**", "*.jsonl"), recursive=True),
-        key=os.path.getmtime,
-        reverse=True,
-    )
-    return session_files[0] if session_files else None
+    # Defense in depth: realpath check on the result
+    return _resolve_under_root(matches[0])
 
 
 def get_current_session_turns(n: int = 10, project_dir: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -183,33 +255,47 @@ def _normalize_turn(entry: Dict, filepath: str) -> Optional[Dict[str, Any]]:
 def log_turn_from_hook(payload: Dict[str, Any]) -> int:
     """Accept a turn payload from the Stop hook and store it in the buffer.
 
-    The hook POSTs JSON from Claude Code with keys like `transcript_path`,
-    `session_id`, etc. This function normalizes and stores it.
-    """
-    # If transcript path is provided, re-parse the latest turn from it
-    transcript_path = payload.get("transcript_path", "")
-    if transcript_path and os.path.exists(transcript_path):
-        try:
-            # Read the last assistant turn from the transcript
-            turns_from_file = _parse_session_file_for_hook(transcript_path)
-            if turns_from_file:
-                latest = turns_from_file[-1]
-                latest["session_id"] = payload.get("session_id") or latest.get("session_id", "")
-                latest["project"] = _detect_project_from_path(transcript_path)
-                return log_claude_code_turn(latest)
-        except Exception as e:
-            logger.warning("[CC_TRACKER] Failed to parse transcript %s: %s", transcript_path, e)
+    The hook POSTs JSON from Claude Code with keys including `session_id` and
+    `transcript_path`. The path field is **ignored entirely** — Claude Code
+    runs on the host and sends host-absolute paths that don't exist inside
+    the container, and accepting arbitrary paths from the hook would allow
+    an attacker with a valid API token (or a prompt-injected LLM) to read
+    arbitrary files into the palace via this endpoint.
 
-    # Fallback: use whatever the hook sent directly
+    Instead, we use `session_id` (validated as UUID-like) to locate the
+    file ourselves, constrained to the configured projects root.
+    """
+    session_id = str(payload.get("session_id") or "").strip()
+
+    # Preferred path: resolve session file from UUID under our root
+    if session_id:
+        session_file = _find_session_file_by_id(session_id)
+        if session_file:
+            try:
+                turns = _parse_session_file_for_hook(session_file)
+                if turns:
+                    latest = turns[-1]
+                    latest["session_id"] = session_id
+                    latest["project"] = _detect_project_from_path(session_file)
+                    return log_claude_code_turn(latest)
+            except Exception as e:
+                logger.warning("[CC_TRACKER] Failed to parse session %s: %s", session_id, e)
+
+    # Fallback: store whatever the hook sent directly (no file read).
+    # We defensively coerce list fields and cap string lengths so a malformed
+    # payload can't blow up state_store.
+    def _as_list(value: Any) -> List[Any]:
+        return value if isinstance(value, list) else []
+
     turn = {
         "timestamp": payload.get("timestamp") or datetime.now().isoformat(),
-        "session_id": payload.get("session_id", ""),
-        "project": payload.get("project", ""),
-        "turn_type": payload.get("turn_type", "assistant"),
-        "content": payload.get("content", ""),
-        "tool_uses": payload.get("tool_uses", []),
-        "files_touched": payload.get("files_touched", []),
-        "commit_hash": payload.get("commit_hash", ""),
+        "session_id": session_id,
+        "project": str(payload.get("project") or "")[:200],
+        "turn_type": str(payload.get("turn_type") or "assistant")[:20],
+        "content": str(payload.get("content") or "")[:10000],
+        "tool_uses": _as_list(payload.get("tool_uses")),
+        "files_touched": _as_list(payload.get("files_touched")),
+        "commit_hash": str(payload.get("commit_hash") or "")[:64],
     }
     return log_claude_code_turn(turn)
 

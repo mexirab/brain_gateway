@@ -58,17 +58,12 @@ async def mine_sessions(session_path: str = "") -> Dict:
     """
     stats = {"total_sessions": 0, "extracted": 0, "stored": 0, "errors": 0}
 
-    # Find session files
-    if not session_path:
-        session_path = shared.settings.palace_session_mine_path
-    if not session_path:
-        # Default: look for this project's sessions
-        home = os.path.expanduser("~")
-        session_path = os.path.join(home, ".claude", "projects")
-
+    # Find session files. `session_path` is treated as untrusted input
+    # (callers may pass it from a REST endpoint body) and is always
+    # resolved under the fixed Claude Code projects root.
     session_files = _find_session_files(session_path)
     if not session_files:
-        logger.info("[SESSION_MINER] No session files found at %s", session_path)
+        logger.info("[SESSION_MINER] No session files found (requested path: %r)", session_path)
         return stats
 
     stats["total_sessions"] = len(session_files)
@@ -111,11 +106,34 @@ async def mine_sessions(session_path: str = "") -> Dict:
 
 
 def _find_session_files(path: str) -> List[str]:
-    """Find .jsonl session files in the given path."""
-    if os.path.isfile(path) and path.endswith(".jsonl"):
-        return [path]
-    if os.path.isdir(path):
-        return sorted(glob.glob(os.path.join(path, "**", "*.jsonl"), recursive=True))
+    """Find .jsonl session files, constrained to the Claude Code projects root.
+
+    `path` is accepted as an optional narrowing hint (e.g., "scan only this
+    subdirectory"). It is NEVER trusted to escape the root — any resolved
+    realpath that isn't under the configured root is rejected.
+
+    If `path` is empty, scans the entire root.
+    """
+    from orchestrator.claude_code_tracker import _claude_projects_root, _resolve_under_root
+
+    root = _claude_projects_root()
+    if not os.path.isdir(root):
+        return []
+
+    # No path given → scan entire root
+    if not path:
+        return sorted(glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True))
+
+    # Validate caller-supplied path stays under root
+    resolved = _resolve_under_root(path)
+    if resolved is None:
+        logger.warning("[SESSION_MINER] Rejected path outside projects root: %r", path)
+        return []
+
+    if os.path.isfile(resolved) and resolved.endswith(".jsonl"):
+        return [resolved]
+    if os.path.isdir(resolved):
+        return sorted(glob.glob(os.path.join(resolved, "**", "*.jsonl"), recursive=True))
     return []
 
 

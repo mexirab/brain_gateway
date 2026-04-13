@@ -129,10 +129,11 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
         location = ""
         if isinstance(meta, dict):
             src = meta.get("file_path") or meta.get("source") or ""
-            wing = meta.get("wing", "")
-            room = meta.get("room", "")
-            if wing:
-                location = f"{wing}/{room}" if room else wing
+            # Use distinct names so we don't shadow the function's wing/room filter params
+            doc_wing = meta.get("wing", "")
+            doc_room = meta.get("room", "")
+            if doc_wing:
+                location = f"{doc_wing}/{doc_room}" if doc_room else doc_wing
 
         entry = f"- {doc[:800]}"
         if location:

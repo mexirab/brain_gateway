@@ -88,8 +88,10 @@ services:
       # MemPalace structure config
       - ${GATEWAY_ROOT_PATH:-.}/data/palace.yaml:/app/config/palace.yaml:ro
       # Claude Code session files (read-only) — lets Jess see what Claude Code
-      # has been working on for self-troubleshooting + code_agent context
-      - ${CLAUDE_PROJECTS_PATH:-/home/labadmin/.claude/projects}:/root/.claude/projects:ro
+      # has been working on for self-troubleshooting + code_agent context.
+      # Host path is configurable; container path is fixed (matches
+      # CLAUDE_PROJECTS_PATH env var in the environment block below).
+      - ${CLAUDE_PROJECTS_HOST_PATH:-/home/labadmin/.claude/projects}:/root/.claude/projects:ro
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/helios/gateway_mvp:ro
     environment:
@@ -189,6 +191,10 @@ services:
       - PALACE_YAML_PATH=/app/config/palace.yaml
       - PALACE_WAKEUP_ENABLED=${PALACE_WAKEUP_ENABLED:-true}
       - PALACE_DEDUP_THRESHOLD=${PALACE_DEDUP_THRESHOLD:-0.85}
+      # Container-side path for Claude Code session files (matches the bind
+      # mount target above). All session file lookups are constrained under
+      # this root for security.
+      - CLAUDE_PROJECTS_PATH=/root/.claude/projects
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001}
     networks:
