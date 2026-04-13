@@ -339,7 +339,8 @@ async def is_duplicate(fact_text: str) -> bool:
         for doc, dist in zip(docs, dists, strict=False):
             if doc is None:
                 continue
-            cos_sim = 1.0 - float(dist)
+            # ChromaDB returns squared L2 distance; cos_sim = 1 - dist/2
+            cos_sim = 1.0 - float(dist) / 2.0
             if cos_sim > shared.AUTO_LEARN_DEDUP_THRESHOLD:
                 return True
             # Also check exact normalized substring match

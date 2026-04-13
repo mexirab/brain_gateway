@@ -245,8 +245,20 @@ class MemPalace:
         for doc_id, doc, meta, dist in zip(ids, docs, metas, dists, strict=False):
             if doc is None:
                 continue
-            cos_sim = 1.0 - float(dist)
-            text = decrypt_text(doc)
+            # ChromaDB returns squared L2 distance; cos_sim = 1 - dist/2 for
+            # normalized vectors (see prompt_builder.rag_context for context).
+            cos_sim = 1.0 - float(dist) / 2.0
+            # Only decrypt if the chunk was actually stored encrypted. Detection
+            # is metadata-driven (encrypted="true") with a format-based fallback
+            # (Fernet v0 tokens start with "gAAAAAB"). Plaintext RAG chunks,
+            # correction docs, and file markers bypass decrypt_text entirely,
+            # which would otherwise return a "[encrypted — decryption failed]"
+            # placeholder for legitimate plaintext data.
+            is_encrypted = (
+                str(meta.get("encrypted", "")).lower() == "true"
+                or doc.startswith("gAAAAAB")
+            )
+            text = decrypt_text(doc) if is_encrypted else doc
             memories.append({
                 "id": doc_id,
                 "text": text,
@@ -277,8 +289,13 @@ class MemPalace:
             metas = result.get("metadatas", [])
             if not docs:
                 return None
-            text = decrypt_text(docs[0])
+            raw = docs[0]
             meta = metas[0] if metas else {}
+            is_encrypted = (
+                str((meta or {}).get("encrypted", "")).lower() == "true"
+                or raw.startswith("gAAAAAB")
+            )
+            text = decrypt_text(raw) if is_encrypted else raw
             return {
                 "id": doc_id,
                 "text": text,
@@ -388,7 +405,7 @@ class MemPalace:
             for doc, dist in zip(docs, dists, strict=False):
                 if doc is None:
                     continue
-                cos_sim = 1.0 - float(dist)
+                cos_sim = 1.0 - float(dist) / 2.0
                 if cos_sim > shared.PALACE_DEDUP_THRESHOLD:
                     return True
                 # Substring match on decrypted text

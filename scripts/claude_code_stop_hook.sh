@@ -23,6 +23,18 @@
 
 set -euo pipefail
 
+# Fall back to sourcing .env if API_TOKEN isn't already in the environment.
+# Claude Code's hook subshell doesn't inherit the user's login env, so
+# requiring the user to export API_TOKEN manually in every terminal is
+# fragile. Sourcing .env here means the hook "just works" as long as .env
+# is populated, which is the canonical source of truth for the token.
+if [ -z "${API_TOKEN:-}" ] && [ -f /opt/helios/gateway_mvp/.env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /opt/helios/gateway_mvp/.env 2>/dev/null || true
+    set +a
+fi
+
 ORCH_URL="${ORCHESTRATOR_URL:-http://localhost:8888}"
 ENDPOINT="${ORCH_URL}/api/claude_code/turn"
 

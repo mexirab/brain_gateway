@@ -140,7 +140,8 @@ def _find_conflicts(search_query: str) -> List[Tuple[str, str, float]]:
         strict=False,
     ):
         # ChromaDB returns L2 distance; convert to cosine similarity
-        cosine_sim = 1.0 - float(distance)
+        # ChromaDB returns squared L2 distance; cos_sim = 1 - dist/2
+        cosine_sim = 1.0 - float(distance) / 2.0
         if cosine_sim >= CONFLICT_THRESHOLD:
             conflicts.append((doc_id, doc_text, cosine_sim))
 

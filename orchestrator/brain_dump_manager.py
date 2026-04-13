@@ -134,7 +134,8 @@ async def _is_duplicate(text: str, embedding: list) -> bool:
         for doc, dist in zip(docs, dists, strict=False):
             if doc is None:
                 continue
-            cos_sim = 1.0 - float(dist)
+            # ChromaDB returns squared L2 distance; cos_sim = 1 - dist/2
+            cos_sim = 1.0 - float(dist) / 2.0
             if cos_sim > DEDUP_THRESHOLD:
                 return True
             # Substring match

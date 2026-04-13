@@ -132,7 +132,12 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
             continue
 
         try:
-            cos = 1.0 - float(dist)
+            # ChromaDB returns squared L2 distance by default. For the
+            # normalized vectors we use, L2² = 2(1 - cos_sim), so the true
+            # cosine similarity is 1 - dist/2 (NOT 1 - dist as older code
+            # assumed, which silently halved the computed similarity and
+            # made MIN_COS filtering nearly no-op).
+            cos = 1.0 - float(dist) / 2.0
         except (ValueError, TypeError):
             cos = None
 
@@ -149,7 +154,24 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
             if doc_wing:
                 location = f"{doc_wing}/{doc_room}" if doc_room else doc_wing
 
-        entry = f"- {doc[:800]}"
+        # Decrypt Fernet-encrypted chunks (auto_learn facts). Detection is
+        # either metadata-driven (encrypted="true") or format-driven (every
+        # Fernet token starts with "gAAAAAB" for v0 tokens). We try both
+        # so chunks written by older code paths still render correctly.
+        display_doc = doc
+        is_encrypted = (
+            (isinstance(meta, dict) and str(meta.get("encrypted", "")).lower() == "true")
+            or display_doc.startswith("gAAAAAB")
+        )
+        if is_encrypted:
+            try:
+                from orchestrator.auto_learn import decrypt_text
+                display_doc = decrypt_text(display_doc)
+            except Exception as e:
+                logger.debug("[RAG] Decryption failed for chunk: %s", e)
+                # fall through with ciphertext — better than losing the result
+
+        entry = f"- {display_doc[:800]}"
         if location:
             entry += f"\n  (palace: {location})"
         elif src:
