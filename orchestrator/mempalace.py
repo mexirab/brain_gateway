@@ -81,6 +81,16 @@ class MemPalace:
     def _collection(self):
         return shared.collection
 
+    def is_known_wing(self, wing: str) -> bool:
+        """Return True iff `wing` is a configured wing name."""
+        if not wing:
+            return False
+        return wing in self._config.get("wings", {})
+
+    def known_wings(self) -> set:
+        """Return the set of configured wing names."""
+        return set(self._config.get("wings", {}).keys())
+
     # ------------------------------------------------------------------
     # Store
     # ------------------------------------------------------------------
@@ -110,13 +120,17 @@ class MemPalace:
         if not wing:
             wing, room = self.route_to_room(text, project=project)
 
-        # Validate wing exists (or default)
+        # Validate wing exists (or default). Logging the fallback helps
+        # catch cases where a caller passes an unknown wing string.
         wings = self._config.get("wings", {})
         if wing not in wings:
+            if wing:
+                logger.warning("[PALACE] store() unknown wing %r → falling back to 'personal'", wing)
             wing = "personal"
         if room and wing in wings:
             rooms = wings[wing].get("rooms", {})
             if room not in rooms:
+                logger.debug("[PALACE] store() unknown room %r in wing %s → dropping", room, wing)
                 room = ""
 
         # Dedup check
@@ -189,6 +203,14 @@ class MemPalace:
         query = query.strip()
         if not query:
             return []
+
+        # Soft-fail: unknown wing → drop the filter and log. This prevents a
+        # prompt-injected LLM from narrowing to a room that doesn't exist
+        # and silently getting zero results (which would mask a bug), and
+        # prevents arbitrary strings from reaching ChromaDB.
+        if wing and not self.is_known_wing(wing):
+            logger.warning("[PALACE] search() ignoring unknown wing: %r", wing)
+            wing = ""
 
         # Build where filter
         where_filter = self._build_where_filter(wing, room)

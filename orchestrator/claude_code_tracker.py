@@ -45,6 +45,19 @@ _EDIT_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "Update"}
 # UUID-like session IDs only (prevents shell/path injection via the hook)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
 
+# Hard cap on session file size we're willing to read. Real session files
+# are typically a few MB; anything dramatically larger is either adversarial
+# or a bug — reading it would risk memory exhaustion.
+_MAX_SESSION_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
+def _is_reasonable_size(filepath: str) -> bool:
+    """Return True iff `filepath` exists and is within the size cap."""
+    try:
+        return os.path.getsize(filepath) <= _MAX_SESSION_FILE_BYTES
+    except OSError:
+        return False
+
 
 def _claude_projects_root() -> str:
     """Return the container-side Claude Code projects directory.
@@ -162,6 +175,9 @@ def get_current_session_turns(n: int = 10, project_dir: Optional[str] = None) ->
     """
     filepath = _find_latest_session_file(project_dir)
     if not filepath:
+        return []
+    if not _is_reasonable_size(filepath):
+        logger.warning("[CC_TRACKER] Session file exceeds size cap, skipping: %s", filepath)
         return []
 
     turns: List[Dict[str, Any]] = []
@@ -302,6 +318,9 @@ def log_turn_from_hook(payload: Dict[str, Any]) -> int:
 
 def _parse_session_file_for_hook(filepath: str, max_turns: int = 2) -> List[Dict[str, Any]]:
     """Parse a session file and return the last max_turns assistant turns."""
+    if not _is_reasonable_size(filepath):
+        logger.warning("[CC_TRACKER] Hook session file exceeds size cap, skipping: %s", filepath)
+        return []
     turns: List[Dict[str, Any]] = []
     with open(filepath) as f:
         for line in f:

@@ -447,7 +447,6 @@ MemPalace replaces the old flat `personal_rag` collection with a single unified 
 | GET | /api/palace/wings | Palace wing structure |
 | GET | /api/palace/wings/{wing}/rooms | Rooms in a wing with memory counts |
 | GET | /api/palace/stats | Memory counts by wing |
-| GET | /api/palace/wakeup | Compressed identity context for system prompts |
 | POST | /api/palace/migrate | Backfill auto_learn facts into the palace |
 | POST | /api/palace/mine | Trigger Claude Code session mining |
 

@@ -377,13 +377,14 @@ async def store_fact(fact: Dict) -> Optional[str]:
         lambda: shared.embedding_model.encode(fact_text, normalize_embeddings=True).tolist()
     )
 
-    # Route to palace wing/room
+    # Route to palace wing/room (gated by PALACE_ENABLED kill switch)
     wing, room = "", ""
-    try:
-        palace = shared.get_palace()
-        wing, room = palace.route_to_room(fact_text)
-    except Exception:
-        pass
+    if shared.PALACE_ENABLED:
+        try:
+            palace = shared.get_palace()
+            wing, room = palace.route_to_room(fact_text)
+        except Exception as e:
+            logger.warning("[AUTO_LEARN] Palace routing failed (non-fatal): %s", e)
 
     metadata = {
         "source": "auto_learn",

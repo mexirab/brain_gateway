@@ -139,6 +139,11 @@ def _find_session_files(path: str) -> List[str]:
 
 def _parse_session_file(filepath: str) -> List[str]:
     """Parse a .jsonl session file, extracting assistant message content."""
+    from orchestrator.claude_code_tracker import _is_reasonable_size
+
+    if not _is_reasonable_size(filepath):
+        logger.warning("[SESSION_MINER] Session file exceeds size cap, skipping: %s", filepath)
+        return []
     messages = []
     try:
         with open(filepath) as f:

@@ -8,6 +8,7 @@ Settings); this module re-exports constants for backward compatibility.
 
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -375,14 +376,20 @@ def get_palace_collection():
     return collection
 
 
-# Palace singleton (lazy — avoids import-time side effects)
+# Palace singleton (lazy — avoids import-time side effects).
+# Protected by a lock because `get_palace()` is called from `asyncio.to_thread`
+# workers (via mempalace.store / is_duplicate), which means two threads can
+# race the None-check and construct two MemPalace instances simultaneously.
 _palace_instance = None
+_palace_lock = threading.Lock()
 
 
 def get_palace():
-    """Get or create the MemPalace singleton."""
+    """Get or create the MemPalace singleton (thread-safe double-checked init)."""
     global _palace_instance
     if _palace_instance is None:
-        from orchestrator.mempalace import MemPalace
-        _palace_instance = MemPalace()
+        with _palace_lock:
+            if _palace_instance is None:  # re-check inside the lock
+                from orchestrator.mempalace import MemPalace
+                _palace_instance = MemPalace()
     return _palace_instance

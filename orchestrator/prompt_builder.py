@@ -70,6 +70,19 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
         logger.warning(f"[RAG] Empty query after normalization (original: '{original_query}')")
         return ""
 
+    # Soft-fail: unknown wing → drop the filter rather than returning zero
+    # results. Uses the palace config as the source of truth; falls back
+    # to accepting the value if palace isn't available.
+    if wing:
+        try:
+            from orchestrator.shared import get_palace
+
+            if not get_palace().is_known_wing(wing):
+                logger.warning("[RAG] Ignoring unknown wing filter: %r", wing)
+                wing = ""
+        except Exception:
+            pass  # palace unavailable — fall through and pass to ChromaDB
+
     filter_desc = f", wing={wing}, room={room}" if wing or room else ""
     logger.info(f"[RAG] Searching for: '{query}' (original: '{original_query}'{filter_desc})", extra={"component": "rag"})
 

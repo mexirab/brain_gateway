@@ -128,7 +128,10 @@ def _route_to_wing_room(doc_text, meta, routing_rules=None):
                 if compiled and compiled.search(text_lower):
                     return rule.get("wing", "personal"), rule.get("room", "")
 
-        # Category-based fallback for auto-learn
+        # Category-based fallback for auto-learn. Must cover every category
+        # the auto_learn extraction prompt emits, otherwise migrated facts
+        # silently land in ("personal", "") (unroomed) and become harder to
+        # find via wing/room filtering.
         cat_map = {
             "health": ("personal", "health"),
             "medication": ("personal", "health"),
@@ -138,6 +141,9 @@ def _route_to_wing_room(doc_text, meta, routing_rules=None):
             "work": ("brain_gateway", ""),
             "technical": ("brain_gateway", ""),
             "pattern": ("personal", ""),
+            "relationship": ("personal", "relationships"),
+            "goal": ("personal", "goals"),
+            "emotion": ("personal", ""),
         }
         if category in cat_map:
             return cat_map[category]

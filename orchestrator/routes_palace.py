@@ -2,12 +2,25 @@
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+
+def _require_palace_enabled():
+    """FastAPI dependency: reject requests when PALACE_ENABLED is false.
+
+    Applied to every handler in this router so the env var is an actual
+    kill switch, not just a hint.
+    """
+    if not shared.PALACE_ENABLED:
+        raise HTTPException(status_code=503, detail="MemPalace is disabled (PALACE_ENABLED=false)")
+
+
+router = APIRouter(dependencies=[Depends(_require_palace_enabled)])
 
 
 @router.get("/api/palace/search")
@@ -101,16 +114,6 @@ async def palace_stats():
 
     palace = get_palace()
     return JSONResponse(palace.room_stats())
-
-
-@router.get("/api/palace/wakeup")
-async def palace_wakeup():
-    """Get compressed identity context for system prompts."""
-    from orchestrator.shared import get_palace
-
-    palace = get_palace()
-    context = palace.generate_wakeup_context()
-    return JSONResponse({"context": context, "token_estimate": len(context) // 4})
 
 
 @router.post("/api/palace/migrate")

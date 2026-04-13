@@ -15,6 +15,7 @@ Environment:
 """
 
 import os
+import sys
 from typing import Any
 
 import httpx
@@ -22,6 +23,20 @@ from mcp.server.fastmcp import FastMCP
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8888")
 API_TOKEN = os.environ.get("API_TOKEN", "")
+
+# Fail loud if the bearer token is missing. The orchestrator's
+# BearerAuthMiddleware will return 401 for every request otherwise, and
+# the user will see a confusing "silent failures" pattern instead of a
+# clear misconfiguration error.
+if not API_TOKEN:
+    print(
+        "FATAL: API_TOKEN environment variable is required but not set.\n"
+        "       The MCP server needs a bearer token to reach the orchestrator.\n"
+        "       Set it before launching Claude Code, e.g.:\n"
+        "           export API_TOKEN=$(grep -E '^API_TOKEN=' /opt/helios/gateway_mvp/.env | cut -d= -f2-)\n",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 mcp = FastMCP("mempalace")
 
