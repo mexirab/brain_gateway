@@ -737,6 +737,22 @@ async def startup_event():
         replace_existing=True,
     )
 
+    # RAG source file watcher: periodically check ~/rag/nadim_rag for edits
+    # and re-ingest changed files into shared.collection. Runs in-process so
+    # the updates are immediately visible to the chat pipeline (no restart
+    # required, unlike out-of-process ingestion which leaves the daemon's
+    # HNSW index stale).
+    from orchestrator.rag_ingest import check_and_ingest as _rag_check_and_ingest
+
+    scheduler.add_job(
+        _rag_check_and_ingest,
+        trigger="interval",
+        minutes=2,
+        id="rag_ingest_watch",
+        name="RAG source file watcher",
+        replace_existing=True,
+    )
+
 
 def _cleanup_audio_files(max_age_hours: int = 1) -> None:
     """Remove old TTS audio files from /tmp/brain_audio."""

@@ -636,6 +636,29 @@ async def get_recent_claude_code_activity(minutes: int = 120, limit: int = 20):
     return JSONResponse({"count": len(turns), "turns": turns})
 
 
+@router.post("/api/rag/ingest")
+async def trigger_rag_ingest():
+    """Run the RAG source-file ingest immediately (bypasses the 2-min scheduler).
+
+    Useful for testing and for one-off "I just edited a file and want it live
+    right now" cases. Returns the same stats as the scheduled job.
+    """
+    from orchestrator.rag_ingest import _run_ingest_sync
+
+    import asyncio
+
+    import time as _time
+    t0 = _time.time()
+    stats = await asyncio.to_thread(_run_ingest_sync)
+    return JSONResponse(
+        {
+            "ok": True,
+            "elapsed_seconds": round(_time.time() - t0, 2),
+            **stats,
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Service health
 # ---------------------------------------------------------------------------
