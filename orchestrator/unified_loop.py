@@ -21,6 +21,42 @@ from orchestrator.shared import MAX_TOOL_ROUNDS
 
 logger = logging.getLogger(__name__)
 
+# Hard cap on a single tool result inserted into the conversation. Without
+# this cap, a tool like code_agent or a long check_system dump can dominate
+# the model's 32K context budget after just a few invocations — every
+# subsequent turn replays the entire bloated message list until llama-server
+# rejects the request with HTTP 400. 8000 chars ≈ 2000 tokens, which is
+# enough for a useful tool result but bounded enough that even several calls
+# per session stay well under the context budget. Tools that need to return
+# more than this should aggregate or summarize internally before returning.
+MAX_TOOL_RESULT_CHARS = 8000
+
+
+def _cap_tool_result(result: Any, tool_name: str) -> str:
+    """Stringify and hard-cap a tool result so it can't poison the context."""
+    s = str(result) if result is not None else ""
+    if len(s) <= MAX_TOOL_RESULT_CHARS:
+        return s
+    truncated = s[:MAX_TOOL_RESULT_CHARS]
+    overflow = len(s) - MAX_TOOL_RESULT_CHARS
+    logger.warning(
+        "[UNIFIED] Truncated %s result: %d chars → %d chars (+%d dropped)",
+        tool_name,
+        len(s),
+        MAX_TOOL_RESULT_CHARS,
+        overflow,
+    )
+    # Footer is model-facing, not user-facing. Explicit "do not call this
+    # tool again" closes the ambiguity of earlier wording that a reasoning
+    # model could interpret as "re-call me with narrower args" — the whole
+    # point of this cap is to prevent that loop.
+    return (
+        f"{truncated}\n\n"
+        f"[... {overflow} chars truncated to fit context budget. "
+        f"Work with the information above; do not call this tool again to retrieve the rest.]"
+    )
+
+
 # Tools that mutate state — return result directly, don't loop
 TERMINAL_TOOLS = {
     "start_focus",
@@ -319,6 +355,7 @@ async def run_unified_tool_loop(
             except Exception as e:
                 logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
                 result = f"The {tool_name} tool encountered an error. Please try again."
+            result = _cap_tool_result(result, tool_name)
             tool_results.append((tool_call.get("id", f"call_{round_num}"), tool_name, result))
 
             if tool_name in TERMINAL_TOOLS:
@@ -328,11 +365,12 @@ async def run_unified_tool_loop(
         # Use proper tool role messages if the model sent native tool_calls
         if message.get("tool_calls"):
             for call_id, _tool_name, result in tool_results:
+                # result is already a str (capped by _cap_tool_result above)
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": call_id,
-                        "content": str(result),
+                        "content": result,
                     }
                 )
         else:
