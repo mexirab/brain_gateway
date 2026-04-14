@@ -22,8 +22,6 @@ from orchestrator.metrics import (
     CALENDAR_POLL_EVENTS_FOUND,
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
-    GMAIL_API_CALLS,
-    GMAIL_API_ERRORS,
 )
 from orchestrator.reminder_manager import _announce_voice, list_pending_reminders
 from orchestrator.shared import TIMEZONE, profile
@@ -451,49 +449,6 @@ async def morning_briefing():
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
-
-
-async def poll_email():
-    """Every N minutes: check for new unread emails, announce important ones via TTS."""
-    client = get_gmail_client()
-    if not client or not client.is_configured:
-        return
-
-    GMAIL_API_CALLS.labels(operation="poll").inc()
-
-    try:
-        # Find unread emails from the last hour, skip non-primary tabs
-        query = "is:unread newer_than:1h -category:promotions -category:social -category:forums -category:updates"
-        response = await client.list_messages(query=query, max_results=5)
-
-        if not response.success:
-            GMAIL_API_ERRORS.labels(operation="poll").inc()
-            logger.warning(f"[EMAIL_POLL] Failed: {response.error}")
-            return
-
-        new_count = 0
-        for msg in response.messages:
-            email_key = f"email:{msg.id}"
-            if state_store.is_notified(email_key):
-                continue
-
-            # Extract sender name (strip email address for TTS)
-            sender = msg.sender.split("<")[0].strip().strip('"')
-            if not sender:
-                sender = msg.sender
-
-            announcement = f"New email from {sender}: {msg.subject}"
-            await _announce_voice(announcement, announcement_type="email")
-            state_store.mark_notified(email_key)
-            new_count += 1
-            logger.info(f"[EMAIL_POLL] Announced: {msg.subject} from {sender}", extra={"component": "gmail"})
-
-        if new_count:
-            logger.info(f"[EMAIL_POLL] Announced {new_count} new emails")
-
-    except Exception as e:
-        GMAIL_API_ERRORS.labels(operation="poll").inc()
-        logger.error(f"[EMAIL_POLL] Error: {e}")
 
 
 _EVENT_EXTRACTION_PROMPT = """\

@@ -25,7 +25,6 @@ async def check_system(query: str) -> str:
     handlers = {
         "morning_briefing": _check_morning_briefing,
         "calendar_poll": _check_calendar_poll,
-        "email_poll": _check_email_poll,
         "reminders": _check_reminders,
         "focus_timer": _check_focus_timer,
         "temperature": _check_temperature,
@@ -84,21 +83,6 @@ async def _check_calendar_poll() -> str:
 
     if scheduler_info:
         lines.append(f"\nNext poll: {scheduler_info}")
-
-    return "\n".join(lines)
-
-
-async def _check_email_poll() -> str:
-    """Check recent email polling activity."""
-    entries = log_ring.search("[EMAIL_POLL]", limit=10)
-    gmail_entries = log_ring.search("[GMAIL]", limit=5)
-
-    if not entries and not gmail_entries:
-        return "No email polling activity found in recent logs."
-
-    lines = ["Email polling log entries (most recent first):"]
-    for e in (entries or gmail_entries)[:5]:
-        lines.append(f"  [{e['time']}] {e['message'][:150]}")
 
     return "\n".join(lines)
 

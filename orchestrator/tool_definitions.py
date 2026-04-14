@@ -630,14 +630,13 @@ STATIC_TOOLS = [
                         "enum": [
                             "morning_briefing",
                             "calendar_poll",
-                            "email_poll",
                             "reminders",
                             "focus_timer",
                             "temperature",
                             "system_health",
                             "recent_errors",
                         ],
-                        "description": "What to check: morning_briefing (did briefing run?), calendar_poll (last calendar check), email_poll (last email check), reminders (pending reminders), focus_timer (current/recent focus), temperature (server closet temps), system_health (overall status), recent_errors (error log)",
+                        "description": "What to check: morning_briefing (did briefing run?), calendar_poll (last calendar check), reminders (pending reminders), focus_timer (current/recent focus), temperature (server closet temps), system_health (overall status), recent_errors (error log)",
                     }
                 },
                 "required": ["query"],

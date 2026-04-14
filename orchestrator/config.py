@@ -104,8 +104,6 @@ class Settings(BaseSettings):
     morning_briefing_speaker: str = ""
 
     # -- Email -------------------------------------------------------------------
-    email_poll_interval: int = 30
-    email_poll_enabled: bool = True
     # Email-to-calendar autonomy is dormant by default. Implementation is
     # complete (see jobs_calendar.process_emails_for_events) and the
     # scheduler trigger is wired in orchestrator.py startup, gated on this
@@ -232,7 +230,7 @@ class Settings(BaseSettings):
             return []
         return [u.strip() for u in self.pihole_urls.split(",") if u.strip()]
 
-    @field_validator("calendar_poll_interval", "email_poll_interval", "travel_time_buffer")
+    @field_validator("calendar_poll_interval", "travel_time_buffer")
     @classmethod
     def validate_positive_int(cls, v: int) -> int:
         if v < 1:

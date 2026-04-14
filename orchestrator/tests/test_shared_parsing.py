@@ -1,8 +1,8 @@
 """
 Tests for shared.py — env var parsing with try/except fallback.
 
-Covers CALENDAR_ALERT_TIERS, CALENDAR_POLL_INTERVAL, and EMAIL_POLL_INTERVAL
-parsing with valid, malformed, and whitespace inputs.
+Covers CALENDAR_ALERT_TIERS and CALENDAR_POLL_INTERVAL parsing with
+valid, malformed, and whitespace inputs.
 """
 
 
@@ -77,26 +77,6 @@ class TestCalendarPollIntervalParsing:
         assert self._parse_interval("") == 5
 
 
-class TestEmailPollIntervalParsing:
-    """EMAIL_POLL_INTERVAL env var parsing."""
-
-    def _parse_interval(self, env_value):
-        try:
-            return int(env_value)
-        except ValueError:
-            return 30
-
-    def test_valid_interval(self):
-        assert self._parse_interval("15") == 15
-
-    def test_default_interval(self):
-        assert self._parse_interval("30") == 30
-
-    def test_malformed_returns_default(self):
-        assert self._parse_interval("xyz") == 30
-
-    def test_float_returns_default(self):
-        assert self._parse_interval("30.0") == 30
 
     def test_empty_returns_default(self):
         assert self._parse_interval("") == 30

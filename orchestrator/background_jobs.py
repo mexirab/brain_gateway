@@ -16,7 +16,6 @@ from orchestrator.jobs_calendar import (  # noqa: F401
     _parse_phone_datetime,
     morning_briefing,
     poll_calendar,
-    poll_email,
     process_emails_for_events,
 )
 from orchestrator.jobs_finance import (  # noqa: F401
@@ -43,7 +42,6 @@ __all__ = [
     "_parse_event_json",
     "morning_briefing",
     "poll_calendar",
-    "poll_email",
     "process_emails_for_events",
     # Finance
     "sync_ynab_transactions",

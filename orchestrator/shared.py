@@ -211,12 +211,6 @@ MORNING_BRIEFING_ENABLED = settings.morning_briefing_enabled
 MORNING_BRIEFING_SPEAKER = settings.morning_briefing_speaker or profile.morning_briefing_speaker
 
 # ---------------------------------------------------------------------------
-# Email polling config
-# ---------------------------------------------------------------------------
-EMAIL_POLL_INTERVAL = settings.email_poll_interval
-EMAIL_POLL_ENABLED = settings.email_poll_enabled
-
-# ---------------------------------------------------------------------------
 # Temperature monitoring
 # ---------------------------------------------------------------------------
 CLOSET_TEMP_WARNING = settings.closet_temp_warning
