@@ -5,9 +5,17 @@ Not Brain Gateway specific. Applies to every node in the homelab cluster
 (Helios, Jupiter, Saturn, Uranus). Lives alongside Brain Gateway dashboards
 but will be reused for future workloads.
 
-Metrics come from node_exporter, nvidia-gpu-exporter (or whatever gpu
-exporter is in use), and the bgw_temperature_* gauges which the Brain
-Gateway orchestrator exposes from the server-closet sensors.
+Metrics come from:
+  - node-exporter on port 9100 (job="node-exporter") — CPU, memory, disk,
+    network, hwmon. The scrape config in monitoring/prometheus/prometheus.yml
+    adds a friendly `node` label (helios/jupiter/saturn/uranus) so we use
+    that instead of `instance` for legends.
+  - nvidia_gpu_exporter v1.4.1 on port 9400 (job="gpu-exporter") — GPU temp,
+    utilization, VRAM, power. Metric names are `nvidia_smi_*`. The only
+    differentiating label is `uuid`, so every GPU panel joins on
+    `nvidia_smi_gpu_info` to pull in a readable `name` label.
+  - bgw_temperature_* gauges from the orchestrator for the server-closet
+    Sonoff sensors.
 """
 
 from __future__ import annotations
@@ -28,21 +36,21 @@ def build() -> dict:
     cluster_row = [
         stat(
             "Nodes Online",
-            'count(up{job=~"node|node_exporter"} == 1)',
+            'count(up{job="node-exporter"} == 1)',
             unit="none",
             graph_mode="none",
             thresholds=[(None, "red"), (3, "yellow"), (4, "green")],
         ),
         bargauge(
             "CPU Usage by Node",
-            '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)',
+            '100 - (avg by (node) (rate(node_cpu_seconds_total{mode="idle", job="node-exporter"}[5m])) * 100)',
             unit="percent",
             max_value=100,
             thresholds=[(None, "green"), (70, "yellow"), (90, "red")],
         ),
         bargauge(
             "Memory Usage by Node",
-            "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+            '(1 - (node_memory_MemAvailable_bytes{job="node-exporter"} / node_memory_MemTotal_bytes{job="node-exporter"})) * 100',
             unit="percent",
             max_value=100,
             thresholds=[(None, "green"), (75, "yellow"), (90, "red")],
@@ -55,23 +63,37 @@ def build() -> dict:
     r, y = row_divider("GPUs", y)
     panels.append(r)
 
+    # GPU panels join nvidia_smi_* metrics with nvidia_smi_gpu_info on uuid
+    # to pull in a readable `name` label (e.g. "NVIDIA GeForce RTX 5090").
+    # The `node` label comes from the prometheus.yml scrape config.
     gpu_row = [
         timeseries(
             "GPU Temperature",
-            [("nvidia_gpu_temperature_celsius", "{{instance}} GPU{{gpu}}")],
+            [
+                (
+                    "nvidia_smi_temperature_gpu * on (uuid) group_left(name) nvidia_smi_gpu_info",
+                    "{{node}} {{name}}",
+                )
+            ],
             unit="celsius",
             thresholds=[(None, "green"), (75, "yellow"), (85, "red")],
         ),
         timeseries(
             "GPU Utilization",
-            [("nvidia_gpu_duty_cycle", "{{instance}} GPU{{gpu}}")],
-            unit="percent",
-            max_value=100,
+            [
+                (
+                    "nvidia_smi_utilization_gpu_ratio * on (uuid) group_left(name) nvidia_smi_gpu_info",
+                    "{{node}} {{name}}",
+                )
+            ],
+            unit="percentunit",  # ratio is 0-1, percentunit handles the *100 + % suffix
+            max_value=1,
             fill=30,
         ),
         bargauge(
             "VRAM Usage",
-            "(nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes) * 100",
+            "((nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes) * 100) "
+            "* on (uuid) group_left(name) nvidia_smi_gpu_info",
             unit="percent",
             max_value=100,
             thresholds=[(None, "green"), (80, "yellow"), (95, "red")],
@@ -87,22 +109,29 @@ def build() -> dict:
     disk_row = [
         bargauge(
             "Disk Usage",
-            '(1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100',
+            '(1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs", job="node-exporter"} '
+            '/ node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs", job="node-exporter"})) * 100',
             unit="percent",
             max_value=100,
             thresholds=[(None, "green"), (80, "yellow"), (92, "red")],
         ),
         timeseries(
             "CPU / Chipset Temps",
-            [("node_hwmon_temp_celsius", "{{instance}} {{chip}}/{{sensor}}")],
+            [('node_hwmon_temp_celsius{job="node-exporter"}', "{{node}} {{chip}}/{{sensor}}")],
             unit="celsius",
             thresholds=[(None, "green"), (75, "yellow"), (85, "red")],
         ),
         timeseries(
             "Disk I/O",
             [
-                ("sum by (instance) (rate(node_disk_read_bytes_total[5m]))", "{{instance}} read"),
-                ("sum by (instance) (rate(node_disk_written_bytes_total[5m]))", "{{instance}} write"),
+                (
+                    'sum by (node) (rate(node_disk_read_bytes_total{job="node-exporter"}[5m]))',
+                    "{{node}} read",
+                ),
+                (
+                    'sum by (node) (rate(node_disk_written_bytes_total{job="node-exporter"}[5m]))',
+                    "{{node}} write",
+                ),
             ],
             unit="Bps",
         ),
@@ -144,8 +173,9 @@ def build() -> dict:
             "Network Receive by Node",
             [
                 (
-                    'sum by (instance) (rate(node_network_receive_bytes_total{device!~"lo|docker.*|br-.*|veth.*"}[5m]))',
-                    "{{instance}}",
+                    "sum by (node) (rate(node_network_receive_bytes_total{"
+                    'device!~"lo|docker.*|br-.*|veth.*", job="node-exporter"}[5m]))',
+                    "{{node}}",
                 )
             ],
             unit="Bps",
@@ -154,8 +184,9 @@ def build() -> dict:
             "Network Transmit by Node",
             [
                 (
-                    'sum by (instance) (rate(node_network_transmit_bytes_total{device!~"lo|docker.*|br-.*|veth.*"}[5m]))',
-                    "{{instance}}",
+                    "sum by (node) (rate(node_network_transmit_bytes_total{"
+                    'device!~"lo|docker.*|br-.*|veth.*", job="node-exporter"}[5m]))',
+                    "{{node}}",
                 )
             ],
             unit="Bps",

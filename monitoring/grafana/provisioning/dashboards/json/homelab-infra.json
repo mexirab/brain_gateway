@@ -67,7 +67,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "count(up{job=~\"node|node_exporter\"} == 1)",
+          "expr": "count(up{job=\"node-exporter\"} == 1)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -138,7 +138,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "expr": "100 - (avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\", job=\"node-exporter\"}[5m])) * 100)",
           "legendFormat": "__auto",
           "range": true,
           "instant": false,
@@ -206,7 +206,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "expr": "(1 - (node_memory_MemAvailable_bytes{job=\"node-exporter\"} / node_memory_MemTotal_bytes{job=\"node-exporter\"})) * 100",
           "legendFormat": "__auto",
           "range": true,
           "instant": false,
@@ -287,8 +287,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "nvidia_gpu_temperature_celsius",
-          "legendFormat": "{{instance}} GPU{{gpu}}",
+          "expr": "nvidia_smi_temperature_gpu * on (uuid) group_left(name) nvidia_smi_gpu_info",
+          "legendFormat": "{{node}} {{name}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -380,8 +380,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "nvidia_gpu_duty_cycle",
-          "legendFormat": "{{instance}} GPU{{gpu}}",
+          "expr": "nvidia_smi_utilization_gpu_ratio * on (uuid) group_left(name) nvidia_smi_gpu_info",
+          "legendFormat": "{{node}} {{name}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -389,7 +389,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -428,7 +428,7 @@
               "mode": "off"
             }
           },
-          "max": 100
+          "max": 1
         },
         "overrides": []
       },
@@ -466,7 +466,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "(nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes) * 100",
+          "expr": "((nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes) * 100) * on (uuid) group_left(name) nvidia_smi_gpu_info",
           "legendFormat": "__auto",
           "range": true,
           "instant": false,
@@ -547,7 +547,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "(1 - (node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\"})) * 100",
+          "expr": "(1 - (node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs\", job=\"node-exporter\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs\", job=\"node-exporter\"})) * 100",
           "legendFormat": "__auto",
           "range": true,
           "instant": false,
@@ -615,8 +615,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "node_hwmon_temp_celsius",
-          "legendFormat": "{{instance}} {{chip}}/{{sensor}}",
+          "expr": "node_hwmon_temp_celsius{job=\"node-exporter\"}",
+          "legendFormat": "{{node}} {{chip}}/{{sensor}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -708,8 +708,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (instance) (rate(node_disk_read_bytes_total[5m]))",
-          "legendFormat": "{{instance}} read",
+          "expr": "sum by (node) (rate(node_disk_read_bytes_total{job=\"node-exporter\"}[5m]))",
+          "legendFormat": "{{node}} read",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -720,8 +720,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (instance) (rate(node_disk_written_bytes_total[5m]))",
-          "legendFormat": "{{instance}} write",
+          "expr": "sum by (node) (rate(node_disk_written_bytes_total{job=\"node-exporter\"}[5m]))",
+          "legendFormat": "{{node}} write",
           "range": true,
           "instant": false,
           "refId": "B"
@@ -1025,8 +1025,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (instance) (rate(node_network_receive_bytes_total{device!~\"lo|docker.*|br-.*|veth.*\"}[5m]))",
-          "legendFormat": "{{instance}}",
+          "expr": "sum by (node) (rate(node_network_receive_bytes_total{device!~\"lo|docker.*|br-.*|veth.*\", job=\"node-exporter\"}[5m]))",
+          "legendFormat": "{{node}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -1110,8 +1110,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (instance) (rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|br-.*|veth.*\"}[5m]))",
-          "legendFormat": "{{instance}}",
+          "expr": "sum by (node) (rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|br-.*|veth.*\", job=\"node-exporter\"}[5m]))",
+          "legendFormat": "{{node}}",
           "range": true,
           "instant": false,
           "refId": "A"
