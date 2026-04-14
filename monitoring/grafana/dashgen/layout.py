@@ -59,3 +59,20 @@ def assign_ids(panels: list[dict], start: int = 1) -> list[dict]:
     for i, p in enumerate(panels):
         p["id"] = start + i
     return panels
+
+
+def row_divider(title: str, y: int, *, collapsed: bool = False) -> tuple[dict, int]:
+    """Emit a full-width row separator at y, return (panel, next_y).
+
+    Row panels occupy h=1 at their y coordinate. Grafana renders them as a
+    collapsible section header. Child panels stay at the top level of the
+    dashboard (expanded row style) — we don't nest them.
+    """
+    panel = {
+        "type": "row",
+        "title": title,
+        "collapsed": collapsed,
+        "panels": [],
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": y},
+    }
+    return panel, y + 1

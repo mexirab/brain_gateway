@@ -29,13 +29,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "monitoring" / "grafana"))
 
-from dashgen.dashboards import jess_glance  # noqa: E402
+from dashgen.dashboards import brain_gateway_sre, homelab_infra, jess_glance  # noqa: E402
 
 OUTPUT_DIR = REPO_ROOT / "monitoring" / "grafana" / "provisioning" / "dashboards" / "json"
 
 # Map of (output filename, builder module).
 DASHBOARDS = [
     ("jess-glance.json", jess_glance),
+    ("brain-gateway-sre.json", brain_gateway_sre),
+    ("homelab-infra.json", homelab_infra),
 ]
 
 
