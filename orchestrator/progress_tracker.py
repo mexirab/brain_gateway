@@ -455,19 +455,47 @@ def _sum_stats(rows: List[Dict]) -> Dict[str, int]:
     }
 
 
+def _is_streak_active(last_active: Optional[str], today_str: str) -> bool:
+    """True if last_active is today or yesterday — otherwise the streak is broken.
+
+    Lazy decay: we don't mutate the DB when a streak goes stale, we just
+    reflect the decayed state at read time. _update_streak() already handles
+    resetting current_streak to 1 on the next qualifying event.
+    """
+    if not last_active:
+        return False
+    try:
+        yesterday = (date.fromisoformat(today_str) - timedelta(days=1)).isoformat()
+    except ValueError:
+        return False
+    return last_active == today_str or last_active == yesterday
+
+
 def get_streaks() -> Dict[str, Any]:
-    """Get all streaks for the API."""
+    """Get all streaks for the API.
+
+    Applies lazy decay: a streak whose last_active is neither today nor
+    yesterday is considered broken and reported with current=0. The longest
+    value is preserved (historical best). DB state is left alone — the next
+    record_event() for that category will reset current_streak to 1 via the
+    existing _update_streak() path.
+    """
+    today_str = date.today().isoformat()
+
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM streaks ORDER BY category").fetchall()
 
     streaks = []
     for row in rows:
+        last_active = row["last_active_date"]
+        stored_current = row["current_streak"]
+        effective_current = stored_current if _is_streak_active(last_active, today_str) else 0
         streaks.append(
             {
                 "category": row["category"],
-                "current": row["current_streak"],
+                "current": effective_current,
                 "longest": row["longest_streak"],
-                "last_active": row["last_active_date"],
+                "last_active": last_active,
             }
         )
 
