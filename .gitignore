@@ -10,6 +10,12 @@ user_profile.yaml
 # Backups
 *.backup
 *.bak
+data/app-backup-*/
+
+# Application runtime state (bind-mounted to /app/data in the container).
+# Holds progress.db, brain_state.db, finance.db, auto_learn.key, etc.
+# Never commit this — contains personal state that changes every run.
+data/app/
 
 # TypeScript build cache
 tsconfig.tsbuildinfo

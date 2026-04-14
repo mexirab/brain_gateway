@@ -76,14 +76,18 @@ services:
       - ${GATEWAY_ROOT_PATH:-.}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
-      # Application data (SQLite databases, etc.)
-      - finance-data:/app/data:rw
+      # Application runtime state: progress.db, brain_state.db, finance.db,
+      # auto_learn.key. Was previously the `finance-data` Docker-managed
+      # named volume, which was fragile — `docker compose down -v` or
+      # `docker volume rm` silently wiped reminders, focus sessions, streaks,
+      # and the auto-learn encryption key. Migrated 2026-04-14 to a host
+      # bind mount so state lives in a backup-friendly inspectable path.
+      - ${GATEWAY_ROOT_PATH:-.}/data/app:/app/data:rw
       # Document vault storage (optional)
       - ${DOCUMENTS_PATH:-./data/documents}:/mnt/documents:rw
       # User profile (personal config — names, speakers, sensors, etc.)
       - ${GATEWAY_ROOT_PATH:-.}/user_profile.yaml:/app/user_profile.yaml:ro
-      # Routine definitions (F-006) — mounted outside /app/data to avoid
-      # colliding with the finance-data named volume on line 80.
+      # Routine definitions (F-006)
       - ${GATEWAY_ROOT_PATH:-.}/data/routines.yaml:/app/config/routines.yaml:ro
       # MemPalace structure config
       - ${GATEWAY_ROOT_PATH:-.}/data/palace.yaml:/app/config/palace.yaml:ro
@@ -362,6 +366,10 @@ volumes:
   brain-audio:
   pihole-etc:
   pihole-dnsmasq:
-  finance-data:
   searxng-data:
+  # Note: `finance-data:` named volume was removed 2026-04-14 when /app/data
+  # was migrated to a host bind mount. The old volume may still exist on the
+  # Docker host until manually removed with `docker volume rm
+  # gateway_mvp_finance-data`. Leave it around for a day or two as a rollback
+  # safety net, then clean up.
 
