@@ -49,7 +49,9 @@ Helios and Jupiter each run their own promtail instance. Logs from both hosts la
 
 Use `host=helios` in LogQL to isolate Helios-origin streams. Loki stream labels set by the Helios promtail: `container`, `host`, `project`, `service`. Extracted JSON fields available via `| json`: `level`, `component`, `tool_name`, `mode`, `intensity`, `model`, `error_type`. `entity_id` and `request_id` are intentionally not labels (cardinality); query them via `| json entity_id request_id`.
 
-**Helios promtail security posture:** image pinned by digest (`grafana/promtail:3.4.2@sha256:...`), `cap_drop: ALL`, `security_opt: no-new-privileges`. Runs on isolated `promtail-net` Docker network — cannot reach `gateway-net` services (orchestrator, redis, open-webui) via Docker DNS. When updating the image, pin to the new digest; don't use a floating tag.
+**Both promtails share the same security posture:** image pinned by digest (`grafana/promtail:3.4.2@sha256:c6e9a987…`), `cap_drop: [ALL]`, `security_opt: no-new-privileges:true`, `-config.expand-env=true`. When updating the image, pin both to the new digest; don't use a floating tag. The Helios sidecar also runs on an isolated `promtail-net` Docker network — cannot reach `gateway-net` services (orchestrator, redis, open-webui) via Docker DNS.
+
+**Level detection on non-JSON containers:** the Jupiter promtail uses a `level_fallback` regex group (not `level`) for lines that aren't JSON, so the JSON-extracted `level` label is never overwritten by the regex stage. `entity_id` is intentionally not a label (cardinality) — query it via `| json entity_id`.
 
 ## Loki Queries
 

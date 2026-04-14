@@ -253,4 +253,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - Helios SSH: `labadmin@10.0.0.195` (LAN) or `labadmin@helios.tail74fc4a.ts.net` (Tailscale)
 - Uranus SSH (from Helios): `ssh labadmin@10.0.0.173`
 - **Model history:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. `llama-server-moe.service` is disabled but the unit file remains on disk as historical reference.
+- **Tool result cap:** unified loop enforces 8000-char cap per tool result (~2000 tokens). Tools that return large blobs must summarize/paginate at the handler level. See `TECHNICAL_REFERENCE.md` → Tool Result Cap.
+- **Both promtails digest-pinned:** Jupiter promtail now matches Helios sidecar posture — same `grafana/promtail:3.4.2` digest, `cap_drop: ALL`, `no-new-privileges`, `-config.expand-env=true`. See `monitoring/README.md`.
+- **auto_learn LLM timeout:** 120s (aligned with unified_loop). Was 30s; caused silent ReadTimeout failures under slot contention.
 

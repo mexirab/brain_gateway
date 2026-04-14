@@ -151,6 +151,14 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 **Brightness:** 50%=128, 75%=191, 100%=255
 
+## Tool Result Cap
+
+The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (~1500 tokens), RAG injection (~1000 tokens), turn history, and several concurrent tool results within the 32K context window.
+
+**Overflow behavior:** `_cap_tool_result()` truncates to 8000 chars and appends a model-facing footer: _"Work with the information above; do not call this tool again to retrieve the rest."_ A `WARNING` log is emitted with the tool name and both char counts.
+
+**Design implication:** Tools must not be designed around returning large blobs (full email threads, long document text, etc.). Summarize or paginate at the tool handler level — the cap is a safety net, not a substitute for well-scoped tool output.
+
 ## Tool Schemas
 
 ### home_assistant
