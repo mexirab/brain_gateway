@@ -56,7 +56,12 @@ scrape_configs:
             latency_ms: latency_ms
             result_count: result_count
 
-      # Step 2: Apply labels from JSON fields
+      # Step 2: Apply labels from JSON fields.
+      # entity_id and request_id are intentionally NOT labels — entity_id
+      # can be any HA entity (dozens to hundreds) and request_id is unique
+      # per call, both would explode Loki's stream index and cause
+      # ingestion failures during the exact incidents you'd need logs for.
+      # They remain available via `| json entity_id request_id` in LogQL.
       - labels:
           level:
           component:
@@ -64,32 +69,27 @@ scrape_configs:
           mode:
           intensity:
           model:
-          entity_id:
           error_type:
 
-      # Step 3: Fallback regex for non-JSON logs (other containers)
+      # Step 3: Fallback regex for non-JSON logs (other containers).
+      # `source:` is omitted intentionally — promtail's regex stage defaults
+      # to matching the raw log line, which is what we want here. The
+      # previous `source: output` referred to a non-existent field and made
+      # this stage a silent no-op.
       - regex:
           expression: '(?P<tool_type>home_assistant|search_memory|ask_expert|ask_orchestrator|set_reminder|cancel_reminder|update_data|web_search|check_calendar|create_calendar_event|start_focus|stop_focus|focus_status)'
-          source: output
 
       - labels:
           tool_type:
 
-      # Step 4: Extract entity IDs from HA calls (fallback for non-JSON)
+      # Step 4: Level detection for non-JSON logs. Uses a distinct
+      # `level_fallback` group so it can never overwrite the JSON-extracted
+      # `level` label above, which would corrupt queries that rely on it.
       - regex:
-          expression: 'entity_id["\s:]+(?P<entity_id>[a-z_]+\.[a-z0-9_]+)'
-          source: output
+          expression: '(?i)(?P<level_fallback>error|warn|info|debug)'
 
       - labels:
-          entity_id:
-
-      # Step 5: Level detection for non-JSON logs
-      - regex:
-          expression: '(?i)(?P<level>error|warn|info|debug)'
-          source: output
-
-      - labels:
-          level:
+          level_fallback:
 
   # ============================================
   # CONJURE PM2 LOGS (file-based, not Docker)

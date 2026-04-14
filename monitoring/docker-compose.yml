@@ -72,17 +72,33 @@ services:
   # ============================================
   # PROMTAIL - Log Shipper (for Docker containers on Jupiter)
   # ============================================
+  # Scrapes Jupiter's own Docker socket + conjure's PM2 file logs and
+  # pushes to the local Loki. The Helios compose has a second promtail
+  # that covers brain-orchestrator et al.
+  #
+  # Hardening matches the Helios sidecar: image pinned by digest
+  # (supply-chain protection — the Docker socket mount gives this
+  # container read access to every container's env, which holds secrets),
+  # cap_drop ALL, no-new-privileges. Bump the digest deliberately.
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.4.2@sha256:c6e9a987ca086cbfef945b8ebd708eb09f98b5e78bfb659e4e5a8b3bd604d11b
     container_name: promtail
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Conjure PM2 logs (bare Node.js process, not Docker)
       - /opt/conjure/server/logs:/opt/conjure/server/logs:ro
-    command: -config.file=/etc/promtail/config.yml
+    # -config.expand-env mirrors the Helios sidecar so the two configs
+    # stay structurally identical; no env vars are used in this config
+    # today, but adding it now prevents a future parameterisation from
+    # silently no-op'ing.
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
     networks:
       - monitoring-net
     depends_on:
