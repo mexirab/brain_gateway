@@ -546,7 +546,7 @@ def build() -> dict:
         ),
         logs(
             "Errors + Warnings",
-            '{container="brain-orchestrator"} | json | level=~"ERROR|CRITICAL|WARNING"',
+            '{container="brain-orchestrator"} | json | level=~"error|critical|warning"',
         ),
     ]
     row, y = grid_row(logs_row, y, heights=[10, 10])

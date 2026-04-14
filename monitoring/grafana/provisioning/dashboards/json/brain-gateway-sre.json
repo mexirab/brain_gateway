@@ -4351,7 +4351,7 @@
             "uid": "P8E80F9AEF21F6940"
           },
           "editorMode": "code",
-          "expr": "{container=\"brain-orchestrator\"} | json | level=~\"ERROR|CRITICAL|WARNING\"",
+          "expr": "{container=\"brain-orchestrator\"} | json | level=~\"error|critical|warning\"",
           "queryType": "range",
           "refId": "A"
         }

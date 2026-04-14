@@ -189,7 +189,7 @@ def build() -> dict:
     log_panels = [
         logs(
             "Orchestrator Flow",
-            '{container="brain-orchestrator"} | json | level=~"INFO|WARNING" | logger=~"orchestrator\\\\..*"',
+            '{container="brain-orchestrator"} | json | level=~"info|warning" | logger=~"orchestrator\\\\..*"',
         ),
         logs(
             "Tool Execution",
@@ -197,7 +197,7 @@ def build() -> dict:
         ),
         logs(
             "Errors",
-            '{container="brain-orchestrator"} | json | level=~"ERROR|CRITICAL"',
+            '{container="brain-orchestrator"} | json | level=~"error|critical"',
         ),
     ]
     row, y = grid_row(log_panels, y, heights=[8, 8, 8])
