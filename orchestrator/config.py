@@ -106,7 +106,11 @@ class Settings(BaseSettings):
     # -- Email -------------------------------------------------------------------
     email_poll_interval: int = 30
     email_poll_enabled: bool = True
-    email_to_calendar_enabled: bool = True
+    # Email-to-calendar autonomy is dormant by default. Implementation is
+    # complete (see jobs_calendar.process_emails_for_events) and the
+    # scheduler trigger is wired in orchestrator.py startup, gated on this
+    # flag. Flip to true in .env when ready to turn on; no code change needed.
+    email_to_calendar_enabled: bool = False
     email_to_calendar_interval: int = 60
 
     # -- Phone calendar sync -----------------------------------------------------

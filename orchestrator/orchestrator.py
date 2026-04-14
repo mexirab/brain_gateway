@@ -45,7 +45,7 @@ from orchestrator import (
 from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
-from orchestrator.background_jobs import morning_briefing, poll_calendar
+from orchestrator.background_jobs import morning_briefing, poll_calendar, process_emails_for_events
 from orchestrator.cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
@@ -559,6 +559,22 @@ async def startup_event():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
+
+        # Email-to-calendar autonomy: scan inbox, extract events via LLM,
+        # auto-create calendar entries. Disabled by default — flip
+        # EMAIL_TO_CALENDAR_ENABLED=true in .env when ready to turn on.
+        # The full pipeline (gmail client, LLM extraction, dedup, calendar
+        # write) is wired and tested; only the scheduler trigger is gated.
+        if shared.EMAIL_TO_CALENDAR_ENABLED:
+            scheduler.add_job(
+                process_emails_for_events,
+                trigger="interval",
+                minutes=shared.EMAIL_TO_CALENDAR_INTERVAL,
+                id="email_to_calendar",
+                name="Email → Calendar auto-import",
+                replace_existing=True,
+            )
+            logger.info(f"[SCHEDULER] Email-to-calendar every {shared.EMAIL_TO_CALENDAR_INTERVAL} min")
 
     # Initialize routine manager (F-006)
     if shared.ROUTINE_ENABLED:
