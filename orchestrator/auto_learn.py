@@ -255,15 +255,24 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
 
         model_url = shared.MODEL_URL
         model_name = shared.MODEL_NAME
+        # 30s was too aggressive — on a loaded llama-server (slot contention
+        # with an in-flight chat turn, long queue) the extraction routinely
+        # hit httpx.ReadTimeout, which bubbled up as a bare empty-string
+        # error and spammed the logs every scheduler tick. 120s matches the
+        # unified loop's per-call budget.
         llm_resp = await call_model(
             model_url,
             model_name,
             messages=[{"role": "user", "content": prompt}],
-            timeout=30,
+            timeout=120,
         )
         raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
     except Exception as e:
-        logger.warning("[AUTO_LEARN] LLM extraction call failed: %s", e)
+        # Include %r so exceptions with empty str() (httpx.ReadTimeout,
+        # asyncio.CancelledError, etc.) don't come through as a bare
+        # "failed: " line. exc_info attaches the traceback for any
+        # unexpected failure mode.
+        logger.warning("[AUTO_LEARN] LLM extraction call failed: %r", e, exc_info=True)
         return []
 
     # Parse JSON from response (reuse pattern from background_jobs._parse_event_json)
@@ -351,7 +360,7 @@ async def is_duplicate(fact_text: str) -> bool:
                 return True
 
     except Exception as e:
-        logger.warning("[AUTO_LEARN] Dedup check failed: %s", e)
+        logger.warning("[AUTO_LEARN] Dedup check failed: %r", e)
 
     return False
 
@@ -407,7 +416,7 @@ async def store_fact(fact: Dict) -> Optional[str]:
             ids=[doc_id],
         )
     except Exception as e:
-        logger.error("[AUTO_LEARN] ChromaDB insert failed: %s", e)
+        logger.error("[AUTO_LEARN] ChromaDB insert failed: %r", e, exc_info=True)
         return None
 
     # Optional markdown file
