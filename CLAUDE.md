@@ -115,80 +115,32 @@ All tools are called directly by the single model in one agentic loop.
 | code_agent | Delegate a coding task to the Qwen2.5-Coder-32B agent on Helios GPU0 |
 | sleep_mode | Do Not Disturb: suppress all announcements until morning |
 
-## Key Files
+## Key Files (top 20 load-bearing)
+
+The files you'll touch most often. For the full map, run `ls orchestrator/` or grep by feature name — everything follows `<feature>_manager.py` / `routes_<feature>.py` / `jobs_<feature>.py` naming.
 
 | File | Purpose |
 |------|---------|
-| orchestrator/mempalace.py | MemPalace: structured memory system (wings/rooms), store, search, wakeup context |
-| orchestrator/routes_palace.py | MemPalace REST API endpoints |
-| orchestrator/session_miner.py | Claude Code session log mining for palace insights |
-| orchestrator/tests/test_mempalace.py | MemPalace unit tests |
-| data/palace.yaml | Palace structure config (wings, rooms, routing rules) |
-| scripts/mempalace_mcp_server.py | Standalone MCP server for Claude Code palace access |
-| orchestrator/auto_learn.py | Auto-learn: extract facts from conversations, encrypt, store in RAG |
-| orchestrator/brain_dump_manager.py | Brain dump: capture, categorize, dedup, and route items to RAG or reminders |
-| orchestrator/tests/test_auto_learn.py | Auto-learn unit tests (sensitive data, privacy, JSON parsing, encryption) |
-| orchestrator/tests/test_brain_dump.py | Brain dump unit tests (routing, dedup, validation, error handling) |
-| orchestrator/unified_loop.py | v7 unified agentic loop: single model conversation + tool execution |
-| orchestrator/model_manager.py | Model health, SSH start/stop |
-| orchestrator/orchestrator.py | FastAPI app, main chat endpoint, startup/shutdown |
-| orchestrator/config.py | Centralized Pydantic Settings: all env vars in one place |
-| orchestrator/db.py | Shared SQLite context manager (used by all DB consumers) |
-| orchestrator/exceptions.py | Exception hierarchy: BrainGatewayError, TransientError, ToolError, etc. |
-| orchestrator/service_registry.py | Service health tracking: auto-detect healthy services, disable tools when down |
-| orchestrator/tool_registry.py | Decorator-based tool registration (replaces legacy if-elif dispatch) |
-| orchestrator/focus_state.py | FocusSession dataclass (replaces raw dict in shared.py) |
-| orchestrator/shared.py | Module-level shared state (imports from config.py, exports backward-compat aliases) |
-| orchestrator/tool_definitions.py | Tool JSON schemas (STATIC_TOOLS, HA tool builder) |
-| orchestrator/prompt_builder.py | System prompt builder, RAG context, helpers |
-| orchestrator/ambient_manager.py | Ambient awareness: aggregated status, periodic TTS summaries, LED control |
-| orchestrator/selfcare_manager.py | Self-care nudges: meals, meds, hydration, movement — persisted to SQLite, phone notifications |
-| orchestrator/tests/test_selfcare_manager.py | Self-care manager unit tests (logging, nudge timing, quiet hours) |
-| orchestrator/context_tracker.py | Interruption recovery: context stack, bookmarks, auto-capture, check-in timer |
-| orchestrator/tests/test_context_tracker.py | Context tracker unit tests (bookmarks, recall, prompt context) |
-| orchestrator/routine_manager.py | Routine scaffolding: morning/evening step-by-step TTS guidance, nudges, calendar awareness |
-| orchestrator/tests/test_routine_manager.py | Routine manager unit tests (session lifecycle, steps, nudges, pause/resume) |
-| orchestrator/progress_tracker.py | Progress tracking: daily stats, streaks, personal bests, daily/weekly TTS summaries |
-| orchestrator/tests/test_progress_tracker.py | Progress tracker unit tests (events, streaks, summaries, personal bests) |
-| orchestrator/task_decomposition.py | Task decomposition: break tasks into micro-steps with ADHD time buffer |
-| orchestrator/focus_manager.py | Pomodoro timer, Endel audio, Pi-hole blocking, body doubling sprints |
-| orchestrator/tool_handlers.py | execute_tool dispatcher + all tool_* functions (uses tool_registry, legacy if-elif removed) |
-| orchestrator/api_routes.py | REST endpoints: thin facade, imports from domain route modules |
-| orchestrator/routes_calendar.py | Calendar API routes (split from api_routes.py) |
-| orchestrator/routes_chat.py | Chat conversation API routes |
-| orchestrator/routes_documents.py | Document vault API routes |
-| orchestrator/routes_shopping.py | Shopping list API routes |
-| orchestrator/routes_vision.py | Vision/STT/TTS API routes |
-| orchestrator/background_jobs.py | Background jobs: thin re-export facade, imports from domain job modules |
-| orchestrator/jobs_calendar.py | Calendar/email/weather background jobs (split from background_jobs.py) |
-| orchestrator/jobs_finance.py | YNAB sync background jobs |
-| orchestrator/jobs_monitoring.py | Temperature/ambient/selfcare background jobs |
-| orchestrator/ha_integration.py | HA entity discovery + call_service() |
-| orchestrator/mode_router.py | Intent-based mode router |
-| orchestrator/google_calendar.py | Google Calendar API v3 client |
-| orchestrator/google_gmail.py | Gmail API v1 client (read-only) |
-| orchestrator/pihole_client.py | Pi-hole v6 multi-instance client |
-| orchestrator/reminder_manager.py | TTS announcements, reminders, announcement history, DND gate, multi-phone notifications |
-| orchestrator/state_store.py | SQLite persistence: reminders, focus sessions, notifications, announcements, selfcare, shopping |
-| orchestrator/cloud_brain.py | CloudBrain class: model routing, fallback, unified loop orchestration |
-| orchestrator/llm_backend.py | LLM backend initialization and configuration |
-| orchestrator/data_manager.py | YAML data management: medications, projects |
-| orchestrator/finance_manager.py | YNAB integration, budget tracking, XP/levels |
-| orchestrator/schemas.py | Pydantic models for API request/response validation |
-| orchestrator/vision_handler.py | Vision model client: image analysis, OCR, scene understanding |
-| orchestrator/tests/test_vision_handler.py | Vision handler unit tests |
-| orchestrator/web_search.py | SearXNG search client |
-| orchestrator/system_diagnostics.py | System health checks, log analysis |
-| orchestrator/fast_path.py | Fast path handler for simple commands (lights, greetings) |
-| orchestrator/user_profile.py | User profile loader from YAML |
-| orchestrator/log_config.py | Structured JSON logging configuration |
-| orchestrator/travel_time.py | Google Maps Directions API client |
-| orchestrator/metrics.py | Prometheus metrics (bgw_* namespace) |
-| scripts/reindex_rag.py | Re-index RAG documents into ChromaDB |
-| scripts/setup.sh | Interactive setup wizard: generates .env + user_profile.yaml |
-| scripts/setup-helios-claude.sh | One-time Helios Claude Code setup (hooks, ruff, permissions) |
-| docker-compose.yml | Service stack (env-var driven, no hardcoded IPs) |
-| .env | Environment config (from .env.example) |
+| `orchestrator/orchestrator.py` | FastAPI app, main chat endpoint, startup/shutdown, scheduler job registration |
+| `orchestrator/unified_loop.py` | v7 unified agentic loop — single model conversation + tool execution. THE main chat flow. |
+| `orchestrator/cloud_brain.py` | Model routing, fallback, unified-loop orchestration |
+| `orchestrator/tool_handlers.py` | All `tool_*` functions + `execute_tool` facade. Tool-side behavior lives here. |
+| `orchestrator/tool_registry.py` | Decorator-based tool registration. `@register_tool` + metrics wrapping. |
+| `orchestrator/tool_definitions.py` | Tool JSON schemas (what the LLM sees). Keep in sync with `tool_handlers.py`. |
+| `orchestrator/config.py` | Pydantic Settings — every env var defined in one place |
+| `orchestrator/shared.py` | Module-level state + env var aliases re-exported from `config.py` |
+| `orchestrator/state_store.py` | SQLite persistence for reminders, focus, announcements, selfcare, shopping, chat, claude_code_turns |
+| `orchestrator/mempalace.py` | MemPalace — the unified memory system (store, search, wing/room routing, wakeup context) |
+| `orchestrator/auto_learn.py` | Background fact extraction from conversations — encrypt, dedup, store in palace |
+| `orchestrator/focus_manager.py` | Pomodoro timer, ambient audio, Pi-hole blocking, body doubling sprints |
+| `orchestrator/reminder_manager.py` | TTS announcements, reminders, DND gate, announcement history, phone notifications |
+| `orchestrator/brain_dump_manager.py` | Brain dump capture, categorization, dedup, routing to RAG or reminders |
+| `orchestrator/routine_manager.py` | Morning/evening routine scaffolding — step-by-step TTS guidance |
+| `orchestrator/progress_tracker.py` | Daily stats, streaks, daily/weekly TTS summaries |
+| `orchestrator/background_jobs.py` | Background job facade (imports from `jobs_*.py` domain modules) |
+| `orchestrator/ha_integration.py` | Home Assistant entity discovery + service call wrapper |
+| `orchestrator/metrics.py` | 70+ Prometheus metrics (`bgw_*` namespace). Source of truth for dashboards. |
+| `docker-compose.yml` | Service stack (env-var driven, no hardcoded IPs) |
 
 ## Key Paths
 
@@ -235,24 +187,43 @@ docker exec brain-orchestrator python -m pytest tests/ -v
 docker exec brain-orchestrator python -m pytest tests/test_progress_tracker.py -v
 ```
 
-## Detailed Docs
+## Detailed Docs (router)
+
+This is a **load-on-demand router**. Read the specific doc when the task touches that domain. Don't read them all up front — each one is written to be self-contained.
+
+**Reference (read when…)**
+
+| Doc | Read when you're working on… |
+|-----|------|
+| `TECHNICAL_REFERENCE.md` | any API endpoint, tool schema, ChromaDB metadata shape, or HA service call |
+| `docs/ENV_VARS.md` | adding or modifying an environment variable in any subsystem |
+| `ARCHITECTURE.md` | data flow, internals, anything that touches how modules interact |
+| `COMMANDS.md` | you need a command you don't remember and Common Commands below isn't enough |
+| `ROADMAP.md` | planning new features or checking what's shipped vs planned |
+
+**Subsystem (read when the task is specifically about…)**
+
+| Doc | Read when you're working on… |
+|-----|------|
+| `docs/MEMPALACE.md` | memory system internals, write paths, MCP server, session mining |
+| `docs/CLAUDE_CODE_INTEGRATION.md` | the Stop hook, `check_claude_activity` tool, or code_agent activity injection |
+| `docs/FOCUS_AND_PIHOLE.md` | focus timer, Pomodoro flow, Pi-hole DNS blocking, Nebula Sync |
+| `docs/VOICE_AND_TTS.md` | ATOM Echo voice assistant, TTS pacing, Wyoming bridges, STT config |
+| `docs/GOOGLE_INTEGRATIONS.md` | Calendar API, Gmail API, phone sync, travel-time alerts, OAuth2 setup |
+| `docs/FRONTEND.md` | dashboard pages, widgets, YNAB finance, API proxy pattern |
+| `docs/MODE_ROUTER.md` | intent classification (explainer/mirror/counterbalance/challenge/baseline) |
+| `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG host setup, temperature monitoring, kiosk config |
+| `docs/REMOTE_DEV.md` | remote dev workflow (mosh + tmux, jdev alias, git sync) |
+| `monitoring/README.md` | Prometheus, Grafana, Loki — scrape targets, dashboard generator, alerts |
+| `monitoring/grafana/dashgen/` | editing dashboards (Python generator; don't hand-edit the JSON) |
+
+**User-facing**
 
 | Doc | What |
 |-----|------|
-| **docs/FOCUS_AND_PIHOLE.md** | Focus timer (Pomodoro), Pi-hole DNS blocking, Nebula Sync |
-| **docs/VOICE_AND_TTS.md** | ATOM Echo voice assistant, TTS pacing, Wyoming bridges |
-| **docs/GOOGLE_INTEGRATIONS.md** | Calendar, Gmail, phone sync, travel-time alerts, OAuth2 setup |
-| **docs/FRONTEND.md** | Dashboard pages, widgets, YNAB finance, API proxy pattern |
-| **docs/MODE_ROUTER.md** | Intent classification modes (explainer/mirror/counterbalance/challenge/baseline) |
-| **docs/INFRASTRUCTURE.md** | HTTPS/Tailscale, RAG, temperature monitoring, performance notes, kiosk |
-| **docs/REMOTE_DEV.md** | Remote dev workflow (mosh + tmux on Jupiter, jdev alias, git sync) |
-| **ARCHITECTURE.md** | Internals, data flow, troubleshooting |
-| **COMMANDS.md** | Command quick reference |
-| **TECHNICAL_REFERENCE.md** | API specs, schemas |
-| **ROADMAP.md** | Feature roadmap and what's done/planned |
-| **monitoring/README.md** | Monitoring setup |
-| **docs/JESS_QUICK_START.md** | One-page user guide: everything Jess can do |
-| **jess-features/README.md** | ADHD feature specs (F-001 through F-010) — all 10 complete |
+| `docs/JESS_QUICK_START.md` | User-facing feature guide — every voice command, grouped by domain |
+| `docs/JESS_REFERENCE_CARD.md` + `.html` | Printable ADHD reference card — grouped by *situation*, not feature |
+| `jess-features/README.md` | ADHD feature spec index (F-001 through F-010) — read for implementation rationale |
 
 ## Jess Feature Specs
 
@@ -281,261 +252,3 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - Uranus SSH (from Helios): `ssh labadmin@10.0.0.173`
 - **Model history:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. `llama-server-moe.service` is disabled but the unit file remains on disk as historical reference.
 
-## Model Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| MODEL_URL | - | Primary model endpoint (e.g. `http://10.0.0.195:8080/v1`) |
-| MODEL_NAME | - | Primary model name (e.g. `Qwen3.5-27B`) |
-| FALLBACK_MODEL_URL | - | Fallback model endpoint (optional) |
-| FALLBACK_MODEL_NAME | - | Fallback model name (optional) |
-| EMBEDDING_MODEL | - | Embedding model for RAG indexing |
-| MODEL_SERVER_IP | - | SSH target for remote model start/stop |
-| MODEL_SSH_USER | - | SSH user for model server |
-| MODEL_START_CMD | - | Command to start model server via SSH |
-| MODEL_STOP_CMD | - | Command to stop model server via SSH |
-
-## Ambient Awareness Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| AMBIENT_ENABLED | true | Enable ambient summaries |
-| AMBIENT_SUMMARY_TIMES | 10:00,12:00,14:00,16:00 | TTS summary times |
-| AMBIENT_LED_ENTITY | (empty) | HA entity for LED status (disabled if empty) |
-| AMBIENT_SPEAKER | (empty) | Speaker for ambient summaries (default if empty) |
-
-## Ambient Awareness API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/ambient/status | Aggregated ambient status (schedule, focus, tasks, LED color) |
-
-## Announcement History API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/announcements/history?limit=50&type= | Recent announcement history (text, speaker, success, latency) |
-| GET | /api/announcements/stats | Success rates, per-speaker breakdown, avg latency, today's count |
-
-## Chat History API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/chat/conversations?limit=50 | List conversations (most recent first) |
-| POST | /api/chat/conversations | Create conversation: `{title}` |
-| GET | /api/chat/conversations/:id/messages | Get conversation + messages |
-| POST | /api/chat/conversations/:id/messages | Save message: `{role, content, routing?, announcement_type?}` |
-| PUT | /api/chat/conversations/:id | Update title: `{title}` |
-| DELETE | /api/chat/conversations/:id | Delete conversation + messages |
-
-## Voice API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | /api/stt/transcribe | Proxy audio to Whisper STT (multipart, max 10MB) |
-| POST | /api/tts/synthesize | Synthesize text to WAV: `{text}` |
-
-## Self-Care Nudge Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| SELFCARE_ENABLED | true | Enable self-care nudges |
-| MEAL_NUDGE_HOURS | 4 | Hours since last meal before nudging |
-| HYDRATION_INTERVAL | 90 | Minutes between water reminders |
-| MOVEMENT_INTERVAL | 90 | Minutes between movement reminders |
-| QUIET_HOURS_START | 22:00 | No nudges after this |
-| QUIET_HOURS_END | 07:00 | No nudges before this |
-
-## Interruption Recovery Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| INTERRUPT_CHECKIN_DELAY | 5 | Minutes after interruption before TTS check-in |
-| CONTEXT_STACK_SIZE | 10 | Max rolling context entries |
-
-## Routine Scaffolding Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| ROUTINES_YAML_PATH | /app/config/routines.yaml | Routine definitions file |
-| ROUTINE_ENABLED | true | Enable scheduled routine triggers |
-| ROUTINE_NUDGE_MAX | 3 | Max nudges per step before auto-skip option |
-| ROUTINE_AUTO_SKIP | false | Auto-skip after max nudges (default: wait for user) |
-
-## Progress Tracking Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| PROGRESS_ENABLED | true | Enable progress tracking |
-| PROGRESS_DB_PATH | /app/data/progress.db | SQLite database path |
-| DAILY_SUMMARY_TIME | 18:00 | When to announce daily summary via TTS |
-| WEEKLY_SUMMARY_DAY | sunday | Day for weekly digest |
-| WEEKLY_SUMMARY_TIME | 19:00 | Time for weekly digest |
-
-## Progress Tracking API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/progress/today | Today's stats (tasks, focus, brain dumps) |
-| GET | /api/progress/week | This week's stats + trend vs prior week |
-| GET | /api/progress/streaks | Active streaks (task, focus, brain dump) |
-
-## Vision / Image Recognition Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| VISION_ENABLED | true | Enable/disable image analysis feature |
-| VISION_MODEL_URL | http://10.0.0.58:8010/v1 | Vision model endpoint (Qwen2.5-VL-7B on Saturn RTX 3080) |
-| VISION_MODEL_NAME | Qwen2.5-VL-7B-Instruct-q4_k_m.gguf | Vision model identifier |
-| VISION_MAX_IMAGE_SIZE | 10485760 | Maximum image upload size in bytes (10MB) |
-| VISION_TIMEOUT | 60 | Vision model request timeout in seconds |
-
-## Vision API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | /api/vision/analyze | Analyze an image (multipart form or JSON with base64) |
-| GET | /api/vision/status | Vision model health and configuration |
-
-## Notification Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| WEBUI_URL | (empty) | Deep link URL for notifications (opens Open WebUI on tap) |
-
-## Shopping List API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/shopping?list_name=&include_checked= | Get shopping list items |
-| POST | /api/shopping | Add item: `{item, list_name}` |
-| POST | /api/shopping/{id}/check | Check off item |
-| POST | /api/shopping/{id}/uncheck | Uncheck item |
-| DELETE | /api/shopping/checked?list_name= | Clear all checked items |
-| DELETE | /api/shopping/{id} | Delete item |
-
-## Sleep Mode (Do Not Disturb)
-
-Say "goodnight" or "bedtime" → `sleep_mode` tool activates DND. All TTS announcements
-and phone notifications are suppressed. State persists to SQLite across restarts.
-Auto-clears when morning briefing fires (5-11am). Say "good morning" to manually disable.
-
-## Weather in Morning Briefing
-
-Morning briefing includes weather forecast from the National Weather Service API.
-Home address is geocoded via Nominatim (free, no API key). Override with env vars:
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| WEATHER_LAT | (geocoded) | Latitude for weather forecast |
-| WEATHER_LON | (geocoded) | Longitude for weather forecast |
-
-## DB Maintenance
-
-Weekly scheduled job (Sundays 3am): cleans announcements (>30 days), selfcare logs
-(>90 days), and runs VACUUM. Also runs cleanup on startup.
-
-## Auto-Learn Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| AUTO_LEARN_ENABLED | true | Enable/disable background fact extraction |
-| AUTO_LEARN_DELAY_MINUTES | 10 | Delay after conversation before extracting facts |
-| AUTO_LEARN_MAX_FACTS | 5 | Max facts extracted per conversation |
-| AUTO_LEARN_DEDUP_THRESHOLD | 0.85 | Cosine similarity threshold for deduplication |
-| AUTO_LEARN_MARKDOWN | false | Also append facts to a markdown file |
-| AUTO_LEARN_ENCRYPT | true | Encrypt stored facts at rest (Fernet) |
-| AUTO_LEARN_ENCRYPTION_KEY | (auto-generated) | Fernet key; auto-generated if empty |
-
-## Auto-Learn API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/memory/learned | List learned facts (decrypted), optional `?category=` and `?limit=` |
-| DELETE | /api/memory/learned/{doc_id} | Delete a single learned fact |
-| DELETE | /api/memory/learned?confirm=true | Wipe all learned facts |
-| GET | /api/memory/learned/stats | Auto-learn statistics (counts by category) |
-| POST | /api/memory/learned/toggle | Enable/disable auto-learn at runtime |
-
-## MemPalace (Unified Memory System)
-
-MemPalace is the single unified `mempalace` ChromaDB collection used by the orchestrator. All memory — RAG document chunks, auto-learned facts, user corrections, document vault entries — lives here, with wing/room metadata for structured organization. The `search_memory` tool supports optional wing/room filtering. Source files in `~/rag/nadim_rag/` are auto-ingested every 2 minutes by the in-process `rag_ingest_watch` scheduler job (see `orchestrator/rag_ingest.py`). For on-demand ingestion: `POST /api/rag/ingest`.
-
-The legacy `nadim_rag` collection (pre-MemPalace, flat structure) was deleted on 2026-04-13 after verifying mempalace had fully absorbed it. See git log: "Clean up legacy nadim_rag collection" if you need historical context.
-
-## MemPalace Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| PALACE_ENABLED | true | Enable/disable MemPalace structured memory |
-| PALACE_COLLECTION | mempalace | ChromaDB collection name for palace |
-| PALACE_YAML_PATH | /app/config/palace.yaml | Palace structure config file |
-| PALACE_WAKEUP_ENABLED | true | Inject wakeup identity context into system prompts |
-| PALACE_WAKEUP_MAX_TOKENS | 170 | Max tokens for wakeup context block |
-| PALACE_DEDUP_THRESHOLD | 0.85 | Cosine similarity threshold for dedup |
-| PALACE_SESSION_MINE_PATH | (empty) | Path to Claude Code session logs for mining |
-
-## MemPalace API Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | /api/palace/search?query=&wing=&room=&n=5 | Semantic search across the palace |
-| POST | /api/palace/store | Store a memory: `{text, wing?, room?, source?, category?, project?}` |
-| GET | /api/palace/memory/{doc_id} | Get a single memory by ID |
-| DELETE | /api/palace/memory/{doc_id} | Delete a memory by ID |
-| GET | /api/palace/wings | Palace wing structure |
-| GET | /api/palace/wings/{wing}/rooms | Rooms in a wing with memory counts |
-| GET | /api/palace/stats | Memory counts by wing |
-| POST | /api/palace/mine | Trigger Claude Code session mining |
-| POST | /api/rag/ingest | Force immediate re-ingest of source files (bypasses 2-min scheduler) |
-
-## MemPalace MCP Server (Claude Code)
-
-```bash
-# Install MCP dependencies
-pip install -r scripts/requirements-mcp.txt
-
-# Register with Claude Code
-claude mcp add mempalace -- python3 /opt/helios/gateway_mvp/scripts/mempalace_mcp_server.py
-
-# Environment: ORCHESTRATOR_URL (default http://localhost:8888), API_TOKEN
-```
-
-MCP tools: `palace_search`, `palace_store`, `palace_list_wings`, `palace_list_rooms`, `palace_get_memory`, `palace_mine_sessions`
-
-## Claude Code Activity Tracking
-
-Jess can see what Claude Code has been working on, for self-troubleshooting and giving the local code_agent awareness of in-flight work. Data flow is one-way (Claude Code → Jess) and entirely local.
-
-**Two sources:**
-1. **Live session file** — `check_claude_activity` reads `~/.claude/projects/-opt-helios-gateway-mvp/*.jsonl` directly. No sync needed, always fresh.
-2. **SQLite rolling buffer** — a Stop hook POSTs each completed turn to the orchestrator. Seven-day retention (cleaned up by the weekly DB maintenance job).
-
-**Install the Stop hook** (optional, for proactive awareness):
-
-```json
-// ~/.claude/settings.json
-{
-  "hooks": {
-    "Stop": [{
-      "hooks": [{
-        "type": "command",
-        "command": "/opt/helios/gateway_mvp/scripts/claude_code_stop_hook.sh"
-      }]
-    }]
-  }
-}
-```
-
-Environment: `ORCHESTRATOR_URL` (default `http://localhost:8888`), `API_TOKEN` (optional bearer auth).
-
-**Jess tool:** `check_claude_activity` with `action` ∈ {`recent`, `current_session`, `files_touched`} and optional `minutes_back`.
-
-**Code agent integration:** `code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt so the local coder knows what's in-flight before making changes.
-
-**REST endpoints:**
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | /api/claude_code/turn | Stop hook target — logs a turn to the buffer |
-| GET | /api/claude_code/recent?minutes=120&limit=20 | List recent turns for dashboards |

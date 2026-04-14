@@ -4,41 +4,128 @@ API specs and schemas for implementation.
 
 ## API Endpoints
 
-### Orchestrator (port 8888)
+All orchestrator endpoints live on port 8888. Many endpoints require `Authorization: Bearer $API_TOKEN` when `API_TOKEN` is set in `.env` — if you get a 401, that's why.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Status, versions, counts |
-| `/v1/chat/completions` | POST | OpenAI-compatible chat |
-| `/v1/models` | GET | List models |
-| `/api/ha/entities` | GET | List HA entities |
-| `/api/ha/command` | POST | Direct HA service call |
-| `/api/memory/search` | GET | RAG search |
-| `/api/memory/stats` | GET | RAG stats |
-| `/api/memory/add` | POST | Add document to RAG (optional `tags` array) |
-| `/api/reminder/trigger` | POST | Trigger a reminder |
-| `/api/reminders` | GET | List pending reminders |
-| `/api/reminder/complete/{id}` | POST | Mark reminder completed |
-| `/api/focus` | GET | Current focus session status |
-| `/api/focus/start` | POST | Start focus session via API |
-| `/api/focus/stop` | POST | Stop focus session via API |
-| `/api/audio/{filename}` | GET | Serve audio files (reminders, TTS) |
-| `/api/email-to-calendar/run` | POST | Manually trigger email-to-calendar extraction |
-| `/api/announce` | POST | Trigger TTS announcement via voice system |
-| `/api/calendar/today` | GET | Today's calendar events (phone sync + Google fallback) |
-| `/api/calendar/sync` | GET/POST/PUT | Phone calendar sync (GET=status, POST/PUT=receive events) |
-| `/api/temperatures` | GET | Temperature sensor readings from HA |
-| `/api/memory/learned` | GET | List auto-learned facts (optional `?category=`, `?limit=`) |
-| `/api/memory/learned/{doc_id}` | DELETE | Delete a single learned fact |
-| `/api/memory/learned` | DELETE | Wipe all learned facts (`?confirm=true` required) |
-| `/api/memory/learned/stats` | GET | Auto-learn statistics (counts by category) |
-| `/api/memory/learned/toggle` | POST | Enable/disable auto-learn at runtime |
-| `/api/progress/today` | GET | Today's progress stats |
-| `/api/progress/week` | GET | This week's stats and trend vs prior week |
-| `/api/progress/streaks` | GET | Active streaks |
-| `/api/announcements/history` | GET | Recent announcement history (optional `?limit=`, `?type=`) |
-| `/api/announcements/stats` | GET | Success rates, per-speaker breakdown, latency |
-| `/api/ambient/status` | GET | Aggregated ambient status (schedule, focus, tasks, LED color) |
+### Core
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/health` | Status, versions, counts |
+| GET | `/metrics` | Prometheus metrics (bearer-auth) |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat |
+| GET | `/v1/models` | List models |
+
+### Home Assistant
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/ha/entities` | List HA entities |
+| POST | `/api/ha/command` | Direct HA service call |
+| GET | `/api/temperatures` | Temperature sensor readings from HA |
+
+### Memory (RAG + MemPalace + Auto-Learn)
+
+Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write the same unified `mempalace` ChromaDB collection.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/memory/search` | Flat semantic search |
+| GET | `/api/memory/stats` | Collection stats |
+| POST | `/api/memory/add` | Add document (optional `tags` array) |
+| GET | `/api/memory/learned` | List auto-learned facts (optional `?category=`, `?limit=`) |
+| DELETE | `/api/memory/learned/{doc_id}` | Delete a single learned fact |
+| DELETE | `/api/memory/learned?confirm=true` | Wipe all learned facts |
+| GET | `/api/memory/learned/stats` | Auto-learn statistics (counts by category) |
+| POST | `/api/memory/learned/toggle` | Enable/disable auto-learn at runtime |
+| GET | `/api/palace/search?query=&wing=&room=&n=5` | Structured palace search with optional wing/room filter |
+| POST | `/api/palace/store` | Store a memory: `{text, wing?, room?, source?, category?, project?}` |
+| GET | `/api/palace/memory/{doc_id}` | Get a single memory by ID |
+| DELETE | `/api/palace/memory/{doc_id}` | Delete a memory by ID |
+| GET | `/api/palace/wings` | Palace wing structure |
+| GET | `/api/palace/wings/{wing}/rooms` | Rooms in a wing with memory counts |
+| GET | `/api/palace/stats` | Memory counts by wing |
+| POST | `/api/palace/mine` | Trigger Claude Code session mining |
+| POST | `/api/rag/ingest` | Force immediate re-ingest of source files (bypasses 2-min scheduler) |
+
+### Chat History
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/chat/conversations?limit=50` | List conversations (most recent first) |
+| POST | `/api/chat/conversations` | Create conversation: `{title}` |
+| GET | `/api/chat/conversations/:id/messages` | Get conversation + messages |
+| POST | `/api/chat/conversations/:id/messages` | Save message: `{role, content, routing?, announcement_type?}` |
+| PUT | `/api/chat/conversations/:id` | Update title: `{title}` |
+| DELETE | `/api/chat/conversations/:id` | Delete conversation + messages |
+
+### Voice (STT / TTS / Announcements)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/stt/transcribe` | Proxy audio to Whisper STT (multipart, max 10 MB) |
+| POST | `/api/tts/synthesize` | Synthesize text to WAV: `{text}` |
+| POST | `/api/announce` | Trigger TTS announcement via voice system |
+| GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS) |
+| GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
+| GET | `/api/announcements/stats` | Success rates, per-speaker breakdown, latency |
+
+### Reminders & Focus
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/reminder/trigger` | Trigger a reminder |
+| GET | `/api/reminders` | List pending reminders |
+| POST | `/api/reminder/complete/{id}` | Mark reminder completed |
+| GET | `/api/focus` | Current focus session status |
+| POST | `/api/focus/start` | Start focus session via API |
+| POST | `/api/focus/stop` | Stop focus session via API |
+
+### Calendar & Email
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/calendar/today` | Today's calendar events (phone sync + Google fallback) |
+| GET/POST/PUT | `/api/calendar/sync` | Phone calendar sync (GET=status, POST/PUT=receive events) |
+| POST | `/api/email-to-calendar/run` | Manually trigger email-to-calendar extraction (dormant by default — see `EMAIL_TO_CALENDAR_ENABLED`) |
+
+### Progress Tracking
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/progress/today` | Today's stats (tasks, focus, brain dumps) |
+| GET | `/api/progress/week` | This week's stats + trend vs prior week |
+| GET | `/api/progress/streaks` | Active streaks (with lazy decay — stale streaks report `current: 0`) |
+
+### Shopping Lists
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/shopping?list_name=&include_checked=` | Get shopping list items |
+| POST | `/api/shopping` | Add item: `{item, list_name}` |
+| POST | `/api/shopping/{id}/check` | Check off item |
+| POST | `/api/shopping/{id}/uncheck` | Uncheck item |
+| DELETE | `/api/shopping/checked?list_name=` | Clear all checked items |
+| DELETE | `/api/shopping/{id}` | Delete item |
+
+### Vision
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/vision/analyze` | Analyze an image (multipart form or JSON with base64) |
+| GET | `/api/vision/status` | Vision model health and configuration |
+
+### Ambient / System
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color) |
+
+### Claude Code Integration
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/claude_code/turn` | Stop hook target — logs a completed Claude Code turn to the 7-day rolling buffer |
+| GET | `/api/claude_code/recent?minutes=120&limit=20` | List recent Claude Code turns for dashboards or the `check_claude_activity` tool |
 
 ### HA Command Format
 
