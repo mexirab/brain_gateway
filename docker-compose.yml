@@ -356,8 +356,48 @@ services:
     networks:
       - gateway-net
 
+  # Ships Helios Docker logs to Loki on Jupiter. The monitoring stack itself
+  # runs on Jupiter; its local promtail only sees Jupiter's containers. This
+  # sidecar gives Loki visibility into brain-orchestrator + friends.
+  #
+  # Hardening notes:
+  # - Image is pinned by digest. The Docker socket mount gives this container
+  #   read access to every container's env (which contains secrets), so a
+  #   :latest tag would be a supply-chain footgun. Bump deliberately when you
+  #   want a new version.
+  # - cap_drop: ALL + no-new-privileges: promtail needs no Linux capabilities
+  #   to read a socket and POST HTTP.
+  # - Isolated on its own bridge network (no gateway-net membership) so a
+  #   compromised promtail can't reach orchestrator/redis/open-webui over
+  #   Docker's internal DNS. It only needs outbound to Jupiter (via host LAN)
+  #   and the Docker socket (host mount).
+  promtail:
+    image: grafana/promtail:3.4.2@sha256:c6e9a987ca086cbfef945b8ebd708eb09f98b5e78bfb659e4e5a8b3bd604d11b
+    container_name: promtail-helios
+    restart: unless-stopped
+    logging: *default-logging
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./monitoring/promtail/promtail-helios.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-helios-data:/tmp
+    environment:
+      - LOKI_PUSH_URL=${LOKI_PUSH_URL:-http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push}
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
+    networks:
+      - promtail-net
+
 networks:
   gateway-net:
+    driver: bridge
+  # Isolated bridge for promtail so a supply-chain compromise of the promtail
+  # image can't reach the rest of the stack over Docker DNS. Promtail only
+  # needs outbound to Jupiter's Loki push URL (via host LAN routing), not
+  # container-to-container reachability.
+  promtail-net:
     driver: bridge
 
 volumes:
@@ -367,6 +407,7 @@ volumes:
   pihole-etc:
   pihole-dnsmasq:
   searxng-data:
+  promtail-helios-data:
   # Note: `finance-data:` named volume was removed 2026-04-14 when /app/data
   # was migrated to a host bind mount. The old volume may still exist on the
   # Docker host until manually removed with `docker volume rm

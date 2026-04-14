@@ -1,0 +1,90 @@
+# Promtail Configuration — Helios node
+# Ships Docker container logs from Helios to Loki on Jupiter.
+# The monitoring stack (Loki/Grafana/Prometheus) runs on Jupiter; the existing
+# promtail-config.yml is Jupiter-local and only sees Jupiter's Docker socket.
+# This config is mounted into a promtail container that runs on Helios, so it
+# sees Helios's containers (brain-orchestrator, open-webui, redis, etc.) and
+# pushes them across the LAN to Jupiter's Loki.
+#
+# Run with: -config.expand-env=true   (so ${LOKI_PUSH_URL} is interpolated)
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+# LAN-plaintext over Tailscale by default — Tailscale establishes a direct
+# WireGuard tunnel between Helios and Jupiter on the same subnet, so the push
+# traffic is authenticated and encrypted without cert management. Override
+# with a bare http:// URL via LOKI_PUSH_URL in .env if the tailnet is down.
+clients:
+  - url: ${LOKI_PUSH_URL:-http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push}
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Keep only Brain Gateway containers — skip noisy or irrelevant ones
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|model-server|nebula-sync|pihole)'
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'project'
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+
+      # Static label so dashboards can distinguish Helios vs Jupiter logs
+      - target_label: 'host'
+        replacement: 'helios'
+
+    pipeline_stages:
+      # Parse JSON logs from orchestrator's structured logging
+      - json:
+          expressions:
+            level: level
+            message: msg
+            timestamp: ts
+            request_id: request_id
+            component: component
+            tool_name: tool_name
+            mode: mode
+            intensity: intensity
+            model: model
+            entity_id: entity_id
+            error_type: error_type
+            latency_ms: latency_ms
+            result_count: result_count
+
+      # Only promote low-cardinality, bounded fields to stream labels.
+      # entity_id and request_id are intentionally NOT labels — entity_id can
+      # be any HA entity (hundreds) and request_id is unique per call, both
+      # would explode Loki's stream index. They remain available via
+      # `| json entity_id request_id` as line-level filters in LogQL.
+      - labels:
+          level:
+          component:
+          tool_name:
+          mode:
+          intensity:
+          model:
+          error_type:
+
+      # Fallback level detection for non-JSON containers.
+      # `source:` is omitted intentionally — promtail's regex stage defaults
+      # to matching the raw log line, which is what we want for containers
+      # whose output isn't JSON (redis, wyoming, nginx, etc.).
+      - regex:
+          expression: '(?i)(?P<level_fallback>error|warn|info|debug)'
+
+      - labels:
+          level_fallback:
