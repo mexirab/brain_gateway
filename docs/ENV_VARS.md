@@ -137,3 +137,9 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `CALENDAR_POLL_INTERVAL` | Minutes between calendar polls (default 15) |
 | `MORNING_BRIEFING_TIME` | `HH:MM` for morning briefing (default 07:30) |
 | `MORNING_BRIEFING_ENABLED` | `true`/`false` (default true) |
+
+## Monitoring
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LOKI_PUSH_URL` | `http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push` | Loki push endpoint used by the Helios promtail sidecar. Override with `http://10.0.0.248:3100/loki/api/v1/push` if the tailnet is unavailable. |

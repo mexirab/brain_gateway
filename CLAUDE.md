@@ -66,6 +66,7 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Vision Model (Qwen2.5-VL-7B) | 8010 | http://10.0.0.58:8010 |
 | Frontend (dashboard) | 3001 | http://helios.tail74fc4a.ts.net:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://10.0.0.195:8090 (Helios) |
+| Promtail (Helios) | 9080 (internal) | Scrapes Helios Docker socket → pushes to Loki on Jupiter via tailnet |
 
 ## Architecture (v7 Unified)
 
@@ -141,6 +142,7 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 | `orchestrator/ha_integration.py` | Home Assistant entity discovery + service call wrapper |
 | `orchestrator/metrics.py` | 70+ Prometheus metrics (`bgw_*` namespace). Source of truth for dashboards. |
 | `docker-compose.yml` | Service stack (env-var driven, no hardcoded IPs) |
+| `monitoring/promtail/promtail-helios.yml` | Promtail config for Helios sidecar — scrapes Docker socket, pushes to Loki |
 
 ## Key Paths
 

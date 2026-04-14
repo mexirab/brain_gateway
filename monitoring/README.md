@@ -18,7 +18,8 @@ docker compose --env-file ../.env -p monitoring up -d
 | Grafana | 3000 | Dashboards |
 | Prometheus | 9090 | Metrics |
 | Loki | 3100 | Logs |
-| Promtail | - | Log shipper |
+| Promtail (Jupiter) | - | Log shipper — Jupiter-local containers (Grafana, Prometheus, Loki, Conjure, etc.) |
+| Promtail (Helios) | 9080 (internal only) | Log shipper — Helios Docker containers → Loki on Jupiter via tailnet |
 | Node Exporter | 9100 | System metrics |
 | Blackbox | 9115 | HTTP probes |
 
@@ -37,12 +38,26 @@ wget -qO- https://github.com/utkuozdemir/nvidia_gpu_exporter/releases/download/v
 sudo systemctl enable --now node_exporter nvidia_gpu_exporter
 ```
 
+## Log Pipeline (two-promtail topology)
+
+Helios and Jupiter each run their own promtail instance. Logs from both hosts land in Loki on Jupiter.
+
+| Promtail | Scrapes | Pushes to | `host` label |
+|----------|---------|-----------|--------------|
+| Jupiter (monitoring stack) | Jupiter Docker socket + journal | local Loki | (Jupiter default, no static override) |
+| Helios (`promtail-helios` sidecar in `docker-compose.yml`) | Helios Docker socket | Loki on Jupiter via `LOKI_PUSH_URL` over Tailscale MagicDNS | `host=helios` (static) |
+
+Use `host=helios` in LogQL to isolate Helios-origin streams. Loki stream labels set by the Helios promtail: `container`, `host`, `project`, `service`. Extracted JSON fields available via `| json`: `level`, `component`, `tool_name`, `mode`, `intensity`, `model`, `error_type`. `entity_id` and `request_id` are intentionally not labels (cardinality); query them via `| json entity_id request_id`.
+
+**Helios promtail security posture:** image pinned by digest (`grafana/promtail:3.4.2@sha256:...`), `cap_drop: ALL`, `security_opt: no-new-privileges`. Runs on isolated `promtail-net` Docker network — cannot reach `gateway-net` services (orchestrator, redis, open-webui) via Docker DNS. When updating the image, pin to the new digest; don't use a floating tag.
+
 ## Loki Queries
 
 ```
-{container="brain-orchestrator"}                    # All logs
-{container="brain-orchestrator"} |~ "tool_call"    # Tool calls
-{container="brain-orchestrator"} |~ "(?i)error"    # Errors
+{container="brain-orchestrator"}                          # All Helios orchestrator logs
+{container="brain-orchestrator", host="helios"}           # Same, scoped to Helios origin
+{container="brain-orchestrator"} |~ "tool_call"          # Tool calls
+{container="brain-orchestrator"} | json | level="error"  # Errors (lowercase; orchestrator emits lowercase levels)
 ```
 
 ## Prometheus Targets
@@ -56,7 +71,8 @@ docker compose -p monitoring restart prometheus
 ## Architecture
 
 ```
-Jupiter: Grafana ← Prometheus ← Loki ← Promtail
-                        ↑
-         node_exporter + gpu_exporter on all GPU nodes
+Jupiter: Grafana ← Prometheus ← Loki ←── Promtail (Jupiter-local containers)
+                        ↑                   ↑
+         node_exporter + gpu_exporter       └── Promtail sidecar on Helios
+              on all GPU nodes                    (pushes over Tailscale MagicDNS)
 ```

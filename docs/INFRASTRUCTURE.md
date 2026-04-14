@@ -81,4 +81,6 @@ Server closet temperature monitoring with dashboard widget, TTS alerts, and Graf
 cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 ```
 
-See `monitoring/README.md` for full setup details.
+Helios container logs are shipped to Loki on Jupiter via a promtail sidecar (`promtail-helios`) defined in the main `docker-compose.yml`. The push path uses Tailscale MagicDNS (`LOKI_PUSH_URL`). If the tailnet is down, override `LOKI_PUSH_URL` to the Jupiter LAN IP (`http://10.0.0.248:3100/loki/api/v1/push`).
+
+See `monitoring/README.md` for full setup details including the two-promtail topology and LogQL examples.
