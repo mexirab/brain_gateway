@@ -91,6 +91,7 @@ All tools are called directly by the single model in one agentic loop.
 |------|---------|
 | home_assistant | HA API: `{entity_id, service, data}` |
 | search_memory | Unified memory palace search (semantic, optional wing/room filtering) |
+| update_memory | Write a new memory directly into the palace (wing/room routed) |
 | set_reminder / cancel_reminder | Voice/phone reminders |
 | update_data | Update meds/projects YAML |
 | start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio, Pi-hole blocking |
@@ -108,6 +109,10 @@ All tools are called directly by the single model in one agentic loop.
 | finance_status | Budget, spending, XP/levels from YNAB integration |
 | analyze_image | Re-analyze or ask follow-up questions about a shared image |
 | shopping_list | Add/check/remove items from shopping/grocery lists |
+| document_vault | Structured doc storage with semantic search (list/create/read/update/delete) |
+| ask_expert | Delegate a hard reasoning question to a dedicated expert-tier model |
+| check_claude_activity | Read what Claude Code has been working on — recent turns, current session, files touched |
+| code_agent | Delegate a coding task to the Qwen2.5-Coder-32B agent on Helios GPU0 |
 | sleep_mode | Do Not Disturb: suppress all announcements until morning |
 
 ## Key Files

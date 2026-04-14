@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Jess — Reference Card</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --muted: #5a5a5a;
+    --line: #d0d0d0;
+    --accent: #6b46c1;
+    --bg-soft: #f5f3fa;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--ink);
+    background: #fff;
+    font-size: 11pt;
+    line-height: 1.35;
+  }
+  .page {
+    max-width: 8.5in;
+    margin: 0 auto;
+    padding: 0.45in 0.5in;
+  }
+  h1 {
+    margin: 0 0 4pt 0;
+    font-size: 22pt;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+  h1 .sub {
+    display: block;
+    font-size: 10pt;
+    font-weight: 400;
+    color: var(--muted);
+    margin-top: 4pt;
+    max-width: 6in;
+  }
+  h2 {
+    margin: 0 0 4pt 0;
+    font-size: 11pt;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  hr {
+    border: none;
+    border-top: 2px solid var(--ink);
+    margin: 10pt 0 14pt 0;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10pt 18pt;
+  }
+  .card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    padding: 6pt 8pt;
+    border-left: 3px solid var(--accent);
+    background: var(--bg-soft);
+    border-radius: 2pt;
+  }
+  .card.mono {
+    border-left-color: #1a1a1a;
+    background: #f5f5f5;
+  }
+  .card ul {
+    margin: 4pt 0 0 0;
+    padding-left: 14pt;
+  }
+  .card li {
+    margin: 2pt 0;
+  }
+  .cmd {
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .what {
+    color: var(--muted);
+    font-size: 9.5pt;
+  }
+  .footer {
+    margin-top: 14pt;
+    padding-top: 8pt;
+    border-top: 1px solid var(--line);
+    font-size: 9pt;
+    color: var(--muted);
+    text-align: center;
+    font-style: italic;
+  }
+  .big-quit {
+    grid-column: 1 / -1;
+    background: #fff4e6;
+    border-left-color: #e67e22;
+    padding: 8pt 12pt;
+  }
+  .big-quit strong { font-size: 13pt; }
+  .schedule {
+    grid-column: 1 / -1;
+    background: #f0f8f4;
+    border-left-color: #16a34a;
+  }
+  .schedule ul {
+    columns: 2;
+    column-gap: 18pt;
+  }
+  @page {
+    size: letter;
+    margin: 0.35in;
+  }
+  @media print {
+    .page { padding: 0; }
+    .card { background: #fff !important; border-left-width: 2pt; }
+    .big-quit { background: #fff !important; }
+    .schedule { background: #fff !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>Jess — Reference Card
+  <span class="sub">When your brain needs a nudge. Grouped by how you feel, not by feature. Each row works on its own.</span>
+</h1>
+
+<hr>
+
+<div class="grid">
+
+  <div class="card">
+    <h2>I can't start</h2>
+    <ul>
+      <li><span class="cmd">"Start a 25 minute focus on [thing]"</span><br><span class="what">Pomodoro + ambient audio + site blocking</span></li>
+      <li><span class="cmd">"Start a body doubling session, 3 sprints"</span><br><span class="what">Multi-sprint focus with breaks</span></li>
+      <li><span class="cmd">"Break down [big task]"</span><br><span class="what">Tiny steps with time estimates</span></li>
+      <li><span class="cmd">"What should I work on?"</span><br><span class="what">One directive pick — no list</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Can't stop thinking</h2>
+    <ul>
+      <li><span class="cmd">"Brain dump: [everything]"</span><br><span class="what">Sorts each item into memory or reminder</span></li>
+      <li><span class="cmd">"Remind me to [X] at [time]"</span><br><span class="what">TTS + phone notification</span></li>
+      <li><span class="cmd">"Remember that [fact about me]"</span><br><span class="what">Writes to your memory palace</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>I lost my place</h2>
+    <ul>
+      <li><span class="cmd">"What was I working on?"</span><br><span class="what">Last 3 activities with timestamps</span></li>
+      <li><span class="cmd">"BRB" / "Need to take this call"</span><br><span class="what">Bookmarks context, checks in after 5 min</span></li>
+      <li><span class="cmd">"Done" / "Next step" / "Skip"</span><br><span class="what">Advance through a decomposed task</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>I'm overwhelmed</h2>
+    <ul>
+      <li><span class="cmd">"I'm overwhelmed"</span><br><span class="what">Triage: single most important thing</span></li>
+      <li><span class="cmd">"What should I eat?"</span><br><span class="what">Two options, no more</span></li>
+      <li><span class="cmd">"Goodnight"</span><br><span class="what">DND until morning</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Body stuff</h2>
+    <ul>
+      <li><span class="cmd">"I had lunch" / "Just ate"</span><br><span class="what">Logs meal, stops food nudges</span></li>
+      <li><span class="cmd">"I took my meds"</span><br><span class="what">Logs, tells you next dose</span></li>
+      <li><span class="cmd">"Had some water"</span><br><span class="what">Resets hydration timer</span></li>
+      <li><span class="what">(Jess nudges every ~15 min if overdue)</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>House stuff</h2>
+    <ul>
+      <li><span class="cmd">"Turn off the bedroom lights"</span><br><span class="what">Any HA device</span></li>
+      <li><span class="cmd">"Set the office fan to 50%"</span><br><span class="what">Brightness, scenes, temperature</span></li>
+      <li><span class="cmd">"Add milk to my grocery list"</span><br><span class="what">Multiple lists supported</span></li>
+      <li><span class="cmd">"What's on my grocery list?"</span><br><span class="what">Reads it back</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Calendar & email</h2>
+    <ul>
+      <li><span class="cmd">"What's on my calendar?"</span><br><span class="what">Today's events read aloud</span></li>
+      <li><span class="cmd">"Add pickleball Thursday at 7pm"</span><br><span class="what">Creates a Google Calendar event</span></li>
+      <li><span class="cmd">"Any new emails?"</span><br><span class="what">Read-only check of Primary inbox</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Routines</h2>
+    <ul>
+      <li><span class="cmd">"Start morning routine"</span><br><span class="what">Meds → shower → breakfast → calendar</span></li>
+      <li><span class="cmd">"Start evening routine"</span><br><span class="what">Meds → tomorrow's calendar → screens away</span></li>
+      <li><span class="what">(Auto-trigger at 7am and 9pm)</span></li>
+    </ul>
+  </div>
+
+  <div class="card schedule">
+    <h2>Things Jess does on her own</h2>
+    <ul>
+      <li><strong>7am</strong> — Morning briefing + weather</li>
+      <li><strong>Before events</strong> — 1h / 30m / 15m / 5m alerts + "leave by"</li>
+      <li><strong>10, 12, 2, 4pm</strong> — Ambient status summaries</li>
+      <li><strong>Every 15 min</strong> — Self-care nudges (if overdue)</li>
+      <li><strong>6pm</strong> — Daily progress recap</li>
+      <li><strong>Sunday 7pm</strong> — Weekly digest</li>
+      <li><strong>10 min after chats</strong> — Auto-learn facts into memory</li>
+      <li><strong>Focus streaks</strong> — Celebrated at 3, 5, 7, 14, 30 days</li>
+    </ul>
+  </div>
+
+  <div class="card big-quit">
+    <h2>If your brain just quit</h2>
+    <strong>Say: "I'm overwhelmed"</strong> — one thing. That's it.<br>
+    Or say <strong>"Goodnight"</strong> and deal with it tomorrow. No guilt.
+  </div>
+
+  <div class="card mono">
+    <h2>When nothing works</h2>
+    <ul>
+      <li><span class="cmd">Dashboard:</span> <span class="what">helios.tail74fc4a.ts.net:3001</span></li>
+      <li><span class="cmd">Diagnose:</span> <span class="what">"Is everything working?"</span></li>
+      <li><span class="cmd">Reset chat:</span> <span class="what">new conversation in Open WebUI</span></li>
+    </ul>
+  </div>
+
+</div>
+
+<div class="footer">
+  One thing at a time · No lists when one answer will do · No guilt for skipping · You don't need to check anything — it comes to you
+</div>
+
+</div>
+</body>
+</html>

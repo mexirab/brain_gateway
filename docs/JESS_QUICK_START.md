@@ -65,6 +65,22 @@ You don't need to do anything — nudges come to you via speakers every 15 minut
 | "Turn off the bedroom lights" | Controls any HA device |
 | "Set the office fan to 50%" | Brightness, temperature, scenes |
 
+## Shopping Lists
+
+| Say this | What happens |
+|----------|-------------|
+| "Add milk to my grocery list" | Adds to the named list |
+| "What's on my grocery list?" | Reads it back |
+| "Check off milk" / "I got the milk" | Marks complete without deleting |
+| "Clear the checked items" | Cleans up what you've already got |
+
+## Quiet Mode
+
+| Say this | What happens |
+|----------|-------------|
+| "Goodnight" / "Bedtime" | DND: all announcements suppressed until morning |
+| "Good morning" | Wakes Jess back up (auto-clears when morning briefing fires 5–11am) |
+
 ## Decision Help
 
 | Say this | What happens |
@@ -77,9 +93,8 @@ You don't need to do anything — nudges come to you via speakers every 15 minut
 
 | Feature | When |
 |---------|------|
-| Morning briefing | 7:00 AM — today's events + pending reminders |
-| Calendar alerts | Tiered countdown: 1hr, 30min, 15min, 5min before events |
-| Email alerts | Every 30 min — new Primary inbox emails |
+| Morning briefing | 7:00 AM — today's events + pending reminders, weather forecast |
+| Calendar alerts | Tiered countdown: 1hr, 30min, 15min, 5min before events + "leave by" times for events with locations |
 | Daily progress recap | 6:00 PM — tasks done, focus time, streaks |
 | Weekly digest | Sunday 7:00 PM — week summary with trends |
 | Ambient summaries | 10am, 12pm, 2pm, 4pm — brief status check |
