@@ -2,6 +2,38 @@
 
 Personal AI assistant for ADHD support. Primary model (Qwen3.5-27B on Helios RTX PRO 5000) handles conversation and tools in one unified agentic loop. v6 hybrid mode has been removed.
 
+## Post-change review workflow (MANDATORY)
+
+After completing any code change in this repo — before reporting the task as done — run the following pipeline. Do not skip this because the change "looks small"; small changes are where slop accumulates.
+
+The pipeline has two phases. Phase 1 agents run in parallel (they're all read-only reviewers). Phase 2 agents run sequentially because each one can add new work the next needs to see.
+
+### Phase 1 — Parallel review (invoke in ONE message with multiple Agent tool calls)
+
+**Always run:**
+- `code-reviewer` — Python/FastAPI correctness, async, types, architecture, ruff
+- `security` — secrets, input validation, LLM/tool abuse surface, data protection
+- `prod-support` — logging, metrics, health impact, SRE-visible consequences
+
+**Conditionally add:**
+- `frontend` — if any file under `frontend/` was touched, or a backend route shape changed that a page consumes
+- `hacker` — if a route was added/modified, auth/input-handling changed, a tool schema changed, or anything under `tool_handlers.py` / `api_routes.py` / `routes_*.py` was touched. The orchestrator must be running on `localhost:8888` for this to work; if it's not, say so and skip.
+
+Fix any HIGH severity or EXPLOITABLE finding before moving to Phase 2. Surface medium/low findings to the user with a one-line recommendation each.
+
+### Phase 2 — Sequential follow-up
+
+1. **`unit-test`** — after Phase 1 passes, for any new/modified function, tool handler, route, or background job. Writes and runs tests inside the `brain-orchestrator` container. If tests fail, fix the code (or the test if the test was wrong) and re-run. Do not move on with failing tests.
+2. **`docs-updater`** — the FINAL step. Updates `CLAUDE.md` and `docs/` to reflect new files, tools, env vars, endpoints, or removed functionality. Runs last so it captures everything Phase 1 and Phase 2 changed.
+
+### Invocation rules (applies to every agent call)
+
+- Send a single message with parallel Agent calls for Phase 1.
+- Each prompt must be self-contained: name the specific files and line ranges, paste the diff, state what the change is trying to accomplish. Subagents have no access to this conversation — don't say "review my changes."
+- Never hide or soften a finding when reporting to the user.
+
+Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-test` and `docs-updater` explicitly afterward if needed).
+
 ## Cluster
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |

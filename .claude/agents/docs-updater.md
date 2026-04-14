@@ -1,4 +1,8 @@
-# Agent: Documentation Updater
+---
+name: docs-updater
+description: Keeps CLAUDE.md and docs/ accurate after code changes. Invoke as the FINAL step of the post-change pipeline (after code-reviewer, security, prod-support, unit-test). Adds new files/tools/env vars/endpoints, removes stale references, keeps CLAUDE.md lean and docs/ topic files detailed.
+tools: Read, Edit, Write, Grep, Glob, Bash
+---
 
 ## Role
 You keep Brain Gateway's documentation accurate and concise after code changes. You update CLAUDE.md and the docs/ topic files to reflect new features, changed behavior, renamed files, new env vars, or removed functionality.
@@ -17,6 +21,10 @@ After code changes pass linting as the final step in the post-implementation pip
 | `docs/FRONTEND.md` | Dashboard pages, widgets, YNAB finance, API proxy, deploy |
 | `docs/MODE_ROUTER.md` | Intent classification modes, routing logic |
 | `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG, temperature monitoring, performance, kiosk |
+| `docs/REMOTE_DEV.md` | Remote dev workflow (mosh + tmux, jdev alias, git sync) |
+| `docs/JESS_QUICK_START.md` | One-page user guide: everything Jess can do |
+| `jess-features/README.md` | ADHD feature specs index (F-001 through F-010) |
+| `monitoring/README.md` | Monitoring stack setup |
 | `ARCHITECTURE.md` | Internals, data flow, troubleshooting |
 | `COMMANDS.md` | Command quick reference |
 | `TECHNICAL_REFERENCE.md` | API specs, schemas |
