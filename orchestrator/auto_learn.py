@@ -31,6 +31,7 @@ from orchestrator.metrics import (
     AUTO_LEARN_EXTRACTIONS_TOTAL,
     AUTO_LEARN_FACTS_STORED,
     AUTO_LEARN_SENSITIVE_FILTERED,
+    PALACE_STORES_TOTAL,
 )
 
 logger = logging.getLogger(__name__)
@@ -414,6 +415,7 @@ async def store_fact(fact: Dict) -> Optional[str]:
         _append_to_monthly_markdown(fact_text, category, confidence, now)
 
     AUTO_LEARN_FACTS_STORED.labels(category=category).inc()
+    PALACE_STORES_TOTAL.labels(wing=wing or "unrouted", room=room or "unrouted").inc()
     logger.info(
         "[AUTO_LEARN] Stored fact (category=%s, confidence=%s, wing=%s, id=%s)", category, confidence, wing, doc_id
     )

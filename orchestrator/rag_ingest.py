@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from orchestrator import shared
+from orchestrator.metrics import PALACE_STORES_TOTAL
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +280,10 @@ def _run_ingest_sync() -> Dict[str, int]:
                 embeddings=embeddings,
             )
         stats["new_chunks"] = len(upsert_ids)
+        # Count only real chunks, not the per-file marker entries (file::*).
+        chunk_count = sum(1 for i in upsert_ids if i.startswith("chunk::"))
+        if chunk_count:
+            PALACE_STORES_TOTAL.labels(wing="library", room="unrouted").inc(chunk_count)
 
     stats["total"] = coll.count()
     return stats
