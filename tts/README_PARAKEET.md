@@ -27,19 +27,36 @@ sudo cp /opt/helios/gateway_mvp/tts/parakeet-stt.service /etc/systemd/system/par
 # 2. Verify ffmpeg is on the host (already required by the Whisper server)
 which ffmpeg || sudo apt install -y ffmpeg
 
-# 3. Build a dedicated venv (keeps NeMo's heavy deps out of qwen-tts-env)
-python3 -m venv /home/labadmin/parakeet-env
+# 3. Build a dedicated venv (keeps NeMo's heavy deps out of qwen-tts-env).
+# Note: python3.12-venv is held back on Helios (nvidia compat reasons), so
+# use virtualenv instead of the stdlib venv module.
+sudo apt install -y python3-virtualenv
+python3 -m virtualenv /home/labadmin/parakeet-env
 /home/labadmin/parakeet-env/bin/pip install --upgrade pip
+
+# 3a. Install torch FIRST, pinned to a cu121 wheel, from the PyTorch index
+# as the PRIMARY source (--index-url, not --extra-index-url). Helios's NVIDIA
+# driver maxes out at CUDA 12.8; the default PyPI torch wheel is built against
+# CUDA 13 and will fail with "NVIDIA driver too old" at runtime.
+/home/labadmin/parakeet-env/bin/pip install \
+    torch==2.5.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# 3b. Install the rest of the stack. NeMo has a torch dep, but since torch
+# is already present at 2.5.1 it won't upgrade.
 /home/labadmin/parakeet-env/bin/pip install \
     "nemo_toolkit[asr]" \
     fastapi \
     "uvicorn[standard]" \
     python-multipart \
-    soundfile \
-    torch \
-    --extra-index-url https://download.pytorch.org/whl/cu121
+    soundfile
 
-# After validating the cutover, pin the versions you tested into a
+# 3c. Sanity check: torch must report cu121 and see the GPUs before continuing.
+/home/labadmin/parakeet-env/bin/python -c \
+    "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.device_count())"
+# Expected: 2.5.1+cu121 12.1 True 2
+
+# After validating the cutover, pin the rest of the versions you tested into a
 # requirements-parakeet.txt next to this README so reinstalls are reproducible.
 
 # 4. Pre-download the Parakeet weights into the HF cache
