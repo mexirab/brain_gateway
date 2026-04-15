@@ -1,0 +1,41 @@
+[Unit]
+Description=Parakeet STT Server for Brain Gateway (GPU1 - RTX PRO 5000 Blackwell)
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=labadmin
+Group=labadmin
+WorkingDirectory=/home/labadmin
+
+Environment="PATH=/home/labadmin/parakeet-env/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v3"
+Environment="PARAKEET_DEVICE=cuda:1"
+Environment="PARAKEET_PORT=8003"
+
+ExecStart=/home/labadmin/parakeet-env/bin/python /home/labadmin/stt_server_parakeet.py
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=600
+LimitNOFILE=65536
+MemoryMax=24G
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/labadmin /tmp
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=parakeet-stt
+
+[Install]
+WantedBy=multi-user.target
