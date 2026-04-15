@@ -221,7 +221,12 @@ def _run_ingest_sync() -> Dict[str, int]:
         if existing_hash_by_rel.get(rel) == h:
             continue  # unchanged — skip
 
-        # Changed or new: clear the old chunks and marker, queue new ones
+        # Changed or new: clear the old chunks and marker, queue new ones.
+        # Note: the delete runs UP FRONT, before the upsert. If the upsert
+        # later fails, the next run's delta detection will see the file as
+        # "new" (marker is gone) and retry it automatically. Moving the
+        # delete after the upsert would leave stale chunks live alongside
+        # the new ones on success — load-bearing invariant, don't invert.
         stats["deleted_chunks"] += _delete_by_file_path(rel)
         with contextlib.suppress(Exception):
             coll.delete(ids=[f"file::{rel}"])
@@ -230,15 +235,20 @@ def _run_ingest_sync() -> Dict[str, int]:
         sections = _split_markdown_by_headers(raw) if f.suffix.lower() == ".md" else [("document", raw)]
         filehash_prefix = h[:12]
         chunk_count = 0
-        for sec_title, sec_text in sections:
+        # sec_idx disambiguates repeated headings within the same file — e.g.
+        # a project doc that has two "### Remote Focus Timer for Mobile" H3s.
+        # Without it, both sections would produce identical chunk IDs and
+        # chromadb would reject the whole upsert batch with DuplicateIDError.
+        for sec_idx, (sec_title, sec_text) in enumerate(sections):
             for k, piece in enumerate(_chunk_text(sec_text)):
-                upsert_ids.append(f"chunk::{rel}::{sec_title}::{k}::{filehash_prefix}")
+                upsert_ids.append(f"chunk::{rel}::{sec_idx}:{sec_title}::{k}::{filehash_prefix}")
                 upsert_docs.append(piece)
                 upsert_metas.append(
                     {
                         "file_path": rel,
                         "file_hash": h,
                         "section": sec_title,
+                        "section_index": sec_idx,
                         "chunk_index": k,
                         "source_root": str(_RAG_SOURCE),
                         "kind": "chunk",
@@ -266,24 +276,38 @@ def _run_ingest_sync() -> Dict[str, int]:
             coll.delete(ids=[f"file::{rel}"])
         stats["changed_files"] += 1
 
-    # 4. Batch upsert
+    # 4. Batch upsert — isolate failures so one bad batch does not take out
+    # the entire run. Any failure is logged with the first ID in the batch
+    # so a future repeat can be traced back to the offending file quickly.
+    # written/written_chunk_count are accumulated INSIDE the successful
+    # branch so a failing middle batch can't drift the Prometheus counter.
+    written = 0
+    written_chunk_count = 0
     if upsert_ids:
         for i in range(0, len(upsert_ids), _UPSERT_BATCH):
             b_ids = upsert_ids[i : i + _UPSERT_BATCH]
             b_docs = upsert_docs[i : i + _UPSERT_BATCH]
             b_metas = upsert_metas[i : i + _UPSERT_BATCH]
-            embeddings = model.encode(b_docs, normalize_embeddings=True).tolist()
-            coll.upsert(
-                ids=b_ids,
-                documents=b_docs,
-                metadatas=b_metas,
-                embeddings=embeddings,
-            )
-        stats["new_chunks"] = len(upsert_ids)
-        # Count only real chunks, not the per-file marker entries (file::*).
-        chunk_count = sum(1 for i in upsert_ids if i.startswith("chunk::"))
-        if chunk_count:
-            PALACE_STORES_TOTAL.labels(wing="library", room="unrouted").inc(chunk_count)
+            try:
+                embeddings = model.encode(b_docs, normalize_embeddings=True).tolist()
+                coll.upsert(
+                    ids=b_ids,
+                    documents=b_docs,
+                    metadatas=b_metas,
+                    embeddings=embeddings,
+                )
+                written += len(b_ids)
+                written_chunk_count += sum(1 for x in b_ids if x.startswith("chunk::"))
+            except Exception as e:
+                logger.error(
+                    "[RAG_INGEST] Upsert batch failed (first id=%s, batch size=%d): %s",
+                    b_ids[0] if b_ids else "<empty>",
+                    len(b_ids),
+                    e,
+                )
+        stats["new_chunks"] = written
+        if written_chunk_count:
+            PALACE_STORES_TOTAL.labels(wing="library", room="unrouted").inc(written_chunk_count)
 
     stats["total"] = coll.count()
     return stats
