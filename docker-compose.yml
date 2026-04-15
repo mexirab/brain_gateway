@@ -184,7 +184,7 @@ services:
       # Vision / image recognition (empty URL = disabled)
       - VISION_ENABLED=${VISION_ENABLED:-false}
       - VISION_MODEL_URL=${VISION_MODEL_URL:-}
-      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-}
+      - VISION_MODEL_NAME=${VISION_MODEL_NAME:-Qwen3VL-8B-Instruct-Q4_K_M.gguf}
       - VISION_MAX_IMAGE_SIZE=${VISION_MAX_IMAGE_SIZE:-10485760}
       - VISION_TIMEOUT=${VISION_TIMEOUT:-60}
       # Code Agent (coding model for self-troubleshooting)
