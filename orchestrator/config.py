@@ -213,6 +213,15 @@ class Settings(BaseSettings):
     # -- CORS --------------------------------------------------------------------
     cors_origins: str = "http://localhost:3001"
 
+    # -- Training corpus drain ---------------------------------------------------
+    # Nightly job that appends user/assistant turns from OWUI, state_store, and
+    # Claude Code sessions to append-only monthly JSONL files. See
+    # orchestrator/jobs_training_corpus.py.
+    training_corpus_dir: str = "/app/data/training_corpus"
+    training_corpus_owui_db: str = "/app/owui_data/webui.db"
+    training_corpus_state_db: str = "/app/data/brain_state.db"
+    training_corpus_cc_dir: str = "/root/.claude/projects/-opt-helios-gateway-mvp"
+
     # ---- Computed properties ---------------------------------------------------
 
     @property

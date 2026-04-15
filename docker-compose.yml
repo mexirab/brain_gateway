@@ -96,6 +96,11 @@ services:
       # Host path is configurable; container path is fixed (matches
       # CLAUDE_PROJECTS_PATH env var in the environment block below).
       - ${CLAUDE_PROJECTS_HOST_PATH:-/home/labadmin/.claude/projects}:/root/.claude/projects:ro
+      # Open WebUI sqlite db (read-only) — nightly training-corpus drain job
+      # snapshots user/assistant turns from OWUI into an append-only JSONL
+      # under /app/data/training_corpus/. Sharing the named volume is safe
+      # because the drain only reads; OWUI owns all writes.
+      - open-webui-data:/app/owui_data:ro
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/helios/gateway_mvp:ro
     environment:

@@ -144,6 +144,15 @@ A few essential vars that always need to be set. These are usually defined in `.
 |----------|---------|---------|
 | `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Directory for uploaded meal photos. Extension allowlist enforced at save: jpg, jpeg, png, gif, webp. Files named as uuid4. |
 
+## Training corpus drain
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TRAINING_CORPUS_DIR` | `/app/data/training_corpus` | Output dir for monthly `YYYY-MM.jsonl` archives. Append-only. |
+| `TRAINING_CORPUS_OWUI_DB` | `/app/owui_data/webui.db` | Open WebUI sqlite db read read-only via `open-webui-data:/app/owui_data:ro` mount. |
+| `TRAINING_CORPUS_STATE_DB` | `/app/data/brain_state.db` | state_store sqlite db; drains `chat_messages`. |
+| `TRAINING_CORPUS_CC_DIR` | `/root/.claude/projects/-opt-helios-gateway-mvp` | Claude Code session jsonls; user-turn extraction only. |
+
 ## Monitoring
 
 | Variable | Default | Purpose |

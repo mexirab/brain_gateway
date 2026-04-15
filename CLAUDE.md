@@ -225,6 +225,7 @@ This is a **load-on-demand router**. Read the specific doc when the task touches
 | `docs/MODE_ROUTER.md` | intent classification (explainer/mirror/counterbalance/challenge/baseline) |
 | `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG host setup, temperature monitoring, kiosk config |
 | `docs/REMOTE_DEV.md` | remote dev workflow (mosh + tmux, jdev alias, git sync) |
+| `docs/TRAINING_CORPUS.md` | working on fine-tune data pipelines, debugging missing conversation data, or changing the drain schedule |
 | `monitoring/README.md` | Prometheus, Grafana, Loki — scrape targets, dashboard generator, alerts |
 | `monitoring/grafana/dashgen/` | editing dashboards (Python generator; don't hand-edit the JSON) |
 
@@ -265,4 +266,5 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - **Tool result cap:** unified loop enforces 8000-char cap per tool result (~2000 tokens). Tools that return large blobs must summarize/paginate at the handler level. See `TECHNICAL_REFERENCE.md` → Tool Result Cap.
 - **Both promtails digest-pinned:** Jupiter promtail now matches Helios sidecar posture — same `grafana/promtail:3.4.2` digest, `cap_drop: ALL`, `no-new-privileges`, `-config.expand-env=true`. See `monitoring/README.md`.
 - **auto_learn LLM timeout:** 120s (aligned with unified_loop). Was 30s; caused silent ReadTimeout failures under slot contention.
+- **Training corpus drain:** `orchestrator/jobs_training_corpus.py` runs nightly at 02:30 + one-shot 30s after startup (registered in `orchestrator.py`). Pulls user/assistant turns from OWUI sqlite (`open-webui-data:/app/owui_data:ro`), `brain_state.chat_messages`, and Claude Code session jsonls into append-only `/app/data/training_corpus/YYYY-MM.jsonl`. Content-addressed sha1 dedup across all months, secret-pattern filter, 8KB-equivalent 50k-char per-turn cap, no retention. Metric: `bgw_training_corpus_records_total{source}`. Env vars: `TRAINING_CORPUS_*` (see `docs/ENV_VARS.md`). Full spec: `docs/TRAINING_CORPUS.md`.
 

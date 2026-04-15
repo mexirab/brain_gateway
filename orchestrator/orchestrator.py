@@ -754,6 +754,35 @@ async def startup_event():
         replace_existing=True,
     )
 
+    # Training corpus drain: nightly at 02:30 — appends new user/assistant
+    # turns from OWUI + state_store + Claude Code sessions to monthly JSONL
+    # files under /app/data/training_corpus/. Append-only, content-addressed
+    # dedup, no retention cap. Backs future fine-tuning runs.
+    from orchestrator.jobs_training_corpus import drain_training_corpus
+
+    scheduler.add_job(
+        drain_training_corpus,
+        trigger="cron",
+        hour=2,
+        minute=30,
+        id="training_corpus_drain",
+        name="Training corpus drain",
+        replace_existing=True,
+    )
+    # Also run a backfill one-shot 30s after startup. Idempotent: the drain
+    # dedups by content-addressed id, so re-running is effectively free once
+    # the corpus is caught up. Keeps the metric warm in the FastAPI process.
+    # Use the scheduler's own tz so the naive-now footgun is avoided.
+    scheduler.add_job(
+        drain_training_corpus,
+        trigger="date",
+        run_date=datetime.now(scheduler.timezone) + timedelta(seconds=30),
+        id="training_corpus_backfill",
+        name="Training corpus backfill (startup)",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Training corpus drain daily at 02:30 + startup backfill")
+
     # RAG source file watcher: periodically check ~/rag/nadim_rag for edits
     # and re-ingest changed files into shared.collection. Runs in-process so
     # the updates are immediately visible to the chat pipeline (no restart
