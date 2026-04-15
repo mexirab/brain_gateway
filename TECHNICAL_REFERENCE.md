@@ -146,7 +146,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | POST | `/api/meals/photo` | Upload meal photo → vision estimate: multipart `file` field; returns `{calories_estimate, description, confidence}` |
 | GET | `/api/meals/photo/{filename}` | Serve a stored meal photo |
 
-**Photo flow:** upload → Qwen2.5-VL strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
+**Photo flow:** upload → Qwen3-VL-8B strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
 
 ### Claude Code Integration
 

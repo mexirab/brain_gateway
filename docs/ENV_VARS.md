@@ -93,8 +93,8 @@ For the authoritative template, see `.env.example` at the repo root.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VISION_ENABLED` | `true` | Enable/disable image analysis feature |
-| `VISION_MODEL_URL` | `http://10.0.0.58:8010/v1` | Vision model endpoint (Qwen2.5-VL-7B on Saturn RTX 3080) |
-| `VISION_MODEL_NAME` | `Qwen2.5-VL-7B-Instruct-q4_k_m.gguf` | Vision model identifier |
+| `VISION_MODEL_URL` | `http://10.0.0.58:8010/v1` | Vision model endpoint (Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080) |
+| `VISION_MODEL_NAME` | `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | Vision model identifier (matches llama.cpp `--model` filename) |
 | `VISION_MAX_IMAGE_SIZE` | `10485760` | Maximum image upload size in bytes (10 MB) |
 | `VISION_TIMEOUT` | `60` | Vision model request timeout in seconds |
 

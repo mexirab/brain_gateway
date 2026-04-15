@@ -40,7 +40,7 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 |------|----------|----------------|-----|------|
 | Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Brain gateway + Docker host**, Primary LLM: Qwen3.5-27B (GPU1 RTX PRO 5000, port 8080), TTS + STT (GPU1), Code agent: Qwen2.5-Coder-32B (GPU0 RTX 5090, port 8082), always-on |
 | Jupiter | 10.0.0.248 | jupiter.tail74fc4a.ts.net | - | **Pi-hole primary + Monitoring host** (Prometheus, Grafana, Loki, Promtail, Blackbox exporter), nebula-sync, Conjure API |
-| Saturn | 10.0.0.58 | - | RTX 3080 + RTX 3090 | Vision model (RTX 3080, Qwen2.5-VL-7B), Pi-hole secondary |
+| Saturn | 10.0.0.58 | - | RTX 3080 (10GB) + RTX 3090 (24GB) | Vision model (RTX 3080, Qwen3-VL-8B-Instruct Q4_K_M), Pi-hole secondary. RTX 3090 currently idle. |
 | Uranus | 10.0.0.173 | - | 2x RTX 5080 | ComfyUI/Conjure (GPU1) |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
@@ -63,7 +63,7 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Loki (Jupiter) | 3100 | http://10.0.0.248:3100 |
 | Wyoming Whisper (STT) | 10300 | tcp://10.0.0.195:10300 |
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.195:10301 |
-| Vision Model (Qwen2.5-VL-7B) | 8010 | http://10.0.0.58:8010 |
+| Vision Model (Qwen3-VL-8B) | 8010 | http://10.0.0.58:8010 |
 | Frontend (dashboard) | 3001 | http://helios.tail74fc4a.ts.net:3001 (future: convivialprophet.com) |
 | SearXNG | 8090 | http://10.0.0.195:8090 (Helios) |
 | Promtail (Helios) | 9080 (internal) | Scrapes Helios Docker socket → pushes to Loki on Jupiter via tailnet |
@@ -149,7 +149,7 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 | `docker-compose.yml` | Service stack (env-var driven, no hardcoded IPs) |
 | `monitoring/promtail/promtail-helios.yml` | Promtail config for Helios sidecar — scrapes Docker socket, pushes to Loki |
 | `orchestrator/workout_manager.py` | Adaptive gym workout generator — recency-aware split logic, set logging, PR tracking |
-| `orchestrator/meal_manager.py` | Calorie-only meal logging with optional photo-based vision estimation (Qwen2.5-VL) |
+| `orchestrator/meal_manager.py` | Calorie-only meal logging with optional photo-based vision estimation (Qwen3-VL-8B) |
 | `orchestrator/exercises_seed.py` | ~52-entry static exercise catalog; seeded idempotently into `exercises` table on startup |
 
 ## Key Paths

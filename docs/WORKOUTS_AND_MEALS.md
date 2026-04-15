@@ -42,7 +42,7 @@ Calories-only. No protein/carb/fat breakdown in v1. Meal logging is independent 
 
 1. User uploads a photo to `POST /api/meals/photo` (multipart `file` field).
 2. Photo is saved to `MEAL_PHOTOS_DIR` with a uuid4 filename. Extension allowlist enforced: `jpg`, `jpeg`, `png`, `gif`, `webp`.
-3. Image is sent to Qwen2.5-VL (Saturn, port 8010) with a strict-JSON prompt.
+3. Image is sent to Qwen3-VL-8B (Saturn, port 8010) with a strict-JSON prompt.
 4. Response `{calories_estimate, description, confidence}` is returned to the caller.
 5. User confirms in the frontend UI before the meal is saved (or the tool passes `auto_log=true` to skip confirmation).
 
@@ -68,7 +68,7 @@ Vision model config (shared with `analyze_image`): see `docs/ENV_VARS.md` → Vi
 | File | Purpose |
 |------|---------|
 | `orchestrator/workout_manager.py` | Adaptive plan generation, set logging, modify_workout, get_history, get_exercise_prs |
-| `orchestrator/meal_manager.py` | Meal CRUD, photo save, calorie estimation via Qwen2.5-VL |
+| `orchestrator/meal_manager.py` | Meal CRUD, photo save, calorie estimation via Qwen3-VL-8B |
 | `orchestrator/exercises_seed.py` | Static exercise catalog, idempotent seed on startup |
 | `orchestrator/routes_workout.py` | Workout API routes |
 | `orchestrator/routes_meals.py` | Meal API routes (photo upload + serve included) |
