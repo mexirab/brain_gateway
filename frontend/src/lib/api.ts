@@ -16,6 +16,15 @@ import type {
   SavedMessage,
   VaultDocument,
   DocumentCategory,
+  WorkoutTodayResponse,
+  WorkoutHistorySession,
+  GenerateWorkoutResponse,
+  ExerciseCatalogEntry,
+  WorkoutSet,
+  Meal,
+  MealsToday,
+  MealHistoryResponse,
+  MealPhotoEstimate,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -145,4 +154,90 @@ export const api = {
   deleteDocument: (id: string) =>
     fetcher<{ ok: boolean }>(`/api/documents/${id}`, { method: 'DELETE' }),
   documentCategories: () => fetcher<DocumentCategory[]>('/api/documents/categories'),
+
+  // Workouts
+  workoutToday: () => fetcher<WorkoutTodayResponse>('/api/workouts/today'),
+  workoutHistory: (days = 14) =>
+    fetcher<{ days: number; sessions: WorkoutHistorySession[] }>(
+      `/api/workouts/history?days=${days}`,
+    ),
+  generateWorkout: () =>
+    fetcher<GenerateWorkoutResponse>('/api/workouts/generate', { method: 'POST' }),
+  workoutExercises: () =>
+    fetcher<ExerciseCatalogEntry[]>('/api/workouts/exercises'),
+  logSet: (body: {
+    exercise: string;
+    weight_lbs: number;
+    reps: number;
+    rpe?: number | null;
+    set_id?: number;
+    workout_id?: number;
+  }) =>
+    fetcher<{ ok: boolean; workout_id: number; set: WorkoutSet }>(
+      '/api/workouts/sets',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+    ),
+  modifyWorkout: (
+    workoutId: number,
+    body: { remove_exercises?: string[]; add_exercises?: string[] },
+  ) =>
+    fetcher<{ ok: boolean }>(`/api/workouts/${workoutId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  endWorkout: (workoutId: number, notes?: string) =>
+    fetcher<{ ok: boolean }>(`/api/workouts/${workoutId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    }),
+  deleteWorkoutSet: (setId: number) =>
+    fetcher<{ ok: boolean }>(`/api/workouts/sets/${setId}`, { method: 'DELETE' }),
+  deleteWorkout: (workoutId: number) =>
+    fetcher<{ ok: boolean }>(`/api/workouts/${workoutId}`, { method: 'DELETE' }),
+
+  // Meals
+  mealsToday: () => fetcher<MealsToday>('/api/meals/today'),
+  mealsHistory: (days = 7) =>
+    fetcher<MealHistoryResponse>(`/api/meals/history?days=${days}`),
+  createMeal: (body: {
+    description: string;
+    calories?: number | null;
+    meal_type?: string;
+    photo_path?: string;
+    source?: string;
+  }) =>
+    fetcher<{ ok: boolean; meal: Meal }>('/api/meals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  updateMeal: (mealId: number, updates: Partial<Meal>) =>
+    fetcher<{ ok: boolean; meal: Meal }>(`/api/meals/${mealId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }),
+  deleteMeal: (mealId: number) =>
+    fetcher<{ ok: boolean }>(`/api/meals/${mealId}`, { method: 'DELETE' }),
+  uploadMealPhoto: async (file: File, autoLog = false, mealType?: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('auto_log', autoLog ? 'true' : 'false');
+    if (mealType) form.append('meal_type', mealType);
+    const res = await fetch(`${PROXY}/api/meals/photo`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({} as { error?: string }));
+      throw new Error(body.error || `Upload failed: ${res.status}`);
+    }
+    return res.json() as Promise<MealPhotoEstimate>;
+  },
 };

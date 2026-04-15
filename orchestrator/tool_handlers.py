@@ -1222,3 +1222,138 @@ import contextlib
 
 with contextlib.suppress(ImportError):
     from orchestrator import code_agent  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# Workouts
+# ---------------------------------------------------------------------------
+
+
+@register_tool("generate_workout")
+async def _reg_generate_workout(arguments: dict) -> str:
+    import asyncio
+
+    from orchestrator.workout_manager import generate_workout
+
+    result = await asyncio.to_thread(generate_workout)
+    if not result.get("ok"):
+        return json.dumps(result)
+    # Build a compact plan description for the model's context
+    lines = [
+        f"Workout ready (id={result['workout_id']}, type={result['workout_type']}).",
+        f"Why: {result['reasoning']}",
+        "Plan:",
+    ]
+    for ex in result.get("exercises", []):
+        sets = ex["sets"]
+        first = sets[0]
+        target_reps = first.get("target_reps")
+        target_w = first.get("target_weight_lbs")
+        weight_txt = f"{target_w:.0f} lb" if target_w else "user weight"
+        lines.append(f"  - {ex['name']} ({ex['primary_muscle']}): {len(sets)}x{target_reps} @ {weight_txt}")
+    lines.append("(Saved to the dashboard. User asked at the gym — do not read this aloud.)")
+    return "\n".join(lines)
+
+
+@register_tool("log_set")
+async def _reg_log_set(arguments: dict) -> str:
+    import asyncio
+
+    from orchestrator.workout_manager import log_set
+
+    exercise = str(arguments.get("exercise") or "").strip()[:200]
+    if not exercise:
+        return "Exercise name is required."
+    try:
+        weight = float(arguments.get("weight_lbs"))
+        reps = int(arguments.get("reps"))
+    except (TypeError, ValueError):
+        return "weight_lbs and reps are required (numeric)."
+    if not (0 < weight <= 2000):
+        return "weight_lbs must be between 0 and 2000."
+    if not (0 < reps <= 1000):
+        return "reps must be between 1 and 1000."
+    rpe_raw = arguments.get("rpe")
+    rpe: float | None = None
+    if rpe_raw not in (None, ""):
+        try:
+            rpe = float(rpe_raw)
+        except (TypeError, ValueError):
+            rpe = None
+        if rpe is not None and not (0 < rpe <= 10):
+            rpe = None
+
+    result = await asyncio.to_thread(log_set, exercise, weight, reps, rpe)
+    return (
+        f"Logged: {exercise} {weight:.0f} lb × {reps}"
+        + (f" @ RPE {rpe}" if rpe else "")
+        + f" (workout {result['workout_id']})."
+    )
+
+
+@register_tool("workout_status")
+async def _reg_workout_status(arguments: dict) -> str:
+    import asyncio
+
+    from orchestrator.workout_manager import get_history, get_status
+
+    action = arguments.get("action", "today")
+    if action == "history":
+        days = int(arguments.get("days") or 7)
+        history = await asyncio.to_thread(get_history, days)
+        return json.dumps({"days": days, "sessions": history})
+    # default: today
+    status = await asyncio.to_thread(get_status)
+    return json.dumps(status)
+
+
+@register_tool("modify_workout")
+async def _reg_modify_workout(arguments: dict) -> str:
+    import asyncio
+
+    from orchestrator.workout_manager import modify_workout
+
+    workout_id = arguments.get("workout_id")
+    if not workout_id:
+        return "workout_id is required."
+    remove = arguments.get("remove_exercises") or []
+    add = arguments.get("add_exercises") or []
+    result = await asyncio.to_thread(modify_workout, int(workout_id), remove, add)
+    return json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# Meals
+# ---------------------------------------------------------------------------
+
+
+@register_tool("log_meal")
+async def _reg_log_meal(arguments: dict) -> str:
+    import asyncio
+
+    from orchestrator.meal_manager import log_meal
+
+    action = arguments.get("action", "log")
+
+    if action == "today":
+        from orchestrator.meal_manager import get_today
+
+        today = await asyncio.to_thread(get_today)
+        return json.dumps(today)
+
+    description = str(arguments.get("description") or "").strip()
+    if not description:
+        return "description is required to log a meal."
+    calories_raw = arguments.get("calories")
+    try:
+        calories = int(calories_raw) if calories_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        calories = None
+    meal_type = arguments.get("meal_type")
+
+    result = await asyncio.to_thread(log_meal, description, calories, meal_type, None, "voice")
+    if not result.get("ok"):
+        return result.get("error", "Failed to log meal.")
+    meal = result["meal"]
+    cal_txt = f" ({meal['calories']} kcal)" if meal.get("calories") else ""
+    return f"Logged {meal['meal_type']}: {meal['description']}{cal_txt}."

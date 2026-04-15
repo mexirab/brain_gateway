@@ -773,6 +773,148 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_workout",
+            "description": (
+                "Generate today's gym workout. The generator looks at the last week of training "
+                "and picks a full-body session by default, complementing whatever muscles were "
+                "trained recently. Writes the plan to the dashboard. Use this when the user says "
+                "'give me a workout', 'what should I do at the gym', 'plan a workout', etc. "
+                "The user is usually AT THE GYM when they ask — DO NOT read the full plan aloud. "
+                "Reply briefly ('Workout's ready on your dashboard') and keep the details in context "
+                "so you can answer follow-up questions about it."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_set",
+            "description": (
+                "Record one completed set of a strength exercise. Weights are in pounds (lb). "
+                "Call this when the user says things like 'log 185 pound squat 5 reps', "
+                "'I did 3 sets of bench at 135', etc. For multiple sets say so in the response and "
+                "call this tool once per set."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "exercise": {
+                        "type": "string",
+                        "description": "Exercise name — match a catalog entry when possible (e.g. 'Back Squat', 'Bench Press').",
+                    },
+                    "weight_lbs": {
+                        "type": "number",
+                        "description": "Weight used for this set, in pounds.",
+                    },
+                    "reps": {
+                        "type": "integer",
+                        "description": "Number of reps completed in this set.",
+                    },
+                    "rpe": {
+                        "type": "number",
+                        "description": "Optional RPE 1-10 (rate of perceived exertion).",
+                    },
+                },
+                "required": ["exercise", "weight_lbs", "reps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "workout_status",
+            "description": (
+                "Check the user's current workout plan or recent training history. "
+                "Use 'today' to see what's planned and what's done, 'history' for recent sessions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["today", "history"],
+                        "description": "today = current plan + progress; history = recent sessions summary",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "For history action: how many days back (default 7).",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "modify_workout",
+            "description": (
+                "Swap, add, or remove exercises from the user's current workout. Use when they "
+                "say things like 'swap squats for leg press' (remove Back Squat + add Leg Press), "
+                "'drop the deadlifts, knee's bothering me', or 'add some biceps work'. "
+                "Only affects planned (uncompleted) sets."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workout_id": {
+                        "type": "integer",
+                        "description": "ID of the workout to modify — get this from the generate_workout result or workout_status.",
+                    },
+                    "remove_exercises": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Exercise names to remove (exact match).",
+                    },
+                    "add_exercises": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Exercise names to add (must match catalog entries).",
+                    },
+                },
+                "required": ["workout_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_meal",
+            "description": (
+                "Log what the user ate, or check today's meals. Use 'log' to record a meal with "
+                "description and optional calories. Use 'today' to get today's meal list and "
+                "running calorie total. Calories are estimates — OK to leave blank if unknown."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["log", "today"],
+                        "description": "log = record a new meal; today = return today's meals + calorie total",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the user ate (free text). Required for log action.",
+                    },
+                    "calories": {
+                        "type": "integer",
+                        "description": "Estimated calories for the meal. Optional.",
+                    },
+                    "meal_type": {
+                        "type": "string",
+                        "enum": ["breakfast", "lunch", "dinner", "snack"],
+                        "description": "Optional; inferred from time of day if omitted.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 # Code agent tool — added dynamically when enabled

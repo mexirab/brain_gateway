@@ -144,6 +144,59 @@ CREATE TABLE IF NOT EXISTS claude_code_turns (
 CREATE INDEX IF NOT EXISTS idx_claude_code_timestamp ON claude_code_turns(timestamp);
 CREATE INDEX IF NOT EXISTS idx_claude_code_session ON claude_code_turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_claude_code_project ON claude_code_turns(project);
+
+CREATE TABLE IF NOT EXISTS exercises (
+    name TEXT PRIMARY KEY,
+    primary_muscle TEXT NOT NULL,
+    secondary_muscles TEXT NOT NULL DEFAULT '[]',
+    equipment TEXT NOT NULL DEFAULT 'barbell',
+    is_compound INTEGER NOT NULL DEFAULT 1,
+    movement_pattern TEXT NOT NULL DEFAULT 'other'
+);
+
+CREATE TABLE IF NOT EXISTS workouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    workout_type TEXT NOT NULL DEFAULT 'full_body',
+    generated_by_jess INTEGER NOT NULL DEFAULT 0,
+    reasoning TEXT,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_workouts_started ON workouts(started_at);
+
+CREATE TABLE IF NOT EXISTS workout_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workout_id INTEGER NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
+    exercise_name TEXT NOT NULL,
+    muscle_groups TEXT NOT NULL DEFAULT '[]',
+    set_number INTEGER NOT NULL,
+    target_reps INTEGER,
+    target_weight_lbs REAL,
+    weight_lbs REAL,
+    reps INTEGER,
+    rpe REAL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_workout_sets_workout ON workout_sets(workout_id);
+CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise ON workout_sets(exercise_name);
+CREATE INDEX IF NOT EXISTS idx_workout_sets_completed ON workout_sets(completed_at);
+
+CREATE TABLE IF NOT EXISTS meals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meal_type TEXT NOT NULL DEFAULT 'snack',
+    description TEXT NOT NULL,
+    calories INTEGER,
+    logged_at TEXT NOT NULL,
+    photo_path TEXT,
+    source TEXT NOT NULL DEFAULT 'manual'
+);
+
+CREATE INDEX IF NOT EXISTS idx_meals_logged ON meals(logged_at);
 """
 
 
@@ -179,6 +232,15 @@ def init_db():
             if col_name not in existing:
                 conn.execute(f"ALTER TABLE focus_sessions ADD COLUMN {col_name} {col_def}")
                 logger.info(f"[STATE] Migrated focus_sessions: added {col_name}")
+    # Seed exercises catalog (idempotent)
+    try:
+        from orchestrator.exercises_seed import EXERCISES
+
+        seeded = seed_exercises(EXERCISES)
+        if seeded:
+            logger.info(f"[STATE] Seeded {seeded} exercises into catalog")
+    except Exception as e:
+        logger.warning(f"[STATE] Exercise seed failed: {e}")
     logger.info(f"[STATE] Database initialized at {DB_PATH}")
 
 
@@ -864,3 +926,399 @@ def cleanup_old_claude_code_turns(days: int = 7) -> int:
             (cutoff,),
         )
         return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Exercises catalog (seeded on init)
+# ---------------------------------------------------------------------------
+
+
+def seed_exercises(exercises: List[Dict[str, Any]]) -> int:
+    """Insert exercises that don't already exist. Returns count inserted."""
+    import json as _json
+
+    inserted = 0
+    with get_db() as conn:
+        for ex in exercises:
+            existing = conn.execute("SELECT 1 FROM exercises WHERE name = ?", (ex["name"],)).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                """INSERT INTO exercises
+                   (name, primary_muscle, secondary_muscles, equipment, is_compound, movement_pattern)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    ex["name"],
+                    ex["primary_muscle"],
+                    _json.dumps(ex.get("secondary_muscles", [])),
+                    ex.get("equipment", "barbell"),
+                    1 if ex.get("is_compound", True) else 0,
+                    ex.get("movement_pattern", "other"),
+                ),
+            )
+            inserted += 1
+    return inserted
+
+
+def get_exercises(
+    movement_pattern: Optional[str] = None,
+    equipment: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Get exercises from the catalog, optionally filtered."""
+    import json as _json
+
+    query = "SELECT * FROM exercises WHERE 1=1"
+    params: list = []
+    if movement_pattern:
+        query += " AND movement_pattern = ?"
+        params.append(movement_pattern)
+    if equipment:
+        query += " AND equipment = ?"
+        params.append(equipment)
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["secondary_muscles"] = _json.loads(d["secondary_muscles"] or "[]")
+        except (ValueError, TypeError):
+            d["secondary_muscles"] = []
+        d["is_compound"] = bool(d["is_compound"])
+        out.append(d)
+    return out
+
+
+def get_exercise(name: str) -> Optional[Dict[str, Any]]:
+    """Get a single exercise by name."""
+    import json as _json
+
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM exercises WHERE name = ?", (name,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["secondary_muscles"] = _json.loads(d["secondary_muscles"] or "[]")
+    except (ValueError, TypeError):
+        d["secondary_muscles"] = []
+    d["is_compound"] = bool(d["is_compound"])
+    return d
+
+
+# ---------------------------------------------------------------------------
+# Workouts
+# ---------------------------------------------------------------------------
+
+
+def create_workout(
+    workout_type: str,
+    generated_by_jess: bool,
+    reasoning: Optional[str] = None,
+) -> int:
+    """Create a new workout row. Returns the workout id."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO workouts (started_at, workout_type, generated_by_jess, reasoning)
+               VALUES (?, ?, ?, ?)""",
+            (datetime.now().isoformat(), workout_type, 1 if generated_by_jess else 0, reasoning),
+        )
+        return cursor.lastrowid
+
+
+def add_planned_set(
+    workout_id: int,
+    exercise_name: str,
+    muscle_groups: List[str],
+    set_number: int,
+    target_reps: Optional[int],
+    target_weight_lbs: Optional[float],
+) -> int:
+    """Add a planned (uncompleted) set to a workout."""
+    import json as _json
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO workout_sets
+               (workout_id, exercise_name, muscle_groups, set_number, target_reps, target_weight_lbs)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                workout_id,
+                exercise_name,
+                _json.dumps(muscle_groups or []),
+                set_number,
+                target_reps,
+                target_weight_lbs,
+            ),
+        )
+        return cursor.lastrowid
+
+
+def log_completed_set(
+    workout_id: int,
+    exercise_name: str,
+    weight_lbs: float,
+    reps: int,
+    rpe: Optional[float] = None,
+    set_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Record a completed set.
+
+    If set_id is provided, updates that planned set; otherwise inserts a new one
+    after looking up the exercise's muscle groups.
+    """
+    import json as _json
+
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        if set_id:
+            conn.execute(
+                """UPDATE workout_sets
+                   SET weight_lbs = ?, reps = ?, rpe = ?, completed = 1, completed_at = ?
+                   WHERE id = ?""",
+                (weight_lbs, reps, rpe, now, set_id),
+            )
+            row = conn.execute("SELECT * FROM workout_sets WHERE id = ?", (set_id,)).fetchone()
+        else:
+            # Look up muscle groups for this exercise
+            ex_row = conn.execute(
+                "SELECT primary_muscle, secondary_muscles FROM exercises WHERE name = ?",
+                (exercise_name,),
+            ).fetchone()
+            if ex_row:
+                try:
+                    secondary = _json.loads(ex_row["secondary_muscles"] or "[]")
+                except (ValueError, TypeError):
+                    secondary = []
+                muscle_groups = [ex_row["primary_muscle"]] + secondary
+            else:
+                muscle_groups = []
+            # Determine next set_number for this exercise in this workout
+            row_n = conn.execute(
+                "SELECT COALESCE(MAX(set_number), 0) + 1 AS next_n FROM workout_sets WHERE workout_id = ? AND exercise_name = ?",
+                (workout_id, exercise_name),
+            ).fetchone()
+            next_n = row_n["next_n"] if row_n else 1
+            cursor = conn.execute(
+                """INSERT INTO workout_sets
+                   (workout_id, exercise_name, muscle_groups, set_number,
+                    weight_lbs, reps, rpe, completed, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                (
+                    workout_id,
+                    exercise_name,
+                    _json.dumps(muscle_groups),
+                    next_n,
+                    weight_lbs,
+                    reps,
+                    rpe,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM workout_sets WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _deserialize_set(dict(row)) if row else {}
+
+
+def _deserialize_set(d: Dict[str, Any]) -> Dict[str, Any]:
+    import json as _json
+
+    try:
+        d["muscle_groups"] = _json.loads(d.get("muscle_groups") or "[]")
+    except (ValueError, TypeError):
+        d["muscle_groups"] = []
+    d["completed"] = bool(d.get("completed"))
+    return d
+
+
+def get_workout(workout_id: int) -> Optional[Dict[str, Any]]:
+    """Get a workout + its sets."""
+    with get_db() as conn:
+        w_row = conn.execute("SELECT * FROM workouts WHERE id = ?", (workout_id,)).fetchone()
+        if not w_row:
+            return None
+        workout = dict(w_row)
+        workout["generated_by_jess"] = bool(workout["generated_by_jess"])
+        set_rows = conn.execute(
+            "SELECT * FROM workout_sets WHERE workout_id = ? ORDER BY exercise_name, set_number",
+            (workout_id,),
+        ).fetchall()
+        workout["sets"] = [_deserialize_set(dict(r)) for r in set_rows]
+    return workout
+
+
+def get_todays_workout() -> Optional[Dict[str, Any]]:
+    """Return the most recent workout from today, if any."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id FROM workouts WHERE started_at >= ? ORDER BY started_at DESC LIMIT 1",
+            (today,),
+        ).fetchone()
+    return get_workout(row["id"]) if row else None
+
+
+def get_recent_workouts(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
+    """Return workouts from the last N days, each with their sets."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id FROM workouts WHERE started_at >= ? ORDER BY started_at DESC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+    return [w for r in rows if (w := get_workout(r["id"]))]
+
+
+def get_recent_muscle_groups(days: int = 3) -> Dict[str, int]:
+    """Return muscle-group -> set count from completed sets in the last N days."""
+    import json as _json
+
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    counts: Dict[str, int] = {}
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT muscle_groups FROM workout_sets WHERE completed = 1 AND completed_at >= ?",
+            (cutoff,),
+        ).fetchall()
+    for r in rows:
+        try:
+            groups = _json.loads(r["muscle_groups"] or "[]")
+        except (ValueError, TypeError):
+            groups = []
+        for g in groups:
+            counts[g] = counts.get(g, 0) + 1
+    return counts
+
+
+def count_workouts_in_window(days: int) -> int:
+    """Count workouts started in the last N days."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM workouts WHERE started_at >= ?",
+            (cutoff,),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+def days_since_last_workout() -> Optional[int]:
+    """Days since the most recent workout, or None if none exist."""
+    with get_db() as conn:
+        row = conn.execute("SELECT started_at FROM workouts ORDER BY started_at DESC LIMIT 1").fetchone()
+    if not row:
+        return None
+    last = datetime.fromisoformat(row["started_at"])
+    return (datetime.now() - last).days
+
+
+def get_exercise_prs(exercise_name: str) -> Optional[Dict[str, Any]]:
+    """Return best weight×reps for an exercise (completed sets only)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT weight_lbs, reps, completed_at
+               FROM workout_sets
+               WHERE exercise_name = ? AND completed = 1 AND weight_lbs IS NOT NULL
+               ORDER BY weight_lbs DESC, reps DESC LIMIT 1""",
+            (exercise_name,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_workout_set(set_id: int) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM workout_sets WHERE id = ?", (set_id,))
+        return cursor.rowcount > 0
+
+
+def delete_workout(workout_id: int) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
+        return cursor.rowcount > 0
+
+
+def end_workout(workout_id: int, notes: Optional[str] = None) -> bool:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE workouts SET ended_at = ?, notes = COALESCE(?, notes) WHERE id = ?",
+            (datetime.now().isoformat(), notes, workout_id),
+        )
+        return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Meals
+# ---------------------------------------------------------------------------
+
+
+def add_meal(
+    description: str,
+    meal_type: str = "snack",
+    calories: Optional[int] = None,
+    photo_path: Optional[str] = None,
+    source: str = "manual",
+) -> Dict[str, Any]:
+    """Insert a meal. Returns the created row."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO meals (meal_type, description, calories, logged_at, photo_path, source)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                meal_type[:30],
+                description[:500],
+                calories,
+                datetime.now().isoformat(),
+                photo_path,
+                source[:20],
+            ),
+        )
+        row = conn.execute("SELECT * FROM meals WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return dict(row) if row else {}
+
+
+def update_meal(meal_id: int, updates: Dict[str, Any]) -> bool:
+    # photo_path intentionally NOT in allowlist — it's set only by the
+    # /api/meals/photo upload route, never by user PATCH.
+    allowed = {"description", "meal_type", "calories"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return False
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [meal_id]
+    with get_db() as conn:
+        cursor = conn.execute(f"UPDATE meals SET {set_clause} WHERE id = ?", values)  # noqa: S608
+        return cursor.rowcount > 0
+
+
+def delete_meal(meal_id: int) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM meals WHERE id = ?", (meal_id,)).fetchone()
+        if not row:
+            return None
+        meal = dict(row)
+        conn.execute("DELETE FROM meals WHERE id = ?", (meal_id,))
+    return meal
+
+
+def get_meals_today() -> List[Dict[str, Any]]:
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM meals WHERE logged_at >= ? ORDER BY logged_at ASC",
+            (today,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_meals_recent(days: int = 7) -> List[Dict[str, Any]]:
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM meals WHERE logged_at >= ? ORDER BY logged_at DESC",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_meal(meal_id: int) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM meals WHERE id = ?", (meal_id,)).fetchone()
+    return dict(row) if row else None

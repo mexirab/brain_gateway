@@ -11,6 +11,8 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with YNAB sync, XP/levels, quest board |
+| Workouts | `/workouts` | Private. Today's adaptive gym plan with inline weight/reps inputs per set, "Ask Jess" button, session history |
+| Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 
 ## Dashboard Widgets
 
@@ -48,3 +50,9 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/dashboard/TemperatureCard.tsx` — Server closet temperature monitoring widget
 - `frontend/src/components/dashboard/ProgressCard.tsx` — Daily stats, 7-day bar chart, streaks with flame icons
 - `frontend/src/components/dashboard/AnnouncementHistoryCard.tsx` — TTS announcement history with type color-coding and stats
+- `frontend/src/app/(private)/workouts/page.tsx` — Workout page: today's plan, inline set logging, history
+- `frontend/src/app/(private)/meals/page.tsx` — Meals page: calorie log, photo-estimate upload, 7-day bar chart
+
+## API Proxy Notes
+
+The proxy `route.ts` now handles `PATCH` in addition to `GET/POST/PUT/DELETE`. Required by both workouts (modify plan) and meals (edit entry) endpoints.

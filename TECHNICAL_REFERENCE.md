@@ -120,6 +120,34 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 |--------|------|---------|
 | GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color) |
 
+### Workouts
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/workouts/today` | Today's workout plan + logged sets |
+| POST | `/api/workouts/generate` | Generate today's plan (idempotent — returns existing plan if one exists) |
+| GET | `/api/workouts/history` | Past workout sessions |
+| GET | `/api/workouts/exercises` | Full exercise catalog (52 entries) |
+| POST | `/api/workouts/sets` | Log a set: `{workout_id, exercise_id, set_number, weight_lbs, reps}` |
+| PATCH | `/api/workouts/{id}` | Modify workout (swap/remove exercise) |
+| DELETE | `/api/workouts/{id}` | Delete a workout |
+| POST | `/api/workouts/{id}/end` | End a workout session |
+| DELETE | `/api/workouts/sets/{id}` | Delete a logged set |
+
+### Meals
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/meals/today` | Today's meals + running calorie total |
+| GET | `/api/meals/history?days=7` | Meal history (`days` clamped 1–365) |
+| POST | `/api/meals/` | Log a meal: `{name, calories, notes?}` |
+| PATCH | `/api/meals/{id}` | Update a meal (`photo_path` field excluded from allowlist) |
+| DELETE | `/api/meals/{id}` | Delete a meal |
+| POST | `/api/meals/photo` | Upload meal photo → vision estimate: multipart `file` field; returns `{calories_estimate, description, confidence}` |
+| GET | `/api/meals/photo/{filename}` | Serve a stored meal photo |
+
+**Photo flow:** upload → Qwen2.5-VL strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
+
 ### Claude Code Integration
 
 | Method | Path | Purpose |
@@ -293,6 +321,41 @@ The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every
 - `category` (string, optional): Category label
 - `source` (string, optional): Source identifier
 - `tags` (array of strings, optional): Stored as comma-separated string in ChromaDB metadata
+
+### generate_workout
+```json
+{}
+```
+Returns the full workout plan as text (model retains it in context for follow-up questions like "swap squats for leg press"). Model should NOT read the plan aloud — user is at the gym.
+
+**Adaptive logic:**
+- < 1 session in last 4 days → `full_body`
+- 1 session in last 3 days → `full_body_complement` (skewed toward undertrained muscles)
+- 2+ sessions in last 4 days → `push` / `pull` / `legs` split, chosen to complement recency
+
+### log_set
+```json
+{"workout_id": 1, "exercise_id": 7, "set_number": 1, "weight_lbs": 135.0, "reps": 8}
+```
+- All weights in lbs.
+
+### workout_status
+```json
+{}
+```
+
+### modify_workout
+```json
+{"workout_id": 1, "action": "swap", "exercise_id": 7, "replacement_exercise_id": 12}
+```
+- `action`: `swap` or `remove`
+
+### log_meal
+```json
+{"name": "chicken and rice", "calories": 650, "notes": "post-gym"}
+```
+- Calories-only (v1). Independent of `selfcare_log` (which is nudge tracking, not calorie accounting).
+- `auto_log` (bool, optional): If `true`, skips confirmation when called after a photo estimate.
 
 ## ChromaDB Schema
 

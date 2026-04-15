@@ -35,9 +35,11 @@ from orchestrator.reminder_manager import _announce_voice, list_pending_reminder
 from orchestrator.routes_calendar import router as calendar_router
 from orchestrator.routes_chat import router as chat_router
 from orchestrator.routes_documents import router as documents_router
+from orchestrator.routes_meals import router as meals_router
 from orchestrator.routes_palace import router as palace_router
 from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_vision import router as vision_router
+from orchestrator.routes_workout import router as workout_router
 from orchestrator.schemas import (
     AnnounceRequest,
     FocusStartRequest,
@@ -79,6 +81,8 @@ router.include_router(documents_router)
 router.include_router(shopping_router)
 router.include_router(vision_router)
 router.include_router(palace_router)
+router.include_router(workout_router)
+router.include_router(meals_router)
 
 
 @router.get("/health")

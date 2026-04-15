@@ -138,6 +138,12 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `MORNING_BRIEFING_TIME` | `HH:MM` for morning briefing (default 07:30) |
 | `MORNING_BRIEFING_ENABLED` | `true`/`false` (default true) |
 
+## Workouts & Meals
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Directory for uploaded meal photos. Extension allowlist enforced at save: jpg, jpeg, png, gif, webp. Files named as uuid4. |
+
 ## Monitoring
 
 | Variable | Default | Purpose |

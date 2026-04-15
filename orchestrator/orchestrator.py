@@ -132,6 +132,7 @@ _LARGE_UPLOAD_PATHS = {
     "/api/documents",
     "/api/stt/transcribe",
     "/api/vision/analyze",
+    "/api/meals/photo",
     "/v1/chat/completions",
     "/chat/completions",
 }

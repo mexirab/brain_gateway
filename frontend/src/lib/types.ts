@@ -249,3 +249,133 @@ export interface SavedMessage {
   announcement_type: string | null;
   created_at: string;
 }
+
+// ---------- Workouts ----------
+export interface WorkoutSet {
+  id: number;
+  workout_id: number;
+  exercise_name: string;
+  muscle_groups: string[];
+  set_number: number;
+  target_reps: number | null;
+  target_weight_lbs: number | null;
+  weight_lbs: number | null;
+  reps: number | null;
+  rpe: number | null;
+  completed: boolean;
+  completed_at: string | null;
+  notes: string | null;
+}
+
+export interface WorkoutExerciseGroup {
+  name: string;
+  muscle_groups: string[];
+  sets: WorkoutSet[];
+}
+
+export interface WorkoutTodayEmpty {
+  has_workout: false;
+  message: string;
+}
+
+export interface WorkoutToday {
+  has_workout: true;
+  workout_id: number;
+  workout_type: string;
+  reasoning: string | null;
+  started_at: string;
+  ended_at: string | null;
+  total_sets: number;
+  completed_sets: number;
+  exercises: WorkoutExerciseGroup[];
+}
+
+export type WorkoutTodayResponse = WorkoutToday | WorkoutTodayEmpty;
+
+export interface WorkoutHistorySession {
+  id: number;
+  workout_type: string;
+  started_at: string;
+  ended_at: string | null;
+  set_count: number;
+  completed_set_count: number;
+  total_volume_lbs: number;
+  reasoning: string | null;
+  exercises: string[];
+}
+
+export interface GenerateWorkoutResponse {
+  ok: boolean;
+  workout_id?: number;
+  workout_type?: string;
+  reasoning?: string;
+  exercises?: Array<{
+    name: string;
+    primary_muscle: string;
+    muscle_groups: string[];
+    equipment: string | null;
+    is_compound: boolean;
+    sets: Array<{
+      set_number: number;
+      target_reps: number | null;
+      target_weight_lbs: number | null;
+    }>;
+  }>;
+  error?: string;
+}
+
+export interface ExerciseCatalogEntry {
+  name: string;
+  primary_muscle: string;
+  secondary_muscles: string[];
+  equipment: string;
+  is_compound: boolean;
+  movement_pattern: string;
+}
+
+// ---------- Meals ----------
+export interface Meal {
+  id: number;
+  meal_type: string;
+  description: string;
+  calories: number | null;
+  logged_at: string;
+  photo_path: string | null;
+  source: string;
+}
+
+export interface MealsToday {
+  meals: Meal[];
+  total_calories: number;
+  meal_count: number;
+}
+
+export interface MealDayRollup {
+  date: string;
+  total_calories: number;
+  meal_count: number;
+  meals: Meal[];
+}
+
+export interface MealHistoryResponse {
+  days: number;
+  history: MealDayRollup[];
+  stats: {
+    days: number;
+    avg_calories: number;
+    total_meals: number;
+    day_count: number;
+  };
+}
+
+export interface MealPhotoEstimate {
+  ok: boolean;
+  photo_path: string;
+  estimate: {
+    description: string;
+    calories: number | null;
+    confidence: string;
+  };
+  meal?: Meal;
+  error?: string;
+}

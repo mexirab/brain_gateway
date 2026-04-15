@@ -115,6 +115,11 @@ All tools are called directly by the single model in one agentic loop.
 | check_claude_activity | Read what Claude Code has been working on — recent turns, current session, files touched |
 | code_agent | Delegate a coding task to the Qwen2.5-Coder-32B agent on Helios GPU0 |
 | sleep_mode | Do Not Disturb: suppress all announcements until morning |
+| generate_workout | Generate today's adaptive gym plan (full-body / split based on recency); returns plan as text for context |
+| log_set | Log a completed exercise set (exercise, weight_lbs, reps, set_number) |
+| workout_status | Get today's workout plan + logged sets |
+| modify_workout | Swap or remove an exercise from today's plan |
+| log_meal | Log a meal with calorie count (calories-only v1; independent of selfcare_log) |
 
 ## Key Files (top 20 load-bearing)
 
@@ -130,7 +135,7 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 | `orchestrator/tool_definitions.py` | Tool JSON schemas (what the LLM sees). Keep in sync with `tool_handlers.py`. |
 | `orchestrator/config.py` | Pydantic Settings — every env var defined in one place |
 | `orchestrator/shared.py` | Module-level state + env var aliases re-exported from `config.py` |
-| `orchestrator/state_store.py` | SQLite persistence for reminders, focus, announcements, selfcare, shopping, chat, claude_code_turns |
+| `orchestrator/state_store.py` | SQLite persistence for reminders, focus, announcements, selfcare, shopping, chat, claude_code_turns, workouts, meals |
 | `orchestrator/mempalace.py` | MemPalace — the unified memory system (store, search, wing/room routing, wakeup context) |
 | `orchestrator/auto_learn.py` | Background fact extraction from conversations — encrypt, dedup, store in palace |
 | `orchestrator/focus_manager.py` | Pomodoro timer, ambient audio, Pi-hole blocking, body doubling sprints |
@@ -143,6 +148,9 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 | `orchestrator/metrics.py` | 70+ Prometheus metrics (`bgw_*` namespace). Source of truth for dashboards. |
 | `docker-compose.yml` | Service stack (env-var driven, no hardcoded IPs) |
 | `monitoring/promtail/promtail-helios.yml` | Promtail config for Helios sidecar — scrapes Docker socket, pushes to Loki |
+| `orchestrator/workout_manager.py` | Adaptive gym workout generator — recency-aware split logic, set logging, PR tracking |
+| `orchestrator/meal_manager.py` | Calorie-only meal logging with optional photo-based vision estimation (Qwen2.5-VL) |
+| `orchestrator/exercises_seed.py` | ~52-entry static exercise catalog; seeded idempotently into `exercises` table on startup |
 
 ## Key Paths
 
@@ -153,6 +161,7 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 ~/.local/share/chroma/personal_rag/ # ChromaDB persistence
 /opt/helios/gateway_mvp/credentials/   # Google OAuth2 creds (gitignored)
 /opt/helios/gateway_mvp/certs/         # Tailscale TLS certs (gitignored)
+/app/data/meal_photos/              # Meal photo uploads (uuid4 names, jpg/jpeg/png/gif/webp only)
 ```
 
 ## Common Commands
@@ -213,6 +222,7 @@ This is a **load-on-demand router**. Read the specific doc when the task touches
 | `docs/VOICE_AND_TTS.md` | ATOM Echo voice assistant, TTS pacing, Wyoming bridges, STT config |
 | `docs/GOOGLE_INTEGRATIONS.md` | Calendar API, Gmail API, phone sync, travel-time alerts, OAuth2 setup |
 | `docs/FRONTEND.md` | dashboard pages, widgets, YNAB finance, API proxy pattern |
+| `docs/WORKOUTS_AND_MEALS.md` | Workout generator adaptive logic, meal photo flow, API endpoints, env vars |
 | `docs/MODE_ROUTER.md` | intent classification (explainer/mirror/counterbalance/challenge/baseline) |
 | `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG host setup, temperature monitoring, kiosk config |
 | `docs/REMOTE_DEV.md` | remote dev workflow (mosh + tmux, jdev alias, git sync) |

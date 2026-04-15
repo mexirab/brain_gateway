@@ -78,6 +78,7 @@ All 10 ADHD-informed features (F-001 through F-010) are complete and deployed. E
 | 4 | Chat interface: streaming SSE with Jess, routing badges | ✅ Done |
 | 5 | Home controls: HA entity cards, toggles, brightness, scenes | ✅ Done |
 | F1-F6 | Gamified finance dashboard: YNAB sync, budget health, XP/levels, quest board | ✅ Done |
+| F7 | Workouts + Meals: adaptive gym generator, set logging, calorie tracking, meal photo estimation | ✅ Done (2026-04-15) |
 | 6 | DNS + Cloudflare Tunnel: ConvivialProphet.com → Jupiter | Not started |
 | 7 | Polish: animations, PWA, mobile optimization, toasts | Not started |
 

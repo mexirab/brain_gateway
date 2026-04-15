@@ -119,6 +119,32 @@ export async function PUT(
   return NextResponse.json(data, { status: res.status });
 }
 
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  if (!isAuthed(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { path } = await params;
+  const targetPath = '/' + path.join('/');
+  const url = new URL(targetPath, ORCHESTRATOR_URL);
+
+  const body = await request.text();
+  const contentType = request.headers.get('content-type') || 'application/json';
+
+  const res = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': contentType, 'Authorization': `Bearer ${API_TOKEN}` },
+    body,
+  });
+
+  if (res.status === 204) return new Response(null, { status: 204 });
+  const data = await res.json();
+  return NextResponse.json(data, { status: res.status });
+}
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
