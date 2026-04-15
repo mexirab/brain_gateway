@@ -1168,11 +1168,6 @@ async def _reg_document_vault(arguments: dict) -> str:
     return await asyncio.to_thread(_handle_document_vault, arguments)
 
 
-@register_tool("ask_expert")
-def _reg_ask_expert(arguments: dict) -> str:
-    return "ask_expert is not available — the primary model handles all queries directly."
-
-
 @register_tool("check_claude_activity")
 def _reg_check_claude_activity(arguments: dict) -> str:
     from orchestrator.claude_code_tracker import (

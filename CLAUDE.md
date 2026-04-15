@@ -111,7 +111,6 @@ All tools are called directly by the single model in one agentic loop.
 | analyze_image | Re-analyze or ask follow-up questions about a shared image |
 | shopping_list | Add/check/remove items from shopping/grocery lists |
 | document_vault | Structured doc storage with semantic search (list/create/read/update/delete) |
-| ask_expert | Delegate a hard reasoning question to a dedicated expert-tier model |
 | check_claude_activity | Read what Claude Code has been working on — recent turns, current session, files touched |
 | code_agent | Delegate a coding task to the Qwen2.5-Coder-32B agent on Helios GPU0 |
 | sleep_mode | Do Not Disturb: suppress all announcements until morning |
