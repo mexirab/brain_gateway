@@ -118,7 +118,11 @@ services:
       # references the old collection name.
       - CHROMA_COLLECTION=${CHROMA_COLLECTION:-mempalace}
       - MIN_COS=${MIN_COS:-0.20}
-      - TOP_K=${TOP_K:-25}
+      # TOP_K is the retrieval size AND the floor on chunks returned per
+      # turn (see prompt_builder.py: MIN_RESULTS = TOP_K). 25 floods the
+      # primary LLM's prefill context and was contributing ~10s of turn
+      # latency in voice conversation mode.
+      - TOP_K=${TOP_K:-10}
       - RAG_BASE=/rag
       # TTS (empty = disabled)
       - TTS_URL=${TTS_URL:-}
@@ -165,6 +169,10 @@ services:
       - WEBUI_URL=${WEBUI_URL:-}
       # API authentication
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
+      # Rate limiting (per-IP sliding window; default 30/min is too tight
+      # for the dashboard which fans out parallel calls from one proxy IP)
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-60}
+      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-300}
       # Auto-learn from conversations
       - AUTO_LEARN_ENABLED=${AUTO_LEARN_ENABLED:-true}
       - AUTO_LEARN_DELAY_MINUTES=${AUTO_LEARN_DELAY_MINUTES:-10}
