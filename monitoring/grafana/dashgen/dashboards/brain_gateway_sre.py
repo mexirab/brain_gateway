@@ -24,6 +24,7 @@ from ..layout import assign_ids, grid_row, row_divider
 from ..panels import (
     GREEN_RED_BINARY,
     LATENCY_THRESHOLDS_S,
+    VOICE_LATENCY_THRESHOLDS_S,
     gauge,
     logs,
     piechart,
@@ -86,6 +87,60 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(request_flow, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------------------- Voice Pipeline
+    r, y = row_divider("Voice Pipeline", y)
+    panels.append(r)
+
+    voice_desc = (
+        "Text-in to text-out latency for voice-channel requests. Covers the "
+        "LLM + tool-loop slice we control; excludes Whisper STT upstream and "
+        "TTS synthesis + speaker playback downstream. Target: keep p95 under "
+        "13s (prior floor). Investigate spikes with the logs row below."
+    )
+    voice_row = [
+        timeseries(
+            "Voice Pipeline Latency (p50 / p95 / p99)",
+            [
+                (
+                    "histogram_quantile(0.50, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+                    "p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+                    "p95",
+                ),
+                (
+                    "histogram_quantile(0.99, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+                    "p99",
+                ),
+            ],
+            unit="s",
+            thresholds=VOICE_LATENCY_THRESHOLDS_S,
+            description=voice_desc,
+        ),
+        timeseries(
+            "Voice Request Rate",
+            [("sum(rate(bgw_voice_pipeline_seconds_count[5m])) * 60", "voice turns/min")],
+            unit="none",
+        ),
+        stat(
+            "Voice Pipeline Mean (5m)",
+            "(sum(rate(bgw_voice_pipeline_seconds_sum[5m])) "
+            "/ sum(rate(bgw_voice_pipeline_seconds_count[5m]))) "
+            "or on() vector(0)",
+            unit="s",
+            decimals=1,
+            thresholds=VOICE_LATENCY_THRESHOLDS_S,
+        ),
+        stat(
+            "Voice Turns (24h)",
+            "sum(increase(bgw_voice_pipeline_seconds_count[24h]))",
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(voice_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- LLM Performance
@@ -533,6 +588,45 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(reminders_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------------------- Background Jobs
+    r, y = row_divider("Background Jobs", y)
+    panels.append(r)
+
+    bg_desc = (
+        "Nightly training-corpus drain: in-process counter only — records "
+        "written by the out-of-process manual backfill are not counted here. "
+        "A flat-zero series on days you used Jess via OWUI / voice means the "
+        "drain broke; investigate via the logs row."
+    )
+    background_row = [
+        stat(
+            "Training Corpus Records (cumulative, in-process)",
+            "sum(bgw_training_corpus_records_total)",
+            unit="none",
+        ),
+        timeseries(
+            "Training Corpus New Records (daily, by source)",
+            [
+                (
+                    "sum by (source) (increase(bgw_training_corpus_records_total[1d]))",
+                    "{{source}}",
+                )
+            ],
+            unit="none",
+            stack=True,
+            fill=40,
+            description=bg_desc,
+        ),
+        stat(
+            "Training Corpus Records (by source)",
+            "sum by (source) (bgw_training_corpus_records_total)",
+            unit="none",
+            text_mode="value_and_name",
+        ),
+    ]
+    row, y = grid_row(background_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Logs (with $request_id trace)

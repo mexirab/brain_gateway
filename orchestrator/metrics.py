@@ -454,3 +454,17 @@ TRAINING_CORPUS_RECORDS = Counter(
     "New records appended to the training corpus by the nightly drain",
     ["source"],  # owui | state_store | cc_session
 )
+
+# -- Voice pipeline latency --------------------------------------------------
+# Measures the orchestrator-observable slice of the voice pipeline: from the
+# moment HA's conversation agent sends text to /v1/chat/completions to the
+# moment we return the final response text. This excludes (a) Whisper STT
+# upstream and (b) TTS synthesis + speaker playback downstream. It captures
+# the LLM + tool-loop portion — the part we control and the part that's been
+# the dominant cost on recent optimizations.
+VOICE_PIPELINE_LATENCY = Histogram(
+    "bgw_voice_pipeline_seconds",
+    "Text-in to text-out latency for voice-channel requests (LLM + tool loop). "
+    "Excludes STT upstream and TTS/playback downstream.",
+    buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 13.0, 17.0, 22.0, 30.0, 45.0, 60.0],
+)

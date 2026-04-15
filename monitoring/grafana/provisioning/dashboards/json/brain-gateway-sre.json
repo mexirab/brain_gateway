@@ -546,7 +546,7 @@
     },
     {
       "type": "row",
-      "title": "LLM Performance",
+      "title": "Voice Pipeline",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -556,6 +556,364 @@
         "y": 9
       },
       "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "Voice Pipeline Latency (p50 / p95 / p99)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 13
+              },
+              {
+                "color": "orange",
+                "value": 17
+              },
+              {
+                "color": "red",
+                "value": 22
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Text-in to text-out latency for voice-channel requests. Covers the LLM + tool-loop slice we control; excludes Whisper STT upstream and TTS synthesis + speaker playback downstream. Target: keep p95 under 13s (prior floor). Investigate spikes with the logs row below.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 10
+      },
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Voice Request Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(bgw_voice_pipeline_seconds_count[5m])) * 60",
+          "legendFormat": "voice turns/min",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 10
+      },
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "Voice Pipeline Mean (5m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(bgw_voice_pipeline_seconds_sum[5m])) / sum(rate(bgw_voice_pipeline_seconds_count[5m]))) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 13
+              },
+              {
+                "color": "orange",
+                "value": 17
+              },
+              {
+                "color": "red",
+                "value": 22
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 10
+      },
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "Voice Turns (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_voice_pipeline_seconds_count[24h]))",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 10
+      },
+      "id": 10
+    },
+    {
+      "type": "row",
+      "title": "LLM Performance",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 11
     },
     {
       "type": "timeseries",
@@ -638,9 +996,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 10
+        "y": 19
       },
-      "id": 7
+      "id": 12
     },
     {
       "type": "timeseries",
@@ -735,9 +1093,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 10
+        "y": 19
       },
-      "id": 8
+      "id": 13
     },
     {
       "type": "timeseries",
@@ -820,9 +1178,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 10
+        "y": 19
       },
-      "id": 9
+      "id": 14
     },
     {
       "type": "stat",
@@ -913,9 +1271,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 10
+        "y": 19
       },
-      "id": 10
+      "id": 15
     },
     {
       "type": "row",
@@ -926,9 +1284,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 27
       },
-      "id": 11
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -1011,9 +1369,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 28
       },
-      "id": 12
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -1108,9 +1466,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 28
       },
-      "id": 13
+      "id": 18
     },
     {
       "type": "timeseries",
@@ -1193,9 +1551,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 28
       },
-      "id": 14
+      "id": 19
     },
     {
       "type": "row",
@@ -1206,9 +1564,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 36
       },
-      "id": 15
+      "id": 20
     },
     {
       "type": "timeseries",
@@ -1291,9 +1649,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 28
+        "y": 37
       },
-      "id": 16
+      "id": 21
     },
     {
       "type": "timeseries",
@@ -1388,9 +1746,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 28
+        "y": 37
       },
-      "id": 17
+      "id": 22
     },
     {
       "type": "stat",
@@ -1451,9 +1809,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 28
+        "y": 37
       },
-      "id": 18
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1548,9 +1906,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 28
+        "y": 37
       },
-      "id": 19
+      "id": 24
     },
     {
       "type": "row",
@@ -1561,9 +1919,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 45
       },
-      "id": 20
+      "id": 25
     },
     {
       "type": "timeseries",
@@ -1658,9 +2016,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 37
+        "y": 46
       },
-      "id": 21
+      "id": 26
     },
     {
       "type": "timeseries",
@@ -1755,9 +2113,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 37
+        "y": 46
       },
-      "id": 22
+      "id": 27
     },
     {
       "type": "timeseries",
@@ -1852,9 +2210,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 37
+        "y": 46
       },
-      "id": 23
+      "id": 28
     },
     {
       "type": "row",
@@ -1865,9 +2223,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 54
       },
-      "id": 24
+      "id": 29
     },
     {
       "type": "timeseries",
@@ -1950,9 +2308,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 46
+        "y": 55
       },
-      "id": 25
+      "id": 30
     },
     {
       "type": "timeseries",
@@ -2035,9 +2393,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 46
+        "y": 55
       },
-      "id": 26
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -2132,9 +2490,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 46
+        "y": 55
       },
-      "id": 27
+      "id": 32
     },
     {
       "type": "row",
@@ -2145,9 +2503,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 63
       },
-      "id": 28
+      "id": 33
     },
     {
       "type": "timeseries",
@@ -2242,9 +2600,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 55
+        "y": 64
       },
-      "id": 29
+      "id": 34
     },
     {
       "type": "timeseries",
@@ -2339,9 +2697,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 55
+        "y": 64
       },
-      "id": 30
+      "id": 35
     },
     {
       "type": "timeseries",
@@ -2424,9 +2782,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 55
+        "y": 64
       },
-      "id": 31
+      "id": 36
     },
     {
       "type": "row",
@@ -2437,9 +2795,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 72
       },
-      "id": 32
+      "id": 37
     },
     {
       "type": "timeseries",
@@ -2522,9 +2880,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 73
       },
-      "id": 33
+      "id": 38
     },
     {
       "type": "timeseries",
@@ -2607,9 +2965,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 73
       },
-      "id": 34
+      "id": 39
     },
     {
       "type": "row",
@@ -2620,9 +2978,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 81
       },
-      "id": 35
+      "id": 40
     },
     {
       "type": "timeseries",
@@ -2717,9 +3075,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 73
+        "y": 82
       },
-      "id": 36
+      "id": 41
     },
     {
       "type": "gauge",
@@ -2786,9 +3144,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 73
+        "y": 82
       },
-      "id": 37
+      "id": 42
     },
     {
       "type": "timeseries",
@@ -2883,9 +3241,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 73
+        "y": 82
       },
-      "id": 38
+      "id": 43
     },
     {
       "type": "timeseries",
@@ -2968,9 +3326,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 73
+        "y": 82
       },
-      "id": 39
+      "id": 44
     },
     {
       "type": "row",
@@ -2981,9 +3339,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 81
+        "y": 90
       },
-      "id": 40
+      "id": 45
     },
     {
       "type": "timeseries",
@@ -3078,9 +3436,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 82
+        "y": 91
       },
-      "id": 41
+      "id": 46
     },
     {
       "type": "timeseries",
@@ -3163,9 +3521,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 82
+        "y": 91
       },
-      "id": 42
+      "id": 47
     },
     {
       "type": "timeseries",
@@ -3260,9 +3618,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 82
+        "y": 91
       },
-      "id": 43
+      "id": 48
     },
     {
       "type": "timeseries",
@@ -3345,9 +3703,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 90
+        "y": 99
       },
-      "id": 44
+      "id": 49
     },
     {
       "type": "timeseries",
@@ -3442,9 +3800,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 90
+        "y": 99
       },
-      "id": 45
+      "id": 50
     },
     {
       "type": "row",
@@ -3455,9 +3813,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 98
+        "y": 107
       },
-      "id": 46
+      "id": 51
     },
     {
       "type": "timeseries",
@@ -3540,9 +3898,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 99
+        "y": 108
       },
-      "id": 47
+      "id": 52
     },
     {
       "type": "timeseries",
@@ -3625,9 +3983,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 99
+        "y": 108
       },
-      "id": 48
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -3722,9 +4080,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 99
+        "y": 108
       },
-      "id": 49
+      "id": 54
     },
     {
       "type": "timeseries",
@@ -3807,9 +4165,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 107
+        "y": 116
       },
-      "id": 50
+      "id": 55
     },
     {
       "type": "timeseries",
@@ -3916,9 +4274,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 107
+        "y": 116
       },
-      "id": 51
+      "id": 56
     },
     {
       "type": "piechart",
@@ -3987,9 +4345,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 107
+        "y": 116
       },
-      "id": 52
+      "id": 57
     },
     {
       "type": "row",
@@ -4000,9 +4358,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 124
       },
-      "id": 53
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -4085,9 +4443,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 116
+        "y": 125
       },
-      "id": 54
+      "id": 59
     },
     {
       "type": "timeseries",
@@ -4182,9 +4540,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 116
+        "y": 125
       },
-      "id": 55
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4279,9 +4637,234 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 116
+        "y": 125
       },
-      "id": 56
+      "id": 61
+    },
+    {
+      "type": "row",
+      "title": "Background Jobs",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 133
+      },
+      "id": 62
+    },
+    {
+      "type": "stat",
+      "title": "Training Corpus Records (cumulative, in-process)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(bgw_training_corpus_records_total)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 134
+      },
+      "id": 63
+    },
+    {
+      "type": "timeseries",
+      "title": "Training Corpus New Records (daily, by source)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (increase(bgw_training_corpus_records_total[1d]))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Nightly training-corpus drain: in-process counter only \u2014 records written by the out-of-process manual backfill are not counted here. A flat-zero series on days you used Jess via OWUI / voice means the drain broke; investigate via the logs row.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 134
+      },
+      "id": 64
+    },
+    {
+      "type": "stat",
+      "title": "Training Corpus Records (by source)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (bgw_training_corpus_records_total)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 134
+      },
+      "id": 65
     },
     {
       "type": "row",
@@ -4292,9 +4875,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 142
       },
-      "id": 57
+      "id": 66
     },
     {
       "type": "logs",
@@ -4333,9 +4916,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 125
+        "y": 143
       },
-      "id": 58
+      "id": 67
     },
     {
       "type": "logs",
@@ -4374,9 +4957,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 125
+        "y": 143
       },
-      "id": 59
+      "id": 68
     }
   ]
 }

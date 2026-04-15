@@ -322,3 +322,7 @@ GREEN_YELLOW_RED = [(None, "green"), (5, "yellow"), (20, "red")]
 GREEN_RED_BINARY = [(None, "red"), (1, "green")]  # for up/down (0=down, 1=up)
 TEMP_THRESHOLDS = [(None, "green"), (75, "yellow"), (80, "orange"), (85, "red")]
 LATENCY_THRESHOLDS_S = [(None, "green"), (1, "yellow"), (5, "orange"), (15, "red")]
+# Voice-pipeline specific: green at/under current p50 target (13s), yellow
+# when p95 slips, orange past prior floor (17s), red past the old 22s regime.
+# Snaps to histogram bucket edges so threshold colors match quantile bins.
+VOICE_LATENCY_THRESHOLDS_S = [(None, "green"), (13, "yellow"), (17, "orange"), (22, "red")]

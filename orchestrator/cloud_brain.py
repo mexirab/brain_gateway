@@ -23,6 +23,7 @@ from orchestrator.metrics import (
     REQUEST_COUNT,
     REQUEST_ERRORS,
     REQUEST_LATENCY,
+    VOICE_PIPELINE_LATENCY,
 )
 from orchestrator.mode_router import get_mode_router
 
@@ -122,8 +123,11 @@ class CloudBrain:
             REQUEST_ERRORS.labels(mode="unified", error_type=type(e).__name__).inc()
             raise
         finally:
+            elapsed = time.time() - _t0
             ACTIVE_REQUESTS.dec()
-            REQUEST_LATENCY.labels(mode="unified").observe(time.time() - _t0)
+            REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
+            if is_voice:
+                VOICE_PIPELINE_LATENCY.observe(elapsed)
 
     async def _chat_unified_inner(
         self,
