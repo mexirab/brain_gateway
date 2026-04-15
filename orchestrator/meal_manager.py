@@ -213,6 +213,18 @@ def log_meal(
         mt,
         calories if calories is not None else "?",
     )
+
+    # Bridge to the self-care nudge gate so the "no meals logged today"
+    # scheduler nudge sees this meal too. meals and selfcare_log live in
+    # separate tables; without this the nudge fires every tick past 12pm
+    # regardless of how recently we logged lunch.
+    try:
+        from orchestrator.selfcare_manager import record_meal_logged
+
+        record_meal_logged(mt or description.strip()[:60])
+    except Exception as e:
+        logger.warning("[MEAL] Selfcare nudge-gate bridge failed: %s", e)
+
     return {"ok": True, "meal": row}
 
 

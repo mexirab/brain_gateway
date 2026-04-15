@@ -64,6 +64,22 @@ def _restore_state() -> None:
 # Called from orchestrator.py startup_event() after state_store.init_db()
 
 
+def record_meal_logged(label: str = "a meal") -> None:
+    """Advance the meal nudge gate.
+
+    Called by both the selfcare_log tool and meal_manager.log_meal so
+    either code path stops the "no meals logged today" scheduler nudge.
+    Keeps _state.last_meal_reported (in-memory, read by _check_meals)
+    in sync with the selfcare_log SQLite table (used to restore state
+    on startup). Safe to call from sync contexts.
+    """
+    from orchestrator.state_store import save_selfcare_log
+
+    _state.last_meal_reported = datetime.now()
+    save_selfcare_log("meal", label)
+    logger.info(f"[SELFCARE] Meal logged: {label}", extra={"component": "selfcare"})
+
+
 # ---------------------------------------------------------------------------
 # Logging actions (tool handler)
 # ---------------------------------------------------------------------------
@@ -79,10 +95,8 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
     now = datetime.now()
 
     if action == "meal":
-        _state.last_meal_reported = now
         meal_type = detail or "a meal"
-        save_selfcare_log("meal", meal_type)
-        logger.info(f"[SELFCARE] Meal logged: {meal_type}", extra={"component": "selfcare"})
+        record_meal_logged(meal_type)
         return f"Logged — you had {meal_type}."
 
     elif action == "medication":

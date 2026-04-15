@@ -162,6 +162,44 @@ def test_log_meal_clamps_invalid_calories(tmp_db, meal_photos_dir):
     assert result["meal"]["calories"] is None
 
 
+def test_log_meal_bridges_to_selfcare_nudge_gate(tmp_db, meal_photos_dir):
+    """Regression: logging a meal via meal_manager.log_meal must advance the
+    selfcare_manager nudge gate. Otherwise the "no meals logged today" nudge
+    fires every scheduler tick past 12pm even after the user logged lunch.
+    """
+    import orchestrator.meal_manager as mm
+    from orchestrator import selfcare_manager
+
+    # Reset the in-memory state so we can detect the advance
+    selfcare_manager._state.last_meal_reported = None
+
+    result = mm.log_meal(description="Turkey sandwich", calories=500, meal_type="lunch")
+
+    assert result["ok"] is True
+    assert selfcare_manager._state.last_meal_reported is not None, (
+        "log_meal did not advance selfcare_manager._state.last_meal_reported — "
+        "the 'no meals logged today' nudge will keep firing"
+    )
+
+
+def test_log_meal_bridge_failure_does_not_break_meal_logging(tmp_db, meal_photos_dir, monkeypatch):
+    """If the selfcare bridge raises, the meal must still be persisted. The
+    bridge is best-effort — losing a nudge advance is worse than losing the
+    meal row the user explicitly asked us to save.
+    """
+    import orchestrator.meal_manager as mm
+    from orchestrator import selfcare_manager
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("selfcare exploded")
+
+    monkeypatch.setattr(selfcare_manager, "record_meal_logged", _boom)
+
+    result = mm.log_meal(description="Resilient oats", calories=300)
+    assert result["ok"] is True
+    assert result["meal"]["description"] == "Resilient oats"
+
+
 # ---------------------------------------------------------------------------
 # delete_meal — does NOT call os.remove for unsafe photo_path
 # ---------------------------------------------------------------------------
