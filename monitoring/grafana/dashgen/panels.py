@@ -326,3 +326,11 @@ LATENCY_THRESHOLDS_S = [(None, "green"), (1, "yellow"), (5, "orange"), (15, "red
 # when p95 slips, orange past prior floor (17s), red past the old 22s regime.
 # Snaps to histogram bucket edges so threshold colors match quantile bins.
 VOICE_LATENCY_THRESHOLDS_S = [(None, "green"), (13, "yellow"), (17, "orange"), (22, "red")]
+# TTS synthesis is fast (<1s typical for a single sentence). Warn past 1.5s,
+# red past 3s where the silence pre-roll can't mask user-perceived delay.
+VOICE_TTS_THRESHOLDS_S = [(None, "green"), (1.5, "yellow"), (3, "red")]
+# Expert agent is thinking-mode Qwen3-32B on Saturn; 30-150s is "normal" for
+# hard reasoning. Green up to 60s, yellow past 90s, red past the 180s timeout.
+EXPERT_LATENCY_THRESHOLDS_S = [(None, "green"), (60, "yellow"), (90, "orange"), (180, "red")]
+# Expert circuit breaker: 0 = closed (healthy), 1 = open (tripping).
+EXPERT_CIRCUIT_THRESHOLDS = [(None, "green"), (1, "red")]

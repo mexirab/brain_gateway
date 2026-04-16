@@ -22,9 +22,12 @@ from __future__ import annotations
 from ..dashboard import dashboard, var_query, var_text
 from ..layout import assign_ids, grid_row, row_divider
 from ..panels import (
+    EXPERT_CIRCUIT_THRESHOLDS,
+    EXPERT_LATENCY_THRESHOLDS_S,
     GREEN_RED_BINARY,
     LATENCY_THRESHOLDS_S,
     VOICE_LATENCY_THRESHOLDS_S,
+    VOICE_TTS_THRESHOLDS_S,
     gauge,
     logs,
     piechart,
@@ -143,6 +146,55 @@ def build() -> dict:
     row, y = grid_row(voice_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- TTS Synthesis
+    tts_desc = (
+        "TTS round-trip at the orchestrator's /v1/audio/speech proxy (the hop "
+        "between OWUI and Qwen3-TTS on port 8002). Excludes browser playback. "
+        "The proxy also prepends ~150ms of silence so the first-word stutter "
+        "from cold prosody state doesn't reach the user — see TTS_SILENCE_PAD_MS."
+    )
+    tts_row = [
+        timeseries(
+            "TTS Latency (p50 / p95 / p99)",
+            [
+                (
+                    "histogram_quantile(0.50, sum by (le) (rate(bgw_voice_tts_seconds_bucket[5m])))",
+                    "p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_tts_seconds_bucket[5m])))",
+                    "p95",
+                ),
+                (
+                    "histogram_quantile(0.99, sum by (le) (rate(bgw_voice_tts_seconds_bucket[5m])))",
+                    "p99",
+                ),
+            ],
+            unit="s",
+            thresholds=VOICE_TTS_THRESHOLDS_S,
+            description=tts_desc,
+        ),
+        timeseries(
+            "TTS Call Rate",
+            [("sum(rate(bgw_voice_tts_seconds_count[5m])) * 60", "tts calls/min")],
+            unit="none",
+        ),
+        stat(
+            "TTS Mean (5m)",
+            "(sum(rate(bgw_voice_tts_seconds_sum[5m])) / sum(rate(bgw_voice_tts_seconds_count[5m]))) or on() vector(0)",
+            unit="s",
+            decimals=2,
+            thresholds=VOICE_TTS_THRESHOLDS_S,
+        ),
+        stat(
+            "TTS Calls (24h)",
+            "sum(increase(bgw_voice_tts_seconds_count[24h]))",
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(tts_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- LLM Performance
     r, y = row_divider("LLM Performance", y)
     panels.append(r)
@@ -193,6 +245,78 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------------------- Expert Agent
+    r, y = row_divider("Expert Agent (Saturn 3090 Qwen3-32B)", y)
+    panels.append(r)
+
+    expert_desc = (
+        "ask_expert tool delegates hard reasoning to Qwen3-32B Thinking on "
+        "Saturn 3090 (10.0.0.58:8084). 30-150s latency is normal for full "
+        "reasoning passes. Circuit breaker opens after N consecutive failures "
+        "(EXPERT_CIRCUIT_BREAKER_FAILURES, default 3); the stat goes red."
+    )
+    expert_row = [
+        stat(
+            "Circuit Breaker",
+            "bgw_expert_circuit_open",
+            text_mode="value_and_name",
+            color_mode="background",
+            graph_mode="none",
+            mappings=[
+                {
+                    "type": "value",
+                    "options": {
+                        "0": {"text": "CLOSED", "color": "green", "index": 0},
+                        "1": {"text": "OPEN", "color": "red", "index": 1},
+                    },
+                }
+            ],
+            thresholds=EXPERT_CIRCUIT_THRESHOLDS,
+        ),
+        timeseries(
+            "Expert Calls by Result",
+            [
+                (
+                    "sum by (result) (rate(bgw_expert_call_count_total[5m])) * 60",
+                    "{{result}}",
+                )
+            ],
+            unit="none",
+            stack=True,
+            fill=40,
+            description=expert_desc,
+        ),
+        timeseries(
+            "Expert Latency (p50 / p95 / p99)",
+            [
+                (
+                    "histogram_quantile(0.50, sum by (le) (rate(bgw_expert_call_latency_seconds_bucket[5m])))",
+                    "p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (le) (rate(bgw_expert_call_latency_seconds_bucket[5m])))",
+                    "p95",
+                ),
+                (
+                    "histogram_quantile(0.99, sum by (le) (rate(bgw_expert_call_latency_seconds_bucket[5m])))",
+                    "p99",
+                ),
+            ],
+            unit="s",
+            thresholds=EXPERT_LATENCY_THRESHOLDS_S,
+        ),
+        stat(
+            "Expert Reasoning Tokens (mean)",
+            "(sum(rate(bgw_expert_reasoning_tokens_sum[5m])) "
+            "/ sum(rate(bgw_expert_reasoning_tokens_count[5m]))) "
+            "or on() vector(0)",
+            unit="none",
+            decimals=0,
+        ),
+    ]
+    row, y = grid_row(expert_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Tools

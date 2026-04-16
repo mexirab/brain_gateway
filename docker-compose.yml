@@ -83,6 +83,10 @@ services:
       - ${GATEWAY_ROOT_PATH:-.}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files
       - brain-audio:/tmp/brain_audio:rw
+      # HuggingFace model cache — persisted across restarts so the embedding
+      # model (nomic-embed-text-v2-moe, ~1.8GB) doesn't re-download on every
+      # boot. Bind mount for backup/inspection parity with the rest of data/.
+      - ${GATEWAY_ROOT_PATH:-.}/data/hf_cache:/root/.cache/huggingface:rw
       # Application runtime state: progress.db, brain_state.db, finance.db,
       # auto_learn.key. Was previously the `finance-data` Docker-managed
       # named volume, which was fragile — `docker compose down -v` or

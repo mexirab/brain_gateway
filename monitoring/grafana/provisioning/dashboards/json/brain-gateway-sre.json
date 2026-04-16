@@ -903,6 +903,343 @@
       "id": 10
     },
     {
+      "type": "timeseries",
+      "title": "TTS Latency (p50 / p95 / p99)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(bgw_voice_tts_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_tts_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bgw_voice_tts_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.5
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "TTS round-trip at the orchestrator's /v1/audio/speech proxy (the hop between OWUI and Qwen3-TTS on port 8002). Excludes browser playback. The proxy also prepends ~150ms of silence so the first-word stutter from cold prosody state doesn't reach the user \u2014 see TTS_SILENCE_PAD_MS.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 18
+      },
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "TTS Call Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(bgw_voice_tts_seconds_count[5m])) * 60",
+          "legendFormat": "tts calls/min",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 18
+      },
+      "id": 12
+    },
+    {
+      "type": "stat",
+      "title": "TTS Mean (5m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(bgw_voice_tts_seconds_sum[5m])) / sum(rate(bgw_voice_tts_seconds_count[5m]))) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.5
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 18
+      },
+      "id": 13
+    },
+    {
+      "type": "stat",
+      "title": "TTS Calls (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_voice_tts_seconds_count[24h]))",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 18
+      },
+      "id": 14
+    },
+    {
       "type": "row",
       "title": "LLM Performance",
       "collapsed": false,
@@ -911,9 +1248,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 26
       },
-      "id": 11
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -996,9 +1333,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 19
+        "y": 27
       },
-      "id": 12
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -1093,9 +1430,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 19
+        "y": 27
       },
-      "id": 13
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -1178,9 +1515,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 19
+        "y": 27
       },
-      "id": 14
+      "id": 18
     },
     {
       "type": "stat",
@@ -1271,9 +1608,375 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 19
+        "y": 27
       },
-      "id": 15
+      "id": 19
+    },
+    {
+      "type": "row",
+      "title": "Expert Agent (Saturn 3090 Qwen3-32B)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 20
+    },
+    {
+      "type": "stat",
+      "title": "Circuit Breaker",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "bgw_expert_circuit_open",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "CLOSED",
+                  "color": "green",
+                  "index": 0
+                },
+                "1": {
+                  "text": "OPEN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 36
+      },
+      "id": 21
+    },
+    {
+      "type": "timeseries",
+      "title": "Expert Calls by Result",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (rate(bgw_expert_call_count_total[5m])) * 60",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "ask_expert tool delegates hard reasoning to Qwen3-32B Thinking on Saturn 3090 (10.0.0.58:8084). 30-150s latency is normal for full reasoning passes. Circuit breaker opens after N consecutive failures (EXPERT_CIRCUIT_BREAKER_FAILURES, default 3); the stat goes red.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 36
+      },
+      "id": 22
+    },
+    {
+      "type": "timeseries",
+      "title": "Expert Latency (p50 / p95 / p99)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(bgw_expert_call_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_expert_call_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bgw_expert_call_latency_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "orange",
+                "value": 90
+              },
+              {
+                "color": "red",
+                "value": 180
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 36
+      },
+      "id": 23
+    },
+    {
+      "type": "stat",
+      "title": "Expert Reasoning Tokens (mean)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(bgw_expert_reasoning_tokens_sum[5m])) / sum(rate(bgw_expert_reasoning_tokens_count[5m]))) or on() vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 36
+      },
+      "id": 24
     },
     {
       "type": "row",
@@ -1284,9 +1987,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 44
       },
-      "id": 16
+      "id": 25
     },
     {
       "type": "timeseries",
@@ -1369,9 +2072,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 28
+        "y": 45
       },
-      "id": 17
+      "id": 26
     },
     {
       "type": "timeseries",
@@ -1466,9 +2169,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 28
+        "y": 45
       },
-      "id": 18
+      "id": 27
     },
     {
       "type": "timeseries",
@@ -1551,9 +2254,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 28
+        "y": 45
       },
-      "id": 19
+      "id": 28
     },
     {
       "type": "row",
@@ -1564,9 +2267,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 53
       },
-      "id": 20
+      "id": 29
     },
     {
       "type": "timeseries",
@@ -1649,9 +2352,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 37
+        "y": 54
       },
-      "id": 21
+      "id": 30
     },
     {
       "type": "timeseries",
@@ -1746,9 +2449,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 37
+        "y": 54
       },
-      "id": 22
+      "id": 31
     },
     {
       "type": "stat",
@@ -1809,9 +2512,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 37
+        "y": 54
       },
-      "id": 23
+      "id": 32
     },
     {
       "type": "timeseries",
@@ -1906,9 +2609,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 37
+        "y": 54
       },
-      "id": 24
+      "id": 33
     },
     {
       "type": "row",
@@ -1919,9 +2622,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 62
       },
-      "id": 25
+      "id": 34
     },
     {
       "type": "timeseries",
@@ -2016,9 +2719,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 46
+        "y": 63
       },
-      "id": 26
+      "id": 35
     },
     {
       "type": "timeseries",
@@ -2113,9 +2816,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 46
+        "y": 63
       },
-      "id": 27
+      "id": 36
     },
     {
       "type": "timeseries",
@@ -2210,9 +2913,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 46
+        "y": 63
       },
-      "id": 28
+      "id": 37
     },
     {
       "type": "row",
@@ -2223,9 +2926,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 71
       },
-      "id": 29
+      "id": 38
     },
     {
       "type": "timeseries",
@@ -2308,9 +3011,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 55
+        "y": 72
       },
-      "id": 30
+      "id": 39
     },
     {
       "type": "timeseries",
@@ -2393,9 +3096,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 55
+        "y": 72
       },
-      "id": 31
+      "id": 40
     },
     {
       "type": "timeseries",
@@ -2490,9 +3193,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 55
+        "y": 72
       },
-      "id": 32
+      "id": 41
     },
     {
       "type": "row",
@@ -2503,9 +3206,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 80
       },
-      "id": 33
+      "id": 42
     },
     {
       "type": "timeseries",
@@ -2600,9 +3303,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 64
+        "y": 81
       },
-      "id": 34
+      "id": 43
     },
     {
       "type": "timeseries",
@@ -2697,9 +3400,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 64
+        "y": 81
       },
-      "id": 35
+      "id": 44
     },
     {
       "type": "timeseries",
@@ -2782,9 +3485,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 64
+        "y": 81
       },
-      "id": 36
+      "id": 45
     },
     {
       "type": "row",
@@ -2795,9 +3498,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 89
       },
-      "id": 37
+      "id": 46
     },
     {
       "type": "timeseries",
@@ -2880,9 +3583,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 73
+        "y": 90
       },
-      "id": 38
+      "id": 47
     },
     {
       "type": "timeseries",
@@ -2965,9 +3668,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 73
+        "y": 90
       },
-      "id": 39
+      "id": 48
     },
     {
       "type": "row",
@@ -2978,9 +3681,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 81
+        "y": 98
       },
-      "id": 40
+      "id": 49
     },
     {
       "type": "timeseries",
@@ -3075,9 +3778,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 82
+        "y": 99
       },
-      "id": 41
+      "id": 50
     },
     {
       "type": "gauge",
@@ -3144,9 +3847,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 82
+        "y": 99
       },
-      "id": 42
+      "id": 51
     },
     {
       "type": "timeseries",
@@ -3241,9 +3944,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 82
+        "y": 99
       },
-      "id": 43
+      "id": 52
     },
     {
       "type": "timeseries",
@@ -3326,9 +4029,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 82
+        "y": 99
       },
-      "id": 44
+      "id": 53
     },
     {
       "type": "row",
@@ -3339,9 +4042,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 107
       },
-      "id": 45
+      "id": 54
     },
     {
       "type": "timeseries",
@@ -3436,9 +4139,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 91
+        "y": 108
       },
-      "id": 46
+      "id": 55
     },
     {
       "type": "timeseries",
@@ -3521,9 +4224,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 91
+        "y": 108
       },
-      "id": 47
+      "id": 56
     },
     {
       "type": "timeseries",
@@ -3618,9 +4321,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 91
+        "y": 108
       },
-      "id": 48
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -3703,9 +4406,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 99
+        "y": 116
       },
-      "id": 49
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -3800,9 +4503,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 99
+        "y": 116
       },
-      "id": 50
+      "id": 59
     },
     {
       "type": "row",
@@ -3813,9 +4516,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 107
+        "y": 124
       },
-      "id": 51
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -3898,9 +4601,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 108
+        "y": 125
       },
-      "id": 52
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -3983,9 +4686,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 108
+        "y": 125
       },
-      "id": 53
+      "id": 62
     },
     {
       "type": "timeseries",
@@ -4080,9 +4783,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 108
+        "y": 125
       },
-      "id": 54
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4165,9 +4868,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 116
+        "y": 133
       },
-      "id": 55
+      "id": 64
     },
     {
       "type": "timeseries",
@@ -4274,9 +4977,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 116
+        "y": 133
       },
-      "id": 56
+      "id": 65
     },
     {
       "type": "piechart",
@@ -4345,9 +5048,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 116
+        "y": 133
       },
-      "id": 57
+      "id": 66
     },
     {
       "type": "row",
@@ -4358,9 +5061,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 141
       },
-      "id": 58
+      "id": 67
     },
     {
       "type": "timeseries",
@@ -4443,9 +5146,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 125
+        "y": 142
       },
-      "id": 59
+      "id": 68
     },
     {
       "type": "timeseries",
@@ -4540,9 +5243,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 125
+        "y": 142
       },
-      "id": 60
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -4637,9 +5340,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 125
+        "y": 142
       },
-      "id": 61
+      "id": 70
     },
     {
       "type": "row",
@@ -4650,9 +5353,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 133
+        "y": 150
       },
-      "id": 62
+      "id": 71
     },
     {
       "type": "stat",
@@ -4713,9 +5416,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 134
+        "y": 151
       },
-      "id": 63
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -4799,9 +5502,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 134
+        "y": 151
       },
-      "id": 64
+      "id": 73
     },
     {
       "type": "stat",
@@ -4862,9 +5565,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 134
+        "y": 151
       },
-      "id": 65
+      "id": 74
     },
     {
       "type": "row",
@@ -4875,9 +5578,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 159
       },
-      "id": 66
+      "id": 75
     },
     {
       "type": "logs",
@@ -4916,9 +5619,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 143
+        "y": 160
       },
-      "id": 67
+      "id": 76
     },
     {
       "type": "logs",
@@ -4957,9 +5660,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 143
+        "y": 160
       },
-      "id": 68
+      "id": 77
     }
   ]
 }

@@ -13,7 +13,9 @@ services:
   # GRAFANA - Dashboard UI
   # ============================================
   grafana:
-    image: grafana/grafana:latest
+    # Digest pinned 2026-04-16 — matches supply-chain posture of promtail
+    # pin below. Bump deliberately; `:latest` alone silently upgrades.
+    image: grafana/grafana:latest@sha256:2e986801428cd689c2358605289c90ab37d2b39e24808874971f54c99bcdc412
     container_name: grafana
     restart: unless-stopped
     ports:
@@ -35,7 +37,8 @@ services:
   # PROMETHEUS - Metrics Collection
   # ============================================
   prometheus:
-    image: prom/prometheus:latest
+    # Digest pinned 2026-04-16
+    image: prom/prometheus:latest@sha256:5550dc63da361dc30f6fe02ac0e4dfc736ededfef3c8d12a634db04a67824d78
     container_name: prometheus
     restart: unless-stopped
     ports:
@@ -57,7 +60,8 @@ services:
   # LOKI - Log Aggregation
   # ============================================
   loki:
-    image: grafana/loki:latest
+    # Digest pinned 2026-04-16
+    image: grafana/loki:latest@sha256:73e905b51a7f917f7a1075e4be68759df30226e03dcb3cd2213b989cc0dc8eb4
     container_name: loki
     restart: unless-stopped
     ports:
@@ -108,7 +112,8 @@ services:
   # BLACKBOX EXPORTER - HTTP Health Probes
   # ============================================
   blackbox-exporter:
-    image: prom/blackbox-exporter:latest
+    # Digest pinned 2026-04-16
+    image: prom/blackbox-exporter:latest@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc
     container_name: blackbox-exporter
     restart: unless-stopped
     ports:
