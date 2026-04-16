@@ -121,10 +121,13 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
 
     logger.info(f"[RAG] Retrieved {len(docs)} candidates from ChromaDB")
 
-    all_scores = [1.0 - float(d) for d in dists]
-    logger.info(f"[RAG] Candidate scores: {[f'{s:.2f}' for s in all_scores]}")
+    # Log cosine similarity using the same formula as the filter (1 - dist/2
+    # for ChromaDB's default L2² on normalized vectors). The prior formula
+    # (1 - dist) was a legacy holdover that made debugging misleading —
+    # logged "scores" looked negative while actual cos values were > 0.2.
+    all_scores = [1.0 - float(d) / 2.0 for d in dists]
+    logger.info(f"[RAG] Candidate cos: {[f'{s:.2f}' for s in all_scores]}")
 
-    MIN_RESULTS = TOP_K
     MIN_CHUNK_LEN = 100
 
     chunks = []
@@ -143,7 +146,10 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
         except (ValueError, TypeError):
             cos = None
 
-        if cos is not None and cos < MIN_COS and len(chunks) >= MIN_RESULTS:
+        # Hard MIN_COS floor — previously soft-bounded by a MIN_RESULTS=TOP_K
+        # minimum, which kept negative-similarity chunks in the prompt every
+        # turn and bloated prefill latency by ~700 tokens on voice queries.
+        if cos is not None and cos < MIN_COS:
             continue
 
         src = ""
@@ -201,8 +207,14 @@ def get_unified_system_prompt(
     """Unified system prompt for a single model handling both conversation and tool execution.
 
     Merges the conversational personality from the Helios prompt with the
-    tool execution instructions from the orchestrator prompt. Used when
-    Used by the v7 unified architecture.
+    tool execution instructions from the orchestrator prompt. Used by the v7
+    unified architecture.
+
+    When ``is_voice=True`` the AVAILABLE TOOLS and WHEN TO USE TOOLS sections
+    are dropped — they duplicate the JSON tool schemas the model already sees
+    in the ``tools`` parameter and were costing ~2.3k prefill tokens per turn.
+    The DECISION HELPER and IMPORTANT RULES sections are kept because they
+    carry behavior the schemas don't encode (selfcare mandatory logging etc.).
     """
     user = profile.user_name
     assistant = profile.assistant_name
@@ -263,7 +275,9 @@ PERSONAL CONTEXT (from {user}'s notes):
     # ask_expert guidance is conditional: only present when the expert tool is
     # both ENABLED and NOT being hidden from the voice path. Injecting the
     # guidance when the tool isn't in the schema would lead the model to
-    # reference a tool that doesn't exist for that turn.
+    # reference a tool that doesn't exist for that turn. Voice also strips
+    # the whole AVAILABLE TOOLS...DECISION HELPER block below, so this is
+    # belt-and-suspenders.
     if shared.EXPERT_ENABLED and not is_voice:
         expert_section = (
             "- ask_expert: Delegate a HARD reasoning task to the expert model "
@@ -281,7 +295,7 @@ PERSONAL CONTEXT (from {user}'s notes):
     else:
         expert_section = ""
 
-    return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
+    prompt = f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
 
 CURRENT DATE/TIME: {date_str}
 
@@ -380,3 +394,20 @@ RESPONSE STYLE:
 - For voice: avoid markdown, bullets, or formatting
 - No emojis unless {user} uses them first
 - Be direct and concise ({user} has ADHD)"""
+
+    # Voice mode: strip the AVAILABLE TOOLS + WHEN TO USE TOOLS sections.
+    # They duplicate the JSON tool schemas sent in the ``tools`` parameter and
+    # were costing ~2.3k prefill tokens per voice turn. DECISION HELPER and
+    # IMPORTANT RULES stay — they carry behavior the schemas don't encode.
+    if is_voice:
+        import re as _re
+
+        prompt = _re.sub(
+            r"\nAVAILABLE TOOLS:.*?(?=\nDECISION HELPER)",
+            "\n",
+            prompt,
+            count=1,
+            flags=_re.DOTALL,
+        )
+
+    return prompt

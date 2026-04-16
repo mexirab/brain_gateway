@@ -183,20 +183,23 @@ class CloudBrain:
             except Exception as e:
                 logger.warning("[FAST-PATH] Error, falling through: %s", e)
 
-        # RAG prefetch
+        # RAG prefetch — skip for greetings and short voice utterances (< 6
+        # words). Short voice turns rarely need RAG and the 2-3k chars of
+        # prepended context adds ~600 tokens of prefill latency per turn.
         personal_context = ""
-        if not self._is_greeting(user_text):
+        skip_rag_short_voice = is_voice and len(user_text.split()) < 6
+        if not self._is_greeting(user_text) and not skip_rag_short_voice:
             personal_context = self._rag_search(user_text)
             if personal_context:
                 logger.info("[UNIFIED] Pre-fetched RAG context (%d chars)", len(personal_context))
                 routing_info["rag_prefetch"] = True
+        elif skip_rag_short_voice:
+            logger.info("[UNIFIED] Skipping RAG for short voice utterance (%d words)", len(user_text.split()))
+            routing_info["rag_skipped"] = "short_voice"
 
         # Build unified system prompt
         system_prompt = self._get_unified_system_prompt(
-            personal_context,
-            mode=intent.mode,
-            intensity=intent.intensity,
-            is_voice=is_voice,
+            personal_context, mode=intent.mode, intensity=intent.intensity, is_voice=is_voice
         )
 
         # Voice mode: add conciseness hint to reduce TTS latency
@@ -204,7 +207,12 @@ class CloudBrain:
             system_prompt += (
                 "\n\n[VOICE MODE] The user is speaking via voice assistant. "
                 "Keep responses concise (1-3 sentences). No markdown, no bullet points, "
-                "no asterisks. Speak naturally as if talking to a friend."
+                "no asterisks. Speak naturally as if talking to a friend. "
+                "Use periods and commas only — no em-dashes, en-dashes, or semicolons "
+                "(they confuse the sentence-split TTS and cause stuttering playback). "
+                "Do NOT start with short filler acknowledgments like 'Got it', 'Sure', "
+                "'Okay', or 'Alright' — the TTS stutters on very short opening utterances. "
+                "Go directly into your answer."
             )
             logger.info("[UNIFIED] Voice mode active, conciseness hint added")
 
@@ -229,12 +237,38 @@ class CloudBrain:
         REQUEST_COUNT.labels(mode="unified").inc()
         model_url = self._model_url
         model_name = self._model_name
-        tools = self._get_all_tools()
-        # Voice gate: ask_expert is text-only. Its ~30-150s latency is
-        # incompatible with voice. Belt-and-braces — the system prompt also
-        # omits the guidance when is_voice is True.
+        # Voice mode uses a trimmed tool subset — drops ~3.5k tokens of tool
+        # schemas from prefill (verbose/debug/typed-only tools aren't reachable
+        # by voice). Typed chat gets the full roster. `ask_expert` is
+        # deliberately absent from VOICE_TOOL_NAMES because its 30-150s
+        # latency is incompatible with a conversational voice turn.
         if is_voice:
-            tools = [t for t in tools if t.get("function", {}).get("name") != "ask_expert"]
+            from orchestrator.tool_definitions import get_voice_tools
+
+            tools = get_voice_tools()
+        else:
+            tools = self._get_all_tools()
+
+        # Observability: prompt-size breakdown per turn. Voice prefill is
+        # dominated by tool schemas + system prompt; logging per-turn sizes
+        # lets us notice regressions when new tools or prompt sections land.
+        try:
+            import json as _json
+
+            _sys_chars = len(system_prompt or "")
+            _tools_chars = len(_json.dumps(tools))
+            _msgs_chars = sum(len(_json.dumps(m)) for m in messages)
+            logger.info(
+                "[UNIFIED] Prompt sizes (chars): system=%d tools=%d messages=%d total=%d (voice=%s tools_n=%d)",
+                _sys_chars,
+                _tools_chars,
+                _msgs_chars,
+                _sys_chars + _tools_chars + _msgs_chars,
+                is_voice,
+                len(tools),
+            )
+        except Exception as _e:
+            logger.debug("[UNIFIED] Prompt size diagnostic failed: %s", _e)
 
         # Strip incoming system messages — the orchestrator builds its own system
         # prompt (with RAG, mode, tools). External callers like HA's llama_conversation

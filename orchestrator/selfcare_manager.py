@@ -141,6 +141,12 @@ async def check_selfcare() -> None:
     tz = ZoneInfo(shared.TIMEZONE)
     now_tz = datetime.now(tz)
 
+    # Apply daily reset BEFORE the is_home gate — otherwise a user who's away
+    # past midnight (or an orchestrator restart during quiet hours) leaves the
+    # figures stuck at yesterday's timestamps. get_selfcare_status() reads
+    # those and surfaces e.g. "you've been sitting for 32 hours".
+    _apply_daily_reset(now)
+
     # Skip nudges when not home
     if shared.PRESENCE_ENABLED:
         try:
@@ -150,17 +156,6 @@ async def check_selfcare() -> None:
                 return
         except Exception:
             pass
-
-    # Reset movement/hydration timers daily so overnight hours don't accumulate
-    if _state.sitting_since and _state.sitting_since.date() < now.date():
-        _state.sitting_since = now
-    if _state.last_hydration_nudge and _state.last_hydration_nudge.date() < now.date():
-        _state.last_hydration_nudge = now
-    if _state.last_movement_nudge and _state.last_movement_nudge.date() < now.date():
-        _state.last_movement_nudge = now
-    if _state.last_meal_reported and _state.last_meal_reported.date() < now.date():
-        logger.debug("[SELFCARE] Daily reset: clearing last_meal_reported from yesterday")
-        _state.last_meal_reported = None
 
     # Quiet hours check
     quiet_start = _parse_time(shared.QUIET_HOURS_START)
@@ -312,9 +307,33 @@ def _check_movement(now: datetime) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _apply_daily_reset(now: datetime) -> None:
+    """Zero out overnight-accumulating selfcare state at midnight rollover.
+
+    Clears `last_meal_reported` entirely (so "last meal" becomes "no meals
+    logged today" after midnight instead of surfacing a yesterday timestamp).
+    Rolls forward sitting_since / hydration / movement timestamps to `now`
+    so their ticker restarts at 0 each day instead of carrying overnight
+    hours. Safe to call from sync or async contexts; idempotent within a
+    single day.
+    """
+    if _state.sitting_since and _state.sitting_since.date() < now.date():
+        _state.sitting_since = now
+    if _state.last_hydration_nudge and _state.last_hydration_nudge.date() < now.date():
+        _state.last_hydration_nudge = now
+    if _state.last_movement_nudge and _state.last_movement_nudge.date() < now.date():
+        _state.last_movement_nudge = now
+    if _state.last_meal_reported and _state.last_meal_reported.date() < now.date():
+        logger.debug("[SELFCARE] Daily reset: clearing last_meal_reported from yesterday")
+        _state.last_meal_reported = None
+
+
 async def get_selfcare_status() -> Dict[str, Any]:
     """Get current self-care status for API or tool."""
     now = datetime.now()
+    # Defensive: apply daily reset on read too, so stale overnight values never
+    # leak into displayed figures even if the nudge loop has been paused.
+    _apply_daily_reset(now)
     status = {}
 
     if _state.last_meal_reported:
