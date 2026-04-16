@@ -154,12 +154,12 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 ## Key Paths
 
 ```
-/opt/helios/gateway_mvp/            # Project root on Helios
+/opt/gateway_mvp/            # Project root on Helios
 ~/.env                              # Secrets (HA_TOKEN, API_TOKEN, PIHOLE_PASSWORD)
 ~/rag/nadim_rag/                    # RAG source documents (154 docs indexed)
 ~/.local/share/chroma/personal_rag/ # ChromaDB persistence
-/opt/helios/gateway_mvp/credentials/   # Google OAuth2 creds (gitignored)
-/opt/helios/gateway_mvp/certs/         # Tailscale TLS certs (gitignored)
+/opt/gateway_mvp/credentials/   # Google OAuth2 creds (gitignored)
+/opt/gateway_mvp/certs/         # Tailscale TLS certs (gitignored)
 /app/data/meal_photos/              # Meal photo uploads (uuid4 names, jpg/jpeg/png/gif/webp only)
 ```
 
@@ -180,7 +180,7 @@ docker logs brain-orchestrator --tail 50 -f
 curl http://localhost:8888/health
 
 # Remote deploy from Mac (via Tailscale or LAN)
-ssh labadmin@10.0.0.195 "cd /opt/helios/gateway_mvp && git pull && docker compose up -d --build orchestrator"
+ssh labadmin@10.0.0.195 "cd /opt/gateway_mvp && git pull && docker compose up -d --build orchestrator"
 
 # Frontend rebuild
 docker compose up -d --build --force-recreate frontend

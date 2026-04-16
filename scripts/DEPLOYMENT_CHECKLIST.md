@@ -37,7 +37,7 @@ sudo systemctl is-enabled llama-server  # Should show "disabled"
 
 **Test from Helios:**
 ```bash
-cd /opt/helios/gateway_mvp/scripts
+cd /opt/gateway_mvp/scripts
 ./helios-status.sh  # Should show "STOPPED"
 ```
 
@@ -49,7 +49,7 @@ Run on **Saturn (10.0.0.58)**:
 
 ```bash
 # Copy systemd service file
-scp /opt/helios/gateway_mvp/tts/nemotron-vllm.service nadim@10.0.0.58:/tmp/
+scp /opt/gateway_mvp/tts/nemotron-vllm.service nadim@10.0.0.58:/tmp/
 ssh nadim@10.0.0.58 'sudo mv /tmp/nemotron-vllm.service /etc/systemd/system/'
 
 # Enable and start
@@ -90,7 +90,7 @@ ssh nadim@10.0.0.173 'sudo systemctl enable qwen-tts whisper-stt'
 On **Helios**:
 
 ```bash
-cd /opt/helios/gateway_mvp/monitoring
+cd /opt/gateway_mvp/monitoring
 
 # Restart monitoring to pick up new config
 docker compose -p monitoring down
@@ -111,18 +111,18 @@ docker logs blackbox-exporter
 1. Copy configuration to Home Assistant:
    ```bash
    # Review and add to HA configuration.yaml:
-   cat /opt/helios/gateway_mvp/ha_automations/configuration_additions.yaml
+   cat /opt/gateway_mvp/ha_automations/configuration_additions.yaml
    ```
 
 2. Add conversation automations:
    ```bash
    # Review and add to HA automations.yaml:
-   cat /opt/helios/gateway_mvp/ha_automations/voice_conversation_automation.yaml
+   cat /opt/gateway_mvp/ha_automations/voice_conversation_automation.yaml
    ```
 
 3. Follow the setup guide:
    ```bash
-   cat /opt/helios/gateway_mvp/ha_automations/voice_assistant_setup.md
+   cat /opt/gateway_mvp/ha_automations/voice_assistant_setup.md
    ```
 
 4. Restart Home Assistant and configure Voice PE device.

@@ -6,9 +6,9 @@ After=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/helios/gateway_mvp
+WorkingDirectory=/opt/gateway_mvp
 # Load environment variables from .env file
-EnvironmentFile=-/opt/helios/gateway_mvp/.env
+EnvironmentFile=-/opt/gateway_mvp/.env
 ExecStart=/usr/bin/docker compose -p brain up -d
 ExecStop=/usr/bin/docker compose -p brain down
 TimeoutStartSec=300

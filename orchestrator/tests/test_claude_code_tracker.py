@@ -131,12 +131,12 @@ class TestNormalizeTurn:
         assert "Sure" in result["content"]
 
     def test_assistant_with_edit_tool_extracts_file_path(self):
-        tools = [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/opt/helios/gateway_mvp/foo.py"}}]
+        tools = [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/opt/gateway_mvp/foo.py"}}]
         entry = _make_jsonl_entry("assistant", text="Editing the file", tools=tools)
         result = self._normalize_turn(entry, "/fake/session.jsonl")
         assert result is not None
         assert "Edit" in result["tool_uses"]
-        assert "/opt/helios/gateway_mvp/foo.py" in result["files_touched"]
+        assert "/opt/gateway_mvp/foo.py" in result["files_touched"]
 
     def test_write_tool_extracts_file_path(self):
         tools = [{"type": "tool_use", "name": "Write", "input": {"file_path": "/tmp/newfile.py"}}]
@@ -498,13 +498,13 @@ class TestStateStoreClaudeCodeTurns:
         from orchestrator.state_store import get_claude_code_turns, log_claude_code_turn
 
         turn = self._make_turn(
-            files=["/opt/helios/gateway_mvp/foo.py", "/opt/helios/gateway_mvp/bar.py"],
+            files=["/opt/gateway_mvp/foo.py", "/opt/gateway_mvp/bar.py"],
             tools=["Edit", "Bash"],
         )
         log_claude_code_turn(turn)
         turns = get_claude_code_turns(since_minutes=5)
         assert isinstance(turns[0]["files_touched"], list)
-        assert "/opt/helios/gateway_mvp/foo.py" in turns[0]["files_touched"]
+        assert "/opt/gateway_mvp/foo.py" in turns[0]["files_touched"]
         assert isinstance(turns[0]["tool_uses"], list)
         assert "Edit" in turns[0]["tool_uses"]
 
@@ -555,7 +555,7 @@ class TestActivitySummaryAndFilesTouched:
                 "turn_type": "assistant",
                 "content": "I edited the config file",
                 "tool_uses": ["Edit"],
-                "files_touched": ["/opt/helios/gateway_mvp/config.py"],
+                "files_touched": ["/opt/gateway_mvp/config.py"],
             }
         ]
         with patch("orchestrator.claude_code_tracker.get_claude_code_turns", return_value=mock_turns):
@@ -593,10 +593,10 @@ class TestActivitySummaryAndFilesTouched:
 
         with patch(
             "orchestrator.claude_code_tracker.get_claude_code_files_touched",
-            return_value=["/opt/helios/gateway_mvp/foo.py"],
+            return_value=["/opt/gateway_mvp/foo.py"],
         ):
             files = tracker.get_files_touched(minutes_back=60)
-        assert "/opt/helios/gateway_mvp/foo.py" in files
+        assert "/opt/gateway_mvp/foo.py" in files
 
     def test_get_files_touched_falls_back_to_live_file(self, tmp_path):
         import orchestrator.claude_code_tracker as tracker
@@ -661,7 +661,7 @@ class TestLogTurnFromHook:
             "turn_type": "assistant",
             "content": "Fixed the bug",
             "tool_uses": ["Edit"],
-            "files_touched": ["/opt/helios/gateway_mvp/fix.py"],
+            "files_touched": ["/opt/gateway_mvp/fix.py"],
             "commit_hash": "abc123",
         }
         with patch("orchestrator.claude_code_tracker.log_claude_code_turn", return_value=42) as mock_log:

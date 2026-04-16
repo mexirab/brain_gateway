@@ -73,11 +73,11 @@ jobs:
     needs: [lint-python, test-python, lint-frontend, docker-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     # The runner already runs on Helios with docker access, so we don't need
-    # a checkout step — we operate directly on /opt/helios/gateway_mvp.
+    # a checkout step — we operate directly on /opt/gateway_mvp.
     steps:
       - name: Pull latest main
         run: |
-          cd /opt/helios/gateway_mvp
+          cd /opt/gateway_mvp
           BEFORE=$(git rev-parse HEAD)
           git pull --ff-only
           AFTER=$(git rev-parse HEAD)
@@ -87,7 +87,7 @@ jobs:
 
       - name: Rebuild changed services
         run: |
-          cd /opt/helios/gateway_mvp
+          cd /opt/gateway_mvp
           BEFORE="${{ steps.pull.outputs.before }}"
           AFTER="${{ steps.pull.outputs.after }}"
 

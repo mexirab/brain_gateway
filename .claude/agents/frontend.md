@@ -1,6 +1,6 @@
 ---
 name: frontend
-description: Reviews and implements changes to the Brain Gateway dashboard (React frontend at /opt/helios/gateway_mvp/frontend, served on port 3001). Use after any change under frontend/ or when adding a new API-proxy/widget/page. Checks component structure, API proxy usage, accessibility, responsive behavior, and consistency with existing pages.
+description: Reviews and implements changes to the Brain Gateway dashboard (React frontend at /opt/gateway_mvp/frontend, served on port 3001). Use after any change under frontend/ or when adding a new API-proxy/widget/page. Checks component structure, API proxy usage, accessibility, responsive behavior, and consistency with existing pages.
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 

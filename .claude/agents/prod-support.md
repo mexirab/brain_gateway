@@ -369,7 +369,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file â
 
 ## Grafana Dashboards
 
-Grafana runs on Jupiter (10.0.0.248:3000). Dashboard JSON lives at `/opt/helios/gateway_mvp/monitoring/grafana/provisioning/dashboards/json/` and is provisioned into the Jupiter container via nebula-sync / volume mount.
+Grafana runs on Jupiter (10.0.0.248:3000). Dashboard JSON lives at `/opt/gateway_mvp/monitoring/grafana/provisioning/dashboards/json/` and is provisioned into the Jupiter container via nebula-sync / volume mount.
 
 | Dashboard | UID | URL | Panels | What it's for |
 |-----------|-----|-----|--------|----------------|

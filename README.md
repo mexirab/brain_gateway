@@ -10,7 +10,7 @@ cp .env.example .env
 vim .env  # Set HA_TOKEN, API_TOKEN, PIHOLE_PASSWORD, GF_SECURITY_ADMIN_PASSWORD
 
 # Start services
-cd /opt/helios/gateway_mvp
+cd /opt/gateway_mvp
 docker compose up -d
 
 # Check health

@@ -12,8 +12,8 @@ sudo tailscale serve --bg http://localhost:80
 sudo tailscale serve --https=443 off
 
 # Cert renewal (auto-managed, but manual if needed)
-sudo tailscale cert --cert-file /opt/helios/gateway_mvp/certs/helios.crt \
-  --key-file /opt/helios/gateway_mvp/certs/helios.key helios.tail74fc4a.ts.net
+sudo tailscale cert --cert-file /opt/gateway_mvp/certs/helios.crt \
+  --key-file /opt/gateway_mvp/certs/helios.key helios.tail74fc4a.ts.net
 ```
 
 **URL:** `https://helios.tail74fc4a.ts.net/` (must use domain, not IP, for valid cert)
@@ -31,7 +31,7 @@ sudo tailscale cert --cert-file /opt/helios/gateway_mvp/certs/helios.crt \
 
 ```bash
 # RAG reindex
-cd /opt/helios/gateway_mvp/rag && python ingest_rag.py \
+cd /opt/gateway_mvp/rag && python ingest_rag.py \
   --source ~/rag/nadim_rag \
   --persist ~/.local/share/chroma/personal_rag \
   --collection nadim_rag

@@ -15,7 +15,7 @@ PROJECT="${1:-brain}"
 case "$PROJECT" in
     brain)
         SESSION="brain-dev"
-        DIR="/opt/helios/gateway_mvp"
+        DIR="/opt/gateway_mvp"
         LOG_CONTAINER="brain-orchestrator"
         ;;
     conjure)

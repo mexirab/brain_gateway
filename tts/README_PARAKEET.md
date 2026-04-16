@@ -21,8 +21,8 @@ error.
 
 ```bash
 # 1. Stage files into the locations the systemd unit expects
-cp /opt/helios/gateway_mvp/tts/stt_server_parakeet.py /home/labadmin/stt_server_parakeet.py
-sudo cp /opt/helios/gateway_mvp/tts/parakeet-stt.service /etc/systemd/system/parakeet-stt.service
+cp /opt/gateway_mvp/tts/stt_server_parakeet.py /home/labadmin/stt_server_parakeet.py
+sudo cp /opt/gateway_mvp/tts/parakeet-stt.service /etc/systemd/system/parakeet-stt.service
 
 # 2. Verify ffmpeg is on the host (already required by the Whisper server)
 which ffmpeg || sudo apt install -y ffmpeg

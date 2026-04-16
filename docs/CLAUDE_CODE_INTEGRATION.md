@@ -19,7 +19,7 @@ Add to `~/.claude/settings.json`:
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "/opt/helios/gateway_mvp/scripts/claude_code_stop_hook.sh"
+        "command": "/opt/gateway_mvp/scripts/claude_code_stop_hook.sh"
       }]
     }]
   }

@@ -14,7 +14,7 @@ SSH into Helios and run the setup script once:
 
 ```bash
 ssh labadmin@10.0.0.195
-cd /opt/helios/gateway_mvp
+cd /opt/gateway_mvp
 git pull
 bash scripts/setup-jupiter-claude.sh
 ```
@@ -34,12 +34,12 @@ Add to `~/.zshrc`:
 ```bash
 jdev() {
     mosh labadmin@10.0.0.195 -- bash -c \
-        'tmux attach -t brain-dev 2>/dev/null || bash /opt/helios/gateway_mvp/scripts/dev-session.sh brain'
+        'tmux attach -t brain-dev 2>/dev/null || bash /opt/gateway_mvp/scripts/dev-session.sh brain'
 }
 
 jcon() {
     mosh labadmin@10.0.0.195 -- bash -c \
-        'tmux attach -t conjure-dev 2>/dev/null || bash /opt/helios/gateway_mvp/scripts/dev-session.sh conjure'
+        'tmux attach -t conjure-dev 2>/dev/null || bash /opt/gateway_mvp/scripts/dev-session.sh conjure'
 }
 ```
 
@@ -100,7 +100,7 @@ jdev  # will auto-create if none exists
 ```bash
 # Re-run setup to regenerate settings.local.json
 ssh labadmin@10.0.0.195
-cd /opt/helios/gateway_mvp
+cd /opt/gateway_mvp
 rm .claude/settings.local.json
 bash scripts/setup-jupiter-claude.sh
 ```

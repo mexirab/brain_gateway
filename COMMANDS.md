@@ -8,7 +8,7 @@ Quick reference for common operations. See `CLAUDE.md` for architecture overview
 
 ### Rebuild orchestrator after code changes
 ```bash
-cd /opt/helios/gateway_mvp
+cd /opt/gateway_mvp
 docker compose down
 docker compose build --no-cache orchestrator
 docker compose up -d
@@ -58,7 +58,7 @@ curl http://localhost:8888/api/ha/entities | jq .
 
 ### Start/stop monitoring stack
 ```bash
-cd /opt/helios/gateway_mvp/monitoring
+cd /opt/gateway_mvp/monitoring
 docker compose -p monitoring up -d    # Start
 docker compose -p monitoring down     # Stop
 ```
@@ -82,7 +82,7 @@ docker compose -p monitoring down     # Stop
 
 ### Hardware audit across cluster
 ```bash
-/opt/helios/gateway_mvp/monitoring/lab_hw_audit.sh
+/opt/gateway_mvp/monitoring/lab_hw_audit.sh
 ```
 
 ---
@@ -100,9 +100,9 @@ python3 -m venv /tmp/google-auth-venv
 
 ### Copy credentials to Helios
 ```bash
-scp credentials/google_credentials.json labadmin@10.0.0.195:/opt/helios/gateway_mvp/credentials/
-scp credentials/google_token.json labadmin@10.0.0.195:/opt/helios/gateway_mvp/credentials/
-ssh labadmin@10.0.0.195 "cd /opt/helios/gateway_mvp && docker compose restart orchestrator"
+scp credentials/google_credentials.json labadmin@10.0.0.195:/opt/gateway_mvp/credentials/
+scp credentials/google_token.json labadmin@10.0.0.195:/opt/gateway_mvp/credentials/
+ssh labadmin@10.0.0.195 "cd /opt/gateway_mvp && docker compose restart orchestrator"
 ```
 
 ### Check calendar status
@@ -205,7 +205,7 @@ ssh labadmin@10.0.0.195 "docker exec brain-orchestrator python /app/ingest_rag.p
   --collection nadim_rag"
 
 # Restart orchestrator to pick up changes
-ssh labadmin@10.0.0.195 "cd /opt/helios/gateway_mvp && docker compose restart orchestrator"
+ssh labadmin@10.0.0.195 "cd /opt/gateway_mvp && docker compose restart orchestrator"
 ```
 
 ### Check RAG doc count

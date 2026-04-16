@@ -11,7 +11,7 @@
 #       "Stop": [{
 #         "hooks": [{
 #           "type": "command",
-#           "command": "/opt/helios/gateway_mvp/scripts/claude_code_stop_hook.sh"
+#           "command": "/opt/gateway_mvp/scripts/claude_code_stop_hook.sh"
 #         }]
 #       }]
 #     }
@@ -28,10 +28,10 @@ set -euo pipefail
 # requiring the user to export API_TOKEN manually in every terminal is
 # fragile. Sourcing .env here means the hook "just works" as long as .env
 # is populated, which is the canonical source of truth for the token.
-if [ -z "${API_TOKEN:-}" ] && [ -f /opt/helios/gateway_mvp/.env ]; then
+if [ -z "${API_TOKEN:-}" ] && [ -f /opt/gateway_mvp/.env ]; then
     set -a
     # shellcheck disable=SC1091
-    source /opt/helios/gateway_mvp/.env 2>/dev/null || true
+    source /opt/gateway_mvp/.env 2>/dev/null || true
     set +a
 fi
 

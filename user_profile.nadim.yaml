@@ -1,6 +1,6 @@
 # Brain Gateway User Profile — Nadim
 # ====================================
-# Copy to user_profile.yaml on Helios: /opt/helios/gateway_mvp/user_profile.yaml
+# Copy to user_profile.yaml on Helios: /opt/gateway_mvp/user_profile.yaml
 
 user:
   name: "Nadim"

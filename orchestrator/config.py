@@ -201,7 +201,7 @@ class Settings(BaseSettings):
     code_agent_enabled: bool = False
     code_agent_model_url: str = ""
     code_agent_model_name: str = ""
-    code_agent_codebase_path: str = "/opt/helios/gateway_mvp"
+    code_agent_codebase_path: str = "/opt/gateway_mvp"
     code_agent_max_rounds: int = 10
 
     # -- Expert Model (Qwen3-32B Thinking on Saturn 3090) ------------------------

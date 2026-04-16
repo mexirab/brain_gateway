@@ -5,7 +5,7 @@ Grafana + Prometheus + Loki for Brain Gateway cluster.
 ## Quick Start
 
 ```bash
-cd /opt/helios/gateway_mvp/monitoring
+cd /opt/gateway_mvp/monitoring
 docker compose --env-file ../.env -p monitoring up -d
 ```
 

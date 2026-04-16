@@ -33,7 +33,7 @@ if not API_TOKEN:
         "FATAL: API_TOKEN environment variable is required but not set.\n"
         "       The MCP server needs a bearer token to reach the orchestrator.\n"
         "       Set it before launching Claude Code, e.g.:\n"
-        "           export API_TOKEN=$(grep -E '^API_TOKEN=' /opt/helios/gateway_mvp/.env | cut -d= -f2-)\n",
+        "           export API_TOKEN=$(grep -E '^API_TOKEN=' /opt/gateway_mvp/.env | cut -d= -f2-)\n",
         file=sys.stderr,
     )
     sys.exit(1)

@@ -113,7 +113,7 @@ services:
       # because the drain only reads; OWUI owns all writes.
       - open-webui-data:/app/owui_data:ro
       # Codebase access for code_agent (read-only by default)
-      - ${GATEWAY_ROOT_PATH:-.}:/opt/helios/gateway_mvp:ro
+      - ${GATEWAY_ROOT_PATH:-.}:/opt/gateway_mvp:ro
     environment:
       # Primary model (conversation + tools) — set MODEL_URL in .env
       - MODEL_URL=${MODEL_URL:-http://localhost:8080/v1}
@@ -214,7 +214,7 @@ services:
       - CODE_AGENT_ENABLED=${CODE_AGENT_ENABLED:-false}
       - CODE_AGENT_MODEL_URL=${CODE_AGENT_MODEL_URL:-}
       - CODE_AGENT_MODEL_NAME=${CODE_AGENT_MODEL_NAME:-}
-      - CODE_AGENT_CODEBASE_PATH=${CODE_AGENT_CODEBASE_PATH:-/opt/helios/gateway_mvp}
+      - CODE_AGENT_CODEBASE_PATH=${CODE_AGENT_CODEBASE_PATH:-/opt/gateway_mvp}
       - CODE_AGENT_MAX_ROUNDS=${CODE_AGENT_MAX_ROUNDS:-10}
       # Presence awareness (empty entity = disabled)
       - PRESENCE_ENABLED=${PRESENCE_ENABLED:-false}

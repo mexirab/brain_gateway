@@ -37,7 +37,7 @@ The palace is exposed as an MCP server so Claude Code can read and write memorie
 pip install -r scripts/requirements-mcp.txt
 
 # Register with Claude Code
-claude mcp add mempalace -- python3 /opt/helios/gateway_mvp/scripts/mempalace_mcp_server.py
+claude mcp add mempalace -- python3 /opt/gateway_mvp/scripts/mempalace_mcp_server.py
 
 # Environment: ORCHESTRATOR_URL (default http://localhost:8888), API_TOKEN
 ```
