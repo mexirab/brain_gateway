@@ -6,7 +6,6 @@ MEAL_PHOTOS_DIR is redirected to a tmp directory via monkeypatch.
 """
 
 import os
-import tempfile
 import unittest.mock as mock
 
 import pytest

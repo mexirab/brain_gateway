@@ -4,7 +4,6 @@ Tests for state_store workout and meal functions.
 Uses the tmp_db fixture from conftest to get a fresh isolated SQLite DB per test.
 """
 
-import pytest
 
 
 # ---------------------------------------------------------------------------

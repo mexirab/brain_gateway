@@ -75,8 +75,3 @@ class TestCalendarPollIntervalParsing:
 
     def test_empty_returns_default(self):
         assert self._parse_interval("") == 5
-
-
-
-    def test_empty_returns_default(self):
-        assert self._parse_interval("") == 30

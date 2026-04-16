@@ -8,15 +8,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from orchestrator import jobs_training_corpus as jtc
 from orchestrator.jobs_training_corpus import (
-    Record,
     _fingerprint,
-    _load_existing_ids,
     drain_cc_sessions,
     drain_owui,
     drain_state_store,
