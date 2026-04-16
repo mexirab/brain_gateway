@@ -328,11 +328,11 @@ async def chat_completions(req: Request):
         [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
     )
 
-    # --- HA voice pipeline detection & optimization ---
-    # HA's llama_conversation sends a system prompt with entity states plus
-    # conversation history. Detect requests from HA and optimize:
-    # strip redundant system prompts, keep only the latest user message,
-    # and enable voice mode (concise responses, no markdown).
+    # --- Voice-mode detection ---
+    # Two signals, both set is_voice=True:
+    #   1) HA Assist pipeline — identified by client IP or "You are 'Al'" prefix
+    #   2) OWUI mic — our /v1/audio/transcriptions proxy sets a consume-on-read
+    #      flag; the next chat request within VOICE_FLAG_WINDOW_SEC is voice.
     is_voice = False
     client_ip = req.client.host if req.client else ""
     ha_ip = os.environ.get("HA_URL", "").replace("http://", "").replace("https://", "").split(":")[0]
@@ -366,6 +366,9 @@ async def chat_completions(req: Request):
         logger.info("[CHAT] Voice user query: %s", user_text[:200])
         # Replace messages: drop HA system/history, keep just the latest user query
         body["messages"] = [{"role": "user", "content": user_text}]
+    elif shared.consume_voice_flag():
+        is_voice = True
+        logger.info("[CHAT] Detected OWUI mic voice turn (STT beacon consumed)")
 
     chat_req = ChatRequest(**body)
 

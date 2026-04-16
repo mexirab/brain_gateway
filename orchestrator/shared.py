@@ -237,6 +237,28 @@ PHONE_CALENDAR_FILE = os.path.join(
     "phone_calendar.json",
 )
 
+# ---------------------------------------------------------------------------
+# Voice-mode beacon
+# ---------------------------------------------------------------------------
+# Set to time.time() when /v1/audio/transcriptions is hit (OWUI mic flow).
+# Consumed by the next chat request within VOICE_FLAG_WINDOW_SEC to mark it
+# as a voice turn. One STT call → one voice chat.
+_last_voice_at: float = 0.0
+VOICE_FLAG_WINDOW_SEC: float = 30.0
+
+
+def consume_voice_flag() -> bool:
+    """Return True (and clear the flag) if a recent STT call makes the next
+    chat request a voice turn. Fresh STT has to arrive within the window."""
+    global _last_voice_at
+    if _last_voice_at <= 0:
+        return False
+    if time.time() - _last_voice_at > VOICE_FLAG_WINDOW_SEC:
+        _last_voice_at = 0.0
+        return False
+    _last_voice_at = 0.0
+    return True
+
 
 def _load_phone_calendar():
     """Load phone calendar events from disk (called at startup)."""

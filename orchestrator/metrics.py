@@ -468,3 +468,12 @@ VOICE_PIPELINE_LATENCY = Histogram(
     "Excludes STT upstream and TTS/playback downstream.",
     buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 13.0, 17.0, 22.0, 30.0, 45.0, 60.0],
 )
+
+# TTS synthesis latency — observed on the /v1/audio/speech proxy in
+# routes_vision. Captures time to fetch audio bytes from Qwen3-TTS,
+# separate from the orchestrator LLM slice.
+VOICE_TTS_LATENCY = Histogram(
+    "bgw_voice_tts_seconds",
+    "TTS synthesis latency (proxy /v1/audio/speech). Excludes browser playback.",
+    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
+)

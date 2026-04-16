@@ -1,12 +1,16 @@
 """Vision, STT, and TTS API routes."""
 
+import io
 import logging
 import os
+import time
+import wave
 
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from orchestrator import shared
+from orchestrator.metrics import VOICE_TTS_LATENCY
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +148,7 @@ async def stt_transcribe(file: UploadFile = File(...)):
     audio_data = await file.read()
     if len(audio_data) > MAX_AUDIO_UPLOAD:
         return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
+    shared._last_voice_at = time.time()
     r = await shared._http.post(
         f"{STT_URL}/v1/audio/transcriptions",
         files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
@@ -152,6 +157,95 @@ async def stt_transcribe(file: UploadFile = File(...)):
     )
     r.raise_for_status()
     return r.json()
+
+
+@router.post("/v1/audio/transcriptions")
+async def openai_audio_transcriptions(
+    file: UploadFile = File(...),
+    model: str = "whisper-1",
+):
+    """OpenAI-compatible STT endpoint for OWUI to point at.
+
+    Sets the voice beacon before proxying to Whisper so the next chat
+    request within VOICE_FLAG_WINDOW_SEC is tagged as a voice turn.
+    """
+    audio_data = await file.read()
+    if len(audio_data) > MAX_AUDIO_UPLOAD:
+        return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
+    shared._last_voice_at = time.time()
+    r = await shared._http.post(
+        f"{STT_URL}/v1/audio/transcriptions",
+        files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
+        data={"model": model},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+TTS_URL = os.environ.get("TTS_URL", "")
+TTS_SILENCE_PAD_MS = int(os.environ.get("TTS_SILENCE_PAD_MS", "150"))
+
+
+def _prepend_silence_wav(wav_bytes: bytes, ms: int) -> bytes:
+    """Prepend N milliseconds of silence to a PCM WAV audio blob.
+
+    Voice-cloned neural TTS stutters on the first phonemes of each call because
+    the audio buffer and prosody model haven't stabilized. A short silent
+    pre-roll lets the player warm up before the real speech starts.
+    """
+    if ms <= 0:
+        return wav_bytes
+    with io.BytesIO(wav_bytes) as src_io:
+        with wave.open(src_io, "rb") as src:
+            nchannels = src.getnchannels()
+            sampwidth = src.getsampwidth()
+            framerate = src.getframerate()
+            audio_data = src.readframes(src.getnframes())
+    silence_frames = int(framerate * ms / 1000)
+    silence_bytes = b"\x00" * (silence_frames * nchannels * sampwidth)
+    out_io = io.BytesIO()
+    with wave.open(out_io, "wb") as out:
+        out.setnchannels(nchannels)
+        out.setsampwidth(sampwidth)
+        out.setframerate(framerate)
+        out.writeframes(silence_bytes + audio_data)
+    return out_io.getvalue()
+
+
+@router.post("/v1/audio/speech")
+async def openai_audio_speech(request: Request):
+    """OpenAI-compatible TTS endpoint for OWUI to point at.
+
+    Proxies to the real Qwen3-TTS server and prepends ~150ms of silence to
+    WAV responses so the browser's audio buffer and the TTS prosody model
+    have time to settle — fixes the per-sentence first-word stutter.
+    """
+    if not TTS_URL:
+        return JSONResponse({"error": "TTS not configured"}, status_code=503)
+
+    body = await request.json()
+    # Force WAV so the silence pad stays lossless and we avoid an MP3 decode.
+    body["response_format"] = "wav"
+
+    _t0 = time.time()
+    try:
+        r = await shared._http.post(f"{TTS_URL}/v1/audio/speech", json=body, timeout=60)
+        r.raise_for_status()
+    finally:
+        VOICE_TTS_LATENCY.observe(time.time() - _t0)
+
+    audio = r.content
+    content_type = r.headers.get("content-type", "audio/wav")
+    if "wav" in content_type.lower():
+        try:
+            audio = _prepend_silence_wav(audio, TTS_SILENCE_PAD_MS)
+        except Exception as e:
+            logger.warning("[TTS] silence pre-pad failed (%s) — returning raw audio", e)
+    else:
+        logger.debug("[TTS] non-WAV response (%s) — silence pre-pad skipped", content_type)
+
+    return Response(content=audio, media_type=content_type)
 
 
 @router.post("/api/tts/synthesize")

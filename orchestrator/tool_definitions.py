@@ -953,3 +953,39 @@ def get_all_tools() -> List[Dict[str, Any]]:
     if shared.CODE_AGENT_ENABLED:
         tools.append(_CODE_AGENT_TOOL)
     return tools
+
+
+# Tools kept available in voice mode. 38 full tool schemas cost ~6.9k prompt
+# tokens; the voice subset keeps the quick-hit conversational flows (device
+# control, shopping list, reminders, memory, focus, selfcare, routines,
+# decision help) while dropping verbose/debug/typed-only tools. See
+# docs/VOICE_AND_TTS.md for the rationale on each entry.
+VOICE_TOOL_NAMES: frozenset = frozenset(
+    {
+        "home_assistant",
+        "search_memory",
+        "update_memory",
+        "brain_dump",
+        "shopping_list",
+        "set_reminder",
+        "cancel_reminder",
+        "check_calendar",
+        "create_calendar_event",
+        "selfcare_log",
+        "log_meal",
+        "start_focus",
+        "stop_focus",
+        "focus_status",
+        "focus_sprint",
+        "sleep_mode",
+        "decide_for_me",
+        "start_routine",
+        "routine_action",
+        "routine_status",
+    }
+)
+
+
+def get_voice_tools() -> List[Dict[str, Any]]:
+    """Voice-mode tool subset — trims tool-schema prefill to cut LLM latency."""
+    return [t for t in get_all_tools() if t.get("function", {}).get("name") in VOICE_TOOL_NAMES]

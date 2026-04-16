@@ -248,6 +248,21 @@ async def run_unified_tool_loop(
         tool_calls = message.get("tool_calls") or []
         content = message.get("content") or ""
 
+        # Per-call LLM telemetry: prompt/completion tokens, think-tag presence,
+        # wall-clock latency. Kept as an INFO log (not just metrics) so you can
+        # correlate a specific turn's token load with its latency in Loki.
+        _usage = llm_resp.get("usage") or {}
+        _has_think = "<think>" in content
+        logger.info(
+            "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s elapsed=%.2fs",
+            label,
+            _usage.get("prompt_tokens"),
+            _usage.get("completion_tokens"),
+            len(content),
+            _has_think,
+            time.time() - _llm_t0,
+        )
+
         # Fallback: parse XML <tool_call> tags if no native tool_calls
         if not tool_calls and content:
             tool_calls = parse_xml_tool_calls(content)
