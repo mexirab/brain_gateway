@@ -22,7 +22,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from orchestrator import shared
 from orchestrator.metrics import (
@@ -89,6 +89,15 @@ def encrypt_text(text: str) -> str:
     return cipher.encrypt(text.encode()).decode()
 
 
+# Per-process cache of token hashes known to fail decryption. When the key
+# file got rotated/regenerated (e.g. pre-2026-04-14 Docker-volume wipes),
+# older records become permanently unreadable. Without this cache a single
+# unreadable record surfaces a fresh "Decryption failed" warning on every
+# RAG hit, spamming the log. We log the first failure with a short prefix
+# fingerprint (so it's identifiable in logs) and silence subsequent ones.
+_FAILED_TOKENS: set[str] = set()
+
+
 def decrypt_text(token: str) -> str:
     """Decrypt a Fernet token. Returns plaintext, or a redacted placeholder on failure."""
     cipher = _get_cipher()
@@ -97,8 +106,40 @@ def decrypt_text(token: str) -> str:
     try:
         return cipher.decrypt(token.encode()).decode()
     except Exception:
-        logger.warning("[AUTO_LEARN] Decryption failed — returning redacted placeholder")
+        # Use the first 20 chars of the token as a stable fingerprint — Fernet
+        # tokens are deterministic for the same plaintext+key, and the prefix
+        # encodes version+timestamp so it's a useful identifier without
+        # leaking the payload.
+        fingerprint = token[:20]
+        if fingerprint not in _FAILED_TOKENS:
+            _FAILED_TOKENS.add(fingerprint)
+            logger.warning(
+                "[AUTO_LEARN] Decryption failed for token %s… — encrypted with a rotated key, "
+                "returning redacted placeholder (further failures for this token will be silent)",
+                fingerprint,
+            )
         return "[encrypted — decryption failed]"
+
+
+def maybe_decrypt(doc: str, meta: Optional[Dict[str, Any]] = None) -> str:
+    """Decrypt a palace doc only if it's actually encrypted.
+
+    Historically ``decrypt_text()`` was called unconditionally on every doc in
+    auto_learn-sourced queries, which produced a false-positive "Decryption
+    failed" warning on every plaintext record with ``source=auto_learn`` (e.g.
+    facts stored during a window when AUTO_LEARN_ENCRYPT was false). This
+    helper mirrors the gate used by prompt_builder: decrypt only when the
+    metadata explicitly says encrypted, or the doc looks like a Fernet token
+    (``gAAAAAB`` prefix, v0 format).
+    """
+    if doc is None:
+        return ""
+    is_encrypted = (isinstance(meta, dict) and str(meta.get("encrypted", "")).lower() == "true") or doc.startswith(
+        "gAAAAAB"
+    )
+    if is_encrypted:
+        return decrypt_text(doc)
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +381,14 @@ async def is_duplicate(fact_text: str) -> bool:
             query_embeddings=[embedding],
             n_results=3,
             where={"source": "auto_learn"},
-            include=["documents", "distances"],
+            include=["documents", "distances", "metadatas"],
         )
 
         docs = results.get("documents", [[]])[0]
         dists = results.get("distances", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
 
-        for doc, dist in zip(docs, dists, strict=False):
+        for doc, dist, meta in zip(docs, dists, metas, strict=False):
             if doc is None:
                 continue
             # ChromaDB returns squared L2 distance; cos_sim = 1 - dist/2
@@ -354,7 +396,7 @@ async def is_duplicate(fact_text: str) -> bool:
             if cos_sim > shared.AUTO_LEARN_DEDUP_THRESHOLD:
                 return True
             # Also check exact normalized substring match
-            existing = decrypt_text(doc).lower().strip()
+            existing = maybe_decrypt(doc, meta).lower().strip()
             new = fact_text.lower().strip()
             if new in existing or existing in new:
                 return True
@@ -563,7 +605,7 @@ def get_learned_facts(category: Optional[str] = None, limit: int = 100) -> List[
         facts.append(
             {
                 "id": doc_id,
-                "fact": decrypt_text(doc),
+                "fact": maybe_decrypt(doc, meta),
                 "category": meta.get("category", ""),
                 "confidence": meta.get("confidence", ""),
                 "learned_at": meta.get("learned_at", ""),

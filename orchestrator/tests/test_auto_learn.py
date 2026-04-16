@@ -710,10 +710,13 @@ class TestRunAutoLearn:
     async def test_duplicate_fact_skipped(self, mock_shared):
         from orchestrator.auto_learn import is_duplicate
 
-        # Simulate existing fact with high cosine similarity
+        # Simulate existing fact with high cosine similarity. is_duplicate now
+        # requests metadatas too (see maybe_decrypt gate), so the mock must
+        # include them to exercise the full loop.
         mock_shared.collection.query.return_value = {
             "documents": [["User likes coffee"]],
             "distances": [[0.05]],  # cosine distance 0.05 = similarity 0.95
+            "metadatas": [[{"source": "auto_learn"}]],
         }
 
         result = await is_duplicate("User enjoys coffee every morning")
@@ -726,6 +729,7 @@ class TestRunAutoLearn:
         mock_shared.collection.query.return_value = {
             "documents": [["User likes coffee"]],
             "distances": [[0.5]],  # cosine distance 0.5 = similarity 0.5
+            "metadatas": [[{"source": "auto_learn"}]],
         }
 
         result = await is_duplicate("User has a pet cat named Whiskers")

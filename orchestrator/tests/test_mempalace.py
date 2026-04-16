@@ -344,6 +344,8 @@ class TestStoreAndDedup:
             "documents": [["Takes Vyvanse 40mg daily"]],
             "distances": [[0.05]],
             "ids": [["palace_existing"]],
+            # is_duplicate now asks for metadatas too (maybe_decrypt gate)
+            "metadatas": [[{"wing": "personal", "room": "health"}]],
         }
 
         with (

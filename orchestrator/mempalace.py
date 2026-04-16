@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from orchestrator import shared
-from orchestrator.auto_learn import decrypt_text, encrypt_text
+from orchestrator.auto_learn import decrypt_text, encrypt_text, maybe_decrypt
 from orchestrator.metrics import (
     PALACE_MEMORIES_TOTAL,
     PALACE_SEARCH_LATENCY,
@@ -387,7 +387,7 @@ class MemPalace:
             kwargs: Dict[str, Any] = {
                 "query_embeddings": [embedding],
                 "n_results": 3,
-                "include": ["documents", "distances"],
+                "include": ["documents", "distances", "metadatas"],
             }
             where_filter = self._build_where_filter(wing, room)
             if where_filter:
@@ -397,15 +397,16 @@ class MemPalace:
 
             docs = results.get("documents", [[]])[0]
             dists = results.get("distances", [[]])[0]
+            metas = results.get("metadatas", [[]])[0]
 
-            for doc, dist in zip(docs, dists, strict=False):
+            for doc, dist, meta in zip(docs, dists, metas, strict=False):
                 if doc is None:
                     continue
                 cos_sim = 1.0 - float(dist) / 2.0
                 if cos_sim > shared.PALACE_DEDUP_THRESHOLD:
                     return True
                 # Substring match on decrypted text
-                existing = decrypt_text(doc).lower().strip()
+                existing = maybe_decrypt(doc, meta).lower().strip()
                 new = text.lower().strip()
                 if new in existing or existing in new:
                     return True
@@ -454,9 +455,10 @@ class MemPalace:
                     include=["documents", "metadatas"],
                 )
                 docs = results.get("documents", [])
-                for doc in docs:
+                doc_metas = results.get("metadatas", [])
+                for doc, dmeta in zip(docs, doc_metas, strict=False):
                     if doc:
-                        text = decrypt_text(doc)
+                        text = maybe_decrypt(doc, dmeta)
                         lines.append(f"- {text}")
             except Exception as e:
                 logger.debug("[PALACE] Wakeup context fetch failed for %s: %s", room_path, e)
