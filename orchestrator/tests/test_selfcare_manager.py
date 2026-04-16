@@ -268,3 +268,22 @@ class TestStatus:
         status = await sm.get_selfcare_status()
         assert status["last_meal"] is not None
         assert "adderall" in status["meds_confirmed_today"]
+
+    @pytest.mark.asyncio
+    async def test_status_clears_stale_yesterday_state_on_read(self, sm):
+        """Regression: get_selfcare_status() must apply the daily reset on read
+        so stale yesterday timestamps don't surface as e.g. 'sitting 32 hours'
+        when the nudge loop has been paused (presence=away) past midnight."""
+        from datetime import datetime, timedelta
+
+        yesterday = datetime.now() - timedelta(hours=26)
+        sm._state.last_meal_reported = yesterday
+        sm._state.sitting_since = yesterday
+
+        status = await sm.get_selfcare_status()
+
+        assert status["last_meal"] is None, "last_meal should reset to None after midnight rollover"
+        assert status["sitting_minutes"] == 0, "sitting_minutes should zero out at midnight rollover"
+        assert sm._state.last_meal_reported is None
+        assert sm._state.sitting_since is not None
+        assert sm._state.sitting_since.date() == datetime.now().date()

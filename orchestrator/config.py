@@ -204,6 +204,25 @@ class Settings(BaseSettings):
     code_agent_codebase_path: str = "/opt/helios/gateway_mvp"
     code_agent_max_rounds: int = 10
 
+    # -- Expert Model (Qwen3-32B Thinking on Saturn 3090) ------------------------
+    # Hard-reasoning delegate. Primary model calls this via the `ask_expert`
+    # tool for multi-step math, complex planning, deep analysis. Stateless,
+    # blocking, text-only. NOT in voice path (latency incompatible).
+    # Per Phase A bench: p50 ~40s, p95 ~120s, p99/timeout 180s on a 3090.
+    # Phase A found llama.cpp separates `message.content` from
+    # `message.reasoning_content` automatically with `--jinja`, so we do NOT
+    # strip <think> tags in the handler — we just consume `content`.
+    # There is intentionally no THINKING_BUDGET_TOKENS: it's a non-lever in
+    # llama-server for Qwen3 (scout misreported). Setting max_tokens below
+    # the reasoning length truncates mid-thought and yields empty content.
+    expert_enabled: bool = False
+    expert_model_url: str = ""  # e.g. http://10.0.0.58:8084/v1
+    expert_model_name: str = "default"
+    expert_timeout_seconds: int = 180
+    expert_max_tokens: int = 8000
+    expert_circuit_breaker_failures: int = 3
+    expert_circuit_breaker_cooldown_seconds: int = 120
+
     # -- Do Not Disturb ----------------------------------------------------------
     # (runtime state, not env var — but included for completeness)
 

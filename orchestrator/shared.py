@@ -237,6 +237,28 @@ PHONE_CALENDAR_FILE = os.path.join(
     "phone_calendar.json",
 )
 
+# ---------------------------------------------------------------------------
+# Voice-mode beacon
+# ---------------------------------------------------------------------------
+# Set to time.time() when /v1/audio/transcriptions is hit (OWUI mic flow).
+# Consumed by the next chat request within VOICE_FLAG_WINDOW_SEC to mark it
+# as a voice turn. One STT call → one voice chat.
+_last_voice_at: float = 0.0
+VOICE_FLAG_WINDOW_SEC: float = 30.0
+
+
+def consume_voice_flag() -> bool:
+    """Return True (and clear the flag) if a recent STT call makes the next
+    chat request a voice turn. Fresh STT has to arrive within the window."""
+    global _last_voice_at
+    if _last_voice_at <= 0:
+        return False
+    if time.time() - _last_voice_at > VOICE_FLAG_WINDOW_SEC:
+        _last_voice_at = 0.0
+        return False
+    _last_voice_at = 0.0
+    return True
+
 
 def _load_phone_calendar():
     """Load phone calendar events from disk (called at startup)."""
@@ -317,6 +339,17 @@ CODE_AGENT_MODEL_URL = settings.code_agent_model_url
 CODE_AGENT_MODEL_NAME = settings.code_agent_model_name
 CODE_AGENT_CODEBASE_PATH = settings.code_agent_codebase_path
 CODE_AGENT_MAX_ROUNDS = settings.code_agent_max_rounds
+
+# ---------------------------------------------------------------------------
+# Expert Model (Qwen3-32B Thinking on Saturn 3090)
+# ---------------------------------------------------------------------------
+EXPERT_ENABLED = settings.expert_enabled
+EXPERT_MODEL_URL = settings.expert_model_url
+EXPERT_MODEL_NAME = settings.expert_model_name
+EXPERT_TIMEOUT_SECONDS = settings.expert_timeout_seconds
+EXPERT_MAX_TOKENS = settings.expert_max_tokens
+EXPERT_CIRCUIT_BREAKER_FAILURES = settings.expert_circuit_breaker_failures
+EXPERT_CIRCUIT_BREAKER_COOLDOWN_SECONDS = settings.expert_circuit_breaker_cooldown_seconds
 
 # ---------------------------------------------------------------------------
 # Do Not Disturb (sleep mode) — suppresses all announcements

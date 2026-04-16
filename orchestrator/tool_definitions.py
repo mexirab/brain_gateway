@@ -947,9 +947,83 @@ _CODE_AGENT_TOOL = {
 }
 
 
+# Expert model tool — added dynamically when enabled
+_EXPERT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_expert",
+        "description": (
+            "Delegate a HARD reasoning task to the expert model (Qwen3-32B Thinking on "
+            "Saturn 3090). Use for: multi-step math, complex planning, deep debugging "
+            "analyses, research syntheses — anything where 30-120 seconds of focused "
+            "thinking is likely to beat your first-pass answer. "
+            "DO NOT use for: simple questions, conversational turns, anything involving "
+            "home_assistant / reminders / calendar / focus / email / live system state "
+            "(those are YOUR job, not the expert's — the expert has no tools and no "
+            "memory of this conversation). "
+            "DO NOT use on voice turns — latency is incompatible with voice. "
+            "Latency is 30-150 seconds per call. Warn the user before invoking "
+            "('let me think carefully about this, it'll take a minute'). "
+            "Pass a fully self-contained question — bake any needed context into it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "The hard question or problem. Self-contained; the expert has "
+                        "no memory of the conversation, so include any context it needs."
+                    ),
+                }
+            },
+            "required": ["question"],
+        },
+    },
+}
+
+
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent."""
+    """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent + optional expert."""
     tools = [get_ha_tool_definition()] + STATIC_TOOLS
     if shared.CODE_AGENT_ENABLED:
         tools.append(_CODE_AGENT_TOOL)
+    if shared.EXPERT_ENABLED:
+        tools.append(_EXPERT_TOOL)
     return tools
+
+
+# Tools kept available in voice mode. 38 full tool schemas cost ~6.9k prompt
+# tokens; the voice subset keeps the quick-hit conversational flows (device
+# control, shopping list, reminders, memory, focus, selfcare, routines,
+# decision help) while dropping verbose/debug/typed-only tools. See
+# docs/VOICE_AND_TTS.md for the rationale on each entry.
+VOICE_TOOL_NAMES: frozenset = frozenset(
+    {
+        "home_assistant",
+        "search_memory",
+        "update_memory",
+        "brain_dump",
+        "shopping_list",
+        "set_reminder",
+        "cancel_reminder",
+        "check_calendar",
+        "create_calendar_event",
+        "selfcare_log",
+        "log_meal",
+        "start_focus",
+        "stop_focus",
+        "focus_status",
+        "focus_sprint",
+        "sleep_mode",
+        "decide_for_me",
+        "start_routine",
+        "routine_action",
+        "routine_status",
+    }
+)
+
+
+def get_voice_tools() -> List[Dict[str, Any]]:
+    """Voice-mode tool subset — trims tool-schema prefill to cut LLM latency."""
+    return [t for t in get_all_tools() if t.get("function", {}).get("name") in VOICE_TOOL_NAMES]

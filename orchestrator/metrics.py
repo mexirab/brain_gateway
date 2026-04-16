@@ -455,6 +455,30 @@ TRAINING_CORPUS_RECORDS = Counter(
     ["source"],  # owui | state_store | cc_session
 )
 
+# -- Expert Model (Qwen3-32B Thinking on Saturn 3090) -----------------------
+# Bucket selection tuned to Phase A bench reality: typical thinking turns
+# fall in the 30-60s range; hard reasoning runs past 2 minutes; timeout is
+# 180s. See `docs/EXPERT_MODEL.md` for the latency discussion.
+EXPERT_CALL_COUNT = Counter(
+    "bgw_expert_calls_total",
+    "Total ask_expert tool invocations",
+    ["result"],  # success | error | circuit_open | disabled
+)
+EXPERT_CALL_LATENCY = Histogram(
+    "bgw_expert_call_duration_seconds",
+    "ask_expert end-to-end latency (HTTP round-trip, includes thinking time)",
+    buckets=[5, 15, 30, 45, 60, 90, 120, 150, 180, 240],
+)
+EXPERT_REASONING_TOKENS = Histogram(
+    "bgw_expert_reasoning_tokens",
+    "Reasoning tokens consumed by each ask_expert call (Qwen3 <think> phase)",
+    buckets=[100, 500, 1000, 2000, 4000, 8000, 16000, 32000],
+)
+EXPERT_CIRCUIT_OPEN = Gauge(
+    "bgw_expert_circuit_open",
+    "1 if the expert circuit breaker is currently open (calls short-circuited)",
+)
+
 # -- Voice pipeline latency --------------------------------------------------
 # Measures the orchestrator-observable slice of the voice pipeline: from the
 # moment HA's conversation agent sends text to /v1/chat/completions to the
@@ -467,4 +491,13 @@ VOICE_PIPELINE_LATENCY = Histogram(
     "Text-in to text-out latency for voice-channel requests (LLM + tool loop). "
     "Excludes STT upstream and TTS/playback downstream.",
     buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 13.0, 17.0, 22.0, 30.0, 45.0, 60.0],
+)
+
+# TTS synthesis latency — observed on the /v1/audio/speech proxy in
+# routes_vision. Captures time to fetch audio bytes from Qwen3-TTS,
+# separate from the orchestrator LLM slice.
+VOICE_TTS_LATENCY = Histogram(
+    "bgw_voice_tts_seconds",
+    "TTS synthesis latency (proxy /v1/audio/speech). Excludes browser playback.",
+    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
 )

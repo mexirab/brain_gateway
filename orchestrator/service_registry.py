@@ -102,6 +102,11 @@ class ServiceRegistry:
                 url=settings.searxng_url,
                 features_when_down=["web_search"],
             ),
+            "expert": ServiceInfo(
+                name="Expert Model",
+                url=settings.expert_model_url,
+                features_when_down=["ask_expert"],
+            ),
         }
 
     def is_healthy(self, service_name: str) -> bool:
@@ -150,7 +155,7 @@ class ServiceRegistry:
         url = svc.url.rstrip("/")
         if name == "ha":
             health_url = f"{url}/api/"
-        elif name in ("model", "fallback_model", "vision"):
+        elif name in ("model", "fallback_model", "vision", "expert"):
             health_url = url.replace("/v1", "") + "/health"
         elif name in ("tts", "stt"):
             health_url = f"{url}/health"
