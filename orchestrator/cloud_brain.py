@@ -192,7 +192,12 @@ class CloudBrain:
                 routing_info["rag_prefetch"] = True
 
         # Build unified system prompt
-        system_prompt = self._get_unified_system_prompt(personal_context, mode=intent.mode, intensity=intent.intensity)
+        system_prompt = self._get_unified_system_prompt(
+            personal_context,
+            mode=intent.mode,
+            intensity=intent.intensity,
+            is_voice=is_voice,
+        )
 
         # Voice mode: add conciseness hint to reduce TTS latency
         if is_voice:
@@ -225,6 +230,11 @@ class CloudBrain:
         model_url = self._model_url
         model_name = self._model_name
         tools = self._get_all_tools()
+        # Voice gate: ask_expert is text-only. Its ~30-150s latency is
+        # incompatible with voice. Belt-and-braces — the system prompt also
+        # omits the guidance when is_voice is True.
+        if is_voice:
+            tools = [t for t in tools if t.get("function", {}).get("name") != "ask_expert"]
 
         # Strip incoming system messages — the orchestrator builds its own system
         # prompt (with RAG, mode, tools). External callers like HA's llama_conversation

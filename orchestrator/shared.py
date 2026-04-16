@@ -319,6 +319,17 @@ CODE_AGENT_CODEBASE_PATH = settings.code_agent_codebase_path
 CODE_AGENT_MAX_ROUNDS = settings.code_agent_max_rounds
 
 # ---------------------------------------------------------------------------
+# Expert Model (Qwen3-32B Thinking on Saturn 3090)
+# ---------------------------------------------------------------------------
+EXPERT_ENABLED = settings.expert_enabled
+EXPERT_MODEL_URL = settings.expert_model_url
+EXPERT_MODEL_NAME = settings.expert_model_name
+EXPERT_TIMEOUT_SECONDS = settings.expert_timeout_seconds
+EXPERT_MAX_TOKENS = settings.expert_max_tokens
+EXPERT_CIRCUIT_BREAKER_FAILURES = settings.expert_circuit_breaker_failures
+EXPERT_CIRCUIT_BREAKER_COOLDOWN_SECONDS = settings.expert_circuit_breaker_cooldown_seconds
+
+# ---------------------------------------------------------------------------
 # Do Not Disturb (sleep mode) — suppresses all announcements
 # ---------------------------------------------------------------------------
 DND_ACTIVE = False  # runtime state, set via goodnight tool

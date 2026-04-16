@@ -947,9 +947,47 @@ _CODE_AGENT_TOOL = {
 }
 
 
+# Expert model tool — added dynamically when enabled
+_EXPERT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_expert",
+        "description": (
+            "Delegate a HARD reasoning task to the expert model (Qwen3-32B Thinking on "
+            "Saturn 3090). Use for: multi-step math, complex planning, deep debugging "
+            "analyses, research syntheses — anything where 30-120 seconds of focused "
+            "thinking is likely to beat your first-pass answer. "
+            "DO NOT use for: simple questions, conversational turns, anything involving "
+            "home_assistant / reminders / calendar / focus / email / live system state "
+            "(those are YOUR job, not the expert's — the expert has no tools and no "
+            "memory of this conversation). "
+            "DO NOT use on voice turns — latency is incompatible with voice. "
+            "Latency is 30-150 seconds per call. Warn the user before invoking "
+            "('let me think carefully about this, it'll take a minute'). "
+            "Pass a fully self-contained question — bake any needed context into it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "The hard question or problem. Self-contained; the expert has "
+                        "no memory of the conversation, so include any context it needs."
+                    ),
+                }
+            },
+            "required": ["question"],
+        },
+    },
+}
+
+
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent."""
+    """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent + optional expert."""
     tools = [get_ha_tool_definition()] + STATIC_TOOLS
     if shared.CODE_AGENT_ENABLED:
         tools.append(_CODE_AGENT_TOOL)
+    if shared.EXPERT_ENABLED:
+        tools.append(_EXPERT_TOOL)
     return tools

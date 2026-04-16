@@ -192,7 +192,12 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
     return "\n".join(chunks) if chunks else ""
 
 
-def get_unified_system_prompt(personal_context: str = "", mode: str = "explainer", intensity: str = "low") -> str:
+def get_unified_system_prompt(
+    personal_context: str = "",
+    mode: str = "explainer",
+    intensity: str = "low",
+    is_voice: bool = False,
+) -> str:
     """Unified system prompt for a single model handling both conversation and tool execution.
 
     Merges the conversational personality from the Helios prompt with the
@@ -254,6 +259,27 @@ PERSONAL CONTEXT (from {user}'s notes):
 
     now = datetime.now()
     date_str = now.strftime("%A, %B %-d, %Y at %-I:%M %p")
+
+    # ask_expert guidance is conditional: only present when the expert tool is
+    # both ENABLED and NOT being hidden from the voice path. Injecting the
+    # guidance when the tool isn't in the schema would lead the model to
+    # reference a tool that doesn't exist for that turn.
+    if shared.EXPERT_ENABLED and not is_voice:
+        expert_section = (
+            "- ask_expert: Delegate a HARD reasoning task to the expert model "
+            "(Qwen3-32B Thinking on Saturn 3090). Use for multi-step math, "
+            "complex planning, debug analyses, research syntheses, or when the "
+            f'user explicitly says "ask the expert", "think harder", '
+            '"reason through this", or similar. DO NOT use for simple questions, '
+            "home_assistant tasks, reminders, calendar, email, or anything involving "
+            "live system state — those are YOUR job. The expert has no tools and no "
+            "memory of this conversation, so bake any needed context into the "
+            f"`question` argument. Latency is 30-150 seconds — ALWAYS warn {user} "
+            'first ("let me think carefully about this, it\'ll take a minute") so '
+            "they know nothing is hung. Don't call it twice in one turn."
+        )
+    else:
+        expert_section = ""
 
     return f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
 
@@ -331,7 +357,7 @@ WHEN TO USE TOOLS:
 - recall_context: When user says "what was I doing?", "where was I?", "what was I working on?", "I'm back", "just got back"
 - check_claude_activity: When {user} asks you to troubleshoot yourself, mentions something that "just broke" or "stopped working", or when a code-related question might be explained by recent Claude Code edits. Action="recent" gives you a compact summary of the last ~2 hours of activity. Action="files_touched" tells you which files changed. Use this BEFORE code_agent when the issue is potentially recent.
 - code_agent: When user asks about how something works in your code, asks you to troubleshoot a code issue, investigate a bug, look at a specific file, search the codebase, run tests, or implement a change. Examples: "how do meal nudges work?", "look at selfcare_manager.py", "why is the calendar polling failing?", "search for where reminders are sent", "run the tests". Use apply_changes=true ONLY when user explicitly asks you to make changes.
-
+{expert_section}
 DECISION HELPER (decide_for_me):
 - When using decide_for_me: return ONE concrete recommendation for work/overwhelm, or TWO options max for food/general
 - Never present more than 2 options — user wants you to make the call

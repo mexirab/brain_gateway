@@ -1218,6 +1218,10 @@ import contextlib
 with contextlib.suppress(ImportError):
     from orchestrator import code_agent  # noqa: F401
 
+# Import expert_agent to register the ask_expert handler
+with contextlib.suppress(ImportError):
+    from orchestrator import expert_agent  # noqa: F401
+
 
 # ---------------------------------------------------------------------------
 # Workouts
