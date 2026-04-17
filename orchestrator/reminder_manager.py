@@ -306,9 +306,14 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
 
     except Exception as e:
         latency_ms = int((_time.time() - t0) * 1000)
-        logger.error(f"Voice announcement failed: {e}")
-        _record_announcement(text, announcement_type, None, False, str(e), latency_ms)
-        return {"success": False, "error": str(e)}
+        # Include exception type because some common failures (httpx.ReadTimeout,
+        # httpx.ReadError) have empty str(), which otherwise logs as the useless
+        # "Voice announcement failed: " with no signal. logger.exception also
+        # attaches the traceback so we can see which call path failed.
+        err_repr = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        logger.exception("Voice announcement failed (%s)", err_repr)
+        _record_announcement(text, announcement_type, None, False, err_repr, latency_ms)
+        return {"success": False, "error": err_repr}
 
 
 def _record_announcement(
