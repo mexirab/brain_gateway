@@ -428,6 +428,12 @@ async def startup_event():
     if shared.DND_ACTIVE:
         logger.info("[DND] Restored sleep mode from DB — announcements suppressed")
 
+    # Restore phone calendar events from disk — _load_phone_calendar persists
+    # events on every sync but wasn't being called on boot, so a fresh
+    # orchestrator started with an empty cache and check_calendar fell through
+    # to Google until the iPhone Shortcut posted again.
+    shared._load_phone_calendar()
+
     # Initialize progress tracking DB (F-005)
     from orchestrator import progress_tracker
 
