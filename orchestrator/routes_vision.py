@@ -149,6 +149,7 @@ async def stt_transcribe(file: UploadFile = File(...)):
     if len(audio_data) > MAX_AUDIO_UPLOAD:
         return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
     shared._last_voice_at = time.time()
+    shared.mark_voice_activity()
     r = await shared._http.post(
         f"{STT_URL}/v1/audio/transcriptions",
         files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
@@ -173,6 +174,7 @@ async def openai_audio_transcriptions(
     if len(audio_data) > MAX_AUDIO_UPLOAD:
         return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
     shared._last_voice_at = time.time()
+    shared.mark_voice_activity()
     r = await shared._http.post(
         f"{STT_URL}/v1/audio/transcriptions",
         files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},

@@ -370,6 +370,12 @@ async def chat_completions(req: Request):
         is_voice = True
         logger.info("[CHAT] Detected OWUI mic voice turn (STT beacon consumed)")
 
+    # Update the sticky voice-activity timestamp (used by reminder_manager to
+    # suppress announcements mid-conversation). Covers HA Assist too — its
+    # path doesn't go through the STT proxy, so STT-side marking misses it.
+    if is_voice:
+        shared.mark_voice_activity()
+
     chat_req = ChatRequest(**body)
 
     return await cloud_brain.chat(

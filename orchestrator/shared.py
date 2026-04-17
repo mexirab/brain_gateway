@@ -240,11 +240,17 @@ PHONE_CALENDAR_FILE = os.path.join(
 # ---------------------------------------------------------------------------
 # Voice-mode beacon
 # ---------------------------------------------------------------------------
-# Set to time.time() when /v1/audio/transcriptions is hit (OWUI mic flow).
-# Consumed by the next chat request within VOICE_FLAG_WINDOW_SEC to mark it
-# as a voice turn. One STT call → one voice chat.
+# _last_voice_at — consume-on-read beacon. Set by STT proxy, consumed by the
+# next chat request within VOICE_FLAG_WINDOW_SEC to tag it as a voice turn.
+# Exactly-once semantics: one STT → one voice chat.
+#
+# _last_voice_activity_at — sticky timestamp of the most recent voice activity
+# (STT call OR is_voice=True chat turn). NEVER consumed — just updated. Used
+# by announcement gating so reminders don't interrupt mid-conversation.
 _last_voice_at: float = 0.0
+_last_voice_activity_at: float = 0.0
 VOICE_FLAG_WINDOW_SEC: float = 30.0
+VOICE_SESSION_WINDOW_SEC: float = 60.0
 
 
 def consume_voice_flag() -> bool:
@@ -258,6 +264,22 @@ def consume_voice_flag() -> bool:
         return False
     _last_voice_at = 0.0
     return True
+
+
+def mark_voice_activity() -> None:
+    """Record that voice activity just happened. Called from STT proxy and
+    from the chat endpoint whenever is_voice=True. Used by is_voice_session_active."""
+    global _last_voice_activity_at
+    _last_voice_activity_at = time.time()
+
+
+def is_voice_session_active(window_sec: float = VOICE_SESSION_WINDOW_SEC) -> bool:
+    """True if voice activity happened within the last window_sec seconds.
+    Use this to gate reminder announcements so they don't stomp on an active
+    conversation with Jess."""
+    if _last_voice_activity_at <= 0:
+        return False
+    return (time.time() - _last_voice_activity_at) <= window_sec
 
 
 def _load_phone_calendar():

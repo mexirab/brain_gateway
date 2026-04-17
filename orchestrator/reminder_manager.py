@@ -214,6 +214,21 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         logger.info(f"[DND] Suppressed announcement ({announcement_type}): {text[:60]}")
         return {"success": True, "suppressed": True, "reason": "dnd_active"}
 
+    # Mid-conversation guard — if the user is in an active voice session with
+    # Jess (OWUI mic or HA Assist), suppress the announcement. Firing an
+    # announcement over the house speakers while the user is talking to Jess
+    # in the browser both (a) confuses the user — two Jesses, different rooms,
+    # crosstalk — and (b) piles onto Qwen3-TTS, which is already handling
+    # per-sentence synthesis for the live reply and will time out under
+    # contention. VOICE_SESSION_WINDOW_SEC defaults to 60s.
+    if shared.is_voice_session_active():
+        logger.info(
+            "[VOICE-ACTIVE] Suppressed announcement (%s): %s",
+            announcement_type,
+            text[:60],
+        )
+        return {"success": True, "suppressed": True, "reason": "voice_session_active"}
+
     try:
         backend = shared.tts_backend
         if backend is None:
