@@ -282,6 +282,7 @@ The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every
 ```
 - `action` (string, required): `meal`, `medication`, `water`, or `movement`
 - `detail` (string, optional): Medication name or meal type
+- Side effect: if an active routine's current step matches `action` (word-boundary match on step id/label against the medication/meal/water/movement keyword map), the routine auto-advances via `routine_manager.advance_step("done")`. Fire-and-forget; never blocks the selfcare write.
 
 ### decide_for_me
 ```json

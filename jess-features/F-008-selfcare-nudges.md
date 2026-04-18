@@ -108,6 +108,7 @@ Med logged: "Logged. Next dose is {next_schedule}."
 
 - Don't nudge during active focus session (or soften: "After this sprint, grab water")
 - Don't nudge during active routine (routine handles meds)
+- When a user logs a selfcare action during an active routine and the logged action matches the current step (medication / meal / water / movement keyword map), `log_selfcare` fires `routine_manager._maybe_advance_routine_for_action` fire-and-forget and the routine auto-advances. See F-006 → "Selfcare bridge".
 - Respect quiet hours
 - Max one nudge per check cycle (don't stack meal + water + movement)
 

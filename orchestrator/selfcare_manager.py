@@ -5,7 +5,9 @@ Monitors time since last meal, medication schedule, hydration, and movement.
 Nudges via TTS at appropriate intervals. Gentle external signals, not nagging.
 """
 
+import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from typing import Any, Dict, Optional
@@ -97,7 +99,7 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
     if action == "meal":
         meal_type = detail or "a meal"
         record_meal_logged(meal_type)
-        return f"Logged — you had {meal_type}."
+        result = f"Logged — you had {meal_type}."
 
     elif action == "medication":
         med_name = detail or "medication"
@@ -107,24 +109,32 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
         save_selfcare_log("medication", med_name)
         next_sched = _get_next_med_schedule(med_name)
         logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})
-        if next_sched:
-            return f"Logged. Next dose is {next_sched}."
-        return f"Logged — {med_name} taken."
+        result = f"Logged. Next dose is {next_sched}." if next_sched else f"Logged — {med_name} taken."
 
     elif action == "water":
         _state.last_hydration_nudge = now
         save_selfcare_log("water", detail)
         logger.info("[SELFCARE] Hydration logged", extra={"component": "selfcare"})
-        return "Logged — stay hydrated!"
+        result = "Logged — stay hydrated!"
 
     elif action == "movement":
         _state.last_movement_nudge = now
         _state.sitting_since = now
         save_selfcare_log("movement", detail)
         logger.info("[SELFCARE] Movement logged", extra={"component": "selfcare"})
-        return "Logged — nice to get moving."
+        result = "Logged — nice to get moving."
 
-    return f"Unknown action: {action}"
+    else:
+        return f"Unknown action: {action}"
+
+    # Bridge: if an active routine is waiting on a step that matches this
+    # selfcare action, advance it. Fire-and-forget so the routine's own TTS
+    # doesn't piggyback on the tool response (would arrive before the user
+    # hears "Logged — medication taken"). 2026-04-17: user logged meds via
+    # selfcare_log at 21:15 but the evening routine stayed stuck on
+    # evening_meds and nudged all night.
+    asyncio.create_task(_maybe_advance_routine_for_action(action))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -427,3 +437,59 @@ def _in_quiet_hours(current: time, start: time, end: time) -> bool:
         return start <= current <= end
     # Wraps midnight (e.g., 22:00 to 07:00)
     return current >= start or current <= end
+
+
+# ---------------------------------------------------------------------------
+# Routine bridge (F-006 selfcare → routine advancement)
+# ---------------------------------------------------------------------------
+
+
+# Word-boundary matching — "med" alone would false-match "premeditated",
+# "stretch goals review", etc. Explicit words keep the bridge tight.
+_ACTION_KEYWORDS: Dict[str, tuple] = {
+    "medication": ("meds", "medication", "medications"),
+    "meal": ("meal", "breakfast", "lunch", "dinner", "eat"),
+    "water": ("water", "hydrate", "hydration"),
+    "movement": ("movement", "stretch", "walk", "exercise"),
+}
+
+
+def _step_matches_selfcare_action(step, action: str) -> bool:
+    """Does an active routine step correspond to this selfcare action?
+
+    Matches on id OR label via word-boundary regex (case-insensitive).
+    """
+    if step is None:
+        return False
+    keywords = _ACTION_KEYWORDS.get(action)
+    if not keywords:
+        return False
+    sid = (getattr(step, "id", "") or "").lower()
+    label = (getattr(step, "label", "") or "").lower()
+    haystack = f"{sid} {label}"
+    return any(re.search(rf"\b{re.escape(k)}\b", haystack) for k in keywords)
+
+
+async def _maybe_advance_routine_for_action(action: str) -> None:
+    """Advance the active routine if its current step matches `action`."""
+    try:
+        from orchestrator.routine_manager import _active_session, advance_step
+
+        if _active_session is None:
+            return
+        idx = _active_session.current_step_index
+        if idx >= len(_active_session.steps):
+            return
+        step = _active_session.steps[idx]
+        if not _step_matches_selfcare_action(step, action):
+            return
+        logger.info(
+            f"[SELFCARE] Advancing routine step '{step.id}' — '{action}' logged",
+            extra={"component": "selfcare"},
+        )
+        await advance_step("done")
+    except Exception as e:
+        # ERROR (not warning): if this fires, the bridge is structurally
+        # broken — either the import path changed or the session shape did.
+        # Either way it needs to be visible on dashboards, not buried.
+        logger.error(f"[SELFCARE] Routine bridge failed: {e}", exc_info=True)

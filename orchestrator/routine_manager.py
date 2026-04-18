@@ -396,6 +396,14 @@ async def get_routine_status() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _greeting_word(hour: int) -> str:
+    if 4 <= hour < 12:
+        return "Morning"
+    if 12 <= hour < 17:
+        return "Afternoon"
+    return "Evening"
+
+
 def _build_step_announcement(
     step: RoutineStep,
     buffer_minutes: Optional[int],
@@ -420,13 +428,14 @@ def _build_step_announcement(
         label = step.fallback_label
 
     if is_first:
+        greet = _greeting_word(datetime.now().hour)
         if is_late and next_event_title:
             return (
-                f"Morning, {name}. You're running a bit behind — "
+                f"{greet}, {name}. You're running a bit behind — "
                 f"{next_event_title} is coming up. "
                 f"First up: {label}. That's the priority."
             )
-        return f"Morning, {name}. First up: {label}. Let me know when you're done."
+        return f"{greet}, {name}. First up: {label}. Let me know when you're done."
 
     if is_last:
         return f"Almost done. Last thing: {label}."
@@ -455,10 +464,23 @@ async def _deliver_nudge() -> None:
 
     nudge_max = shared.ROUTINE_NUDGE_MAX
 
-    # Auto-skip after max nudges if configured
-    if _active_session.nudge_count > nudge_max and shared.ROUTINE_AUTO_SKIP and step.skippable:
-        logger.info(f"[ROUTINE] Auto-skipping step '{step.id}' after {nudge_max} nudges")
-        await advance_step("skip")
+    if _active_session.nudge_count > nudge_max:
+        # Preferred escape: auto-skip the stuck step (gated by env + skippable).
+        if shared.ROUTINE_AUTO_SKIP and step.skippable:
+            logger.info(f"[ROUTINE] Auto-skipping step '{step.id}' after {nudge_max} nudges")
+            await advance_step("skip")
+            return
+        # Safety net for non-skippable / auto-skip-off: end the whole routine
+        # instead of nudging forever. The 2026-04-17 evening routine was stuck
+        # on evening_meds (skippable=false) and nudged through the night —
+        # user heard "I'll move past your evening meds" as the first thing
+        # after quiet hours lifted.
+        logger.warning(
+            f"[ROUTINE] Auto-ending '{_active_session.routine_id}' — stuck on "
+            f"step '{step.id}' (skippable={step.skippable}, "
+            f"auto_skip={shared.ROUTINE_AUTO_SKIP}) after {nudge_max} nudges"
+        )
+        await advance_step("stop")
         return
 
     # Pick nudge template
@@ -493,11 +515,18 @@ def _schedule_nudge(delay_minutes: int) -> None:
 
 def _cancel_nudge() -> None:
     """Cancel the current nudge job."""
+    from apscheduler.jobstores.base import JobLookupError
+
     global _active_session
     if _active_session is None or not _active_session.nudge_job_id:
         return
-    with contextlib.suppress(Exception):
-        shared.scheduler.remove_job(_active_session.nudge_job_id)
+    job_id = _active_session.nudge_job_id
+    try:
+        shared.scheduler.remove_job(job_id)
+    except JobLookupError:
+        # Expected when the job removed itself (auto-end path calls stop from
+        # inside the nudge job body). Noise-free debug line, not a warning.
+        logger.debug(f"[ROUTINE] Nudge job {job_id} already gone")
     _active_session.nudge_job_id = None
 
 

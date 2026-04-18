@@ -6,6 +6,8 @@ Mocks TTS, HA, calendar, and scheduler to isolate routine logic.
 Requires full orchestrator dependencies (runs inside Docker).
 """
 
+import logging
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -289,3 +291,144 @@ class TestPromptContext:
     def test_context_when_inactive(self, rm):
         ctx = rm.get_active_routine_context()
         assert ctx == ""
+
+
+# ---------------------------------------------------------------------------
+# _greeting_word boundary tests
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestGreetingWord:
+    @pytest.mark.parametrize(
+        "hour,expected",
+        [
+            (3, "Evening"),   # before 4am → Evening
+            (4, "Morning"),   # morning starts
+            (11, "Morning"),  # last hour of morning
+            (12, "Afternoon"),  # afternoon starts
+            (16, "Afternoon"),  # last hour of afternoon
+            (17, "Evening"),  # evening starts
+            (21, "Evening"),
+            (23, "Evening"),
+            (0, "Evening"),   # midnight is still Evening
+        ],
+    )
+    def test_greeting_word_boundaries(self, rm, hour, expected):
+        assert rm._greeting_word(hour) == expected
+
+
+# ---------------------------------------------------------------------------
+# _deliver_nudge — auto-end safety net
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestDeliverNudgeAutoEnd:
+    """Covers the post-cap safety net added after the 2026-04-17 overnight bug.
+
+    Previously: past cap, if step not skippable / auto-skip disabled, the nudge
+    job just kept firing template-2 ("I'll move past X soon") forever.
+    Now: past cap, auto-skip if possible, else advance_step("stop") cleanly.
+    """
+
+    @pytest.mark.asyncio
+    async def test_under_cap_announces_normally(self, rm, mock_voice, monkeypatch):
+        """nudge_count <= nudge_max → normal nudge fires, session continues."""
+        await rm.start_routine("morning")
+        mock_voice.reset_mock()
+
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 3, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", True, raising=False)
+
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+
+        assert rm._active_session is not None
+        assert rm._active_session.nudge_count == 1
+        mock_voice.assert_awaited_once()
+        # Normal nudge path should NOT trigger advance_step
+        mock_advance.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_past_cap_skippable_auto_skips(self, rm, mock_voice, monkeypatch):
+        """Past cap + skippable + ROUTINE_AUTO_SKIP=True → advance_step('skip')."""
+        await rm.start_routine("morning")
+        # Advance past non-skippable meds to the shower step (skippable=True)
+        await rm.advance_step("done")
+        assert rm._active_session.current_step_index == 1
+        assert rm._active_session.steps[1].skippable is True
+
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 2, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", True, raising=False)
+        rm._active_session.nudge_count = 2  # next nudge will push count > 2
+
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+
+        mock_advance.assert_awaited_once_with("skip")
+
+    @pytest.mark.asyncio
+    async def test_past_cap_non_skippable_stops(self, rm, mock_voice, monkeypatch, caplog):
+        """Past cap + step.skippable=False → advance_step('stop'), WARNING logged."""
+        # Start evening routine: single step evening_meds with skippable=False
+        await rm.start_routine("evening")
+        current_step = rm._active_session.steps[0]
+        assert current_step.skippable is False
+
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 2, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", True, raising=False)
+        rm._active_session.nudge_count = 2  # next nudge will push count > 2
+
+        with (
+            patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance,
+            caplog.at_level(logging.WARNING, logger="orchestrator.routine_manager"),
+        ):
+            await rm._deliver_nudge()
+
+        mock_advance.assert_awaited_once_with("stop")
+        # WARNING log mentions "Auto-ending" and the step id
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Auto-ending" in r.getMessage() and "evening_meds" in r.getMessage() for r in warnings), (
+            f"Expected 'Auto-ending'+step-id WARNING; got: {[r.getMessage() for r in warnings]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_past_cap_auto_skip_disabled_stops(self, rm, mock_voice, monkeypatch):
+        """Past cap + skippable=True + ROUTINE_AUTO_SKIP=False → advance_step('stop')."""
+        await rm.start_routine("morning")
+        await rm.advance_step("done")  # move to shower (skippable=True)
+        assert rm._active_session.steps[1].skippable is True
+
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 2, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", False, raising=False)
+        rm._active_session.nudge_count = 2
+
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+
+        mock_advance.assert_awaited_once_with("stop")
+
+    @pytest.mark.asyncio
+    async def test_no_active_session_is_noop(self, rm, mock_voice):
+        """_active_session=None → no announcement, no advance."""
+        rm._active_session = None
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+        mock_voice.assert_not_called()
+        mock_advance.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_paused_session_is_noop(self, rm, mock_voice):
+        """paused=True → no announcement, no advance, nudge_count unchanged."""
+        await rm.start_routine("morning")
+        rm._active_session.paused = True
+        mock_voice.reset_mock()
+        count_before = rm._active_session.nudge_count
+
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+
+        mock_voice.assert_not_called()
+        mock_advance.assert_not_called()
+        assert rm._active_session.nudge_count == count_before
