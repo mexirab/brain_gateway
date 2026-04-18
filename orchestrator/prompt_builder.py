@@ -341,7 +341,7 @@ AVAILABLE TOOLS:
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
-- search_memory: For personal info (projects, routines, preferences, medications, schedules). Use wing param to narrow by domain (personal, brain_gateway, infrastructure, jess, conjure) and room for specific topics (health, routines, architecture, debugging).
+- search_memory: For PERSONAL info (projects, routines, preferences, medications, schedules). Use wing param to narrow by domain (personal, brain_gateway, infrastructure, jess, conjure) and room for specific topics (health, routines, architecture, debugging). NOT for external/real-world info — events, restaurants, businesses, weather, news, sports, "things to do" — use web_search for those.
 - update_data: **PREFERRED for structured data** — ALWAYS use this when the user wants to change medications (add/remove/update/change dose/change schedule) or projects (status, steps, goals). This updates the source-of-truth YAML file. Use even when the user says phrases like "update your memory about my meds", "remember that I moved my Vyvanse to evening", "I take Naltrexone in the morning now". Medication schedule changes ALWAYS go through update_data, never update_memory.
 - update_memory: For OTHER factual corrections that aren't medications or projects — e.g., "actually I live in Austin now", "my sister's name is Sara not Sarah", "I prefer Python not JavaScript". Use this ONLY when no dedicated tool (update_data, selfcare_log, etc.) handles the domain. If the correction is about meds, projects, or anything with a dedicated tool, use that tool instead.
 - set_reminder: When user says "remind me to..." or asks for a reminder
@@ -350,7 +350,7 @@ WHEN TO USE TOOLS:
 - stop_focus: When user wants to stop/cancel/end the current focus timer
 - focus_status: When user asks how much time is left or checks focus timer status
 - focus_sprint: When user says "next sprint", "extend", "add more time", or "end session" / "I'm done" during a multi-sprint focus session
-- web_search: For real-world questions - events, news, weather, restaurants, sports scores, businesses
+- web_search: For real-world questions — events, activities, attractions, things to do, news, weather, restaurants, sports scores, businesses, local info ("in Houston", "near me"). You HAVE live web access via this tool — NEVER say "I can't browse the web" or "I don't have internet access". If search_memory returns nothing for an external/world-facing question, call web_search; don't give up after one failed tool call.
 - check_calendar: When user asks about their schedule, calendar, or upcoming events
 - create_calendar_event: When user wants to add, schedule, or create a calendar event
 - check_email: When user asks about their email or inbox
