@@ -73,6 +73,16 @@ Read-only Gmail access via OAuth2. Tools: `check_email`, `search_email`.
 
 iPhone Shortcut sends aggregated calendar events (Outlook + Google + iCloud) to `/api/calendar/sync` endpoint every few hours. Dashboard `/api/calendar/today` merges phone-synced events with Google Calendar API, preferring phone data when fresh (<24h) and deduplicating by title+start time.
 
+**Source priority (phone-sync-first callers):** these read phone cache first, fall through to Google if phone data is stale (>24h) or unparseable:
+
+| Caller | File | Defensive guard (phone records exist but none parse → fall through to Google) |
+|--------|------|-------------------------------------------------------------------------------|
+| `tool_check_calendar` | `orchestrator/tool_handlers.py` | yes |
+| `get_ambient_status` (10am/12pm/2pm/4pm summary + dashboard LED) | `orchestrator/ambient_manager.py` | yes |
+| `morning_briefing` | `orchestrator/jobs_calendar.py` | **no** (tech debt — see below) |
+
+**Known inconsistency / tech debt:** `morning_briefing` uses phone-sync-first but lacks the "all-records-unparseable → fall through to Google" guard that `tool_check_calendar` and `get_ambient_status` have. If an iPhone Shortcut posts a corrupt batch (empty title/start), the 7am briefing will silently announce "no events" while the other two callers recover. Consolidating these three into a shared helper is a pending refactor.
+
 **Persistence:** Phone events saved to `/app/data/phone_calendar.json` on Docker volume. Survives orchestrator restarts. Loaded at startup in `orchestrator.py`.
 
 **iOS date format handling:** iPhone Shortcuts sends dates like `"Mar 4, 2026 at 10:00 AM"` with narrow no-break space (`\u202f`). Custom `_parse_phone_datetime()` normalizes Unicode spaces and handles multiple date formats.

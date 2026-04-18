@@ -118,7 +118,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color) |
+| GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color). Calendar source: phone-sync-first (<24h, at least one parseable record) → Google fallback. Same priority as `check_calendar` and `morning_briefing` — see `docs/GOOGLE_INTEGRATIONS.md` → Phone Calendar Sync. |
 
 ### Workouts
 

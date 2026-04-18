@@ -6,7 +6,8 @@ LED status indicator via HA, ambient dashboard mode support.
 """
 
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
@@ -26,37 +27,89 @@ async def get_ambient_status() -> Dict[str, Any]:
     now = datetime.now(tz)
     status: Dict[str, Any] = {"timestamp": now.isoformat()}
 
-    # Schedule density + next event
+    # Schedule density + next event. Source priority mirrors
+    # tool_check_calendar / morning_briefing: phone sync first (superset —
+    # covers iCloud + Work + Gmail), Google as fallback. Previously this path
+    # hit Google directly and silently missed events that only lived on the
+    # iPhone calendars (observed 2026-04-17: 10am summary announced "no more
+    # events today" while a 1pm event was on the phone sync only).
+    window_end = now + timedelta(hours=12)
+    upcoming: list[Dict[str, Any]] = []
+    source: str | None = None
+
     try:
-        from orchestrator.google_calendar import get_calendar_client
+        from orchestrator.jobs_calendar import _parse_phone_datetime
 
-        client = get_calendar_client(http_client=shared._http)
-        if client and client.is_configured:
-            response = await client.get_upcoming(hours_ahead=12)
-            if response.success:
-                events = [e for e in response.events if not e.all_day]
-                status["events_remaining"] = len(events)
+        phone_age = (
+            time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+        )
+        phone_parsed_count = 0
+        if shared._phone_calendar_events and phone_age < 86400:
+            for ev in shared._phone_calendar_events:
+                try:
+                    start = _parse_phone_datetime(ev.get("start", ""), tz)
+                    phone_parsed_count += 1
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=tz)
+                    if ev.get("all_day", False):
+                        continue
+                    if not (now <= start < window_end):
+                        continue
+                    upcoming.append({"title": ev.get("title", "(No title)"), "start": start})
+                except (ValueError, TypeError):
+                    continue
+            # Same defensive guard as tool_check_calendar: records present but
+            # none parseable -> treat phone sync as broken and fall through.
+            if phone_parsed_count == 0:
+                logger.warning(
+                    f"[AMBIENT] Phone cache has {len(shared._phone_calendar_events)} records "
+                    f"but zero parsed — falling back to Google."
+                )
+            else:
+                source = "phone"
+                upcoming.sort(key=lambda e: e["start"])
+                logger.info(f"[AMBIENT] Using phone sync ({len(upcoming)} upcoming in 12h window)")
 
-                if events:
-                    next_ev = events[0]
-                    minutes_away = int((next_ev.start - now).total_seconds() / 60)
-                    status["next_event"] = {
-                        "title": next_ev.title,
-                        "start": str(next_ev.start),
-                        "minutes_away": max(0, minutes_away),
-                    }
-                    if minutes_away <= 15:
-                        status["schedule_density"] = "busy"
-                    elif minutes_away <= 60:
-                        status["schedule_density"] = "light"
-                    else:
-                        status["schedule_density"] = "clear"
+        if source is None:
+            from orchestrator.google_calendar import get_calendar_client
+
+            client = get_calendar_client(http_client=shared._http)
+            if client and client.is_configured:
+                response = await client.get_upcoming(hours_ahead=12)
+                if response.success:
+                    for e in response.events:
+                        if e.all_day:
+                            continue
+                        upcoming.append({"title": e.title, "start": e.start})
+                    upcoming.sort(key=lambda x: x["start"])
+                    source = "google"
+                    logger.info(f"[AMBIENT] Using Google ({len(upcoming)} upcoming in 12h window)")
+
+        if source is not None:
+            status["events_remaining"] = len(upcoming)
+            if upcoming:
+                next_ev = upcoming[0]
+                minutes_away = int((next_ev["start"] - now).total_seconds() / 60)
+                status["next_event"] = {
+                    "title": next_ev["title"],
+                    "start": str(next_ev["start"]),
+                    "minutes_away": max(0, minutes_away),
+                }
+                if minutes_away <= 15:
+                    status["schedule_density"] = "busy"
+                elif minutes_away <= 60:
+                    status["schedule_density"] = "light"
                 else:
-                    status["next_event"] = None
                     status["schedule_density"] = "clear"
-                    status["events_remaining"] = 0
+            else:
+                status["next_event"] = None
+                status["schedule_density"] = "clear"
+        else:
+            status["schedule_density"] = "unknown"
     except Exception as e:
-        logger.warning(f"[AMBIENT] Calendar check failed: {e}")
+        # Log traceback — silent failures here are the exact class of bug this
+        # patch fixed (10am ambient announced "no events" with no loud signal).
+        logger.warning(f"[AMBIENT] Calendar check failed: {e}", exc_info=True)
         status["schedule_density"] = "unknown"
 
     # Focus session
