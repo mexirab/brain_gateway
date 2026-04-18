@@ -197,6 +197,12 @@ async def sync_phone_calendar(req: Request):
         if not raw_body:
             return JSONResponse({"error": "empty body"}, status_code=400)
 
+        # Log raw body (truncated) so we can diagnose malformed iOS Shortcut payloads.
+        # Escape CR/LF so attacker-controlled payload can't forge log lines.
+        preview = raw_body[:2000].decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n")
+        truncated = " [truncated]" if len(raw_body) > 2000 else ""
+        logger.debug(f"[PHONE_SYNC] Raw body ({len(raw_body)} bytes){truncated}: {preview}")
+
         body = await req.json()
 
         # Normalize: accept multiple input shapes from iOS Shortcuts
@@ -215,17 +221,11 @@ async def sync_phone_calendar(req: Request):
         if not isinstance(events, list):
             events = [events]
 
-        # If last sync was >60s ago, start a new batch; otherwise append
-        now = time.time()
-        if now - shared._phone_calendar_sync_time > 60:
-            shared._phone_calendar_events = events
-            logger.info(f"[PHONE_SYNC] New batch started with {len(events)} event(s)")
-        else:
-            shared._phone_calendar_events.extend(events)
-            logger.info(f"[PHONE_SYNC] Appended {len(events)} event(s), total now {len(shared._phone_calendar_events)}")
-
-        shared._phone_calendar_sync_time = now
+        # Each POST is a full calendar snapshot — replace, don't append.
+        shared._phone_calendar_events = events
+        shared._phone_calendar_sync_time = time.time()
         shared._save_phone_calendar()
+        logger.info(f"[PHONE_SYNC] Replaced batch with {len(events)} event(s)")
 
         return {
             "ok": True,
