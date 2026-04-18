@@ -226,9 +226,11 @@ Once `nudge_count > ROUTINE_NUDGE_MAX`, `_deliver_nudge` force-ends the active r
 
 This prevents stuck evening/morning routines from nudging indefinitely when the user has gone to bed or walked away. When `ROUTINE_AUTO_SKIP=true` and the step is skippable, the original auto-skip path still runs.
 
-### Selfcare bridge
+### Selfcare bridge (bidirectional)
 
-`selfcare_log({action})` fires `_maybe_advance_routine_for_action` as a fire-and-forget async task. If an active routine's current step matches `action` via word-boundary regex on `step.id`/`step.label` (keyword map: `medication→{meds,medication,medications}`, `meal→{meal,breakfast,lunch,dinner,eat}`, `water→{water,hydrate,hydration}`, `movement→{movement,stretch,walk,exercise}`), the routine advances with `advance_step("done")`. Errors are logged at ERROR with `exc_info`; failures never block the selfcare write.
+**Selfcare -> routine:** `selfcare_log({action})` fires `_maybe_advance_routine_for_action` as a fire-and-forget async task. If an active routine's current step matches `action` via word-boundary regex on `step.id`/`step.label` (keyword map: `medication→{meds,medication,medications}`, `meal→{meal,breakfast,lunch,dinner,eat}`, `water→{water,hydrate,hydration}`, `movement→{movement,stretch,walk,exercise}`), the routine advances with `advance_step("done")`. Errors are logged at ERROR with `exc_info`; failures never block the selfcare write.
+
+**Routine -> selfcare (reverse):** after `advance_step("done")` appends to `completed_steps`, it calls `selfcare_manager.mark_selfcare_from_routine_step(step)` synchronously. This uses `_infer_selfcare_action(step)` (same keyword map as above) to dispatch to `record_medication_logged` / `record_meal_logged` / `record_hydration_logged` / `record_movement_logged`, which suppress the corresponding nudge. Routine-sourced medication logging unconditionally sets the generic `last_med_confirmation["medication"]` key (routine labels like `'routine:meds'` can't be mapped to a morning/evening med window). Only fires on `"done"` — NOT on `"skip"` or auto-end `"stop"` (skipped meds shouldn't mark as taken). Wrapped in try/except with `logger.error(exc_info=True)`; never blocks advance.
 
 ---
 

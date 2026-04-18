@@ -302,6 +302,17 @@ def log_set(
         int(reps),
         workout_id,
     )
+    # Bridge: lifting a set is obvious movement — reset the sitting/movement
+    # nudge gate so selfcare doesn't fire "you've been sitting for 274 min"
+    # while the user is actively at the gym.
+    try:
+        from orchestrator.selfcare_manager import record_movement_logged
+
+        record_movement_logged(f"set:{exercise_name}")
+    except Exception as e:
+        # ERROR not warning — consistent with the other state bridges; if
+        # this fires the selfcare API surface has drifted.
+        logger.error(f"[WORKOUT] Selfcare movement bridge failed: {e}", exc_info=True)
     return {"ok": True, "workout_id": workout_id, "set": row}
 
 

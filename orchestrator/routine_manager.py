@@ -225,6 +225,19 @@ async def advance_step(action: str = "done") -> str:
         # done / next / finished
         _active_session.completed_steps.append(step.id)
         logger.info(f"[ROUTINE] Completed step: {step.id}", extra={"component": "routine"})
+        # Bridge: mark the corresponding selfcare gate so completing the
+        # evening_meds step via routine_action("done") also suppresses the
+        # scheduled selfcare nudge that would otherwise fire later. Reverse
+        # direction of log_selfcare → advance_step.
+        try:
+            from orchestrator.selfcare_manager import mark_selfcare_from_routine_step
+
+            mark_selfcare_from_routine_step(step)
+        except Exception as e:
+            # ERROR not warning: if this fires the selfcare/routine contract
+            # has drifted — structural bug, needs to page. Matches the log
+            # level on the reverse-direction bridge in selfcare_manager.
+            logger.error(f"[ROUTINE] Selfcare bridge failed: {e}", exc_info=True)
 
     # Cancel current nudge
     _cancel_nudge()

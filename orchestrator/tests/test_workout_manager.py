@@ -5,6 +5,7 @@ state_store calls are mocked or backed by tmp_db (the fixture from conftest)
 depending on the test. External LLM/vision calls are never made.
 """
 
+import logging
 import unittest.mock as mock
 
 import pytest
@@ -368,3 +369,68 @@ def test_get_history_summary(seeded_db):
     assert h["workout_type"] == "full_body"
     assert h["completed_set_count"] == 1
     assert h["total_volume_lbs"] == 135.0 * 8
+
+
+# ---------------------------------------------------------------------------
+# log_set → selfcare movement bridge
+# ---------------------------------------------------------------------------
+# Logging a set is obvious movement — the bridge resets sitting_since so the
+# 15-min selfcare loop doesn't fire "you've been sitting for 274 min" while
+# the user is actively at the gym. Bridge failures must not break log_set.
+
+
+def test_log_set_calls_record_movement_logged(seeded_db):
+    """log_set routes through selfcare_manager.record_movement_logged with
+    label 'set:<exercise_name>' so the movement gate resets on every set."""
+    from orchestrator import workout_manager
+
+    with mock.patch("orchestrator.selfcare_manager.record_movement_logged") as mock_rec:
+        result = workout_manager.log_set("Bench Press", 135.0, 8)
+
+    assert result["ok"] is True
+    mock_rec.assert_called_once_with("set:Bench Press")
+
+
+def test_log_set_bridge_exception_does_not_propagate(seeded_db, caplog):
+    """If record_movement_logged raises, log_set still returns its normal
+    {"ok": True, ...} dict. ERROR with exc_info is logged."""
+    from orchestrator import workout_manager
+
+    def _boom(label):
+        raise RuntimeError("selfcare api drifted")
+
+    with (
+        mock.patch(
+            "orchestrator.selfcare_manager.record_movement_logged", side_effect=_boom
+        ),
+        caplog.at_level(logging.ERROR, logger="orchestrator.workout_manager"),
+    ):
+        result = workout_manager.log_set("Bench Press", 135.0, 8)
+
+    # Normal return value — bridge failure doesn't break the set log
+    assert result["ok"] is True
+    assert result["workout_id"] > 0
+    assert result["set"]["exercise_name"] == "Bench Press"
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any(
+        "Selfcare movement bridge failed" in r.getMessage() for r in errors
+    ), f"Expected 'Selfcare movement bridge failed' ERROR; got: {[r.getMessage() for r in errors]}"
+    assert any(r.exc_info is not None for r in errors), (
+        "Expected exc_info on ERROR record"
+    )
+
+
+def test_log_set_bridge_fires_with_explicit_workout_id(seeded_db):
+    """Bridge fires even when workout_id is passed explicitly (not auto-created)."""
+    from orchestrator import state_store, workout_manager
+
+    wid = state_store.create_workout("full_body", True)
+    with mock.patch("orchestrator.selfcare_manager.record_movement_logged") as mock_rec:
+        result = workout_manager.log_set(
+            "Barbell Squat", 225.0, 5, workout_id=wid
+        )
+
+    assert result["ok"] is True
+    assert result["workout_id"] == wid
+    mock_rec.assert_called_once_with("set:Barbell Squat")

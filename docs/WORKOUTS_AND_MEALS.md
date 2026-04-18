@@ -24,6 +24,10 @@ Full-body is the floor. The push/pull/legs split is a reward for consistency. Th
 
 `generate_workout` returns the full plan text so the model retains it in context for follow-up questions (e.g., "swap squats for leg press"). The tool description instructs the model NOT to read the plan aloud — the user is at the gym.
 
+### Movement nudge bridge
+
+`log_set` calls `selfcare_manager.record_movement_logged(f"set:{exercise_name}")` after persisting the set, resetting both `last_movement_nudge` and `sitting_since`. This prevents the "you've been sitting for 274 minutes" nudge from firing while the user is actively at the gym. Wrapped in try/except with `logger.error(exc_info=True)`; never blocks the set write.
+
 ### Database tables
 
 - `exercises` — catalog (id, name, movement_pattern, equipment, notes)

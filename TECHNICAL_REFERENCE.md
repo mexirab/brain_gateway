@@ -270,6 +270,7 @@ The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every
 {"action": "done"}
 ```
 - `action` (string, required): `done`, `skip`, `pause`, `resume`, `stop`, or `status`
+- Side effect on `"done"`: `routine_manager.advance_step` calls `selfcare_manager.mark_selfcare_from_routine_step(step)`, which dispatches to `record_medication_logged`/`record_meal_logged`/`record_hydration_logged`/`record_movement_logged` based on the medication/meal/water/movement keyword map against step id/label. Suppresses the corresponding nudge. NOT fired on `"skip"` or auto-end `"stop"`.
 
 ### routine_status
 ```json
@@ -339,6 +340,7 @@ Returns the full workout plan as text (model retains it in context for follow-up
 {"workout_id": 1, "exercise_id": 7, "set_number": 1, "weight_lbs": 135.0, "reps": 8}
 ```
 - All weights in lbs.
+- Side effect: after persisting the set, calls `selfcare_manager.record_movement_logged(f"set:{exercise_name}")`, which resets both `last_movement_nudge` and `sitting_since` (prevents sitting-timer nudges while at the gym). Wrapped in try/except; never blocks the set write.
 
 ### workout_status
 ```json

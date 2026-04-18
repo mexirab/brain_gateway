@@ -432,3 +432,84 @@ class TestDeliverNudgeAutoEnd:
         mock_voice.assert_not_called()
         mock_advance.assert_not_called()
         assert rm._active_session.nudge_count == count_before
+
+
+# ---------------------------------------------------------------------------
+# advance_step("done") → selfcare bridge
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestAdvanceStepSelfcareBridge:
+    """Covers the reverse-direction bridge added 2026-04-17: completing a
+    routine step via advance_step('done') calls mark_selfcare_from_routine_step
+    so the scheduled selfcare nudge for that action doesn't fire later.
+
+    Regression guard: before this bridge, completing evening_meds via the
+    routine still left the selfcare gate open, so check_selfcare would fire
+    'did you take your Guanfacine' nudges at the next 15-min cycle.
+    """
+
+    @pytest.mark.asyncio
+    async def test_done_fires_selfcare_bridge_with_step(self, rm):
+        """advance_step('done') calls mark_selfcare_from_routine_step(step)
+        with the completed step, not the next one."""
+        await rm.start_routine("evening")  # single step: evening_meds
+        completed_step = rm._active_session.steps[0]
+        assert completed_step.id == "evening_meds"
+
+        # Patch selfcare_manager import target used by advance_step
+        with patch("orchestrator.selfcare_manager.mark_selfcare_from_routine_step") as mock_mark:
+            # Patch _record_routine_progress too since evening routine is
+            # one-step and advance_step('done') will flow into _complete_routine
+            with patch.object(rm, "_record_routine_progress"):
+                await rm.advance_step("done")
+
+        mock_mark.assert_called_once()
+        called_step = mock_mark.call_args.args[0]
+        assert called_step is completed_step
+        assert called_step.id == "evening_meds"
+
+    @pytest.mark.asyncio
+    async def test_skip_does_not_fire_selfcare_bridge(self, rm):
+        """advance_step('skip') must NOT call the selfcare bridge — a skipped
+        step means the user explicitly didn't take the meds/eat/etc."""
+        await rm.start_routine("morning")
+        # Move to shower (skippable=True) so skip is allowed
+        with patch("orchestrator.selfcare_manager.mark_selfcare_from_routine_step"):
+            await rm.advance_step("done")  # past meds
+
+        with patch("orchestrator.selfcare_manager.mark_selfcare_from_routine_step") as mock_mark:
+            await rm.advance_step("skip")
+
+        mock_mark.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bridge_exception_does_not_propagate(self, rm, caplog):
+        """If mark_selfcare_from_routine_step raises, advance_step still
+        returns normally (the routine continues) and logs at ERROR with
+        exc_info=True so dashboards pick it up."""
+        await rm.start_routine("morning")  # on meds step
+
+        def _boom(step):
+            raise RuntimeError("selfcare exploded")
+
+        with (
+            patch("orchestrator.selfcare_manager.mark_selfcare_from_routine_step", side_effect=_boom),
+            caplog.at_level(logging.ERROR, logger="orchestrator.routine_manager"),
+        ):
+            result = await rm.advance_step("done")
+
+        # advance_step must still return a string announcement (didn't raise)
+        assert isinstance(result, str)
+        assert len(result) > 0
+        # Routine state advanced past meds despite the bridge failure
+        assert rm._active_session.current_step_index == 1
+        assert "meds" in rm._active_session.completed_steps
+
+        # ERROR logged with exc_info
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("Selfcare bridge failed" in r.getMessage() for r in errors), (
+            f"Expected 'Selfcare bridge failed' ERROR; got: {[r.getMessage() for r in errors]}"
+        )
+        assert any(r.exc_info is not None for r in errors), "Expected exc_info on ERROR record"

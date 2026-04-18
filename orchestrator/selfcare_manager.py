@@ -82,6 +82,83 @@ def record_meal_logged(label: str = "a meal") -> None:
     logger.info(f"[SELFCARE] Meal logged: {label}", extra={"component": "selfcare"})
 
 
+def record_medication_logged(label: str = "medication") -> None:
+    """Advance the medication nudge gate.
+
+    Public sync helper so other subsystems (routine_manager completing a
+    meds step) can keep the selfcare state in sync without duplicating
+    log_selfcare's branching. Sets the generic 'medication' key in addition
+    to the label-keyed entry so _check_meds's primary gate fires regardless
+    of whether _expand_med_confirmation can infer the window from the label
+    (e.g. 'routine:meds' doesn't contain 'morning'/'evening').
+    """
+    from orchestrator.state_store import save_selfcare_log
+
+    now = datetime.now()
+    _state.last_med_confirmation[label.lower()] = now
+    _state.last_med_confirmation["medication"] = now
+    _expand_med_confirmation(label, now)
+    save_selfcare_log("medication", label)
+    logger.info(f"[SELFCARE] Med logged: {label}", extra={"component": "selfcare"})
+
+
+def record_hydration_logged(label: str = "water") -> None:
+    """Advance the hydration nudge gate."""
+    from orchestrator.state_store import save_selfcare_log
+
+    _state.last_hydration_nudge = datetime.now()
+    save_selfcare_log("water", label)
+    logger.info(f"[SELFCARE] Hydration logged: {label}", extra={"component": "selfcare"})
+
+
+def record_movement_logged(label: str = "movement") -> None:
+    """Advance the movement nudge gate (resets sitting_since too).
+
+    Called by workout_manager.log_set so lifting a set counts as movement
+    and suppresses the "you've been sitting for N minutes" nudge that
+    would otherwise fire while the user is actively at the gym.
+    """
+    from orchestrator.state_store import save_selfcare_log
+
+    now = datetime.now()
+    _state.last_movement_nudge = now
+    _state.sitting_since = now
+    save_selfcare_log("movement", label)
+    logger.info(f"[SELFCARE] Movement logged: {label}", extra={"component": "selfcare"})
+
+
+def mark_selfcare_from_routine_step(step) -> None:
+    """Update selfcare state when a routine step completes.
+
+    The reverse direction of log_selfcare's routine bridge: when the user
+    completes a step via routine_action("done"), keep selfcare state in
+    sync so the scheduled selfcare nudge for that action doesn't fire
+    later. Silent no-op for steps that don't map to any selfcare action.
+    """
+    action = _infer_selfcare_action(step)
+    if action is None:
+        return
+    label = f"routine:{getattr(step, 'id', '?')}"
+    if action == "medication":
+        record_medication_logged(label)
+    elif action == "meal":
+        record_meal_logged(label)
+    elif action == "water":
+        record_hydration_logged(label)
+    elif action == "movement":
+        record_movement_logged(label)
+
+
+def _infer_selfcare_action(step) -> Optional[str]:
+    """Return the selfcare action a step corresponds to, or None."""
+    if step is None:
+        return None
+    for action in _ACTION_KEYWORDS:
+        if _step_matches_selfcare_action(step, action):
+            return action
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Logging actions (tool handler)
 # ---------------------------------------------------------------------------
@@ -106,6 +183,12 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
         _state.last_med_confirmation[med_name.lower()] = now
         # Also mark individual meds if a group phrase like "morning meds" was used
         _expand_med_confirmation(med_name, now)
+        # NOTE: intentionally does NOT set the generic "medication" key here —
+        # preserves prior behavior where users logging individual meds ("I took
+        # my Guanfacine") only suppress that specific med's nudge, not all
+        # window meds. The routine bridge (record_medication_logged) DOES set
+        # the generic key because routine step labels like 'routine:meds' can't
+        # be mapped to a window by _expand_med_confirmation.
         save_selfcare_log("medication", med_name)
         next_sched = _get_next_med_schedule(med_name)
         logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})

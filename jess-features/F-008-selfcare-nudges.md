@@ -109,6 +109,8 @@ Med logged: "Logged. Next dose is {next_schedule}."
 - Don't nudge during active focus session (or soften: "After this sprint, grab water")
 - Don't nudge during active routine (routine handles meds)
 - When a user logs a selfcare action during an active routine and the logged action matches the current step (medication / meal / water / movement keyword map), `log_selfcare` fires `routine_manager._maybe_advance_routine_for_action` fire-and-forget and the routine auto-advances. See F-006 → "Selfcare bridge".
+- **Routine completion suppresses the matching nudge (reverse bridge):** when `routine_action("done")` advances past a step whose id/label matches medication/meal/water/movement, `routine_manager` calls `selfcare_manager.mark_selfcare_from_routine_step(step)` synchronously, which invokes the relevant `record_*_logged` helper. The morning-meds step sets the generic `last_med_confirmation["medication"]` key so `_check_meds` suppresses. Only fires on `"done"`, not `"skip"`/auto-`"stop"`.
+- **Workout `log_set` counts as movement:** after persisting a set, `workout_manager.log_set` calls `selfcare_manager.record_movement_logged(f"set:{exercise_name}")`, resetting both `last_movement_nudge` and `sitting_since`. Closes the "sitting 274 min while at gym" complaint.
 - Respect quiet hours
 - Max one nudge per check cycle (don't stack meal + water + movement)
 
