@@ -12,7 +12,7 @@ Domain-specific routes are split into separate modules and included as sub-route
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -353,11 +353,62 @@ async def complete_reminder_api(reminder_id: str):
 # run WITHOUT a Bearer token — they're HMAC-signature-gated instead. See
 # BearerAuthMiddleware.PUBLIC_PREFIXES in orchestrator.py and the security
 # model in jess-features/F-011-ntfy-feedback-loop.md.
+#
+# Method handling: POST is the original ntfy action-button shape. GET is
+# added for Pushover's primary `url` field, which Safari opens as a tap.
+# Both methods run the same HMAC-gated logic; the response is a tiny HTML
+# page for GET (browser) and JSON for POST (machine clients / ntfy).
 
 
-@router.post("/api/reminder/ack/{reminder_id}")
-async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
-    """Ack a reminder from an ntfy action button. HMAC-gated, no bearer."""
+def _callback_response(
+    request: Request,
+    payload: Dict[str, Any],
+    status_code: int = 200,
+    html_headline: str = "Done",
+    html_subtext: str = "You can close this tab.",
+) -> Any:
+    """Return JSON for POST, HTML for GET — so a Safari tap on a Pushover
+    primary URL lands on a readable confirmation page instead of raw JSON.
+
+    The HTML page is dark-theme, viewport-scaled, auto-closes nothing
+    (Safari won't honor `window.close()` on a user-opened tab anyway).
+    """
+    from fastapi.responses import HTMLResponse
+
+    if request.method == "GET":
+        safe_headline = (html_headline or "").replace("<", "&lt;").replace(">", "&gt;")
+        safe_subtext = (html_subtext or "").replace("<", "&lt;").replace(">", "&gt;")
+        page = (
+            "<!DOCTYPE html><html><head>"
+            "<meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<title>Jess</title>"
+            "<style>"
+            "html,body{margin:0;padding:0;height:100%}"
+            "body{background:#0b0d12;color:#eceef3;"
+            "font:600 1.25rem system-ui,-apple-system,sans-serif;"
+            "display:flex;flex-direction:column;align-items:center;"
+            "justify-content:center;text-align:center;padding:2rem}"
+            ".h{font-size:2.5rem;margin-bottom:0.5rem}"
+            ".s{font-size:1rem;color:#8a94a8;font-weight:400}"
+            "</style></head>"
+            f"<body><div class='h'>{safe_headline}</div>"
+            f"<div class='s'>{safe_subtext}</div></body></html>"
+        )
+        return HTMLResponse(page, status_code=status_code)
+    # POST path preserves existing JSON contract.
+    if status_code == 200:
+        return payload
+    return JSONResponse(payload, status_code=status_code)
+
+
+# Accept both POST (ntfy HTTP action button) and GET (Pushover primary-url
+# taps → Safari opens the URL, which is a GET). HMAC verification gates
+# state mutation identically for both; the response shape differs — JSON
+# for POST (machine callers), HTML for GET (browser).
+@router.api_route("/api/reminder/ack/{reminder_id}", methods=["GET", "POST"])
+async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", exp: int = 0):
+    """Ack a reminder from an ntfy (POST) or Pushover (GET) action. HMAC-gated, no bearer."""
     from orchestrator import state_store as _ss
     from orchestrator.config import settings
     from orchestrator.metrics import (
@@ -377,7 +428,13 @@ async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
     # Return 404 (not 403) so we don't leak the route's existence to scanners
     # when every channel is off.
     if not (settings.ntfy_enabled or settings.pushover_enabled):
-        return JSONResponse({"ok": False, "error": "disabled"}, status_code=404)
+        return _callback_response(
+            request,
+            {"ok": False, "error": "disabled"},
+            status_code=404,
+            html_headline="Not available",
+            html_subtext="Reminder feedback is off on this server.",
+        )
 
     err = verify_callback_signature(reminder_id, "ack", exp, sig)
     if err:
@@ -388,17 +445,40 @@ async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
         log_fn = logger.info if err == "expired" else logger.warning
         log_fn(f"[NTFY-ACK] Rejected {reminder_id}: {err}")
         status = 410 if err == "expired" else 403
-        return JSONResponse({"ok": False, "error": err}, status_code=status)
+        headline = "Expired" if err == "expired" else "Invalid"
+        subtext = (
+            "This link is older than 30 minutes. The reminder didn't register."
+            if err == "expired"
+            else "Signature check failed. This link may have been tampered with."
+        )
+        return _callback_response(
+            request,
+            {"ok": False, "error": err},
+            status_code=status,
+            html_headline=headline,
+            html_subtext=subtext,
+        )
 
     result = _ss.mark_reminder_acked(reminder_id, via="ntfy")
     if result is None:
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="not_found").inc()
-        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+        return _callback_response(
+            request,
+            {"ok": False, "error": "not_found"},
+            status_code=404,
+            html_headline="Not found",
+            html_subtext="That reminder doesn't exist.",
+        )
 
     if result.get("already_acked"):
         # Idempotent replay — don't re-fire the selfcare bridge, don't double-count.
         logger.info(f"[NTFY-ACK] {reminder_id} already acked; idempotent replay")
-        return {"ok": True, "already_acked": True, "reminder_id": reminder_id}
+        return _callback_response(
+            request,
+            {"ok": True, "already_acked": True, "reminder_id": reminder_id},
+            html_headline="\u2713 Already done",
+            html_subtext="You've acknowledged this one already.",
+        )
 
     # Cancel any pending retry job the TTS-failure path might have scheduled.
     retry_job_id = f"reminder_{reminder_id}_retry"
@@ -464,15 +544,22 @@ async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
     _fire_and_forget(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
     _fire_and_forget(deliver_pushover_confirm(confirm_title, confirm_msg, reminder_id))
 
-    return {"ok": True, "reminder_id": reminder_id, "inferred_action": action}
+    return _callback_response(
+        request,
+        {"ok": True, "reminder_id": reminder_id, "inferred_action": action},
+        html_headline="\u2713 Done",
+        html_subtext="Reminder acknowledged. You can close this tab.",
+    )
 
 
-@router.post("/api/reminder/snooze/{reminder_id}")
-async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, minutes: int = 10):
-    """Snooze a reminder from an ntfy action button. HMAC-gated, no bearer.
+@router.api_route("/api/reminder/snooze/{reminder_id}", methods=["GET", "POST"])
+async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = "", exp: int = 0, minutes: int = 10):
+    """Snooze a reminder from an ntfy (POST) or Pushover (GET) action.
 
-    Reschedules `deliver_reminder_job` `minutes` minutes from now and bumps
-    snooze_count. Capped by `NTFY_MAX_SNOOZE_COUNT`.
+    HMAC-gated, no bearer. Reschedules `deliver_reminder_job` `minutes`
+    minutes from now and bumps snooze_count. Capped by
+    `NTFY_MAX_SNOOZE_COUNT`. HTML response on GET so a Safari tap on a
+    Pushover link lands on a readable confirmation page.
     """
     from zoneinfo import ZoneInfo
 
@@ -484,7 +571,13 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
     # Feature-flag gate: same widened semantics as the ack route. Either push
     # channel keeps the signed callback URLs reachable.
     if not (settings.ntfy_enabled or settings.pushover_enabled):
-        return JSONResponse({"ok": False, "error": "disabled"}, status_code=404)
+        return _callback_response(
+            request,
+            {"ok": False, "error": "disabled"},
+            status_code=404,
+            html_headline="Not available",
+            html_subtext="Reminder feedback is off on this server.",
+        )
 
     # Clamp BEFORE verifying signature: signature binds the minutes value,
     # so we have to clamp first and check against the clamped value.
@@ -499,19 +592,36 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
         log_fn = logger.info if err == "expired" else logger.warning
         log_fn(f"[NTFY-SNOOZE] Rejected {reminder_id}: {err}")
         status = 410 if err == "expired" else 403
-        return JSONResponse({"ok": False, "error": err}, status_code=status)
+        headline = "Expired" if err == "expired" else "Invalid"
+        subtext = "This link is older than 30 minutes." if err == "expired" else "Signature check failed."
+        return _callback_response(
+            request,
+            {"ok": False, "error": err},
+            status_code=status,
+            html_headline=headline,
+            html_subtext=subtext,
+        )
 
     reminder = _ss.get_reminder(reminder_id)
     if reminder is None:
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="not_found").inc()
-        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+        return _callback_response(
+            request,
+            {"ok": False, "error": "not_found"},
+            status_code=404,
+            html_headline="Not found",
+            html_subtext="That reminder doesn't exist.",
+        )
 
     current = reminder.get("snooze_count") or 0
     if current >= settings.ntfy_max_snooze_count:
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="over_snoozed").inc()
-        return JSONResponse(
+        return _callback_response(
+            request,
             {"ok": False, "error": "max_snoozes_reached", "snooze_count": current},
             status_code=409,
+            html_headline="Snooze limit reached",
+            html_subtext=f"You've snoozed this {current} times already.",
         )
 
     run_at = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=minutes)
@@ -527,7 +637,13 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
         )
     except Exception as sch_err:
         logger.error(f"[NTFY-SNOOZE] Reschedule failed for {reminder_id}: {sch_err}", exc_info=True)
-        return JSONResponse({"ok": False, "error": "reschedule_failed"}, status_code=500)
+        return _callback_response(
+            request,
+            {"ok": False, "error": "reschedule_failed"},
+            status_code=500,
+            html_headline="Couldn't snooze",
+            html_subtext="Something went wrong rescheduling. Check back later.",
+        )
 
     new_count = _ss.increment_snooze_count(reminder_id)
     NTFY_SNOOZE_TOTAL.inc()
@@ -544,12 +660,17 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
     )
     _fire_and_forget(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
     _fire_and_forget(deliver_pushover_confirm(confirm_title, confirm_msg, reminder_id))
-    return {
-        "ok": True,
-        "reminder_id": reminder_id,
-        "rescheduled_for": run_at.isoformat(),
-        "snooze_count": new_count,
-    }
+    return _callback_response(
+        request,
+        {
+            "ok": True,
+            "reminder_id": reminder_id,
+            "rescheduled_for": run_at.isoformat(),
+            "snooze_count": new_count,
+        },
+        html_headline=f"\U0001f4a4 Snoozed until {fire_time}",
+        html_subtext=f"I'll remind you again at {fire_time}. You can close this tab.",
+    )
 
 
 @router.get("/api/focus")
