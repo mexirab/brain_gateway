@@ -36,6 +36,17 @@ Full-body is the floor. The push/pull/legs split is a reward for consistency. Th
 
 All weights are stored and returned in **lbs**.
 
+### Dashboard UI
+
+The `/workouts` page lets the user manage plans without going through Jess:
+
+- Delete today's in-progress workout via a trash-icon button next to "End session".
+- Remove an individual exercise from today's plan via an X button on each exercise header (calls `PATCH /api/workouts/{id}` with `remove_exercises`).
+- Add a new exercise from a collapsible picker populated by `GET /api/workouts/exercises` (calls `PATCH /api/workouts/{id}` with `add_exercises`).
+- Delete any past workout from the history list via a trash icon on each row.
+
+All controls hit existing backend routes — no new endpoints, no new tools. The `modify_workout` tool remains the voice/chat path to the same backend.
+
 ## Meal Logging
 
 ### v1 scope

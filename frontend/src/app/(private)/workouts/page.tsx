@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Dumbbell, Sparkles, Check, Trash2, History } from 'lucide-react';
+import { Dumbbell, Sparkles, Check, Trash2, History, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   WorkoutTodayResponse,
   WorkoutToday,
   WorkoutHistorySession,
   WorkoutSet,
+  ExerciseCatalogEntry,
 } from '@/lib/types';
 
 type SetInputs = Record<number, { weight: string; reps: string }>;
@@ -19,10 +20,13 @@ function isActiveWorkout(w: WorkoutTodayResponse | null): w is WorkoutToday {
 export default function WorkoutsPage() {
   const [today, setToday] = useState<WorkoutTodayResponse | null>(null);
   const [history, setHistory] = useState<WorkoutHistorySession[]>([]);
+  const [catalog, setCatalog] = useState<ExerciseCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inputs, setInputs] = useState<SetInputs>({});
+  const [addPickerOpen, setAddPickerOpen] = useState(false);
+  const [addSelection, setAddSelection] = useState('');
 
   const fetchAll = useCallback(async () => {
     try {
@@ -60,6 +64,15 @@ export default function WorkoutsPage() {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  useEffect(() => {
+    api
+      .workoutExercises()
+      .then(setCatalog)
+      .catch((e) => {
+        console.warn('Exercise catalog load failed', e);
+      });
+  }, []);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -117,6 +130,54 @@ export default function WorkoutsPage() {
       await fetchAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const handleDeleteWorkout = async (workoutId: number, label: string) => {
+    if (!confirm(`Delete ${label} and all its sets? This cannot be undone.`)) return;
+    try {
+      const res = await api.deleteWorkout(workoutId);
+      if (!res.ok) {
+        setError('Workout could not be deleted (already gone?)');
+        await fetchAll();
+        return;
+      }
+      await fetchAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete workout');
+    }
+  };
+
+  const handleRemoveExercise = async (workoutId: number, name: string) => {
+    if (!confirm(`Remove ${name} from today's workout? Completed sets are kept.`)) return;
+    try {
+      const res = await api.modifyWorkout(workoutId, { remove_exercises: [name] });
+      if (!res.ok) {
+        setError(`Could not remove ${name}`);
+        await fetchAll();
+        return;
+      }
+      await fetchAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove exercise');
+    }
+  };
+
+  const handleAddExercise = async () => {
+    if (!isActiveWorkout(today) || !addSelection) return;
+    try {
+      const res = await api.modifyWorkout(today.workout_id, {
+        add_exercises: [addSelection],
+      });
+      if (!res.ok) {
+        setError(`Could not add ${addSelection}`);
+        return;
+      }
+      setAddSelection('');
+      setAddPickerOpen(false);
+      await fetchAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add exercise');
     }
   };
 
@@ -179,14 +240,27 @@ export default function WorkoutsPage() {
                 <p className="text-sm text-zinc-400 mt-1">{today.reasoning}</p>
               )}
             </div>
-            {!today.ended_at && (
+            <div className="flex items-center gap-3">
+              {!today.ended_at && (
+                <button
+                  onClick={handleEndWorkout}
+                  className="text-xs text-zinc-500 hover:text-emerald-400 whitespace-nowrap"
+                >
+                  End session
+                </button>
+              )}
               <button
-                onClick={handleEndWorkout}
-                className="text-xs text-zinc-500 hover:text-emerald-400 whitespace-nowrap"
+                type="button"
+                onClick={() =>
+                  handleDeleteWorkout(today.workout_id, "today's workout")
+                }
+                className="p-1.5 text-zinc-500 hover:text-red-400"
+                aria-label="Delete today's workout"
+                title="Delete today's workout"
               >
-                End session
+                <Trash2 size={14} />
               </button>
-            )}
+            </div>
           </div>
 
           {today.exercises.map((ex) => (
@@ -194,11 +268,26 @@ export default function WorkoutsPage() {
               key={ex.name}
               className="border border-zinc-800 rounded-lg p-4 space-y-3"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <h3 className="font-semibold text-zinc-200">{ex.name}</h3>
-                <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
-                  {ex.muscle_groups.slice(0, 3).join(' · ')}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
+                    {ex.muscle_groups.slice(0, 3).join(' · ')}
+                  </span>
+                  {!today.ended_at && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleRemoveExercise(today.workout_id, ex.name)
+                      }
+                      className="p-2 text-zinc-600/60 hover:text-red-400"
+                      aria-label={`Remove ${ex.name}`}
+                      title="Remove exercise (completed sets are kept)"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="space-y-1.5">
                 {ex.sets.map((s) => {
@@ -273,6 +362,55 @@ export default function WorkoutsPage() {
             </div>
           ))}
 
+          {!today.ended_at && (
+            <div className="pt-1">
+              {!addPickerOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setAddPickerOpen(true)}
+                  disabled={catalog.length === 0}
+                  className="w-full inline-flex items-center justify-center gap-2 py-2 text-xs text-zinc-500 hover:text-emerald-400 transition-colors border border-dashed border-zinc-800 rounded-lg disabled:opacity-40 disabled:hover:text-zinc-500"
+                >
+                  <Plus size={12} />
+                  {catalog.length === 0 ? 'Exercise catalog unavailable' : 'Add exercise'}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <select
+                    value={addSelection}
+                    onChange={(e) => setAddSelection(e.target.value)}
+                    className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">Pick an exercise…</option>
+                    {catalog.map((ex) => (
+                      <option key={ex.name} value={ex.name}>
+                        {ex.name} ({ex.primary_muscle})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAddExercise}
+                    disabled={!addSelection}
+                    className="px-3 py-1.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded hover:bg-emerald-500/30 disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddPickerOpen(false);
+                      setAddSelection('');
+                    }}
+                    className="px-2 py-1.5 text-xs text-zinc-500 hover:text-zinc-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             onClick={handleGenerate}
             disabled={generating}
@@ -293,17 +431,33 @@ export default function WorkoutsPage() {
           </div>
           {history.map((h) => (
             <div key={h.id} className="glass p-3 text-sm">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-zinc-300">
                   {new Date(h.started_at).toLocaleDateString()} ·{' '}
                   <span className="text-zinc-500">
                     {h.workout_type.replace(/_/g, ' ')}
                   </span>
                 </span>
-                <span className="text-xs text-zinc-600">
-                  {h.completed_set_count}/{h.set_count} sets ·{' '}
-                  {h.total_volume_lbs.toLocaleString()} lb volume
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-600">
+                    {h.completed_set_count}/{h.set_count} sets ·{' '}
+                    {h.total_volume_lbs.toLocaleString()} lb volume
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleDeleteWorkout(
+                        h.id,
+                        `${new Date(h.started_at).toLocaleDateString()} ${h.workout_type.replace(/_/g, ' ')}`,
+                      )
+                    }
+                    className="p-2 text-zinc-600/60 hover:text-red-400"
+                    aria-label={`Delete ${new Date(h.started_at).toLocaleDateString()} workout`}
+                    title="Delete this workout"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </div>
               <div className="text-[11px] text-zinc-600 mt-1">
                 {h.exercises.slice(0, 5).join(', ')}

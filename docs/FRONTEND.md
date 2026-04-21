@@ -11,7 +11,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with YNAB sync, XP/levels, quest board |
-| Workouts | `/workouts` | Private. Today's adaptive gym plan with inline weight/reps inputs per set, "Ask Jess" button, session history |
+| Workouts | `/workouts` | Private. Today's adaptive gym plan with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 
 ## Dashboard Widgets
