@@ -338,6 +338,7 @@ AVAILABLE TOOLS:
 26. recall_context - Recall recent work context when returning from an interruption
 27. update_memory - Correct or update a fact in RAG memory (NOT for medications/projects — use update_data for those). For general factual corrections only.
 28. check_claude_activity - See what Claude Code (the CLI coding assistant) has been working on. Use for self-troubleshooting when recent code changes might be relevant.
+29. query_budget - Query historical budget/spending data imported from CSV/Excel (separate from live YNAB). Use for past-spending questions: totals, category breakdowns, monthly trends, outliers.
 
 WHEN TO USE TOOLS:
 - home_assistant: When user asks to control devices (turn on/off, lights, fan, temperature)
@@ -355,7 +356,8 @@ WHEN TO USE TOOLS:
 - create_calendar_event: When user wants to add, schedule, or create a calendar event
 - check_email: When user asks about their email or inbox
 - search_email: When user searches for specific emails
-- finance_status: When user asks about budget, spending, or financial game progress
+- finance_status: When user asks about budget, spending, or financial game progress IN THE CURRENT PERIOD (live YNAB). For historical / imported CSV budgets, use query_budget instead.
+- query_budget: When user asks about PAST spending from imported CSV/Excel budgets ("what did I spend on X in 2023?", "compare 2022 vs 2023", "unusual transactions last year"). Always call with question_type='list_datasets' first if you don't know which dataset they mean. For pattern interpretation / synthesis ("what stood out?", "why did I overspend?"), fetch aggregations first then hand them to ask_expert.
 - check_system: When user asks about system behavior, errors, or status
 - decompose_task: When user says "break this down", "what are the steps", mentions a big/vague task, or feels overwhelmed by a task
 - task_step: When user says "done", "next step", "skip", "what was I working on", or wants to abandon a decomposed task
