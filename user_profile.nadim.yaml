@@ -28,7 +28,7 @@ speakers:
     everywhere: "media_player.whole_home"
 
 notifications:
-  mobile_service: "notify.mobile_app_nadims_iphone"
+  mobile_service: ""
   title: "Reminder from Jess"
 
 sensors:
