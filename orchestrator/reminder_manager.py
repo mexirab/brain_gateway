@@ -549,7 +549,7 @@ async def deliver_via_ntfy(reminder_id: str, text: str, priority: Optional[int] 
     ]
     if missing:
         logger.warning(f"[NTFY] Enabled but missing config: {missing}; skipping push")
-        NTFY_PUSH_TOTAL.labels(result="skipped").inc()
+        NTFY_PUSH_TOTAL.labels(result="skipped", kind="reminder").inc()
         return {"success": False, "skipped": True, "reason": f"missing:{','.join(missing)}"}
 
     done_url = _build_callback_url(reminder_id, "ack")
@@ -580,16 +580,16 @@ async def deliver_via_ntfy(reminder_id: str, text: str, priority: Optional[int] 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(url, content=text.encode("utf-8"), headers=headers)
         latency = time.time() - t0
-        NTFY_PUSH_LATENCY.observe(latency)
+        NTFY_PUSH_LATENCY.labels(kind="reminder").observe(latency)
         if resp.status_code in (200, 201, 202):
             logger.info(f"[NTFY] Pushed reminder {reminder_id} ({len(text)} chars, prio={push_prio})")
-            NTFY_PUSH_TOTAL.labels(result="ok").inc()
+            NTFY_PUSH_TOTAL.labels(result="ok", kind="reminder").inc()
             return {"success": True, "latency_ms": int(latency * 1000)}
         logger.warning(f"[NTFY] Push returned {resp.status_code}: {resp.text[:200]}")
-        NTFY_PUSH_TOTAL.labels(result="fail").inc()
+        NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder").inc()
         return {"success": False, "status_code": resp.status_code, "body": resp.text[:200]}
     except Exception as e:
-        NTFY_PUSH_TOTAL.labels(result="fail").inc()
+        NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder").inc()
         logger.error(f"[NTFY] Push failed: {type(e).__name__}: {e}")
         return {"success": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -616,3 +616,68 @@ def infer_selfcare_action_from_text(text: str) -> Optional[str]:
             if re.search(rf"\b{re.escape(kw)}\b", haystack):
                 return action
     return None
+
+
+async def deliver_ack_confirm(
+    title: str, message: str, reminder_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Push a low-priority confirmation notification (F-011 ack/snooze feedback).
+
+    Fire-and-forget: called from the ack/snooze routes via
+    `asyncio.create_task` after the state mutation succeeds. Never
+    raises. Gated by both `ntfy_enabled` (top-level kill-switch) AND
+    `ntfy_confirm_enabled` (opt-in for this side-channel specifically,
+    since some users will find the follow-up notification noisy).
+
+    Uses priority=1 (iOS delivers quietly / auto-summarizes) and no
+    action buttons. Separate from `deliver_via_ntfy` because the
+    shape is intentionally different — we don't want a Done button
+    on the confirmation itself.
+
+    **Privacy note (security review finding):** the title stays
+    generic (never contains action category like "Medication logged")
+    because the ntfy topic is open-tailnet and titles are visible on
+    lockscreens/notification lists without the body. Action-specific
+    detail belongs in the body only. Callers already constrain the
+    title on their side; we also enforce a 120-char cap here.
+    """
+    from orchestrator.metrics import NTFY_PUSH_TOTAL
+
+    if not _settings.ntfy_enabled or not _settings.ntfy_confirm_enabled:
+        return {"success": False, "skipped": True, "reason": "disabled"}
+
+    if not _settings.ntfy_url:
+        NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm").inc()
+        return {"success": False, "skipped": True, "reason": "missing_url"}
+
+    url = f"{_settings.ntfy_url.rstrip('/')}/{_settings.ntfy_topic}"
+    # httpx defaults to ASCII-encoded headers; non-ASCII chars (emoji U+2713,
+    # U+1F4A4, etc.) would crash the POST before it ever hits the wire. ntfy
+    # server decodes Title as UTF-8, so we build the headers as a list of
+    # (name, utf-8 bytes) tuples — httpx will accept raw bytes unchanged.
+    # The 120-char cap is on the pre-encoded string so the UTF-8 byte length
+    # can be larger (but still reasonable).
+    title_bytes = title[:120].encode("utf-8")
+    headers = [
+        ("Title", title_bytes),  # cap so a huge title can't bloat the push
+        ("Priority", b"1"),
+        ("Tags", b"white_check_mark"),
+    ]
+
+    # Include reminder_id in failure logs for Loki correlation with the
+    # original push line (`[NTFY] Pushed reminder <id>`). Success stays
+    # silent to avoid log noise on frequent ack taps.
+    rid_hint = f" rid={reminder_id}" if reminder_id else ""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, content=message.encode("utf-8"), headers=headers)
+        if resp.status_code in (200, 201, 202):
+            NTFY_PUSH_TOTAL.labels(result="ok", kind="confirm").inc()
+            return {"success": True}
+        logger.warning(f"[NTFY-CONFIRM] Push returned {resp.status_code}{rid_hint}")
+        NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm").inc()
+        return {"success": False, "status_code": resp.status_code}
+    except Exception as e:
+        NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm").inc()
+        logger.error(f"[NTFY-CONFIRM] Push failed{rid_hint}: {type(e).__name__}: {e}")
+        return {"success": False, "error": f"{type(e).__name__}: {e}"}

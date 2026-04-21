@@ -124,10 +124,10 @@ Both return plain JSON: `{"ok": true, ...}`. 403 on bad signature, 404 on unknow
 
 ## Metrics
 
-- `bgw_ntfy_push_total{result="ok|fail|skipped"}` — Counter.
+- `bgw_ntfy_push_total{result="ok|fail|skipped", kind="reminder|confirm"}` — Counter. `kind` distinguishes the original reminder push from the ack/snooze confirm side-channel (see "Confirm side-channel" below).
 - `bgw_ntfy_ack_total{inferred_action}` — Counter; label is `medication|meal|water|movement|none`.
 - `bgw_ntfy_snooze_total` — Counter.
-- `bgw_ntfy_push_latency_seconds` — Histogram (push-to-ntfy duration, not phone delivery).
+- `bgw_ntfy_push_latency_seconds{kind="reminder|confirm"}` — Histogram (push-to-ntfy duration, not phone delivery).
 - `bgw_ntfy_callback_rejected_total{reason}` — Counter; label is `bad_signature|expired|not_found|over_snoozed|signing_disabled`.
 - `bgw_reminder_ack_latency_seconds` — Histogram, observed only on the first successful ack: how long from `trigger_time` to user tap. The **core F-011 product KPI**.
 
@@ -147,6 +147,27 @@ Both return plain JSON: `{"ok": true, ...}`. 403 on bad signature, 404 on unknow
 - [ ] Missing/short `NTFY_HMAC_SECRET` + `NTFY_ENABLED=true` at startup → `model_validator` logs error and auto-disables; orchestrator boots normally.
 - [ ] Tampering with `minutes` on a snooze URL (valid sig, different minutes param) → `bad_signature` rejection.
 - [ ] Reminder fired with `target=phone` (or `both`) dispatches `deliver_via_ntfy` as a detached task — scheduler job returns immediately even if ntfy is slow.
+
+---
+
+## Confirm side-channel (visible button feedback)
+
+After a successful Done/Snooze action-button tap, the ack/snooze routes in `orchestrator/api_routes.py` fire `asyncio.create_task(reminder_manager.deliver_ack_confirm(...))` to push a low-priority (priority=1) confirmation message back to the same ntfy topic. Examples:
+
+- Done tap → body `"✓ Logged"`
+- Snooze tap → body `"💤 Snoozed until 3:15 PM"`
+
+Why: iOS cannot mutate ntfy action buttons in-place after they're tapped, so the original "button turns into a checkmark" mental model is impossible. The confirm push is a side-channel that replaces that affordance with a visible second notification.
+
+**Privacy constraint (security-review driven).** The confirm **title stays generic** (no `"Medication logged"` / `"Meds logged"` in the `Title` header) because the ntfy topic is open-tailnet and notification titles render on the lockscreen without the body. Action-specific detail — including the inferred selfcare category — lives in the body only.
+
+**Opt-in.** Gated by `NTFY_CONFIRM_ENABLED` (default `false`); when false, `deliver_ack_confirm` is a no-op and no confirm push is attempted. Fire-and-forget: scheduler/route latency is unaffected if ntfy is slow or down.
+
+**Metrics.** `bgw_ntfy_push_total` and `bgw_ntfy_push_latency_seconds` both carry a `kind` label (`reminder` for the original delivery, `confirm` for this side-channel) so dashboards can distinguish the two paths.
+
+### Gotchas
+
+- **UTF-8 httpx headers.** `httpx` ASCII-encodes header values by default; emoji in the ntfy `Title` header (e.g. `"✓ Logged"`) raise `UnicodeEncodeError` 100% of the time. `deliver_ack_confirm` encodes header values as UTF-8 bytes before handing them to httpx. Any future code path that sets non-ASCII ntfy headers must do the same.
 
 ---
 

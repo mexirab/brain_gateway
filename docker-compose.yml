@@ -259,6 +259,7 @@ services:
       - NTFY_HMAC_SECRET=${NTFY_HMAC_SECRET:-}
       - NTFY_ACK_EXP_SECONDS=${NTFY_ACK_EXP_SECONDS:-1800}
       - NTFY_MAX_SNOOZE_COUNT=${NTFY_MAX_SNOOZE_COUNT:-5}
+      - NTFY_CONFIRM_ENABLED=${NTFY_CONFIRM_ENABLED:-false}
     networks:
       - gateway-net
     healthcheck:

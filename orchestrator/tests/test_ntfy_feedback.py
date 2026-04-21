@@ -271,7 +271,7 @@ class TestDeliverViaNtfy:
         from orchestrator.metrics import NTFY_PUSH_TOTAL
         from orchestrator.reminder_manager import deliver_via_ntfy
 
-        before = NTFY_PUSH_TOTAL.labels(result="ok")._value.get()
+        before = NTFY_PUSH_TOTAL.labels(result="ok", kind="reminder")._value.get()
 
         with respx.mock(base_url="http://ntfy.test:8889") as mock:
             route = mock.post("/jess-reminders").mock(return_value=Response(200))
@@ -292,7 +292,7 @@ class TestDeliverViaNtfy:
 
         assert result["success"] is True
         assert "latency_ms" in result
-        after = NTFY_PUSH_TOTAL.labels(result="ok")._value.get()
+        after = NTFY_PUSH_TOTAL.labels(result="ok", kind="reminder")._value.get()
         assert after == before + 1
 
     @pytest.mark.asyncio
@@ -303,14 +303,14 @@ class TestDeliverViaNtfy:
         from orchestrator.metrics import NTFY_PUSH_TOTAL
         from orchestrator.reminder_manager import deliver_via_ntfy
 
-        before = NTFY_PUSH_TOTAL.labels(result="fail")._value.get()
+        before = NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder")._value.get()
         with respx.mock(base_url="http://ntfy.test:8889") as mock:
             mock.post("/jess-reminders").mock(return_value=Response(500, text="boom"))
             result = await deliver_via_ntfy("r1", "hi")
 
         assert result["success"] is False
         assert result["status_code"] == 500
-        after = NTFY_PUSH_TOTAL.labels(result="fail")._value.get()
+        after = NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder")._value.get()
         assert after == before + 1
 
     @pytest.mark.asyncio
@@ -321,7 +321,7 @@ class TestDeliverViaNtfy:
         from orchestrator.metrics import NTFY_PUSH_TOTAL
         from orchestrator.reminder_manager import deliver_via_ntfy
 
-        before = NTFY_PUSH_TOTAL.labels(result="fail")._value.get()
+        before = NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder")._value.get()
         with respx.mock(base_url="http://ntfy.test:8889") as mock:
             mock.post("/jess-reminders").mock(
                 side_effect=httpx.ConnectError("dns")
@@ -332,7 +332,7 @@ class TestDeliverViaNtfy:
         assert result["success"] is False
         assert "error" in result
         assert "ConnectError" in result["error"]
-        after = NTFY_PUSH_TOTAL.labels(result="fail")._value.get()
+        after = NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder")._value.get()
         assert after == before + 1
 
 
@@ -621,3 +621,447 @@ class TestSnoozeRoute:
         )
         assert r.status_code == 404
         assert r.json()["error"] == "not_found"
+
+
+# ===========================================================================
+# deliver_ack_confirm (unit, respx-mocked HTTP)
+# ===========================================================================
+
+
+@pytest.fixture
+def ntfy_confirm_on(ntfy_on, monkeypatch):
+    """Enable ntfy AND the confirm side-channel."""
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "ntfy_confirm_enabled", True, raising=False)
+    return settings
+
+
+class TestDeliverAckConfirm:
+    @pytest.mark.asyncio
+    async def test_ntfy_disabled_returns_disabled_no_http_no_metric(
+        self, ntfy_off, monkeypatch
+    ):
+        """ntfy_enabled=False → short-circuit before any HTTP or metric bump."""
+        import respx
+
+        from orchestrator.config import settings
+        from orchestrator.metrics import NTFY_PUSH_TOTAL
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        monkeypatch.setattr(settings, "ntfy_confirm_enabled", True, raising=False)
+        before_ok = NTFY_PUSH_TOTAL.labels(result="ok", kind="confirm")._value.get()
+        before_skip = NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get()
+        before_fail = NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get()
+
+        with respx.mock:
+            result = await deliver_ack_confirm("t", "m")
+
+        assert result == {"success": False, "skipped": True, "reason": "disabled"}
+        # No metric was touched — side-channel gate is silent
+        assert NTFY_PUSH_TOTAL.labels(result="ok", kind="confirm")._value.get() == before_ok
+        assert NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get() == before_skip
+        assert NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get() == before_fail
+
+    @pytest.mark.asyncio
+    async def test_confirm_flag_off_returns_disabled_no_http(
+        self, ntfy_on, monkeypatch
+    ):
+        """ntfy_enabled=True but ntfy_confirm_enabled=False → skipped, no HTTP."""
+        import respx
+
+        from orchestrator.config import settings
+        from orchestrator.metrics import NTFY_PUSH_TOTAL
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        monkeypatch.setattr(settings, "ntfy_confirm_enabled", False, raising=False)
+        before_skip = NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get()
+
+        with respx.mock:
+            result = await deliver_ack_confirm("t", "m")
+
+        assert result == {"success": False, "skipped": True, "reason": "disabled"}
+        # Early-disabled gate does not bump any metric
+        assert NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get() == before_skip
+
+    @pytest.mark.asyncio
+    async def test_missing_url_returns_missing_url_and_bumps_skipped_metric(
+        self, ntfy_confirm_on, monkeypatch
+    ):
+        """Both flags true but NTFY_URL='' → skipped/missing_url + metric bump."""
+        import respx
+
+        from orchestrator.config import settings
+        from orchestrator.metrics import NTFY_PUSH_TOTAL
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        monkeypatch.setattr(settings, "ntfy_url", "", raising=False)
+        before = NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get()
+
+        with respx.mock:
+            result = await deliver_ack_confirm("t", "m")
+
+        assert result == {"success": False, "skipped": True, "reason": "missing_url"}
+        after = NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get()
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_happy_path_200(self, ntfy_confirm_on):
+        """200 → success=True, metric +1, Title/Priority/body exactly as specified."""
+        import respx
+        from httpx import Response
+
+        from orchestrator.metrics import NTFY_PUSH_TOTAL
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        before = NTFY_PUSH_TOTAL.labels(result="ok", kind="confirm")._value.get()
+
+        with respx.mock(base_url="http://ntfy.test:8889") as mock:
+            route = mock.post("/jess-reminders").mock(return_value=Response(200))
+            result = await deliver_ack_confirm(
+                "\u2713 Logged", "drink water\n(water logged)", "r1"
+            )
+
+        assert route.called
+        req = route.calls[0].request
+        # Title header is sent as UTF-8 bytes (httpx accepts raw bytes
+        # values), which ntfy decodes as UTF-8. The raw header bytes must
+        # match the caller's UTF-8 encoding of the original string.
+        raw_title = dict(req.headers.raw).get(b"title") or dict(
+            req.headers.raw
+        ).get(b"Title")
+        assert raw_title == "\u2713 Logged".encode("utf-8")
+        # And the decoded view matches too
+        assert req.headers.get("Title") == "\u2713 Logged"
+        assert req.headers.get("Priority") == "1"
+        # Body is raw message bytes (utf-8 encoded)
+        assert req.content == "drink water\n(water logged)".encode("utf-8")
+        # No Actions header on confirms (intentionally different from reminders)
+        assert "Actions" not in req.headers
+
+        assert result == {"success": True}
+        after = NTFY_PUSH_TOTAL.labels(result="ok", kind="confirm")._value.get()
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_5xx_response_fail_metric_and_status_code_returned(
+        self, ntfy_confirm_on
+    ):
+        import respx
+        from httpx import Response
+
+        from orchestrator.metrics import NTFY_PUSH_TOTAL
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        before = NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get()
+        with respx.mock(base_url="http://ntfy.test:8889") as mock:
+            mock.post("/jess-reminders").mock(return_value=Response(503, text="boom"))
+            result = await deliver_ack_confirm("t", "m")
+
+        assert result["success"] is False
+        assert result["status_code"] == 503
+        after = NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get()
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_connect_error_swallowed_and_bumps_fail(self, ntfy_confirm_on):
+        import httpx
+        import respx
+
+        from orchestrator.metrics import NTFY_PUSH_TOTAL
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        before = NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get()
+        with respx.mock(base_url="http://ntfy.test:8889") as mock:
+            mock.post("/jess-reminders").mock(side_effect=httpx.ConnectError("dns"))
+            result = await deliver_ack_confirm("t", "m")
+
+        assert result["success"] is False
+        assert "error" in result
+        assert "ConnectError" in result["error"]
+        after = NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get()
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_title_sliced_to_120_chars(self, ntfy_confirm_on):
+        """200-char title → Title header is exactly 120 chars."""
+        import respx
+        from httpx import Response
+
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        long_title = "A" * 200
+        with respx.mock(base_url="http://ntfy.test:8889") as mock:
+            route = mock.post("/jess-reminders").mock(return_value=Response(200))
+            await deliver_ack_confirm(long_title, "m")
+
+        sent_title = route.calls[0].request.headers.get("Title")
+        assert sent_title is not None
+        assert len(sent_title) == 120
+        assert sent_title == "A" * 120
+
+    @pytest.mark.asyncio
+    async def test_reminder_id_in_failure_log(self, ntfy_confirm_on, caplog):
+        """Failure log line must include rid=<id> for Loki correlation."""
+        import logging
+
+        import respx
+        from httpx import Response
+
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        with respx.mock(base_url="http://ntfy.test:8889") as mock, caplog.at_level(
+            logging.WARNING, logger="orchestrator.reminder_manager"
+        ):
+            mock.post("/jess-reminders").mock(return_value=Response(500))
+            await deliver_ack_confirm("t", "m", reminder_id="abc-123")
+
+        assert any("rid=abc-123" in r.getMessage() for r in caplog.records), (
+            f"Expected 'rid=abc-123' in WARNING log, got: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reminder_id_in_exception_log(self, ntfy_confirm_on, caplog):
+        """Exception path also carries rid= hint."""
+        import logging
+
+        import httpx
+        import respx
+
+        from orchestrator.reminder_manager import deliver_ack_confirm
+
+        with respx.mock(base_url="http://ntfy.test:8889") as mock, caplog.at_level(
+            logging.ERROR, logger="orchestrator.reminder_manager"
+        ):
+            mock.post("/jess-reminders").mock(side_effect=httpx.ConnectError("dns"))
+            await deliver_ack_confirm("t", "m", reminder_id="xyz-9")
+
+        assert any("rid=xyz-9" in r.getMessage() for r in caplog.records), (
+            f"Expected 'rid=xyz-9' in ERROR log, got: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+
+
+# ===========================================================================
+# Route wiring — /ack and /snooze fire deliver_ack_confirm via create_task
+# ===========================================================================
+
+
+class TestAckConfirmWiring:
+    """Verify the route dispatches a create_task(deliver_ack_confirm(...)) call
+    with the right title+body shape, regardless of the confirm flag (the
+    function itself is the gate)."""
+
+    def _patch_confirm(self):
+        """Patch the name the route imports locally. The route does `from
+        orchestrator.reminder_manager import deliver_ack_confirm` at call time,
+        so we patch the source module."""
+        from unittest.mock import AsyncMock
+
+        return patch(
+            "orchestrator.reminder_manager.deliver_ack_confirm",
+            new_callable=AsyncMock,
+        )
+
+    def test_ack_fires_deliver_ack_confirm_with_check_mark_title(
+        self, client, ntfy_confirm_on, tmp_db
+    ):
+        """Successful ack → deliver_ack_confirm called with U+2713 title + body
+        containing reminder text. Title must NEVER contain the action
+        category (security finding)."""
+        from orchestrator import state_store
+
+        state_store.save_reminder("r1", "take meds now", "2026-04-20T09:00:00")
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "ack", exp)
+
+        with patch(
+            "orchestrator.selfcare_manager.record_medication_logged"
+        ), self._patch_confirm() as mock_confirm:
+            r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
+            # create_task scheduled the coroutine; drive it by awaiting all pending
+            # tasks via the event loop. TestClient runs sync, so we need to yield
+            # control for the task to actually invoke our mock.
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        assert r.status_code == 200
+        mock_confirm.assert_called_once()
+        args, kwargs = mock_confirm.call_args
+        # Positional: (title, message, reminder_id)
+        title, message, rid = args[0], args[1], args[2]
+        assert title == "\u2713 Logged"
+        # Security: action name ("medication") must NOT be in title
+        assert "medication" not in title.lower()
+        assert "Medication" not in title
+        # Body contains the reminder text
+        assert "take meds now" in message
+        # Action category is fine in the BODY (just not the title)
+        assert "medication" in message.lower()
+        assert rid == "r1"
+
+    def test_ack_no_action_omits_action_suffix_in_body(
+        self, client, ntfy_confirm_on, tmp_db
+    ):
+        """When no selfcare action is inferred, body is just the text snippet."""
+        from orchestrator import state_store
+
+        state_store.save_reminder("r1", "call the doctor", "2026-04-20T09:00:00")
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "ack", exp)
+
+        with self._patch_confirm() as mock_confirm:
+            r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        assert r.status_code == 200
+        mock_confirm.assert_called_once()
+        args, _ = mock_confirm.call_args
+        title, message, rid = args[0], args[1], args[2]
+        assert title == "\u2713 Logged"
+        assert "call the doctor" in message
+        # No "(X logged)" suffix when action is None
+        assert "logged)" not in message
+        assert rid == "r1"
+
+    def test_ack_replay_does_not_fire_confirm(
+        self, client, ntfy_confirm_on, tmp_db
+    ):
+        """already_acked short-circuit happens BEFORE the create_task."""
+        from orchestrator import state_store
+
+        state_store.save_reminder("r1", "walk outside", "2026-04-20T09:00:00")
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "ack", exp)
+
+        with patch(
+            "orchestrator.selfcare_manager.record_movement_logged"
+        ), self._patch_confirm() as mock_confirm:
+            # First ack — confirm fires once
+            r1 = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            assert r1.status_code == 200
+            first_call_count = mock_confirm.call_count
+            assert first_call_count == 1
+
+            # Replay — must NOT fire confirm again
+            r2 = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            assert r2.status_code == 200
+            assert r2.json().get("already_acked") is True
+            # Call count unchanged — replay short-circuits before dispatch
+            assert mock_confirm.call_count == first_call_count
+
+    def test_ack_fires_confirm_even_when_confirm_flag_off(
+        self, client, ntfy_on, tmp_db, monkeypatch
+    ):
+        """Route dispatches unconditionally; the function gates internally.
+        This verifies the fire-and-forget contract: api_routes doesn't know
+        or care about ntfy_confirm_enabled."""
+        from orchestrator.config import settings
+
+        monkeypatch.setattr(settings, "ntfy_confirm_enabled", False, raising=False)
+
+        from orchestrator import state_store
+
+        state_store.save_reminder("r1", "whatever", "2026-04-20T09:00:00")
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "ack", exp)
+
+        with self._patch_confirm() as mock_confirm:
+            r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        assert r.status_code == 200
+        # Route fires unconditionally — gating is the function's job
+        mock_confirm.assert_called_once()
+
+
+class TestSnoozeConfirmWiring:
+    def _patch_confirm(self):
+        from unittest.mock import AsyncMock
+
+        return patch(
+            "orchestrator.reminder_manager.deliver_ack_confirm",
+            new_callable=AsyncMock,
+        )
+
+    def test_snooze_fires_confirm_with_sleep_emoji_title_and_count_body(
+        self, client, ntfy_confirm_on, tmp_db, clean_scheduler
+    ):
+        """Snooze success → title is '💤 Snoozed until <time>', body contains
+        'N/5 snoozes used', reminder_id is third arg."""
+        from orchestrator import state_store
+
+        state_store.save_reminder("r1", "tick", "2026-04-20T09:00:00")
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "snooze", exp, extra="10")
+
+        with self._patch_confirm() as mock_confirm:
+            r = client.post(
+                f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
+            )
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        assert r.status_code == 200
+        mock_confirm.assert_called_once()
+        args, _ = mock_confirm.call_args
+        title, message, rid = args[0], args[1], args[2]
+        # Sleep emoji is U+1F4A4
+        assert title.startswith("\U0001f4a4 Snoozed until")
+        # Body reports usage ratio
+        assert "1/5 snoozes used" in message
+        assert rid == "r1"
+
+    def test_snooze_fires_confirm_when_flag_off(
+        self, client, ntfy_on, tmp_db, clean_scheduler, monkeypatch
+    ):
+        """Same fire-and-forget contract as ack: dispatch is unconditional."""
+        from orchestrator import state_store
+        from orchestrator.config import settings
+
+        monkeypatch.setattr(settings, "ntfy_confirm_enabled", False, raising=False)
+        state_store.save_reminder("r1", "tick", "2026-04-20T09:00:00")
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "snooze", exp, extra="10")
+
+        with self._patch_confirm() as mock_confirm:
+            r = client.post(
+                f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
+            )
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        assert r.status_code == 200
+        mock_confirm.assert_called_once()

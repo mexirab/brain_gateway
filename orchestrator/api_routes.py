@@ -426,6 +426,22 @@ async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
                 exc_info=True,
             )
 
+    # Visible-confirmation side-channel (F-011 follow-up). Fire-and-forget
+    # so a slow/down ntfy server doesn't stretch the ack response time.
+    # Gated by settings.ntfy_confirm_enabled; no-op when off.
+    # Title stays generic ("Logged") — selfcare action category (medication,
+    # meal, water, movement) is medically sensitive and the ntfy topic is
+    # open-tailnet, so that detail lives in the body only. See F-011 security
+    # review finding.
+    import asyncio as _asyncio
+
+    from orchestrator.reminder_manager import deliver_ack_confirm
+
+    confirm_title = "\u2713 Logged"
+    text_snippet = (text[:100] + "...") if len(text) > 100 else (text or "reminder")
+    confirm_msg = f"{text_snippet}\n({action} logged)" if action else text_snippet
+    _asyncio.create_task(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
+
     return {"ok": True, "reminder_id": reminder_id, "inferred_action": action}
 
 
@@ -492,6 +508,18 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
     new_count = _ss.increment_snooze_count(reminder_id)
     NTFY_SNOOZE_TOTAL.inc()
     logger.info(f"[NTFY-SNOOZE] {reminder_id} snoozed {minutes}m (count={new_count})")
+
+    # Visible-confirmation side-channel (F-011 follow-up). Fire-and-forget.
+    import asyncio as _asyncio
+
+    from orchestrator.reminder_manager import deliver_ack_confirm
+
+    fire_time = run_at.strftime("%-I:%M %p")
+    confirm_title = f"\U0001f4a4 Snoozed until {fire_time}"
+    confirm_msg = (
+        f"{new_count}/{settings.ntfy_max_snooze_count} snoozes used" if new_count is not None else "Rescheduled"
+    )
+    _asyncio.create_task(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
     return {
         "ok": True,
         "reminder_id": reminder_id,

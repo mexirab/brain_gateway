@@ -255,6 +255,12 @@ class Settings(BaseSettings):
     ntfy_hmac_secret: str = ""  # required when ntfy_enabled; signs callback URLs
     ntfy_ack_exp_seconds: int = 1800  # signature validity window
     ntfy_max_snooze_count: int = 5  # guardrail against indefinite snooze loops
+    # After a successful Done/Snooze button tap, push a low-priority
+    # confirmation ntfy message so the user sees visible feedback
+    # ("✓ Logged" / "💤 Snoozed until 3:15 PM"). iOS `UNNotificationAction`
+    # can't mutate buttons post-tap, so this side-channel is the closest
+    # substitute for "button turns into a checkmark."
+    ntfy_confirm_enabled: bool = False
 
     # -- Training corpus drain ---------------------------------------------------
     # Nightly job that appends user/assistant turns from OWUI, state_store, and

@@ -180,6 +180,7 @@ Third reminder delivery channel with Done/Snooze action buttons. Callbacks hit H
 | `NTFY_HMAC_SECRET` | (empty) | Secret for signing callback URLs. Scheme: `sig = HMAC-SHA256(secret, f"{id}|{action}|{exp}|{extra}")[:32]`. Missing → channel auto-disables. |
 | `NTFY_ACK_EXP_SECONDS` | `86400` | TTL for ack/snooze callback signatures (seconds). |
 | `NTFY_MAX_SNOOZE_COUNT` | `3` | Max snoozes per reminder before Snooze button is dropped. |
+| `NTFY_CONFIRM_ENABLED` | `false` | Opt-in. When true, after a successful ack/snooze callback the orchestrator pushes a low-priority (priority=1) confirmation message back to the same ntfy topic so the user sees visible feedback that the button registered (iOS can't mutate action buttons in-place). Title stays generic; action-specific detail lives in body only (topic is open-tailnet, titles render on lockscreen). |
 
 ## Monitoring
 
