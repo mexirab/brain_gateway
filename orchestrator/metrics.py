@@ -238,6 +238,25 @@ PAPERLESS_UPLOAD_LATENCY = Histogram(
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
 )
 
+# -- Pushover bridge (F-013) ------------------------------------------------
+PUSHOVER_PUSH_TOTAL = Counter(
+    "bgw_pushover_push_total",
+    "Pushover push attempts",
+    # result: ok | fail | skipped
+    # kind:   reminder | confirm
+    # reason: ok | http_4xx | http_5xx | timeout | connect_error | other |
+    #         disabled | missing_user_key | missing_app_token
+    # (reason lets Grafana distinguish 'token revoked' from 'Pushover down')
+    ["result", "kind", "reason"],
+)
+
+PUSHOVER_PUSH_LATENCY = Histogram(
+    "bgw_pushover_push_latency_seconds",
+    "Latency of the POST to the Pushover API",
+    ["kind"],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+)
+
 # -- Calendar ----------------------------------------------------------------
 CALENDAR_API_CALLS = Counter(
     "bgw_calendar_api_calls_total",

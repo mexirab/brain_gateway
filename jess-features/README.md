@@ -22,6 +22,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-010 | [Ambient Awareness Mode](./F-010-ambient-awareness.md) | P2 | Ready | Done |
 | F-011 | [Ntfy Feedback Loop](./F-011-ntfy-feedback-loop.md) | P1 | Ready | Done |
 | F-012 | [Paperless-ngx Bridge](./F-012-paperless-bridge.md) | P2 | Ready | Done |
+| F-013 | [Pushover Push Bridge](./F-013-pushover-bridge.md) | P1 | Ready | Done |
 
 ## Build Order
 
@@ -56,6 +57,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-010 Ambient Awareness | Aggregates all other features into passive awareness |
 | F-011 Ntfy Feedback Loop | Third reminder channel with Done/Snooze buttons; depends on F-002 (time nudges) + F-008 (selfcare bridge) |
 | F-012 Paperless-ngx Bridge | Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging; no hard deps on other features — depends only on Paperless-ngx running. `document_vault` stays the home for typed/pasted text notes. |
+| F-013 Pushover Push Bridge | Parallel iOS push channel alongside F-011 ntfy (Pushover has native APNs, ntfy-upstream was unreliable on iOS). Depends on F-011 — reuses its HMAC-signed ack/snooze callback routes. Independent on/off flag; runs alongside ntfy or standalone. Blocks: none. |
 
 ## Dependency Graph
 
@@ -78,9 +80,11 @@ F-004 Focus Enhancement    F-008 Self-Care Nudges ──────────
                            F-002 Tiered Nudges (standalone enhancement)
                                    │
                                    └──► F-011 Ntfy Feedback Loop (Done/Snooze)
-                                              ▲
-                                              │
-                           F-008 Self-Care Nudges (shares ACTION_KEYWORDS)
+                                              ▲     │
+                                              │     ▼
+                           F-008 Self-Care    F-013 Pushover Push Bridge
+                           Nudges (shares           (reuses F-011 HMAC
+                           ACTION_KEYWORDS)          ack/snooze routes)
 
 F-012 Paperless-ngx Bridge (standalone — no deps on other features;
                             requires Paperless-ngx running on Jupiter)

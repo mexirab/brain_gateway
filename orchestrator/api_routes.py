@@ -75,6 +75,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+# F-011 background-task keeper. `asyncio.create_task` only holds a weak
+# reference — if the handler returns before the task's first await point
+# (e.g. fire-and-forget confirm push on a route that itself does almost
+# nothing), the task can be garbage-collected mid-flight and silently
+# never run. We hold a strong reference in a module-level set and clear
+# it via done-callback. See https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
+import asyncio as _asyncio
+
+_BACKGROUND_TASKS: set = set()
+
+
+def _fire_and_forget(coro) -> None:
+    """Schedule `coro` on the event loop with a strong reference held."""
+    task = _asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
 # Include domain-specific sub-routers
 router.include_router(calendar_router)
 router.include_router(chat_router)
@@ -351,10 +370,13 @@ async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
         verify_callback_signature,
     )
 
-    # Feature-flag gate: if ntfy is disabled, the callback surface shouldn't
-    # outlive the push surface. Return 404 (not 403) so we don't leak the
-    # existence of the route to scanners when the feature is off.
-    if not settings.ntfy_enabled:
+    # Feature-flag gate: the callback surface should outlive EITHER the ntfy
+    # push channel OR the pushover channel, since both send signed URLs that
+    # ack/snooze. Only 404 if BOTH channels are off — otherwise e.g. running
+    # pushover-only (ntfy disabled) would strand the Done/Snooze taps.
+    # Return 404 (not 403) so we don't leak the route's existence to scanners
+    # when every channel is off.
+    if not (settings.ntfy_enabled or settings.pushover_enabled):
         return JSONResponse({"ok": False, "error": "disabled"}, status_code=404)
 
     err = verify_callback_signature(reminder_id, "ack", exp, sig)
@@ -433,14 +455,14 @@ async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
     # meal, water, movement) is medically sensitive and the ntfy topic is
     # open-tailnet, so that detail lives in the body only. See F-011 security
     # review finding.
-    import asyncio as _asyncio
-
+    from orchestrator.pushover_manager import deliver_pushover_confirm
     from orchestrator.reminder_manager import deliver_ack_confirm
 
     confirm_title = "\u2713 Logged"
     text_snippet = (text[:100] + "...") if len(text) > 100 else (text or "reminder")
     confirm_msg = f"{text_snippet}\n({action} logged)" if action else text_snippet
-    _asyncio.create_task(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
+    _fire_and_forget(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
+    _fire_and_forget(deliver_pushover_confirm(confirm_title, confirm_msg, reminder_id))
 
     return {"ok": True, "reminder_id": reminder_id, "inferred_action": action}
 
@@ -459,7 +481,9 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
     from orchestrator.metrics import NTFY_CALLBACK_REJECTED_TOTAL, NTFY_SNOOZE_TOTAL
     from orchestrator.reminder_manager import verify_callback_signature
 
-    if not settings.ntfy_enabled:
+    # Feature-flag gate: same widened semantics as the ack route. Either push
+    # channel keeps the signed callback URLs reachable.
+    if not (settings.ntfy_enabled or settings.pushover_enabled):
         return JSONResponse({"ok": False, "error": "disabled"}, status_code=404)
 
     # Clamp BEFORE verifying signature: signature binds the minutes value,
@@ -509,9 +533,8 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
     NTFY_SNOOZE_TOTAL.inc()
     logger.info(f"[NTFY-SNOOZE] {reminder_id} snoozed {minutes}m (count={new_count})")
 
-    # Visible-confirmation side-channel (F-011 follow-up). Fire-and-forget.
-    import asyncio as _asyncio
-
+    # Visible-confirmation side-channel (F-011 + F-013). Fire-and-forget on both.
+    from orchestrator.pushover_manager import deliver_pushover_confirm
     from orchestrator.reminder_manager import deliver_ack_confirm
 
     fire_time = run_at.strftime("%-I:%M %p")
@@ -519,7 +542,8 @@ async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, mi
     confirm_msg = (
         f"{new_count}/{settings.ntfy_max_snooze_count} snoozes used" if new_count is not None else "Rescheduled"
     )
-    _asyncio.create_task(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
+    _fire_and_forget(deliver_ack_confirm(confirm_title, confirm_msg, reminder_id))
+    _fire_and_forget(deliver_pushover_confirm(confirm_title, confirm_msg, reminder_id))
     return {
         "ok": True,
         "reminder_id": reminder_id,

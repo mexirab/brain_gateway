@@ -232,6 +232,18 @@ class Settings(BaseSettings):
     # -- CORS --------------------------------------------------------------------
     cors_origins: str = "http://localhost:3001"
 
+    # -- Pushover bridge (F-013) ----------------------------------------------
+    # Parallel iOS push channel. Pushover's native APNs integration is more
+    # reliable than ntfy-upstream on self-hosted for lockscreen banners.
+    # Runs alongside ntfy when both are enabled; toggle ntfy off to go
+    # pushover-only. Callbacks reuse F-011's HMAC-signed routes.
+    pushover_enabled: bool = False
+    pushover_user_key: str = ""  # 30-char alphanum from pushover.net home page
+    pushover_app_token: str = ""  # 30-char alphanum from an application you create
+    pushover_default_priority: int = 0  # -2..2
+    pushover_api_url: str = "https://api.pushover.net/1/messages.json"
+    pushover_upload_timeout_seconds: int = 10
+
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
     # mirror state — Paperless owns its files and metadata. document_vault
@@ -303,6 +315,26 @@ class Settings(BaseSettings):
         if v > 5:
             return 5
         return v
+
+    @model_validator(mode="after")
+    def validate_pushover_config(self) -> "Settings":
+        """Auto-disable F-013 Pushover bridge on missing creds. Log + disable,
+        never raise — optional feature must not block startup.
+        """
+        if self.pushover_enabled and (len(self.pushover_user_key) < 8 or len(self.pushover_app_token) < 8):
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] PUSHOVER_ENABLED=true but PUSHOVER_USER_KEY or "
+                "PUSHOVER_APP_TOKEN is missing/short; disabling Pushover. "
+                "Set both (30-char alphanum each) in .env to re-enable."
+            )
+            object.__setattr__(self, "pushover_enabled", False)
+        if self.pushover_default_priority < -2:
+            object.__setattr__(self, "pushover_default_priority", -2)
+        elif self.pushover_default_priority > 2:
+            object.__setattr__(self, "pushover_default_priority", 2)
+        return self
 
     @model_validator(mode="after")
     def validate_paperless_config(self) -> "Settings":

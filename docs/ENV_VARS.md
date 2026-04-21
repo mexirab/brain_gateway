@@ -182,6 +182,19 @@ Third reminder delivery channel with Done/Snooze action buttons. Callbacks hit H
 | `NTFY_MAX_SNOOZE_COUNT` | `3` | Max snoozes per reminder before Snooze button is dropped. |
 | `NTFY_CONFIRM_ENABLED` | `false` | Opt-in. When true, after a successful ack/snooze callback the orchestrator pushes a low-priority (priority=1) confirmation message back to the same ntfy topic so the user sees visible feedback that the button registered (iOS can't mutate action buttons in-place). Title stays generic; action-specific detail lives in body only (topic is open-tailnet, titles render on lockscreen). |
 
+## Pushover Bridge (F-013)
+
+Parallel iOS push channel alongside F-011 ntfy. Pushover has native APNs integration so lockscreen banners land reliably on iOS where self-hosted ntfy-upstream was flaky. Runs ALONGSIDE ntfy (double push if both enabled); `NTFY_ENABLED` and `PUSHOVER_ENABLED` are independent flags. Reuses F-011's HMAC-signed `/api/reminder/ack/{id}` + `/api/reminder/snooze/{id}` callback routes — no new routes, just a new outbound channel. If `PUSHOVER_USER_KEY` or `PUSHOVER_APP_TOKEN` is missing, a `model_validator` in `config.py` auto-disables the channel regardless of `PUSHOVER_ENABLED` and logs an error (matches F-011/F-012 pattern; no exception). Reminder text is HTML-escaped before embedding in Pushover's HTML body to block prompt-injection `<a href>` planted via `set_reminder`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PUSHOVER_ENABLED` | `false` | Enable Pushover delivery for reminders. Forced off if `PUSHOVER_USER_KEY` or `PUSHOVER_APP_TOKEN` is missing. |
+| `PUSHOVER_USER_KEY` | (empty) | Pushover user key. Required when enabled. |
+| `PUSHOVER_APP_TOKEN` | (empty) | Pushover application API token. Required when enabled. |
+| `PUSHOVER_DEFAULT_PRIORITY` | `0` | Pushover priority (-2 to 2). Overridden per-reminder when urgency is set; values are clamped to the Pushover-valid range. |
+| `PUSHOVER_DEVICE` | (empty) | Optional device name to target a specific device; empty = all user devices. |
+| `PUSHOVER_TIMEOUT_SECONDS` | `10` | Per-request httpx timeout. Bucketed into `bgw_pushover_push_latency_seconds`. |
+
 ## Monitoring
 
 | Variable | Default | Purpose |

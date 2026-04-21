@@ -518,10 +518,10 @@ async def deliver_reminder_job(reminder_id: str):
 
     if target in ["phone", "both"]:
         await _send_notification(text)
-        # F-011: ntfy push runs alongside HA Companion push. Gated on
-        # settings.ntfy_enabled — no-op if off. Dispatched as a detached
-        # task so a slow ntfy server never extends the scheduler job
-        # duration (see prod-support review of F-011).
+        # F-011 + F-013: push channels run in parallel with HA Companion push.
+        # Each is individually gated by its own *_enabled flag — no-op when
+        # off. Dispatched as detached tasks so a slow push server never
+        # extends the scheduler job duration (prod-support review of F-011).
         try:
             import asyncio as _asyncio
 
@@ -541,6 +541,31 @@ async def deliver_reminder_job(reminder_id: str):
         except Exception as ntfy_err:
             logger.error(
                 f"[REMINDER] ntfy dispatch failed for {reminder_id}: {ntfy_err}",
+                extra={"component": "reminder"},
+                exc_info=True,
+            )
+
+        # F-013 Pushover push — parallel channel with more reliable iOS APNs
+        # delivery. Same detached-task pattern.
+        try:
+            import asyncio as _asyncio_po
+
+            from orchestrator.pushover_manager import deliver_via_pushover
+
+            async def _pushover_and_log() -> None:
+                try:
+                    await deliver_via_pushover(reminder_id, text)
+                except Exception as push_err:
+                    logger.error(
+                        f"[REMINDER] pushover push raised for {reminder_id}: {push_err}",
+                        extra={"component": "reminder"},
+                        exc_info=True,
+                    )
+
+            _asyncio_po.create_task(_pushover_and_log())
+        except Exception as po_err:
+            logger.error(
+                f"[REMINDER] pushover dispatch failed for {reminder_id}: {po_err}",
                 extra={"component": "reminder"},
                 exc_info=True,
             )

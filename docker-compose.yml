@@ -260,6 +260,14 @@ services:
       - NTFY_ACK_EXP_SECONDS=${NTFY_ACK_EXP_SECONDS:-1800}
       - NTFY_MAX_SNOOZE_COUNT=${NTFY_MAX_SNOOZE_COUNT:-5}
       - NTFY_CONFIRM_ENABLED=${NTFY_CONFIRM_ENABLED:-false}
+      # Pushover bridge (F-013) — parallel iOS push channel with more
+      # reliable APNs delivery than self-hosted ntfy. Disabled by default;
+      # set PUSHOVER_ENABLED=true + user key + app token in .env to turn on.
+      - PUSHOVER_ENABLED=${PUSHOVER_ENABLED:-false}
+      - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY:-}
+      - PUSHOVER_APP_TOKEN=${PUSHOVER_APP_TOKEN:-}
+      - PUSHOVER_DEFAULT_PRIORITY=${PUSHOVER_DEFAULT_PRIORITY:-0}
+      - PUSHOVER_UPLOAD_TIMEOUT_SECONDS=${PUSHOVER_UPLOAD_TIMEOUT_SECONDS:-10}
     networks:
       - gateway-net
     healthcheck:
