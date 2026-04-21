@@ -10,12 +10,22 @@ user_profile.yaml
 # Backups
 *.backup
 *.bak
+*.bak.*
+.env.bak*
 data/app-backup-*/
 
 # Application runtime state (bind-mounted to /app/data in the container).
 # Holds progress.db, brain_state.db, finance.db, auto_learn.key, etc.
 # Never commit this — contains personal state that changes every run.
 data/app/
+
+# Local ML caches / fine-tune artifacts (can be regenerated; bloats the repo)
+data/embedding_finetune/
+data/hf_cache/
+
+# Claude Code local state (worktrees, local settings backups)
+.claude/worktrees/
+.claude/settings.local.json.bak*
 
 # TypeScript build cache
 tsconfig.tsbuildinfo
