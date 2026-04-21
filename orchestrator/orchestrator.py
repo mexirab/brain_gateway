@@ -104,7 +104,16 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer token on all endpoints except public ones."""
 
     PUBLIC_PATHS = {"/health"}
-    PUBLIC_PREFIXES = ("/api/audio/",)  # Google speakers fetch audio without auth
+    # Prefix-based public paths.
+    # - /api/audio/: Google speakers fetch TTS clips without auth
+    # - /api/reminder/ack/ and /api/reminder/snooze/: F-011 ntfy action buttons
+    #   are called from the user's phone without a bearer token; the route
+    #   handler verifies an HMAC-signed URL instead.
+    PUBLIC_PREFIXES = (
+        "/api/audio/",
+        "/api/reminder/ack/",
+        "/api/reminder/snooze/",
+    )
 
     async def dispatch(self, request: Request, call_next):
         # CORS preflight must pass through
@@ -133,6 +142,7 @@ _LARGE_UPLOAD_PATHS = {
     "/api/stt/transcribe",
     "/api/vision/analyze",
     "/api/meals/photo",
+    "/api/paperless/upload",
     "/v1/chat/completions",
     "/chat/completions",
 }

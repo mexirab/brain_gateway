@@ -37,11 +37,13 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Self-care nudges (F-008) | Meal, medication, hydration & movement reminders | Working |
 | Decision simplifier (F-009) | Choice paralysis helper — narrow options, structured comparison | Working |
 | Ambient awareness (F-010) | Periodic environmental/schedule summaries in the background | Working |
+| Ntfy feedback loop (F-011) | Reminder delivery via ntfy with Done/Snooze buttons + HMAC-signed callback routes | Working |
+| Paperless bridge (F-012) | `paperless_save` tool + `POST /api/paperless/upload` → Paperless-ngx on Jupiter for OCR + auto-tagging | Working |
 | Announcement observability | Announcement history, metrics, per-speaker tracking | Working |
 
 ## ADHD Feature Suite — DONE
 
-All 10 ADHD-informed features (F-001 through F-010) are complete and deployed. Each feature was built from a self-contained implementation spec with interaction examples, tool schemas, TTS templates, and testing checklists. See [jess-features/README.md](jess-features/README.md) for the full build order, dependency graph, and per-feature specs.
+All 12 ADHD-informed features (F-001 through F-012) are complete and deployed. Each feature was built from a self-contained implementation spec with interaction examples, tool schemas, TTS templates, and testing checklists. See [jess-features/README.md](jess-features/README.md) for the full build order, dependency graph, and per-feature specs.
 
 | ID | Feature | Tools |
 |----|---------|-------|
@@ -55,6 +57,8 @@ All 10 ADHD-informed features (F-001 through F-010) are complete and deployed. E
 | F-008 | Self-Care Nudges — meal, medication, hydration & movement reminders | (background job) |
 | F-009 | Decision Simplifier — choice paralysis helper, structured comparison | (integrated) |
 | F-010 | Ambient Awareness — periodic environmental/schedule summaries | (background job) |
+| F-011 | Ntfy Feedback Loop — reminder delivery via ntfy with Done/Snooze action buttons + HMAC callback routes | (integrated in `reminder_manager`) |
+| F-012 | Paperless-ngx Bridge — push files from `/app/data/paperless_inbox/` to Paperless for OCR + auto-tagging; `document_vault` unchanged | `paperless_save` |
 
 ## Known Issues / TODOs
 

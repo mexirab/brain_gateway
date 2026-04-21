@@ -11,7 +11,7 @@ Domain-specific routes are split into separate modules and included as sub-route
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Request
@@ -37,6 +37,7 @@ from orchestrator.routes_chat import router as chat_router
 from orchestrator.routes_documents import router as documents_router
 from orchestrator.routes_meals import router as meals_router
 from orchestrator.routes_palace import router as palace_router
+from orchestrator.routes_paperless import router as paperless_router
 from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_vision import router as vision_router
 from orchestrator.routes_workout import router as workout_router
@@ -83,6 +84,7 @@ router.include_router(vision_router)
 router.include_router(palace_router)
 router.include_router(workout_router)
 router.include_router(meals_router)
+router.include_router(paperless_router)
 
 
 @router.get("/health")
@@ -323,6 +325,179 @@ async def complete_reminder_api(reminder_id: str):
     if success:
         return {"ok": True, "reminder_id": reminder_id}
     return JSONResponse({"ok": False, "error": "Reminder not found"}, status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# F-011: ntfy feedback-loop callbacks
+# ---------------------------------------------------------------------------
+# These two routes are called by phones via ntfy action buttons and therefore
+# run WITHOUT a Bearer token — they're HMAC-signature-gated instead. See
+# BearerAuthMiddleware.PUBLIC_PREFIXES in orchestrator.py and the security
+# model in jess-features/F-011-ntfy-feedback-loop.md.
+
+
+@router.post("/api/reminder/ack/{reminder_id}")
+async def ntfy_ack_reminder(reminder_id: str, sig: str = "", exp: int = 0):
+    """Ack a reminder from an ntfy action button. HMAC-gated, no bearer."""
+    from orchestrator import state_store as _ss
+    from orchestrator.config import settings
+    from orchestrator.metrics import (
+        NTFY_ACK_TOTAL,
+        NTFY_CALLBACK_REJECTED_TOTAL,
+        REMINDER_ACK_LATENCY,
+    )
+    from orchestrator.reminder_manager import (
+        infer_selfcare_action_from_text,
+        verify_callback_signature,
+    )
+
+    # Feature-flag gate: if ntfy is disabled, the callback surface shouldn't
+    # outlive the push surface. Return 404 (not 403) so we don't leak the
+    # existence of the route to scanners when the feature is off.
+    if not settings.ntfy_enabled:
+        return JSONResponse({"ok": False, "error": "disabled"}, status_code=404)
+
+    err = verify_callback_signature(reminder_id, "ack", exp, sig)
+    if err:
+        NTFY_CALLBACK_REJECTED_TOTAL.labels(reason=err).inc()
+        # `expired` is an expected state (user didn't tap in time); don't
+        # spam WARNING for it. `bad_signature` stays WARNING — that's a
+        # real security signal.
+        log_fn = logger.info if err == "expired" else logger.warning
+        log_fn(f"[NTFY-ACK] Rejected {reminder_id}: {err}")
+        status = 410 if err == "expired" else 403
+        return JSONResponse({"ok": False, "error": err}, status_code=status)
+
+    result = _ss.mark_reminder_acked(reminder_id, via="ntfy")
+    if result is None:
+        NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="not_found").inc()
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+
+    if result.get("already_acked"):
+        # Idempotent replay — don't re-fire the selfcare bridge, don't double-count.
+        logger.info(f"[NTFY-ACK] {reminder_id} already acked; idempotent replay")
+        return {"ok": True, "already_acked": True, "reminder_id": reminder_id}
+
+    # Cancel any pending retry job the TTS-failure path might have scheduled.
+    retry_job_id = f"reminder_{reminder_id}_retry"
+    if scheduler.get_job(retry_job_id):
+        try:
+            scheduler.remove_job(retry_job_id)
+            logger.info(f"[NTFY-ACK] Cancelled retry job for {reminder_id}")
+        except Exception as job_err:
+            logger.warning(f"[NTFY-ACK] Failed to cancel retry job: {job_err}")
+
+    # Observe ack latency: trigger_time → now, so we can see how long it
+    # typically takes the user to respond to an ntfy push.
+    try:
+        trig = result.get("trigger_time")
+        if trig:
+            trigger_dt = datetime.fromisoformat(trig)
+            elapsed = (datetime.now() - trigger_dt).total_seconds()
+            if elapsed >= 0:
+                REMINDER_ACK_LATENCY.observe(elapsed)
+    except Exception:
+        pass
+
+    text = result.get("text", "") or ""
+    action = infer_selfcare_action_from_text(text)
+    NTFY_ACK_TOTAL.labels(inferred_action=action or "none").inc()
+
+    if action:
+        try:
+            from orchestrator import selfcare_manager
+
+            label = f"reminder:{text[:80]}"
+            if action == "medication":
+                selfcare_manager.record_medication_logged(label)
+            elif action == "meal":
+                selfcare_manager.record_meal_logged(label)
+            elif action == "water":
+                selfcare_manager.record_hydration_logged(label)
+            elif action == "movement":
+                selfcare_manager.record_movement_logged(label)
+            logger.info(f"[NTFY-ACK] {reminder_id} acked, selfcare={action}")
+        except Exception as bridge_err:
+            # Bridge failure is loud (same philosophy as selfcare_manager's
+            # routine bridge): the ack still stands, but somebody needs to fix
+            # the handler.
+            logger.error(
+                f"[NTFY-ACK] Selfcare bridge failed for {reminder_id}: {bridge_err}",
+                exc_info=True,
+            )
+
+    return {"ok": True, "reminder_id": reminder_id, "inferred_action": action}
+
+
+@router.post("/api/reminder/snooze/{reminder_id}")
+async def ntfy_snooze_reminder(reminder_id: str, sig: str = "", exp: int = 0, minutes: int = 10):
+    """Snooze a reminder from an ntfy action button. HMAC-gated, no bearer.
+
+    Reschedules `deliver_reminder_job` `minutes` minutes from now and bumps
+    snooze_count. Capped by `NTFY_MAX_SNOOZE_COUNT`.
+    """
+    from zoneinfo import ZoneInfo
+
+    from orchestrator import state_store as _ss
+    from orchestrator.config import settings
+    from orchestrator.metrics import NTFY_CALLBACK_REJECTED_TOTAL, NTFY_SNOOZE_TOTAL
+    from orchestrator.reminder_manager import verify_callback_signature
+
+    if not settings.ntfy_enabled:
+        return JSONResponse({"ok": False, "error": "disabled"}, status_code=404)
+
+    # Clamp BEFORE verifying signature: signature binds the minutes value,
+    # so we have to clamp first and check against the clamped value.
+    if minutes < 1:
+        minutes = 1
+    if minutes > 120:
+        minutes = 120
+
+    err = verify_callback_signature(reminder_id, "snooze", exp, sig, extra=str(minutes))
+    if err:
+        NTFY_CALLBACK_REJECTED_TOTAL.labels(reason=err).inc()
+        log_fn = logger.info if err == "expired" else logger.warning
+        log_fn(f"[NTFY-SNOOZE] Rejected {reminder_id}: {err}")
+        status = 410 if err == "expired" else 403
+        return JSONResponse({"ok": False, "error": err}, status_code=status)
+
+    reminder = _ss.get_reminder(reminder_id)
+    if reminder is None:
+        NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="not_found").inc()
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+
+    current = reminder.get("snooze_count") or 0
+    if current >= settings.ntfy_max_snooze_count:
+        NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="over_snoozed").inc()
+        return JSONResponse(
+            {"ok": False, "error": "max_snoozes_reached", "snooze_count": current},
+            status_code=409,
+        )
+
+    run_at = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=minutes)
+    job_id = f"reminder_{reminder_id}"
+    try:
+        scheduler.add_job(
+            deliver_reminder_job,
+            trigger="date",
+            run_date=run_at,
+            args=[reminder_id],
+            id=job_id,
+            replace_existing=True,
+        )
+    except Exception as sch_err:
+        logger.error(f"[NTFY-SNOOZE] Reschedule failed for {reminder_id}: {sch_err}", exc_info=True)
+        return JSONResponse({"ok": False, "error": "reschedule_failed"}, status_code=500)
+
+    new_count = _ss.increment_snooze_count(reminder_id)
+    NTFY_SNOOZE_TOTAL.inc()
+    logger.info(f"[NTFY-SNOOZE] {reminder_id} snoozed {minutes}m (count={new_count})")
+    return {
+        "ok": True,
+        "reminder_id": reminder_id,
+        "rescheduled_for": run_at.isoformat(),
+        "snooze_count": new_count,
+    }
 
 
 @router.get("/api/focus")

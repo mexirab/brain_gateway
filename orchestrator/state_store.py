@@ -197,6 +197,33 @@ CREATE TABLE IF NOT EXISTS meals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meals_logged ON meals(logged_at);
+
+CREATE TABLE IF NOT EXISTS budget_imports (
+    name TEXT PRIMARY KEY,
+    source_file TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    date_min TEXT,
+    date_max TEXT,
+    total_outflow REAL NOT NULL DEFAULT 0,
+    total_inflow REAL NOT NULL DEFAULT 0,
+    column_map TEXT,
+    summary_doc_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS budget_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dataset TEXT NOT NULL,
+    txn_date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT,
+    payee TEXT,
+    description TEXT,
+    FOREIGN KEY (dataset) REFERENCES budget_imports(name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_budget_txn_dataset_date ON budget_transactions(dataset, txn_date);
+CREATE INDEX IF NOT EXISTS idx_budget_txn_category ON budget_transactions(dataset, category);
 """
 
 
@@ -232,6 +259,18 @@ def init_db():
             if col_name not in existing:
                 conn.execute(f"ALTER TABLE focus_sessions ADD COLUMN {col_name} {col_def}")
                 logger.info(f"[STATE] Migrated focus_sessions: added {col_name}")
+        # F-011 migration: reminders gain ack/snooze state so ntfy callbacks
+        # can close the loop back to the selfcare bridge.
+        _f011_cols = [
+            ("ack_at", "TEXT"),
+            ("acked_via", "TEXT"),
+            ("snooze_count", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        existing_rem = {row[1] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+        for col_name, col_def in _f011_cols:
+            if col_name not in existing_rem:
+                conn.execute(f"ALTER TABLE reminders ADD COLUMN {col_name} {col_def}")
+                logger.info(f"[STATE] Migrated reminders: added {col_name}")
     # Seed exercises catalog (idempotent)
     try:
         from orchestrator.exercises_seed import EXERCISES
@@ -281,6 +320,54 @@ def complete_reminder(reminder_id: str) -> bool:
             (datetime.now().isoformat(), reminder_id),
         )
         return cursor.rowcount > 0
+
+
+def mark_reminder_acked(reminder_id: str, via: str) -> Optional[Dict[str, Any]]:
+    """Mark a reminder acknowledged (F-011 ntfy feedback loop).
+
+    Idempotent: if already acked, returns the existing row unchanged with
+    `already_acked=True`. If unknown, returns None. Otherwise sets
+    ack_at=now, acked_via=<via>, and status='completed' so the reminder
+    drops out of the pending list.
+    """
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+        if row is None:
+            return None
+        existing = dict(row)
+        if existing.get("ack_at"):
+            existing["already_acked"] = True
+            return existing
+        conn.execute(
+            """UPDATE reminders
+                  SET ack_at = ?, acked_via = ?, status = 'completed', completed_at = ?
+                WHERE id = ?""",
+            (now, via, now, reminder_id),
+        )
+        existing["ack_at"] = now
+        existing["acked_via"] = via
+        existing["status"] = "completed"
+        existing["completed_at"] = now
+        existing["already_acked"] = False
+        return existing
+
+
+def increment_snooze_count(reminder_id: str) -> Optional[int]:
+    """Bump snooze_count for a reminder and return the new value.
+
+    Returns None if the reminder doesn't exist.
+    """
+    with get_db() as conn:
+        row = conn.execute("SELECT snooze_count FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+        if row is None:
+            return None
+        new_count = (row["snooze_count"] or 0) + 1
+        conn.execute(
+            "UPDATE reminders SET snooze_count = ? WHERE id = ?",
+            (new_count, reminder_id),
+        )
+        return new_count
 
 
 def cancel_reminder(reminder_id: str) -> bool:
@@ -1322,3 +1409,245 @@ def get_meal(meal_id: int) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meals WHERE id = ?", (meal_id,)).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Budget imports (historical CSV/Excel budget data)
+# ---------------------------------------------------------------------------
+
+
+def save_budget_import(meta: Dict[str, Any]) -> None:
+    """Upsert a budget_imports metadata row.
+
+    Uses ON CONFLICT DO UPDATE (not INSERT OR REPLACE) so that updating an
+    existing row does NOT trigger ON DELETE CASCADE on budget_transactions.
+    INSERT OR REPLACE would silently wipe the child transactions we just
+    inserted during the import flow — see 2026-04-18 debugging session.
+    """
+    import json as _json
+
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO budget_imports
+               (name, source_file, imported_at, row_count, date_min, date_max,
+                total_outflow, total_inflow, column_map, summary_doc_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+                   source_file = excluded.source_file,
+                   imported_at = excluded.imported_at,
+                   row_count = excluded.row_count,
+                   date_min = excluded.date_min,
+                   date_max = excluded.date_max,
+                   total_outflow = excluded.total_outflow,
+                   total_inflow = excluded.total_inflow,
+                   column_map = excluded.column_map,
+                   summary_doc_id = excluded.summary_doc_id""",
+            (
+                meta["name"],
+                meta["source_file"],
+                meta.get("imported_at") or datetime.now().isoformat(),
+                int(meta["row_count"]),
+                meta.get("date_min"),
+                meta.get("date_max"),
+                float(meta.get("total_outflow", 0)),
+                float(meta.get("total_inflow", 0)),
+                _json.dumps(meta.get("column_map") or {}),
+                meta.get("summary_doc_id"),
+            ),
+        )
+
+
+def list_budget_imports() -> List[Dict[str, Any]]:
+    """List all budget imports ordered by most recent."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM budget_imports ORDER BY imported_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_budget_import(name: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM budget_imports WHERE name = ?", (name,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_budget_import(name: str) -> int:
+    """Delete a budget import + all its transactions (via FK cascade)."""
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM budget_imports WHERE name = ?", (name,))
+        return cur.rowcount
+
+
+def save_budget_transactions(dataset: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Bulk insert budget transactions with multiset-aware dedup.
+
+    A SQL UNIQUE index doesn't work here because YNAB datasets legitimately
+    contain repeat rows (daily $6 coffee from the same payee with empty
+    memo). Dedup on the MULTISET: count each existing key, only insert rows
+    whose incoming count exceeds existing count. A first import of 10
+    identical Starbucks rows keeps all 10; a second --append of the same
+    file doesn't double them to 20.
+    """
+    if not rows:
+        return {"attempted": 0, "inserted": 0, "skipped_duplicates": 0}
+
+    def _key(date, amount, category, payee, description):
+        return (date, round(float(amount), 2), category or "", payee or "", description or "")
+
+    with get_db() as conn:
+        existing_counts: Dict[tuple, int] = {}
+        for r in conn.execute(
+            "SELECT txn_date, amount, category, payee, description FROM budget_transactions WHERE dataset = ?",
+            (dataset,),
+        ).fetchall():
+            k = _key(r["txn_date"], r["amount"], r["category"], r["payee"], r["description"])
+            existing_counts[k] = existing_counts.get(k, 0) + 1
+
+        incoming_seen: Dict[tuple, int] = {}
+        to_insert: List[tuple] = []
+        skipped = 0
+        for r in rows:
+            k = _key(r["txn_date"], r["amount"], r.get("category"), r.get("payee"), r.get("description"))
+            incoming_seen[k] = incoming_seen.get(k, 0) + 1
+            if incoming_seen[k] <= existing_counts.get(k, 0):
+                skipped += 1
+                continue
+            to_insert.append(
+                (
+                    dataset,
+                    r["txn_date"],
+                    float(r["amount"]),
+                    r.get("category"),
+                    r.get("payee"),
+                    r.get("description"),
+                )
+            )
+
+        if to_insert:
+            conn.executemany(
+                """INSERT INTO budget_transactions
+                   (dataset, txn_date, amount, category, payee, description)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                to_insert,
+            )
+
+    return {
+        "attempted": len(rows),
+        "inserted": len(to_insert),
+        "skipped_duplicates": skipped,
+    }
+
+
+def clear_budget_transactions(dataset: str) -> int:
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM budget_transactions WHERE dataset = ?", (dataset,))
+        return cur.rowcount
+
+
+def query_budget_transactions(
+    dataset: str,
+    group_by: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    category: Optional[str] = None,
+    payee_contains: Optional[str] = None,
+    amount_sign: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Run a bounded aggregation query against budget_transactions.
+
+    group_by: None -> list raw transactions (sorted by date desc, limit applied).
+              'category' | 'payee' | 'month' -> group + sum + count + return top N by abs(total).
+    amount_sign: 'outflow' (amount < 0), 'inflow' (amount > 0), or None (both).
+    """
+    where = ["dataset = ?"]
+    params: list = [dataset]
+    if start_date:
+        where.append("txn_date >= ?")
+        params.append(start_date)
+    if end_date:
+        where.append("txn_date <= ?")
+        params.append(end_date)
+    if category:
+        where.append("LOWER(COALESCE(category,'')) = LOWER(?)")
+        params.append(category)
+    if payee_contains:
+        where.append("LOWER(COALESCE(payee,'')) LIKE LOWER(?)")
+        params.append(f"%{payee_contains}%")
+    if amount_sign == "outflow":
+        where.append("amount < 0")
+    elif amount_sign == "inflow":
+        where.append("amount > 0")
+    where_sql = " AND ".join(where)
+
+    if group_by is None:
+        sql = (
+            f"SELECT txn_date, amount, category, payee, description "
+            f"FROM budget_transactions WHERE {where_sql} "
+            f"ORDER BY txn_date DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        with get_db() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    if group_by == "category":
+        group_expr = "COALESCE(NULLIF(category, ''), '(uncategorized)')"
+    elif group_by == "payee":
+        group_expr = "COALESCE(NULLIF(payee, ''), '(unknown payee)')"
+    elif group_by == "month":
+        group_expr = "substr(txn_date, 1, 7)"
+    else:
+        raise ValueError(f"Unsupported group_by: {group_by}")
+
+    sql = (
+        f"SELECT {group_expr} AS group_key, "
+        f"SUM(amount) AS total, COUNT(*) AS count, "
+        f"SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS outflow, "
+        f"SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS inflow "
+        f"FROM budget_transactions WHERE {where_sql} "
+        f"GROUP BY group_key "
+        f"ORDER BY ABS(SUM(amount)) DESC LIMIT ?"
+    )
+    params.append(int(limit))
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def query_budget_outliers(
+    dataset: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    n_std: float = 2.0,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Find transactions with |amount| more than n_std stddev from the mean
+    of outflow magnitudes in the dataset (optionally date-filtered)."""
+    where = ["dataset = ?", "amount < 0"]
+    params: list = [dataset]
+    if start_date:
+        where.append("txn_date >= ?")
+        params.append(start_date)
+    if end_date:
+        where.append("txn_date <= ?")
+        params.append(end_date)
+    where_sql = " AND ".join(where)
+    with get_db() as conn:
+        stats = conn.execute(
+            f"SELECT AVG(ABS(amount)) AS mean, "
+            f"AVG(amount*amount) - AVG(amount)*AVG(amount) AS var "
+            f"FROM budget_transactions WHERE {where_sql}",
+            params,
+        ).fetchone()
+        if not stats or stats["mean"] is None or stats["var"] is None or stats["var"] <= 0:
+            return []
+        import math
+
+        threshold = abs(stats["mean"]) + n_std * math.sqrt(stats["var"])
+        rows = conn.execute(
+            f"SELECT txn_date, amount, category, payee, description FROM budget_transactions "
+            f"WHERE {where_sql} AND ABS(amount) >= ? "
+            f"ORDER BY ABS(amount) DESC LIMIT ?",
+            params + [threshold, int(limit)],
+        ).fetchall()
+    return [dict(r) for r in rows]

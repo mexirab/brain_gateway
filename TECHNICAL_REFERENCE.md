@@ -76,9 +76,13 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | POST | `/api/reminder/trigger` | Trigger a reminder |
 | GET | `/api/reminders` | List pending reminders |
 | POST | `/api/reminder/complete/{id}` | Mark reminder completed |
+| POST | `/api/reminder/ack/{id}?sig=&exp=` | Ntfy Done callback (HMAC-gated, bearer-exempt). Marks reminder acked via ntfy and fires selfcare bridge. |
+| POST | `/api/reminder/snooze/{id}?sig=&exp=&minutes=` | Ntfy Snooze callback (HMAC-gated, bearer-exempt). Reschedules delivery by `minutes` (default 15); rejected once `snooze_count >= NTFY_MAX_SNOOZE_COUNT`. |
 | GET | `/api/focus` | Current focus session status |
 | POST | `/api/focus/start` | Start focus session via API |
 | POST | `/api/focus/stop` | Stop focus session via API |
+
+**Ntfy callback HMAC scheme.** Both `/api/reminder/ack/{id}` and `/api/reminder/snooze/{id}` are registered in `BearerAuthMiddleware.PUBLIC_PREFIXES` (bearer-exempt) and gated instead by an HMAC-SHA256 signature. Signature construction: `sig = hmac.new(NTFY_HMAC_SECRET, f"{id}|{action}|{exp}|{extra}".encode(), sha256).hexdigest()[:32]` where `action` is `ack` or `snooze`, `exp` is a Unix timestamp, and `extra` is the snooze-`minutes` value for snooze callbacks (empty string for ack). Requests are rejected when the signature mismatches, `exp` is in the past, the reminder doesn't exist, or (snooze only) `snooze_count >= NTFY_MAX_SNOOZE_COUNT`. Rejections increment `bgw_ntfy_callback_rejected_total{reason}`.
 
 ### Calendar & Email
 
@@ -147,6 +151,14 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | GET | `/api/meals/photo/{filename}` | Serve a stored meal photo |
 
 **Photo flow:** upload → Qwen3-VL-8B strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
+
+### Paperless Bridge (F-012)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/paperless/upload` | Multipart upload → forward file to Paperless-ngx for OCR + tagging. Bearer-gated (NOT in `PUBLIC_PREFIXES`). 100 MB cap via `_LARGE_UPLOAD_PATHS`. Form fields: `file` (required), `title`, `correspondent`, `document_type`, `tags` (repeat field). Returns `{ok, task_id, latency_ms}` on 200, `{ok:false, error}` on 503 (feature disabled / runtime-disabled) or 502 (Paperless rejected / unreachable). |
+
+Responses are never cached. No local copy is persisted on Helios — Paperless owns the file once it returns a task id. Metrics: `bgw_paperless_upload_total{result,reason}` (labels: `result` ∈ `{ok, fail, skipped}`, `reason` ∈ `{ok, http_4xx, http_5xx, timeout, connect_error, other, disabled, missing_url, missing_token, file_too_large, file_missing}`), `bgw_paperless_upload_latency_seconds`.
 
 ### Claude Code Integration
 
@@ -359,6 +371,15 @@ Returns the full workout plan as text (model retains it in context for follow-up
 ```
 - Calories-only (v1). Independent of `selfcare_log` (which is nudge tracking, not calorie accounting).
 - `auto_log` (bool, optional): If `true`, skips confirmation when called after a photo estimate.
+
+### paperless_save
+```json
+{"filename": "tax-q3-2026.pdf", "title": "Q3 2026 Taxes", "correspondent": "IRS", "document_type": "tax", "tags": ["taxes", "2026"]}
+```
+- `filename` (string, required): Basename of a file already present in `PAPERLESS_INBOX_PATH`. Handler rejects path separators, `..`, absolute paths, null bytes, and symlink escape (`Path.resolve() + relative_to(inbox)`).
+- `title`, `correspondent`, `document_type` (string, optional): Paperless metadata. Inferred from filename/OCR when omitted.
+- `tags` (array of strings, optional): Added to `PAPERLESS_DEFAULT_TAGS`. Missing tags are created by Paperless if the server setting allows; otherwise ignored.
+- File read uses `asyncio.to_thread` to avoid blocking the event loop. Size cap enforced before `read_bytes()`. Auto-disabled bridge surfaces as a structured "skipped" tool result rather than raising.
 
 ## ChromaDB Schema
 

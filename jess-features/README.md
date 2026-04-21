@@ -20,6 +20,8 @@ Implementation specs for Claude Code. One file per feature.
 | F-008 | [Meal & Self-Care Nudges](./F-008-selfcare-nudges.md) | P2 | Ready | Done |
 | F-009 | [Decision Simplifier](./F-009-decision-simplifier.md) | P2 | Ready | Done |
 | F-010 | [Ambient Awareness Mode](./F-010-ambient-awareness.md) | P2 | Ready | Done |
+| F-011 | [Ntfy Feedback Loop](./F-011-ntfy-feedback-loop.md) | P1 | Ready | Done |
+| F-012 | [Paperless-ngx Bridge](./F-012-paperless-bridge.md) | P2 | Ready | Done |
 
 ## Build Order
 
@@ -52,6 +54,8 @@ Implementation specs for Claude Code. One file per feature.
 |---------|-----------|
 | F-009 Decision Simplifier | Needs F-003/F-005/F-008 for full context |
 | F-010 Ambient Awareness | Aggregates all other features into passive awareness |
+| F-011 Ntfy Feedback Loop | Third reminder channel with Done/Snooze buttons; depends on F-002 (time nudges) + F-008 (selfcare bridge) |
+| F-012 Paperless-ngx Bridge | Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging; no hard deps on other features — depends only on Paperless-ngx running. `document_vault` stays the home for typed/pasted text notes. |
 
 ## Dependency Graph
 
@@ -72,6 +76,14 @@ F-004 Focus Enhancement    F-008 Self-Care Nudges ──────────
                                    ▲
                                    │
                            F-002 Tiered Nudges (standalone enhancement)
+                                   │
+                                   └──► F-011 Ntfy Feedback Loop (Done/Snooze)
+                                              ▲
+                                              │
+                           F-008 Self-Care Nudges (shares ACTION_KEYWORDS)
+
+F-012 Paperless-ngx Bridge (standalone — no deps on other features;
+                            requires Paperless-ngx running on Jupiter)
 ```
 
 ## Pattern for All Features

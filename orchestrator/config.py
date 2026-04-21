@@ -11,7 +11,7 @@ Import `settings` to access configuration anywhere:
 from typing import List
 
 from dotenv import load_dotenv
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 # Load .env before Settings reads os.environ
@@ -232,6 +232,30 @@ class Settings(BaseSettings):
     # -- CORS --------------------------------------------------------------------
     cors_origins: str = "http://localhost:3001"
 
+    # -- Paperless bridge (F-012) ----------------------------------------------
+    # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
+    # mirror state — Paperless owns its files and metadata. document_vault
+    # is untouched (it stays the home for typed/pasted text notes).
+    paperless_enabled: bool = False
+    paperless_url: str = ""  # e.g. http://10.0.0.248:8777
+    paperless_api_token: str = ""
+    paperless_inbox_path: str = "/app/data/paperless_inbox"
+    paperless_default_tags: str = ""  # comma-separated, optional
+    paperless_upload_timeout_seconds: int = 30
+
+    # -- ntfy feedback loop (F-011) ---------------------------------------------
+    # Third delivery channel for reminders (alongside TTS + HA Companion push).
+    # Includes HMAC-signed Done/Snooze action buttons that POST back to the
+    # orchestrator, closing the ack loop and firing the selfcare bridge.
+    ntfy_enabled: bool = False
+    ntfy_url: str = ""  # e.g. http://10.0.0.248:8889
+    ntfy_topic: str = "jess-reminders"
+    ntfy_default_priority: int = 3  # 1..5
+    ntfy_callback_base_url: str = ""  # e.g. http://helios.tail74fc4a.ts.net:8888
+    ntfy_hmac_secret: str = ""  # required when ntfy_enabled; signs callback URLs
+    ntfy_ack_exp_seconds: int = 1800  # signature validity window
+    ntfy_max_snooze_count: int = 5  # guardrail against indefinite snooze loops
+
     # -- Training corpus drain ---------------------------------------------------
     # Nightly job that appends user/assistant turns from OWUI, state_store, and
     # Claude Code sessions to append-only monthly JSONL files. See
@@ -264,6 +288,59 @@ class Settings(BaseSettings):
         if v < 1:
             return 1
         return v
+
+    @field_validator("ntfy_default_priority")
+    @classmethod
+    def validate_ntfy_priority(cls, v: int) -> int:
+        if v < 1:
+            return 1
+        if v > 5:
+            return 5
+        return v
+
+    @model_validator(mode="after")
+    def validate_paperless_config(self) -> "Settings":
+        """Auto-disable F-012 paperless bridge if config is incomplete.
+
+        Loud error log, not a ValueError: missing optional-feature config
+        must not take down the whole orchestrator.
+        """
+        if self.paperless_enabled and (not self.paperless_url or len(self.paperless_api_token) < 8):
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] PAPERLESS_ENABLED=true but PAPERLESS_URL or "
+                "PAPERLESS_API_TOKEN is missing; disabling Paperless bridge. "
+                "Set both in .env to re-enable."
+            )
+            object.__setattr__(self, "paperless_enabled", False)
+        return self
+
+    @model_validator(mode="after")
+    def validate_ntfy_config(self) -> "Settings":
+        """Validate F-011 ntfy settings consistency.
+
+        Uses `model_validator(mode="after")` so we see the fully-populated
+        model and don't depend on field-declaration order (the previous
+        `field_validator` on ntfy_hmac_secret silently broke if ntfy_enabled
+        was moved above/below in the class body).
+
+        If the feature is enabled without a strong secret, we **auto-disable
+        it and log a loud error** rather than raising ValueError. A missing
+        optional-feature secret should not take down the whole orchestrator
+        (chat, HA, scheduler) at startup.
+        """
+        if self.ntfy_enabled and len(self.ntfy_hmac_secret) < 32:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] NTFY_ENABLED=true but NTFY_HMAC_SECRET is missing or <32 chars; "
+                "disabling ntfy. Set a 32+ char secret in .env to re-enable."
+            )
+            # Pydantic v2: assigning in model_validator(mode=after) is fine
+            # because the model is already constructed.
+            object.__setattr__(self, "ntfy_enabled", False)
+        return self
 
     model_config = {
         "env_file": "/app/.env",

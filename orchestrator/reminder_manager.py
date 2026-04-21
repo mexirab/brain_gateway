@@ -4,12 +4,16 @@ Handles voice reminder scheduling, storage, and delivery via Home Assistant.
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import httpx
 
@@ -450,3 +454,165 @@ async def _send_notification(text: str) -> Dict[str, Any]:
         logger.warning(f"Notification failed for: {errors}")
 
     return {"success": len(successes) > 0, "delivered": successes, "errors": errors}
+
+
+# =============================================================================
+# NTFY FEEDBACK LOOP (F-011)
+# =============================================================================
+# Third delivery channel. Pushes reminders to an ntfy topic with HMAC-signed
+# Done/Snooze action buttons. Tapping a button on the phone POSTs back to the
+# orchestrator, which closes the loop (selfcare bridge on ack, reschedule on
+# snooze). Runs alongside TTS + HA Companion push — not a replacement.
+
+
+def _sign_callback(reminder_id: str, action: str, exp: int, extra: str = "") -> str:
+    """HMAC-SHA256 over "reminder_id|action|exp|extra", truncated to 32 hex chars.
+
+    `extra` lets callers bind additional fields into the signature so they
+    can't be tampered with in transit — e.g. snooze URLs include the
+    minutes value there so an attacker who grabs a valid URL can't replay
+    it with a different minutes param. `extra` is empty for ack.
+
+    Truncation is intentional: 128 bits of keyspace is more than enough for
+    a single-reminder, 30-minute-window secret, and short sigs keep the ntfy
+    payload compact. Secret is `settings.ntfy_hmac_secret`.
+    """
+    secret = _settings.ntfy_hmac_secret.encode("utf-8")
+    msg = f"{reminder_id}|{action}|{exp}|{extra}".encode("utf-8")
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+
+
+def verify_callback_signature(
+    reminder_id: str, action: str, exp: int, sig: str, extra: str = ""
+) -> Optional[str]:
+    """Validate an ntfy callback URL. Returns None on success, error string otherwise.
+
+    Separate function so tests can exercise it without a live request.
+    Constant-time compare to avoid timing oracle on the truncated HMAC.
+    Callers that signed with an `extra` field MUST pass the same value here.
+    """
+    if not _settings.ntfy_hmac_secret:
+        return "signing_disabled"
+    if exp < int(time.time()):
+        return "expired"
+    expected = _sign_callback(reminder_id, action, exp, extra)
+    if not hmac.compare_digest(expected, sig):
+        return "bad_signature"
+    return None
+
+
+def _build_callback_url(
+    reminder_id: str,
+    action: str,
+    extra_params: Optional[Dict[str, str]] = None,
+    signed_extra: str = "",
+) -> str:
+    """Build a signed callback URL for an ntfy action button.
+
+    `signed_extra` is bound into the HMAC so its corresponding query param
+    is tamper-evident (used for snooze's `minutes`).
+    """
+    exp = int(time.time()) + _settings.ntfy_ack_exp_seconds
+    sig = _sign_callback(reminder_id, action, exp, signed_extra)
+    base = _settings.ntfy_callback_base_url.rstrip("/")
+    # Path-segment-encode reminder_id so ids with weird chars don't break the URL.
+    rid = quote(reminder_id, safe="")
+    url = f"{base}/api/reminder/{action}/{rid}?sig={sig}&exp={exp}"
+    if extra_params:
+        for key, val in extra_params.items():
+            url += f"&{quote(key, safe='')}={quote(str(val), safe='')}"
+    return url
+
+
+async def deliver_via_ntfy(reminder_id: str, text: str, priority: Optional[int] = None) -> Dict[str, Any]:
+    """Push a reminder to the ntfy topic with Done/Snooze action buttons.
+
+    Fire-and-forget semantics: always returns a dict, never raises. Failures
+    log and increment the fail metric but don't block the main reminder
+    delivery path. No-op (returns `skipped=True`) when `NTFY_ENABLED=false`
+    or required config is missing.
+    """
+    # Import here to avoid circular import at module load (metrics imports shared)
+    from orchestrator.metrics import NTFY_PUSH_LATENCY, NTFY_PUSH_TOTAL
+
+    if not _settings.ntfy_enabled:
+        return {"success": False, "skipped": True, "reason": "disabled"}
+
+    missing = [
+        name
+        for name, val in (
+            ("NTFY_URL", _settings.ntfy_url),
+            ("NTFY_CALLBACK_BASE_URL", _settings.ntfy_callback_base_url),
+            ("NTFY_HMAC_SECRET", _settings.ntfy_hmac_secret),
+        )
+        if not val
+    ]
+    if missing:
+        logger.warning(f"[NTFY] Enabled but missing config: {missing}; skipping push")
+        NTFY_PUSH_TOTAL.labels(result="skipped").inc()
+        return {"success": False, "skipped": True, "reason": f"missing:{','.join(missing)}"}
+
+    done_url = _build_callback_url(reminder_id, "ack")
+    # Bind minutes into the HMAC so an eavesdropper on the open-tailnet ntfy
+    # topic can't replay with a modified minutes value to burn the snooze
+    # budget.
+    snooze_url = _build_callback_url(
+        reminder_id, "snooze", {"minutes": "10"}, signed_extra="10"
+    )
+
+    # ntfy action-button format: semicolon-separated, comma-separated fields within
+    # See https://docs.ntfy.sh/publish/#action-buttons
+    actions_header = f"http, Done, {done_url}, clear=true; http, Snooze 10m, {snooze_url}, clear=true"
+
+    push_prio = priority if priority is not None else _settings.ntfy_default_priority
+    push_prio = max(1, min(5, push_prio))
+
+    url = f"{_settings.ntfy_url.rstrip('/')}/{_settings.ntfy_topic}"
+    headers = {
+        "Title": "Jess reminder",
+        "Priority": str(push_prio),
+        "Tags": "bell",
+        "Actions": actions_header,
+    }
+
+    t0 = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, content=text.encode("utf-8"), headers=headers)
+        latency = time.time() - t0
+        NTFY_PUSH_LATENCY.observe(latency)
+        if resp.status_code in (200, 201, 202):
+            logger.info(f"[NTFY] Pushed reminder {reminder_id} ({len(text)} chars, prio={push_prio})")
+            NTFY_PUSH_TOTAL.labels(result="ok").inc()
+            return {"success": True, "latency_ms": int(latency * 1000)}
+        logger.warning(f"[NTFY] Push returned {resp.status_code}: {resp.text[:200]}")
+        NTFY_PUSH_TOTAL.labels(result="fail").inc()
+        return {"success": False, "status_code": resp.status_code, "body": resp.text[:200]}
+    except Exception as e:
+        NTFY_PUSH_TOTAL.labels(result="fail").inc()
+        logger.error(f"[NTFY] Push failed: {type(e).__name__}: {e}")
+        return {"success": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def infer_selfcare_action_from_text(text: str) -> Optional[str]:
+    """Return the selfcare action a reminder body corresponds to, or None.
+
+    Case-insensitive word-boundary match against the canonical
+    selfcare_manager.ACTION_KEYWORDS map (shared with the routine-step
+    matcher). First hit wins; iteration order is medication > meal > water
+    > movement, reflecting how painful a missed one is (loosely). Used by
+    the ack route to fire the selfcare bridge.
+    """
+    if not text:
+        return None
+    # Import here so this module has no hard dependency on selfcare_manager
+    # at load time (both modules import state_store; selfcare_manager also
+    # imports routine_manager — lazy import prevents cycles).
+    from orchestrator.selfcare_manager import ACTION_KEYWORDS
+
+    haystack = text.lower()
+    for action, keywords in ACTION_KEYWORDS.items():
+        for kw in keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", haystack):
+                return action
+    return None

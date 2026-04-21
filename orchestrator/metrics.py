@@ -179,6 +179,62 @@ REMINDERS_PENDING = Gauge(
     "Currently pending reminders",
 )
 
+# -- ntfy feedback loop (F-011) ---------------------------------------------
+NTFY_PUSH_TOTAL = Counter(
+    "bgw_ntfy_push_total",
+    "ntfy push attempts from reminder_manager",
+    ["result"],  # ok | fail | skipped
+)
+
+NTFY_PUSH_LATENCY = Histogram(
+    "bgw_ntfy_push_latency_seconds",
+    "Latency of the POST to the ntfy server (orchestrator -> ntfy, not phone delivery)",
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+)
+
+NTFY_ACK_TOTAL = Counter(
+    "bgw_ntfy_ack_total",
+    "Reminder ack callbacks from ntfy action buttons",
+    ["inferred_action"],  # medication | meal | water | movement | none
+)
+
+NTFY_SNOOZE_TOTAL = Counter(
+    "bgw_ntfy_snooze_total",
+    "Reminder snooze callbacks from ntfy action buttons",
+)
+
+NTFY_CALLBACK_REJECTED_TOTAL = Counter(
+    "bgw_ntfy_callback_rejected_total",
+    "ntfy callbacks rejected before state mutation",
+    ["reason"],  # bad_signature | expired | not_found | over_snoozed | signing_disabled
+)
+
+# End-to-end response latency KPI for F-011: how long from reminder fire to
+# user tapping Done on the ntfy notification. Only observed when an ack
+# callback resolves the reminder (not on replays or retries).
+REMINDER_ACK_LATENCY = Histogram(
+    "bgw_reminder_ack_latency_seconds",
+    "Time between reminder trigger_time and user acknowledgement via ntfy",
+    buckets=[5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200],
+)
+
+# -- Paperless bridge (F-012) -----------------------------------------------
+PAPERLESS_UPLOAD_TOTAL = Counter(
+    "bgw_paperless_upload_total",
+    "Uploads attempted to Paperless-ngx",
+    # result: ok | fail | skipped
+    # reason: ok | http_4xx | http_5xx | timeout | connect_error | other |
+    #         disabled | missing_url | missing_token | file_too_large |
+    #         file_missing
+    ["result", "reason"],
+)
+
+PAPERLESS_UPLOAD_LATENCY = Histogram(
+    "bgw_paperless_upload_latency_seconds",
+    "Orchestrator → Paperless upload round-trip latency",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
+)
+
 # -- Calendar ----------------------------------------------------------------
 CALENDAR_API_CALLS = Counter(
     "bgw_calendar_api_calls_total",

@@ -518,6 +518,32 @@ async def deliver_reminder_job(reminder_id: str):
 
     if target in ["phone", "both"]:
         await _send_notification(text)
+        # F-011: ntfy push runs alongside HA Companion push. Gated on
+        # settings.ntfy_enabled — no-op if off. Dispatched as a detached
+        # task so a slow ntfy server never extends the scheduler job
+        # duration (see prod-support review of F-011).
+        try:
+            import asyncio as _asyncio
+
+            from orchestrator.reminder_manager import deliver_via_ntfy
+
+            async def _ntfy_and_log() -> None:
+                try:
+                    await deliver_via_ntfy(reminder_id, text)
+                except Exception as push_err:
+                    logger.error(
+                        f"[REMINDER] ntfy push raised for {reminder_id}: {push_err}",
+                        extra={"component": "reminder"},
+                        exc_info=True,
+                    )
+
+            _asyncio.create_task(_ntfy_and_log())
+        except Exception as ntfy_err:
+            logger.error(
+                f"[REMINDER] ntfy dispatch failed for {reminder_id}: {ntfy_err}",
+                extra={"component": "reminder"},
+                exc_info=True,
+            )
 
     if voice_ok or target == "phone":
         REMINDERS_DELIVERED.inc()
@@ -1183,6 +1209,23 @@ async def _reg_routine_status(arguments: dict) -> str:
     return await get_routine_status()
 
 
+@register_tool("query_budget")
+async def _reg_query_budget(arguments: dict) -> str:
+    from orchestrator import budget_manager
+
+    result = budget_manager.query(
+        dataset=arguments.get("dataset"),
+        question_type=arguments.get("question_type", "list_datasets"),
+        start_date=arguments.get("start_date"),
+        end_date=arguments.get("end_date"),
+        category=arguments.get("category"),
+        payee_contains=arguments.get("payee_contains"),
+        amount_sign=arguments.get("amount_sign"),
+        limit=int(arguments.get("limit", 20)),
+    )
+    return json.dumps(result, default=str)
+
+
 @register_tool("check_system")
 async def _reg_check_system(arguments: dict) -> str:
     from orchestrator.system_diagnostics import check_system
@@ -1261,6 +1304,113 @@ async def _reg_document_vault(arguments: dict) -> str:
     import asyncio
 
     return await asyncio.to_thread(_handle_document_vault, arguments)
+
+
+@register_tool("paperless_save")
+async def _reg_paperless_save(arguments: dict) -> str:
+    """F-012: hand off a staged file to Paperless-ngx.
+
+    Security: `filename` must be a bare basename (no `/`, no `..`, no null
+    byte, not absolute). The resolved file path is required to live under
+    settings.paperless_inbox_path — we reject anything that resolves above
+    it, defending against symlink attacks inside the staging dir. Size
+    capped at DOCUMENT_MAX_SIZE_MB (default 100MB) before reading to
+    prevent OOM from a staged huge file.
+    """
+    import asyncio
+    import os
+    from pathlib import Path
+
+    from orchestrator.config import settings
+    from orchestrator.paperless_manager import upload_file
+
+    if not settings.paperless_enabled:
+        return (
+            "Paperless bridge is disabled. Set PAPERLESS_ENABLED=true plus "
+            "PAPERLESS_URL and PAPERLESS_API_TOKEN in .env to turn it on."
+        )
+
+    filename = (arguments.get("filename") or "").strip()
+    if not filename:
+        return "Please tell me which filename in the inbox to save."
+
+    # Basename-only check — no separators, no parent refs, no absolute path,
+    # no null byte (CPython's path layer already rejects \x00 with ValueError,
+    # but surfacing a clean error here is friendlier to the LLM).
+    if "\x00" in filename:
+        return "Refused filename: contains a null byte."
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return f"Refused filename '{filename}': pass only the basename (e.g. 'tax-q3-2026.pdf'), no paths."
+    if os.path.isabs(filename):
+        return f"Refused absolute path '{filename}': pass only the basename."
+
+    inbox = Path(settings.paperless_inbox_path).resolve()
+    try:
+        candidate = (inbox / filename).resolve()
+    except Exception as e:
+        return f"Couldn't resolve path for '{filename}': {e}"
+
+    # Post-resolve sanity: the resolved path MUST sit inside the inbox root.
+    # If a symlink inside the inbox points outside, this rejects it.
+    try:
+        candidate.relative_to(inbox)
+    except ValueError:
+        return f"Refused '{filename}': resolved path escapes the Paperless inbox."
+
+    if not candidate.is_file():
+        return f"No file named '{filename}' in the Paperless inbox. Drop it in {settings.paperless_inbox_path} first."
+
+    # Size guard BEFORE reading. The REST route relies on RequestSizeLimit-
+    # Middleware's 100MB cap; the tool path bypasses middleware entirely
+    # (file is already on disk), so we enforce the same ceiling here to
+    # protect orchestrator RAM from a staged huge file + LLM-driven
+    # paperless_save call. MAX_UPLOAD_SIZE is parsed from DOCUMENT_MAX_SIZE_MB.
+    try:
+        size = candidate.stat().st_size
+    except OSError as stat_err:
+        return f"Couldn't stat '{filename}': {stat_err}"
+    max_bytes = int(os.environ.get("DOCUMENT_MAX_SIZE_MB", "100")) * 1024 * 1024
+    if size > max_bytes:
+        from orchestrator.metrics import PAPERLESS_UPLOAD_TOTAL
+
+        PAPERLESS_UPLOAD_TOTAL.labels(result="skipped", reason="file_too_large").inc()
+        return f"Refused '{filename}': {size / 1_048_576:.1f} MB exceeds the {max_bytes // 1_048_576} MB upload cap."
+
+    # Read bytes off the event loop — up to the cap enforced above, this
+    # can still be tens of MB and blocks the loop otherwise.
+    try:
+        content = await asyncio.to_thread(candidate.read_bytes)
+    except Exception as e:
+        return f"Couldn't read '{filename}': {type(e).__name__}: {e}"
+
+    tags = arguments.get("tags") or None
+    if tags is not None and not isinstance(tags, list):
+        # Defensive: LLM occasionally passes a comma string
+        tags = [str(t).strip() for t in str(tags).split(",") if str(t).strip()]
+
+    result = await upload_file(
+        content=content,
+        filename=filename,
+        title=arguments.get("title") or None,
+        correspondent=arguments.get("correspondent") or None,
+        document_type=arguments.get("document_type") or None,
+        tags=tags,
+    )
+
+    if result.get("success"):
+        return (
+            f"Queued '{filename}' to Paperless. Task id: "
+            f"{str(result.get('task_id'))[:60]}. OCR and tagging will finish "
+            "in a moment; find it in the Paperless web UI."
+        )
+
+    if result.get("skipped"):
+        return f"Paperless bridge skipped the upload: {result.get('reason')}"
+
+    if result.get("status_code"):
+        return f"Paperless rejected '{filename}' (HTTP {result.get('status_code')}): {result.get('body', '')}"
+
+    return f"Paperless upload failed for '{filename}': {result.get('error')}"
 
 
 @register_tool("check_claude_activity")

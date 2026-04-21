@@ -111,6 +111,7 @@ All tools are called directly by the single model in one agentic loop.
 | analyze_image | Re-analyze or ask follow-up questions about a shared image |
 | shopping_list | Add/check/remove items from shopping/grocery lists |
 | document_vault | Structured doc storage with semantic search (list/create/read/update/delete) |
+| paperless_save | Push a file from `/app/data/paperless_inbox/` to Paperless-ngx for OCR + auto-tagging (F-012) |
 | check_claude_activity | Read what Claude Code has been working on — recent turns, current session, files touched |
 | code_agent | Delegate a coding task to the Qwen2.5-Coder-32B agent on Helios GPU0 |
 | sleep_mode | Do Not Disturb: suppress all announcements until morning |
@@ -235,7 +236,7 @@ This is a **load-on-demand router**. Read the specific doc when the task touches
 |-----|------|
 | `docs/JESS_QUICK_START.md` | User-facing feature guide — every voice command, grouped by domain |
 | `docs/JESS_REFERENCE_CARD.md` + `.html` | Printable ADHD reference card — grouped by *situation*, not feature |
-| `jess-features/README.md` | ADHD feature spec index (F-001 through F-010) — read for implementation rationale |
+| `jess-features/README.md` | ADHD feature spec index (F-001 through F-012) — read for implementation rationale |
 
 ## Jess Feature Specs
 
@@ -253,6 +254,8 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 | `jess-features/F-008-selfcare-nudges.md` | Meal & Self-Care Nudges | P2 |
 | `jess-features/F-009-decision-simplifier.md` | Decision Simplifier | P2 |
 | `jess-features/F-010-ambient-awareness.md` | Ambient Awareness Mode | P2 |
+| `jess-features/F-011-ntfy-feedback-loop.md` | Ntfy Feedback Loop (Done/Snooze) | P1 |
+| `jess-features/F-012-paperless-bridge.md` | Paperless-ngx Bridge (file handoff for OCR + tagging) | P2 |
 
 ## Notes
 
@@ -269,5 +272,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - **Training corpus drain:** `orchestrator/jobs_training_corpus.py` runs nightly at 02:30 + one-shot 30s after startup (registered in `orchestrator.py`). Pulls user/assistant turns from OWUI sqlite (`open-webui-data:/app/owui_data:ro`), `brain_state.chat_messages`, and Claude Code session jsonls into append-only `/app/data/training_corpus/YYYY-MM.jsonl`. Content-addressed sha1 dedup across all months, secret-pattern filter, 8KB-equivalent 50k-char per-turn cap, no retention. Metric: `bgw_training_corpus_records_total{source}`. Env vars: `TRAINING_CORPUS_*` (see `docs/ENV_VARS.md`). Full spec: `docs/TRAINING_CORPUS.md`.
 - **Calendar source priority:** `tool_check_calendar`, `morning_briefing`, and `get_ambient_status` (ambient summary TTS at 10am/12pm/2pm/4pm + dashboard LED) all read phone sync first (<24h, at least one parseable record) and fall through to Google. `morning_briefing` is the outlier — still lacks the "all-records-unparseable → fall through" defensive guard the other two have. See `docs/GOOGLE_INTEGRATIONS.md` → Phone Calendar Sync.
 - **Routine step advancement & greeting:** `routine_manager._build_step_announcement` picks "Morning/Afternoon/Evening" from wall-clock hour (4-11/12-16/else) — no longer hardcoded to "Morning". Prevents the 2026-04-17 evening-routine-stuck-all-night class of bug where non-skippable steps nudged forever: `_deliver_nudge` now force-ends the routine once `nudge_count > ROUTINE_NUDGE_MAX` on a non-skippable step (or any step when `ROUTINE_AUTO_SKIP=off`), logged at WARNING. Metrics gap: no `bgw_routine_*` or `bgw_selfcare_*` counters exist yet — a `bgw_routine_auto_ended_total{routine,step}` would let Grafana alert on stuck routines instead of relying on user notice.
+- **Ntfy feedback loop (F-011):** Third reminder delivery channel alongside TTS + HA Companion push. `reminder_manager.deliver_via_ntfy` publishes to ntfy with Done/Snooze action buttons that POST back to HMAC-signed callback URLs — `/api/reminder/ack/{id}` and `/api/reminder/snooze/{id}` (bearer-exempt, listed in `BearerAuthMiddleware.PUBLIC_PREFIXES`). Done taps fire the selfcare bridge via `infer_selfcare_action_from_text` (shares `selfcare_manager.ACTION_KEYWORDS` with `selfcare_log`). Dispatched fire-and-forget from `deliver_reminder_job` after HA Companion push. Auto-disables via `config.py` `model_validator` if `NTFY_HMAC_SECRET` is missing. Metrics: `bgw_ntfy_push_total`, `bgw_ntfy_push_latency_seconds`, `bgw_ntfy_ack_total`, `bgw_ntfy_snooze_total`, `bgw_ntfy_callback_rejected_total`, `bgw_reminder_ack_latency_seconds`. Env vars: `NTFY_*` (see `docs/ENV_VARS.md`). Full spec: `jess-features/F-011-ntfy-feedback-loop.md`.
+- **Paperless bridge (F-012):** `paperless_save` tool + `POST /api/paperless/upload` (bearer-gated, 100MB cap via `_LARGE_UPLOAD_PATHS`) push files to Paperless-ngx on Jupiter for OCR + auto-tagging. Staging inbox: `/app/data/paperless_inbox/` (host: `/opt/gateway_mvp/data/app/paperless_inbox/`). Handler guards against path traversal (`/`, `\`, `..`, absolute, null byte) and symlink escape via `Path.resolve() + relative_to(inbox)`. Auto-disables in `config.py` `validate_paperless_config` model_validator if `PAPERLESS_URL` is missing or `PAPERLESS_API_TOKEN` < 8 chars (logs error, never raises — matches F-011 pattern). `document_vault` is deliberately untouched and remains the home for typed/pasted text notes (mempalace-searchable); `paperless_save` handles files (Paperless-managed). Metrics: `bgw_paperless_upload_total{result,reason}`, `bgw_paperless_upload_latency_seconds`. Env vars: `PAPERLESS_*` (see `docs/ENV_VARS.md`). Full spec: `jess-features/F-012-paperless-bridge.md`.
 - **Selfcare <-> routine bridge (symmetric):** `selfcare_log` fires `_maybe_advance_routine_for_action` fire-and-forget; if the active routine's current step matches the logged action (keyword map for medication/meal/water/movement), it calls `advance_step("done")`. Reverse direction now works too: `routine_manager.advance_step("done")` calls `selfcare_manager.mark_selfcare_from_routine_step(step)`, which dispatches to `record_medication_logged`/`record_meal_logged`/`record_hydration_logged`/`record_movement_logged` based on the same keyword inference. Routine-sourced medication logging sets the generic `last_med_confirmation["medication"]` key unconditionally (routine labels like `'routine:meds'` can't be window-mapped). Only fires on `"done"`, never on `"skip"`/auto-end `"stop"`. Workout `log_set` also calls `record_movement_logged(f"set:{exercise_name}")` — closes the "sitting 274 min while at gym" gap. Both bridges wrapped in try/except with `logger.error(exc_info=True)`; never block the primary write.
 

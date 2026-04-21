@@ -529,12 +529,14 @@ def _in_quiet_hours(current: time, start: time, end: time) -> bool:
 
 # Word-boundary matching — "med" alone would false-match "premeditated",
 # "stretch goals review", etc. Explicit words keep the bridge tight.
-_ACTION_KEYWORDS: Dict[str, tuple] = {
-    "medication": ("meds", "medication", "medications"),
-    "meal": ("meal", "breakfast", "lunch", "dinner", "eat"),
-    "water": ("water", "hydrate", "hydration"),
-    "movement": ("movement", "stretch", "walk", "exercise"),
+ACTION_KEYWORDS: Dict[str, tuple] = {
+    "medication": ("meds", "medication", "medications", "pill", "pills"),
+    "meal": ("meal", "breakfast", "lunch", "dinner", "eat", "snack"),
+    "water": ("water", "hydrate", "hydration", "drink"),
+    "movement": ("movement", "stretch", "walk", "exercise", "move"),
 }
+# Back-compat alias — internal callers still import the private name.
+_ACTION_KEYWORDS = ACTION_KEYWORDS
 
 
 def _step_matches_selfcare_action(step, action: str) -> bool:

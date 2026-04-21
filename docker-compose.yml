@@ -102,6 +102,9 @@ services:
       - ${GATEWAY_ROOT_PATH:-.}/data/routines.yaml:/app/config/routines.yaml:ro
       # MemPalace structure config
       - ${GATEWAY_ROOT_PATH:-.}/data/palace.yaml:/app/config/palace.yaml:ro
+      # Admin scripts (read-only) — one-off operational tools like
+      # import_budget.py that operate on data inside the container.
+      - ${GATEWAY_ROOT_PATH:-.}/scripts:/app/scripts:ro
       # Claude Code session files (read-only) — lets Jess see what Claude Code
       # has been working on for self-troubleshooting + code_agent context.
       # Host path is configurable; container path is fixed (matches
@@ -236,6 +239,26 @@ services:
       - CLAUDE_PROJECTS_PATH=/root/.claude/projects
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001}
+      # Paperless-ngx bridge (F-012) — hand off files for OCR + tagging.
+      # Disabled by default; set PAPERLESS_ENABLED=true plus URL and API
+      # token in .env to turn on. Inbox staging dir is bind-mounted below.
+      - PAPERLESS_ENABLED=${PAPERLESS_ENABLED:-false}
+      - PAPERLESS_URL=${PAPERLESS_URL:-}
+      - PAPERLESS_API_TOKEN=${PAPERLESS_API_TOKEN:-}
+      - PAPERLESS_INBOX_PATH=/app/data/paperless_inbox
+      - PAPERLESS_DEFAULT_TAGS=${PAPERLESS_DEFAULT_TAGS:-}
+      - PAPERLESS_UPLOAD_TIMEOUT_SECONDS=${PAPERLESS_UPLOAD_TIMEOUT_SECONDS:-30}
+      # ntfy feedback loop (F-011) — third reminder delivery channel with
+      # Done/Snooze action buttons. Disabled by default; set NTFY_ENABLED=true
+      # plus URL/callback/secret in .env to turn it on.
+      - NTFY_ENABLED=${NTFY_ENABLED:-false}
+      - NTFY_URL=${NTFY_URL:-}
+      - NTFY_TOPIC=${NTFY_TOPIC:-jess-reminders}
+      - NTFY_DEFAULT_PRIORITY=${NTFY_DEFAULT_PRIORITY:-3}
+      - NTFY_CALLBACK_BASE_URL=${NTFY_CALLBACK_BASE_URL:-}
+      - NTFY_HMAC_SECRET=${NTFY_HMAC_SECRET:-}
+      - NTFY_ACK_EXP_SECONDS=${NTFY_ACK_EXP_SECONDS:-1800}
+      - NTFY_MAX_SNOOZE_COUNT=${NTFY_MAX_SNOOZE_COUNT:-5}
     networks:
       - gateway-net
     healthcheck:

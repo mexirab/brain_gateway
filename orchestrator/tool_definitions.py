@@ -332,6 +332,69 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "query_budget",
+            "description": (
+                "Query imported historical budget/spending data (CSV/Excel files the user "
+                "loaded with scripts/import_budget.py — separate from live YNAB via "
+                "finance_status). Use for questions about past spending: totals, category "
+                "breakdowns, monthly trends, outlier transactions. "
+                "Always call with question_type='list_datasets' first if you don't know "
+                "what datasets are available. For deep analysis/interpretation (pattern "
+                "explanations, cross-year comparisons, anomaly reasoning), fetch the "
+                "aggregations with this tool first, then pass them to ask_expert with a "
+                "self-contained prompt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question_type": {
+                        "type": "string",
+                        "enum": ["list_datasets", "total", "by_category", "by_payee", "by_month", "outliers", "list"],
+                        "description": (
+                            "list_datasets: show available imports. "
+                            "total: sum + count over filters. "
+                            "by_category / by_payee / by_month: grouped aggregation. "
+                            "outliers: transactions > 2 std above mean outflow. "
+                            "list: recent raw transactions (use sparingly)."
+                        ),
+                    },
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset name (from list_datasets). Required for every question_type except list_datasets.",
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "ISO date (YYYY-MM-DD) lower bound, inclusive.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "ISO date (YYYY-MM-DD) upper bound, inclusive.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Exact category filter (case-insensitive match).",
+                    },
+                    "payee_contains": {
+                        "type": "string",
+                        "description": "Substring match against payee/merchant name.",
+                    },
+                    "amount_sign": {
+                        "type": "string",
+                        "enum": ["outflow", "inflow", "both"],
+                        "description": "Sign filter. by_category/by_payee/by_month default to 'outflow' (excludes income so 'Ready to Assign' doesn't dominate). total/outliers/list default to both. Pass 'inflow' to specifically see income.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows/groups to return (default 20).",
+                    },
+                },
+                "required": ["question_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_calendar",
             "description": "Check the user's Google Calendar for upcoming events. Use when they ask about their schedule, what's on their calendar, or what's happening today/tomorrow/this week.",
             "parameters": {
@@ -748,6 +811,50 @@ STATIC_TOOLS = [
                     },
                 },
                 "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "paperless_save",
+            "description": (
+                "Send a file from the local Paperless inbox to Paperless-ngx "
+                "for OCR and auto-tagging. Use this for scanned receipts, "
+                "bills, tax documents, medical records, insurance papers — "
+                "anything that originated as PAPER or a PDF. Do NOT use this "
+                "for typed/pasted text notes (use document_vault for those). "
+                "The file must already exist in /app/data/paperless_inbox/ "
+                "(the user rsyncs/drops files there). Pass just the filename, "
+                "no path. Paperless will OCR, tag, and file it; searchable "
+                "afterwards via the Paperless web UI or mobile app."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "Basename of the file in the inbox directory (e.g. 'tax-q3-2026.pdf'). Must not contain path separators or '..'.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional document title. Paperless infers one from the filename/OCR if omitted.",
+                    },
+                    "correspondent": {
+                        "type": "string",
+                        "description": "Optional sender/author name (e.g. 'IRS', 'Dr Smith Clinic').",
+                    },
+                    "document_type": {
+                        "type": "string",
+                        "description": "Optional doc type label ('invoice', 'statement', 'medical', 'tax', etc.).",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tag names. Missing tags are created by Paperless if the server setting allows; otherwise ignored.",
+                    },
+                },
+                "required": ["filename"],
             },
         },
     },

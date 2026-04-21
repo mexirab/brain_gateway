@@ -153,6 +153,34 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `TRAINING_CORPUS_STATE_DB` | `/app/data/brain_state.db` | state_store sqlite db; drains `chat_messages`. |
 | `TRAINING_CORPUS_CC_DIR` | `/root/.claude/projects/-opt-helios-gateway-mvp` | Claude Code session jsonls; user-turn extraction only. |
 
+## Paperless bridge (F-012)
+
+Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging. If `PAPERLESS_URL` is empty or `PAPERLESS_API_TOKEN` is shorter than 8 characters, a `model_validator` in `config.py` auto-disables the bridge and logs an error (no exception — other subsystems keep running). `document_vault` is deliberately unaffected and keeps handling typed/pasted text notes.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PAPERLESS_ENABLED` | `false` | Enable the F-012 bridge (`paperless_save` tool + `POST /api/paperless/upload`). Forced off if `PAPERLESS_URL` is empty or `PAPERLESS_API_TOKEN` is too short. |
+| `PAPERLESS_URL` | (empty) | Paperless-ngx base URL (e.g. `http://10.0.0.248:8777`). Required when enabled. |
+| `PAPERLESS_API_TOKEN` | (empty) | Paperless API token. Required when enabled; must be >= 8 characters. |
+| `PAPERLESS_INBOX_PATH` | `/app/data/paperless_inbox` | Container-side staging dir the `paperless_save` tool reads from. Host-side: `/opt/gateway_mvp/data/app/paperless_inbox/`, bind-mounted via the existing `/app/data` mount. Filename-only inputs — handler rejects `/`, `\`, `..`, absolute paths, null bytes, and symlink escape. |
+| `PAPERLESS_DEFAULT_TAGS` | (empty) | Comma-separated tag names applied to every upload (in addition to tool-supplied tags). |
+| `PAPERLESS_UPLOAD_TIMEOUT_SECONDS` | `30` | Per-upload httpx timeout. Metric bucketed into `bgw_paperless_upload_latency_seconds`. |
+
+## Ntfy Feedback Loop (F-011)
+
+Third reminder delivery channel with Done/Snooze action buttons. Callbacks hit HMAC-signed URLs (`/api/reminder/ack/{id}`, `/api/reminder/snooze/{id}`). If `NTFY_HMAC_SECRET` is empty, a `model_validator` in `config.py` auto-disables the channel regardless of `NTFY_ENABLED` — reminders continue via TTS + HA Companion push.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NTFY_ENABLED` | `false` | Enable ntfy delivery for reminders. Forced off if `NTFY_HMAC_SECRET` is unset. |
+| `NTFY_URL` | `https://ntfy.sh` | Ntfy server base URL. Typically points at the self-hosted instance on Jupiter. |
+| `NTFY_TOPIC` | (empty) | Ntfy topic to publish to. Required when enabled. |
+| `NTFY_DEFAULT_PRIORITY` | `3` | Ntfy priority (1-5). Overridden per-reminder when urgency is set. |
+| `NTFY_CALLBACK_BASE_URL` | (empty) | Public base URL the orchestrator is reachable at for callbacks (e.g. `https://helios.tail74fc4a.ts.net`). Used to build Done/Snooze action URLs. |
+| `NTFY_HMAC_SECRET` | (empty) | Secret for signing callback URLs. Scheme: `sig = HMAC-SHA256(secret, f"{id}|{action}|{exp}|{extra}")[:32]`. Missing → channel auto-disables. |
+| `NTFY_ACK_EXP_SECONDS` | `86400` | TTL for ack/snooze callback signatures (seconds). |
+| `NTFY_MAX_SNOOZE_COUNT` | `3` | Max snoozes per reminder before Snooze button is dropped. |
+
 ## Monitoring
 
 | Variable | Default | Purpose |
