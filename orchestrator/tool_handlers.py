@@ -1238,7 +1238,7 @@ async def _reg_routine_status(arguments: dict) -> str:
 async def _reg_query_budget(arguments: dict) -> str:
     from orchestrator import budget_manager
 
-    result = budget_manager.query(
+    result = await budget_manager.query(
         dataset=arguments.get("dataset"),
         question_type=arguments.get("question_type", "list_datasets"),
         start_date=arguments.get("start_date"),
@@ -1247,6 +1247,7 @@ async def _reg_query_budget(arguments: dict) -> str:
         payee_contains=arguments.get("payee_contains"),
         amount_sign=arguments.get("amount_sign"),
         limit=int(arguments.get("limit", 20)),
+        analysis_question=arguments.get("analysis_question"),
     )
     return json.dumps(result, default=str)
 

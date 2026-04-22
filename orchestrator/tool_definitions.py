@@ -339,24 +339,41 @@ STATIC_TOOLS = [
                 "finance_status). Use for questions about past spending: totals, category "
                 "breakdowns, monthly trends, outlier transactions. "
                 "Always call with question_type='list_datasets' first if you don't know "
-                "what datasets are available. For deep analysis/interpretation (pattern "
-                "explanations, cross-year comparisons, anomaly reasoning), fetch the "
-                "aggregations with this tool first, then pass them to ask_expert with a "
-                "self-contained prompt."
+                "what datasets are available. "
+                "For ANY 'find patterns', 'what stood out', 'biggest X in period Y', "
+                "'why did I overspend', 'analyze', or 'compare years' question: use "
+                "question_type='analyze' — that single call gathers the data, hands it "
+                "to the expert reasoning model, and returns the synthesis. Do NOT try to "
+                "stitch together by_category/by_payee/by_month manually for synthesis "
+                "questions — use 'analyze' instead."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "question_type": {
                         "type": "string",
-                        "enum": ["list_datasets", "total", "by_category", "by_payee", "by_month", "outliers", "list"],
+                        "enum": [
+                            "list_datasets",
+                            "analyze",
+                            "total",
+                            "by_category",
+                            "by_payee",
+                            "by_month",
+                            "outliers",
+                            "list",
+                        ],
                         "description": (
                             "list_datasets: show available imports. "
+                            "analyze: ONE-call pattern finder — gathers totals + top categories + top payees + monthly breakdown + outliers (respecting filters) and internally delegates to the expert reasoning model. Returns {expert_synthesis, data}. Use this for 'find patterns', 'biggest X', 'what stood out', 'compare years' — the response from the expert model IS the answer; you don't need additional query_budget calls afterward. Pass analysis_question with the user's actual intent for a better synthesis. Slow (~50s — that's the expert thinking). "
                             "total: sum + count over filters. "
-                            "by_category / by_payee / by_month: grouped aggregation. "
+                            "by_category / by_payee / by_month: grouped aggregation (use these for narrow per-dimension facts like 'what category did I spend most on', not for synthesis). "
                             "outliers: transactions > 2 std above mean outflow. "
                             "list: recent raw transactions (use sparingly)."
                         ),
+                    },
+                    "analysis_question": {
+                        "type": "string",
+                        "description": "The user's actual question, in their words. Passed to the expert reasoning model along with the aggregated data. Only used when question_type='analyze'. Example: 'Find the biggest gaming purchases in 2025 and tell me if there's a pattern.'",
                     },
                     "dataset": {
                         "type": "string",

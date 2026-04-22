@@ -120,6 +120,7 @@ All tools are called directly by the single model in one agentic loop.
 | workout_status | Get today's workout plan + logged sets |
 | modify_workout | Swap or remove an exercise from today's plan |
 | log_meal | Log a meal with calorie count (calories-only v1; independent of selfcare_log) |
+| query_budget | Query historical budget/spending data imported from CSV/Excel. Use `question_type="analyze"` with `analysis_question=<user's question>` for synthesis (internally chains to the expert reasoning model, slow ~50s); other types for narrow per-dimension facts. |
 
 ## Key Files (top 20 load-bearing)
 

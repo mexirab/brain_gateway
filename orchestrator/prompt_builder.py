@@ -357,7 +357,7 @@ WHEN TO USE TOOLS:
 - check_email: When user asks about their email or inbox
 - search_email: When user searches for specific emails
 - finance_status: When user asks about budget, spending, or financial game progress IN THE CURRENT PERIOD (live YNAB). For historical / imported CSV budgets, use query_budget instead.
-- query_budget: When user asks about PAST spending from imported CSV/Excel budgets ("what did I spend on X in 2023?", "compare 2022 vs 2023", "unusual transactions last year"). Always call with question_type='list_datasets' first if you don't know which dataset they mean. For pattern interpretation / synthesis ("what stood out?", "why did I overspend?"), fetch aggregations first then hand them to ask_expert.
+- query_budget: When user asks about PAST spending from imported CSV/Excel budgets. Call list_datasets ONCE if you don't know the dataset. For synthesis questions ("find patterns", "biggest X in period Y", "what stood out", "why did I overspend", "analyze", "compare years"): use question_type='analyze' with analysis_question=<user's actual question>. That ONE call gathers the data AND delegates to the expert reasoning model; its expert_synthesis field IS the answer — don't follow up with more query_budget calls. Only use by_category/by_payee/by_month/total/outliers for narrow per-dimension facts, never for synthesis.
 - check_system: When user asks about system behavior, errors, or status
 - decompose_task: When user says "break this down", "what are the steps", mentions a big/vague task, or feels overwhelmed by a task
 - task_step: When user says "done", "next step", "skip", "what was I working on", or wants to abandon a decomposed task

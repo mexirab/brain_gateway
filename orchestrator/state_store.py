@@ -1549,6 +1549,7 @@ def query_budget_transactions(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     category: Optional[str] = None,
+    category_contains: Optional[str] = None,
     payee_contains: Optional[str] = None,
     amount_sign: Optional[str] = None,
     limit: int = 50,
@@ -1557,6 +1558,12 @@ def query_budget_transactions(
 
     group_by: None -> list raw transactions (sorted by date desc, limit applied).
               'category' | 'payee' | 'month' -> group + sum + count + return top N by abs(total).
+    category: EXACT (case-insensitive) match. Use only when you know the literal
+              category string. YNAB users often prefix with emoji + spaces
+              ('🎮 🎲 Gaming'), which will NOT match category='Gaming' — use
+              category_contains instead for those.
+    category_contains: substring (case-insensitive) match — the right default
+              when the caller only knows a keyword ('gaming', 'food', 'gas').
     amount_sign: 'outflow' (amount < 0), 'inflow' (amount > 0), or None (both).
     """
     where = ["dataset = ?"]
@@ -1570,6 +1577,9 @@ def query_budget_transactions(
     if category:
         where.append("LOWER(COALESCE(category,'')) = LOWER(?)")
         params.append(category)
+    if category_contains:
+        where.append("LOWER(COALESCE(category,'')) LIKE LOWER(?)")
+        params.append(f"%{category_contains}%")
     if payee_contains:
         where.append("LOWER(COALESCE(payee,'')) LIKE LOWER(?)")
         params.append(f"%{payee_contains}%")

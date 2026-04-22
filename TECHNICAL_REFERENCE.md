@@ -385,6 +385,16 @@ Returns the full workout plan as text (model retains it in context for follow-up
 - `tags` (array of strings, optional): Added to `PAPERLESS_DEFAULT_TAGS`. Missing tags are created by Paperless if the server setting allows; otherwise ignored.
 - File read uses `asyncio.to_thread` to avoid blocking the event loop. Size cap enforced before `read_bytes()`. Auto-disabled bridge surfaces as a structured "skipped" tool result rather than raising.
 
+### query_budget
+```json
+{"question_type": "analyze", "analysis_question": "What patterns stood out in my 2025 gaming spend?", "year": 2025, "category": "Gaming"}
+```
+- `question_type` (enum, required): `total | by_category | by_month | top_payees | outliers | analyze`. Narrow types return structured facts for a single dimension. `analyze` gathers totals + top 5 categories + top 5 payees + up to 36 months + top 3 outliers (respecting filters) and delegates the synthesis to the expert reasoning model (`handle_ask_expert`) in a single tool call.
+- `analysis_question` (string, required when `question_type="analyze"`): The user's synthesis question, passed verbatim to the expert.
+- Filters (all optional): `year`, `month`, `category`, `payee`, `min_amount`, `max_amount`.
+- Response for `analyze`: `{expert_synthesis: str | null, expert_error: str | null, data: {...}, ...}`. `expert_synthesis=null` + non-null `expert_error` when the expert is unreachable, disabled, or its circuit is open — the `data` block is always populated so the primary model can fall back to surface-level summary.
+- `budget_manager.query()` is `async` (awaits the expert). `by_month` internally capped at 36 entries.
+
 ## ChromaDB Schema
 
 **Chunk ID:** `chunk::{path}::{section}::{index}::{hash[:12]}`

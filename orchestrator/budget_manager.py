@@ -131,6 +131,29 @@ def _parse_money(val) -> Optional[float]:
     return -val if negative else val
 
 
+def _strip_symbol_glyphs(s: Optional[str]) -> Optional[str]:
+    """Remove emoji / pictographic symbols from a category or payee string.
+
+    YNAB users often prefix category names with emoji ('🎮 🎲 Gaming',
+    '🍽 Dining Out', '💾 Software Subscriptions'). These are visually nice
+    in the YNAB UI but poison downstream text matching: an exact filter
+    like category='Gaming' never hits '🎮 🎲 Gaming', and even substring
+    searches have to know to skip the leading emoji.
+
+    Strategy: drop every codepoint in Unicode category 'So' (Symbol,
+    other — covers essentially all emoji including multi-codepoint
+    sequences after component-wise filtering) or 'Sk' (Symbol, modifier).
+    Then collapse runs of whitespace and trim. Letters, digits, common
+    punctuation ('-', '&', '/', etc.), and currency glyphs are preserved.
+    """
+    if not s:
+        return s
+    import unicodedata
+
+    cleaned = "".join(c for c in s if unicodedata.category(c) not in ("So", "Sk"))
+    return " ".join(cleaned.split()) or None
+
+
 _TRANSFER_PAYEE_RX = re.compile(r"^\s*transfer\s*:", re.IGNORECASE)
 _STARTING_BALANCE_RX = re.compile(r"^\s*starting\s+balance\s*$", re.IGNORECASE)
 _RECONCILIATION_RX = re.compile(r"^\s*reconciliation\s+balance\s+adjustment\s*$", re.IGNORECASE)
@@ -202,10 +225,14 @@ def _normalize_rows(
         if col_map.get("category"):
             c = r.get(col_map["category"])
             category = None if pd.isna(c) else str(c).strip() or None
+            # Strip YNAB emoji prefixes ('🎮 🎲 Gaming' -> 'Gaming') so that
+            # exact-match category filters work downstream.
+            category = _strip_symbol_glyphs(category)
         payee = None
         if col_map.get("payee"):
             p = r.get(col_map["payee"])
             payee = None if pd.isna(p) else str(p).strip() or None
+            payee = _strip_symbol_glyphs(payee)
         memo = None
         if col_map.get("memo"):
             m = r.get(col_map["memo"])
@@ -485,25 +512,92 @@ async def _build_and_index_summary(name: str, rows: List[Dict[str, Any]]) -> Opt
 # ---------------------------------------------------------------------------
 
 
+def strip_symbols_from_existing(dataset: Optional[str] = None) -> Dict[str, int]:
+    """One-shot cleanup: strip emoji/symbol glyphs from existing category
+    and payee values in the budget_transactions table.
+
+    `dataset=None` cleans all datasets. Returns a dict with counts of rows
+    updated. Safe to re-run (idempotent — rows already clean become no-ops).
+    """
+    # Update by DISTINCT value rather than per-row: there are typically
+    # <100 unique categories and <500 unique payees across even a decade
+    # of transactions, so one UPDATE per distinct value is both faster
+    # (batched) and simpler (no rowid juggling).
+    with state_store.get_db() as conn:
+        where = "AND dataset = ?" if dataset else ""
+        ds_params: list = [dataset] if dataset else []
+
+        cat_updates = 0
+        cats = conn.execute(
+            f"SELECT DISTINCT category FROM budget_transactions WHERE category IS NOT NULL AND category <> '' {where}",
+            ds_params,
+        ).fetchall()
+        for r in cats:
+            orig = r["category"]
+            new = _strip_symbol_glyphs(orig)
+            if new != orig:
+                upd_params = [new, orig] + ds_params
+                conn.execute(
+                    f"UPDATE budget_transactions SET category = ? WHERE category = ? {where}",
+                    upd_params,
+                )
+                cat_updates += 1
+
+        payee_updates = 0
+        payees = conn.execute(
+            f"SELECT DISTINCT payee FROM budget_transactions WHERE payee IS NOT NULL AND payee <> '' {where}",
+            ds_params,
+        ).fetchall()
+        for r in payees:
+            orig = r["payee"]
+            new = _strip_symbol_glyphs(orig)
+            if new != orig:
+                upd_params = [new, orig] + ds_params
+                conn.execute(
+                    f"UPDATE budget_transactions SET payee = ? WHERE payee = ? {where}",
+                    upd_params,
+                )
+                payee_updates += 1
+        # get_db() context manager commits automatically on clean exit.
+
+    logger.info(
+        "[BUDGET] Stripped symbols: dataset=%s categories_updated=%d payees_updated=%d",
+        dataset or "(all)",
+        cat_updates,
+        payee_updates,
+    )
+    return {"categories_updated": cat_updates, "payees_updated": payee_updates}
+
+
 def list_datasets() -> List[Dict[str, Any]]:
     return state_store.list_budget_imports()
 
 
-def query(
+async def query(
     dataset: Optional[str] = None,
     question_type: str = "list_datasets",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     category: Optional[str] = None,
+    category_contains: Optional[str] = None,
     payee_contains: Optional[str] = None,
     amount_sign: Optional[str] = None,
     limit: int = 20,
+    analysis_question: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Dispatcher called by the query_budget tool. Returns a JSON-serializable dict.
 
     amount_sign defaults to 'outflow' for by_category/by_payee/by_month so those
     rankings aren't dominated by income rows (YNAB's 'Ready to Assign' category
     routinely dwarfs every spending category). Pass 'both' to include inflow.
+
+    `analysis_question` is used only by question_type="analyze" — the user's
+    original intent, passed through to ask_expert along with the aggregated
+    data.
+
+    Async because question_type="analyze" internally invokes ask_expert
+    (handle_ask_expert). All other branches are synchronous SQL — this
+    just makes the dispatcher await-able for the one path that needs it.
     """
     if question_type == "list_datasets":
         items = list_datasets()
@@ -535,6 +629,7 @@ def query(
         start_date=start_date,
         end_date=end_date,
         category=category,
+        category_contains=category_contains,
         payee_contains=payee_contains,
         amount_sign=amount_sign if amount_sign in ("outflow", "inflow") else None,
         limit=limit,
@@ -577,6 +672,151 @@ def query(
             ],
         }
 
+    if question_type == "analyze":
+        # ONE-call pattern-finder. Gathers multi-dimensional aggregates
+        # respecting the caller's filters, then internally invokes
+        # ask_expert with the data so the user's question is answered
+        # by the reasoning model rather than Qwen3.5-27B's tool-calling
+        # loop (which has repeatedly run out of rounds at 5 calls without
+        # producing a synthesis). Returns the expert's synthesis AND the
+        # underlying data so the caller can see both.
+        #
+        # All sub-queries respect the same filter args (start_date,
+        # end_date, category, payee_contains). amount_sign defaults to
+        # 'outflow' for rankings so top-lists aren't dominated by income.
+        # Top-N kept tight (5 categories / 5 payees / 3 outliers) so the
+        # data payload fits comfortably in the expert's prompt budget.
+        # by_month capped at 36 (3 years) so a wide-range analyze doesn't
+        # blow the expert's prompt budget or the unified-loop 8KB tool
+        # result cap on the return path — for longer horizons the caller
+        # should narrow the start_date/end_date filter.
+        #
+        # `analysis_question` is strongly preferred (better expert synthesis
+        # when it has the user's exact intent) but not strictly required.
+        # Earlier a "required or error" gate was tried and it caused the
+        # primary model to fail with a confusing retry loop when it called
+        # analyze without the kwarg — better to succeed with a generic
+        # pattern prompt than to force the primary to self-correct mid-turn.
+        ranking_sign = amount_sign if amount_sign in ("outflow", "inflow") else "outflow"
+        filter_args = dict(
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            payee_contains=payee_contains,
+        )
+        # Totals (reuse existing month-rollup trick so we count everything
+        # that matches, not just a limit-20 slice).
+        totals_groups = state_store.query_budget_transactions(dataset, group_by="month", limit=10000, **filter_args)
+        total_out = sum(g["outflow"] for g in totals_groups)
+        total_in = sum(g["inflow"] for g in totals_groups)
+        matched = sum(g["count"] for g in totals_groups)
+        # Top 5 categories + 5 payees (outflow-ranked unless caller passed inflow).
+        top_cats = state_store.query_budget_transactions(
+            dataset, group_by="category", amount_sign=ranking_sign, limit=5, **filter_args
+        )
+        top_payees = state_store.query_budget_transactions(
+            dataset, group_by="payee", amount_sign=ranking_sign, limit=5, **filter_args
+        )
+        # Monthly breakdown — cap at 36 months so a wide-range analyze
+        # doesn't blow up the expert prompt and the unified-loop 8KB tool
+        # result cap. 3 years of months is enough signal for "find
+        # patterns"; for deeper history the caller should filter explicitly.
+        monthly = state_store.query_budget_transactions(dataset, group_by="month", limit=36, **filter_args)
+        # Top 3 outliers within the filter.
+        outlier_rows = state_store.query_budget_outliers(dataset, start_date=start_date, end_date=end_date, limit=3)
+        overview_data = {
+            "dataset": dataset,
+            "filters": {k: v for k, v in filter_args.items() if v},
+            "ranking_sign": ranking_sign,
+            "matched_rows": matched,
+            "total_outflow": round(total_out, 2),
+            "total_inflow": round(total_in, 2),
+            "net": round(total_out + total_in, 2),
+            "top_categories": [
+                {"key": g["group_key"], "total": round(g["total"], 2), "count": g["count"]} for g in top_cats
+            ],
+            "top_payees": [
+                {"key": g["group_key"], "total": round(g["total"], 2), "count": g["count"]} for g in top_payees
+            ],
+            "by_month": [
+                {
+                    "month": g["group_key"],
+                    "outflow": round(g["outflow"], 2),
+                    "inflow": round(g["inflow"], 2),
+                    "net": round(g["total"], 2),
+                    "count": g["count"],
+                }
+                for g in sorted(monthly, key=lambda x: x["group_key"])
+            ],
+            "outliers": [
+                {
+                    "date": r["txn_date"],
+                    "amount": round(r["amount"], 2),
+                    "category": r["category"],
+                    "payee": r["payee"],
+                }
+                for r in outlier_rows
+            ],
+        }
+        # Chain to ask_expert: build a compact prompt containing the
+        # user's intent + the aggregated data, call the reasoning model,
+        # return BOTH the synthesis and the underlying data.
+        user_intent = (analysis_question or "").strip() or (
+            "Find the most notable patterns, trends, and outliers in this spending data. Call out anything surprising."
+        )
+        filter_desc = ", ".join(f"{k}={v}" for k, v in overview_data["filters"].items()) or "no filters"
+        import json as _json
+
+        data_block = _json.dumps(overview_data, indent=2, default=str)
+        expert_question = (
+            f"Question from the user: {user_intent}\n\n"
+            f"Dataset: {dataset} (filters: {filter_desc})\n\n"
+            f"Aggregated data (totals, top categories, top payees, monthly "
+            f"breakdown, outliers):\n```json\n{data_block}\n```\n\n"
+            "Produce a tight, readable analysis that directly answers the "
+            "user's question. Lead with the 2-3 most important findings. "
+            "Quote specific numbers from the data. Don't hedge — if a "
+            "pattern is clear, say so."
+        )
+
+        # Invoke ask_expert. Circuit breaker / disabled / timeout are all
+        # handled inside handle_ask_expert — we always get back a string,
+        # never an exception. Failure messages all start with "Expert
+        # model" (see `_DISABLED_MSG`, `_UNREACHABLE_MSG`, `_CIRCUIT_OPEN_MSG`
+        # in expert_agent.py) — detect and surface as a distinct field so
+        # the primary model can tell "expert analyzed" from "expert down,
+        # synthesize from the data yourself" and behave accordingly.
+        from orchestrator.expert_agent import handle_ask_expert
+
+        logger.info(
+            "[BUDGET] analyze: delegating to expert (question=%d chars, data=%d chars)",
+            len(expert_question),
+            len(data_block),
+        )
+        expert_reply = await handle_ask_expert({"question": expert_question})
+        is_expert_failure = isinstance(expert_reply, str) and expert_reply.startswith("Expert model")
+
+        result_payload: Dict[str, Any] = {
+            "question_type": "analyze",
+            "dataset": dataset,
+            "user_question": user_intent,
+            "filters": overview_data["filters"],
+            "data": overview_data,
+        }
+        if is_expert_failure:
+            # Expert unreachable / disabled / circuit-open. The primary
+            # model should fall back to synthesizing from `data` directly.
+            result_payload["expert_synthesis"] = None
+            result_payload["expert_error"] = expert_reply
+            result_payload["hint"] = (
+                "Expert reasoning model was unavailable; synthesize the findings "
+                "yourself from the `data` field. Don't call query_budget again — "
+                "everything you need to answer the user is already in `data`."
+            )
+        else:
+            result_payload["expert_synthesis"] = expert_reply
+        return result_payload
+
     if question_type == "outliers":
         rows = state_store.query_budget_outliers(dataset, start_date=start_date, end_date=end_date, limit=limit)
         return {
@@ -611,5 +851,5 @@ def query(
 
     return {
         "error": f"Unknown question_type: {question_type!r}. Use one of: "
-        f"list_datasets, total, by_category, by_payee, by_month, outliers, list."
+        f"list_datasets, analyze, total, by_category, by_payee, by_month, outliers, list."
     }
