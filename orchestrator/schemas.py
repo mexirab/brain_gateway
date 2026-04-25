@@ -173,3 +173,18 @@ class CalendarTodayResponse(APIResponse):
     events: list[CalendarEvent] = Field(default_factory=list)
     source: str = "none"
     count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Self-audit (F-014)
+# ---------------------------------------------------------------------------
+
+
+class SelfAuditRunResponse(APIResponse):
+    """Response shape for `POST /api/self_audit/run`."""
+
+    result: str = "ok"  # ok | partial | failed | skipped | busy
+    clusters: int = 0
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    report_path: Optional[str] = None
+    reason: Optional[str] = None

@@ -779,6 +779,45 @@ async def startup_event():
         replace_existing=True,
     )
 
+    # Self-audit (F-014): daily error-log audit. Queries Loki for last 24h of
+    # error/warn logs across docker + systemd services, asks Jess to diagnose
+    # each cluster, pushes a one-line digest via Pushover, saves a markdown
+    # report under SELF_AUDIT_OUTPUT_DIR. Read-only by design — Jess emits
+    # text only; the user reviews and runs commands manually.
+    if shared.SELF_AUDIT_ENABLED:
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        scheduler.add_job(
+            run_self_audit,
+            trigger="cron",
+            hour=shared.SELF_AUDIT_HOUR_UTC,
+            minute=0,
+            id="self_audit_daily",
+            name="Daily self-audit",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Self-audit daily at {shared.SELF_AUDIT_HOUR_UTC:02d}:00 UTC")
+
+        # One-shot 7-day calibration review at 2026-05-02 14:00 UTC.
+        # Uses the code agent (Qwen3-Coder-Next) as a neutral judge to grade
+        # whether the daily F-014 audit is earning its keep. Registered only
+        # if the run date is still in the future — re-registrations after
+        # the date passes become no-ops.
+        from orchestrator.jobs_self_audit import run_self_audit_review
+
+        review_run_at = datetime(2026, 5, 2, 14, 0, 0, tzinfo=scheduler.timezone)
+        if datetime.now(scheduler.timezone) < review_run_at:
+            scheduler.add_job(
+                run_self_audit_review,
+                trigger="date",
+                run_date=review_run_at,
+                id="self_audit_review_one_shot",
+                name="Self-audit 7-day calibration review",
+                replace_existing=True,
+                misfire_grace_time=3600,
+            )
+            logger.info(f"[SCHEDULER] Self-audit 7-day review one-shot at {review_run_at.isoformat()}")
+
     # Training corpus drain: nightly at 02:30 — appends new user/assistant
     # turns from OWUI + state_store + Claude Code sessions to monthly JSONL
     # files under /app/data/training_corpus/. Append-only, content-addressed

@@ -1022,3 +1022,34 @@ async def get_services_status():
     from orchestrator.service_registry import services
 
     return JSONResponse(services.status_summary())
+
+
+# ---------------------------------------------------------------------------
+# Self-audit (F-014) — manual trigger
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/self_audit/run", response_model=None)
+async def trigger_self_audit():
+    """Run the daily self-audit on demand. Bearer-gated (default for /api/*).
+
+    Concurrency-protected via a module-level asyncio.Lock in
+    `jobs_self_audit` — overlapping calls (cron + manual, or two manual)
+    return `result="busy"` with HTTP 409 instead of stacking a second
+    LLM call on the primary slot.
+    """
+    from orchestrator.jobs_self_audit import run_self_audit
+    from orchestrator.schemas import SelfAuditRunResponse
+
+    raw = await run_self_audit()
+    payload = SelfAuditRunResponse(
+        ok=raw.get("result") in {"ok", "partial", "skipped"},
+        result=raw.get("result", "unknown"),
+        clusters=raw.get("clusters", 0),
+        severity_counts=raw.get("severity_counts", {}) or {},
+        report_path=raw.get("report_path"),
+        reason=raw.get("reason"),
+        error=None if raw.get("result") in {"ok", "partial", "skipped"} else raw.get("reason"),
+    )
+    status_code = 409 if raw.get("result") == "busy" else 200
+    return JSONResponse(payload.model_dump(), status_code=status_code)

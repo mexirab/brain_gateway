@@ -398,6 +398,10 @@ DAILY_SUMMARY_TIME = settings.daily_summary_time
 WEEKLY_SUMMARY_DAY = settings.weekly_summary_day
 WEEKLY_SUMMARY_TIME = settings.weekly_summary_time
 
+# -- Self-audit (F-014) ----------------------------------------------------
+SELF_AUDIT_ENABLED = settings.self_audit_enabled
+SELF_AUDIT_HOUR_UTC = settings.self_audit_hour_utc
+
 # ---------------------------------------------------------------------------
 # Vision / image recognition
 # ---------------------------------------------------------------------------

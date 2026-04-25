@@ -40,11 +40,12 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Ntfy feedback loop (F-011) | Reminder delivery via ntfy with Done/Snooze buttons + HMAC-signed callback routes | Working |
 | Paperless bridge (F-012) | `paperless_save` tool + `POST /api/paperless/upload` → Paperless-ngx on Jupiter for OCR + auto-tagging | Working |
 | Pushover bridge (F-013) | Parallel iOS push channel alongside F-011 ntfy; reuses HMAC ack/snooze routes; independent `PUSHOVER_ENABLED` flag | Working |
+| Self-audit (F-014) | Daily 7am UTC Loki scan + Jess diagnosis + Pushover digest + markdown report under `/app/data/self_audits/`; read-only by design; default-OFF (`SELF_AUDIT_ENABLED`) | Working |
 | Announcement observability | Announcement history, metrics, per-speaker tracking | Working |
 
 ## ADHD Feature Suite — DONE
 
-All 13 ADHD-informed features (F-001 through F-013) are complete and deployed. Each feature was built from a self-contained implementation spec with interaction examples, tool schemas, TTS templates, and testing checklists. See [jess-features/README.md](jess-features/README.md) for the full build order, dependency graph, and per-feature specs.
+All 14 ADHD-informed features (F-001 through F-014) are complete and deployed. Each feature was built from a self-contained implementation spec with interaction examples, tool schemas, TTS templates, and testing checklists. See [jess-features/README.md](jess-features/README.md) for the full build order, dependency graph, and per-feature specs.
 
 | ID | Feature | Tools |
 |----|---------|-------|
@@ -61,6 +62,7 @@ All 13 ADHD-informed features (F-001 through F-013) are complete and deployed. E
 | F-011 | Ntfy Feedback Loop — reminder delivery via ntfy with Done/Snooze action buttons + HMAC callback routes | (integrated in `reminder_manager`) |
 | F-012 | Paperless-ngx Bridge — push files from `/app/data/paperless_inbox/` to Paperless for OCR + auto-tagging; `document_vault` unchanged | `paperless_save` |
 | F-013 | Pushover Push Bridge — parallel iOS push channel alongside F-011 ntfy; reuses HMAC ack/snooze routes; HTML-escaped reminder text | (integrated in `pushover_manager`) |
+| F-014 | Daily Self-Audit — 7am UTC Loki scan + Jess diagnosis + Pushover digest + markdown report; read-only safety story (allow-list + dangerous-pattern + secret-pattern filters); default-OFF | (background job in `jobs_self_audit.py`) |
 
 ## Known Issues / TODOs
 

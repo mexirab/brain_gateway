@@ -446,6 +446,12 @@ services:
     volumes:
       - ./monitoring/promtail/promtail-helios.yml:/etc/promtail/config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Read-only systemd journal mount for F-014 self-audit. Promtail's
+      # `journal:` scrape stage reads /var/log/journal directly. Both
+      # /var/log/journal and /etc/machine-id are required (machine-id is
+      # how journalctl correlates volatile vs persistent journals).
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
       - promtail-helios-data:/tmp
     environment:
       - LOKI_PUSH_URL=${LOKI_PUSH_URL:-http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push}

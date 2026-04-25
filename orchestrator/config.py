@@ -283,6 +283,20 @@ class Settings(BaseSettings):
     training_corpus_state_db: str = "/app/data/brain_state.db"
     training_corpus_cc_dir: str = "/root/.claude/projects/-opt-helios-gateway-mvp"
 
+    # -- Self-audit (F-014) ------------------------------------------------------
+    # Daily 7am job that queries Loki for the last 24h of error/warn logs across
+    # all Helios services, asks Jess to diagnose each cluster, and pushes a
+    # one-line digest via Pushover. Read-only by design — Jess emits text, the
+    # orchestrator never executes her suggestions. Full report saved under
+    # SELF_AUDIT_OUTPUT_DIR for the user to review and discuss with Claude Code.
+    self_audit_enabled: bool = False
+    self_audit_hour_utc: int = 7
+    self_audit_lookback_hours: int = 24
+    self_audit_loki_url: str = "http://jupiter-amds.tail74fc4a.ts.net:3100"
+    self_audit_max_clusters: int = 30
+    self_audit_output_dir: str = "/app/data/self_audits"
+    self_audit_llm_timeout_sec: int = 120
+
     # ---- Computed properties ---------------------------------------------------
 
     @property
@@ -334,6 +348,37 @@ class Settings(BaseSettings):
             object.__setattr__(self, "pushover_default_priority", -2)
         elif self.pushover_default_priority > 2:
             object.__setattr__(self, "pushover_default_priority", 2)
+        return self
+
+    @model_validator(mode="after")
+    def validate_self_audit_config(self) -> "Settings":
+        """Auto-disable F-014 self-audit on bad config. Log + disable,
+        never raise — optional feature must not block startup.
+        """
+        if not self.self_audit_enabled:
+            return self
+        import logging
+
+        log = logging.getLogger(__name__)
+        url = self.self_audit_loki_url or ""
+        if not url.startswith(("http://", "https://")):
+            log.error(
+                "[CONFIG] SELF_AUDIT_ENABLED=true but SELF_AUDIT_LOKI_URL is "
+                "missing or not http(s); disabling self-audit."
+            )
+            object.__setattr__(self, "self_audit_enabled", False)
+            return self
+        if not 0 <= self.self_audit_hour_utc <= 23:
+            log.warning(f"[CONFIG] SELF_AUDIT_HOUR_UTC={self.self_audit_hour_utc} out of range; clamping to 7.")
+            object.__setattr__(self, "self_audit_hour_utc", 7)
+        if self.self_audit_lookback_hours < 1:
+            object.__setattr__(self, "self_audit_lookback_hours", 1)
+        elif self.self_audit_lookback_hours > 168:
+            object.__setattr__(self, "self_audit_lookback_hours", 168)
+        if self.self_audit_max_clusters < 1:
+            object.__setattr__(self, "self_audit_max_clusters", 1)
+        elif self.self_audit_max_clusters > 200:
+            object.__setattr__(self, "self_audit_max_clusters", 200)
         return self
 
     @model_validator(mode="after")

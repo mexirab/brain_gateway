@@ -87,3 +87,10 @@ certs/
 *.pt
 *.pth
 secrets.yaml
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
+
+# qwen-code project-scoped runtime (created when running `qwen` in repo dir)
+.qwen/
+QWEN.md

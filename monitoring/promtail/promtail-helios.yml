@@ -88,3 +88,59 @@ scrape_configs:
 
       - labels:
           level_fallback:
+
+  # ---------------------------------------------------------------------------
+  # systemd journal scrape — feeds F-014 self-audit
+  # ---------------------------------------------------------------------------
+  # Adds visibility into host-level systemd units that aren't Docker (the
+  # llama-server family, qwen-tts, brain-gateway, etc.) so the daily audit
+  # job in orchestrator/jobs_self_audit.py can spot crashes / restart loops
+  # in the LLM and TTS services. Limited via `matches:` to a known-safe
+  # whitelist of units — we do NOT scrape the whole system journal (that
+  # would balloon Loki cardinality and ingest random user/session logs).
+  - job_name: journal
+    journal:
+      max_age: 24h
+      path: /var/log/journal
+      labels:
+        job: systemd-journal
+        host: helios
+      # Only emit lines whose unit matches one of these. Add new ones here
+      # if a new always-on systemd service ships and the audit job should
+      # see its errors.
+      # Same-field OR uses space-separated terms (journalctl convention).
+      # The '+' separator is for OR between DIFFERENT field-name groups; we
+      # only filter on _SYSTEMD_UNIT, so same-field OR via space is correct.
+      matches: '_SYSTEMD_UNIT=llama-server.service _SYSTEMD_UNIT=llama-server-coder.service _SYSTEMD_UNIT=qwen-tts.service _SYSTEMD_UNIT=brain-gateway.service'
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+      # Map systemd priority numbers to a `level` label that matches the
+      # docker scrape's level taxonomy (so the audit query can union both
+      # streams with one regex).
+      - source_labels: ['__journal_priority_keyword']
+        target_label: 'level'
+        regex: '(emerg|alert|crit)'
+        replacement: 'critical'
+      - source_labels: ['__journal_priority_keyword']
+        target_label: 'level'
+        regex: 'err'
+        replacement: 'error'
+      - source_labels: ['__journal_priority_keyword']
+        target_label: 'level'
+        regex: 'warning'
+        replacement: 'warn'
+      - source_labels: ['__journal__hostname']
+        target_label: 'hostname'
+
+    pipeline_stages:
+      # Drop qwen-tts health-check heartbeat at the agent — it's a
+      # ~5700 lines/day "GET /health 200 OK" stream from Jupiter, zero
+      # diagnostic value, doubles Loki ingest if left in. Other units
+      # are quiet enough to leave un-filtered.
+      - match:
+          selector: '{unit="qwen-tts.service"}'
+          stages:
+            - drop:
+                expression: '"GET /health HTTP/1.1" 200'
+                drop_counter_reason: tts_health_heartbeat

@@ -257,6 +257,40 @@ PUSHOVER_PUSH_LATENCY = Histogram(
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
 )
 
+# -- Self-audit (F-014) -----------------------------------------------------
+SELF_AUDIT_RUNS_TOTAL = Counter(
+    "bgw_self_audit_runs_total",
+    "Daily self-audit runs",
+    # result: ok | partial | failed | skipped | busy
+    # ok      = full audit + diagnosis succeeded (or genuinely empty week)
+    # partial = clusters captured but Jess unavailable for diagnosis
+    # failed  = Loki unreachable or probe empty -- digest pushed as alert,
+    #           NOT as 'all clean' (so the user knows visibility is broken)
+    # skipped = SELF_AUDIT_ENABLED=false
+    # busy    = another audit in flight (manual + cron collision)
+    ["result"],
+)
+
+SELF_AUDIT_CLUSTERS_TOTAL = Counter(
+    "bgw_self_audit_clusters_total",
+    "Error clusters surfaced per audit, by severity",
+    # service label dropped: aggregate-only counts today, populating per-cluster
+    # service would explode label cardinality without enough Grafana payoff.
+    ["severity"],
+)
+
+SELF_AUDIT_LATENCY = Histogram(
+    "bgw_self_audit_latency_seconds",
+    "Self-audit job duration",
+    buckets=[1, 5, 10, 30, 60, 120, 300],
+)
+
+SELF_AUDIT_FORMAT_DRIFT_TOTAL = Counter(
+    "bgw_self_audit_format_drift_total",
+    "Audits where diagnosis text was non-empty but no severity headers parsed "
+    "-- signals Qwen3.5-27B went off-format and the prompt may need tuning",
+)
+
 # -- Calendar ----------------------------------------------------------------
 CALENDAR_API_CALLS = Counter(
     "bgw_calendar_api_calls_total",

@@ -195,6 +195,20 @@ Parallel iOS push channel alongside F-011 ntfy. Pushover has native APNs integra
 | `PUSHOVER_DEVICE` | (empty) | Optional device name to target a specific device; empty = all user devices. |
 | `PUSHOVER_TIMEOUT_SECONDS` | `10` | Per-request httpx timeout. Bucketed into `bgw_pushover_push_latency_seconds`. |
 
+## Self-audit (F-014)
+
+Daily 7am UTC scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki for the last-24h error/warn logs across Helios services, asks Jess to diagnose each cluster (single `call_model` pass, no tool loop), saves a markdown report under `/app/data/self_audits/YYYY-MM-DD.md`, and pushes a one-line digest via Pushover. Read-only by design — Jess emits text only, the orchestrator never executes her output. Three-layer safety: allow-list filter on Jess's suggested shell commands, dangerous-pattern regex, secret-pattern filter on both disk report and mempalace summary. Concurrency lock prevents manual + cron collision. Loki-unreachable is distinguished from a clean week (upfront probe + explicit `result="failed"` digest, never a green "all clean" lie). Summary indexed into mempalace under wing=`system`, room=`audit`. Default-OFF.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SELF_AUDIT_ENABLED` | `false` | Master flag. Default-OFF; flip to `true` in `.env` to enable both the daily cron job and `POST /api/self_audit/run`. |
+| `SELF_AUDIT_HOUR_UTC` | `7` | Hour of day (UTC) the daily cron fires. |
+| `SELF_AUDIT_LOOKBACK_HOURS` | `24` | How far back to query Loki for error/warn logs. |
+| `SELF_AUDIT_LOKI_URL` | `http://jupiter-amds.tail74fc4a.ts.net:3100` | Loki base URL. **Operator-controlled and trusted same as `MODEL_URL`** — there's no allow-list validator, only an `http(s)://` prefix check. Operators should not point this at attacker-controlled hosts. |
+| `SELF_AUDIT_MAX_CLUSTERS` | `30` | Max number of `(service, first-80-chars-of-message)` clusters kept after frequency-bucketing before sending to Jess. |
+| `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Directory for `YYYY-MM-DD.md` markdown reports. Host-mounted via the existing `/app/data` bind. |
+| `SELF_AUDIT_LLM_TIMEOUT_SEC` | `120` | Per-call timeout for the diagnose-each-cluster `call_model` invocation. |
+
 ## Monitoring
 
 | Variable | Default | Purpose |
