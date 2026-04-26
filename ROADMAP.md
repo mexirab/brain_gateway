@@ -64,6 +64,21 @@ All 14 ADHD-informed features (F-001 through F-014) are complete and deployed. E
 | F-013 | Pushover Push Bridge — parallel iOS push channel alongside F-011 ntfy; reuses HMAC ack/snooze routes; HTML-escaped reminder text | (integrated in `pushover_manager`) |
 | F-014 | Daily Self-Audit — 7am UTC Loki scan + Jess diagnosis + Pushover digest + markdown report; read-only safety story (allow-list + dangerous-pattern + secret-pattern filters); default-OFF | (background job in `jobs_self_audit.py`) |
 
+## vLLM Migration (Phase 2 → Phase 3)
+
+**Phase 2 trial complete (2026-04-26).** `vllm/vllm-openai:0.19.1` running `Lorbus/Qwen3.6-27B-int4-AutoRound` (AutoRound INT4 + MTP n=3 + flashinfer + fp8_e4m3 KV) on Helios GPU0 (RTX 5090, 32 GB) hit:
+
+| Workload | vLLM tps | × llama.cpp baseline (~50 tps) |
+|----------|---------:|-------------------------------:|
+| short_gen narrative (200 tok) | 130.8 | 2.6× |
+| mid_mix narrative (500 tok) | 121.1 | 2.4× |
+| long_prompt warm (64 tok @ 6.5K ctx) | 78.0 | 1.6× |
+| code structured (1000 tok) | 151.0 | 3.0× |
+
+Max practical context: **153,600 tokens** at `--gpu-memory-utilization 0.93`. Full 256K requires vLLM 0.19.2+ (unmerged KV-calc fix). All decision-criteria gates passed: TG ≥ 1.5× ✅, tool-call parsing ✅, context expansion to ≥128K ✅.
+
+**Phase 3 plan:** Plan B — vLLM solo on GPU1 RTX PRO 5000 (~32 / 48 GB), voice services (qwen-tts, parakeet-stt) repinned from GPU1 → GPU0 (~15 / 32 GB) alongside the coder. Status: **ungated, awaiting maintenance window.** See [docs/VLLM_PHASE_3_PLAN.md](docs/VLLM_PHASE_3_PLAN.md).
+
 ## Known Issues / TODOs
 
 | Issue | Priority | Notes |

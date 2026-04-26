@@ -56,7 +56,7 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Code agent (Qwen3-Coder-Next 80B/3B MoE) | 8082 | http://10.0.0.195:8082/v1 |
 | Expert model (Qwen3-32B Q4_K_M) | 8084 | http://10.0.0.58:8084/v1 |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
-| STT (Whisper) | 8003 | http://10.0.0.195:8003 |
+| STT (Parakeet TDT v3) | 8003 | http://10.0.0.195:8003 |
 | Pi-hole (Jupiter primary) | 53/8053 | http://10.0.0.248:8053/admin |
 | Pi-hole (Saturn secondary) | 53/8053 | http://10.0.0.58:8053/admin |
 | Grafana (Jupiter) | 3000 | http://10.0.0.248:3000/d/brain-gateway-overview |
@@ -228,8 +228,9 @@ This is a **load-on-demand router**. Read the specific doc when the task touches
 | `docs/FRONTEND.md` | dashboard pages, widgets, YNAB finance, API proxy pattern |
 | `docs/WORKOUTS_AND_MEALS.md` | Workout generator adaptive logic, meal photo flow, API endpoints, env vars |
 | `docs/MODE_ROUTER.md` | intent classification (explainer/mirror/counterbalance/challenge/baseline) |
-| `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG host setup, temperature monitoring, kiosk config |
+| `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG host setup, GPU drivers, temperature monitoring, kiosk config |
 | `docs/REMOTE_DEV.md` | remote dev workflow (mosh + tmux, jdev alias, git sync) |
+| `docs/VLLM_PHASE_3_PLAN.md` | vLLM cutover plan: GPU layout, systemd diffs, readiness checklist (post Phase 2 trial) |
 | `docs/TRAINING_CORPUS.md` | working on fine-tune data pipelines, debugging missing conversation data, or changing the drain schedule |
 | `monitoring/README.md` | Prometheus, Grafana, Loki — scrape targets, dashboard generator, alerts |
 | `monitoring/grafana/dashgen/` | editing dashboards (Python generator; don't hand-edit the JSON) |
@@ -284,4 +285,6 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - **Selfcare <-> routine bridge (symmetric):** `selfcare_log` fires `_maybe_advance_routine_for_action` fire-and-forget; if the active routine's current step matches the logged action (keyword map for medication/meal/water/movement), it calls `advance_step("done")`. Reverse direction now works too: `routine_manager.advance_step("done")` calls `selfcare_manager.mark_selfcare_from_routine_step(step)`, which dispatches to `record_medication_logged`/`record_meal_logged`/`record_hydration_logged`/`record_movement_logged` based on the same keyword inference. Routine-sourced medication logging sets the generic `last_med_confirmation["medication"]` key unconditionally (routine labels like `'routine:meds'` can't be window-mapped). Only fires on `"done"`, never on `"skip"`/auto-end `"stop"`. Workout `log_set` also calls `record_movement_logged(f"set:{exercise_name}")` — closes the "sitting 274 min while at gym" gap. Both bridges wrapped in try/except with `logger.error(exc_info=True)`; never block the primary write.
 - **Helios pihole + nginx model-server removed from compose 2026-04-26.** Production Pi-holes run on Jupiter (primary) + Saturn (secondary); orchestrator already pointed `PIHOLE_URLS` at those two. The model-server was an unfinished "Hey Jess" custom wake word file server — files remain in `/opt/gateway_mvp/models/` (`hey_jess.tflite`, `hey_jess.json`) for when the feature is finished. To re-enable: change `SERVICE_MODEL_SERVER_PORT` to a non-conflicting value (8080 collides with llama-server), uncomment the wake-word block in `models/atom-echo-jess.yaml:171`, reflash the ATOM Echo via ESPHome. `pihole-etc` and `pihole-dnsmasq` named volumes still exist on disk until manually removed. Promtail-helios scrape regex narrowed to `'/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|nebula-sync)'` (dropped `model-server` and `pihole`).
 - **ollama disabled on Jupiter + Saturn 2026-04-26.** `systemctl stop && systemctl disable` on both 10.0.0.248 and 10.0.0.58 — both were running with 0 models loaded. No tool routes through ollama; this was leftover from earlier experimentation.
+- **STT engine swap 2026-04-26 — Whisper -> Parakeet (port 8003).** `whisper-stt.service` stopped + disabled; `parakeet-stt.service` active and enabled (model: `nvidia/parakeet-tdt-0.6b-v3`, ~6.3 GB on GPU1, English-only, ~10× faster than Whisper medium with lower WER). Same port 8003, identical OpenAI-compatible API surface (`/health`, `/transcribe`, `/v1/audio/transcriptions`) — orchestrator `STT_URL` unchanged. Pinned to GPU1 via `CUDA_VISIBLE_DEVICES=1` + `PARAKEET_DEVICE=cuda:0`. Wrapper: `tts/stt_server_parakeet.py`, unit: `tts/parakeet-stt.service`. Wyoming Whisper bridge (port 10300, HA voice pipeline) is separate and unchanged. See `docs/VOICE_AND_TTS.md`.
+- **vLLM Phase 2 trial complete 2026-04-26.** `vllm/vllm-openai:0.19.1` running `Lorbus/Qwen3.6-27B-int4-AutoRound` (AutoRound INT4 + MTP n=3 + flashinfer + fp8_e4m3 KV) hit 121–151 tps across narrative/code workloads (2.4–3.0× the llama.cpp 50-tps baseline) at 153,600-token max practical context. All decision-criteria gates passed. Phase 3 plan ungated, awaiting maintenance window — see `docs/VLLM_PHASE_3_PLAN.md`.
 

@@ -58,6 +58,12 @@ Server closet temperature monitoring with dashboard widget, TTS alerts, and Graf
 
 **HA sensors used:** `sensor.closet_temperature`, `sensor.kitchen_temperature`
 
+## Helios GPU Drivers
+
+NVIDIA driver baseline: **580+ required for vLLM 0.19+ on Blackwell sm_100** (RTX PRO 5000 / 5090). vLLM 0.19's CUDA 12.9 forward-compatibility shim does not work on driver 570 — it surfaces as "Error 804: forward compatibility was attempted on non supported HW."
+
+Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` installer) to `580.126.09` (`nvidia-driver-580-server-open` from Ubuntu noble-security). Method: surgical `.run` uninstall → unhold + purge PPA-held `libnvidia-*-570` packages → `apt install nvidia-driver-580-server-open`. DKMS rebuilt modules for kernel 6.8.0-60-generic. Primary LLM throughput unchanged within run-to-run noise (50.1/48.9/49.5 vs pre-upgrade 49.4/48.2/48.1 tps).
+
 ## Performance Notes
 
 - Shared `httpx.AsyncClient` (`_http`) reused across all requests — init at startup, closed at shutdown

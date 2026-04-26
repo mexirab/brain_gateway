@@ -217,12 +217,14 @@ _announce_voice(text, speaker=None)
 
 ## TTS / STT (Helios, GPU1 RTX PRO 5000 Blackwell)
 
-Both TTS and STT run on Helios as systemd services, pinned to GPU1 alongside the primary LLM (Qwen3.5-27B). They share GPU1 via their respective env vars (`QWEN_TTS_DEVICE=cuda:1`, `WHISPER_DEVICE=cuda:1`).
+Both TTS and STT run on Helios as systemd services, pinned to GPU1 alongside the primary LLM (Qwen3.5-27B). TTS pins via `QWEN_TTS_DEVICE=cuda:1`; Parakeet STT uses `CUDA_VISIBLE_DEVICES=1` + `PARAKEET_DEVICE=cuda:0` (hides GPU0 to keep NeMo from OOM'ing against the code agent).
 
 ```
-qwen-tts    (port 8002) - Jessica voice clone (Qwen3-TTS-1.7B-Base)
-whisper-stt (port 8003) - OpenAI-compatible (Whisper medium)
+qwen-tts     (port 8002) - Jessica voice clone (Qwen3-TTS-1.7B-Base)
+parakeet-stt (port 8003) - OpenAI-compatible (Parakeet TDT v3, since 2026-04-26)
 ```
+
+The Wyoming bridge (`wyoming-faster-whisper`, port 10300) used by the HA voice pipeline is a separate process and was not part of the STT engine swap.
 
 **TTS pacing pipeline:**
 ```
