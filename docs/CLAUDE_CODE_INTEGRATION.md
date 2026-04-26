@@ -45,7 +45,7 @@ Example user-facing phrases:
 
 ## Code agent integration
 
-`orchestrator/code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt. This means when Jess delegates a coding task to the local Qwen2.5-Coder-32B agent, the agent already knows what Claude Code has been working on and won't step on in-flight work.
+`orchestrator/code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt. This means when Jess delegates a coding task to the local Qwen3-Coder-Next 80B/3B MoE agent (Helios GPU0 + RAM-spilled experts, port 8082), the agent already knows what Claude Code has been working on and won't step on in-flight work.
 
 The injection happens transparently before every `code_agent` tool call. If no activity is found (e.g., hook not installed and JSONL files empty), the system prompt just omits the section rather than failing.
 

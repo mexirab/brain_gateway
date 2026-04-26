@@ -51,7 +51,7 @@ User Request → Orchestrator
 |---------|--------|
 | `tool_home_assistant()` | → `ha_client.call_service()` |
 | `tool_search_memory()` | → `rag_context()` |
-| `tool_ask_expert()` | → stub, returns "not available" (v7 unified loop handles all queries on the primary model) |
+| `tool_ask_expert()` | → `expert_agent.handle_ask_expert()` — one-shot blocking call to Qwen3-32B Thinking on Saturn 3090 (port 8084). Auto-disabled if `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` empty. Circuit breaker after `EXPERT_CIRCUIT_BREAKER_FAILURES` failures. |
 | `tool_update_data()` | → `data_manager.handle_update_data()` |
 | `tool_set_reminder()` | → APScheduler + TTS + HA notification |
 | `tool_cancel_reminder()` | → Remove pending reminder by ID |
@@ -211,7 +211,7 @@ _announce_voice(text, speaker=None)
     → ESPHome voice_assistant → Home Assistant
     → Wyoming Whisper STT (Jupiter :10300)
     → HA Conversation Agent → Orchestrator :8888
-    → Wyoming Jessica TTS bridge (:10301) → Uranus TTS :8002
+    → Wyoming Jessica TTS bridge (:10301) → Helios TTS :8002
     → Speaker output
 ```
 

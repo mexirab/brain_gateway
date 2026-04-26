@@ -29,8 +29,9 @@ open http://localhost
 │        ├─► ChromaDB (RAG)                                 │
 │        ├─► Home Assistant                                 │
 │        ├─► TTS (Qwen3-TTS) / STT (Whisper)                │
-│        ├─► Code agent (Qwen2.5-Coder-32B on GPU0)         │
-│        └─► Vision model (Saturn, Qwen2.5-VL-7B)           │
+│        ├─► Code agent (Qwen3-Coder-Next 80B/3B MoE, GPU0) │
+│        ├─► Expert reasoner (Saturn 3090, Qwen3-32B :8084) │
+│        └─► Vision model (Saturn 3080, Qwen3-VL-8B :8010)  │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -40,10 +41,10 @@ open http://localhost
 
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
-| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Brain gateway, Docker host, Primary LLM (Qwen3.5-27B on PRO 5000), TTS + STT (PRO 5000), Code agent (Qwen2.5-Coder-32B on RTX 5090) |
+| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Brain gateway, Docker host, Primary LLM (Qwen3.5-27B on PRO 5000), TTS + STT (PRO 5000), Code agent (Qwen3-Coder-Next 80B/3B MoE on RTX 5090 + RAM-spilled experts) |
 | Jupiter | 10.0.0.248 | - | Pi-hole primary, monitoring stack (Prometheus, Grafana, Loki, Blackbox), nebula-sync, Conjure API |
-| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (Qwen2.5-VL-7B), Pi-hole secondary |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | ComfyUI / Conjure |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (Qwen3-VL-8B-Instruct on 3080), Expert reasoning model (Qwen3-32B Q4_K_M on 3090, port 8084), Pi-hole secondary |
+| Uranus | 10.0.0.173 | 2x RTX 5080 | Currently offline (hardware removed 2026-04-26 for troubleshooting) |
 | HA | 10.0.0.106 | - | Home Assistant |
 
 ## Features

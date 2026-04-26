@@ -142,7 +142,7 @@ ssh labadmin@10.0.0.195 "sudo systemctl restart llama-server"
 
 ### Test TTS with Jessica voice
 ```bash
-curl -X POST http://10.0.0.173:8002/tts \
+curl -X POST http://10.0.0.195:8002/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "Good morning Nadim!", "voice": "jessica"}' \
   --output test.wav
@@ -158,7 +158,7 @@ ssh labadmin@10.0.0.195 "journalctl -u qwen-tts --no-pager -n 50"
 
 ### Load a new voice clone
 ```bash
-curl -X POST http://10.0.0.173:8002/voices/load \
+curl -X POST http://10.0.0.195:8002/voices/load \
   -H "Content-Type: application/json" \
   -d '{
     "name": "jessica",
@@ -215,9 +215,9 @@ curl -s http://localhost:8888/health | jq '.rag_documents'
 
 ---
 
-## Voice Clone Config (Uranus)
+## Voice Clone Config (Helios)
 
-Location: `~/tts-voices/voices.json`
+Location on Helios: `~/tts-voices/voices.json`
 
 ```json
 {

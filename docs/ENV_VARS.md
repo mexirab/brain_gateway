@@ -18,6 +18,20 @@ For the authoritative template, see `.env.example` at the repo root.
 | `MODEL_START_CMD` | — | Command to start model server via SSH |
 | `MODEL_STOP_CMD` | — | Command to stop model server via SSH |
 
+## Expert reasoning model (`ask_expert` tool)
+
+One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 8084 via the `expert-model` Docker container, image `ghcr.io/ggml-org/llama.cpp:server-cuda`). Used by `query_budget` analyze-mode synthesis and any future hard-reasoning task. Auto-disabled (handler returns a short "disabled" string) when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `EXPERT_ENABLED` | `false` | Master flag. When false, `ask_expert` returns a disabled message and `query_budget` analyze-mode falls back to the surface-level `data` block. |
+| `EXPERT_MODEL_URL` | (empty) | Expert endpoint, e.g. `http://10.0.0.58:8084/v1`. |
+| `EXPERT_MODEL_NAME` | `default` | Model name passed to llama-server's OpenAI-compatible API. |
+| `EXPERT_TIMEOUT_SECONDS` | `180` | Per-call timeout. Real latency is 30-150s. |
+| `EXPERT_MAX_TOKENS` | `8000` | Max output tokens. Set high enough that real reasoning completes — there is no thinking-budget lever in llama-server for Qwen3, and a low cap yields empty `content`. |
+| `EXPERT_CIRCUIT_BREAKER_FAILURES` | `3` | Consecutive failures before the breaker opens. |
+| `EXPERT_CIRCUIT_BREAKER_COOLDOWN_SECONDS` | `120` | Open-state cooldown before half-open retry. |
+
 ## MemPalace (unified memory)
 
 | Variable | Default | Purpose |

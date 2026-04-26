@@ -27,7 +27,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "TTS service (Uranus) is down"
+          summary: "TTS service (Helios) is down"
           description: "Jessica TTS has not responded for 5 minutes. Voice output unavailable."
 
       - alert: STTDown
@@ -36,7 +36,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "STT service (Uranus) is down"
+          summary: "STT service (Helios) is down"
           description: "Whisper STT has not responded for 5 minutes. Voice input unavailable."
 
       # -- Error Rates ----------------------------------------------------------

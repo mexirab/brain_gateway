@@ -30,7 +30,7 @@ scrape_configs:
     relabel_configs:
       # Keep only Brain Gateway containers — skip noisy or irrelevant ones
       - source_labels: ['__meta_docker_container_name']
-        regex: '/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|model-server|nebula-sync|pihole)'
+        regex: '/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|nebula-sync)'
         action: keep
 
       - source_labels: ['__meta_docker_container_name']

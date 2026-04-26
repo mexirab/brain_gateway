@@ -385,6 +385,16 @@ Returns the full workout plan as text (model retains it in context for follow-up
 - `tags` (array of strings, optional): Added to `PAPERLESS_DEFAULT_TAGS`. Missing tags are created by Paperless if the server setting allows; otherwise ignored.
 - File read uses `asyncio.to_thread` to avoid blocking the event loop. Size cap enforced before `read_bytes()`. Auto-disabled bridge surfaces as a structured "skipped" tool result rather than raising.
 
+### ask_expert
+```json
+{"question": "Why might my 2025 gaming spend have spiked in November?"}
+```
+- `question` (string, required): A self-contained question. The expert (Qwen3-32B Thinking on Saturn 3090, port 8084) is stateless — pass all needed context in the question.
+- One-shot, blocking. Latency 30-150s in practice; 180s timeout. The primary should warn the user before invoking.
+- llama.cpp `--jinja` mode separates `message.content` (final answer) from `message.reasoning_content` (the `<think>` trace); only the final content is returned.
+- Auto-disabled when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty — returns a short string explaining the disabled state instead of raising. Circuit breaker opens after `EXPERT_CIRCUIT_BREAKER_FAILURES` (default 3) consecutive failures, half-opens after `EXPERT_CIRCUIT_BREAKER_COOLDOWN_SECONDS` (default 120s).
+- Metrics: `bgw_expert_call_total{result}`, `bgw_expert_call_latency_seconds`, `bgw_expert_circuit_open` (gauge), `bgw_expert_reasoning_tokens` (histogram).
+
 ### query_budget
 ```json
 {"question_type": "analyze", "analysis_question": "What patterns stood out in my 2025 gaming spend?", "year": 2025, "category": "Gaming"}

@@ -40,8 +40,8 @@ Redundant Pi-hole v6 pair synced via Nebula Sync. Jupiter is primary, Saturn is 
 | Admin UI | http://10.0.0.248:8053/admin | http://10.0.0.58:8053/admin |
 | DNS | 10.0.0.248:53 | 10.0.0.58:53 |
 | Upstream | 8.8.8.8, 8.8.4.4 | 8.8.8.8, 8.8.4.4 |
-| Docker project | `gateway_mvp` | `pihole` |
-| Compose file | `docker-compose.yml` | `saturn/docker-compose.pihole.yml` |
+| Docker project | (runs on Jupiter directly, not in this repo's compose) | `pihole` |
+| Compose file | (not in `gateway_mvp/docker-compose.yml` — the local Helios pihole was removed 2026-04-26) | `saturn/docker-compose.pihole.yml` |
 
 **DHCP:** Disabled on both Pi-holes. DHCP served by Orbi router with static reservations for all cluster nodes. Pi-holes handle DNS only.
 

@@ -2,14 +2,14 @@
 # ========================================
 # Configuration for M5Stack ATOM Echo with "Hey Jess" wake word
 #
-# Architecture:
+# Architecture (v7 unified):
 #   "Hey Jess" → ATOM Echo (microWakeWord on-device)
 #             → Home Assistant (Wyoming)
-#             → Whisper STT (Uranus:8003)
-#             → Brain Gateway (:8888)
-#             → Nemotron-8B (Saturn:8001)
-#             → Jessica TTS (Uranus:8002)
-#             → ATOM Echo speaker
+#             → Wyoming Whisper STT bridge (Helios:10300 → :8003)
+#             → Brain Gateway orchestrator (Helios:8888)
+#             → Qwen3.5-27B unified loop (Helios GPU1, primary model)
+#             → Wyoming Jessica TTS bridge (Helios:10301 → :8002)
+#             → ATOM Echo speaker (or Google speakers group)
 #
 # Prerequisites:
 # 1. ATOM Echo flashed with ESPHome (atom_echo.yaml)
@@ -26,14 +26,14 @@
 # Add TWO integrations:
 #
 # 1. Speech-to-Text (Whisper):
-#    - Host: 10.0.0.173
-#    - Port: 8003
-#    - Name: Whisper STT (Uranus)
+#    - Host: 10.0.0.195
+#    - Port: 10300        # Wyoming bridge port; wraps the underlying HTTP STT on :8003
+#    - Name: Whisper STT (Helios)
 #
 # 2. Text-to-Speech (Jessica/Qwen3):
-#    - Host: 10.0.0.173
-#    - Port: 8002
-#    - Name: Jessica TTS (Uranus)
+#    - Host: 10.0.0.195
+#    - Port: 10301        # Wyoming bridge port; wraps the underlying HTTP TTS on :8002
+#    - Name: Jessica TTS (Helios)
 
 # =============================================================================
 # STEP 2: Create Voice Assistant Pipeline (via Home Assistant UI)
@@ -45,8 +45,8 @@
 #   Name: Jess (Brain Gateway)
 #   Language: English
 #   Conversation agent: Home Assistant (or Brain Gateway custom agent)
-#   Speech-to-text: Whisper STT (Uranus)
-#   Text-to-speech: Jessica TTS (Uranus)
+#   Speech-to-text: Whisper STT (Helios)
+#   Text-to-speech: Jessica TTS (Helios)
 #
 # After saving:
 # 1. Go to Settings > Devices & Services

@@ -38,10 +38,10 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
-| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Brain gateway + Docker host**, Primary LLM: Qwen3.5-27B (GPU1 RTX PRO 5000, port 8080), TTS + STT (GPU1), Code agent: Qwen2.5-Coder-32B (GPU0 RTX 5090, port 8082), always-on |
+| Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Brain gateway + Docker host**, Primary LLM: Qwen3.5-27B (GPU1 RTX PRO 5000, port 8080), TTS + STT (GPU1), Code agent: Qwen3-Coder-Next 80B/3B MoE Q4_K_XL (GPU0 RTX 5090 + system RAM via `-ot .ffn_.*_exps.=CPU`, port 8082), always-on |
 | Jupiter | 10.0.0.248 | jupiter.tail74fc4a.ts.net | - | **Pi-hole primary + Monitoring host** (Prometheus, Grafana, Loki, Promtail, Blackbox exporter), nebula-sync, Conjure API |
-| Saturn | 10.0.0.58 | - | RTX 3080 (10GB) + RTX 3090 (24GB) | Vision model (RTX 3080, Qwen3-VL-8B-Instruct Q4_K_M), Pi-hole secondary. RTX 3090 currently idle. |
-| Uranus | 10.0.0.173 | - | 2x RTX 5080 | ComfyUI/Conjure (GPU1) |
+| Saturn | 10.0.0.58 | - | RTX 3080 (10GB) + RTX 3090 (24GB) | Vision model (Qwen3-VL-8B-Instruct Q4_K_M, RTX 3080, port 8010), Expert reasoning model (Qwen3-32B Q4_K_M, RTX 3090, port 8084 via `expert-model` docker container), Pi-hole secondary |
+| Uranus | 10.0.0.173 | - | 2x RTX 5080 | **Currently offline** — hardware physically removed 2026-04-26 for troubleshooting. Was: ComfyUI/Conjure on GPU1. Conjure API now lives on Jupiter. |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
@@ -53,7 +53,8 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Open WebUI (HTTP) | 80 | http://10.0.0.195 |
 | Orchestrator | 8888 | http://10.0.0.195:8888 |
 | Primary LLM (Qwen3.5-27B) | 8080 | http://10.0.0.195:8080/v1 |
-| Code agent (Qwen2.5-Coder-32B) | 8082 | http://10.0.0.195:8082/v1 |
+| Code agent (Qwen3-Coder-Next 80B/3B MoE) | 8082 | http://10.0.0.195:8082/v1 |
+| Expert model (Qwen3-32B Q4_K_M) | 8084 | http://10.0.0.58:8084/v1 |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
 | STT (Whisper) | 8003 | http://10.0.0.195:8003 |
 | Pi-hole (Jupiter primary) | 53/8053 | http://10.0.0.248:8053/admin |
@@ -109,11 +110,12 @@ All tools are called directly by the single model in one agentic loop.
 | check_system | System diagnostics: logs, health, recent errors |
 | finance_status | Budget, spending, XP/levels from YNAB integration |
 | analyze_image | Re-analyze or ask follow-up questions about a shared image |
+| ask_expert | Delegate a HARD reasoning task to the expert model (Qwen3-32B on Saturn RTX 3090, port 8084). Used by `query_budget` analyze-mode synthesis. See `orchestrator/expert_agent.py`. |
 | shopping_list | Add/check/remove items from shopping/grocery lists |
 | document_vault | Structured doc storage with semantic search (list/create/read/update/delete) |
 | paperless_save | Push a file from `/app/data/paperless_inbox/` to Paperless-ngx for OCR + auto-tagging (F-012) |
 | check_claude_activity | Read what Claude Code has been working on — recent turns, current session, files touched |
-| code_agent | Delegate a coding task to the Qwen2.5-Coder-32B agent on Helios GPU0 |
+| code_agent | Delegate a coding task to the Qwen3-Coder-Next 80B/3B MoE agent on Helios GPU0 (port 8082) |
 | sleep_mode | Do Not Disturb: suppress all announcements until morning |
 | generate_workout | Generate today's adaptive gym plan (full-body / split based on recency); returns plan as text for context |
 | log_set | Log a completed exercise set (exercise, weight_lbs, reps, set_number) |
@@ -267,7 +269,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - Helios is always-on (no auto-shutdown); can be manually started/stopped via SSH
 - TTS uses Jessica McCabe voice clone (Qwen3-TTS) with sentence pause injection
 - Helios SSH: `labadmin@10.0.0.195` (LAN) or `labadmin@helios.tail74fc4a.ts.net` (Tailscale)
-- Uranus SSH (from Helios): `ssh labadmin@10.0.0.173`
+- Uranus SSH (from Helios): `ssh labadmin@10.0.0.173` (currently unreachable — hardware removed 2026-04-26)
 - **Model history:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. `llama-server-moe.service` is disabled but the unit file remains on disk as historical reference.
 - **Tool result cap:** unified loop enforces 8000-char cap per tool result (~2000 tokens). Tools that return large blobs must summarize/paginate at the handler level. See `TECHNICAL_REFERENCE.md` → Tool Result Cap.
 - **Both promtails digest-pinned:** Jupiter promtail now matches Helios sidecar posture — same `grafana/promtail:3.4.2` digest, `cap_drop: ALL`, `no-new-privileges`, `-config.expand-env=true`. See `monitoring/README.md`.
@@ -280,4 +282,6 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - **Self-audit (F-014):** Daily 7am UTC scheduled job (`orchestrator/jobs_self_audit.py`) queries Loki on Jupiter for last-24h error/warn logs across Helios services (Docker containers + systemd units), buckets into clusters by `(service, first 80 chars)`, asks Jess to diagnose each cluster (single `call_model` invocation, no tool loop), and pushes a one-line digest via Pushover with the markdown report saved at `/app/data/self_audits/YYYY-MM-DD.md`. Three-layer safety: (1) allow-list filter on Jess's suggested shell commands, (2) dangerous-pattern regex (`rm`, `dd`, `mkfs`, `drop`, `truncate`, etc.), (3) secret-pattern filter applied to both disk report and mempalace summary. Read-only by design — Jess emits text only, the orchestrator never executes her output. Concurrency lock prevents manual `POST /api/self_audit/run` + cron collision (returns `result="busy"` HTTP 409). Loki-unreachable is distinguished from a clean week via an upfront probe + explicit `result="failed"` digest — never a green "all clean" lie. Summary indexed into mempalace under wing=`system`, room=`audit` so future Jess can recall recent operational state. Default-OFF: flip `SELF_AUDIT_ENABLED=true` in `.env`. `SELF_AUDIT_LOKI_URL` is operator-controlled and trusted (same posture as `MODEL_URL` — only http(s) prefix check, no allow-list). Promtail-helios sidecar now scrapes systemd journal for `llama-server`, `llama-server-coder`, `qwen-tts`, `brain-gateway` with a drop stage for qwen-tts health-check noise. Metrics: `bgw_self_audit_runs_total{result}`, `bgw_self_audit_clusters_total{severity}`, `bgw_self_audit_latency_seconds`, `bgw_self_audit_format_drift_total`. Env vars: `SELF_AUDIT_*` (see `docs/ENV_VARS.md`). Full spec: `jess-features/F-014-self-audit.md`.
 - **Paperless bridge (F-012):** `paperless_save` tool + `POST /api/paperless/upload` (bearer-gated, 100MB cap via `_LARGE_UPLOAD_PATHS`) push files to Paperless-ngx on Jupiter for OCR + auto-tagging. Staging inbox: `/app/data/paperless_inbox/` (host: `/opt/gateway_mvp/data/app/paperless_inbox/`). Handler guards against path traversal (`/`, `\`, `..`, absolute, null byte) and symlink escape via `Path.resolve() + relative_to(inbox)`. Auto-disables in `config.py` `validate_paperless_config` model_validator if `PAPERLESS_URL` is missing or `PAPERLESS_API_TOKEN` < 8 chars (logs error, never raises — matches F-011 pattern). `document_vault` is deliberately untouched and remains the home for typed/pasted text notes (mempalace-searchable); `paperless_save` handles files (Paperless-managed). Metrics: `bgw_paperless_upload_total{result,reason}`, `bgw_paperless_upload_latency_seconds`. Env vars: `PAPERLESS_*` (see `docs/ENV_VARS.md`). Full spec: `jess-features/F-012-paperless-bridge.md`.
 - **Selfcare <-> routine bridge (symmetric):** `selfcare_log` fires `_maybe_advance_routine_for_action` fire-and-forget; if the active routine's current step matches the logged action (keyword map for medication/meal/water/movement), it calls `advance_step("done")`. Reverse direction now works too: `routine_manager.advance_step("done")` calls `selfcare_manager.mark_selfcare_from_routine_step(step)`, which dispatches to `record_medication_logged`/`record_meal_logged`/`record_hydration_logged`/`record_movement_logged` based on the same keyword inference. Routine-sourced medication logging sets the generic `last_med_confirmation["medication"]` key unconditionally (routine labels like `'routine:meds'` can't be window-mapped). Only fires on `"done"`, never on `"skip"`/auto-end `"stop"`. Workout `log_set` also calls `record_movement_logged(f"set:{exercise_name}")` — closes the "sitting 274 min while at gym" gap. Both bridges wrapped in try/except with `logger.error(exc_info=True)`; never block the primary write.
+- **Helios pihole + nginx model-server removed from compose 2026-04-26.** Production Pi-holes run on Jupiter (primary) + Saturn (secondary); orchestrator already pointed `PIHOLE_URLS` at those two. The model-server was an unfinished "Hey Jess" custom wake word file server — files remain in `/opt/gateway_mvp/models/` (`hey_jess.tflite`, `hey_jess.json`) for when the feature is finished. To re-enable: change `SERVICE_MODEL_SERVER_PORT` to a non-conflicting value (8080 collides with llama-server), uncomment the wake-word block in `models/atom-echo-jess.yaml:171`, reflash the ATOM Echo via ESPHome. `pihole-etc` and `pihole-dnsmasq` named volumes still exist on disk until manually removed. Promtail-helios scrape regex narrowed to `'/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|nebula-sync)'` (dropped `model-server` and `pihole`).
+- **ollama disabled on Jupiter + Saturn 2026-04-26.** `systemctl stop && systemctl disable` on both 10.0.0.248 and 10.0.0.58 — both were running with 0 models loaded. No tool routes through ollama; this was leftover from earlier experimentation.
 

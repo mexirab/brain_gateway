@@ -14,7 +14,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers | Working |
 | Personal memory (RAG) | ChromaDB with 154 docs: profile, patterns, meds, projects | Working |
 | Web search | "What's the weather?" → SearXNG | Working |
-| Hybrid LLM | Helios (Qwen3-32B) for conversation, Nemotron 8B for tools | Working |
+| Unified LLM (v7) | Single Qwen3.5-27B on Helios GPU1 handles conversation + tools in one agentic loop; expert reasoning delegated to Qwen3-32B on Saturn 3090 via `ask_expert`; coding delegated to Qwen3-Coder-Next 80B/3B MoE on Helios GPU0 via `code_agent` | Working |
 | Google Calendar | "What's on my calendar?" → check/create events, proactive alerts | Working |
 | Phone calendar sync | iPhone Shortcut → all calendars (Outlook+Google+iCloud) merged on dashboard | Working |
 | Gmail monitoring | check_email/search_email tools + proactive polling (Primary inbox) | Working |
@@ -68,7 +68,6 @@ All 14 ADHD-informed features (F-001 through F-014) are complete and deployed. E
 
 | Issue | Priority | Notes |
 |-------|----------|-------|
-| Voice pipeline routes to Nemotron directly | High | Should route through orchestrator :8888 for hybrid Helios+Nemotron. Requires HA UI access to change conversation agent. |
 | TTS output on ATOM Echo tiny speaker | High | Should route to Google speakers group ("all speakers"). Requires HA UI. |
 | ATOM Echo S3R has no LED feedback | Low | S3R variant has no programmable RGB LED (GPIO35 conflicts with PSRAM). Hardware limitation. |
 
@@ -214,9 +213,8 @@ All 14 ADHD-informed features (F-001 through F-014) are complete and deployed. E
 6. ~~**Frontend dashboard**~~ — ✅ DONE (Architecture, Dashboard, Chat, Home, Finance pages)
 7. ~~**Gmail integration**~~ — ✅ DONE (check/search tools + proactive polling)
 8. ~~**Calendar unification**~~ — ✅ DONE (iPhone Shortcuts bridge for all calendars)
-9. **Voice pipeline routing** — Route through orchestrator for hybrid LLM quality (needs HA UI)
-10. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
-11. **Document ingestion** — builds on existing RAG, immediate utility
-12. **Proactive agent** — transforms from reactive to anticipatory
-13. **Vision/multimodal** — nice to have, depends on model capabilities
-14. **Jess avatar** — Animated talking head synced to TTS output
+9. **TTS to Google speakers** — Better audio output than tiny ATOM Echo speaker (needs HA UI)
+10. **Document ingestion** — builds on existing RAG, immediate utility
+11. **Proactive agent** — transforms from reactive to anticipatory
+12. **Vision/multimodal** — nice to have, depends on model capabilities
+13. **Jess avatar** — Animated talking head synced to TTS output

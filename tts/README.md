@@ -1,10 +1,13 @@
 # Voice Pipeline (TTS + STT)
 
-FastAPI servers for Qwen3-TTS and Whisper STT, running on Uranus (10.0.0.173).
+FastAPI servers for Qwen3-TTS and Whisper STT, running on Helios (10.0.0.195) as systemd services.
 
 **Deployment:**
-- GPU 0 (cuda:0): Qwen3-TTS on port 8002
-- GPU 1 (cuda:1): Whisper STT on port 8003
+- Both services pinned to GPU1 (RTX PRO 5000 Blackwell, 48GB) alongside the primary Qwen3.5-27B LLM
+- Qwen3-TTS on port 8002 (`QWEN_TTS_DEVICE=cuda:1`)
+- Whisper STT on port 8003 (`WHISPER_DEVICE=cuda:1`)
+
+Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whisper` (:10300) and `wyoming-jessica-tts` (:10301).
 
 ## TTS Features
 
@@ -20,13 +23,13 @@ FastAPI servers for Qwen3-TTS and Whisper STT, running on Uranus (10.0.0.173).
 - **OpenAI-compatible API** (`/v1/audio/transcriptions`)
 - **Configurable model size** (tiny, base, small, medium, large)
 
-## Quick Start (Uranus)
+## Quick Start (Helios)
 
 ### 1. Install Dependencies
 
 ```bash
-# SSH to Uranus
-ssh nadim@10.0.0.173
+# SSH to Helios
+ssh labadmin@10.0.0.195
 
 # Create virtual environment
 python -m venv ~/qwen-tts-env
@@ -91,7 +94,7 @@ sudo systemctl start qwen-tts whisper-stt
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QWEN_TTS_MODEL` | (required) | Model path (use Base for cloning) |
-| `QWEN_TTS_DEVICE` | `cuda:0` | GPU device |
+| `QWEN_TTS_DEVICE` | `cuda:1` | GPU device (GPU1 RTX PRO 5000 Blackwell, shared with Qwen3.5-27B + Whisper STT) |
 | `QWEN_TTS_PORT` | `8002` | Server port |
 | `QWEN_TTS_DTYPE` | `bfloat16` | Model dtype |
 | `QWEN_TTS_FLASH_ATTN` | `false` | Use FlashAttention 2 (disabled by default) |
@@ -101,7 +104,7 @@ sudo systemctl start qwen-tts whisper-stt
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WHISPER_MODEL` | `base` | Model size (tiny, base, small, medium, large) |
-| `WHISPER_DEVICE` | `cuda:1` | GPU device (use GPU 1 alongside TTS on GPU 0) |
+| `WHISPER_DEVICE` | `cuda:1` | GPU device (GPU1 RTX PRO 5000 Blackwell, shared with Qwen3.5-27B + Qwen3-TTS) |
 | `WHISPER_PORT` | `8003` | Server port |
 
 ## API Endpoints
