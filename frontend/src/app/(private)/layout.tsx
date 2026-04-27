@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed } from 'lucide-react';
+import MobileNav from '@/components/layout/MobileNav';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -49,19 +50,8 @@ export default function PrivateLayout({
         </form>
       </aside>
 
-      {/* Mobile bottom nav */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-surface-raised border-t border-zinc-800 flex z-50">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className="flex-1 flex flex-col items-center gap-1 py-3 text-zinc-400 hover:text-white transition-colors"
-          >
-            <Icon size={20} />
-            <span className="text-xs">{label}</span>
-          </Link>
-        ))}
-      </nav>
+      {/* Mobile bottom nav (5 primary tabs + More sheet) */}
+      <MobileNav />
 
       {/* Main content */}
       <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">

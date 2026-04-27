@@ -379,3 +379,26 @@ export interface MealPhotoEstimate {
   meal?: Meal;
   error?: string;
 }
+
+// ---------- Selfcare state ----------
+export type SelfcareAction = 'medication' | 'meal' | 'water' | 'movement';
+
+export interface SelfcareEntry {
+  logged_at: string;
+  detail: string | null;
+}
+
+export interface SelfcareActionState {
+  logged_today: boolean;
+  count_today: number;
+  last_today: string | null;
+  last_ever: string | null;
+  entries: SelfcareEntry[];
+}
+
+export interface SelfcareTodayResponse {
+  ok?: boolean;
+  as_of: string;
+  today_date: string;
+  actions: Record<SelfcareAction, SelfcareActionState>;
+}

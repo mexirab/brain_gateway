@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { MessageSquare, Volume2, VolumeX } from 'lucide-react';
+import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
 import type { ChatMessage, RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
@@ -18,11 +18,15 @@ interface DisplayMessage {
   saved?: boolean; // already persisted to DB
 }
 
+const SIDEBAR_PREF_KEY = 'chat:sidebar-open';
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarReady, setSidebarReady] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastSeenIdRef = useRef<number | null>(null);
   const initRef = useRef(false);
@@ -35,6 +39,37 @@ export default function ChatPage() {
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { activeConvIdRef.current = activeConvId; }, [activeConvId]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Sidebar default: persisted preference, falling back to "open if the
+  // viewport is large enough that the rails won't crowd the chat" — closed
+  // on landscape phone (short height + sub-laptop width).
+  useEffect(() => {
+    let initial: boolean;
+    try {
+      const stored = localStorage.getItem(SIDEBAR_PREF_KEY);
+      if (stored === '1' || stored === '0') {
+        initial = stored === '1';
+      } else {
+        initial = window.matchMedia('(min-width: 768px) and (min-height: 600px)').matches;
+      }
+    } catch {
+      initial = false;
+    }
+    setSidebarOpen(initial);
+    setSidebarReady(true);
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_PREF_KEY, next ? '1' : '0');
+      } catch {
+        // ignore — preference simply won't persist
+      }
+      return next;
+    });
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -212,29 +247,44 @@ export default function ChatPage() {
 
   return (
     <div className="h-full flex" style={{ height: 'calc(100vh - 3rem)' }}>
-      {/* Conversation sidebar */}
-      <div className="hidden md:block">
-        <ChatSidebar
-          conversations={conversations}
-          activeId={activeConvId}
-          onSelect={loadConversation}
-          onNew={createNewChat}
-          onDelete={handleDelete}
-        />
-      </div>
+      {/* Conversation sidebar — collapsible. Hidden on mobile, toggleable on md+. */}
+      {sidebarReady && sidebarOpen && (
+        <div className="hidden md:block">
+          <ChatSidebar
+            conversations={conversations}
+            activeId={activeConvId}
+            onSelect={loadConversation}
+            onNew={createNewChat}
+            onDelete={handleDelete}
+          />
+        </div>
+      )}
 
       {/* Chat area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex items-center justify-between px-4 py-3">
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <MessageSquare size={20} className="text-indigo-400" />
-            {activeConvId
-              ? conversations.find((c) => c.id === activeConvId)?.title || 'Chat'
-              : 'New Chat'}
-          </h1>
+        <div className="flex items-center justify-between px-4 py-3 gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={toggleSidebar}
+              aria-label={sidebarOpen ? 'Hide conversation history' : 'Show conversation history'}
+              aria-expanded={sidebarOpen}
+              className="hidden md:inline-flex p-2 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors shrink-0"
+              title={sidebarOpen ? 'Hide history' : 'Show history'}
+            >
+              {sidebarOpen ? <PanelLeftClose size={18} aria-hidden /> : <PanelLeftOpen size={18} aria-hidden />}
+            </button>
+            <h1 className="text-xl font-bold flex items-center gap-2 min-w-0">
+              <MessageSquare size={20} className="text-indigo-400 shrink-0" />
+              <span className="truncate">
+                {activeConvId
+                  ? conversations.find((c) => c.id === activeConvId)?.title || 'Chat'
+                  : 'New Chat'}
+              </span>
+            </h1>
+          </div>
           <button
             onClick={() => setTtsEnabled(!ttsEnabled)}
-            className={`p-2 rounded-lg transition-colors ${
+            className={`p-2 rounded-lg transition-colors shrink-0 ${
               ttsEnabled
                 ? 'bg-indigo-500/20 text-indigo-400'
                 : 'bg-zinc-700/30 text-zinc-500 hover:text-zinc-300'

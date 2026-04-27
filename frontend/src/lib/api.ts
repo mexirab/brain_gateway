@@ -25,6 +25,7 @@ import type {
   MealsToday,
   MealHistoryResponse,
   MealPhotoEstimate,
+  SelfcareTodayResponse,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -225,6 +226,9 @@ export const api = {
     }),
   deleteMeal: (mealId: number) =>
     fetcher<{ ok: boolean }>(`/api/meals/${mealId}`, { method: 'DELETE' }),
+  // Selfcare state
+  selfcareToday: () => fetcher<SelfcareTodayResponse>('/api/selfcare/today'),
+
   uploadMealPhoto: async (file: File, autoLog = false, mealType?: string) => {
     const form = new FormData();
     form.append('file', file);

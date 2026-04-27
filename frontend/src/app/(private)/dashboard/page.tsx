@@ -6,6 +6,7 @@ import FinanceSnapshotCard from '@/components/dashboard/FinanceSnapshotCard';
 import TemperatureCard from '@/components/dashboard/TemperatureCard';
 import ProgressCard from '@/components/dashboard/ProgressCard';
 import AnnouncementHistoryCard from '@/components/dashboard/AnnouncementHistoryCard';
+import SelfcareTodayCard from '@/components/dashboard/SelfcareTodayCard';
 
 export default function DashboardPage() {
   return (
@@ -14,6 +15,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         <CalendarCard />
         <RemindersCard />
+        <SelfcareTodayCard />
         <FocusTimerCard />
         <ProgressCard />
         <AnnouncementHistoryCard />

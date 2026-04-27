@@ -806,6 +806,60 @@ async def get_temperatures():
 
 
 # ---------------------------------------------------------------------------
+# Selfcare state — what Jess has actually marked off in the database
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/selfcare/today")
+async def get_selfcare_today_endpoint():
+    """Return today's selfcare log + last-seen-ever, grouped by action.
+
+    Lets the dashboard verify whether Jess actually recorded meds/meal/water/
+    movement (and that the midnight reset is working).
+    """
+    from orchestrator.state_store import get_last_selfcare, get_selfcare_today
+
+    tracked_actions = ("medication", "meal", "water", "movement")
+    try:
+        today_rows = get_selfcare_today()  # all actions, today only, DESC
+        by_action: Dict[str, list] = {a: [] for a in tracked_actions}
+        for row in today_rows:
+            action = row.get("action")
+            if action in by_action:
+                by_action[action].append(
+                    {
+                        "logged_at": row.get("logged_at"),
+                        "detail": row.get("detail"),
+                    }
+                )
+
+        actions: Dict[str, Dict[str, Any]] = {}
+        for action in tracked_actions:
+            entries = by_action[action]
+            last_ever = get_last_selfcare(action)
+            actions[action] = {
+                "logged_today": len(entries) > 0,
+                "count_today": len(entries),
+                "last_today": entries[0]["logged_at"] if entries else None,
+                "last_ever": last_ever.isoformat() if last_ever else None,
+                "entries": entries,
+            }
+
+        return {
+            "ok": True,
+            "as_of": datetime.now().isoformat(),
+            "today_date": datetime.now().strftime("%Y-%m-%d"),
+            "actions": actions,
+        }
+    except Exception as e:
+        logger.error("[SELFCARE] /api/selfcare/today failed: %s", e, exc_info=True)
+        return JSONResponse(
+            {"ok": False, "error": "Selfcare read failed"},
+            status_code=500,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Auto-Learn endpoints
 # ---------------------------------------------------------------------------
 

@@ -88,6 +88,30 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 **Pushover push metrics (F-013).** `bgw_pushover_push_total{result,kind,reason}` counter + `bgw_pushover_push_latency_seconds{kind}` histogram. `kind` ∈ `{reminder, confirm}` (same split as ntfy). `reason` ∈ `{ok, http_4xx, http_5xx, timeout, connect_error, other, disabled, missing_user_key, missing_app_token, missing_credentials}` — lets Grafana distinguish "Pushover token revoked" (http_4xx) from "Pushover down" (http_5xx / connect_error / timeout) from "user turned feature off" (disabled). Reminder text is HTML-escaped via `html.escape(text, quote=False)` before embedding in the Pushover HTML body (prompt-injection defense — reminder text comes from the LLM via `set_reminder` and would otherwise render as tappable `<a href>`). Error bodies run through a credential-regex-strip before being logged.
 
+### Selfcare
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/selfcare/today` | Today's selfcare log + last-seen-ever timestamps for the 4 tracked actions (`medication`, `meal`, `water`, `movement`). Bearer-gated (NOT in `PUBLIC_PREFIXES`). Backed by existing `state_store.get_selfcare_today()` + `get_last_selfcare()` helpers — no new schema. |
+
+**Response shape:**
+
+```json
+{
+  "ok": true,
+  "as_of": "2026-04-27T14:30:00-05:00",
+  "today_date": "2026-04-27",
+  "actions": {
+    "medication": {"today_count": 1, "last_at": "2026-04-27T08:15:00-05:00", "entries": [{"id": 42, "logged_at": "...", "detail": "Adderall"}]},
+    "meal":       {"today_count": 2, "last_at": "...", "entries": [...]},
+    "water":      {"today_count": 0, "last_at": "2026-04-26T22:10:00-05:00", "entries": []},
+    "movement":   {"today_count": 3, "last_at": "...", "entries": [...]}
+  }
+}
+```
+
+On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.error`. Powers the dashboard `SelfcareTodayCard` (polls every 30s).
+
 ### Calendar & Email
 
 | Method | Path | Purpose |
