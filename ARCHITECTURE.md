@@ -217,7 +217,7 @@ _announce_voice(text, speaker=None)
 
 ## TTS / STT (Helios, GPU1 RTX PRO 5000 Blackwell)
 
-Both TTS and STT run on Helios as systemd services, pinned to GPU1 alongside the primary LLM (Qwen3.5-27B). TTS pins via `QWEN_TTS_DEVICE=cuda:1`; Parakeet STT uses `CUDA_VISIBLE_DEVICES=1` + `PARAKEET_DEVICE=cuda:0` (hides GPU0 to keep NeMo from OOM'ing against the code agent).
+Both TTS and STT run on Helios as systemd services, pinned to GPU1 alongside the code agent (`llama-server-coder`). The primary LLM (Lorbus/Qwen3.6-27B-int4-AutoRound via vLLM) lives on GPU0 RTX 5090 since the 2026-04-26 Phase 3 cutover. TTS pins via `QWEN_TTS_DEVICE=cuda:1`; Parakeet STT uses `CUDA_VISIBLE_DEVICES=1` + `PARAKEET_DEVICE=cuda:0` (hides GPU0 to keep NeMo from interfering with vLLM).
 
 ```
 qwen-tts     (port 8002) - Jessica voice clone (Qwen3-TTS-1.7B-Base)

@@ -16,13 +16,13 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
 
 **Current status:**
 - Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on Qwen3.5-27B (no Nemotron — that v6 hybrid path was removed)
+- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on Lorbus/Qwen3.6-27B-int4-AutoRound (vLLM, since 2026-04-26 Phase 3 cutover; was Qwen3.5-27B on llama.cpp). No Nemotron — that v6 hybrid path was removed.
 - TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
 - No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
 
 **Key components:**
 - **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
-- **Wake word manifest:** `hey_jess.json` lives in `/opt/gateway_mvp/models/`. Was served via an nginx `model-server` Docker container at `http://10.0.0.195:${SERVICE_MODEL_SERVER_PORT}/hey_jess.json` until 2026-04-26 when the unfinished service was removed (port 8080 collided with llama-server). Re-enable by uncommenting the wake-word block in `models/atom-echo-jess.yaml:171`, restoring the `model-server` entry in `docker-compose.yml` on a non-conflicting port, and reflashing via ESPHome.
+- **Wake word manifest:** `hey_jess.json` lives in `/opt/gateway_mvp/models/`. Was served via an nginx `model-server` Docker container at `http://10.0.0.195:${SERVICE_MODEL_SERVER_PORT}/hey_jess.json` until 2026-04-26 when the unfinished service was removed (port 8080 collided with the primary LLM, then llama-server, now vllm-primary). Re-enable by uncommenting the wake-word block in `models/atom-echo-jess.yaml:171`, restoring the `model-server` entry in `docker-compose.yml` on a non-conflicting port, and reflashing via ESPHome.
 - **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Helios)
 - **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol -> HTTP Jessica TTS on Helios
 - **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions

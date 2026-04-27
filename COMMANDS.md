@@ -120,9 +120,9 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
-## Helios Primary Model (Qwen3.5-27B)
+## Helios Primary Model (Lorbus/Qwen3.6-27B-int4-AutoRound via vLLM)
 
-Helios is always-on in v7. The primary model serves on port 8080 (llama-server on GPU1 RTX PRO 5000 Blackwell).
+Helios is always-on in v7. The primary model serves on port 8080 (`vllm-primary.service` running `vllm/vllm-openai:v0.19.1` on GPU0 RTX 5090, since the 2026-04-26 Phase 3 cutover).
 
 ### Check via API
 ```bash
@@ -132,9 +132,17 @@ curl -s http://10.0.0.195:8080/v1/models
 
 ### Manual start/stop (systemd on Helios, if needed)
 ```bash
-ssh labadmin@10.0.0.195 "sudo systemctl status llama-server"
-ssh labadmin@10.0.0.195 "sudo systemctl restart llama-server"
+ssh labadmin@10.0.0.195 "sudo systemctl status vllm-primary"
+ssh labadmin@10.0.0.195 "sudo systemctl restart vllm-primary"
+
+# Coder (Qwen3-Coder-Next 80B/3B MoE) on GPU1 since the Phase 3 cutover
+ssh labadmin@10.0.0.195 "sudo systemctl status llama-server-coder"
+
+# Rollback to the previous Qwen3.5-27B (llama-server) primary, idempotent
+ssh labadmin@10.0.0.195 "/home/labadmin/vllm-trial/rollback_phase3.sh"
 ```
+
+`llama-server.service` (the previous Qwen3.5-27B primary) is disabled but the unit file is retained on disk as a historical reference.
 
 ---
 

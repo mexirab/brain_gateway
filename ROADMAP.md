@@ -14,7 +14,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers | Working |
 | Personal memory (RAG) | ChromaDB with 154 docs: profile, patterns, meds, projects | Working |
 | Web search | "What's the weather?" → SearXNG | Working |
-| Unified LLM (v7) | Single Qwen3.5-27B on Helios GPU1 handles conversation + tools in one agentic loop; expert reasoning delegated to Qwen3-32B on Saturn 3090 via `ask_expert`; coding delegated to Qwen3-Coder-Next 80B/3B MoE on Helios GPU0 via `code_agent` | Working |
+| Unified LLM (v7) | Single Lorbus/Qwen3.6-27B-int4-AutoRound served by vLLM 0.19.1 on Helios GPU0 (RTX 5090) handles conversation + tools in one agentic loop; expert reasoning delegated to Qwen3-32B on Saturn 3090 via `ask_expert`; coding delegated to Qwen3-Coder-Next 80B/3B MoE on Helios GPU1 (RTX PRO 5000) via `code_agent` | Working |
 | Google Calendar | "What's on my calendar?" → check/create events, proactive alerts | Working |
 | Phone calendar sync | iPhone Shortcut → all calendars (Outlook+Google+iCloud) merged on dashboard | Working |
 | Gmail monitoring | check_email/search_email tools + proactive polling (Primary inbox) | Working |
@@ -64,9 +64,9 @@ All 14 ADHD-informed features (F-001 through F-014) are complete and deployed. E
 | F-013 | Pushover Push Bridge — parallel iOS push channel alongside F-011 ntfy; reuses HMAC ack/snooze routes; HTML-escaped reminder text | (integrated in `pushover_manager`) |
 | F-014 | Daily Self-Audit — 7am UTC Loki scan + Jess diagnosis + Pushover digest + markdown report; read-only safety story (allow-list + dangerous-pattern + secret-pattern filters); default-OFF | (background job in `jobs_self_audit.py`) |
 
-## vLLM Migration (Phase 2 → Phase 3)
+## vLLM Migration (Phase 2 → Phase 3) — DONE
 
-**Phase 2 trial complete (2026-04-26).** `vllm/vllm-openai:0.19.1` running `Lorbus/Qwen3.6-27B-int4-AutoRound` (AutoRound INT4 + MTP n=3 + flashinfer + fp8_e4m3 KV) on Helios GPU0 (RTX 5090, 32 GB) hit:
+**Phase 2 trial complete 2026-04-26.** `vllm/vllm-openai:0.19.1` running `Lorbus/Qwen3.6-27B-int4-AutoRound` (AutoRound INT4 + MTP n=3 + flashinfer + fp8_e4m3 KV) on Helios GPU0 (RTX 5090, 32 GB) hit:
 
 | Workload | vLLM tps | × llama.cpp baseline (~50 tps) |
 |----------|---------:|-------------------------------:|
@@ -77,7 +77,15 @@ All 14 ADHD-informed features (F-001 through F-014) are complete and deployed. E
 
 Max practical context: **153,600 tokens** at `--gpu-memory-utilization 0.93`. Full 256K requires vLLM 0.19.2+ (unmerged KV-calc fix). All decision-criteria gates passed: TG ≥ 1.5× ✅, tool-call parsing ✅, context expansion to ≥128K ✅.
 
-**Phase 3 plan:** Plan B — vLLM solo on GPU1 RTX PRO 5000 (~32 / 48 GB), voice services (qwen-tts, parakeet-stt) repinned from GPU1 → GPU0 (~15 / 32 GB) alongside the coder. Status: **ungated, awaiting maintenance window.** See [docs/VLLM_PHASE_3_PLAN.md](docs/VLLM_PHASE_3_PLAN.md).
+**Phase 3 cutover landed 2026-04-26 — Plan A, not Plan B.** A pre-cutover bench of Lorbus 27B on GPU1 (RTX PRO 5000) hit only 28–79% of the Phase 2 throughput recorded on GPU0 (the 5090 has higher memory bandwidth and more SMs); since the Phase 2 numbers were RTX 5090 numbers, moving to GPU1 would have given up the throughput win. Plan A keeps vLLM on the 5090 and instead repins the coder GPU0 → GPU1. Voice services (qwen-tts, parakeet-stt) stayed on GPU1 unchanged.
+
+**Final layout:**
+- **GPU0 RTX 5090 (32 GB):** `vllm-primary.service` (port 8080, Lorbus 27B INT4)
+- **GPU1 RTX PRO 5000 (48 GB):** `llama-server-coder.service` (port 8082) + `qwen-tts.service` (port 8002) + `parakeet-stt.service` (port 8003)
+
+`llama-server.service` disabled (unit retained on disk). `MODEL_NAME` and `FALLBACK_MODEL_NAME` updated to `qwen3.6-27b-int4`. Idempotent rollback at `/home/labadmin/vllm-trial/rollback_phase3.sh`. Forward-looking: when vLLM 0.19.2 + 256K context becomes worth pursuing, the primary must migrate to GPU1 (the 5090 can't hold Lorbus + 256K KV in 32 GB).
+
+See [docs/VLLM_PHASE_3_PLAN.md](docs/VLLM_PHASE_3_PLAN.md) → Outcome for the full landed config.
 
 ## Known Issues / TODOs
 

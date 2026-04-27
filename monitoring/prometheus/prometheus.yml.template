@@ -118,19 +118,19 @@ scrape_configs:
           service: 'tts'
           node: 'helios'
 
-      # STT (Whisper on Helios GPU1)
+      # STT (Parakeet TDT v3 on Helios GPU1)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_STT_PORT}/health']
         labels:
           service: 'stt'
           node: 'helios'
 
-      # Primary LLM (llama-server on Helios GPU1)
+      # Primary LLM (vllm-primary on Helios GPU0 — Lorbus/Qwen3.6-27B-int4-AutoRound, since 2026-04-26 Phase 3 cutover)
       - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
         labels:
           service: 'llama-primary'
           node: 'helios'
 
-      # Code agent (llama-server on Helios GPU0)
+      # Code agent (llama-server-coder on Helios GPU1 — repinned GPU0→GPU1 at Phase 3 cutover)
       - targets: ['http://${NODE_HELIOS_IP}:8082/v1/models']
         labels:
           service: 'llama-coder'

@@ -9,9 +9,9 @@ For the authoritative template, see `.env.example` at the repo root.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MODEL_URL` | — | Primary model endpoint (e.g. `http://10.0.0.195:8080/v1`) |
-| `MODEL_NAME` | — | Primary model name (e.g. `Qwen3.5-27B`) |
+| `MODEL_NAME` | — | Primary model name (current production: `qwen3.6-27b-int4` — Lorbus/Qwen3.6-27B-int4-AutoRound served by vLLM. Was `Qwen3.5-27B` until 2026-04-26 vLLM Phase 3 cutover.) |
 | `FALLBACK_MODEL_URL` | — | Fallback model endpoint (optional) |
-| `FALLBACK_MODEL_NAME` | — | Fallback model name (optional) |
+| `FALLBACK_MODEL_NAME` | — | Fallback model name (current production: `qwen3.6-27b-int4`; matches `MODEL_NAME` post Phase 3 cutover) |
 | `EMBEDDING_MODEL` | — | Embedding model for RAG indexing |
 | `MODEL_SERVER_IP` | — | SSH target for remote model start/stop |
 | `MODEL_SSH_USER` | — | SSH user for model server |

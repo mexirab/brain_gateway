@@ -209,12 +209,21 @@ async def run_unified_tool_loop(
     from orchestrator.orchestrator import call_model
     from orchestrator.tool_handlers import execute_tool
 
-    # Voice mode: reduce max_tokens for shorter responses (faster TTS)
-    # Keep thinking enabled — disabling it causes the model to skip tool calls
+    # Voice mode: reduce max_tokens for shorter responses (faster TTS) and
+    # disable Qwen3 thinking. With vLLM's reasoning parser, thinking gets
+    # extracted into a separate `reasoning` field — and on voice prompts
+    # Qwen3.6 emits ~700-2000 tokens of reasoning before producing any
+    # `content`, so a 1024 cap was being entirely consumed by reasoning,
+    # leaving raw_len=0 (empty replies). Disabling thinking via chat-template
+    # kwargs returns a direct answer; tool calls still fire (verified
+    # 2026-04-26 against Qwen3.6-27B).
     voice_extra = None
     if is_voice:
-        voice_extra = {"max_tokens": 512}
-        logger.info("[%s] Voice mode: max_tokens=512", label)
+        voice_extra = {
+            "max_tokens": 1024,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        logger.info("[%s] Voice mode: max_tokens=1024, thinking=off", label)
 
     # Build allowlist of valid tool names from the tools passed in
     valid_tool_names = {t["function"]["name"] for t in tools if "function" in t}

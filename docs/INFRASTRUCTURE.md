@@ -62,7 +62,18 @@ Server closet temperature monitoring with dashboard widget, TTS alerts, and Graf
 
 NVIDIA driver baseline: **580+ required for vLLM 0.19+ on Blackwell sm_100** (RTX PRO 5000 / 5090). vLLM 0.19's CUDA 12.9 forward-compatibility shim does not work on driver 570 — it surfaces as "Error 804: forward compatibility was attempted on non supported HW."
 
-Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` installer) to `580.126.09` (`nvidia-driver-580-server-open` from Ubuntu noble-security). Method: surgical `.run` uninstall → unhold + purge PPA-held `libnvidia-*-570` packages → `apt install nvidia-driver-580-server-open`. DKMS rebuilt modules for kernel 6.8.0-60-generic. Primary LLM throughput unchanged within run-to-run noise (50.1/48.9/49.5 vs pre-upgrade 49.4/48.2/48.1 tps).
+Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` installer) to `580.126.09` (`nvidia-driver-580-server-open` from Ubuntu noble-security). Method: surgical `.run` uninstall → unhold + purge PPA-held `libnvidia-*-570` packages → `apt install nvidia-driver-580-server-open`. DKMS rebuilt modules for kernel 6.8.0-60-generic.
+
+## Helios GPU Layout (post vLLM Phase 3, 2026-04-26)
+
+| GPU | Card | VRAM | Tenants |
+|-----|------|------|---------|
+| GPU0 | RTX 5090 | 32 GB | vLLM primary (`vllm-primary.service`, port 8080, Lorbus/Qwen3.6-27B-int4-AutoRound) |
+| GPU1 | RTX PRO 5000 Blackwell | 48 GB | Coder (`llama-server-coder.service`, port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL with MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`), TTS (`qwen-tts.service`, port 8002), STT (`parakeet-stt.service`, port 8003) |
+
+vLLM was kept on GPU0 (Plan A) because a pre-cutover bench showed Lorbus 27B on GPU1 hit only 28–79% of the Phase 2 throughput recorded on GPU0 — the PRO 5000 has lower memory bandwidth and fewer SMs than the 5090. Forward-looking: when vLLM 0.19.2 ships with the unmerged KV-calc fix and 256K context becomes feasible, the primary will need to migrate to GPU1 (the 5090's 32 GB can't hold Lorbus + 256K KV). See `docs/VLLM_PHASE_3_PLAN.md` → Outcome.
+
+Disabled units kept on disk as historical reference: `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
 
 ## Performance Notes
 
