@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-const PROTECTED_PATHS = ['/dashboard', '/chat', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture'];
+const PROTECTED_PATHS = ['/dashboard', '/chat', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings'];
 const COOKIE_NAME = 'brain_token';
 
 export function middleware(request: NextRequest) {
@@ -26,5 +26,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/chat/:path*', '/home/:path*', '/finance/:path*', '/announcements/:path*', '/shopping/:path*', '/documents/:path*', '/architecture/:path*'],
+  matcher: ['/dashboard/:path*', '/chat/:path*', '/home/:path*', '/finance/:path*', '/announcements/:path*', '/shopping/:path*', '/documents/:path*', '/architecture/:path*', '/settings/:path*'],
 };

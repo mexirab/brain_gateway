@@ -198,6 +198,48 @@ def rag_context(query: str, wing: str = "", room: str = "") -> str:
     return "\n".join(chunks) if chunks else ""
 
 
+def _resolve_tone(user_name: str, prof) -> str:
+    """Return the tone block for the system prompt.
+
+    - If the user disabled ADHD mode, swap in a neutral tone instruction
+      so the prompt stops asserting an ADHD-coaching frame.
+    - If `tone_preference` is set ("warm" | "balanced" | "direct"), use a
+      preset block keyed off that choice.
+    - Otherwise fall back to the legacy `get_tone_constraint(user)` block.
+    """
+    adhd_on = bool(getattr(prof, "adhd_mode", True))
+    tone_pref = (getattr(prof, "tone_preference", "") or "").strip().lower()
+
+    if not adhd_on:
+        return (
+            "TONE:\n"
+            f"- Be helpful and concise. Match {user_name}'s energy.\n"
+            "- Skip therapeutic framing unless explicitly asked."
+        )
+
+    presets = {
+        "warm": (
+            "TONE (warm):\n"
+            f"- Lead with empathy. Validate before redirecting.\n"
+            f"- Match {user_name}'s energy; never lecture."
+        ),
+        "balanced": (
+            "TONE (balanced):\n"
+            "- Mix warmth with directness. Acknowledge feelings briefly, then move to action.\n"
+            f"- Match {user_name}'s energy."
+        ),
+        "direct": (
+            "TONE (direct):\n"
+            "- Skip the warm-up. Lead with the answer or the next step.\n"
+            "- Don't soften or pad. Plain speech only."
+        ),
+    }
+    if tone_pref in presets:
+        return presets[tone_pref]
+
+    return get_tone_constraint(user_name)
+
+
 def get_unified_system_prompt(
     personal_context: str = "",
     mode: str = "explainer",
@@ -218,7 +260,7 @@ def get_unified_system_prompt(
     """
     user = profile.user_name
     assistant = profile.assistant_name
-    tone = get_tone_constraint(user)
+    tone = _resolve_tone(user, profile)
     mode_block = MODE_PROMPTS.get(mode, MODE_PROMPTS["explainer"])
 
     from orchestrator.task_decomposition import get_active_tasks_context

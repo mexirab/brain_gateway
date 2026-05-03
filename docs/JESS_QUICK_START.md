@@ -105,6 +105,15 @@ You don't need to do anything — nudges come to you via speakers every 15 minut
 
 Visit the dashboard to see everything at a glance: calendar, reminders, focus timer, progress tracking, announcement history, system health, and temperature monitoring.
 
+## Settings
+
+Visit `/settings` to tune things you used to need an env-var edit + restart for:
+
+- **Identity & Tone** — assistant name, your name, ADHD mode toggle, tone preset (warm / balanced / direct), timezone
+- **Selfcare Nudges** — turn each category (medication, meal, water, movement) on or off, set the interval, set the active hours
+- **Quiet Hours** — start/end + day-of-week filter (no more nudges on Sunday mornings if you don't want them)
+- **Recurring Reminders** — cron-based rules ("every weekday at 9am, take meds") that auto-materialize into Jess's normal reminder pipeline
+
 ## Tips
 
 - **One thing at a time.** Jess never gives you a list when one answer will do.

@@ -209,6 +209,7 @@ CALENDAR_ALERT_TIERS = settings.alert_tiers
 MORNING_BRIEFING_TIME = settings.morning_briefing_time
 MORNING_BRIEFING_ENABLED = settings.morning_briefing_enabled
 MORNING_BRIEFING_SPEAKER = settings.morning_briefing_speaker or profile.morning_briefing_speaker
+MORNING_BRIEFING_MIN_VOLUME = settings.morning_briefing_min_volume
 
 # ---------------------------------------------------------------------------
 # Temperature monitoring
@@ -338,6 +339,7 @@ _auto_learn_conversations: Dict[str, list] = {}
 # Routine scaffolding configuration (F-006)
 # ---------------------------------------------------------------------------
 ROUTINES_YAML_PATH = settings.routines_yaml_path
+ROUTINES_OVERRIDES_PATH = settings.routines_overrides_path
 ROUTINE_ENABLED = settings.routine_enabled
 ROUTINE_NUDGE_MAX = settings.routine_nudge_max
 ROUTINE_AUTO_SKIP = settings.routine_auto_skip

@@ -195,6 +195,25 @@ Responses are never cached. No local copy is persisted on Helios — Paperless o
 | POST | `/api/claude_code/turn` | Stop hook target — logs a completed Claude Code turn to the 7-day rolling buffer |
 | GET | `/api/claude_code/recent?minutes=120&limit=20` | List recent Claude Code turns for dashboards or the `check_claude_activity` tool |
 
+### Settings (`/api/config/*`)
+
+All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orchestrator/routes_config.py`. Every successful PUT/POST/DELETE writes a redacted before/after diff to the `config_changes` SQLite table via `config_writer.log_config_change(panel, before, after)`. YAML writes go through `config_writer.atomic_write_yaml()` (tmpfile + `os.replace` + fsync).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET    | `/api/config/identity` | Returns `{assistant_name, user_name, adhd_mode, tone_preference, timezone}`. Reads the merged base + overrides view of the user profile. |
+| PUT    | `/api/config/identity` | Partial update of the same shape. Writes to `USER_PROFILE_OVERRIDES_PATH` only (base is `:ro`). Calls `reload_profile()` to mutate the singleton in place. |
+| GET    | `/api/config/selfcare` | Returns `{categories: {medication: {...}, meal: {...}, water: {...}, movement: {...}}}`. |
+| PUT    | `/api/config/selfcare` | Partial `categories.*` merge. Writes to `SELFCARE_SCHEDULE_PATH` and calls `selfcare_schedule.reload_schedule()`. |
+| GET    | `/api/config/quiet_hours` | Returns `{start, end, days: ["mon", ...]}`. Source-of-truth shared with the Selfcare panel (lives in the same YAML). |
+| PUT    | `/api/config/quiet_hours` | Partial update of the same shape. Same write/reload path as selfcare. |
+| GET    | `/api/config/recurring_reminders` | Returns `{rules: [{id, text, cron_expression, target, days_of_week, enabled, ...}, ...]}`. |
+| POST   | `/api/config/recurring_reminders` | Create a rule: `{text, cron_expression, target, days_of_week, enabled}`. Cron validated via `croniter`. |
+| PUT    | `/api/config/recurring_reminders/{id}` | Partial update. |
+| DELETE | `/api/config/recurring_reminders/{id}` | Delete a rule. |
+
+**Recurring expansion job.** `recurring_reminders.expand_due_reminders()` runs every 5 min as APScheduler interval job `id="recurring_reminders_expand"` (registered in `orchestrator.py`). For each enabled rule it walks `croniter` forward (capped at 14 days lookahead), filters by `days_of_week`, materializes due rows into the existing one-shot `reminders` table for `deliver_reminder_job` to pick up, and auto-disables rules whose cron never fires (e.g. `0 0 30 2 *` — Feb 30). Metrics: `bgw_recurring_reminders_expanded_total`, `bgw_recurring_reminders_expand_errors_total`.
+
 ### HA Command Format
 
 ```json
@@ -444,6 +463,37 @@ Returns the full workout plan as text (model retains it in context for follow-up
   }
 }
 ```
+
+## SQLite Schema (`brain_state.db`)
+
+Defined in `orchestrator/state_store.py::SCHEMA_SQL`. Listing only the tables not covered elsewhere in this doc.
+
+### `recurring_reminders`
+
+CRUD source for the `/api/config/recurring_reminders` endpoints. Rows are read every 5 min by `expand_due_reminders()` and materialized into one-shot `reminders` rows for `deliver_reminder_job`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INTEGER PRIMARY KEY | Auto-increment rule id. |
+| `text` | TEXT NOT NULL | Reminder text (HTML-escaped before Pushover delivery — F-013). |
+| `cron_expression` | TEXT NOT NULL | Standard 5-field cron, validated with `croniter`. Impossible crons (e.g. `0 0 30 2 *`) are detected at expand time and the rule is auto-disabled. |
+| `target` | TEXT | Speaker/device target — same shape `set_reminder` uses. |
+| `days_of_week` | TEXT | Comma-separated `mon,tue,...` filter applied on top of the cron. Empty = all days. |
+| `enabled` | INTEGER | `1` enabled, `0` disabled. Set to `0` automatically on impossible crons. |
+| `last_expanded_at` | TEXT | ISO 8601 timestamp of the last successful expansion pass; used to dedupe materialized rows. |
+| `created_at` / `updated_at` | TEXT | ISO 8601 timestamps. |
+
+### `config_changes`
+
+Append-only audit log written by `config_writer.log_config_change(panel, before, after)`. Every successful PUT/POST/DELETE on `/api/config/*` adds one row. Sensitive fields are masked through `_redact()` before persistence.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INTEGER PRIMARY KEY | Auto-increment. |
+| `panel` | TEXT NOT NULL | One of `identity`, `selfcare`, `quiet_hours`, `recurring_reminders`. |
+| `before` | TEXT | Redacted JSON snapshot of the prior value. |
+| `after` | TEXT | Redacted JSON snapshot of the new value. |
+| `changed_at` | TEXT | ISO 8601 timestamp. |
 
 ## Environment Variables
 

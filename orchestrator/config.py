@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # -- Reminders / speakers (empty = skip TTS) ---------------------------------
     reminder_speaker: str = ""
     fallback_speaker: str = ""
+    # Writable shadow for the per-category speaker map written by the
+    # `/settings → Speakers` panel. Loader prefers this when present;
+    # missing categories fall back to reminder_speaker / morning_briefing_speaker
+    # / focus_audio_player as appropriate.
+    announcement_routes_path: str = "/app/data/announcement_routes.yaml"
 
     # -- Focus -------------------------------------------------------------------
     focus_audio_player: str = ""
@@ -102,6 +107,11 @@ class Settings(BaseSettings):
     morning_briefing_time: str = "07:00"
     morning_briefing_enabled: bool = False
     morning_briefing_speaker: str = ""
+    # Volume floor (0.0–1.0) the morning briefing forces on its target speaker
+    # before play_media. Defeats "speaker still at sleep-sound volume" — see
+    # the 2026-04-30 incident where the briefing played at volume_level=0.10.
+    # Set to 0 to disable the floor entirely.
+    morning_briefing_min_volume: float = 0.4
 
     # -- Email -------------------------------------------------------------------
     # Email-to-calendar autonomy is dormant by default. Implementation is
@@ -143,6 +153,9 @@ class Settings(BaseSettings):
     # NOTE: /app/data is a named Docker volume (finance-data); config files ship
     # from the repo and get bind-mounted into /app/config/ instead.
     routines_yaml_path: str = "/app/config/routines.yaml"
+    # Writable shadow that the settings page writes to. Loader prefers this
+    # when present; falls back to `routines_yaml_path` (read-only ship copy).
+    routines_overrides_path: str = "/app/data/routines.yaml"
     routine_enabled: bool = True
     routine_nudge_max: int = 3
     routine_auto_skip: bool = False

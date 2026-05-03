@@ -224,6 +224,31 @@ CREATE TABLE IF NOT EXISTS budget_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_budget_txn_dataset_date ON budget_transactions(dataset, txn_date);
 CREATE INDEX IF NOT EXISTS idx_budget_txn_category ON budget_transactions(dataset, category);
+
+CREATE TABLE IF NOT EXISTS recurring_reminders (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT 'both',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    days_of_week TEXT NOT NULL DEFAULT 'mon,tue,wed,thu,fri,sat,sun',
+    last_fired_at TEXT,
+    next_fire_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recurring_next_fire ON recurring_reminders(enabled, next_fire_at);
+
+CREATE TABLE IF NOT EXISTS config_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    changed_at TEXT NOT NULL,
+    panel TEXT NOT NULL,
+    diff_json TEXT,
+    changed_by TEXT NOT NULL DEFAULT 'user'
+);
+
+CREATE INDEX IF NOT EXISTS idx_config_changes_panel ON config_changes(panel, changed_at);
 """
 
 

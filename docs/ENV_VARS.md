@@ -67,6 +67,8 @@ One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 808
 
 ## Self-Care Nudges
 
+These env vars are bootstrap defaults. Once the runtime YAML at `SELFCARE_SCHEDULE_PATH` exists (created on first save from the `/settings` page Selfcare or Quiet Hours panel), `selfcare_manager._check_*` reads enabled/interval/active-hours/quiet-hours from the YAML and ignores the env-var defaults. The legacy hardcoded 9am–9pm meal window is gone — quiet hours additionally honor `is_quiet_day` (day-of-week filter).
+
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SELFCARE_ENABLED` | `true` | Enable self-care nudges |
@@ -75,6 +77,13 @@ One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 808
 | `MOVEMENT_INTERVAL` | `90` | Minutes between movement reminders |
 | `QUIET_HOURS_START` | `22:00` | No nudges after this |
 | `QUIET_HOURS_END` | `07:00` | No nudges before this |
+| `SELFCARE_SCHEDULE_PATH` | `/app/data/selfcare_schedule.yaml` | Runtime YAML written by the Selfcare + Quiet Hours panels. Loaded by `selfcare_schedule.load_schedule()`; hot-reloaded on every save via `reload_schedule()`. |
+
+## User profile overrides
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `USER_PROFILE_OVERRIDES_PATH` | `/app/data/user_profile_overrides.yaml` | Writable overlay merged on top of the base `/app/config/user_profile.yaml` (which is mounted `:ro`). The Identity panel writes here via `user_profile.save_profile_partial()`. Loader precedence: base + overrides + env. `reload_profile()` mutates the existing singleton in place so `shared.profile` consumers see updates without a restart. |
 
 ## Interruption Recovery
 
@@ -87,10 +96,17 @@ One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 808
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ROUTINES_YAML_PATH` | `/app/config/routines.yaml` | Routine definitions file |
+| `ROUTINES_YAML_PATH` | `/app/config/routines.yaml` | Read-only base routine definitions (mounted `:ro` from the repo). |
+| `ROUTINES_OVERRIDES_PATH` | `/app/data/routines.yaml` | Writable shadow written by the `/settings → Routines` panel via `routines_config.save_routines()`. Loader precedence: shadow → base. Power-user fields (`ha_action`, `fallback_label`, `fallback_threshold_minutes`, `include_calendar_summary`, `calendar_days_ahead`) are spliced back from the existing on-disk YAML on every save so the panel can't accidentally drop them. PUT triggers `reload_routines_and_reschedule()` which updates `routine_manager._routines` AND replaces the `routine_<id>` cron jobs in APScheduler so a time/day change takes effect without restart; deleted routines have their cron jobs removed. |
 | `ROUTINE_ENABLED` | `true` | Enable scheduled routine triggers |
 | `ROUTINE_NUDGE_MAX` | `3` | Max nudges per step before auto-skip option |
 | `ROUTINE_AUTO_SKIP` | `false` | Auto-skip after max nudges (default: wait for user) |
+
+## Speaker Routing
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ANNOUNCEMENT_ROUTES_PATH` | `/app/data/announcement_routes.yaml` | Writable YAML written by the `/settings → Speakers` panel. Maps each announcement category (`selfcare`, `reminder`, `calendar`, `ambient`, `progress`, `focus`, `briefing`) → speaker entity-id (single or comma-separated for multi-room). `_announce_voice(speaker=None, announcement_type=...)` consults `announcement_routes.route_for(...)`. Empty string in a category means "use the legacy fallback" (`REMINDER_SPEAKER` for most, `MORNING_BRIEFING_SPEAKER` for `briefing`, `FOCUS_AUDIO_PLAYER` for `focus`). Hot-reloads on every PUT via `reload_routes()`. The `default` key (if present) acts as a wildcard for any announcement_type not in `CATEGORIES`. |
 
 ## Progress Tracking
 
@@ -151,6 +167,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `CALENDAR_POLL_INTERVAL` | Minutes between calendar polls (default 15) |
 | `MORNING_BRIEFING_TIME` | `HH:MM` for morning briefing (default 07:30) |
 | `MORNING_BRIEFING_ENABLED` | `true`/`false` (default true) |
+| `MORNING_BRIEFING_MIN_VOLUME` | Volume floor (0.0–1.0) the briefing forces on its target speaker via `media_player.volume_set` before `play_media`. Bumps up only — never lowers an already-loud speaker. Set to `0` to disable the floor. Default `0.4`. Defeats "speaker still at sleep-sound volume" — see the 2026-04-30 incident where the briefing played at 0.10 because the bedroom_pair was still on overnight fireplace audio. |
 
 ## Workouts & Meals
 

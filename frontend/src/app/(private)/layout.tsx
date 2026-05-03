@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Settings } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
 
 const NAV_ITEMS = [
@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/home', label: 'Home', icon: Home },
   { href: '/architecture', label: 'Architecture', icon: Network },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
 export default function PrivateLayout({

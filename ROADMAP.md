@@ -109,6 +109,7 @@ See [docs/VLLM_PHASE_3_PLAN.md](docs/VLLM_PHASE_3_PLAN.md) → Outcome for the f
 | 5 | Home controls: HA entity cards, toggles, brightness, scenes | ✅ Done |
 | F1-F6 | Gamified finance dashboard: YNAB sync, budget health, XP/levels, quest board | ✅ Done |
 | F7 | Workouts + Meals: adaptive gym generator, set logging, calorie tracking, meal photo estimation | ✅ Done (2026-04-15) |
+| F8 | In-app settings page: Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders (`/settings` + `/api/config/*` + audit log) | ✅ Done (2026-04-29) |
 | 6 | DNS + Cloudflare Tunnel: ConvivialProphet.com → Jupiter | Not started |
 | 7 | Polish: animations, PWA, mobile optimization, toasts | Not started |
 

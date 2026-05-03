@@ -613,3 +613,13 @@ VOICE_TTS_LATENCY = Histogram(
     "TTS synthesis latency (proxy /v1/audio/speech). Excludes browser playback.",
     buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
 )
+
+# -- Recurring reminders (settings page) -------------------------------------
+RECURRING_REMINDERS_EXPANDED = Counter(
+    "bgw_recurring_reminders_expanded_total",
+    "Number of one-shot reminders materialized from recurring rules.",
+)
+RECURRING_REMINDERS_EXPAND_ERRORS = Counter(
+    "bgw_recurring_reminders_expand_errors_total",
+    "Errors raised while expanding due recurring rules into one-shot reminders.",
+)

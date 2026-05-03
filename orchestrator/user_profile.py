@@ -51,6 +51,8 @@ _DEFAULTS = {
     "coaching": {
         "default_mode": "explainer",
         "grounding_preference": "only_when_high",
+        "adhd_mode": True,
+        "tone_preference": "",
     },
     "finance": {
         "monthly_discretionary": 1000,
@@ -99,6 +101,10 @@ class UserProfile:
     # Coaching
     default_mode: str = "explainer"
     grounding_preference: str = "only_when_high"
+    adhd_mode: bool = True
+    # Empty string = fall back to get_tone_constraint(user) in prompt_builder.
+    # Settings page writes "warm" | "balanced" | "direct" here to override.
+    tone_preference: str = ""
 
     # Finance defaults
     monthly_discretionary: float = 1000.0
@@ -137,6 +143,8 @@ class UserProfile:
             temp_critical=float(temp.get("critical", _DEFAULTS["sensors"]["temperature"]["critical"])),
             default_mode=coaching.get("default_mode", _DEFAULTS["coaching"]["default_mode"]),
             grounding_preference=coaching.get("grounding_preference", _DEFAULTS["coaching"]["grounding_preference"]),
+            adhd_mode=bool(coaching.get("adhd_mode", _DEFAULTS["coaching"]["adhd_mode"])),
+            tone_preference=str(coaching.get("tone_preference", _DEFAULTS["coaching"]["tone_preference"]) or ""),
             monthly_discretionary=float(
                 finance.get("monthly_discretionary", _DEFAULTS["finance"]["monthly_discretionary"])
             ),
@@ -175,30 +183,58 @@ def _find_profile_path() -> Optional[Path]:
     return None
 
 
-def load_profile() -> UserProfile:
-    """Load user profile from YAML file, falling back to defaults.
+_OVERRIDES_PATH = os.environ.get("USER_PROFILE_OVERRIDES_PATH", "/app/data/user_profile_overrides.yaml")
 
-    Priority: env vars > profile YAML > built-in defaults.
+
+def _load_yaml_safe(path: Path) -> Dict[str, Any]:
+    try:
+        import yaml
+
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[PROFILE] Failed to load {path}: {e}")
+        return {}
+
+
+def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge overlay into base. Overlay scalars overwrite base."""
+    out = dict(base)
+    for k, v in overlay.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load_profile() -> UserProfile:
+    """Load user profile from YAML files, falling back to defaults.
+
+    Priority: env vars > overrides YAML > base profile YAML > built-in defaults.
+
+    The overrides file (`/app/data/user_profile_overrides.yaml` by default)
+    holds settings-page edits — the base profile is mounted read-only in
+    most deployments so saving in-place is not possible.
     """
     profile_path = _find_profile_path()
 
+    base: Dict[str, Any] = {}
     if profile_path:
-        try:
-            import yaml
-
-            with open(profile_path) as f:
-                data = yaml.safe_load(f) or {}
-            logger.info(f"[PROFILE] Loaded from {profile_path}")
-            profile = UserProfile.from_dict(data)
-        except ImportError:
-            logger.warning("[PROFILE] PyYAML not installed, using defaults")
-            profile = UserProfile()
-        except Exception as e:
-            logger.error(f"[PROFILE] Failed to load {profile_path}: {e}, using defaults")
-            profile = UserProfile()
+        base = _load_yaml_safe(profile_path)
+        if base:
+            logger.info(f"[PROFILE] Loaded base from {profile_path}")
     else:
         logger.info("[PROFILE] No user_profile.yaml found, using defaults")
-        profile = UserProfile()
+
+    overrides = _load_yaml_safe(Path(_OVERRIDES_PATH))
+    if overrides:
+        logger.info(f"[PROFILE] Applying overrides from {_OVERRIDES_PATH}")
+
+    merged = _deep_merge(base, overrides)
+    profile = UserProfile.from_dict(merged) if merged else UserProfile()
 
     # Env var overrides (highest priority)
     _apply_env_overrides(profile)
@@ -253,7 +289,55 @@ def get_profile() -> UserProfile:
 
 
 def reload_profile() -> UserProfile:
-    """Force reload the profile from disk."""
+    """Force reload the profile from disk.
+
+    Mutates the existing singleton in place so callers that captured
+    `shared.profile` at import time (orchestrator/shared.py:32, plus a
+    dozen other modules) see the new values without a restart.
+    """
     global _profile
-    _profile = load_profile()
+    fresh = load_profile()
+    if _profile is None:
+        _profile = fresh
+    else:
+        for f in fresh.__dataclass_fields__:
+            setattr(_profile, f, getattr(fresh, f))
     return _profile
+
+
+def save_profile_partial(updates: Dict[str, Any]) -> UserProfile:
+    """Merge partial updates into the writable overrides YAML + reload.
+
+    Used by `/api/config/identity` PUT. Writes to
+    `/app/data/user_profile_overrides.yaml` (writable mount), not the
+    read-only base `user_profile.yaml`. `load_profile()` merges the
+    overrides on top of the base. Unknown keys are silently ignored
+    (rejected upstream by Pydantic schema).
+    """
+    from orchestrator.config_writer import atomic_write_yaml
+
+    overrides_path = Path(_OVERRIDES_PATH)
+
+    raw = _load_yaml_safe(overrides_path)
+
+    section_map = {
+        "user_name": ("user", "name"),
+        "home_address": ("user", "home_address"),
+        "timezone": ("user", "timezone"),
+        "assistant_name": ("assistant", "name"),
+        "assistant_voice": ("assistant", "voice"),
+        "assistant_personality": ("assistant", "personality"),
+        "default_mode": ("coaching", "default_mode"),
+        "grounding_preference": ("coaching", "grounding_preference"),
+        "adhd_mode": ("coaching", "adhd_mode"),
+        "tone_preference": ("coaching", "tone_preference"),
+    }
+    for key, value in updates.items():
+        target = section_map.get(key)
+        if target is None:
+            continue
+        section, field_name = target
+        raw.setdefault(section, {})[field_name] = value
+
+    atomic_write_yaml(overrides_path, raw)
+    return reload_profile()

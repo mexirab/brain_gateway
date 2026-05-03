@@ -196,7 +196,12 @@ def list_pending_reminders() -> List[Dict[str, Any]]:
 # =============================================================================
 
 
-async def _announce_voice(text: str, speaker: str | None = None, announcement_type: str = "unknown") -> Dict[str, Any]:
+async def _announce_voice(
+    text: str,
+    speaker: str | None = None,
+    announcement_type: str = "unknown",
+    min_volume: float | None = None,
+) -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
 
@@ -206,6 +211,13 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         text: The text to announce.
         speaker: Target speaker entity or room name (defaults to REMINDER_SPEAKER).
         announcement_type: Category for tracking (calendar, reminder, focus, progress, ambient, etc.).
+        min_volume: If set (0.0–1.0), bump each target speaker's volume up to this
+            level before play_media when its current volume is lower. Used by
+            wake-time announcements (morning briefing, morning routine) to defeat
+            "speaker still at sleep-sound volume" — see the 2026-04-30 incident
+            where the briefing played at volume_level=0.10 and was inaudible.
+            Doesn't lower an already-loud speaker. Failures are logged and the
+            announcement still plays at whatever volume the speaker has.
     """
     import time as _time
 
@@ -263,20 +275,27 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         # The caller may pass:
         #   - a single entity_id       -> wrapped as [entity_id]
         #   - a comma-separated string -> split into a list
-        #   - the literal "all"        -> alias for REMINDER_SPEAKER (multi-room broadcast)
-        #   - None / empty             -> fall through to REMINDER_SPEAKER
-        # REMINDER_SPEAKER itself may be comma-separated for multi-room broadcast
-        # (avoids Google Home group issues with soundbars).
+        #   - the literal "all"        -> alias for the configured route
+        #   - None / empty             -> consult announcement_routes.route_for(announcement_type)
+        # The route lookup itself falls back to the legacy REMINDER_SPEAKER
+        # env var when no per-category override is configured (preserving
+        # pre-Speakers-panel behavior).
         def _split_speakers(value: str) -> list[str]:
             return [s.strip() for s in value.split(",") if s.strip()]
 
         if speaker and speaker.strip().lower() != "all":
             broadcast_speakers = _split_speakers(speaker)
         else:
-            broadcast_speakers = _split_speakers(REMINDER_SPEAKER)
+            from orchestrator.announcement_routes import route_for as _route_for
+
+            routed = _route_for(announcement_type)
+            broadcast_speakers = _split_speakers(routed) if routed else _split_speakers(REMINDER_SPEAKER)
 
         if not broadcast_speakers:
-            err = "No speakers configured (REMINDER_SPEAKER is empty)"
+            err = (
+                f"No speakers configured for announcement_type={announcement_type!r} "
+                f"(check Speakers panel or REMINDER_SPEAKER env var)"
+            )
             logger.error(err)
             _record_announcement(text, announcement_type, None, False, err, None)
             return {"success": False, "error": err}
@@ -285,6 +304,39 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         succeeded = []
         last_error = None
         async with httpx.AsyncClient(timeout=30) as client:
+            # Optional: bump-only volume floor for wake-time announcements.
+            # Done before play_media so the speaker wakes from `off` already at
+            # the right volume. Failures are logged and never block the play.
+            if min_volume is not None:
+                clamped = max(0.0, min(1.0, float(min_volume)))
+                for try_speaker in broadcast_speakers:
+                    try:
+                        cur = await client.get(
+                            f"{HA_URL}/api/states/{try_speaker}",
+                            headers=headers,
+                        )
+                        current_vol = None
+                        if cur.status_code == 200:
+                            current_vol = (cur.json().get("attributes") or {}).get("volume_level")
+                        if current_vol is None or float(current_vol) < clamped:
+                            vol_resp = await client.post(
+                                f"{HA_URL}/api/services/media_player/volume_set",
+                                headers=headers,
+                                json={"entity_id": try_speaker, "volume_level": clamped},
+                            )
+                            if vol_resp.status_code == 200:
+                                logger.info(
+                                    f"[VOLUME] Bumped {try_speaker}: "
+                                    f"{current_vol if current_vol is not None else 'unknown'} -> {clamped} "
+                                    f"({announcement_type})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[VOLUME] volume_set returned {vol_resp.status_code} for {try_speaker}"
+                                )
+                    except Exception as vol_err:  # noqa: BLE001
+                        logger.warning(f"[VOLUME] floor check failed for {try_speaker}: {vol_err}")
+
             for try_speaker in broadcast_speakers:
                 try:
                     ha_response = await client.post(

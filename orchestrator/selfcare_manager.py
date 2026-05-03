@@ -250,11 +250,17 @@ async def check_selfcare() -> None:
         except Exception:
             pass
 
-    # Quiet hours check
-    quiet_start = _parse_time(shared.QUIET_HOURS_START)
-    quiet_end = _parse_time(shared.QUIET_HOURS_END)
-    if _in_quiet_hours(now_tz.time(), quiet_start, quiet_end):
-        return
+    # Quiet hours check — pulled from data/selfcare_schedule.yaml so the
+    # /settings page can edit them without a restart. Falls through to
+    # shared.QUIET_HOURS_* defaults on missing/empty file.
+    from orchestrator.selfcare_schedule import is_quiet_day, quiet_hours
+
+    qh = quiet_hours()
+    if is_quiet_day(now_tz.isoweekday()):
+        quiet_start = _parse_time(qh.get("start") or shared.QUIET_HOURS_START)
+        quiet_end = _parse_time(qh.get("end") or shared.QUIET_HOURS_END)
+        if _in_quiet_hours(now_tz.time(), quiet_start, quiet_end):
+            return
 
     # Don't nudge during active focus session (will nudge after)
     if shared.current_focus_session.get("active"):
@@ -291,6 +297,11 @@ async def check_selfcare() -> None:
 
 def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
     """Check if any medication is due and not confirmed."""
+    from orchestrator.selfcare_schedule import category_enabled
+
+    if not category_enabled("meds"):
+        return None
+
     try:
         from orchestrator.data_manager import get_medications
 
@@ -334,13 +345,37 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
     return None
 
 
+def _within_active_hours(category: str, now: datetime) -> bool:
+    """True if the category's active_hours window covers `now`. Missing
+    window = always active."""
+    from orchestrator.selfcare_schedule import category_active_hours
+
+    start_s, end_s = category_active_hours(category)
+    if not start_s or not end_s:
+        return True
+    try:
+        start = _parse_time(start_s)
+        end = _parse_time(end_s)
+    except Exception:
+        return True
+    current = now.time()
+    if start <= end:
+        return start <= current <= end
+    # Wraps midnight
+    return current >= start or current <= end
+
+
 def _check_meals(now: datetime) -> Optional[str]:
     """Check if it's been too long since last meal."""
-    meal_hours = shared.MEAL_NUDGE_HOURS
+    from orchestrator.selfcare_schedule import category_enabled, category_interval_minutes
 
-    # Don't nudge before 9am or after 9pm
-    if now.hour < 9 or now.hour > 21:
+    if not category_enabled("meals"):
         return None
+    if not _within_active_hours("meals", now):
+        return None
+
+    meal_minutes = category_interval_minutes("meals", shared.MEAL_NUDGE_HOURS * 60)
+    meal_hours = meal_minutes / 60.0
 
     if _state.last_meal_reported is None:
         # No meal logged today — nudge after 12pm
@@ -365,7 +400,14 @@ def _check_meals(now: datetime) -> Optional[str]:
 
 def _check_hydration(now: datetime) -> Optional[str]:
     """Check if hydration nudge is due."""
-    interval = shared.HYDRATION_INTERVAL
+    from orchestrator.selfcare_schedule import category_enabled, category_interval_minutes, load_schedule
+
+    if not category_enabled("water"):
+        return None
+    if not _within_active_hours("water", now):
+        return None
+
+    interval = category_interval_minutes("water", shared.HYDRATION_INTERVAL)
     if _state.last_hydration_nudge is None:
         _state.last_hydration_nudge = now
         return None
@@ -373,14 +415,22 @@ def _check_hydration(now: datetime) -> Optional[str]:
     minutes_since = (now - _state.last_hydration_nudge).total_seconds() / 60
     if minutes_since >= interval:
         _state.last_hydration_nudge = now
-        return "Water check. Take a few sips."
+        msg = (load_schedule()["categories"].get("water", {}).get("message_template") or "").strip()
+        return msg or "Water check. Take a few sips."
 
     return None
 
 
 def _check_movement(now: datetime) -> Optional[str]:
     """Check if movement nudge is due."""
-    interval = shared.MOVEMENT_INTERVAL
+    from orchestrator.selfcare_schedule import category_enabled, category_interval_minutes
+
+    if not category_enabled("movement"):
+        return None
+    if not _within_active_hours("movement", now):
+        return None
+
+    interval = category_interval_minutes("movement", shared.MOVEMENT_INTERVAL)
     if _state.sitting_since is None:
         _state.sitting_since = now
         return None

@@ -67,6 +67,9 @@ from orchestrator.prompt_builder import (
     last_user_text,
     rag_context,
 )
+
+# Settings page (`/api/config/*`)
+from orchestrator.routes_config import router as config_router
 from orchestrator.shared import (
     CALENDAR_POLL_INTERVAL,
     FALLBACK_MODEL_NAME,
@@ -238,6 +241,7 @@ app.add_middleware(RateLimitMiddleware)
 # Mount the infrastructure API routes (health, metrics, HA, memory, reminders, focus, etc.)
 app.include_router(api_router)
 app.include_router(finance_router)
+app.include_router(config_router)
 
 
 # Global exception handler for typed Brain Gateway errors
@@ -606,14 +610,18 @@ async def startup_event():
     if shared.ROUTINE_ENABLED:
         from orchestrator.background_jobs import trigger_routine
         from orchestrator.routine_manager import load_routines
+        from orchestrator.routines_config import effective_path as _routines_effective_path
 
-        await load_routines(shared.ROUTINES_YAML_PATH)
+        # Prefer the writable shadow at ROUTINES_OVERRIDES_PATH (settings-page edits)
+        # over the read-only base at ROUTINES_YAML_PATH. effective_path() handles the fallback.
+        _routines_path = _routines_effective_path()
+        await load_routines(_routines_path)
 
         # Schedule routine triggers from YAML
         try:
             import yaml
 
-            with open(shared.ROUTINES_YAML_PATH) as f:
+            with open(_routines_path) as f:
                 _routines_data = yaml.safe_load(f) or {}
             for _rid, _rdef in _routines_data.get("routines", {}).items():
                 _trigger = _rdef.get("trigger", {})
@@ -635,7 +643,7 @@ async def startup_event():
                     )
                     logger.info(f"[SCHEDULER] Routine '{_rid}' scheduled at {_t} ({_dow})")
         except FileNotFoundError:
-            logger.warning(f"[ROUTINE] Routines file not found: {shared.ROUTINES_YAML_PATH}")
+            logger.warning(f"[ROUTINE] Routines file not found: {_routines_path}")
         except Exception as e:
             logger.warning(f"[ROUTINE] Failed to schedule routine triggers: {e}")
 
@@ -862,6 +870,24 @@ async def startup_event():
         name="RAG source file watcher",
         replace_existing=True,
     )
+
+    # Recurring reminders (settings page): every 5 min, materialize one-shot
+    # reminders for any rule whose next_fire_at falls within the window. The
+    # one-shots then dispatch through the existing deliver_reminder_job path.
+    from orchestrator.recurring_reminders import (
+        EXPANSION_WINDOW_MINUTES,
+        expand_due_reminders,
+    )
+
+    scheduler.add_job(
+        expand_due_reminders,
+        trigger="interval",
+        minutes=EXPANSION_WINDOW_MINUTES,
+        id="recurring_reminders_expand",
+        name="Recurring reminders expansion",
+        replace_existing=True,
+    )
+    logger.info(f"[SCHEDULER] Recurring reminder expansion every {EXPANSION_WINDOW_MINUTES}m")
 
 
 def _cleanup_audio_files(max_age_hours: int = 1) -> None:

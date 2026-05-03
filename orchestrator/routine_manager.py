@@ -50,6 +50,10 @@ class RoutineSession:
     speaker: Optional[str] = None
     steps: List[RoutineStep] = field(default_factory=list)
     nudge_delay_minutes: int = 10
+    # Per-routine overrides for the global ROUTINE_NUDGE_MAX / ROUTINE_AUTO_SKIP
+    # env vars. None = fall back to the global default at fire time.
+    nudge_max: Optional[int] = None
+    auto_skip: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +146,8 @@ async def start_routine(routine_id: str, triggered_by: str = "user") -> str:
     display_name = routine_def.get("display_name", routine_id.title())
     speaker = routine_def.get("speaker")
     nudge_delay = routine_def.get("nudge_delay_minutes", 10)
+    nudge_max = routine_def.get("nudge_max")  # None → global fallback in _deliver_nudge
+    auto_skip = routine_def.get("auto_skip")  # None → global fallback in _deliver_nudge
 
     _active_session = RoutineSession(
         routine_id=routine_id,
@@ -152,6 +158,8 @@ async def start_routine(routine_id: str, triggered_by: str = "user") -> str:
         speaker=speaker,
         steps=steps,
         nudge_delay_minutes=nudge_delay,
+        nudge_max=nudge_max,
+        auto_skip=auto_skip,
     )
 
     # Record context for interruption recovery (F-007)
@@ -475,11 +483,13 @@ async def _deliver_nudge() -> None:
     step = _active_session.steps[_active_session.current_step_index]
     _active_session.nudge_count += 1
 
-    nudge_max = shared.ROUTINE_NUDGE_MAX
+    # Per-routine overrides take precedence; fall through to globals.
+    nudge_max = _active_session.nudge_max if _active_session.nudge_max is not None else shared.ROUTINE_NUDGE_MAX
+    auto_skip = _active_session.auto_skip if _active_session.auto_skip is not None else shared.ROUTINE_AUTO_SKIP
 
     if _active_session.nudge_count > nudge_max:
-        # Preferred escape: auto-skip the stuck step (gated by env + skippable).
-        if shared.ROUTINE_AUTO_SKIP and step.skippable:
+        # Preferred escape: auto-skip the stuck step (gated by setting + skippable).
+        if auto_skip and step.skippable:
             logger.info(f"[ROUTINE] Auto-skipping step '{step.id}' after {nudge_max} nudges")
             await advance_step("skip")
             return
@@ -491,7 +501,7 @@ async def _deliver_nudge() -> None:
         logger.warning(
             f"[ROUTINE] Auto-ending '{_active_session.routine_id}' — stuck on "
             f"step '{step.id}' (skippable={step.skippable}, "
-            f"auto_skip={shared.ROUTINE_AUTO_SKIP}) after {nudge_max} nudges"
+            f"auto_skip={auto_skip}) after {nudge_max} nudges"
         )
         await advance_step("stop")
         return

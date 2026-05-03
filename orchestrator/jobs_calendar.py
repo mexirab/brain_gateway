@@ -442,10 +442,22 @@ async def morning_briefing():
         if pending:
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
 
-        await _announce_voice(" ".join(parts), speaker=shared.MORNING_BRIEFING_SPEAKER, announcement_type="briefing")
-        logger.info(
-            f"[MORNING_BRIEFING] Delivered on {shared.MORNING_BRIEFING_SPEAKER}: {len(briefing_events)} events, {len(pending)} reminders"
+        # `min_volume` floors the speaker at MORNING_BRIEFING_MIN_VOLUME
+        # before play_media — defeats the "speaker still at sleep-sound
+        # volume" failure mode (see 2026-04-30 incident: briefing played at
+        # volume_level=0.10 because the bedroom_pair was still on the
+        # overnight fireplace track).
+        min_vol = shared.MORNING_BRIEFING_MIN_VOLUME if shared.MORNING_BRIEFING_MIN_VOLUME > 0 else None
+        # Pass speaker=None so _announce_voice consults the Speakers panel
+        # via announcement_routes.route_for("briefing"), which itself falls
+        # back to MORNING_BRIEFING_SPEAKER when nothing is configured.
+        await _announce_voice(
+            " ".join(parts),
+            speaker=None,
+            announcement_type="briefing",
+            min_volume=min_vol,
         )
+        logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")

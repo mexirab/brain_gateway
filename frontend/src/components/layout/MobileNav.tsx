@@ -16,6 +16,7 @@ import {
   Home,
   Network,
   LogOut,
+  Settings,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -40,6 +41,7 @@ const MORE: NavItem[] = [
   { href: '/announcements', label: 'Announcements', icon: Volume2 },
   { href: '/home', label: 'Home', icon: Home },
   { href: '/architecture', label: 'Architecture', icon: Network },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
 function isActive(pathname: string | null, href: string): boolean {
