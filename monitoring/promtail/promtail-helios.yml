@@ -30,7 +30,7 @@ scrape_configs:
     relabel_configs:
       # Keep only Brain Gateway containers — skip noisy or irrelevant ones
       - source_labels: ['__meta_docker_container_name']
-        regex: '/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|nebula-sync)'
+        regex: '/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|nebula-sync|nut-exporter)'
         action: keep
 
       - source_labels: ['__meta_docker_container_name']
@@ -93,12 +93,11 @@ scrape_configs:
   # systemd journal scrape — feeds F-014 self-audit
   # ---------------------------------------------------------------------------
   # Adds visibility into host-level systemd units that aren't Docker (the
-  # vllm-primary, llama-server family, qwen-tts, parakeet-stt, brain-gateway,
-  # etc.) so the daily audit job in orchestrator/jobs_self_audit.py can spot
-  # crashes / restart loops in the LLM and TTS services. Limited via `matches:`
-  # to a known-safe whitelist of units — we do NOT scrape the whole system
-  # journal (that would balloon Loki cardinality and ingest random
-  # user/session logs).
+  # llama-server family, qwen-tts, brain-gateway, etc.) so the daily audit
+  # job in orchestrator/jobs_self_audit.py can spot crashes / restart loops
+  # in the LLM and TTS services. Limited via `matches:` to a known-safe
+  # whitelist of units — we do NOT scrape the whole system journal (that
+  # would balloon Loki cardinality and ingest random user/session logs).
   - job_name: journal
     journal:
       max_age: 24h
@@ -112,7 +111,7 @@ scrape_configs:
       # Same-field OR uses space-separated terms (journalctl convention).
       # The '+' separator is for OR between DIFFERENT field-name groups; we
       # only filter on _SYSTEMD_UNIT, so same-field OR via space is correct.
-      matches: '_SYSTEMD_UNIT=vllm-primary.service _SYSTEMD_UNIT=llama-server.service _SYSTEMD_UNIT=llama-server-coder.service _SYSTEMD_UNIT=qwen-tts.service _SYSTEMD_UNIT=parakeet-stt.service _SYSTEMD_UNIT=brain-gateway.service'
+      matches: '_SYSTEMD_UNIT=llama-server.service _SYSTEMD_UNIT=llama-server-coder.service _SYSTEMD_UNIT=qwen-tts.service _SYSTEMD_UNIT=parakeet-stt.service _SYSTEMD_UNIT=vllm-primary.service _SYSTEMD_UNIT=brain-gateway.service _SYSTEMD_UNIT=nut-server.service _SYSTEMD_UNIT=nut-monitor.service _SYSTEMD_UNIT=nut-driver-enumerator.service _SYSTEMD_UNIT=nut-driver@cyberpower.service _SYSTEMD_UNIT=nut-driver@goldenmate.service'
     relabel_configs:
       - source_labels: ['__journal__systemd_unit']
         target_label: 'unit'

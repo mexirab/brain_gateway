@@ -442,6 +442,44 @@ services:
     networks:
       - promtail-net
 
+  # NUT Prometheus exporter — reads local NUT server (upsd on host 127.0.0.1:3493)
+  # and exposes /metrics on Helios:9199 for scraping by Prometheus on Jupiter.
+  #
+  # Both UPSes (CyberPower CP1500PFCLCD, Goldenmate 2000VA LiFePO4) are USB-
+  # attached to Helios and read by host-level NUT systemd services. Goldenmate's
+  # iDowell-chip firmware doesn't expose load watts — only status and battery.
+  # CyberPower exposes everything including ups.load.
+  #
+  # Hardening: digest-pinned image, cap_drop ALL, no-new-privileges, read-only
+  # filesystem with /tmp tmpfs. network_mode: host because the exporter only
+  # needs to reach upsd at 127.0.0.1 and serve /metrics on the host — same
+  # posture node_exporter would use.
+  #
+  # NUT_EXPORTER_PASSWORD must be set in .env (matches the [exporter] entry in
+  # /etc/nut/upsd.users on Helios). Container exits cleanly if unreachable.
+  nut-exporter:
+    image: druggeri/nut_exporter:3.2.5@sha256:76fc9fb623bf8b7f1ee8ffc018ad7ffc568d297c04360accb54ef76981e0fa32
+    container_name: nut-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: host
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      - NUT_EXPORTER_SERVER=127.0.0.1
+      - NUT_EXPORTER_USERNAME=exporter
+      - NUT_EXPORTER_PASSWORD=${NUT_EXPORTER_PASSWORD:?NUT_EXPORTER_PASSWORD must be set in .env (must match [exporter] in /etc/nut/upsd.users on Helios)}
+      # Default var list omits ups.realpower.nominal and battery.runtime, which
+      # we need for rated-watts calculation and runtime-remaining display.
+      # Listing everything we care about; the exporter silently skips vars that
+      # the UPS doesn't publish (Goldenmate iDowell only honors a subset).
+      - NUT_EXPORTER_VARIABLES=battery.charge,battery.runtime,battery.voltage,battery.voltage.nominal,input.voltage,input.voltage.nominal,output.voltage,ups.load,ups.realpower,ups.realpower.nominal,ups.status
+
 networks:
   gateway-net:
     driver: bridge

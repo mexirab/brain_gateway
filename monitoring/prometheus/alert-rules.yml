@@ -106,3 +106,76 @@ groups:
           severity: info
         annotations:
           summary: "Calendar polling has >5 errors in the last hour"
+
+  # ===========================================================================
+  # UPS / Power Chain
+  # ===========================================================================
+  # Both UPSes feed Helios via NUT + nut_exporter on port 9199.
+  # CyberPower CP1500PFCLCD = 1000W; Goldenmate 2000VA LiFePO4 (firmware-limited).
+  - name: brain_gateway_ups
+    interval: 30s
+    rules:
+      - alert: UPSOnBattery
+        # ups_status flag goes 1 the instant grid power is lost. Sustained
+        # `for: 30s` lets brief AC blips (transfer test, brownout flicker)
+        # not page; anything beyond that is a real outage.
+        expr: network_ups_tools_ups_status{flag="OB"} == 1
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "UPS '{{ $labels.ups }}' on battery"
+          description: "Grid lost on {{ $labels.ups }} — running on battery. Check input voltage panel."
+
+      - alert: UPSLowBattery
+        # LB flag means the UPS itself thinks it's about to die. Below 20% is the
+        # secondary trigger. Either way we want a critical-severity page.
+        expr: network_ups_tools_ups_status{flag="LB"} == 1 or network_ups_tools_battery_charge < 20
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "UPS '{{ $labels.ups }}' low battery ({{ $value }}%)"
+          description: "Battery at {{ $value }}% — graceful shutdown imminent."
+
+      - alert: UPSReplaceBattery
+        expr: network_ups_tools_ups_status{flag="RB"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "UPS '{{ $labels.ups }}' wants battery replaced"
+          description: "Self-test reported the battery should be replaced. Doesn't affect runtime today; plan a swap."
+
+      - alert: UPSOverload
+        # OVER flag, OR ups.load > 90% sustained.
+        expr: network_ups_tools_ups_status{flag="OVER"} == 1 or network_ups_tools_ups_load > 90
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "UPS '{{ $labels.ups }}' overloaded ({{ $value }}%)"
+          description: "Load >90% of rated capacity. Will cut runtime sharply on grid loss."
+
+      - alert: UPSExporterDown
+        # The scrape itself failing — covers nut_exporter container down OR
+        # NUT server (upsd) down OR the UPS USB cable yanked.
+        expr: up{job="nut"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NUT exporter scrape failing for '{{ $labels.ups }}'"
+          description: "Prometheus can't reach the nut_exporter for {{ $labels.ups }}. UPS itself may be fine — check Helios:9199 + upsd."
+
+      - alert: UPSInputVoltageOutOfRange
+        # CyberPower only — Goldenmate doesn't expose input.voltage.
+        # Wide tolerance — 105V/130V is well past what HVAC/legitimate
+        # brownouts cause. AVR (BOOST/TRIM flags) covers normal swings.
+        expr: network_ups_tools_input_voltage{ups="cyberpower"} < 105 or network_ups_tools_input_voltage{ups="cyberpower"} > 130
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Wall voltage abnormal: {{ $value }}V on {{ $labels.ups }}"
+          description: "Sustained out-of-range input voltage. Brownout, surge, or wiring issue."
