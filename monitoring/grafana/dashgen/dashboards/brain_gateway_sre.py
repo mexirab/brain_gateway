@@ -714,6 +714,36 @@ def build() -> dict:
     row, y = grid_row(reminders_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # ---------------------------------------------------- Recurring Reminders
+    r, y = row_divider("Recurring Reminders (Settings → Recurring Reminders)", y)
+    panels.append(r)
+
+    recurring_row = [
+        timeseries(
+            "Recurring Expansions / hr",
+            [("rate(bgw_recurring_reminders_expanded_total[1h]) * 3600", "expanded/hr")],
+            unit="none",
+            description=(
+                "One-shot reminders materialized from croniter rules by the "
+                "every-5-min expansion job. Each cron rule fires here once "
+                "per scheduled occurrence."
+            ),
+        ),
+        timeseries(
+            "Recurring Expansion Errors / hr",
+            [("rate(bgw_recurring_reminders_expand_errors_total[1h]) * 3600", "errors/hr")],
+            unit="none",
+            thresholds=[(None, "green"), (1, "red")],
+            description=(
+                "Errors raised while expanding recurring rules. Non-zero "
+                "indicates a rule with an impossible cron (auto-disabled "
+                "after one error) or a transient APScheduler issue."
+            ),
+        ),
+    ]
+    row, y = grid_row(recurring_row, y, heights=[8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Background Jobs
     r, y = row_divider("Background Jobs", y)
     panels.append(r)

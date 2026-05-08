@@ -5346,7 +5346,7 @@
     },
     {
       "type": "row",
-      "title": "Background Jobs",
+      "title": "Recurring Reminders (Settings \u2192 Recurring Reminders)",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -5356,6 +5356,195 @@
         "y": 150
       },
       "id": 71
+    },
+    {
+      "type": "timeseries",
+      "title": "Recurring Expansions / hr",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_recurring_reminders_expanded_total[1h]) * 3600",
+          "legendFormat": "expanded/hr",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "One-shot reminders materialized from croniter rules by the every-5-min expansion job. Each cron rule fires here once per scheduled occurrence.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 151
+      },
+      "id": 72
+    },
+    {
+      "type": "timeseries",
+      "title": "Recurring Expansion Errors / hr",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_recurring_reminders_expand_errors_total[1h]) * 3600",
+          "legendFormat": "errors/hr",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Errors raised while expanding recurring rules. Non-zero indicates a rule with an impossible cron (auto-disabled after one error) or a transient APScheduler issue.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 151
+      },
+      "id": 73
+    },
+    {
+      "type": "row",
+      "title": "Background Jobs",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 159
+      },
+      "id": 74
     },
     {
       "type": "stat",
@@ -5416,9 +5605,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 151
+        "y": 160
       },
-      "id": 72
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5502,9 +5691,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 151
+        "y": 160
       },
-      "id": 73
+      "id": 76
     },
     {
       "type": "stat",
@@ -5565,9 +5754,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 151
+        "y": 160
       },
-      "id": 74
+      "id": 77
     },
     {
       "type": "row",
@@ -5578,9 +5767,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 159
+        "y": 168
       },
-      "id": 75
+      "id": 78
     },
     {
       "type": "logs",
@@ -5619,9 +5808,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 160
+        "y": 169
       },
-      "id": 76
+      "id": 79
     },
     {
       "type": "logs",
@@ -5660,9 +5849,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 160
+        "y": 169
       },
-      "id": 77
+      "id": 80
     }
   ]
 }

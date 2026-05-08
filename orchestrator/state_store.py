@@ -653,6 +653,19 @@ def cleanup_old_announcements(keep_days: int = 30) -> int:
         return cursor.rowcount
 
 
+def cleanup_old_config_changes(keep_days: int = 180) -> int:
+    """Remove config_changes audit rows older than keep_days.
+
+    The audit table grows ~10 rows/day at typical usage (a few panel saves
+    per week, each writing 1 row). 180 days gives plenty of "what did I
+    change last quarter" lookback while keeping the table small.
+    """
+    cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM config_changes WHERE changed_at < ?", (cutoff,))
+        return cursor.rowcount
+
+
 def clear_announcements() -> int:
     """Delete all announcement history. Returns count of deleted rows."""
     with get_db() as conn:
