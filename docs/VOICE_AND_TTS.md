@@ -10,7 +10,7 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
     -> Home Assistant voice pipeline
     -> Wyoming Whisper STT (Docker on Jupiter :10300)
     -> HA Conversation Agent -> Brain Gateway :8888
-    -> Wyoming Jessica TTS bridge (:10301) -> Helios TTS :8002
+    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> Helios TTS :8002
     -> ATOM Echo S3R speaker (or Google speakers group)
 ```
 
@@ -24,7 +24,8 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
 - **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
 - **Wake word manifest:** `hey_jess.json` lives in `/opt/gateway_mvp/models/`. Was served via an nginx `model-server` Docker container at `http://10.0.0.195:${SERVICE_MODEL_SERVER_PORT}/hey_jess.json` until 2026-04-26 when the unfinished service was removed (port 8080 collided with the primary LLM, then llama-server, now vllm-primary). Re-enable by uncommenting the wake-word block in `models/atom-echo-jess.yaml:171`, restoring the `model-server` entry in `docker-compose.yml` on a non-conflicting port, and reflashing via ESPHome.
 - **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Helios)
-- **TTS bridge:** `wyoming-jessica-tts` bridges Wyoming protocol -> HTTP Jessica TTS on Helios
+- **TTS bridge:** `wyoming-jessica-tts` (container/program-name retained for HA wiring back-compat) bridges Wyoming protocol -> HTTP TTS server on Helios. Default voice is configurable via `TTS_VOICE` env / `user_profile.yaml` `voice:` field; live deployment uses a Jessica McCabe reference clone (`voice: "jessica"`).
+  - **Fresh install note:** the Wyoming bridge advertises a voice named `jessica` (wire ID, kept for back-compat); the compose default `--voice` is `default`. Either set `TTS_VOICE=jessica` in `.env` (matching the wire ID) AND `POST /voices/load` to register a `jessica` voice on your TTS server, OR change the advertised wire ID in `tts/wyoming_jessica_bridge.py` to match your registered voice name. Without alignment, HA TTS calls return HTTP 400 from the TTS server with no audio (silent on the HA side).
 - **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions
 
 **Multi-room deployment:**
@@ -37,7 +38,7 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 ## TTS Pacing
 
-Jessica voice clone uses Qwen3-TTS on Helios (GPU1, port 8002). Two pacing controls:
+Voice clone (Jessica McCabe reference on the live deployment; configurable elsewhere) runs through Qwen3-TTS on Helios (GPU1, port 8002). Two pacing controls:
 
 1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
 2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery

@@ -12,7 +12,7 @@ user:
 
 assistant:
   name: "Jess"                          # Your AI assistant's name
-  voice: "jessica"                      # TTS voice name
+  voice: "default"                      # TTS voice name (registered via /voices/load)
   personality: "warm, friendly, supportive ADHD coach"
 
 speakers:
@@ -96,7 +96,7 @@ finance:
 # tts:
 #   backend: "local_http"
 #   url: "http://localhost:8002"
-#   voice: "jessica"
+#   voice: "default"
 #
 # --- Cloud TTS Examples ---
 #

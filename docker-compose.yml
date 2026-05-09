@@ -375,7 +375,7 @@ services:
     command: >-
       --uri tcp://0.0.0.0:10301
       --tts-url ${TTS_URL:-http://localhost:${SERVICE_TTS_PORT:-8002}}
-      --voice ${TTS_VOICE:-jessica}
+      --voice ${TTS_VOICE:-default}
     networks:
       - gateway-net
 

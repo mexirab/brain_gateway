@@ -66,7 +66,7 @@ class Settings(BaseSettings):
 
     # -- TTS (empty = disabled) --------------------------------------------------
     tts_url: str = ""
-    tts_voice: str = "jessica"
+    tts_voice: str = "default"
 
     # -- STT (empty = disabled) --------------------------------------------------
     stt_url: str = ""

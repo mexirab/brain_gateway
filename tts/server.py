@@ -365,7 +365,7 @@ async def list_languages():
 
 class LoadVoiceRequest(BaseModel):
     """Request to load a voice from reference audio."""
-    name: str = Field(..., description="Name for this voice (e.g., 'jessica')")
+    name: str = Field(..., description="Name for this voice (e.g., 'default')")
     ref_audio: str = Field(..., description="Path to reference audio file")
     ref_text: str = Field(..., description="Transcript of reference audio")
     description: str = Field(default="", description="Description of the voice")
@@ -397,10 +397,10 @@ async def load_voice(request: LoadVoiceRequest):
     curl -X POST http://localhost:8002/voices/load \
       -H "Content-Type: application/json" \
       -d '{
-        "name": "jessica",
-        "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
-        "ref_text": "The transcript of what Jessica says in the audio.",
-        "description": "Jessica McCabe - warm, energetic ADHD advocate"
+        "name": "default",
+        "ref_audio": "/path/to/reference_voice.wav",
+        "ref_text": "Transcript of the reference audio (1-2 sentences).",
+        "description": "Reference voice clone"
       }'
     ```
     """
@@ -457,7 +457,7 @@ async def text_to_speech(request: TTSRequest):
     ```
     curl -X POST http://localhost:8002/tts \
       -H "Content-Type: application/json" \
-      -d '{"text": "Hello Nadim!", "voice": "jessica"}' \
+      -d '{"text": "Hello world!", "voice": "default"}' \
       --output speech.wav
     ```
     """
@@ -663,7 +663,7 @@ async def openai_compatible_tts(request: OpenAITTSRequest):
     ```
     curl -X POST http://localhost:8002/v1/audio/speech \
       -H "Content-Type: application/json" \
-      -d '{"input": "Hello!", "voice": "jessica"}' \
+      -d '{"input": "Hello!", "voice": "default"}' \
       --output speech.wav
     ```
     """

@@ -1,17 +1,22 @@
 """
-Wyoming Protocol Bridge for Jessica TTS
+Wyoming Protocol Bridge for the Brain Gateway TTS server.
 
-Bridges Home Assistant's Wyoming protocol to the HTTP-based Qwen3-TTS server
-(Jessica voice clone).
+Bridges Home Assistant's Wyoming protocol to the HTTP-based Qwen3-TTS server.
+The default `--voice` selects which loaded voice clone to use; the TTS server
+exposes voices via /voices/load (see tts/server.py).
 
 Wyoming clients (like voice_assistant ESPHome devices) connect here,
 send text → this bridge calls the HTTP TTS API → returns audio over Wyoming.
 
 Usage:
     python wyoming_jessica_bridge.py --uri tcp://0.0.0.0:10301 \
-        --tts-url http://tts-host:8002 --voice jessica
+        --tts-url http://tts-host:8002 --voice default
 
 The --tts-url flag (or TTS_URL env in compose) is required.
+
+Note: filename and entrypoint container name retained as `wyoming-jessica-tts`
+for backward compatibility with existing Home Assistant Wyoming integration
+configs that reference that name. A future slice may rename with a migration.
 """
 
 import argparse
@@ -109,27 +114,32 @@ class JessicaTtsHandler(AsyncEventHandler):
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Wyoming bridge for Jessica TTS")
+    parser = argparse.ArgumentParser(description="Wyoming bridge for Brain Gateway TTS")
     parser.add_argument("--uri", default="tcp://0.0.0.0:10301", help="Wyoming server URI")
     parser.add_argument(
         "--tts-url",
         default=os.environ.get("TTS_URL", ""),
-        help="Jessica TTS HTTP endpoint (required; or set TTS_URL env)",
+        help="TTS HTTP endpoint (required; or set TTS_URL env)",
     )
-    parser.add_argument("--voice", default="jessica", help="Default voice name")
+    parser.add_argument("--voice", default="default", help="Default voice name")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     if not args.tts_url:
         logger.error("--tts-url is required (or set TTS_URL env)")
         sys.exit(2)
-    logger.info("Starting Wyoming Jessica TTS bridge on %s → %s", args.uri, args.tts_url)
+    logger.info("Starting Wyoming TTS bridge on %s → %s", args.uri, args.tts_url)
 
+    # NOTE: TtsProgram and TtsVoice `name` fields are wire identifiers consumed
+    # by Home Assistant's Wyoming integration — keeping `jessica-tts` and
+    # `jessica` here preserves backward compat for existing HA voice-pipeline
+    # configs. Descriptions and attribution are user-visible only and have
+    # been generic-ized.
     wyoming_info = Info(
         tts=[
             TtsProgram(
                 name="jessica-tts",
-                description="Jessica voice (Qwen3-TTS clone)",
+                description="Brain Gateway TTS",
                 attribution=Attribution(
                     name="Brain Gateway",
                     url="https://github.com/ConvivialProphet/brain",
@@ -139,7 +149,7 @@ async def main():
                 voices=[
                     TtsVoice(
                         name="jessica",
-                        description="Jessica McCabe voice clone",
+                        description="Reference voice clone (configurable)",
                         languages=["en-US"],
                         attribution=Attribution(
                             name="Brain Gateway",
