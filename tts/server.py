@@ -2,7 +2,8 @@
 Qwen3-TTS FastAPI Server for Brain Gateway
 ==========================================
 Provides TTS endpoints for the Brain Gateway voice pipeline.
-Designed to run on Uranus (10.0.0.173) with RTX 5080 GPUs.
+Runs on a CUDA-capable GPU (≥12 GB VRAM recommended). Bind host/port
+via env vars TTS_HOST / TTS_PORT (defaults 0.0.0.0:8002).
 
 Endpoints:
 - POST /tts          - Text-to-speech with voice selection

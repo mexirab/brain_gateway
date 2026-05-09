@@ -1107,12 +1107,33 @@ _EXPERT_TOOL = {
 }
 
 
+# Tools gated behind JESS_ADVANCED — owner-specific or scope-creep
+# integrations cut from the shippable single-box build. Hidden from the LLM's
+# tool schema unless JESS_ADVANCED=true; handlers stay registered (unreachable
+# from the unified loop when not exposed).
+ADVANCED_ONLY_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "query_budget",  # YNAB-specific; needs license check
+        "finance_status",  # YNAB-specific
+        "check_claude_activity",  # owner-specific dev tooling
+    }
+)
+
+
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent + optional expert."""
-    tools = [get_ha_tool_definition()] + STATIC_TOOLS
-    if shared.CODE_AGENT_ENABLED:
+    """Get all tools for unified mode (v7): HA tool + static tools + optional code agent + optional expert.
+
+    JESS_ADVANCED gates owner-specific tools (`code_agent`, `ask_expert`,
+    `query_budget`, `finance_status`, `check_claude_activity`) so the
+    shippable build only exposes the core ADHD toolset by default.
+    """
+    static = STATIC_TOOLS
+    if not shared.JESS_ADVANCED:
+        static = [t for t in static if t.get("function", {}).get("name") not in ADVANCED_ONLY_TOOL_NAMES]
+    tools = [get_ha_tool_definition()] + static
+    if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
         tools.append(_CODE_AGENT_TOOL)
-    if shared.EXPERT_ENABLED:
+    if shared.EXPERT_ENABLED and shared.JESS_ADVANCED:
         tools.append(_EXPERT_TOOL)
     return tools
 

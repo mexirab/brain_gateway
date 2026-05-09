@@ -356,6 +356,11 @@ PRESENCE_WELCOME_HOME = settings.presence_welcome_home
 PRESENCE_WELCOME_COOLDOWN = settings.presence_welcome_cooldown
 
 # ---------------------------------------------------------------------------
+# Distribution profile
+# ---------------------------------------------------------------------------
+JESS_ADVANCED = settings.jess_advanced
+
+# ---------------------------------------------------------------------------
 # Code Agent (coding-focused model for self-troubleshooting)
 # ---------------------------------------------------------------------------
 CODE_AGENT_ENABLED = settings.code_agent_enabled

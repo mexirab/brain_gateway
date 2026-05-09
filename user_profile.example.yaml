@@ -54,11 +54,11 @@ finance:
 # llm:
 #   model:                                   # Primary model (conversation + tools)
 #     backend: "openai_compatible"
-#     url: "http://10.0.0.195:8080/v1"
+#     url: "http://localhost:8080/v1"
 #     model: "Qwen3.5-27B"
 #   fallback:                                # Fallback model (used when primary is down)
 #     backend: "openai_compatible"
-#     url: "http://10.0.0.58:8001/v1"
+#     url: "http://localhost:8001/v1"
 #     model: "Qwen3.5-9B"
 #
 # --- BYOK Examples ---
@@ -95,7 +95,7 @@ finance:
 #
 # tts:
 #   backend: "local_http"
-#   url: "http://10.0.0.195:8002"
+#   url: "http://localhost:8002"
 #   voice: "jessica"
 #
 # --- Cloud TTS Examples ---

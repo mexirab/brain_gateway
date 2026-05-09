@@ -1,12 +1,15 @@
 # Voice PE Integration for Brain Gateway
 # Add these configurations to your Home Assistant
 #
+# TEMPLATE: replace ${JESS_HOST} below with your Brain Gateway host before
+# pasting into Home Assistant. HA YAML does not expand ${VAR} natively.
+#
 # Voice Pipeline: Voice PE -> Wyoming STT -> Brain Gateway -> Wyoming TTS -> Voice PE
 #
 # Services:
-#   - STT (Whisper): Helios 10.0.0.195:8003
-#   - TTS (Jessica/Qwen3): Helios 10.0.0.195:8002
-#   - Brain Gateway: Helios 10.0.0.195:8888
+#   - STT (Whisper): Helios ${JESS_HOST}:8003
+#   - TTS (Jessica/Qwen3): Helios ${JESS_HOST}:8002
+#   - Brain Gateway: Helios ${JESS_HOST}:8888
 
 # =============================================================================
 # STEP 1: Add to configuration.yaml
@@ -22,7 +25,7 @@ wyoming:
 # --------------------------------
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.195:8888/v1/chat/completions"
+    url: "http://${JESS_HOST}:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -44,7 +47,7 @@ rest_command:
     content_type: "application/json"
 
   generate_morning_briefing:
-    url: "http://10.0.0.195:8888/api/briefing/morning"
+    url: "http://${JESS_HOST}:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -59,11 +62,11 @@ rest_command:
 # Add two integrations:
 #
 # 1. STT (Speech-to-Text):
-#    Host: 10.0.0.173
+#    Host: ${JESS_HOST}
 #    Port: 8003
 #
 # 2. TTS (Text-to-Speech):
-#    Host: 10.0.0.173
+#    Host: ${JESS_HOST}
 #    Port: 8002
 
 # =============================================================================
@@ -74,8 +77,8 @@ rest_command:
 #
 # Name: Brain Gateway
 # Conversation agent: Brain Gateway (see intent_script below)
-# Speech-to-text: Wyoming (Whisper on 10.0.0.173:8003)
-# Text-to-speech: Wyoming (Qwen3-TTS on 10.0.0.173:8002)
+# Speech-to-text: Wyoming (Whisper on ${JESS_HOST}:8003)
+# Text-to-speech: Wyoming (Qwen3-TTS on ${JESS_HOST}:8002)
 #
 # Set as default for Voice PE in the device settings
 

@@ -1,5 +1,10 @@
 # ATOM Echo Integration for Brain Gateway
 # ========================================
+# TEMPLATE: replace ${JESS_HOST} below with your Brain Gateway host
+# (e.g. 10.0.0.195 or jess.example.tld) before deploying to Home Assistant.
+# HA YAML does not expand ${VAR} natively; the upcoming setup wizard renders
+# these for you.
+#
 # Configuration for M5Stack ATOM Echo with "Hey Jess" wake word
 #
 # Architecture (v7 unified):
@@ -26,12 +31,12 @@
 # Add TWO integrations:
 #
 # 1. Speech-to-Text (Whisper):
-#    - Host: 10.0.0.195
+#    - Host: ${JESS_HOST}
 #    - Port: 10300        # Wyoming bridge port; wraps the underlying HTTP STT on :8003
 #    - Name: Whisper STT (Helios)
 #
 # 2. Text-to-Speech (Jessica/Qwen3):
-#    - Host: 10.0.0.195
+#    - Host: ${JESS_HOST}
 #    - Port: 10301        # Wyoming bridge port; wraps the underlying HTTP TTS on :8002
 #    - Name: Jessica TTS (Helios)
 
@@ -64,7 +69,7 @@ wyoming:
 # REST Commands for Brain Gateway
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.195:8888/v1/chat/completions"
+    url: "http://${JESS_HOST}:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -87,7 +92,7 @@ rest_command:
     timeout: 30
 
   brain_gateway_expert:
-    url: "http://10.0.0.195:8888/v1/chat/completions"
+    url: "http://${JESS_HOST}:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -110,7 +115,7 @@ rest_command:
     timeout: 120
 
   generate_morning_briefing:
-    url: "http://10.0.0.195:8888/api/briefing/morning"
+    url: "http://${JESS_HOST}:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"

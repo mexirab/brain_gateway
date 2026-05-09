@@ -1,5 +1,8 @@
 # ATOM Echo S3R — Mic-Only Voice Satellite
 # ==========================================
+# TEMPLATE: replace ${JESS_HOST} below with your Brain Gateway host before
+# flashing to the device.
+#
 # M5Stack ATOM Echo S3R (ESP32-S3 + ES8311 codec + NS4150B amp)
 # Based on official M5Stack config (2026.1.2), customized for Brain Gateway.
 #
@@ -169,7 +172,7 @@ micro_wake_word:
     - model: okay_nabu
       id: okay_nabu
     # Custom "Hey Jess" wake word (served by model-server on Helios)
-    - model: http://10.0.0.195:8085/hey_jess.json
+    - model: http://${JESS_HOST}:8085/hey_jess.json
       id: hey_jess
   on_wake_word_detected:
     # Amp on → beep → wait for beep → amp off → start VA

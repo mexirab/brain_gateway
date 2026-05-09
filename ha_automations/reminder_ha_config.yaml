@@ -25,7 +25,7 @@
 #         target:
 #           entity_id: media_player.whole_home
 #         data:
-#           media_content_id: "http://10.0.0.195:8888/api/audio/reminders/abc12345.wav"
+#           media_content_id: "http://${JESS_HOST}:8888/api/audio/reminders/abc12345.wav"
 #           media_content_type: "audio/wav"
 #       - service: notify.mobile_app_nadims_iphone
 #         data:

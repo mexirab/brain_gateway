@@ -155,13 +155,14 @@ def get_presence_prompt_context() -> str:
         return ""
 
     p = get_presence()
+    name = shared.profile.user_name
     if p["is_home"]:
         if p["current_room"]:
-            return f"Nadim is home, currently in the {p['current_room']}."
+            return f"{name} is home, currently in the {p['current_room']}."
         elif p["last_motion_room"] and p["last_seen_ago_minutes"] is not None:
-            return f"Nadim is home, last seen in the {p['last_motion_room']} {p['last_seen_ago_minutes']} minutes ago."
-        return "Nadim is home."
+            return f"{name} is home, last seen in the {p['last_motion_room']} {p['last_seen_ago_minutes']} minutes ago."
+        return f"{name} is home."
     else:
         if p["away_minutes"] is not None:
-            return f"Nadim is away from home ({p['away_minutes']} minutes)."
-        return "Nadim is away from home."
+            return f"{name} is away from home ({p['away_minutes']} minutes)."
+        return f"{name} is away from home."

@@ -1,21 +1,25 @@
 """
-Wyoming Protocol Bridge for Whisper STT on Uranus
+Wyoming Protocol Bridge for Whisper STT
 
-Bridges Home Assistant's Wyoming STT protocol to the existing HTTP-based
-Whisper STT server on Uranus (large-v3 on GPU).
+Bridges Home Assistant's Wyoming STT protocol to the HTTP-based STT server
+(currently Parakeet TDT v3, formerly Whisper large-v3).
 
 Wyoming clients (HA voice pipelines) connect here,
 send audio → this bridge forwards to the HTTP STT API → returns transcript.
 
 Usage:
     python wyoming_whisper_bridge.py --uri tcp://0.0.0.0:10300 \
-        --stt-url http://10.0.0.173:8003 --language en
+        --stt-url http://stt-host:8003 --language en
+
+The --stt-url flag (or STT_URL env in compose) is required.
 """
 
 import argparse
 import asyncio
 import io
 import logging
+import os
+import sys
 import wave
 from functools import partial
 
@@ -71,7 +75,7 @@ class WhisperBridgeHandler(AsyncEventHandler):
             return True
 
         if AudioStop.is_type(event.type):
-            # All audio received — send to Uranus Whisper server
+            # All audio received — send to STT server
             if not self._audio_bytes:
                 await self.write_event(Transcript(text="").event())
                 return True
@@ -127,20 +131,23 @@ async def main():
     parser.add_argument("--uri", default="tcp://0.0.0.0:10300", help="Wyoming server URI")
     parser.add_argument(
         "--stt-url",
-        default="http://10.0.0.173:8003",
-        help="Whisper STT HTTP endpoint on Uranus",
+        default=os.environ.get("STT_URL", ""),
+        help="STT HTTP endpoint (required; or set STT_URL env)",
     )
     parser.add_argument("--language", default="en", help="Default language")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    logger.info("Starting Wyoming Whisper STT bridge on %s → %s", args.uri, args.stt_url)
+    if not args.stt_url:
+        logger.error("--stt-url is required (or set STT_URL env)")
+        sys.exit(2)
+    logger.info("Starting Wyoming STT bridge on %s → %s", args.uri, args.stt_url)
 
     wyoming_info = Info(
         asr=[
             AsrProgram(
                 name="whisper-uranus",
-                description="Whisper large-v3 on Uranus GPU",
+                description="STT bridge (Parakeet/Whisper)",
                 attribution=Attribution(
                     name="Brain Gateway",
                     url="https://github.com/ConvivialProphet/brain",

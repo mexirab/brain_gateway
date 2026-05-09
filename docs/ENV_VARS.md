@@ -4,11 +4,18 @@ All orchestrator-side environment variables, grouped by subsystem. Defaults in p
 
 For the authoritative template, see `.env.example` at the repo root.
 
+## Distribution profile
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `JESS_ADVANCED` | `false` | Master gate for owner-specific surface cut from the default shippable build. Two effects: (1) exposes 5 advanced tools to the LLM — `code_agent`, `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity` — via `tool_definitions.get_all_tools()` filtering; (2) registers two background jobs in `orchestrator.py` startup — the F-014 self-audit (additionally gated by `SELF_AUDIT_ENABLED`) and the nightly training-corpus drain (privacy hazard for fresh installs — collects user conversations). Handlers / job functions stay imported, just unregistered when off. Flip to `true` in `.env` for the development stack. |
+| `COMPOSE_PROFILES` | _empty_ | Native Docker Compose profile selector. Set to `advanced` in `.env` to bring up the operator/owner-specific services: `nebula-sync` (Pi-hole multi-instance config sync), `promtail` (log shipper to external Loki), `nut-exporter` (UPS metrics, requires NUT on host). Default-empty leaves only the core stack: orchestrator + open-webui + redis + searxng + frontend + the two wyoming bridges. Comma-separated for multiple profiles. Independent of `JESS_ADVANCED` — that gates application-level features; this gates compose-service startup. |
+
 ## Model / LLM backends
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MODEL_URL` | — | Primary model endpoint (e.g. `http://10.0.0.195:8080/v1`) |
+| `MODEL_URL` | `http://localhost:8080/v1` | Primary model endpoint (e.g. `http://llm.example.tld:8080/v1` for off-host) |
 | `MODEL_NAME` | — | Primary model name (current production: `qwen3.6-27b-int4` — Lorbus/Qwen3.6-27B-int4-AutoRound served by vLLM. Was `Qwen3.5-27B` until 2026-04-26 vLLM Phase 3 cutover.) |
 | `FALLBACK_MODEL_URL` | — | Fallback model endpoint (optional) |
 | `FALLBACK_MODEL_NAME` | — | Fallback model name (current production: `qwen3.6-27b-int4`; matches `MODEL_NAME` post Phase 3 cutover) |
@@ -25,7 +32,7 @@ One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 808
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `EXPERT_ENABLED` | `false` | Master flag. When false, `ask_expert` returns a disabled message and `query_budget` analyze-mode falls back to the surface-level `data` block. |
-| `EXPERT_MODEL_URL` | (empty) | Expert endpoint, e.g. `http://10.0.0.58:8084/v1`. |
+| `EXPERT_MODEL_URL` | (empty) | Expert endpoint, e.g. `http://expert.example.tld:8084/v1`. |
 | `EXPERT_MODEL_NAME` | `default` | Model name passed to llama-server's OpenAI-compatible API. |
 | `EXPERT_TIMEOUT_SECONDS` | `180` | Per-call timeout. Real latency is 30-150s. |
 | `EXPERT_MAX_TOKENS` | `8000` | Max output tokens. Set high enough that real reasoning completes — there is no thinking-budget lever in llama-server for Qwen3, and a low cap yields empty `content`. |
@@ -122,8 +129,8 @@ These env vars are bootstrap defaults. Once the runtime YAML at `SELFCARE_SCHEDU
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `VISION_ENABLED` | `true` | Enable/disable image analysis feature |
-| `VISION_MODEL_URL` | `http://10.0.0.58:8010/v1` | Vision model endpoint (Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080) |
+| `VISION_ENABLED` | `false` | Enable/disable image analysis feature |
+| `VISION_MODEL_URL` | (empty) | Vision model endpoint, e.g. `http://vision.example.tld:8010/v1` (Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080 in this deployment). Required when `VISION_ENABLED=true`. |
 | `VISION_MODEL_NAME` | `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | Vision model identifier (matches llama.cpp `--model` filename) |
 | `VISION_MAX_IMAGE_SIZE` | `10485760` | Maximum image upload size in bytes (10 MB) |
 | `VISION_TIMEOUT` | `60` | Vision model request timeout in seconds |
@@ -182,7 +189,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `TRAINING_CORPUS_DIR` | `/app/data/training_corpus` | Output dir for monthly `YYYY-MM.jsonl` archives. Append-only. |
 | `TRAINING_CORPUS_OWUI_DB` | `/app/owui_data/webui.db` | Open WebUI sqlite db read read-only via `open-webui-data:/app/owui_data:ro` mount. |
 | `TRAINING_CORPUS_STATE_DB` | `/app/data/brain_state.db` | state_store sqlite db; drains `chat_messages`. |
-| `TRAINING_CORPUS_CC_DIR` | `/root/.claude/projects/-opt-helios-gateway-mvp` | Claude Code session jsonls; user-turn extraction only. |
+| `TRAINING_CORPUS_CC_DIR` | `/root/.claude/projects/-opt-gateway-mvp` | Claude Code session jsonls; user-turn extraction only. |
 
 ## Paperless bridge (F-012)
 
@@ -191,7 +198,7 @@ Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging. If `PAPERL
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PAPERLESS_ENABLED` | `false` | Enable the F-012 bridge (`paperless_save` tool + `POST /api/paperless/upload`). Forced off if `PAPERLESS_URL` is empty or `PAPERLESS_API_TOKEN` is too short. |
-| `PAPERLESS_URL` | (empty) | Paperless-ngx base URL (e.g. `http://10.0.0.248:8777`). Required when enabled. |
+| `PAPERLESS_URL` | (empty) | Paperless-ngx base URL (e.g. `http://paperless.example.tld:8777`). Required when enabled. |
 | `PAPERLESS_API_TOKEN` | (empty) | Paperless API token. Required when enabled; must be >= 8 characters. |
 | `PAPERLESS_INBOX_PATH` | `/app/data/paperless_inbox` | Container-side staging dir the `paperless_save` tool reads from. Host-side: `/opt/gateway_mvp/data/app/paperless_inbox/`, bind-mounted via the existing `/app/data` mount. Filename-only inputs — handler rejects `/`, `\`, `..`, absolute paths, null bytes, and symlink escape. |
 | `PAPERLESS_DEFAULT_TAGS` | (empty) | Comma-separated tag names applied to every upload (in addition to tool-supplied tags). |
@@ -235,7 +242,8 @@ Daily 7am UTC scheduled job (`orchestrator/jobs_self_audit.py`) that queries Lok
 | `SELF_AUDIT_ENABLED` | `false` | Master flag. Default-OFF; flip to `true` in `.env` to enable both the daily cron job and `POST /api/self_audit/run`. |
 | `SELF_AUDIT_HOUR_UTC` | `7` | Hour of day (UTC) the daily cron fires. |
 | `SELF_AUDIT_LOOKBACK_HOURS` | `24` | How far back to query Loki for error/warn logs. |
-| `SELF_AUDIT_LOKI_URL` | `http://jupiter-amds.tail74fc4a.ts.net:3100` | Loki base URL. **Operator-controlled and trusted same as `MODEL_URL`** — there's no allow-list validator, only an `http(s)://` prefix check. Operators should not point this at attacker-controlled hosts. |
+| `SELF_AUDIT_LOKI_URL` | _empty (required when `SELF_AUDIT_ENABLED=true`)_ | Loki base URL (e.g. `http://loki.example.tld:3100`). **Operator-controlled and trusted same as `MODEL_URL`** — there's no allow-list validator, only an `http(s)://` prefix check. Operators should not point this at attacker-controlled hosts. If empty while self-audit is on, the model_validator auto-disables self-audit at startup. |
+| `SELF_AUDIT_PROM_URL` | _empty (optional)_ | Prometheus base URL used by the weekly review (e.g. `http://prom.example.tld:9090`). When unset, the weekly review skips Prometheus aggregates. |
 | `SELF_AUDIT_MAX_CLUSTERS` | `30` | Max number of `(service, first-80-chars-of-message)` clusters kept after frequency-bucketing before sending to Jess. |
 | `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Directory for `YYYY-MM-DD.md` markdown reports. Host-mounted via the existing `/app/data` bind. |
 | `SELF_AUDIT_LLM_TIMEOUT_SEC` | `120` | Per-call timeout for the diagnose-each-cluster `call_model` invocation. |
@@ -244,4 +252,4 @@ Daily 7am UTC scheduled job (`orchestrator/jobs_self_audit.py`) that queries Lok
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `LOKI_PUSH_URL` | `http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push` | Loki push endpoint used by the Helios promtail sidecar. Override with `http://10.0.0.248:3100/loki/api/v1/push` if the tailnet is unavailable. |
+| `LOKI_PUSH_URL` | _empty_ | Loki push endpoint used by the Helios promtail sidecar (e.g. `http://loki.example.tld:3100/loki/api/v1/push`). Required when `COMPOSE_PROFILES=advanced` is on (which brings up promtail); ignored otherwise. Soft default — fail-fast happens inside the promtail container, not at compose-parse time, because compose expands env vars file-wide before profile filtering. |

@@ -15,12 +15,13 @@ server:
 positions:
   filename: /tmp/positions.yaml
 
-# LAN-plaintext over Tailscale by default — Tailscale establishes a direct
-# WireGuard tunnel between Helios and Jupiter on the same subnet, so the push
-# traffic is authenticated and encrypted without cert management. Override
-# with a bare http:// URL via LOKI_PUSH_URL in .env if the tailnet is down.
+# LOKI_PUSH_URL is required — set in .env to your Loki push endpoint
+# (e.g. http://loki.example.tld:3100/loki/api/v1/push). Compose fails fast
+# at parse time if unset. If your Loki is on the same private network,
+# Tailscale gives you free WireGuard auth+encryption; otherwise consider
+# fronting Loki with TLS.
 clients:
-  - url: ${LOKI_PUSH_URL:-http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push}
+  - url: ${LOKI_PUSH_URL}
 
 scrape_configs:
   - job_name: docker

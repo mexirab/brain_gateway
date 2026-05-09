@@ -118,7 +118,7 @@ the model download. User kills it. No more restart loop.
 - **Destructive command filter:** the prompt explicitly forbids `rm`, `dd`, `mkfs`, `format`, `drop`, `truncate`. The implementation also greps the LLM output for those tokens and tags any cluster with one as `severity=LOW, action=REJECTED-AUTO` so it's visible but flagged.
 - **Loki URL** is on the trusted Tailscale network (jupiter.tail74fc4a.ts.net). No auth on the query path is intentional and documented; if Tailscale ACLs ever loosen, this needs revisiting.
 - **systemd journal exposure to Promtail:** the journal mount is `:ro`. Promtail-helios already runs with `cap_drop: ALL` and `no-new-privileges`. Adding the journal mount widens its blast-radius slightly but doesn't grant new capabilities.
-- **Manual trigger endpoint** (`POST /api/self_audit/run`) is bearer-gated via the existing `BearerAuthMiddleware` — not added to `PUBLIC_PREFIXES`.
+- **Manual trigger endpoint** (`POST /api/self_audit/run`) is bearer-gated via the existing `BearerAuthMiddleware` — not added to `PUBLIC_PREFIXES`. Additionally, `run_self_audit()` re-checks `SELF_AUDIT_ENABLED` and `JESS_ADVANCED` at function entry, so the manual route honors the same productization gate as the cron registration in `orchestrator.py` (no bypass).
 
 ## Testing checklist
 

@@ -100,4 +100,6 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 
 Helios container logs are shipped to Loki on Jupiter via a promtail sidecar (`promtail-helios`) defined in the main `docker-compose.yml`. The push path uses Tailscale MagicDNS (`LOKI_PUSH_URL`). If the tailnet is down, override `LOKI_PUSH_URL` to the Jupiter LAN IP (`http://10.0.0.248:3100/loki/api/v1/push`).
 
+**Advanced profile gating:** `promtail` (Helios sidecar), `nebula-sync` (multi-Pi-hole replication), and `nut-exporter` (UPS metrics) are all behind `profiles: ["advanced"]` in `docker-compose.yml`. Default installs skip them; set `COMPOSE_PROFILES=advanced` in `.env` to bring them up. `LOKI_PUSH_URL`, `NODE_JUPITER_IP`, and `NODE_SATURN_IP` use soft `${VAR:-}` defaults so default installs don't fail compose validation.
+
 See `monitoring/README.md` for full setup details including the two-promtail topology and LogQL examples.

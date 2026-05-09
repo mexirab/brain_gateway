@@ -300,11 +300,16 @@ services:
     container_name: nebula-sync
     restart: unless-stopped
     logging: *default-logging
+    # Owner-specific: requires multi-instance Pi-hole (primary + replica).
+    # Set COMPOSE_PROFILES=advanced in .env to bring this up.
+    profiles: ["advanced"]
     environment:
       # Derive nebula-sync endpoints from existing env vars so the password
       # only needs to be set once. Format is url|password (pipe-separated).
-      - PRIMARY=http://${NODE_JUPITER_IP:-10.0.0.248}:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
-      - REPLICAS=http://${NODE_SATURN_IP:-10.0.0.58}:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
+      # Both NODE_JUPITER_IP and NODE_SATURN_IP must be set in .env when this
+      # profile is active.
+      - PRIMARY=http://${NODE_JUPITER_IP:-}:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
+      - REPLICAS=http://${NODE_SATURN_IP:-}:${PIHOLE_WEB_PORT:-8053}|${PIHOLE_PASSWORD}
       - FULL_SYNC=true
       - RUN_GRAVITY=true
       # IMPORTANT: Pi-hole v6's /api/teleporter import endpoint unconditionally
@@ -422,6 +427,10 @@ services:
     container_name: promtail-helios
     restart: unless-stopped
     logging: *default-logging
+    # Operator-specific: ships logs to Loki on a separate monitoring host.
+    # Requires LOKI_PUSH_URL set in .env. Set COMPOSE_PROFILES=advanced to
+    # bring this up.
+    profiles: ["advanced"]
     cap_drop:
       - ALL
     security_opt:
@@ -437,7 +446,13 @@ services:
       - /etc/machine-id:/etc/machine-id:ro
       - promtail-helios-data:/tmp
     environment:
-      - LOKI_PUSH_URL=${LOKI_PUSH_URL:-http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push}
+      # When the `advanced` profile is active, set LOKI_PUSH_URL in .env to
+      # your Loki push endpoint, e.g. http://loki.example.tld:3100/loki/api/v1/push.
+      # Empty value passes through to promtail which fails fast at container
+      # startup. Soft default is intentional — the `:?` form would block
+      # `docker compose config` for default (non-advanced) installs because
+      # compose expands env vars file-wide before profile filtering.
+      - LOKI_PUSH_URL=${LOKI_PUSH_URL:-}
     command: -config.file=/etc/promtail/config.yml -config.expand-env=true
     networks:
       - promtail-net
@@ -462,6 +477,10 @@ services:
     container_name: nut-exporter
     restart: unless-stopped
     logging: *default-logging
+    # Owner-specific: requires NUT (Network UPS Tools) running on the host
+    # with USB-attached UPSes. Set COMPOSE_PROFILES=advanced in .env to
+    # bring this up.
+    profiles: ["advanced"]
     network_mode: host
     cap_drop:
       - ALL

@@ -39,7 +39,7 @@ action:
 
 # rest_command:
 #   generate_morning_briefing:
-#     url: "http://10.0.0.195:8888/api/briefing/morning"
+#     url: "http://${JESS_HOST}:8888/api/briefing/morning"
 #     method: POST
 #     headers:
 #       Content-Type: "application/json"

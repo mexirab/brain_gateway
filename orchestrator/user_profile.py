@@ -2,8 +2,8 @@
 User Profile — Loads user-specific configuration from YAML.
 
 Replaces all hardcoded personal data (names, addresses, speakers, sensors, etc.)
-with a configurable profile. Nadim's setup keeps working identically via
-user_profile.nadim.yaml. New users create their own user_profile.yaml.
+with a configurable profile. Each deployment ships its own user_profile.yaml
+(see user_profile.example.yaml for the template).
 
 Priority: env vars > profile YAML > built-in defaults
 """

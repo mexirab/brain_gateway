@@ -1,21 +1,25 @@
 """
 Wyoming Protocol Bridge for Jessica TTS
 
-Bridges Home Assistant's Wyoming protocol to the existing HTTP-based
-Jessica TTS server on Uranus (Qwen3-TTS with Jessica voice clone).
+Bridges Home Assistant's Wyoming protocol to the HTTP-based Qwen3-TTS server
+(Jessica voice clone).
 
 Wyoming clients (like voice_assistant ESPHome devices) connect here,
 send text → this bridge calls the HTTP TTS API → returns audio over Wyoming.
 
 Usage:
     python wyoming_jessica_bridge.py --uri tcp://0.0.0.0:10301 \
-        --tts-url http://10.0.0.173:8002 --voice jessica
+        --tts-url http://tts-host:8002 --voice jessica
+
+The --tts-url flag (or TTS_URL env in compose) is required.
 """
 
 import argparse
 import asyncio
 import io
 import logging
+import os
+import sys
 import wave
 from functools import partial
 
@@ -107,11 +111,18 @@ class JessicaTtsHandler(AsyncEventHandler):
 async def main():
     parser = argparse.ArgumentParser(description="Wyoming bridge for Jessica TTS")
     parser.add_argument("--uri", default="tcp://0.0.0.0:10301", help="Wyoming server URI")
-    parser.add_argument("--tts-url", default="http://10.0.0.173:8002", help="Jessica TTS HTTP endpoint")
+    parser.add_argument(
+        "--tts-url",
+        default=os.environ.get("TTS_URL", ""),
+        help="Jessica TTS HTTP endpoint (required; or set TTS_URL env)",
+    )
     parser.add_argument("--voice", default="jessica", help="Default voice name")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
+    if not args.tts_url:
+        logger.error("--tts-url is required (or set TTS_URL env)")
+        sys.exit(2)
     logger.info("Starting Wyoming Jessica TTS bridge on %s → %s", args.uri, args.tts_url)
 
     wyoming_info = Info(

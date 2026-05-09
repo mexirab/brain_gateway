@@ -8,7 +8,7 @@ Reuses encryption from auto_learn.py.
 Usage:
     from orchestrator.shared import get_palace
     palace = get_palace()
-    palace.store("Nadim prefers step-by-step", wing="personal", room="preferences")
+    palace.store("User prefers step-by-step", wing="personal", room="preferences")
     results = palace.search("preferences")
 """
 

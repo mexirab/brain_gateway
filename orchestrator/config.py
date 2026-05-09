@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     tz: str = "America/Chicago"
 
+    # -- Distribution profile ----------------------------------------------------
+    # JESS_ADVANCED gates owner-specific tools and integrations from the
+    # shippable single-box build (e.g. code_agent, ask_expert, query_budget,
+    # finance_status, check_claude_activity). Default OFF so a fresh install
+    # only exposes the core ADHD toolset; flip to true in .env to unlock the
+    # full advanced surface used in development.
+    jess_advanced: bool = False
+
     # -- Primary LLM -------------------------------------------------------------
     model_url: str = "http://localhost:8080/v1"
     model_name: str = ""
@@ -229,7 +237,7 @@ class Settings(BaseSettings):
     # llama-server for Qwen3 (scout misreported). Setting max_tokens below
     # the reasoning length truncates mid-thought and yields empty content.
     expert_enabled: bool = False
-    expert_model_url: str = ""  # e.g. http://10.0.0.58:8084/v1
+    expert_model_url: str = ""  # e.g. http://expert.example.tld:8084/v1
     expert_model_name: str = "default"
     expert_timeout_seconds: int = 180
     expert_max_tokens: int = 8000
@@ -262,7 +270,7 @@ class Settings(BaseSettings):
     # mirror state — Paperless owns its files and metadata. document_vault
     # is untouched (it stays the home for typed/pasted text notes).
     paperless_enabled: bool = False
-    paperless_url: str = ""  # e.g. http://10.0.0.248:8777
+    paperless_url: str = ""  # e.g. http://paperless.example.tld:8777
     paperless_api_token: str = ""
     paperless_inbox_path: str = "/app/data/paperless_inbox"
     paperless_default_tags: str = ""  # comma-separated, optional
@@ -273,10 +281,10 @@ class Settings(BaseSettings):
     # Includes HMAC-signed Done/Snooze action buttons that POST back to the
     # orchestrator, closing the ack loop and firing the selfcare bridge.
     ntfy_enabled: bool = False
-    ntfy_url: str = ""  # e.g. http://10.0.0.248:8889
+    ntfy_url: str = ""  # e.g. http://ntfy.example.tld:8889
     ntfy_topic: str = "jess-reminders"
     ntfy_default_priority: int = 3  # 1..5
-    ntfy_callback_base_url: str = ""  # e.g. http://helios.tail74fc4a.ts.net:8888
+    ntfy_callback_base_url: str = ""  # e.g. https://jess.example.tld
     ntfy_hmac_secret: str = ""  # required when ntfy_enabled; signs callback URLs
     ntfy_ack_exp_seconds: int = 1800  # signature validity window
     ntfy_max_snooze_count: int = 5  # guardrail against indefinite snooze loops
@@ -294,7 +302,7 @@ class Settings(BaseSettings):
     training_corpus_dir: str = "/app/data/training_corpus"
     training_corpus_owui_db: str = "/app/owui_data/webui.db"
     training_corpus_state_db: str = "/app/data/brain_state.db"
-    training_corpus_cc_dir: str = "/root/.claude/projects/-opt-helios-gateway-mvp"
+    training_corpus_cc_dir: str = "/root/.claude/projects/-opt-gateway-mvp"
 
     # -- Self-audit (F-014) ------------------------------------------------------
     # Daily 7am job that queries Loki for the last 24h of error/warn logs across
@@ -305,7 +313,8 @@ class Settings(BaseSettings):
     self_audit_enabled: bool = False
     self_audit_hour_utc: int = 7
     self_audit_lookback_hours: int = 24
-    self_audit_loki_url: str = "http://jupiter-amds.tail74fc4a.ts.net:3100"
+    self_audit_loki_url: str = ""  # required when self_audit_enabled; e.g. http://loki.example.tld:3100
+    self_audit_prom_url: str = ""  # optional, used by weekly review job; e.g. http://prom.example.tld:9090
     self_audit_max_clusters: int = 30
     self_audit_output_dir: str = "/app/data/self_audits"
     self_audit_llm_timeout_sec: int = 120

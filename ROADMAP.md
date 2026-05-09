@@ -87,6 +87,18 @@ Max practical context: **153,600 tokens** at `--gpu-memory-utilization 0.93`. Fu
 
 See [docs/VLLM_PHASE_3_PLAN.md](docs/VLLM_PHASE_3_PLAN.md) → Outcome for the full landed config.
 
+## In Progress: Productization (de-personalization)
+
+Per `/home/labadmin/.claude/plans/ship-jess-as-product.md` Phase 2. Replacing hardcoded user identity with `shared.profile.user_name` so the codebase can ship as a multi-user product.
+
+- ✅ Step 1 — Hardcoded user identity: `presence_tracker.py` 5× "Nadim is home/away" strings parameterized via `shared.profile.user_name` (`tests/test_presence_tracker.py`, 7 tests); `mempalace.py`, `tool_handlers.py`, `user_profile.py` docstring examples updated
+- ✅ Step 2 — Hardcoded-IP sweep: `config.py` defaults flipped to empty strings + `*.example.tld` comments (`expert_model_url`, `paperless_url`, `ntfy_url`, `ntfy_callback_base_url`, `self_audit_loki_url`); new `self_audit_prom_url` setting consumed by `jobs_self_audit._query_prometheus_summary` (skip-when-empty); `training_corpus_cc_dir` default corrected to `-opt-gateway-mvp`; `.env.example` and `user_profile.example.yaml` de-personalized; `docker-compose.yml`, `ha_automations/*`, `monitoring/promtail/promtail-helios.yml`, `tts/wyoming_*` env-driven. Live behavior preserved via `.env` additions.
+- ✅ Step 3 — `JESS_ADVANCED` flag (default false) gates 5 owner-only tools out of the shippable build: `code_agent`, `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity`. New setting in `config.py`, exposed via `shared.JESS_ADVANCED`; `tool_definitions.ADVANCED_ONLY_TOOL_NAMES` frozenset filters `get_all_tools()`. Tests in `orchestrator/tests/test_tool_gating.py`.
+- ✅ Step 4 — `JESS_ADVANCED` extended to background jobs: self-audit (`jobs_self_audit`) and training-corpus drain (`jobs_training_corpus`) registration in `orchestrator.py` startup is gated. `run_self_audit()` also checks both `SELF_AUDIT_ENABLED` and `JESS_ADVANCED` at the function level, closing the `POST /api/self_audit/run` manual-trigger bypass (same code path now applies to cron + route). Tests in `orchestrator/tests/test_self_audit_gate.py` (3 tests).
+- ✅ Step 5 — Compose profile gating: `nebula-sync`, `promtail` (Helios sidecar), and `nut-exporter` moved behind `profiles: ["advanced"]` in `docker-compose.yml`. Default install brings up only the 7 core services (open-webui, orchestrator, redis, searxng, wyoming-whisper, wyoming-jessica-tts, frontend); set `COMPOSE_PROFILES=advanced` in `.env` to enable the owner-specific log-shipping, multi-Pi-hole sync, and NUT/UPS observability services. `LOKI_PUSH_URL` and `NODE_*_IP` defaults relaxed to `${VAR:-}` (soft fallback) because compose expands env vars file-wide before profile filtering — the previous `:?error` form would have blocked fresh installs.
+- ✅ Step 6 — Dead-code cleanup: removed the 7-day calibration review block from `jobs_self_audit.py` (scheduled for 2026-05-02, already past). `run_self_audit_review()` and 6 review-only helpers (~350 lines) deleted; `prometheus.yml` `nut` scrape job documented as advanced-profile-dependent.
+- ⬜ Remaining production code paths with hardcoded "Nadim" string literals (audit pending)
+
 ## Known Issues / TODOs
 
 | Issue | Priority | Notes |

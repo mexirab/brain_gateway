@@ -204,8 +204,8 @@ async def tool_check_calendar(days_ahead: int = 7) -> str:
     """Check calendar for upcoming events.
 
     Mirrors the morning briefing's source priority: phone calendar sync first
-    (covers Gmail + iCloud + Work — the superset Nadim actually uses), with
-    Google Calendar as the fallback when the phone sync is missing or stale
+    (covers the superset of calendars the user actually uses — e.g. Gmail +
+    iCloud + Work), with Google Calendar as the fallback when the phone sync is missing or stale
     (>24h old). Previously this tool hit Google directly and silently missed
     everything that only lived on the iPhone calendars.
     """

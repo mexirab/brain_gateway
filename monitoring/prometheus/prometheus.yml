@@ -180,6 +180,11 @@ scrape_configs:
   # state — no load watts available from firmware. For Goldenmate watts, use
   # a Kasa/Tapo smart plug at the wall (separate ingestion via Home Assistant)
   # or sum nvidia-smi power draw on Helios.
+  #
+  # Depends on the `nut-exporter` container running on Helios — that's gated
+  # behind COMPOSE_PROFILES=advanced in the Helios docker-compose.yml. Comment
+  # this whole job out (or remove the targets) on monitoring hosts deployed
+  # against a default-profile Helios stack.
   - job_name: 'nut'
     metrics_path: /ups_metrics
     scrape_interval: 15s

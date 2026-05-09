@@ -1,15 +1,18 @@
 # Home Assistant Configuration Additions for Voice PE
 # ==================================================
+# TEMPLATE: replace ${JESS_HOST} below with your Brain Gateway host before
+# pasting into configuration.yaml. HA YAML does not expand ${VAR} natively.
+#
 # Add these sections to your configuration.yaml
 #
-# Voice Pipeline: Voice PE -> STT (Helios) -> Brain Gateway -> TTS (Helios) -> Voice PE
+# Voice Pipeline: Voice PE -> STT -> Brain Gateway -> TTS -> Voice PE
 
 # -----------------------------------------------------------------------------
 # REST Commands - Brain Gateway Integration
 # -----------------------------------------------------------------------------
 rest_command:
   brain_gateway_chat:
-    url: "http://10.0.0.195:8888/v1/chat/completions"
+    url: "http://${JESS_HOST}:8888/v1/chat/completions"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -32,7 +35,7 @@ rest_command:
     timeout: 30
 
   generate_morning_briefing:
-    url: "http://10.0.0.195:8888/api/briefing/morning"
+    url: "http://${JESS_HOST}:8888/api/briefing/morning"
     method: POST
     headers:
       Content-Type: "application/json"
@@ -64,7 +67,7 @@ template:
 # -----------------------------------------------------------------------------
 binary_sensor:
   - platform: ping
-    host: 10.0.0.195
+    host: ${JESS_HOST}
     name: Brain Gateway Health
     count: 2
     scan_interval: 60
@@ -75,7 +78,7 @@ binary_sensor:
 sensor:
   - platform: rest
     name: Brain Gateway Details
-    resource: http://10.0.0.195:8888/health
+    resource: http://${JESS_HOST}:8888/health
     json_attributes:
       - status
       - chromadb

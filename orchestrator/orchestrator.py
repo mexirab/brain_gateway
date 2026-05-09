@@ -793,7 +793,8 @@ async def startup_event():
     # each cluster, pushes a one-line digest via Pushover, saves a markdown
     # report under SELF_AUDIT_OUTPUT_DIR. Read-only by design — Jess emits
     # text only; the user reviews and runs commands manually.
-    if shared.SELF_AUDIT_ENABLED:
+    # Gated by JESS_ADVANCED (operator feature, requires Loki + Pushover stack).
+    if shared.SELF_AUDIT_ENABLED and shared.JESS_ADVANCED:
         from orchestrator.jobs_self_audit import run_self_audit
 
         scheduler.add_job(
@@ -807,54 +808,37 @@ async def startup_event():
         )
         logger.info(f"[SCHEDULER] Self-audit daily at {shared.SELF_AUDIT_HOUR_UTC:02d}:00 UTC")
 
-        # One-shot 7-day calibration review at 2026-05-02 14:00 UTC.
-        # Uses the code agent (Qwen3-Coder-Next) as a neutral judge to grade
-        # whether the daily F-014 audit is earning its keep. Registered only
-        # if the run date is still in the future — re-registrations after
-        # the date passes become no-ops.
-        from orchestrator.jobs_self_audit import run_self_audit_review
-
-        review_run_at = datetime(2026, 5, 2, 14, 0, 0, tzinfo=scheduler.timezone)
-        if datetime.now(scheduler.timezone) < review_run_at:
-            scheduler.add_job(
-                run_self_audit_review,
-                trigger="date",
-                run_date=review_run_at,
-                id="self_audit_review_one_shot",
-                name="Self-audit 7-day calibration review",
-                replace_existing=True,
-                misfire_grace_time=3600,
-            )
-            logger.info(f"[SCHEDULER] Self-audit 7-day review one-shot at {review_run_at.isoformat()}")
-
     # Training corpus drain: nightly at 02:30 — appends new user/assistant
     # turns from OWUI + state_store + Claude Code sessions to monthly JSONL
     # files under /app/data/training_corpus/. Append-only, content-addressed
     # dedup, no retention cap. Backs future fine-tuning runs.
-    from orchestrator.jobs_training_corpus import drain_training_corpus
+    # Gated by JESS_ADVANCED — collects user conversation data, privacy hazard
+    # for the default shippable build.
+    if shared.JESS_ADVANCED:
+        from orchestrator.jobs_training_corpus import drain_training_corpus
 
-    scheduler.add_job(
-        drain_training_corpus,
-        trigger="cron",
-        hour=2,
-        minute=30,
-        id="training_corpus_drain",
-        name="Training corpus drain",
-        replace_existing=True,
-    )
-    # Also run a backfill one-shot 30s after startup. Idempotent: the drain
-    # dedups by content-addressed id, so re-running is effectively free once
-    # the corpus is caught up. Keeps the metric warm in the FastAPI process.
-    # Use the scheduler's own tz so the naive-now footgun is avoided.
-    scheduler.add_job(
-        drain_training_corpus,
-        trigger="date",
-        run_date=datetime.now(scheduler.timezone) + timedelta(seconds=30),
-        id="training_corpus_backfill",
-        name="Training corpus backfill (startup)",
-        replace_existing=True,
-    )
-    logger.info("[SCHEDULER] Training corpus drain daily at 02:30 + startup backfill")
+        scheduler.add_job(
+            drain_training_corpus,
+            trigger="cron",
+            hour=2,
+            minute=30,
+            id="training_corpus_drain",
+            name="Training corpus drain",
+            replace_existing=True,
+        )
+        # Also run a backfill one-shot 30s after startup. Idempotent: the drain
+        # dedups by content-addressed id, so re-running is effectively free once
+        # the corpus is caught up. Keeps the metric warm in the FastAPI process.
+        # Use the scheduler's own tz so the naive-now footgun is avoided.
+        scheduler.add_job(
+            drain_training_corpus,
+            trigger="date",
+            run_date=datetime.now(scheduler.timezone) + timedelta(seconds=30),
+            id="training_corpus_backfill",
+            name="Training corpus backfill (startup)",
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Training corpus drain daily at 02:30 + startup backfill")
 
     # RAG source file watcher: periodically check ~/rag/nadim_rag for edits
     # and re-ingest changed files into shared.collection. Runs in-process so
