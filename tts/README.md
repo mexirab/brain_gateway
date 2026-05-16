@@ -15,7 +15,7 @@ Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whis
 - **Voice cloning** from audio samples (requires Base model, not CustomVoice)
 - **Auto-load voices** from `~/tts-voices/voices.json` on startup
 - **OpenAI-compatible endpoint** (`/v1/audio/speech`)
-- **Jessica McCabe voice** pre-configured for ADHD-friendly announcements
+- **Default voice** pre-configured for ADHD-friendly announcements
 
 ## STT Features
 
@@ -61,10 +61,10 @@ mkdir -p ~/tts-voices
 # Create voices.json with your cloned voices
 cat > ~/tts-voices/voices.json << 'EOF'
 {
-  "jessica": {
-    "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
-    "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
-    "description": "Jessica McCabe - warm, energetic ADHD advocate"
+  "myvoice": {
+    "ref_audio": "/home/youruser/tts-voices/myvoice_sample.wav",
+    "ref_text": "A transcript of exactly what is spoken in the reference audio clip.",
+    "description": "Warm, energetic voice"
   }
 }
 EOF
@@ -124,7 +124,7 @@ curl http://10.0.0.173:8002/voices
 curl -X POST http://10.0.0.173:8002/tts \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "Hey Nadim, your morning meds are due.",
+    "text": "Hey there, your morning meds are due.",
     "voice": "Ethan",
     "emotion": "warm and friendly"
   }' \
@@ -137,10 +137,10 @@ curl -X POST http://10.0.0.173:8002/tts \
 curl -X POST http://10.0.0.173:8002/voices/load \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "jessica",
-    "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
-    "ref_text": "And trying to get my brain to focus...",
-    "description": "Jessica McCabe voice"
+    "name": "myvoice",
+    "ref_audio": "/home/youruser/tts-voices/myvoice_sample.wav",
+    "ref_text": "A transcript of exactly what is spoken in the reference clip...",
+    "description": "Warm, energetic voice"
   }'
 ```
 
@@ -148,7 +148,7 @@ curl -X POST http://10.0.0.173:8002/voices/load \
 ```bash
 curl -X POST http://10.0.0.173:8002/tts \
   -H "Content-Type: application/json" \
-  -d '{"text": "Good morning!", "voice": "jessica"}' \
+  -d '{"text": "Good morning!", "voice": "myvoice"}' \
   --output speech.wav
 ```
 
@@ -213,7 +213,7 @@ curl http://10.0.0.173:8003/health
 A shell script (`scripts/morning_briefing.sh`) handles morning briefings:
 1. Searches RAG for morning routine/meds info
 2. Generates personalized briefing via Nemotron
-3. Synthesizes audio with Jessica's voice
+3. Synthesizes audio with the configured voice
 4. Plays on HA speaker via `media_player.play_media`
 
 ```bash
@@ -230,7 +230,7 @@ environment:
   - AUDIO_TTS_ENGINE=openai
   - AUDIO_TTS_OPENAI_API_BASE_URL=http://10.0.0.173:8002/v1
   - AUDIO_TTS_OPENAI_API_KEY=local
-  - AUDIO_TTS_VOICE=jessica
+  - AUDIO_TTS_VOICE=default
   # STT
   - AUDIO_STT_ENGINE=openai
   - AUDIO_STT_OPENAI_API_BASE_URL=http://10.0.0.173:8003/v1

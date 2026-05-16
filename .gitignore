@@ -6,6 +6,8 @@
 
 # Active user profile (contains personal data)
 user_profile.yaml
+# Owner's personal profile copy — kept on disk, never shipped
+user_profile.nadim.yaml
 
 # Backups
 *.backup
