@@ -19,8 +19,10 @@ GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in th
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `MODEL_BIND_ADDR` | `127.0.0.1` | Host interface the `vllm-primary` / `qwen-tts` / `parakeet-stt` published ports bind to. Loopback by default — the model APIs are unauthenticated and the orchestrator reaches them over the compose network. Set `0.0.0.0` for LAN access. |
 | `VLLM_MODEL` | `Lorbus/Qwen3.6-27B-int4-AutoRound` | HuggingFace repo id for the primary LLM. 24GB tier → `Qwen/Qwen3-14B-Instruct-AWQ`; 32/48GB tier → the default. |
 | `VLLM_SERVED_NAME` | `qwen3.6-27b-int4` | `--served-model-name` exposed on the OpenAI-compatible API. Should match the orchestrator's `MODEL_NAME`. |
+| `VLLM_QUANTIZATION` | `auto_round` | vLLM `--quantization`. `auto_round` for the default AutoRound model; `awq` for AWQ models; `auto` to detect from the model config. |
 | `VLLM_MAX_MODEL_LEN` | `153600` | `--max-model-len` (context window). |
 | `VLLM_GPU_MEM_UTIL` | `0.93` | `--gpu-memory-utilization` fraction. |
 | `JESS_VRAM_TIER` | (empty) | VRAM tier (`24` \| `32` \| `48`). Written by `scripts/detect_hardware.sh`, which reads `nvidia-smi` and also prints a suggested `VLLM_MODEL`. |

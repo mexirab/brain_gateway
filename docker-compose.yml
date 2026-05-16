@@ -354,8 +354,13 @@ services:
     restart: unless-stopped
     logging: *default-logging
     profiles: ["models"]
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "${SERVICE_MODEL_PORT:-8080}:8000"
+      # Bound to loopback by default — vLLM's OpenAI API is unauthenticated.
+      # The orchestrator reaches it over gateway-net DNS (vllm-primary:8000),
+      # not this published port. Set MODEL_BIND_ADDR=0.0.0.0 for LAN access.
+      - "${MODEL_BIND_ADDR:-127.0.0.1}:${SERVICE_MODEL_PORT:-8080}:8000"
     ipc: host
     shm_size: "16gb"
     volumes:
@@ -373,7 +378,7 @@ services:
       - --served-model-name
       - ${VLLM_SERVED_NAME:-qwen3.6-27b-int4}
       - --quantization
-      - auto_round
+      - ${VLLM_QUANTIZATION:-auto_round}
       - --kv-cache-dtype
       - fp8_e4m3
       - --max-model-len
@@ -417,8 +422,10 @@ services:
     restart: unless-stopped
     logging: *default-logging
     profiles: ["models"]
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "${SERVICE_TTS_PORT:-8002}:8002"
+      - "${MODEL_BIND_ADDR:-127.0.0.1}:${SERVICE_TTS_PORT:-8002}:8002"
     volumes:
       - model-hf-cache:/root/.cache/huggingface
       - ${TTS_VOICES_PATH:-./data/tts_voices}:/app/voices:rw
@@ -456,8 +463,10 @@ services:
     restart: unless-stopped
     logging: *default-logging
     profiles: ["models"]
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "${SERVICE_STT_PORT:-8003}:8003"
+      - "${MODEL_BIND_ADDR:-127.0.0.1}:${SERVICE_STT_PORT:-8003}:8003"
     volumes:
       - model-hf-cache:/root/.cache/huggingface
     environment:

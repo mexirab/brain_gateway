@@ -42,7 +42,12 @@ docker compose --profile models config
 
 # Bring up the full stack including the model layer
 COMPOSE_PROFILES=models docker compose up -d --build
+
+# Once the model containers are healthy, smoke-test them
+bash scripts/model_layer_smoketest.sh
 ```
+
+Full deploy + validation procedure (for a test box): `docs/MODEL_LAYER_BOOT_TEST.md`.
 
 ---
 
