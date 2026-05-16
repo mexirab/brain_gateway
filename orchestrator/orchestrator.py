@@ -70,6 +70,9 @@ from orchestrator.prompt_builder import (
 
 # Settings page (`/api/config/*`)
 from orchestrator.routes_config import router as config_router
+
+# First-boot setup wizard (`/api/setup/*`)
+from orchestrator.routes_setup import router as setup_router
 from orchestrator.shared import (
     CALENDAR_POLL_INTERVAL,
     FALLBACK_MODEL_NAME,
@@ -242,6 +245,7 @@ app.add_middleware(RateLimitMiddleware)
 app.include_router(api_router)
 app.include_router(finance_router)
 app.include_router(config_router)
+app.include_router(setup_router)
 
 
 # Global exception handler for typed Brain Gateway errors
@@ -431,6 +435,18 @@ async def startup_event():
     state_store.clear_stale_notifications(older_than_hours=48)
     state_store.cleanup_old_announcements(keep_days=30)
     state_store.cleanup_old_selfcare(keep_days=90)
+
+    # First-boot setup wizard state (does not gate startup — informational)
+    from orchestrator.routes_setup import is_first_boot
+
+    # Informational only — must never abort startup, hence the broad guard.
+    try:
+        if is_first_boot():
+            logger.info("[SETUP] First boot — setup wizard not yet completed (/api/setup/*)")
+        else:
+            logger.info("[SETUP] Setup wizard previously completed")
+    except Exception:
+        logger.warning("[SETUP] first-boot check failed (non-fatal)", exc_info=True)
 
     # Restore selfcare state from DB (must run after init_db creates tables)
     from orchestrator.selfcare_manager import _restore_state as restore_selfcare

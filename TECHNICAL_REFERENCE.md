@@ -195,6 +195,47 @@ Responses are never cached. No local copy is persisted on Helios — Paperless o
 | POST | `/api/claude_code/turn` | Stop hook target — logs a completed Claude Code turn to the 7-day rolling buffer |
 | GET | `/api/claude_code/recent?minutes=120&limit=20` | List recent Claude Code turns for dashboards or the `check_claude_activity` tool |
 
+### Setup Wizard (`/api/setup/*`)
+
+First-boot setup-wizard backend. Backed by `orchestrator/routes_setup.py`. All three endpoints are bearer-gated (NOT in `PUBLIC_PREFIXES`) — the orchestrator refuses to boot without `API_TOKEN`, so a token always exists by the time these are reachable. No DB schema change: state is two JSON files under the `/app/data` bind mount.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET  | `/api/setup/status` | Report whether the first-boot wizard has been completed. Returns `{ok: true, setup_completed: bool, completed_at: str\|null}`. |
+| GET  | `/api/setup/hardware` | Serve the cached hardware scan that feeds the wizard's model-selection step. |
+| POST | `/api/setup/complete` | Mark the wizard done and persist the timestamp. Idempotent — a re-POST keeps the original `completed_at`. Returns `{ok: true, setup_completed: true, completed_at: str}`. |
+
+**State files.** `/app/data/setup_state.json` (`{setup_completed, completed_at}`) is written by `/api/setup/complete` via an atomic tmpfile + `os.replace` + fsync write (JSON sibling of `config_writer.atomic_write_yaml`). A corrupt/unreadable `setup_state.json` degrades to "first boot" (`is_first_boot()` → `True`) and self-heals on the next `/complete`.
+
+**Hardware scan is host-produced.** The orchestrator container is CPU-only — it has no GPU access and cannot run `nvidia-smi`. `/api/setup/hardware` does NOT detect hardware live; it serves a cached `/app/data/hardware_scan.json` artifact written HOST-SIDE by `scripts/detect_hardware.sh --json <path>`. The operator runs `bash scripts/detect_hardware.sh --json data/app/hardware_scan.json` on the host before/during install.
+
+`GET /api/setup/hardware` response when the scan exists:
+
+```json
+{
+  "ok": true,
+  "available": true,
+  "scan": {
+    "gpus": [{"index": 0, "name": "NVIDIA GeForce RTX 5090", "vram_gib": 32}],
+    "gpu_count": 1,
+    "driver": "570.xx",
+    "ram_gib": 125,
+    "largest_gpu_gib": 32,
+    "vram_tier": 32,
+    "tensor_parallel_advisory": 1,
+    "recommendation": {
+      "model": "Lorbus/Qwen3.6-27B-int4-AutoRound",
+      "quantization": "...",
+      "max_model_len": 32768,
+      "gpu_mem_util": 0.90,
+      "vision_capable": false
+    }
+  }
+}
+```
+
+When no scan file is present, the response is `{"ok": true, "available": false, "hint": "<re-run instruction>"}` — never an error; the wizard surfaces the hint to the operator.
+
 ### Settings (`/api/config/*`)
 
 All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orchestrator/routes_config.py`. Every successful PUT/POST/DELETE writes a redacted before/after diff to the `config_changes` SQLite table via `config_writer.log_config_change(panel, before, after)`. YAML writes go through `config_writer.atomic_write_yaml()` (tmpfile + `os.replace` + fsync).

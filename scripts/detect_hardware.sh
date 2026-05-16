@@ -2,8 +2,9 @@
 # detect_hardware.sh — analyze the box's GPU(s) + RAM and recommend a vLLM
 # model configuration for the `models` compose profile.
 #
-#   bash scripts/detect_hardware.sh           # print the analysis + recommendation
-#   bash scripts/detect_hardware.sh >> .env   # append the recommended KEY=value knobs
+#   bash scripts/detect_hardware.sh                 # print analysis + recommendation
+#   bash scripts/detect_hardware.sh >> .env         # append the KEY=value knobs
+#   bash scripts/detect_hardware.sh --json <path>   # also write a structured JSON scan
 #
 # Human-readable analysis goes to stderr; only the KEY=value recommendation
 # goes to stdout, so the `>> .env` form yields a clean env fragment. This is
@@ -15,6 +16,25 @@ MIN_DRIVER_MAJOR=570
 
 emit() { printf '%s\n' "$*"; }       # machine-readable -> stdout
 log()  { printf '%s\n' "$*" >&2; }   # human-readable    -> stderr
+
+# --- arguments -------------------------------------------------------------
+# --json <path>: in addition to the normal output, write the structured scan
+# to <path> as JSON (consumed by the orchestrator /api/setup/hardware endpoint).
+json_path=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --json)
+            json_path="${2:-}"
+            if [ -z "$json_path" ]; then
+                log "ERROR: --json requires a path argument."
+                exit 2
+            fi
+            shift 2 ;;
+        *)
+            log "WARNING: ignoring unknown argument '$1'."
+            shift ;;
+    esac
+done
 
 # --- GPU presence ----------------------------------------------------------
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -36,6 +56,7 @@ log ""
 log "GPUs (${#gpus[@]}):"
 max_mib=0
 second_mib=0
+gpu_json=""
 for row in "${gpus[@]}"; do
     idx=$(printf '%s' "$row"  | cut -d, -f1 | tr -d ' ')
     name=$(printf '%s' "$row" | cut -d, -f2 | sed 's/^ *//;s/ *$//')
@@ -48,6 +69,8 @@ for row in "${gpus[@]}"; do
         continue
     fi
     log "  [${idx}] ${name} — $(( mib / 1024 )) GiB"
+    name_esc=$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    gpu_json="${gpu_json}${gpu_json:+,}{\"index\":${idx},\"name\":\"${name_esc}\",\"vram_gib\":$(( mib / 1024 ))}"
     if [ "$mib" -gt "$max_mib" ]; then
         second_mib=$max_mib
         max_mib=$mib
@@ -120,8 +143,10 @@ fi
 # --- tensor-parallel advisory ---------------------------------------------
 # 2+ GPUs where the smaller is >=85% of the largest (within ~15%) => a TP
 # pair could run a bigger model.
+tp_advisory="false"
 if [ "${#gpus[@]}" -ge 2 ] && [ "${second_mib}" -gt 0 ] \
    && [ $(( second_mib * 100 / max_mib )) -ge 85 ]; then
+    tp_advisory="true"
     log ""
     log "Multi-GPU: ${#gpus[@]} similar GPUs detected. Tensor-parallel across them"
     log "  could run a larger model (effective VRAM ≈ the sum). The default compose"
@@ -160,3 +185,41 @@ fi
 emit "VLLM_QUANTIZATION=${quant}"
 emit "VLLM_MAX_MODEL_LEN=${maxlen}"
 emit "VLLM_GPU_MEM_UTIL=${gpumem}"
+
+# --- optional JSON artifact (--json <path>) --------------------------------
+# Written atomically (tmpfile + mv). Consumed by GET /api/setup/hardware.
+if [ -n "${json_path}" ]; then
+    vision="false"
+    [ "${note}" = "vision-capable" ] && vision="true"
+    model_json="null"
+    [ -n "${model}" ] && model_json="\"${model}\""
+    tier_json="null"
+    [ -n "${tier}" ] && tier_json="${tier}"
+    mkdir -p "$(dirname "${json_path}")" 2>/dev/null
+    tmp_json="${json_path}.tmp.$$"
+    if {
+        printf '{\n'
+        printf '  "gpus": [%s],\n'                    "${gpu_json}"
+        printf '  "gpu_count": %s,\n'                 "${#gpus[@]}"
+        printf '  "driver": "%s",\n'                  "${driver}"
+        printf '  "ram_gib": %s,\n'                   "${ram_gib:-0}"
+        printf '  "largest_gpu_gib": %s,\n'           "${max_gib}"
+        printf '  "vram_tier": %s,\n'                 "${tier_json}"
+        printf '  "tensor_parallel_advisory": %s,\n'  "${tp_advisory}"
+        printf '  "recommendation": {\n'
+        printf '    "model": %s,\n'                   "${model_json}"
+        printf '    "quantization": "%s",\n'          "${quant}"
+        printf '    "max_model_len": %s,\n'           "${maxlen}"
+        printf '    "gpu_mem_util": %s,\n'            "${gpumem}"
+        printf '    "vision_capable": %s\n'           "${vision}"
+        printf '  }\n'
+        printf '}\n'
+    } > "${tmp_json}"; then
+        mv -f "${tmp_json}" "${json_path}"
+        log "Wrote hardware scan JSON to ${json_path}"
+    else
+        rm -f "${tmp_json}"
+        log "ERROR: failed to write JSON to ${json_path}"
+        exit 3
+    fi
+fi
