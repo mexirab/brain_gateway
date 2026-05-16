@@ -34,7 +34,7 @@ The `models` compose profile runs vLLM + Qwen3-TTS + Parakeet STT as containers.
 Not used on Helios — that box runs the model layer as host systemd units (see the
 Helios Primary Model section below). For a fresh install:
 ```bash
-# Detect VRAM tier → suggested VLLM_MODEL (read-only)
+# Analyze GPU(s) → recommended model config (read-only; append with >> .env)
 bash scripts/detect_hardware.sh
 
 # Validate the stanzas without starting anything

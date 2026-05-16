@@ -25,7 +25,7 @@ GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in th
 | `VLLM_QUANTIZATION` | `auto_round` | vLLM `--quantization`. `auto_round` for the default AutoRound model; `awq` for AWQ models; `auto` to detect from the model config. |
 | `VLLM_MAX_MODEL_LEN` | `153600` | `--max-model-len` (context window). |
 | `VLLM_GPU_MEM_UTIL` | `0.93` | `--gpu-memory-utilization` fraction. |
-| `JESS_VRAM_TIER` | (empty) | VRAM tier (`24` \| `32` \| `48`). Written by `scripts/detect_hardware.sh`, which reads `nvidia-smi` and also prints a suggested `VLLM_MODEL`. |
+| `JESS_VRAM_TIER` | (empty) | VRAM tier (`24` \| `32` \| `48`). Written by `scripts/detect_hardware.sh`, which analyzes the box's GPU(s) + RAM + driver and prints a full recommended model config — `VLLM_MODEL`, `VLLM_QUANTIZATION`, `VLLM_MAX_MODEL_LEN`, `VLLM_GPU_MEM_UTIL`. |
 | `QWEN_TTS_MODEL` | `Qwen/Qwen3-TTS-1.7B-Base` | HuggingFace repo id for the TTS model; downloads into `model-hf-cache` on first run. |
 | `QWEN_TTS_DTYPE` | `bfloat16` | TTS model compute dtype. |
 | `QWEN_TTS_FLASH_ATTN` | `false` | Enable FlashAttention in the TTS server. |
