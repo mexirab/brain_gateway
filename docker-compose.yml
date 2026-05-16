@@ -339,6 +339,150 @@ services:
     networks:
       - gateway-net
 
+  # --------------------------------------------------------------------------
+  # Model layer (compose profile: models)
+  # --------------------------------------------------------------------------
+  # vLLM (primary LLM), Qwen3-TTS, and Parakeet STT. Gated behind the `models`
+  # profile: on Helios these run as host systemd units (vllm-primary.service,
+  # qwen-tts.service, parakeet-stt.service) and must NOT be double-started by
+  # compose — leaving `models` out of COMPOSE_PROFILES keeps `docker compose up`
+  # clear of them. A fresh single-box install sets COMPOSE_PROFILES=models to
+  # bring the whole stack up in Docker. GPU pinning: vLLM → GPU0, TTS+STT → GPU1.
+  vllm-primary:
+    image: vllm/vllm-openai:v0.19.1
+    container_name: vllm-primary
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["models"]
+    ports:
+      - "${SERVICE_MODEL_PORT:-8080}:8000"
+    ipc: host
+    shm_size: "16gb"
+    volumes:
+      - model-hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    command:
+      - --model
+      - ${VLLM_MODEL:-Lorbus/Qwen3.6-27B-int4-AutoRound}
+      - --served-model-name
+      - ${VLLM_SERVED_NAME:-qwen3.6-27b-int4}
+      - --quantization
+      - auto_round
+      - --kv-cache-dtype
+      - fp8_e4m3
+      - --max-model-len
+      - "${VLLM_MAX_MODEL_LEN:-153600}"
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_MEM_UTIL:-0.93}"
+      - --max-num-seqs
+      - "2"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --reasoning-parser
+      - qwen3
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":3}'
+      - --enable-prefix-caching
+      - --language-model-only
+      - --skip-mm-profiling
+      - --performance-mode
+      - interactivity
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      # Generous: first boot downloads the model from HuggingFace (~15GB for a
+      # 27B int4) before the server is ready.
+      start_period: 900s
+      retries: 3
+    networks:
+      - gateway-net
+
+  qwen-tts:
+    build:
+      context: ./tts
+      dockerfile: Dockerfile
+    container_name: qwen-tts
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["models"]
+    ports:
+      - "${SERVICE_TTS_PORT:-8002}:8002"
+    volumes:
+      - model-hf-cache:/root/.cache/huggingface
+      - ${TTS_VOICES_PATH:-./data/tts_voices}:/app/voices:rw
+    environment:
+      # GPU1 is pinned as the only visible device → index 0 inside the container.
+      - QWEN_TTS_MODEL=${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-1.7B-Base}
+      - QWEN_TTS_DEVICE=cuda:0
+      - QWEN_TTS_PORT=8002
+      - QWEN_TTS_DTYPE=${QWEN_TTS_DTYPE:-bfloat16}
+      - QWEN_TTS_FLASH_ATTN=${QWEN_TTS_FLASH_ATTN:-false}
+      - QWEN_TTS_VOICES_DIR=/app/voices
+      - TZ=${TZ:-America/Chicago}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      # First boot downloads the TTS model from HuggingFace before serving.
+      start_period: 600s
+      retries: 3
+    networks:
+      - gateway-net
+
+  parakeet-stt:
+    build:
+      context: ./tts
+      dockerfile: Dockerfile.parakeet
+    container_name: parakeet-stt
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["models"]
+    ports:
+      - "${SERVICE_STT_PORT:-8003}:8003"
+    volumes:
+      - model-hf-cache:/root/.cache/huggingface
+    environment:
+      # GPU1 is pinned as the only visible device → index 0 inside the container.
+      - PARAKEET_MODEL=${PARAKEET_MODEL:-nvidia/parakeet-tdt-0.6b-v3}
+      - PARAKEET_DEVICE=cuda:0
+      - PARAKEET_PORT=8003
+      - TZ=${TZ:-America/Chicago}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      # First boot downloads the STT model from HuggingFace before serving.
+      start_period: 600s
+      retries: 3
+    networks:
+      - gateway-net
+
   wyoming-whisper:
     build:
       context: ./tts
@@ -515,6 +659,10 @@ volumes:
   brain-audio:
   searxng-data:
   promtail-helios-data:
+  # HuggingFace model cache shared by the `models`-profile services (vLLM,
+  # Qwen3-TTS, Parakeet STT). Content-addressed by repo id, so the three
+  # services share it without collision.
+  model-hf-cache:
   # Note: `finance-data:` named volume was removed 2026-04-14 when /app/data
   # was migrated to a host bind mount. The old volume may still exist on the
   # Docker host until manually removed with `docker volume rm

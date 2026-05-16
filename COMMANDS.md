@@ -29,6 +29,21 @@ curl http://localhost:8888/health
 docker logs brain-orchestrator --tail 50 -f
 ```
 
+### Model-layer compose profile (fresh single-box installs)
+The `models` compose profile runs vLLM + Qwen3-TTS + Parakeet STT as containers.
+Not used on Helios — that box runs the model layer as host systemd units (see the
+Helios Primary Model section below). For a fresh install:
+```bash
+# Detect VRAM tier → suggested VLLM_MODEL (read-only)
+bash scripts/detect_hardware.sh
+
+# Validate the stanzas without starting anything
+docker compose --profile models config
+
+# Bring up the full stack including the model layer
+COMPOSE_PROFILES=models docker compose up -d --build
+```
+
 ---
 
 ## Home Assistant

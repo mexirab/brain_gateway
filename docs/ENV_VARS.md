@@ -9,7 +9,26 @@ For the authoritative template, see `.env.example` at the repo root.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `JESS_ADVANCED` | `false` | Master gate for owner-specific surface cut from the default shippable build. Two effects: (1) exposes 5 advanced tools to the LLM — `code_agent`, `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity` — via `tool_definitions.get_all_tools()` filtering; (2) registers two background jobs in `orchestrator.py` startup — the F-014 self-audit (additionally gated by `SELF_AUDIT_ENABLED`) and the nightly training-corpus drain (privacy hazard for fresh installs — collects user conversations). Handlers / job functions stay imported, just unregistered when off. Flip to `true` in `.env` for the development stack. |
-| `COMPOSE_PROFILES` | _empty_ | Native Docker Compose profile selector. Set to `advanced` in `.env` to bring up the operator/owner-specific services: `nebula-sync` (Pi-hole multi-instance config sync), `promtail` (log shipper to external Loki), `nut-exporter` (UPS metrics, requires NUT on host). Default-empty leaves only the core stack: orchestrator + open-webui + redis + searxng + frontend + the two wyoming bridges. Comma-separated for multiple profiles. Independent of `JESS_ADVANCED` — that gates application-level features; this gates compose-service startup. |
+| `COMPOSE_PROFILES` | _empty_ | Native Docker Compose profile selector. Comma-separated for multiple profiles. Two valid values: `advanced` brings up the operator/owner-specific services — `nebula-sync` (Pi-hole multi-instance config sync), `promtail` (log shipper to external Loki), `nut-exporter` (UPS metrics, requires NUT on host); `models` brings up the model layer — `vllm-primary` + `qwen-tts` + `parakeet-stt` (see Model layer below). Default-empty leaves only the core stack: orchestrator + open-webui + redis + searxng + frontend + the two wyoming bridges. Independent of `JESS_ADVANCED` — that gates application-level features; this gates compose-service startup. |
+
+## Model layer (compose profile: `models`)
+
+The vLLM primary LLM, Qwen3-TTS, and Parakeet STT have compose stanzas (`vllm-primary`, `qwen-tts`, `parakeet-stt`) and Dockerfiles (`tts/Dockerfile`, `tts/Dockerfile.parakeet`), gated behind the `models` compose profile. **Status: authored and build-validated, not deployed.** On the live Helios box the model layer still runs as host systemd units (`vllm-primary.service`, `qwen-tts.service`, `parakeet-stt.service`); Helios's `.env` keeps `COMPOSE_PROFILES=advanced` (no `models`) so compose does not double-start the systemd-managed servers. The `models` profile exists for fresh single-box installs, which set `COMPOSE_PROFILES=models` (or `advanced,models`).
+
+GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in the `model-hf-cache` named volume. The env vars below feed those stanzas only — they are inert unless `models` is in `COMPOSE_PROFILES`. When the model layer runs in compose, also repoint the orchestrator at the compose-internal service names: `MODEL_URL=http://vllm-primary:8000/v1`, `TTS_URL=http://qwen-tts:8002`, `STT_URL=http://parakeet-stt:8003`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VLLM_MODEL` | `Lorbus/Qwen3.6-27B-int4-AutoRound` | HuggingFace repo id for the primary LLM. 24GB tier → `Qwen/Qwen3-14B-Instruct-AWQ`; 32/48GB tier → the default. |
+| `VLLM_SERVED_NAME` | `qwen3.6-27b-int4` | `--served-model-name` exposed on the OpenAI-compatible API. Should match the orchestrator's `MODEL_NAME`. |
+| `VLLM_MAX_MODEL_LEN` | `153600` | `--max-model-len` (context window). |
+| `VLLM_GPU_MEM_UTIL` | `0.93` | `--gpu-memory-utilization` fraction. |
+| `JESS_VRAM_TIER` | (empty) | VRAM tier (`24` \| `32` \| `48`). Written by `scripts/detect_hardware.sh`, which reads `nvidia-smi` and also prints a suggested `VLLM_MODEL`. |
+| `QWEN_TTS_MODEL` | `Qwen/Qwen3-TTS-1.7B-Base` | HuggingFace repo id for the TTS model; downloads into `model-hf-cache` on first run. |
+| `QWEN_TTS_DTYPE` | `bfloat16` | TTS model compute dtype. |
+| `QWEN_TTS_FLASH_ATTN` | `false` | Enable FlashAttention in the TTS server. |
+| `TTS_VOICES_PATH` | `./data/tts_voices` | Host dir for cloned-voice files (`voices.json` + reference wavs), bind-mounted into the `qwen-tts` container at `/app/voices`. |
+| `PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | HuggingFace repo id for the Parakeet STT model. |
 
 ## Model / LLM backends
 

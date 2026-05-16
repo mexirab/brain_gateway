@@ -1,0 +1,42 @@
+# Parakeet TDT v3 STT server image (Phase 1 containerization).
+#
+# Ubuntu 24.04 base = Python 3.12, matching the known-working host venv
+# (parakeet-env). torch is installed from the cu128 wheel index — same
+# Blackwell constraint as the TTS image (tts/Dockerfile). All other deps are
+# exact-pinned in requirements-parakeet.txt (generated from the host venv).
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PATH=/venv/bin:$PATH
+
+WORKDIR /app
+
+# ffmpeg: stt_server_parakeet.py normalises every uploaded clip to 16kHz mono
+# PCM WAV via a subprocess call to ffmpeg. sox + libsndfile1: required by the
+# NeMo audio dependency graph. A venv sidesteps Ubuntu 24.04's PEP 668 block.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-venv curl ffmpeg sox libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /venv
+
+# torch FIRST, from the cu128 wheel index (see tts/Dockerfile) — pinned exactly
+# to the host venv's build so NeMo resolves against a known-good torch.
+RUN pip install --no-cache-dir torch==2.7.1 torchaudio==2.7.1 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+COPY requirements-parakeet.txt .
+RUN pip install --no-cache-dir -r requirements-parakeet.txt
+
+COPY stt_server_parakeet.py .
+
+# Model downloads from HuggingFace into the mounted model-hf-cache volume.
+ENV PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v3 \
+    PARAKEET_PORT=8003
+
+EXPOSE 8003
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=3 \
+    CMD curl -f http://localhost:8003/health || exit 1
+
+CMD ["python3", "stt_server_parakeet.py"]
