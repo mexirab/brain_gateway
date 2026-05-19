@@ -41,7 +41,7 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **Brain gateway + Docker host**, Primary LLM: Lorbus/Qwen3.6-27B-int4-AutoRound served by vLLM 0.19.1 (GPU0 RTX 5090, port 8080), TTS + STT (GPU1 RTX PRO 5000), Code agent: Qwen3-Coder-Next 80B/3B MoE Q4_K_XL (GPU1 RTX PRO 5000 + system RAM via `-ot .ffn_.*_exps.=CPU`, port 8082), always-on |
 | Jupiter | 10.0.0.248 | jupiter.tail74fc4a.ts.net | - | **Pi-hole primary + Monitoring host** (Prometheus, Grafana, Loki, Promtail, Blackbox exporter), nebula-sync, Conjure API |
 | Saturn | 10.0.0.58 | - | RTX 3080 (10GB) + RTX 3090 (24GB) | Vision model (Qwen3-VL-8B-Instruct Q4_K_M, RTX 3080, port 8010), Expert reasoning model (Qwen3-32B Q4_K_M, RTX 3090, port 8084 via `expert-model` docker container), Pi-hole secondary |
-| Uranus | 10.0.0.173 | - | 2x RTX 5080 | **Currently offline** — hardware physically removed 2026-04-26 for troubleshooting. Was: ComfyUI/Conjure on GPU1. Conjure API now lives on Jupiter. |
+| Uranus | 10.0.0.173 | - | 2x RTX 5080 (16GB each) | **Back online 2026-05-18** — reimaged (Ubuntu 24.04, driver 580.159.04 via DKMS, nvidia-container-toolkit). Used as the non-Helios **test box** for the productization model-layer boot test. Conjure API stayed on Jupiter (did not move back); ComfyUI no longer deployed here. |
 | HA | 10.0.0.106 | - | - | Home Assistant |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
@@ -287,7 +287,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - Helios is always-on (no auto-shutdown); can be manually started/stopped via SSH
 - TTS uses Qwen3-TTS with sentence pause injection. Voice is env-configurable via `TTS_VOICE` (default `default`); the live deployment sets `TTS_VOICE=jessica` for the Jessica McCabe clone, but the codebase no longer hardcodes that branding. Wire IDs `jessica-tts` (server name) and `jessica` (Wyoming bridge voice ID) are retained for HA back-compat — see `docs/VOICE_AND_TTS.md`.
 - Helios SSH: `labadmin@10.0.0.195` (LAN) or `labadmin@helios.tail74fc4a.ts.net` (Tailscale)
-- Uranus SSH (from Helios): `ssh labadmin@10.0.0.173` (currently unreachable — hardware removed 2026-04-26)
+- Uranus SSH (from Helios): `ssh labadmin@10.0.0.173` (back online 2026-05-18, reimaged — Helios key re-authorized)
 - **Model history:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B (llama.cpp). Qwen3.5-27B served as primary until the 2026-04-26 vLLM Phase 3 cutover replaced it with Lorbus/Qwen3.6-27B-int4-AutoRound on vLLM. `llama-server-moe.service` and `llama-server.service` are both disabled but their unit files remain on disk as historical references.
 - **Tool result cap:** unified loop enforces 8000-char cap per tool result (~2000 tokens). Tools that return large blobs must summarize/paginate at the handler level. See `TECHNICAL_REFERENCE.md` → Tool Result Cap.
 - **Both promtails digest-pinned:** Jupiter promtail now matches Helios sidecar posture — same `grafana/promtail:3.4.2` digest, `cap_drop: ALL`, `no-new-privileges`, `-config.expand-env=true`. See `monitoring/README.md`.
