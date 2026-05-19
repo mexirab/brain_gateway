@@ -26,7 +26,8 @@ GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in th
 | `VLLM_MAX_MODEL_LEN` | `153600` | `--max-model-len` (context window). |
 | `VLLM_GPU_MEM_UTIL` | `0.93` | `--gpu-memory-utilization` fraction. |
 | `JESS_VRAM_TIER` | (empty) | VRAM tier (`24` \| `32` \| `48`). Written by `scripts/detect_hardware.sh`, which analyzes the box's GPU(s) + RAM + driver and prints a full recommended model config — `VLLM_MODEL`, `VLLM_QUANTIZATION`, `VLLM_MAX_MODEL_LEN`, `VLLM_GPU_MEM_UTIL`. |
-| `QWEN_TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | HuggingFace repo id for the TTS model; downloads into `model-hf-cache` on first run. Preset-voice model — use a `*-Base` model instead if you need voice cloning. |
+| `QWEN_TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | HuggingFace repo id for the TTS model; downloads into `model-hf-cache` on first run. Preset-voice model — use a `*-Base` model instead if you need voice cloning. Set to `/models/local` to use a locally-mounted model (see `QWEN_TTS_MODEL_DIR`). |
+| `QWEN_TTS_MODEL_DIR` | (empty) | Optional host directory holding a pre-downloaded local TTS model, bind-mounted read-only into the `qwen-tts` container at `/models/local`. For models that aren't on HuggingFace (e.g. a gated cloning-capable `*-Base` model). When unset, an inert placeholder is mounted. |
 | `QWEN_TTS_DTYPE` | `bfloat16` | TTS model compute dtype. |
 | `QWEN_TTS_FLASH_ATTN` | `false` | Enable FlashAttention in the TTS server. |
 | `TTS_VOICES_PATH` | `./data/tts_voices` | Host dir for cloned-voice files (`voices.json` + reference wavs), bind-mounted into the `qwen-tts` container at `/app/voices`. |

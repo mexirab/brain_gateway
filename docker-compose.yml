@@ -429,6 +429,12 @@ services:
     volumes:
       - model-hf-cache:/root/.cache/huggingface
       - ${TTS_VOICES_PATH:-./data/tts_voices}:/app/voices:rw
+      # Optional: mount a pre-downloaded local TTS model — e.g. a cloning-capable
+      # *-Base model that is gated/absent on HuggingFace. To use it, set
+      # QWEN_TTS_MODEL_DIR to the host directory and QWEN_TTS_MODEL=/models/local.
+      # The default re-mounts the voices dir as an inert placeholder: harmless
+      # while QWEN_TTS_MODEL stays an HF repo id (nothing reads /models/local).
+      - ${QWEN_TTS_MODEL_DIR:-./data/tts_voices}:/models/local:ro
     environment:
       # GPU1 is pinned as the only visible device → index 0 inside the container.
       - QWEN_TTS_MODEL=${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice}
