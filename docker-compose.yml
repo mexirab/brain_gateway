@@ -431,7 +431,7 @@ services:
       - ${TTS_VOICES_PATH:-./data/tts_voices}:/app/voices:rw
     environment:
       # GPU1 is pinned as the only visible device → index 0 inside the container.
-      - QWEN_TTS_MODEL=${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-1.7B-Base}
+      - QWEN_TTS_MODEL=${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice}
       - QWEN_TTS_DEVICE=cuda:0
       - QWEN_TTS_PORT=8002
       - QWEN_TTS_DTYPE=${QWEN_TTS_DTYPE:-bfloat16}
@@ -623,8 +623,12 @@ services:
   # needs to reach upsd at 127.0.0.1 and serve /metrics on the host — same
   # posture node_exporter would use.
   #
-  # NUT_EXPORTER_PASSWORD must be set in .env (matches the [exporter] entry in
-  # /etc/nut/upsd.users on Helios). Container exits cleanly if unreachable.
+  # NUT_EXPORTER_PASSWORD should be set in .env when this advanced-profile
+  # service is enabled (matches the [exporter] entry in /etc/nut/upsd.users on
+  # Helios). The empty default keeps fresh non-advanced installs from being
+  # blocked by compose interpolation. NB: this is a pull-model exporter — with a
+  # wrong/empty password the container still stays Up and only fails per-scrape,
+  # so a misconfig surfaces as absent ups_metrics, not a crash. Alert on that.
   nut-exporter:
     image: druggeri/nut_exporter:3.2.5@sha256:76fc9fb623bf8b7f1ee8ffc018ad7ffc568d297c04360accb54ef76981e0fa32
     container_name: nut-exporter
@@ -645,7 +649,7 @@ services:
     environment:
       - NUT_EXPORTER_SERVER=127.0.0.1
       - NUT_EXPORTER_USERNAME=exporter
-      - NUT_EXPORTER_PASSWORD=${NUT_EXPORTER_PASSWORD:?NUT_EXPORTER_PASSWORD must be set in .env (must match [exporter] in /etc/nut/upsd.users on Helios)}
+      - NUT_EXPORTER_PASSWORD=${NUT_EXPORTER_PASSWORD:-}
       # Default var list omits ups.realpower.nominal and battery.runtime, which
       # we need for rated-watts calculation and runtime-remaining display.
       # Listing everything we care about; the exporter silently skips vars that
