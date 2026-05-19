@@ -25,6 +25,10 @@ data/app/
 data/embedding_finetune/
 data/hf_cache/
 
+# Wake-word training data — personal voice recordings (biometric) + trained
+# models. Never commit; tens of GB and not portable.
+data/wakeword/
+
 # Claude Code local state (worktrees, local settings backups)
 .claude/worktrees/
 .claude/settings.local.json.bak*
