@@ -8,15 +8,7 @@ import {
   type SelfcareSchedule,
 } from '@/lib/settings-api';
 import { SaveBar } from './IdentityPanel';
-
-const CATEGORY_ORDER = ['meds', 'meals', 'water', 'movement'];
-
-const CATEGORY_LABELS: Record<string, string> = {
-  meds: 'Medication',
-  meals: 'Meals',
-  water: 'Water / Hydration',
-  movement: 'Movement / Posture',
-};
+import { CATEGORY_ORDER, CATEGORY_LABELS } from '@/lib/selfcare-categories';
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
 
