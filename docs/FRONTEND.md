@@ -37,6 +37,19 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 - Gamified: XP for under-budget months, levels, streaks, quest board
 - SQLite persistence at `/app/data/finance.db`
 
+## First-Boot Setup Wizard (`/setup`)
+
+**Partial — slice 1 of a multi-step wizard.** Only Welcome / Identity / Review exist. Model, Voice, Push-channel, Selfcare, and Optional-integrations steps from the full plan are not built yet.
+
+- **Route:** `/setup` is a top-level route (`frontend/src/app/setup/page.tsx`), NOT under the `(private)` route group — but it still sits behind the dashboard login cookie (`/setup` is in `middleware.ts` `PROTECTED_PATHS` + matcher).
+- **Steps:**
+  - **Welcome** (`WelcomeStep.tsx`) — intro; calls `GET /api/setup/hardware` to show whether a host-side hardware scan exists.
+  - **Identity** (`IdentityStep.tsx`) — edits `assistant_name` / `user_name` / `timezone` / `adhd_mode` / `tone_preference`; saves via the existing `PUT /api/config/identity` on Continue.
+  - **Review** (`ReviewStep.tsx`) — identity summary; "Finish setup" calls `POST /api/setup/complete`, then redirects to `/dashboard`.
+- **First-boot redirect:** `SetupGuard.tsx` is rendered from `(private)/layout.tsx`; on mount it checks `GET /api/setup/status` and redirects to `/setup` if setup is not complete.
+- **Progress indicator:** `Stepper.tsx`.
+- **API client:** `frontend/src/lib/setup-api.ts` — typed client for `/api/setup/{status,hardware,complete}`, same `/api/proxy` pattern as `settings-api.ts`. Backend lives in `orchestrator/routes_setup.py` (see `TECHNICAL_REFERENCE.md` → Setup Wizard).
+
 ## API Pattern
 
 All client-side API calls go through `/api/proxy` prefix -> Next.js auth middleware -> orchestrator `:8888`.
@@ -66,6 +79,10 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/settings/QuietHoursPanel.tsx` — Quiet hours start/end + day-of-week filter
 - `frontend/src/components/settings/RecurringRemindersPanel.tsx` — CRUD UI for cron-based recurring reminder rules
 - `frontend/src/lib/settings-api.ts` — Typed client for `/api/config/*`; routed through `/api/proxy` for bearer injection
+- `frontend/src/app/setup/page.tsx` — First-boot setup wizard route (top-level, outside `(private)`); 3-step skeleton (Welcome → Identity → Review)
+- `frontend/src/components/setup/SetupGuard.tsx` — First-boot redirect guard; checks `/api/setup/status`, mounted from `(private)/layout.tsx`
+- `frontend/src/components/setup/{Stepper,WelcomeStep,IdentityStep,ReviewStep}.tsx` — Wizard progress indicator + 3 step components
+- `frontend/src/lib/setup-api.ts` — Typed client for `/api/setup/{status,hardware,complete}`; routed through `/api/proxy`
 
 ## API Proxy Notes
 
