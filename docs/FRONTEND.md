@@ -39,7 +39,7 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 
 ## First-Boot Setup Wizard (`/setup`)
 
-**Partial — slices 1–2 of a multi-step wizard.** Welcome / Identity / Selfcare / Review exist. Model, Voice, Push-channel, and Optional-integrations steps from the full plan are not built yet.
+**Partial — slices 1–3 of a multi-step wizard.** Welcome / Identity / Selfcare / Review exist on the frontend (slices 1–2). Slice 3 (2026-05-21) is **backend only** — the first-boot env-overrides writer at `/api/setup/env` + `/api/setup/env/validate` (backed by `orchestrator/setup_env.py`, persists to `/app/data/setup_overrides.env`). When slice 4 wires Model / Voice / Push-channel / Optional-integrations into the frontend, those steps will POST allow-listed credential/config values through that surface — see `TECHNICAL_REFERENCE.md` → Setup Wizard.
 
 - **Route:** `/setup` is a top-level route (`frontend/src/app/setup/page.tsx`), NOT under the `(private)` route group — but it still sits behind the dashboard login cookie (`/setup` is in `middleware.ts` `PROTECTED_PATHS` + matcher).
 - **Steps:**
