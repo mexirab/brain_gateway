@@ -263,3 +263,225 @@ class TestPostSetupComplete:
         body = _body(await routes_setup.post_setup_complete())
         assert body["setup_completed"] is True
         assert body["completed_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# /api/setup/env  — first-boot env-override writer
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def routes_setup_env(routes_setup, tmp_path, monkeypatch):
+    """Extends `routes_setup` by also redirecting the setup_env overrides file.
+
+    Returns the routes_setup module (callers want it for the handler funcs).
+    """
+    from orchestrator import setup_env
+
+    monkeypatch.setattr(setup_env, "_OVERRIDES_PATH", str(tmp_path / "setup_overrides.env"), raising=True)
+    monkeypatch.setattr(setup_env, "_dirty_since_boot", False, raising=True)
+    return routes_setup
+
+
+def _mark_complete(routes_setup):
+    """Helper: flip setup_completed on disk."""
+    routes_setup._atomic_write_json(
+        routes_setup._SETUP_STATE_PATH,
+        {"setup_completed": True, "completed_at": "2026-05-20T00:00:00+00:00"},
+    )
+
+
+@_skip_no_deps
+class TestGetEnv:
+    @pytest.mark.asyncio
+    async def test_fresh_box_unlocked(self, routes_setup_env):
+        body = _body(await routes_setup_env.get_setup_env())
+        assert body["ok"] is True
+        assert body["locked"] is False
+        assert body["restart_required"] is False
+        assert "VLLM_MODEL" in body["keys"]
+
+    @pytest.mark.asyncio
+    async def test_secret_never_echoed(self, routes_setup_env):
+        from orchestrator import setup_env
+
+        setup_env.set_keys({"HA_TOKEN": "actual-secret"})
+        body = _body(await routes_setup_env.get_setup_env())
+        assert body["keys"]["HA_TOKEN"]["present"] is True
+        assert "value" not in body["keys"]["HA_TOKEN"]
+
+    @pytest.mark.asyncio
+    async def test_locks_after_complete(self, routes_setup_env):
+        _mark_complete(routes_setup_env)
+        body = _body(await routes_setup_env.get_setup_env())
+        assert body["locked"] is True
+
+    @pytest.mark.asyncio
+    async def test_restart_required_after_write(self, routes_setup_env):
+        from orchestrator import setup_env
+
+        setup_env.set_keys({"VLLM_MODEL": "x"})
+        body = _body(await routes_setup_env.get_setup_env())
+        assert body["restart_required"] is True
+
+
+@_skip_no_deps
+class TestPostEnv:
+    @pytest.mark.asyncio
+    async def test_write_success(self, routes_setup_env):
+        from orchestrator import routes_setup as mod
+
+        body_obj = mod._SetEnvBody(values={"VLLM_MODEL": "Qwen/Qwen3-8B-AWQ"})
+        body = _body(await routes_setup_env.post_setup_env(body_obj))
+        assert body["ok"] is True
+        assert body["written"] == ["VLLM_MODEL"]
+        assert body["restart_required"] is True
+
+    @pytest.mark.asyncio
+    async def test_locked_after_complete(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        from orchestrator import routes_setup as mod
+
+        _mark_complete(routes_setup_env)
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.post_setup_env(mod._SetEnvBody(values={"VLLM_MODEL": "x"}))
+        assert ei.value.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_reject_non_allow_listed(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        from orchestrator import routes_setup as mod
+
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.post_setup_env(mod._SetEnvBody(values={"DB_PASSWORD": "shh"}))
+        assert ei.value.status_code == 400
+        assert "allow-list" in ei.value.detail
+
+    @pytest.mark.asyncio
+    async def test_reject_empty_values(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        from orchestrator import routes_setup as mod
+
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.post_setup_env(mod._SetEnvBody(values={}))
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_reject_empty_string_value(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        from orchestrator import routes_setup as mod
+
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.post_setup_env(mod._SetEnvBody(values={"VLLM_MODEL": ""}))
+        assert ei.value.status_code == 400
+        assert "empty value" in ei.value.detail
+
+    @pytest.mark.asyncio
+    async def test_reject_control_chars(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        from orchestrator import routes_setup as mod
+
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.post_setup_env(mod._SetEnvBody(values={"HA_TOKEN": "bad\nvalue"}))
+        assert ei.value.status_code == 400
+        assert "control characters" in ei.value.detail
+
+
+@_skip_no_deps
+class TestDeleteEnv:
+    @pytest.mark.asyncio
+    async def test_delete_present(self, routes_setup_env):
+        from orchestrator import setup_env
+
+        setup_env.set_keys({"VLLM_MODEL": "x"})
+        body = _body(await routes_setup_env.delete_setup_env(key="VLLM_MODEL"))
+        assert body["ok"] is True
+        assert body["removed"] is True
+        assert body["restart_required"] is True
+
+    @pytest.mark.asyncio
+    async def test_delete_absent(self, routes_setup_env):
+        body = _body(await routes_setup_env.delete_setup_env(key="VLLM_MODEL"))
+        assert body["ok"] is True
+        assert body["removed"] is False
+        assert body["restart_required"] is False
+
+    @pytest.mark.asyncio
+    async def test_locked_after_complete(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        _mark_complete(routes_setup_env)
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.delete_setup_env(key="VLLM_MODEL")
+        assert ei.value.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_reject_non_allow_listed(self, routes_setup_env):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.delete_setup_env(key="DB_PASSWORD")
+        assert ei.value.status_code == 400
+
+
+@_skip_no_deps
+class TestValidateEnv:
+    @pytest.mark.asyncio
+    async def test_no_validator_service_returns_ok(self, routes_setup_env):
+        # `model` has no validator → should succeed without an HTTP call.
+        from orchestrator import routes_setup as mod
+
+        body_obj = mod._ValidateBody(service="model", values={"VLLM_MODEL": "x"})
+        body = _body(await routes_setup_env.post_setup_env_validate(body_obj))
+        assert body["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_service_400_like(self, routes_setup_env):
+        # validate_service returns (False, "Unknown service: ...") — not a 400,
+        # but the body's `ok` is false. Caller decides how to render.
+        from orchestrator import routes_setup as mod
+
+        body_obj = mod._ValidateBody(service="not_a_thing", values={})
+        body = _body(await routes_setup_env.post_setup_env_validate(body_obj))
+        assert body["ok"] is False
+        assert "Unknown" in body["detail"]
+
+    @pytest.mark.asyncio
+    async def test_filters_non_allow_listed_inputs(self, routes_setup_env, monkeypatch):
+        """validate route drops non-allow-listed keys before calling validator."""
+        seen = {}
+
+        async def fake_validator(values):
+            seen.update(values)
+            return True, "ok"
+
+        from orchestrator import setup_env
+
+        monkeypatch.setitem(setup_env._VALIDATORS, "ha", fake_validator)
+
+        from orchestrator import routes_setup as mod
+
+        body_obj = mod._ValidateBody(
+            service="ha",
+            values={"HA_URL": "http://x", "HA_TOKEN": "t", "ATTACKER_KEY": "evil"},
+        )
+        await routes_setup_env.post_setup_env_validate(body_obj)
+        # ATTACKER_KEY must NOT reach the validator.
+        assert "ATTACKER_KEY" not in seen
+        assert seen["HA_URL"] == "http://x"
+
+    @pytest.mark.asyncio
+    async def test_not_locked_after_complete(self, routes_setup_env):
+        # Validation is read-only against the external service; the lock does
+        # NOT apply (operator can re-check a stored token any time).
+        _mark_complete(routes_setup_env)
+        from orchestrator import routes_setup as mod
+
+        body_obj = mod._ValidateBody(service="model", values={})
+        body = _body(await routes_setup_env.post_setup_env_validate(body_obj))
+        assert body["ok"] is True

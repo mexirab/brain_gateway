@@ -454,6 +454,29 @@ class Settings(BaseSettings):
     }
 
 
+# Apply first-boot setup-wizard overrides to os.environ BEFORE Pydantic Settings
+# reads it. Pydantic Settings: process env beats env_file, so writing the
+# overrides directly into os.environ here is what lets the wizard's values win
+# over the compose-injected env block (e.g. HA_TOKEN=${HA_TOKEN}). Missing file
+# is a no-op. Kept out of the main config module to keep cycles in the import
+# graph local.
+try:
+    from orchestrator import setup_env as _setup_env
+
+    _applied = _setup_env.apply_to_environ()
+    if _applied:
+        import logging as _logging
+
+        _logging.getLogger(__name__).info(
+            "[CONFIG] applied %d setup_overrides.env keys to os.environ: %s",
+            len(_applied),
+            sorted(_applied),
+        )
+except Exception as _e:
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning("[CONFIG] could not apply setup_overrides.env (continuing): %s", _e)
+
 # Module-level singleton — import this everywhere
 try:
     settings = Settings()

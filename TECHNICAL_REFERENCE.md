@@ -203,6 +203,10 @@ First-boot setup-wizard backend. Backed by `orchestrator/routes_setup.py`. All t
 |--------|------|---------|
 | GET  | `/api/setup/status` | Report whether the first-boot wizard has been completed. Returns `{ok: true, setup_completed: bool, completed_at: str\|null}`. |
 | GET  | `/api/setup/hardware` | Serve the cached hardware scan that feeds the wizard's model-selection step. |
+| GET  | `/api/setup/env` | Per-key state for every allow-listed env override. Returns `{ok: true, locked: bool, restart_required: bool, keys: {KEY: {secret, service, description, present, value?}}}`. `locked` mirrors "first-boot done"; `restart_required` mirrors the in-process `_dirty_since_boot` flag. Secret keys (`HA_TOKEN`, `NTFY_HMAC_SECRET`, `PUSHOVER_*_TOKEN`, `PAPERLESS_API_TOKEN`, ...) never include `value` — presence only. |
+| POST | `/api/setup/env` | Body `{values: {KEY: value, ...}}` — write one or more overrides to `/app/data/setup_overrides.env`. **First-boot only**: returns HTTP 410 once `setup_completed` flips true (Gitea `INSTALL_LOCK` pattern). Allow-list enforced (400 on unknown key — see `ALLOWED_KEYS` in `orchestrator/setup_env.py`). Empty strings and control characters rejected (400). Held under `setup_env._write_lock` so a concurrent `POST /complete` can't race past the gate. Log lines redacted via `setup_env.redact_for_log()`. Returns `{ok: true, written: [KEY, ...], restart_required: true}`. |
+| DELETE | `/api/setup/env/{key}` | Remove a single key from the overrides file. First-boot only (HTTP 410 after `/complete`). Returns `{ok: true, key, removed: bool, restart_required: bool}`. |
+| POST | `/api/setup/env/validate` | Body `{service, values}` — run a per-service live validator (HA `/api/`, Pushover `/users/validate.json`, ntfy publish ping, Paperless `/api/`) against the supplied creds via `httpx`. **NOT locked** — operator can re-check a stored token after setup. `values` is filtered to the allow-list before being passed to the validator (defence-in-depth against attacker-controlled URLs/headers). Returns `{ok: bool, detail: str}`. |
 | POST | `/api/setup/complete` | Mark the wizard done and persist the timestamp. Idempotent — a re-POST keeps the original `completed_at`. Returns `{ok: true, setup_completed: true, completed_at: str}`. |
 
 **State files.** `/app/data/setup_state.json` (`{setup_completed, completed_at}`) is written by `/api/setup/complete` via an atomic tmpfile + `os.replace` + fsync write (JSON sibling of `config_writer.atomic_write_yaml`). A corrupt/unreadable `setup_state.json` degrades to "first boot" (`is_first_boot()` → `True`) and self-heals on the next `/complete`.
@@ -235,6 +239,8 @@ First-boot setup-wizard backend. Backed by `orchestrator/routes_setup.py`. All t
 ```
 
 When no scan file is present, the response is `{"ok": true, "available": false, "hint": "<re-run instruction>"}` — never an error; the wizard surfaces the hint to the operator.
+
+**Env overrides overlay.** `POST /api/setup/env` writes to `/app/data/setup_overrides.env` (`.env`-style, `chmod 600`, gitignored — managed by `orchestrator/setup_env.py`). The file is consumed by `setup_env.apply_to_environ()`, which `config.py` calls BEFORE constructing `Settings()` so wizard writes win over compose-injected env. Allow-list lives in `setup_env.ALLOWED_KEYS` (`VLLM_*`, `MODEL_NAME`, `TTS_VOICE`, `HA_URL`/`HA_TOKEN`, `NTFY_*`, `PUSHOVER_*`, `PAPERLESS_*`). Each spec carries `secret: bool` (secrets never echo `value` on `GET /api/setup/env`) and `service: str` (drives `POST /api/setup/env/validate`). A module-level `_dirty_since_boot` flag flips on the first write — `GET /api/setup/env` surfaces it as `restart_required: true`. Corrupt overrides degrade gracefully (try/except in `config.py`, no startup crash). See `docs/ENV_VARS.md` → Setup wizard overrides file.
 
 ### Settings (`/api/config/*`)
 
