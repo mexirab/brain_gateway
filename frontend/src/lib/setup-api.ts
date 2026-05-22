@@ -94,6 +94,14 @@ export interface SetEnvResult {
   restart_required: boolean;
 }
 
+/** Result of `POST /api/setup/env/validate` — a live test of a credential
+ *  combo against the real service (HA, Pushover, ntfy, Paperless). `ok=false`
+ *  means the values were rejected; `detail` is a short human-readable reason. */
+export interface ValidateResult {
+  ok: boolean;
+  detail: string;
+}
+
 // ----- API -----
 
 export const setupApi = {
@@ -103,4 +111,6 @@ export const setupApi = {
   getEnv: () => get<EnvStatus>('/api/setup/env'),
   setEnv: (values: Record<string, string>) =>
     post<SetEnvResult>('/api/setup/env', { values }),
+  validateEnv: (service: string, values: Record<string, string>) =>
+    post<ValidateResult>('/api/setup/env/validate', { service, values }),
 };
