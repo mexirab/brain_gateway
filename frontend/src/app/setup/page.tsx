@@ -8,6 +8,7 @@ import IdentityStep from '@/components/setup/IdentityStep';
 import ModelStep from '@/components/setup/ModelStep';
 import VoiceStep from '@/components/setup/VoiceStep';
 import PushStep from '@/components/setup/PushStep';
+import IntegrationsStep from '@/components/setup/IntegrationsStep';
 import SelfcareStep from '@/components/setup/SelfcareStep';
 import ReviewStep from '@/components/setup/ReviewStep';
 
@@ -17,6 +18,7 @@ const STEPS = [
   'Model',
   'Voice',
   'Push',
+  'Integrations',
   'Selfcare',
   'Review',
 ];
@@ -53,8 +55,9 @@ export default function SetupPage() {
         {step === 2 && <ModelStep onNext={goNext} onBack={goBack} />}
         {step === 3 && <VoiceStep onNext={goNext} onBack={goBack} />}
         {step === 4 && <PushStep onNext={goNext} onBack={goBack} />}
-        {step === 5 && <SelfcareStep onNext={goNext} onBack={goBack} />}
-        {step === 6 && <ReviewStep identity={identity} onBack={goBack} />}
+        {step === 5 && <IntegrationsStep onNext={goNext} onBack={goBack} />}
+        {step === 6 && <SelfcareStep onNext={goNext} onBack={goBack} />}
+        {step === 7 && <ReviewStep identity={identity} onBack={goBack} />}
       </div>
     </main>
   );
