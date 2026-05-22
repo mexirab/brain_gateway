@@ -33,11 +33,33 @@ export interface SetupStatus {
   completed_at: string | null;
 }
 
+/** Shape of the `recommendation` block inside `HardwareScan.scan`.
+ *  Produced by `scripts/detect_hardware.sh --json`. */
+export interface HardwareRecommendation {
+  model: string | null;
+  quantization: string;
+  max_model_len: number;
+  gpu_mem_util: number;
+  vision_capable: boolean;
+}
+
+/** Shape of `HardwareScan.scan`. Mirrors `scripts/detect_hardware.sh --json`. */
+export interface HardwareScanData {
+  gpus: { index: number; name: string; vram_gib: number }[];
+  gpu_count: number;
+  driver: string;
+  ram_gib: number;
+  largest_gpu_gib: number;
+  vram_tier: number | null;
+  tensor_parallel_advisory: unknown;
+  recommendation: HardwareRecommendation;
+}
+
 export interface HardwareScan {
   ok: boolean;
   available: boolean;
   /** Present only when available — the cached detect_hardware.sh --json scan. */
-  scan?: Record<string, unknown>;
+  scan?: HardwareScanData;
   /** Present only when unavailable — operator instruction to produce the scan. */
   hint?: string;
 }
@@ -48,10 +70,37 @@ export interface SetupCompleteResult {
   completed_at: string | null;
 }
 
+/** Per-key state from `GET /api/setup/env`. Secrets never include `value`. */
+export interface EnvKeyStatus {
+  secret: boolean;
+  service: string;
+  description: string;
+  present: boolean;
+  value?: string;
+}
+
+export interface EnvStatus {
+  ok: boolean;
+  /** True once `POST /api/setup/complete` has fired — write/delete return 410. */
+  locked: boolean;
+  /** Any write since process start means the orchestrator caches stale values. */
+  restart_required: boolean;
+  keys: Record<string, EnvKeyStatus>;
+}
+
+export interface SetEnvResult {
+  ok: boolean;
+  written: string[];
+  restart_required: boolean;
+}
+
 // ----- API -----
 
 export const setupApi = {
   getStatus: () => get<SetupStatus>('/api/setup/status'),
   getHardware: () => get<HardwareScan>('/api/setup/hardware'),
   complete: () => post<SetupCompleteResult>('/api/setup/complete'),
+  getEnv: () => get<EnvStatus>('/api/setup/env'),
+  setEnv: (values: Record<string, string>) =>
+    post<SetEnvResult>('/api/setup/env', { values }),
 };

@@ -5,10 +5,11 @@ import type { Identity } from '@/lib/settings-api';
 import Stepper from '@/components/setup/Stepper';
 import WelcomeStep from '@/components/setup/WelcomeStep';
 import IdentityStep from '@/components/setup/IdentityStep';
+import ModelStep from '@/components/setup/ModelStep';
 import SelfcareStep from '@/components/setup/SelfcareStep';
 import ReviewStep from '@/components/setup/ReviewStep';
 
-const STEPS = ['Welcome', 'Identity', 'Selfcare', 'Review'];
+const STEPS = ['Welcome', 'Identity', 'Model', 'Selfcare', 'Review'];
 
 export default function SetupPage() {
   const [step, setStep] = useState(0);
@@ -39,8 +40,9 @@ export default function SetupPage() {
             onBack={goBack}
           />
         )}
-        {step === 2 && <SelfcareStep onNext={goNext} onBack={goBack} />}
-        {step === 3 && <ReviewStep identity={identity} onBack={goBack} />}
+        {step === 2 && <ModelStep onNext={goNext} onBack={goBack} />}
+        {step === 3 && <SelfcareStep onNext={goNext} onBack={goBack} />}
+        {step === 4 && <ReviewStep identity={identity} onBack={goBack} />}
       </div>
     </main>
   );
