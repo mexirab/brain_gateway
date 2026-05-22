@@ -39,12 +39,13 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 
 ## First-Boot Setup Wizard (`/setup`)
 
-**Partial — slices 1–3 of a multi-step wizard.** Welcome / Identity / Selfcare / Review exist on the frontend (slices 1–2). Slice 3 (2026-05-21) is **backend only** — the first-boot env-overrides writer at `/api/setup/env` + `/api/setup/env/validate` (backed by `orchestrator/setup_env.py`, persists to `/app/data/setup_overrides.env`). When slice 4 wires Model / Voice / Push-channel / Optional-integrations into the frontend, those steps will POST allow-listed credential/config values through that surface — see `TECHNICAL_REFERENCE.md` → Setup Wizard.
+**Partial — slices 1–4 of a multi-step wizard.** Welcome / Identity / Model / Selfcare / Review exist. Slice 3 (2026-05-21, backend) added the env-overrides writer at `/api/setup/env` + `/api/setup/env/validate` (`orchestrator/setup_env.py`, persists to `/app/data/setup_overrides.env`). Slice 4 (2026-05-21, frontend) — `ModelStep.tsx` is the first consumer of that surface: writes `VLLM_*` + `MODEL_NAME` env overrides. Remaining wizard steps (Voice, Push-channel, Optional-integrations) will POST through the same surface.
 
 - **Route:** `/setup` is a top-level route (`frontend/src/app/setup/page.tsx`), NOT under the `(private)` route group — but it still sits behind the dashboard login cookie (`/setup` is in `middleware.ts` `PROTECTED_PATHS` + matcher).
 - **Steps:**
   - **Welcome** (`WelcomeStep.tsx`) — intro; calls `GET /api/setup/hardware` to show whether a host-side hardware scan exists.
   - **Identity** (`IdentityStep.tsx`) — edits `assistant_name` / `user_name` / `timezone` / `adhd_mode` / `tone_preference`; saves via the existing `PUT /api/config/identity` on Continue.
+  - **Model** (`ModelStep.tsx`) — reads `GET /api/setup/hardware` for a recommendation, persists `VLLM_MODEL` / `VLLM_QUANTIZATION` / `VLLM_SERVED_NAME` / `VLLM_MAX_MODEL_LEN` / `VLLM_GPU_MEM_UTIL` / `MODEL_NAME` via `POST /api/setup/env`. "Use this" merge-fills empty fields from the recommendation (never overwrites typed values); numeric fields are range-validated client-side; MODEL_NAME ↔ VLLM_SERVED_NAME are mirrored if one is empty (they must match for the orchestrator to reach vLLM). "Skip for now" guards against discarding a dirty draft.
   - **Selfcare** (`SelfcareStep.tsx`) — per-category on/off toggles (a lighter "baseline" view than the full `SelfcarePanel`; cadence editing stays in Settings); saves via `PUT /api/config/selfcare`. Category constants are shared with `SelfcarePanel` via `lib/selfcare-categories.ts`.
   - **Review** (`ReviewStep.tsx`) — identity summary; "Finish setup" calls `POST /api/setup/complete`, then redirects to `/dashboard`.
 - **First-boot redirect:** `SetupGuard.tsx` is rendered from `(private)/layout.tsx`; on mount it checks `GET /api/setup/status` and redirects to `/setup` if setup is not complete.
