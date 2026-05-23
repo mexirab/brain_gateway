@@ -476,12 +476,16 @@ class TestValidateEnv:
         assert seen["HA_URL"] == "http://x"
 
     @pytest.mark.asyncio
-    async def test_not_locked_after_complete(self, routes_setup_env):
-        # Validation is read-only against the external service; the lock does
-        # NOT apply (operator can re-check a stored token any time).
-        _mark_complete(routes_setup_env)
+    async def test_locked_after_complete(self, routes_setup_env):
+        # Validator dials operator-supplied URLs from inside the orchestrator
+        # container — a permanent live SSRF surface if left open. Post-setup
+        # the route returns 410, same as the write endpoints. (Hacker review
+        # finding — was previously "not locked".)
+        from fastapi import HTTPException
+
         from orchestrator import routes_setup as mod
 
-        body_obj = mod._ValidateBody(service="model", values={})
-        body = _body(await routes_setup_env.post_setup_env_validate(body_obj))
-        assert body["ok"] is True
+        _mark_complete(routes_setup_env)
+        with pytest.raises(HTTPException) as ei:
+            await routes_setup_env.post_setup_env_validate(mod._ValidateBody(service="model", values={}))
+        assert ei.value.status_code == 410
