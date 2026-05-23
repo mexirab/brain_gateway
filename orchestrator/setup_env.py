@@ -350,8 +350,23 @@ def _validate_url(url: str) -> Tuple[bool, str]:
         return False, "URL is missing a host."
     if p.username is not None or p.password is not None:
         return False, "URL must not contain credentials (use the token field)."
-    if p.fragment or p.query or p.params:
+    # `'?' in url` catches the trailing-empty-query case (`http://x?`) that
+    # `p.query` doesn't — `urlparse("http://x?").query == ""` would slide
+    # through the check below, then `f"{url}/api/"` would build "http://x?/api/"
+    # which httpx parses as query="/api/" and never sends the auth path.
+    # Same bug class as the fragment trick.
+    if p.fragment or p.query or p.params or "?" in url:
         return False, "URL must not contain a fragment, query, or params."
+    # Port validation — `urlparse` only checks port range when `.port` is
+    # accessed. An out-of-range port (`http://x:99999`) raises ValueError on
+    # access, or in async contexts wraps as `OverflowError` inside an
+    # `ExceptionGroup` from anyio at connect time — neither caught by the
+    # validator's `httpx.HTTPError | InvalidURL` filter, so it leaks as a 500.
+    # Reject early with a precise error instead.
+    try:
+        _ = p.port
+    except ValueError:
+        return False, "URL port is out of range (0-65535)."
     return True, ""
 
 
