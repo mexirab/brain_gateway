@@ -601,6 +601,44 @@ class TestValidateUrl:
         assert ok is False
         assert "control" in why.lower()
 
+    def test_rejects_trailing_question_mark(self, setup_env_mod):
+        # Empty-query bypass — `urlparse("http://x?").query == ""` would slide
+        # through the `p.query` check, then the appended `/api/` lands inside
+        # the query string. Same false-positive class as the fragment trick.
+        # (Hacker re-attack PARTIAL finding on PR #20.)
+        ok, why = setup_env_mod._validate_url("http://example.com?")
+        assert ok is False
+        assert "fragment" in why.lower() or "query" in why.lower()
+
+    def test_rejects_trailing_question_mark_with_path(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://example.com/path?")
+        assert ok is False
+
+    def test_accepts_valid_port(self, setup_env_mod):
+        # Boundary: 65535 is the highest valid port.
+        ok, _ = setup_env_mod._validate_url("http://ha.local:65535")
+        assert ok is True
+
+    def test_accepts_port_zero(self, setup_env_mod):
+        # Port 0 is technically valid in a URL (means "any port" in some APIs).
+        # urlparse accepts it; we don't have a reason to reject.
+        ok, _ = setup_env_mod._validate_url("http://ha.local:0")
+        assert ok is True
+
+    def test_rejects_port_above_range(self, setup_env_mod):
+        # `http://x:99999` — urlparse raises ValueError when `.port` is
+        # accessed. Without the explicit check, this leaks as an
+        # ExceptionGroup at connect-time → uncaught 500 in the route.
+        # (Hacker re-attack NEW-1 finding on PR #20.)
+        ok, why = setup_env_mod._validate_url("http://example.com:99999")
+        assert ok is False
+        assert "port" in why.lower()
+
+    def test_rejects_port_far_above_range(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://example.com:1234567")
+        assert ok is False
+        assert "port" in why.lower()
+
 
 # ---------------------------------------------------------------------------
 # validate_service dispatch
