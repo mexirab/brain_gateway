@@ -43,6 +43,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -311,16 +312,63 @@ def _http_client(timeout: float = 8.0) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout)
 
 
+# Generic detail string for any network-level failure. Used in place of the
+# httpx exception class name — the class name (ConnectError /
+# RemoteProtocolError / ReadError / etc.) leaked enough information to use the
+# validator as a port-scan oracle (distinguishing closed-port from
+# open-non-HTTP from DNS-timeout). The HTTP status-code path still echoes the
+# real code, which is fine — it's information the caller would learn from
+# their own browser anyway.
+_NETWORK_ERROR_DETAIL = "unreachable or timed out"
+
+
+def _validate_url(url: str) -> Tuple[bool, str]:
+    """Reject URLs the validators can't safely append a path to.
+
+    The validators build request URLs by appending `/api/` or `/<topic>` to
+    the operator-supplied base. A fragment / query / params component in the
+    input would push the appended path INSIDE the fragment, never reaching
+    the server — silently turning a "did this credential work" check into a
+    "did `/` return 200" probe (the URL-fragment validator false-positive
+    the hacker review found). We also pin to http(s) so `file://` and
+    friends can't be smuggled in, reject userinfo (`user:pass@host`) so
+    creds aren't leaked into the URL alongside the Bearer/Token header,
+    and pre-reject whitespace/control chars so the operator gets a
+    precise error rather than a misleading "unreachable or timed out".
+    """
+    if url != url.strip():
+        return False, "URL has leading or trailing whitespace."
+    if _CONTROL_CHAR_RE.search(url):
+        return False, "URL contains control characters."
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return False, "URL is malformed."
+    if p.scheme not in ("http", "https"):
+        return False, "URL must use http or https."
+    if not p.netloc:
+        return False, "URL is missing a host."
+    if p.username is not None or p.password is not None:
+        return False, "URL must not contain credentials (use the token field)."
+    if p.fragment or p.query or p.params:
+        return False, "URL must not contain a fragment, query, or params."
+    return True, ""
+
+
 async def _validate_ha(values: Dict[str, str]) -> ValidatorResult:
-    url = (values.get("HA_URL") or "").rstrip("/")
+    raw = values.get("HA_URL") or ""
     token = values.get("HA_TOKEN") or ""
-    if not url or not token:
+    if not raw or not token:
         return False, "Both HA_URL and HA_TOKEN are required."
+    ok, why = _validate_url(raw)
+    if not ok:
+        return False, f"HA_URL invalid: {why}"
+    url = raw.rstrip("/")
     try:
         async with _http_client() as client:
             r = await client.get(f"{url}/api/", headers={"Authorization": f"Bearer {token}"})
-    except httpx.HTTPError as e:
-        return False, f"Could not reach Home Assistant: {type(e).__name__}."
+    except (httpx.HTTPError, httpx.InvalidURL):
+        return False, f"Could not reach Home Assistant: {_NETWORK_ERROR_DETAIL}."
     if r.status_code == 200:
         return True, "Home Assistant reachable and token accepted."
     if r.status_code == 401:
@@ -341,8 +389,8 @@ async def _validate_pushover(values: Dict[str, str]) -> ValidatorResult:
                 "https://api.pushover.net/1/users/validate.json",
                 data={"token": app_token, "user": user_key},
             )
-    except httpx.HTTPError as e:
-        return False, f"Could not reach Pushover: {type(e).__name__}."
+    except (httpx.HTTPError, httpx.InvalidURL):
+        return False, f"Could not reach Pushover: {_NETWORK_ERROR_DETAIL}."
     if r.status_code == 200:
         try:
             body = r.json()
@@ -363,10 +411,14 @@ async def _validate_ntfy(values: Dict[str, str]) -> ValidatorResult:
     every subscribed ntfy client will see a (silent, low-priority) push.
     The wizard UI should warn before calling this so the user isn't surprised.
     """
-    url = (values.get("NTFY_URL") or "").rstrip("/")
+    raw = values.get("NTFY_URL") or ""
     topic = values.get("NTFY_TOPIC") or ""
-    if not url or not topic:
+    if not raw or not topic:
         return False, "Both NTFY_URL and NTFY_TOPIC are required."
+    ok, why = _validate_url(raw)
+    if not ok:
+        return False, f"NTFY_URL invalid: {why}"
+    url = raw.rstrip("/")
     # ntfy doesn't have auth on public topics, so we just verify the topic URL
     # is reachable. POST a minimal silent message at min priority.
     try:
@@ -376,8 +428,8 @@ async def _validate_ntfy(values: Dict[str, str]) -> ValidatorResult:
                 content="setup wizard test",
                 headers={"Title": "Jess setup", "Priority": "min", "Tags": "gear"},
             )
-    except httpx.HTTPError as e:
-        return False, f"Could not reach ntfy: {type(e).__name__}."
+    except (httpx.HTTPError, httpx.InvalidURL):
+        return False, f"Could not reach ntfy: {_NETWORK_ERROR_DETAIL}."
     if r.status_code in (200, 202):
         return True, "ntfy topic reachable (test message sent)."
     if r.status_code in (401, 403):
@@ -386,15 +438,19 @@ async def _validate_ntfy(values: Dict[str, str]) -> ValidatorResult:
 
 
 async def _validate_paperless(values: Dict[str, str]) -> ValidatorResult:
-    url = (values.get("PAPERLESS_URL") or "").rstrip("/")
+    raw = values.get("PAPERLESS_URL") or ""
     token = values.get("PAPERLESS_API_TOKEN") or ""
-    if not url or not token:
+    if not raw or not token:
         return False, "Both PAPERLESS_URL and PAPERLESS_API_TOKEN are required."
+    ok, why = _validate_url(raw)
+    if not ok:
+        return False, f"PAPERLESS_URL invalid: {why}"
+    url = raw.rstrip("/")
     try:
         async with _http_client() as client:
             r = await client.get(f"{url}/api/", headers={"Authorization": f"Token {token}"})
-    except httpx.HTTPError as e:
-        return False, f"Could not reach Paperless: {type(e).__name__}."
+    except (httpx.HTTPError, httpx.InvalidURL):
+        return False, f"Could not reach Paperless: {_NETWORK_ERROR_DETAIL}."
     if r.status_code in (200, 301, 302):
         return True, "Paperless-ngx reachable and token accepted."
     if r.status_code == 401:

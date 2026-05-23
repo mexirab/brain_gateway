@@ -223,12 +223,25 @@ async def delete_setup_env(key: str = PathParam(..., min_length=1, max_length=64
 async def post_setup_env_validate(body: _ValidateBody):
     """Live-test a credential/config combo without persisting it.
 
-    Not locked by `setup_completed` — read-only against the external service,
-    useful for re-checking a stored token. Doesn't accept arbitrary keys: the
-    `values` dict is filtered to the allow-list before being sent to the
-    validator (defence-in-depth against the validator being tricked into using
-    attacker-controlled URLs/headers).
+    LOCKED post-setup (returns 410 once `setup_completed`). The validator
+    dials operator-supplied URLs from inside the orchestrator container — a
+    permanent live SSRF surface, no matter how careful the URL parser is.
+    This route exists for one purpose: the wizard's "Test connection" buttons
+    during first-boot setup. After setup completes, an operator changing an
+    integration's credentials does so through the Settings page or `.env`
+    directly; the credential validates the first time the integration is
+    actually used. So we collapse the post-setup attack surface to zero.
+
+    `values` is also filtered to the allow-list before being sent to the
+    validator (defence-in-depth against key-smuggling).
+
+    Note: this handler does NOT take `setup_env._write_lock` (unlike POST/DELETE
+    on `/env`). The validator is read-only against the overrides file, and the
+    lock-after-complete check is monotonic — a TOCTOU race with `POST /complete`
+    can at worst leak one extra outbound probe, which is harmless given the
+    bearer-holder running the wizard could simply delay calling `/complete`.
     """
+    _ensure_first_boot()
     filtered = {k: v for k, v in body.values.items() if setup_env.is_allowed(k)}
     ok, detail = await setup_env.validate_service(body.service, filtered)
     return JSONResponse({"ok": ok, "detail": detail})

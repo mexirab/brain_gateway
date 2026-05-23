@@ -28,8 +28,9 @@ import pytest
 
 def _can_import():
     try:
-        from orchestrator import setup_env  # noqa: F401
         import httpx  # noqa: F401
+
+        from orchestrator import setup_env  # noqa: F401
 
         return True
     except (ImportError, ModuleNotFoundError):
@@ -75,7 +76,7 @@ class TestParseEnvLine:
 
     def test_mismatched_quotes_kept(self, setup_env_mod):
         # Mismatched quotes are not stripped — value passes through unchanged.
-        assert setup_env_mod._parse_env_line('KEY="hello\'') == ("KEY", '"hello\'')
+        assert setup_env_mod._parse_env_line("KEY=\"hello'") == ("KEY", "\"hello'")
 
     def test_blank_line_returns_none(self, setup_env_mod):
         assert setup_env_mod._parse_env_line("") is None
@@ -371,9 +372,7 @@ class TestValidators:
         import httpx
 
         def _client_factory(timeout: float = 8.0):
-            return httpx.AsyncClient(
-                transport=httpx.MockTransport(handler), timeout=timeout
-            )
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=timeout)
 
         monkeypatch.setattr(setup_env_mod, "_http_client", _client_factory)
 
@@ -387,9 +386,7 @@ class TestValidators:
             return httpx.Response(200, json={"message": "API running"})
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, detail = await setup_env_mod._validate_ha(
-            {"HA_URL": "http://ha.local:8123", "HA_TOKEN": "my-token"}
-        )
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "http://ha.local:8123", "HA_TOKEN": "my-token"})
         assert ok is True
         assert "Home Assistant" in detail
 
@@ -401,9 +398,7 @@ class TestValidators:
             return httpx.Response(401)
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, detail = await setup_env_mod._validate_ha(
-            {"HA_URL": "http://ha.local", "HA_TOKEN": "bad"}
-        )
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "http://ha.local", "HA_TOKEN": "bad"})
         assert ok is False
         assert "rejected" in detail.lower()
 
@@ -421,11 +416,64 @@ class TestValidators:
             raise httpx.ConnectError("boom")
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, detail = await setup_env_mod._validate_ha(
-            {"HA_URL": "http://x", "HA_TOKEN": "y"}
-        )
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "http://x", "HA_TOKEN": "y"})
         assert ok is False
         assert "Could not reach" in detail
+        # Regression: the httpx exception class name must NOT appear in the
+        # detail (hacker review finding — was a port-scan oracle).
+        assert "ConnectError" not in detail
+        assert "ReadError" not in detail
+        assert "RemoteProtocolError" not in detail
+
+    @pytest.mark.asyncio
+    async def test_ha_invalid_url_caught(self, setup_env_mod, monkeypatch):
+        """httpx.InvalidURL (CRLF in URL etc.) must NOT escape the validator
+        as a 500. Regression for the hacker review's finding #3."""
+        import httpx
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.InvalidURL("CRLF in URL")
+
+        self._patch_transport(monkeypatch, setup_env_mod, handler)
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "http://x", "HA_TOKEN": "y"})
+        assert ok is False
+        assert "Could not reach" in detail
+
+    @pytest.mark.asyncio
+    async def test_ha_rejects_url_with_fragment(self, setup_env_mod):
+        """URL fragment → path appended inside the fragment → request goes to /
+        with no auth path → any 200-on-/ server validates with a junk token.
+        Regression for the hacker review's finding #2 (HIGH)."""
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "http://10.0.0.248:3000#x", "HA_TOKEN": "x"})
+        assert ok is False
+        assert "fragment" in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_ha_rejects_url_with_query(self, setup_env_mod):
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "http://ha.local?foo=bar", "HA_TOKEN": "x"})
+        assert ok is False
+        assert "query" in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_ha_rejects_non_http_scheme(self, setup_env_mod):
+        ok, detail = await setup_env_mod._validate_ha({"HA_URL": "file:///etc/shadow", "HA_TOKEN": "x"})
+        assert ok is False
+        assert "http" in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_paperless_rejects_url_with_fragment(self, setup_env_mod):
+        """Same fragment-trick on Paperless. Regression for hacker finding #2."""
+        ok, detail = await setup_env_mod._validate_paperless(
+            {"PAPERLESS_URL": "http://10.0.0.106:8123#x", "PAPERLESS_API_TOKEN": "x"}
+        )
+        assert ok is False
+        assert "fragment" in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_ntfy_rejects_url_with_fragment(self, setup_env_mod):
+        ok, detail = await setup_env_mod._validate_ntfy({"NTFY_URL": "http://ntfy.local#x", "NTFY_TOPIC": "topic"})
+        assert ok is False
+        assert "fragment" in detail.lower()
 
     @pytest.mark.asyncio
     async def test_pushover_success(self, setup_env_mod, monkeypatch):
@@ -436,9 +484,7 @@ class TestValidators:
             return httpx.Response(200, json={"status": 1})
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, detail = await setup_env_mod._validate_pushover(
-            {"PUSHOVER_USER_KEY": "u", "PUSHOVER_APP_TOKEN": "t"}
-        )
+        ok, detail = await setup_env_mod._validate_pushover({"PUSHOVER_USER_KEY": "u", "PUSHOVER_APP_TOKEN": "t"})
         assert ok is True
 
     @pytest.mark.asyncio
@@ -446,14 +492,10 @@ class TestValidators:
         import httpx
 
         def handler(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json={"status": 0, "errors": ["user identifier is invalid"]}
-            )
+            return httpx.Response(200, json={"status": 0, "errors": ["user identifier is invalid"]})
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, detail = await setup_env_mod._validate_pushover(
-            {"PUSHOVER_USER_KEY": "bad", "PUSHOVER_APP_TOKEN": "bad"}
-        )
+        ok, detail = await setup_env_mod._validate_pushover({"PUSHOVER_USER_KEY": "bad", "PUSHOVER_APP_TOKEN": "bad"})
         assert ok is False
         assert "invalid" in detail.lower()
 
@@ -465,9 +507,7 @@ class TestValidators:
             return httpx.Response(200)
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, _ = await setup_env_mod._validate_ntfy(
-            {"NTFY_URL": "http://ntfy.local", "NTFY_TOPIC": "jess"}
-        )
+        ok, _ = await setup_env_mod._validate_ntfy({"NTFY_URL": "http://ntfy.local", "NTFY_TOPIC": "jess"})
         assert ok is True
 
     @pytest.mark.asyncio
@@ -479,10 +519,87 @@ class TestValidators:
             return httpx.Response(200)
 
         self._patch_transport(monkeypatch, setup_env_mod, handler)
-        ok, _ = await setup_env_mod._validate_paperless(
-            {"PAPERLESS_URL": "http://p.local", "PAPERLESS_API_TOKEN": "t"}
-        )
+        ok, _ = await setup_env_mod._validate_paperless({"PAPERLESS_URL": "http://p.local", "PAPERLESS_API_TOKEN": "t"})
         assert ok is True
+
+
+# ---------------------------------------------------------------------------
+# _validate_url helper
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestValidateUrl:
+    def test_plain_http_ok(self, setup_env_mod):
+        ok, _ = setup_env_mod._validate_url("http://ha.local:8123")
+        assert ok is True
+
+    def test_plain_https_ok(self, setup_env_mod):
+        ok, _ = setup_env_mod._validate_url("https://api.example.com")
+        assert ok is True
+
+    def test_trailing_slash_ok(self, setup_env_mod):
+        # rstrip("/") on the caller side — the helper itself accepts trailing.
+        ok, _ = setup_env_mod._validate_url("http://ha.local/")
+        assert ok is True
+
+    def test_rejects_fragment(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://ha.local#frag")
+        assert ok is False
+        assert "fragment" in why.lower()
+
+    def test_rejects_query(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://ha.local?x=1")
+        assert ok is False
+        assert "query" in why.lower()
+
+    def test_rejects_params(self, setup_env_mod):
+        # The `;params` segment in a URL path is rare but parseable.
+        ok, why = setup_env_mod._validate_url("http://ha.local/path;p=1")
+        assert ok is False
+
+    def test_rejects_file_scheme(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("file:///etc/shadow")
+        assert ok is False
+        assert "http" in why.lower()
+
+    def test_rejects_gopher_scheme(self, setup_env_mod):
+        ok, _ = setup_env_mod._validate_url("gopher://x/")
+        assert ok is False
+
+    def test_rejects_missing_scheme(self, setup_env_mod):
+        ok, _ = setup_env_mod._validate_url("ha.local:8123")
+        assert ok is False
+
+    def test_rejects_missing_host(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://")
+        assert ok is False
+        assert "host" in why.lower()
+
+    def test_rejects_userinfo(self, setup_env_mod):
+        # user:pass@ in URL leaks creds into access logs + double-auths the
+        # request (one via the wizard's Authorization header).
+        ok, why = setup_env_mod._validate_url("http://user:pass@ha.local")
+        assert ok is False
+        assert "credentials" in why.lower()
+
+    def test_rejects_username_only(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://user@ha.local")
+        assert ok is False
+
+    def test_rejects_trailing_whitespace(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://ha.local  ")
+        assert ok is False
+        assert "whitespace" in why.lower()
+
+    def test_rejects_leading_whitespace(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("  http://ha.local")
+        assert ok is False
+
+    def test_rejects_control_chars(self, setup_env_mod):
+        ok, why = setup_env_mod._validate_url("http://ha.local\nX-Evil: 1")
+        assert ok is False
+        assert "control" in why.lower()
 
 
 # ---------------------------------------------------------------------------
