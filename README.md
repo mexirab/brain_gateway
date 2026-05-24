@@ -38,7 +38,7 @@ git clone https://github.com/mexirab/brain_gateway.git
 cd brain_gateway
 
 # 2. Run the installer
-bash scripts/install.sh
+bash install.sh
 ```
 
 The installer handles Docker, the NVIDIA driver, the NVIDIA container toolkit, the orchestrator stack, and prints the wizard URL when it's done. A reboot is required midway (to load the new NVIDIA kernel module); the script tells you exactly when and asks you to re-run it after the box comes back. Plan on ~20 minutes end-to-end, mostly waiting on apt and container image pulls.

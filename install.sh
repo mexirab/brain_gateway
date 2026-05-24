@@ -9,14 +9,16 @@
 # Idempotent: safe to re-run at any time. Stage is tracked via a marker file
 # at /var/lib/brain-gateway-install/stage.
 #
-# Usage:  bash scripts/install.sh
+# Usage:  bash install.sh
 set -euo pipefail
 
 # ── Constants ───────────────────────────────────────────────────────────────
 MARKER_DIR=/var/lib/brain-gateway-install
 MARKER="${MARKER_DIR}/stage"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# This script ships at the repo root; SCRIPT_DIR == REPO_ROOT. Prefer git
+# in case a user runs the script from inside a subdirectory.
+REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}")"
 ENV_FILE="${REPO_ROOT}/.env"
 ENV_EXAMPLE="${REPO_ROOT}/.env.example"
 
@@ -156,7 +158,7 @@ stage_1() {
     echo "    After the box comes back, SSH in and run:"
     echo
     echo "        cd ${REPO_ROOT}"
-    echo "        bash scripts/install.sh"
+    echo "        bash install.sh"
     echo
     confirm "Press Enter to reboot now (or Ctrl-C to reboot manually later)"
 

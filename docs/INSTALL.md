@@ -2,7 +2,7 @@
 
 End-to-end install for a single-box Brain Gateway deployment.
 
-**The fast path** (recommended for almost everyone): `bash scripts/install.sh`. The installer handles Docker, the NVIDIA driver, the container toolkit, the orchestrator stack, and prints the wizard URL when it's done. See [The fast path](#the-fast-path).
+**The fast path** (recommended for almost everyone): `bash install.sh`. The installer handles Docker, the NVIDIA driver, the container toolkit, the orchestrator stack, and prints the wizard URL when it's done. See [The fast path](#the-fast-path).
 
 **The manual path:** if you want to know exactly what's being installed, run a custom subset of steps, or you're on a non-standard config (different Linux distro, pre-existing Docker setup, etc.), follow the step-by-step manual install below.
 
@@ -33,7 +33,7 @@ git clone https://github.com/mexirab/brain_gateway.git
 cd brain_gateway
 
 # 2. Run the installer
-bash scripts/install.sh
+bash install.sh
 ```
 
 The script runs in two stages, separated by one reboot:
@@ -47,7 +47,7 @@ After the reboot, SSH back in and re-run the same command — the installer dete
 
 ```bash
 cd brain_gateway
-bash scripts/install.sh
+bash install.sh
 ```
 
 When Stage 2 finishes, it prints something like:
@@ -64,7 +64,7 @@ Open that URL from any browser on your LAN and walk the [setup wizard](#step-6--
 
 ```bash
 sudo rm -rf /var/lib/brain-gateway-install
-bash scripts/install.sh
+bash install.sh
 ```
 
 ---
