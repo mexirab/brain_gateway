@@ -30,36 +30,20 @@ Full compatibility matrix: see [`docs/HARDWARE.md`](docs/HARDWARE.md).
 
 ---
 
-## 5-minute install
+## Install
 
 ```bash
-# 1. NVIDIA driver + container toolkit (if not already installed)
-sudo apt install nvidia-driver-580-open
-sudo apt install nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-sudo usermod -aG docker "$USER" && newgrp docker
+# 1. Clone
+git clone https://github.com/mexirab/brain_gateway.git
+cd brain_gateway
 
-# 2. Clone + minimum .env
-git clone https://github.com/mexirab/brain_gateway.git /opt/gateway_mvp
-cd /opt/gateway_mvp
-cp .env.example .env
-
-# 3. Set ONE secret: the orchestrator API token. Everything else
-#    can be configured through the wizard.
-python3 -c "import secrets; print('API_TOKEN=' + secrets.token_urlsafe(32))" >> .env
-
-# 4. (Optional) get a tier + model recommendation appended to .env
-bash scripts/detect_hardware.sh >> .env
-
-# 5. Bring up the core stack
-docker compose up -d
-
-# 6. Open the wizard
-xdg-open http://localhost:3001/setup    # or visit it from any LAN browser
+# 2. Run the installer
+bash scripts/install.sh
 ```
 
-That's it. The setup wizard walks you through:
+The installer handles Docker, the NVIDIA driver, the NVIDIA container toolkit, the orchestrator stack, and prints the wizard URL when it's done. A reboot is required midway (to load the new NVIDIA kernel module); the script tells you exactly when and asks you to re-run it after the box comes back. Plan on ~20 minutes end-to-end, mostly waiting on apt and container image pulls.
+
+When the installer finishes, it prints a URL like `http://<your-box-ip>:3001/setup`. Open that from any browser on your LAN to walk the setup wizard:
 - **Identity** — your name, timezone, ADHD mode
 - **Model** — confirm the recommended model from your hardware scan
 - **Voice** — pick a TTS voice

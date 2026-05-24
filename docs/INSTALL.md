@@ -1,6 +1,10 @@
 # Install guide
 
-End-to-end install procedure for a single-box Brain Gateway deployment. The short version lives in the [README's 5-minute install](../README.md#5-minute-install) — this page is the detailed walkthrough with every step, every prompt, and every common failure mode.
+End-to-end install for a single-box Brain Gateway deployment.
+
+**The fast path** (recommended for almost everyone): `bash scripts/install.sh`. The installer handles Docker, the NVIDIA driver, the container toolkit, the orchestrator stack, and prints the wizard URL when it's done. See [The fast path](#the-fast-path).
+
+**The manual path:** if you want to know exactly what's being installed, run a custom subset of steps, or you're on a non-standard config (different Linux distro, pre-existing Docker setup, etc.), follow the step-by-step manual install below.
 
 If you just want hardware-by-hardware recommendations, see [`docs/HARDWARE.md`](HARDWARE.md).
 
@@ -8,7 +12,7 @@ If you just want hardware-by-hardware recommendations, see [`docs/HARDWARE.md`](
 
 ## Pre-flight checklist
 
-Before you start, confirm:
+Before you start (either path), confirm:
 
 - [ ] **OS:** Ubuntu 22.04 LTS or 24.04 LTS (see [HARDWARE.md](HARDWARE.md) for non-Ubuntu notes)
 - [ ] **GPU:** at least 20 GiB VRAM (24 GB card class). Below that, manual model selection — see [HARDWARE.md](HARDWARE.md).
@@ -17,7 +21,57 @@ Before you start, confirm:
 - [ ] **RAM:** 16 GiB minimum, 32 GiB if you plan to enable the advanced profile or code agent
 - [ ] **Network:** the box can reach the public internet to pull container images and HuggingFace models (one-time)
 - [ ] **Sudo:** you can `sudo` on the box
-- [ ] **Time:** ~45 minutes for the first install (most of that is HuggingFace model downloads)
+- [ ] **Time:** ~20 minutes for the install itself; the first browser-wizard interaction takes another ~5 minutes
+
+---
+
+## The fast path
+
+```bash
+# 1. Clone
+git clone https://github.com/mexirab/brain_gateway.git
+cd brain_gateway
+
+# 2. Run the installer
+bash scripts/install.sh
+```
+
+The script runs in two stages, separated by one reboot:
+
+| Stage | What it does |
+|-------|--------------|
+| **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, then prompts you to reboot. |
+| **2 (after reboot)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes a generated `API_TOKEN` to `.env`, runs `scripts/detect_hardware.sh` to append a model recommendation, brings up the stack, waits for the orchestrator to report healthy, prints the wizard URL. |
+
+After the reboot, SSH back in and re-run the same command — the installer detects the marker file (`/var/lib/brain-gateway-install/stage`) and continues from Stage 2:
+
+```bash
+cd brain_gateway
+bash scripts/install.sh
+```
+
+When Stage 2 finishes, it prints something like:
+
+```
+✓ Install complete!
+==> Open the setup wizard from any browser on your LAN:
+    http://10.0.0.173:3001/setup
+```
+
+Open that URL from any browser on your LAN and walk the [setup wizard](#step-6--run-the-setup-wizard) (the wizard walkthrough is in Step 6 of the manual install below — same flow, same screens).
+
+**To re-run the installer from scratch** (e.g. after a wipe-test):
+
+```bash
+sudo rm -rf /var/lib/brain-gateway-install
+bash scripts/install.sh
+```
+
+---
+
+## The manual path
+
+This is what the installer is doing under the hood. Follow it if you want full control, are debugging a failed install, or are on a non-standard config.
 
 ---
 
