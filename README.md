@@ -1,111 +1,131 @@
 # Brain Gateway
 
-Personal AI assistant optimized for ADHD support. Voice-first interface with Home Assistant integration, personal RAG memory, and power-optimized cluster architecture.
+A self-hosted, voice-first personal assistant tuned for ADHD support.
 
-## Quick Start
+One model, one box, one HTTPS URL. Talk to it from your phone, your laptop, or any Home Assistant voice puck. Set reminders, run focus sprints, dump your brain at 2 AM, get nudged through morning routines, and ask it anything — all without your data leaving your network.
+
+> **Status:** v1.0.0 release candidate (May 2026). Single-box install with a browser-based setup wizard. The default build runs the conversation model + voice (TTS/STT) + reminders + focus timer + Home Assistant control. Optional integrations (Google Calendar, Gmail, ntfy/Pushover push, Paperless-ngx, monitoring stack) get wired up through the wizard.
+
+---
+
+## Hardware requirements
+
+Brain Gateway runs the LLM, TTS, and STT models locally on a single NVIDIA GPU. The setup wizard picks a model based on what it finds.
+
+| GPU VRAM | Tier | Default model | Notes |
+|----------|------|---------------|-------|
+| **< 20 GiB** | below floor | pick a 7–8B AWQ yourself | Boots but you'll need to set `VLLM_MODEL` manually. Quality degrades. |
+| **20–29 GiB** | 24 GiB | `Qwen/Qwen3-14B-Instruct-AWQ` | RTX 3090 / 4090 / 5070 Ti class. Good general performance. |
+| **30–43 GiB** | 32 GiB | `Lorbus/Qwen3.6-27B-int4-AutoRound` | RTX 5090 class. Recommended sweet spot. |
+| **44+ GiB** | 48 GiB | `Lorbus/Qwen3.6-27B-int4-AutoRound` | RTX PRO 5000 / A6000 class. Vision-capable; can run a second VL model. |
+
+Other requirements:
+- **OS:** Ubuntu 22.04 or 24.04 (other distros work but driver/DKMS dance is on you)
+- **NVIDIA driver:** 580+ (required for Blackwell + vLLM 0.19)
+- **RAM:** 16 GiB minimum, 32 GiB recommended
+- **Disk:** ~120 GiB free (model weights + HF cache + container images)
+- **Network:** any LAN; Tailscale recommended for off-LAN HTTPS access
+
+Full compatibility matrix: see [`docs/HARDWARE.md`](docs/HARDWARE.md).
+
+---
+
+## 5-minute install
 
 ```bash
-# Configure environment
-cp .env.example .env
-vim .env  # Set HA_TOKEN, API_TOKEN, PIHOLE_PASSWORD, GF_SECURITY_ADMIN_PASSWORD
+# 1. NVIDIA driver + container toolkit (if not already installed)
+sudo apt install nvidia-driver-580-open
+sudo apt install nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+sudo usermod -aG docker "$USER" && newgrp docker
 
-# Start services
+# 2. Clone + minimum .env
+git clone https://github.com/mexirab/brain_gateway.git /opt/gateway_mvp
 cd /opt/gateway_mvp
+cp .env.example .env
+
+# 3. Set ONE secret: the orchestrator API token. Everything else
+#    can be configured through the wizard.
+python3 -c "import secrets; print('API_TOKEN=' + secrets.token_urlsafe(32))" >> .env
+
+# 4. (Optional) get a tier + model recommendation appended to .env
+bash scripts/detect_hardware.sh >> .env
+
+# 5. Bring up the core stack
 docker compose up -d
 
-# Check health
-curl http://localhost:8888/health
-
-# Access UI
-open http://localhost
+# 6. Open the wizard
+xdg-open http://localhost:3001/setup    # or visit it from any LAN browser
 ```
 
-## Architecture
+That's it. The setup wizard walks you through:
+- **Identity** — your name, timezone, ADHD mode
+- **Model** — confirm the recommended model from your hardware scan
+- **Voice** — pick a TTS voice
+- **Push channels** — ntfy + Pushover (both optional)
+- **Optional integrations** — Home Assistant, Paperless-ngx, etc.
+- **Selfcare nudges** — meal / water / med / movement reminders
+- **Review + launch**
 
-```
-┌─ HELIOS (always-on) ─────────────────────────────────────┐
-│  Orchestrator → Qwen3.5-27B (unified loop)                │
-│        │                                                  │
-│        ├─► ChromaDB (RAG)                                 │
-│        ├─► Home Assistant                                 │
-│        ├─► TTS (Qwen3-TTS) / STT (Whisper)                │
-│        ├─► Code agent (Qwen3-Coder-Next 80B/3B MoE, GPU0) │
-│        ├─► Expert reasoner (Saturn 3090, Qwen3-32B :8084) │
-│        └─► Vision model (Saturn 3080, Qwen3-VL-8B :8010)  │
-└──────────────────────────────────────────────────────────┘
-```
+![Setup wizard — TODO: add screenshot](docs/img/setup-wizard.png)
 
-**v7 Unified Flow:** Single primary model (Qwen3.5-27B on Helios RTX PRO 5000) handles conversation and tool execution in one agentic loop. See `ARCHITECTURE.md`.
+Step-by-step install guide with troubleshooting: [`docs/INSTALL.md`](docs/INSTALL.md).
 
-## Cluster
+---
 
-| Node | IP | GPU | Role |
-|------|-----|-----|------|
-| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Brain gateway, Docker host, Primary LLM (Qwen3.5-27B on PRO 5000), TTS + STT (PRO 5000), Code agent (Qwen3-Coder-Next 80B/3B MoE on RTX 5090 + RAM-spilled experts) |
-| Jupiter | 10.0.0.248 | - | Pi-hole primary, monitoring stack (Prometheus, Grafana, Loki, Blackbox), nebula-sync, Conjure API |
-| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (Qwen3-VL-8B-Instruct on 3080), Expert reasoning model (Qwen3-32B Q4_K_M on 3090, port 8084), Pi-hole secondary |
-| Uranus | 10.0.0.173 | 2x RTX 5080 | Currently offline (hardware removed 2026-04-26 for troubleshooting) |
-| HA | 10.0.0.106 | - | Home Assistant |
+## What you can do with it
 
-## Features
+Once the wizard finishes, you talk to Brain Gateway like a normal assistant — from the web UI, from a voice puck, or via the API. A few of the things it does well:
 
-- **Home Assistant:** Natural language control of lights, switches, climate, scenes
-- **RAG Memory:** Personal knowledge base from markdown files
-- **Voice:** Jessica McCabe voice clone (TTS) + Whisper (STT)
-- **Reminders:** Voice + mobile notifications via HA
-- **Web Search:** Real-time info via SearXNG (weather, news, events)
-- **Data Management:** Natural language updates to meds/projects
-- **Focus Timer:** Pomodoro with Endel ambient audio and Pi-hole site blocking
+- **Voice-first brain dump.** Mumble a stream of thoughts; it sorts them into reminders, tasks, and long-term memory.
+- **Focus sessions.** Pomodoro sprints with ambient audio, optional Pi-hole site blocking, body-doubling check-ins.
+- **Reminders that actually land.** Voice on the speakers, push to your phone via ntfy / Pushover, with one-tap Done/Snooze.
+- **Routine scaffolding.** Morning and evening routines with TTS guidance and auto-skip when you've already done the step.
+- **Decision simplifier.** "I can't decide between X and Y" → it gathers context and gives you 1–2 concrete recommendations.
+- **Home Assistant control.** Natural language → lights / scenes / climate / media.
+- **Personal RAG memory.** Drop markdown into your knowledge folder; it's searchable in conversation.
 
-## Configuration
+Full feature reference: [`docs/JESS_QUICK_START.md`](docs/JESS_QUICK_START.md).
 
-All settings in `.env` (see `.env.example` for full list):
+---
 
-| Variable | Purpose |
-|----------|---------|
-| HA_TOKEN | Home Assistant long-lived token |
-| API_TOKEN | Orchestrator API authentication |
-| PIHOLE_PASSWORD | Pi-hole v6 web admin + API password |
-| NODE_*_IP | Cluster node addresses |
-| RAG_BASE | Personal documents path |
+## After install
 
-## Commands
+| Task | Where |
+|------|-------|
+| Change any setting later | `/settings` page in the dashboard |
+| Upgrade to a newer release | [`docs/UPGRADE.md`](docs/UPGRADE.md) |
+| Enable advanced features (monitoring, multi-host, code agent) | Set `COMPOSE_PROFILES=advanced` and/or `JESS_ADVANCED=true` in `.env`, then `docker compose up -d` |
+| Run the API directly | `POST /v1/chat/completions` with `Authorization: Bearer $API_TOKEN` (OpenAI-compatible) |
+| Get a printable ADHD reference card | [`docs/JESS_REFERENCE_CARD.md`](docs/JESS_REFERENCE_CARD.md) |
 
-```bash
-# Rebuild after code changes
-docker compose up -d --build orchestrator
+---
 
-# View logs
-docker logs brain-orchestrator --tail 50 -f
+## Privacy
 
-# Reindex RAG
-cd rag && python ingest_rag.py \
-  --source ~/rag/nadim_rag \
-  --persist ~/.local/share/chroma/personal_rag \
-  --collection nadim_rag
+Brain Gateway runs entirely on your hardware. There is no telemetry — no usage stats, no crash reports, no phone-home. The only outbound network traffic is what *you* explicitly enable (e.g. Google Calendar, ntfy push, web search through SearXNG). Your conversation history, RAG knowledge, and reminders never leave the box.
 
-# Start monitoring
-cd monitoring && docker compose --env-file ../.env -p monitoring up -d
-```
+---
 
 ## Documentation
 
-| File | Content |
-|------|---------|
-| ARCHITECTURE.md | Internals, data flow |
-| COMMANDS.md | Command reference |
-| TECHNICAL_REFERENCE.md | API specs |
-| monitoring/README.md | Monitoring setup |
+| Doc | What |
+|-----|------|
+| [`docs/INSTALL.md`](docs/INSTALL.md) | Full step-by-step install + troubleshooting |
+| [`docs/HARDWARE.md`](docs/HARDWARE.md) | GPU/VRAM tier matrix + benchmark notes |
+| [`docs/UPGRADE.md`](docs/UPGRADE.md) | Upgrading between releases |
+| [`docs/JESS_QUICK_START.md`](docs/JESS_QUICK_START.md) | Everything you can say to it |
+| [`docs/ENV_VARS.md`](docs/ENV_VARS.md) | Every environment variable, what it does |
+| [`docs/DEV.md`](docs/DEV.md) | Developer setup, architecture, contributing |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release notes |
 
-## API
+For developer-facing internals (architecture, tools, agent pipeline), see [`CLAUDE.md`](CLAUDE.md) at the repo root. It is written for AI coding assistants but doubles as a contributor's map of the codebase.
 
-| Endpoint | Purpose |
-|----------|---------|
-| GET /health | Status check |
-| POST /v1/chat/completions | OpenAI-compatible chat |
-| GET /api/ha/entities | List HA devices |
-| POST /api/ha/command | Direct HA control |
+---
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Copyright © 2026 Nadim Nabi. Brain Gateway is provided as-is, with no warranty. If you ship it as part of a commercial product, please keep the MIT notice.
