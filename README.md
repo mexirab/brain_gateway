@@ -106,6 +106,8 @@ Full feature reference: [`docs/JESS_QUICK_START.md`](docs/JESS_QUICK_START.md).
 
 Brain Gateway runs entirely on your hardware. There is no telemetry — no usage stats, no crash reports, no phone-home. The only outbound network traffic is what *you* explicitly enable (e.g. Google Calendar, ntfy push, web search through SearXNG). Your conversation history, RAG knowledge, and reminders never leave the box.
 
+Full disclosure of what data is handled, where it lives, and what can leave the box: [`docs/PRIVACY.md`](docs/PRIVACY.md).
+
 ---
 
 ## Documentation
@@ -118,6 +120,7 @@ Brain Gateway runs entirely on your hardware. There is no telemetry — no usage
 | [`docs/JESS_QUICK_START.md`](docs/JESS_QUICK_START.md) | Everything you can say to it |
 | [`docs/ENV_VARS.md`](docs/ENV_VARS.md) | Every environment variable, what it does |
 | [`docs/DEV.md`](docs/DEV.md) | Developer setup, architecture, contributing |
+| [`docs/PRIVACY.md`](docs/PRIVACY.md) | What data is handled, where it lives, what can leave the box |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release notes |
 
 For developer-facing internals (architecture, tools, agent pipeline), see [`CLAUDE.md`](CLAUDE.md) at the repo root. It is written for AI coding assistants but doubles as a contributor's map of the codebase.

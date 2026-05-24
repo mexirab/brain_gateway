@@ -53,7 +53,7 @@ Brain Gateway is now a self-contained single-box appliance with a browser-based 
 
 ### Privacy
 
-- **No telemetry.** Brain Gateway never phones home. The only outbound network traffic is what you explicitly enable (e.g. Google Calendar, ntfy push, SearXNG web search).
+- **No telemetry.** Brain Gateway never phones home. The only outbound network traffic is what you explicitly enable (e.g. Google Calendar, ntfy push, SearXNG web search). Full disclosure: `docs/PRIVACY.md`.
 
 ---
 

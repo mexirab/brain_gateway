@@ -1,0 +1,120 @@
+# Privacy
+
+Brain Gateway is designed to run entirely on your hardware. This page describes what data it handles, where that data lives, and what — if anything — ever leaves the box.
+
+The short version: **there is no telemetry.** The project does not phone home, does not report usage stats, does not send crash reports, does not check for updates, does not register installs. The only outbound network traffic is what *you* explicitly enable in the setup wizard.
+
+---
+
+## What data the system handles
+
+| Data | Where it lives | Retention |
+|------|----------------|-----------|
+| Conversation history | SQLite at `data/state.db` → `chat_messages` table | Indefinite (you can delete entries via the dashboard or by clearing the table) |
+| Personal RAG memory | ChromaDB on disk under `data/chroma/` | Indefinite (rebuilt by `scripts/reindex_rag.py`) |
+| Auto-learned facts | Same ChromaDB collection (`mempalace`), separate wing | Indefinite |
+| Reminders, focus sessions, selfcare logs | SQLite at `data/state.db` | Indefinite |
+| Routine state, shopping lists, workout sets, meals | SQLite at `data/state.db` | Indefinite |
+| Setup wizard answers | `data/app/setup_overrides.env` (`chmod 600`) | Persistent until you delete it |
+| Reminder ack/snooze history | SQLite at `data/state.db` | Indefinite |
+| Meal photos (if uploaded) | `data/meal_photos/` (UUID-named) | Indefinite (manual delete) |
+| Paperless inbox files (if used) | `data/paperless_inbox/` | Until Paperless-ngx ingests them |
+| Training corpus (if enabled) | `data/training_corpus/YYYY-MM.jsonl` | Indefinite; no auto-rotation |
+| Self-audit reports (if enabled) | `data/self_audits/YYYY-MM-DD.md` | Indefinite |
+| Wake-word recordings (if you enable the capture WIP) | `data/wakeword/` | Indefinite; gitignored to prevent accidental commit |
+
+**Everything in `data/` is yours.** Back it up, delete it, copy it to another box — Brain Gateway has no opinion on what you do with it.
+
+---
+
+## What can leave the box
+
+Only what you explicitly turn on. By default, the system makes **zero** outbound network calls beyond what's needed to pull container images at install time.
+
+| Outbound channel | Triggered by | What gets sent |
+|------------------|--------------|----------------|
+| Google Calendar API | Wizard's Calendar integration | OAuth refresh tokens + calendar read/write requests |
+| Gmail API | Wizard's Gmail integration | OAuth refresh tokens + inbox read requests (read-only by default) |
+| ntfy push | Wizard's ntfy step | Reminder title + body (HTML-escaped) + HMAC-signed callback URLs |
+| Pushover push | Wizard's Pushover step | Reminder title + body (HTML-escaped) + callback URLs |
+| Paperless-ngx upload | `paperless_save` tool | File contents from `data/paperless_inbox/` |
+| Home Assistant API | Wizard's HA integration | Service calls + entity queries to your HA instance |
+| SearXNG (web search) | `web_search` tool | Your search query → your own SearXNG instance (defaults to the local container) → upstream search engines |
+| Hugging Face (model downloads) | First boot / model swap | Anonymous GET requests for model weights (HF logs IP + user-agent) |
+| Container registries | Image pulls | Anonymous Docker manifest requests (Docker Hub / GHCR log IP + user-agent) |
+
+You can verify any of this by watching the orchestrator container's egress with `tcpdump`, `iftop`, or the host firewall. The codebase has no hidden outbound paths.
+
+---
+
+## What the project does NOT do
+
+- ❌ No anonymous usage metrics ("we collected 1000 installs this month")
+- ❌ No crash reports or stack traces sent anywhere
+- ❌ No update check / version ping
+- ❌ No install registration
+- ❌ No A/B testing, experiments, or feature flag service
+- ❌ No analytics SDK (PostHog, Mixpanel, Sentry, etc.)
+- ❌ No ad networks, marketing pixels, or tracking
+- ❌ No model-provider phone-home (vLLM and llama.cpp do not call out)
+
+If a future release adds any kind of telemetry, it will be:
+1. **Opt-in only**, defaulting to off
+2. **Explicitly disclosed** in the wizard before the box reaches a running state
+3. **Documented in this file** before the release tags
+
+---
+
+## Local network exposure
+
+Brain Gateway listens on these ports by default:
+
+| Port | Service | Access |
+|------|---------|--------|
+| 80 / 443 | Open WebUI (chat UI) | LAN |
+| 3001 | Dashboard frontend | LAN |
+| 8888 | Orchestrator API | LAN, bearer-token gated |
+| 8080 / 8002 / 8003 | Model layer (vLLM / TTS / STT) | **Loopback only** (`127.0.0.1`) by default |
+| 10300 / 10301 | Wyoming bridges (HA voice pipeline) | LAN |
+| 8090 | SearXNG | LAN |
+| 9090 / 3000 / 3100 | Prometheus / Grafana / Loki | LAN (advanced profile only) |
+
+The model layer's loopback binding is set via `${MODEL_BIND_ADDR:-127.0.0.1}` in `docker-compose.yml`. Change it to `0.0.0.0` only if you have a deliberate reason to expose model weights to your LAN.
+
+---
+
+## OAuth tokens (Google integrations)
+
+If you connect Google Calendar or Gmail via the wizard:
+
+- Tokens are stored in `credentials/` (gitignored).
+- Refresh tokens are used to mint short-lived access tokens; they never leave the box except in API calls to `*.googleapis.com`.
+- To revoke access from Google's side: https://myaccount.google.com/permissions
+- To revoke access from the box's side: delete `credentials/token.json` and re-run the wizard's Integrations step.
+
+---
+
+## Voice data
+
+- **STT (Parakeet TDT v3) runs locally.** Your voice audio is processed on the box and never transmitted.
+- **TTS (Qwen3-TTS) runs locally.** Generated speech is synthesized on the box.
+- **Wake-word ("Hey Jess" or your configured trigger) runs locally** on the voice puck (microWakeWord on ATOM Echo).
+- The optional wake-word capture mode (`data/wakeword/`, gitignored) saves raw audio fragments to disk for retraining. **This is opt-in via env var and off by default.**
+
+---
+
+## Children + sensitive populations
+
+Brain Gateway is built for adult ADHD support. It is not designed, tested, or recommended for use by minors, in clinical settings, or as a substitute for professional medical / mental-health care. The selfcare and routine features are convenience nudges, not interventions.
+
+---
+
+## Reporting a privacy issue
+
+If you discover a vulnerability that lets the system exfiltrate data, leak secrets, or otherwise behave contrary to this document, file a GitHub issue. For high-severity issues, email the maintainer (see `pyproject.toml` / `LICENSE` for contact) rather than filing publicly.
+
+---
+
+## License of this document
+
+This file is part of the Brain Gateway repository and shares its MIT license. Reproduce + adapt freely for your own self-hosted project's privacy disclosure.
