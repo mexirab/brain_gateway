@@ -108,4 +108,4 @@ cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 
 ## License
 
-Private project - Nadim Nabi
+MIT — see [LICENSE](LICENSE).

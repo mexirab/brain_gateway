@@ -20,8 +20,7 @@ After code changes pass linting as the final step in the post-implementation pip
 | `docs/GOOGLE_INTEGRATIONS.md` | Calendar, Gmail, phone sync, travel-time, OAuth2 setup |
 | `docs/FRONTEND.md` | Dashboard pages, widgets, YNAB finance, API proxy, deploy |
 | `docs/MODE_ROUTER.md` | Intent classification modes, routing logic |
-| `docs/INFRASTRUCTURE.md` | HTTPS/Tailscale, RAG, temperature monitoring, performance, kiosk |
-| `docs/REMOTE_DEV.md` | Remote dev workflow (mosh + tmux, jdev alias, git sync) |
+| `docs/internal/HELIOS_INFRASTRUCTURE.md` | Helios-specific runbook (maintainer reference; do not add new general content here) |
 | `docs/JESS_QUICK_START.md` | One-page user guide: everything Jess can do |
 | `jess-features/README.md` | ADHD feature specs index (F-001 through F-010) |
 | `monitoring/README.md` | Monitoring stack setup |

@@ -71,7 +71,7 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 | GPU0 | RTX 5090 | 32 GB | vLLM primary (`vllm-primary.service`, port 8080, Lorbus/Qwen3.6-27B-int4-AutoRound) |
 | GPU1 | RTX PRO 5000 Blackwell | 48 GB | Coder (`llama-server-coder.service`, port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL with MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`), TTS (`qwen-tts.service`, port 8002), STT (`parakeet-stt.service`, port 8003) |
 
-vLLM was kept on GPU0 (Plan A) because a pre-cutover bench showed Lorbus 27B on GPU1 hit only 28–79% of the Phase 2 throughput recorded on GPU0 — the PRO 5000 has lower memory bandwidth and fewer SMs than the 5090. Forward-looking: when vLLM 0.19.2 ships with the unmerged KV-calc fix and 256K context becomes feasible, the primary will need to migrate to GPU1 (the 5090's 32 GB can't hold Lorbus + 256K KV). See `docs/VLLM_PHASE_3_PLAN.md` → Outcome.
+vLLM was kept on GPU0 (Plan A) because a pre-cutover bench showed Lorbus 27B on GPU1 hit only 28–79% of the Phase 2 throughput recorded on GPU0 — the PRO 5000 has lower memory bandwidth and fewer SMs than the 5090. Forward-looking: when vLLM 0.19.2 ships with the unmerged KV-calc fix and 256K context becomes feasible, the primary will need to migrate to GPU1 (the 5090's 32 GB can't hold Lorbus + 256K KV). See `VLLM_PHASE_3_PLAN.md` (same directory) → Outcome.
 
 Disabled units kept on disk as historical reference: `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
 

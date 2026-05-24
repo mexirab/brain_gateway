@@ -85,7 +85,7 @@ Max practical context: **153,600 tokens** at `--gpu-memory-utilization 0.93`. Fu
 
 `llama-server.service` disabled (unit retained on disk). `MODEL_NAME` and `FALLBACK_MODEL_NAME` updated to `qwen3.6-27b-int4`. Idempotent rollback at `/home/labadmin/vllm-trial/rollback_phase3.sh`. Forward-looking: when vLLM 0.19.2 + 256K context becomes worth pursuing, the primary must migrate to GPU1 (the 5090 can't hold Lorbus + 256K KV in 32 GB).
 
-See [docs/VLLM_PHASE_3_PLAN.md](docs/VLLM_PHASE_3_PLAN.md) → Outcome for the full landed config.
+See [docs/internal/VLLM_PHASE_3_PLAN.md](docs/internal/VLLM_PHASE_3_PLAN.md) → Outcome for the full landed config.
 
 ## In Progress: Productization (de-personalization)
 
