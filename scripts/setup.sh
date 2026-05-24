@@ -1,335 +1,437 @@
 #!/usr/bin/env bash
-# Brain Gateway — Interactive Setup Wizard
-# Generates .env and user_profile.yaml from user input.
-# Re-runnable: detects existing .env and offers to update.
+# Brain Gateway — interactive first-boot setup wizard (CLI)
+#
+# Walks the user through the same 7 steps the (now-deprecated) web wizard
+# covered: Identity, Model, Voice, Push channels, Integrations, Selfcare,
+# Review. Writes via the orchestrator's existing /api/setup/* and
+# /api/config/* endpoints over localhost:8888 using the API_TOKEN bearer.
+#
+# Idempotent until `setup_completed: true` — then the orchestrator's kill
+# switch makes /api/setup/env return 410 and this script refuses to proceed.
+#
+# Usually invoked automatically by install.sh at the end of Stage 2; can
+# also be run manually after a `docker compose up -d`.
+#
+# Usage:  bash scripts/setup.sh
 set -euo pipefail
 
+# ── Constants + paths ──────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-ENV_FILE="$PROJECT_DIR/.env"
-PROFILE_FILE="$PROJECT_DIR/user_profile.yaml"
+REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null || cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${REPO_ROOT}/.env"
+ORCH="${ORCHESTRATOR_URL:-http://localhost:8888}"
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# ── Colors (TTY only) ──────────────────────────────────────────────────────
+if [ -t 1 ]; then
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+    CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+else
+    RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
+fi
 
-echo -e "${CYAN}"
-echo "╔══════════════════════════════════════╗"
-echo "║     Brain Gateway Setup Wizard       ║"
-echo "╚══════════════════════════════════════╝"
-echo -e "${NC}"
+say()  { printf '\n%s==>%s %s%s%s\n'   "${CYAN}"  "${NC}" "${BOLD}" "$*" "${NC}"; }
+ok()   { printf '%s✓%s %s\n'           "${GREEN}" "${NC}" "$*"; }
+warn() { printf '%s!%s %s\n'           "${YELLOW}" "${NC}" "$*"; }
+info() { printf '%s  %s%s\n'           "${DIM}"   "$*"  "${NC}"; }
+die()  { printf '%s✗%s %s\n'           "${RED}"   "${NC}" "$*" >&2; exit 1; }
 
-# --- Helper functions -------------------------------------------------------
-
-prompt() {
-    local var_name="$1" prompt_text="$2" default="${3:-}"
-    local value
-    if [ -n "$default" ]; then
-        read -r -p "$(echo -e "${GREEN}$prompt_text${NC} [$default]: ")" value
-        value="${value:-$default}"
-    else
-        read -r -p "$(echo -e "${GREEN}$prompt_text${NC}: ")" value
+# ── Dependency check ───────────────────────────────────────────────────────
+need_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        die "Required command '$1' is missing. ${2:-Install it and re-run.}"
     fi
-    printf -v "$var_name" '%s' "$value"
+}
+
+need_cmd curl "(apt install -y curl)"
+need_cmd jq   "(apt install -y jq)"
+
+# ── Load API_TOKEN from .env ───────────────────────────────────────────────
+if [ ! -f "${ENV_FILE}" ]; then
+    die ".env not found at ${ENV_FILE}. Run install.sh first."
+fi
+API_TOKEN="$(grep -E '^API_TOKEN=' "${ENV_FILE}" | tail -1 | cut -d= -f2-)"
+if [ -z "${API_TOKEN}" ] || [ "${API_TOKEN}" = "your-api-token-here" ]; then
+    die "API_TOKEN not set in ${ENV_FILE}. install.sh should have generated one."
+fi
+
+# ── HTTP helpers ───────────────────────────────────────────────────────────
+api_get() {
+    # Usage: api_get /api/path
+    curl -fsS --max-time 5 \
+        -H "Authorization: Bearer ${API_TOKEN}" \
+        "${ORCH}$1"
+}
+
+api_post() {
+    # Usage: api_post /api/path '{"json":"body"}'
+    curl -fsS --max-time 10 \
+        -X POST \
+        -H "Authorization: Bearer ${API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${2:-{}}" \
+        "${ORCH}$1"
+}
+
+api_put() {
+    curl -fsS --max-time 10 \
+        -X PUT \
+        -H "Authorization: Bearer ${API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$2" \
+        "${ORCH}$1"
+}
+
+# Returns 0 on HTTP 2xx, 1 otherwise. Captures HTTP code in $HTTP_CODE.
+api_post_raw() {
+    HTTP_CODE="$(curl -s -o /tmp/setup_api_response.json -w '%{http_code}' --max-time 10 \
+        -X POST \
+        -H "Authorization: Bearer ${API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${2:-{}}" \
+        "${ORCH}$1")"
+    [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]
+}
+
+# ── Prompt helpers ─────────────────────────────────────────────────────────
+prompt() {
+    # prompt VAR_NAME "Question text" "default value"
+    local var="$1" text="$2" default="${3:-}" value=""
+    if [ -n "${default}" ]; then
+        read -r -p "${GREEN}${text}${NC} [${default}]: " value
+        value="${value:-${default}}"
+    else
+        read -r -p "${GREEN}${text}${NC}: " value
+    fi
+    printf -v "${var}" '%s' "${value}"
 }
 
 prompt_secret() {
-    local var_name="$1" prompt_text="$2"
-    local value
-    read -r -s -p "$(echo -e "${GREEN}$prompt_text${NC}: ")" value
-    echo ""
-    printf -v "$var_name" '%s' "$value"
+    # prompt_secret VAR_NAME "Question text"
+    local var="$1" text="$2" value=""
+    read -r -s -p "${GREEN}${text}${NC} (input hidden): " value
+    echo
+    printf -v "${var}" '%s' "${value}"
 }
 
-test_url() {
-    local url="$1" label="$2"
-    if [ -z "$url" ]; then
-        echo -e "  ${YELLOW}Skipped${NC} — $label not configured"
-        return 1
-    fi
-    # Try /health first, then root
-    local health_url="${url%/v1}/health"
-    if curl -sf --max-time 5 "$health_url" >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} $label reachable at $url"
-        return 0
-    elif curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} $label reachable at $url"
-        return 0
+prompt_yn() {
+    # prompt_yn VAR_NAME "Question text?" "Y" or "N" (default)
+    local var="$1" text="$2" default="${3:-Y}" reply=""
+    local prompt_suffix
+    if [ "${default^^}" = "Y" ]; then
+        prompt_suffix="[Y/n]"
     else
-        echo -e "  ${RED}✗${NC} $label unreachable at $url"
-        return 1
+        prompt_suffix="[y/N]"
+    fi
+    while true; do
+        read -r -p "${GREEN}${text}${NC} ${prompt_suffix}: " reply
+        reply="${reply:-${default}}"
+        case "${reply,,}" in
+            y|yes) printf -v "${var}" '%s' "true"; return 0 ;;
+            n|no)  printf -v "${var}" '%s' "false"; return 0 ;;
+            *)     warn "Please answer y or n." ;;
+        esac
+    done
+}
+
+prompt_choice() {
+    # prompt_choice VAR_NAME "Question?" "opt1 opt2 opt3" "default"
+    local var="$1" text="$2" options="$3" default="${4:-}" reply=""
+    echo "${GREEN}${text}${NC}"
+    local i=1
+    local choices=()
+    for opt in ${options}; do
+        if [ "${opt}" = "${default}" ]; then
+            printf '    %d) %s %s(default)%s\n' "$i" "${opt}" "${DIM}" "${NC}"
+        else
+            printf '    %d) %s\n' "$i" "${opt}"
+        fi
+        choices+=("${opt}")
+        i=$((i + 1))
+    done
+    while true; do
+        read -r -p "Choose [1-${#choices[@]}, default ${default}]: " reply
+        if [ -z "${reply}" ] && [ -n "${default}" ]; then
+            printf -v "${var}" '%s' "${default}"; return 0
+        fi
+        if [[ "${reply}" =~ ^[0-9]+$ ]] && [ "${reply}" -ge 1 ] && [ "${reply}" -le "${#choices[@]}" ]; then
+            printf -v "${var}" '%s' "${choices[$((reply - 1))]}"; return 0
+        fi
+        warn "Enter a number 1-${#choices[@]} or press Enter for default."
+    done
+}
+
+# ── Pre-flight ─────────────────────────────────────────────────────────────
+echo
+printf '%s' "${BOLD}"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║          Brain Gateway — first-boot setup wizard            ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+printf '%s\n' "${NC}"
+
+say "Checking orchestrator health…"
+if ! api_get /health >/dev/null 2>&1; then
+    die "Can't reach orchestrator at ${ORCH}. Is 'docker compose up -d' done? Try: docker compose logs orchestrator"
+fi
+ok "Orchestrator is reachable."
+
+# Kill-switch check via /api/setup/status
+say "Checking setup status…"
+status_json="$(api_get /api/setup/status)" || die "Failed to query /api/setup/status"
+already_complete="$(echo "${status_json}" | jq -r '.setup_completed // false')"
+if [ "${already_complete}" = "true" ]; then
+    warn "Setup is already marked complete (${ENV_FILE%/*}/data/app/setup_state.json)."
+    warn "The /api/setup/env endpoints are now LOCKED (return 410)."
+    warn "To re-run setup: edit data/app/setup_state.json to set setup_completed=false,"
+    warn "then re-run this script."
+    exit 1
+fi
+ok "Setup is unconfigured — first-boot wizard can proceed."
+
+# Helper to write env overrides
+write_env() {
+    # write_env KEY1=VAL1 KEY2=VAL2 ...
+    local json_pairs=""
+    for kv in "$@"; do
+        local k="${kv%%=*}" v="${kv#*=}"
+        # JSON-escape the value (jq handles all the escaping)
+        v="$(echo -n "${v}" | jq -Rs '.')"
+        if [ -n "${json_pairs}" ]; then json_pairs+=","; fi
+        json_pairs+="\"${k}\":${v}"
+    done
+    local body="{\"values\":{${json_pairs}}}"
+    if ! api_post_raw /api/setup/env "${body}"; then
+        warn "Write failed (HTTP ${HTTP_CODE}):"
+        cat /tmp/setup_api_response.json
+        echo
+        die "/api/setup/env returned non-2xx. Fix and re-run."
     fi
 }
 
-generate_token() {
-    python3 -c "import secrets; print(secrets.token_urlsafe(32))" 2>/dev/null || \
-    openssl rand -base64 32 2>/dev/null || \
-    head -c 32 /dev/urandom | base64
-}
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 1 — Identity
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 1 of 7 — Identity"
+info "Tell Jess your name, what to call her, and your timezone."
 
-# --- Check for existing config ----------------------------------------------
+current_identity="$(api_get /api/config/identity 2>/dev/null || echo '{}')"
+def_user="$(echo "${current_identity}" | jq -r '.user_name // ""')"
+def_assistant="$(echo "${current_identity}" | jq -r '.assistant_name // "Jess"')"
+def_tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo 'UTC')"
 
-if [ -f "$ENV_FILE" ]; then
-    echo -e "${YELLOW}Existing .env found.${NC}"
-    read -r -p "Overwrite? (y/N): " overwrite
-    if [[ ! "$overwrite" =~ ^[Yy] ]]; then
-        echo "Keeping existing .env. Run with a backup if you want to start fresh."
-        exit 0
+prompt USER_NAME "Your name" "${def_user}"
+prompt ASSISTANT_NAME "Assistant name" "${def_assistant}"
+prompt TIMEZONE "Timezone" "${def_tz}"
+prompt_yn ADHD_MODE "Enable ADHD mode (warmer, more proactive tone)" "Y"
+prompt_choice TONE "Default tone preset" "warm balanced direct" "warm"
+
+identity_body=$(jq -nc \
+    --arg user_name "${USER_NAME}" \
+    --arg assistant_name "${ASSISTANT_NAME}" \
+    --arg timezone "${TIMEZONE}" \
+    --argjson adhd_mode "${ADHD_MODE}" \
+    --arg tone "${TONE}" \
+    '{user_name: $user_name, assistant_name: $assistant_name, timezone: $timezone, adhd_mode: $adhd_mode, tone_preference: $tone}')
+api_put /api/config/identity "${identity_body}" >/dev/null
+ok "Identity saved."
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 2 — Model
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 2 of 7 — Model"
+
+current_model="$(grep -E '^VLLM_MODEL=' "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+
+if [ -n "${current_model}" ]; then
+    info "Hardware scan recommended: ${BOLD}${current_model}${NC}"
+    prompt_yn USE_RECOMMENDED "Use this model" "Y"
+    if [ "${USE_RECOMMENDED}" = "true" ]; then
+        MODEL_ID="${current_model}"
+    else
+        prompt MODEL_ID "Model id (HuggingFace, AWQ or AutoRound recommended)" "${current_model}"
+    fi
+else
+    warn "No model recommendation in .env (your GPU is below the 20 GiB tier-24 floor)."
+    info "Pick a 7-8B AWQ model that fits comfortably in your VRAM. Common options:"
+    info "  • Qwen/Qwen3-8B-AWQ            (8B, ~6 GB VRAM, good general quality)"
+    info "  • Qwen/Qwen3-7B-Instruct-AWQ   (7B, ~5 GB VRAM, faster)"
+    prompt MODEL_ID "Model id" "Qwen/Qwen3-8B-AWQ"
+fi
+write_env "VLLM_MODEL=${MODEL_ID}"
+ok "Model saved: ${MODEL_ID}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 3 — Voice
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 3 of 7 — Voice"
+
+tts_url="${TTS_URL:-http://localhost:8002}"
+if curl -fsS --max-time 2 "${tts_url}/health" >/dev/null 2>&1; then
+    voices="$(curl -fsS --max-time 5 "${tts_url}/voices" 2>/dev/null | jq -r '.voices[]?' 2>/dev/null || echo "default")"
+    info "TTS server is up. Available voices:"
+    voice_list=""
+    for v in ${voices}; do
+        voice_list+="${v} "
+    done
+    prompt_choice TTS_VOICE "Pick a voice" "${voice_list}" "default"
+else
+    warn "TTS server not running (default install profile excludes the model layer)."
+    info "Pick a voice id now; it'll be used when you enable the TTS server later."
+    prompt TTS_VOICE "TTS voice id" "default"
+fi
+write_env "TTS_VOICE=${TTS_VOICE}"
+ok "Voice saved: ${TTS_VOICE}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 4 — Push channels (ntfy + Pushover)
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 4 of 7 — Push channels (optional)"
+info "Reminders + ACK/snooze can fire to your phone via ntfy and/or Pushover."
+info "Skip either by leaving values blank."
+
+# ntfy
+prompt_yn USE_NTFY "Enable ntfy push" "N"
+if [ "${USE_NTFY}" = "true" ]; then
+    prompt NTFY_URL "ntfy server URL" "https://ntfy.sh"
+    prompt NTFY_TOPIC "ntfy topic (a long unguessable string)"
+    prompt_secret NTFY_HMAC_SECRET "HMAC secret (32+ random bytes; used to sign ACK/snooze callbacks)"
+    write_env "NTFY_ENABLED=true" "NTFY_URL=${NTFY_URL}" "NTFY_TOPIC=${NTFY_TOPIC}" "NTFY_HMAC_SECRET=${NTFY_HMAC_SECRET}"
+    ok "ntfy configured."
+fi
+
+# Pushover
+prompt_yn USE_PUSHOVER "Enable Pushover push" "N"
+if [ "${USE_PUSHOVER}" = "true" ]; then
+    prompt_secret PUSHOVER_USER_KEY "Pushover user key (from your Pushover dashboard)"
+    prompt_secret PUSHOVER_APP_TOKEN "Pushover application token"
+    write_env "PUSHOVER_ENABLED=true" "PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY}" "PUSHOVER_APP_TOKEN=${PUSHOVER_APP_TOKEN}"
+    ok "Pushover configured."
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 5 — Integrations (Home Assistant + Paperless-ngx)
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 5 of 7 — Integrations (optional)"
+
+# Home Assistant
+prompt_yn USE_HA "Enable Home Assistant integration" "N"
+if [ "${USE_HA}" = "true" ]; then
+    prompt HA_URL "Home Assistant URL (no trailing slash)" "http://homeassistant.local:8123"
+    prompt_secret HA_TOKEN "Home Assistant long-lived access token"
+    info "Testing connection…"
+    validate_body=$(jq -nc --arg url "${HA_URL}" --arg token "${HA_TOKEN}" '{service:"ha", values:{HA_URL:$url, HA_TOKEN:$token}}')
+    if api_post_raw /api/setup/env/validate "${validate_body}"; then
+        ok "Connection works."
+        write_env "HA_URL=${HA_URL}" "HA_TOKEN=${HA_TOKEN}"
+    else
+        warn "Validation failed:"
+        cat /tmp/setup_api_response.json | jq . 2>/dev/null || cat /tmp/setup_api_response.json
+        echo
+        prompt_yn SAVE_ANYWAY "Save these values anyway (e.g. HA isn't up yet)" "N"
+        if [ "${SAVE_ANYWAY}" = "true" ]; then
+            write_env "HA_URL=${HA_URL}" "HA_TOKEN=${HA_TOKEN}"
+            ok "HA values saved (unverified)."
+        else
+            warn "Skipping HA integration."
+        fi
     fi
 fi
 
-# --- Core Services -----------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}=== Core Services ===${NC}"
-echo ""
-
-prompt MODEL_URL "LLM endpoint URL" "http://localhost:8080/v1"
-test_url "$MODEL_URL" "Primary LLM" || true
-
-prompt MODEL_NAME "Model name (for logging)" ""
-
-prompt FALLBACK_MODEL_URL "Fallback LLM URL (empty to skip)" ""
-if [ -n "$FALLBACK_MODEL_URL" ]; then
-    test_url "$FALLBACK_MODEL_URL" "Fallback LLM" || true
-    prompt FALLBACK_MODEL_NAME "Fallback model name" ""
-else
-    FALLBACK_MODEL_NAME=""
-fi
-
-prompt TTS_URL "TTS endpoint URL (empty to skip)" ""
-if [ -n "$TTS_URL" ]; then
-    test_url "$TTS_URL" "TTS" || true
-    prompt TTS_VOICE "TTS voice name" "jessica"
-else
-    TTS_VOICE="jessica"
-fi
-
-prompt STT_URL "STT endpoint URL (empty to skip)" ""
-if [ -n "$STT_URL" ]; then
-    test_url "$STT_URL" "STT" || true
-fi
-
-# --- Home Assistant -----------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}=== Home Assistant (optional) ===${NC}"
-echo ""
-
-prompt HA_URL "Home Assistant URL (empty to skip)" ""
-HA_TOKEN=""
-REMINDER_SPEAKER=""
-FALLBACK_SPEAKER=""
-MORNING_BRIEFING_SPEAKER=""
-FOCUS_AUDIO_PLAYER=""
-PRESENCE_ENTITY=""
-
-if [ -n "$HA_URL" ]; then
-    prompt_secret HA_TOKEN "HA Long-Lived Access Token"
-    if test_url "$HA_URL/api/" "Home Assistant"; then
-        echo -e "  ${GREEN}Tip:${NC} Configure speakers in user_profile.yaml after setup"
+# Paperless-ngx
+prompt_yn USE_PAPERLESS "Enable Paperless-ngx integration" "N"
+if [ "${USE_PAPERLESS}" = "true" ]; then
+    prompt PAPERLESS_URL "Paperless-ngx URL" "http://paperless.local:8000"
+    prompt_secret PAPERLESS_API_TOKEN "Paperless API token (8+ chars)"
+    info "Testing connection…"
+    validate_body=$(jq -nc --arg url "${PAPERLESS_URL}" --arg token "${PAPERLESS_API_TOKEN}" '{service:"paperless", values:{PAPERLESS_URL:$url, PAPERLESS_API_TOKEN:$token}}')
+    if api_post_raw /api/setup/env/validate "${validate_body}"; then
+        ok "Connection works."
+        write_env "PAPERLESS_URL=${PAPERLESS_URL}" "PAPERLESS_API_TOKEN=${PAPERLESS_API_TOKEN}"
+    else
+        warn "Validation failed:"
+        cat /tmp/setup_api_response.json | jq . 2>/dev/null || cat /tmp/setup_api_response.json
+        echo
+        prompt_yn SAVE_ANYWAY "Save these values anyway" "N"
+        if [ "${SAVE_ANYWAY}" = "true" ]; then
+            write_env "PAPERLESS_URL=${PAPERLESS_URL}" "PAPERLESS_API_TOKEN=${PAPERLESS_API_TOKEN}"
+            ok "Paperless values saved (unverified)."
+        else
+            warn "Skipping Paperless integration."
+        fi
     fi
-    prompt REMINDER_SPEAKER "Default reminder speaker entity (empty to skip)" ""
-    prompt MORNING_BRIEFING_SPEAKER "Morning briefing speaker (empty to skip)" ""
-    prompt PRESENCE_ENTITY "Presence entity (e.g., person.yourname, empty to skip)" ""
 fi
 
-# --- Google Integration -------------------------------------------------------
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 6 — Selfcare nudges
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 6 of 7 — Selfcare nudges"
+info "Jess can nudge you to eat / drink / take meds / move. Set per-category"
+info "intervals here; you can fine-tune later from the /settings page."
 
-echo ""
-echo -e "${CYAN}=== Google Integration (optional) ===${NC}"
-echo ""
+selfcare_json='{"categories":{}}'
+for category in medication meal hydration movement; do
+    case "${category}" in
+        medication) default_int=120 ; default_enabled="N" ;;
+        meal)       default_int=240 ; default_enabled="Y" ;;
+        hydration)  default_int=60  ; default_enabled="Y" ;;
+        movement)   default_int=90  ; default_enabled="Y" ;;
+    esac
+    prompt_yn "ENABLE_${category^^}" "Enable ${category} nudges" "${default_enabled}"
+    enabled_var="ENABLE_${category^^}"
+    if [ "${!enabled_var}" = "true" ]; then
+        prompt INTERVAL "  ${category} interval (minutes between nudges)" "${default_int}"
+        selfcare_json=$(echo "${selfcare_json}" | jq --arg cat "${category}" --argjson interval "${INTERVAL}" \
+            '.categories[$cat] = {enabled: true, interval_minutes: $interval}')
+    else
+        selfcare_json=$(echo "${selfcare_json}" | jq --arg cat "${category}" \
+            '.categories[$cat] = {enabled: false}')
+    fi
+done
+api_put /api/config/selfcare "${selfcare_json}" >/dev/null
+ok "Selfcare schedule saved."
 
-GOOGLE_CREDENTIALS_PATH="/app/credentials/google_credentials.json"
-CALENDAR_ENABLED="false"
-if [ -f "$PROJECT_DIR/credentials/google_credentials.json" ]; then
-    echo -e "  ${GREEN}✓${NC} Google credentials found"
-    CALENDAR_ENABLED="true"
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 7 — Review + complete
+# ═══════════════════════════════════════════════════════════════════════════
+say "Step 7 of 7 — Review"
+echo
+printf '%s  Identity:%s %s, assistant %s (tz %s, ADHD mode %s, tone %s)\n' \
+    "${DIM}" "${NC}" "${USER_NAME:-unnamed}" "${ASSISTANT_NAME}" "${TIMEZONE}" "${ADHD_MODE}" "${TONE}"
+printf '%s  Model:   %s %s\n' "${DIM}" "${NC}" "${MODEL_ID}"
+printf '%s  Voice:   %s %s\n' "${DIM}" "${NC}" "${TTS_VOICE}"
+printf '%s  Push:    %s ntfy=%s, pushover=%s\n' "${DIM}" "${NC}" "${USE_NTFY:-false}" "${USE_PUSHOVER:-false}"
+printf '%s  HA:      %s %s\n' "${DIM}" "${NC}" "${USE_HA:-false}"
+printf '%s  Paperless:%s %s\n' "${DIM}" "${NC}" "${USE_PAPERLESS:-false}"
+echo
+prompt_yn CONFIRM "Mark setup complete and lock the wizard" "Y"
+if [ "${CONFIRM}" != "true" ]; then
+    warn "Setup left in-progress. Re-run this script when you're ready to lock it."
+    exit 0
+fi
+
+api_post /api/setup/complete >/dev/null
+ok "Setup is complete and locked."
+
+# ── Restart orchestrator so it picks up the new env overrides ──────────────
+say "Restarting the orchestrator to pick up new env values…"
+if command -v docker >/dev/null 2>&1 && [ -f "${REPO_ROOT}/docker-compose.yml" ]; then
+    ( cd "${REPO_ROOT}" && docker compose restart orchestrator 2>&1 | tail -5 ) || warn "Restart returned non-zero (check 'docker compose ps')"
+    ok "Orchestrator restarted."
 else
-    echo -e "  ${YELLOW}No Google credentials found.${NC} Calendar and email features disabled."
-    echo "  Place google_credentials.json in $PROJECT_DIR/credentials/ to enable."
+    warn "docker / compose not found; restart the orchestrator manually:"
+    info "    cd ${REPO_ROOT} && docker compose restart orchestrator"
 fi
 
-prompt GOOGLE_MAPS_API_KEY "Google Maps API key (empty to skip)" ""
-
-# --- Vision Model -------------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}=== Vision Model (optional) ===${NC}"
-echo ""
-
-prompt VISION_MODEL_URL "Vision model URL (empty to skip)" ""
-VISION_ENABLED="false"
-VISION_MODEL_NAME=""
-if [ -n "$VISION_MODEL_URL" ]; then
-    VISION_ENABLED="true"
-    test_url "$VISION_MODEL_URL" "Vision model" || true
-    prompt VISION_MODEL_NAME "Vision model name" ""
-fi
-
-# --- Pi-hole ------------------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}=== Pi-hole Focus Blocking (optional) ===${NC}"
-echo ""
-
-prompt PIHOLE_URLS "Pi-hole URL(s), comma-separated (empty to skip)" ""
-PIHOLE_PASSWORD=""
-FOCUS_BLOCKING_ENABLED="false"
-if [ -n "$PIHOLE_URLS" ]; then
-    FOCUS_BLOCKING_ENABLED="true"
-    prompt_secret PIHOLE_PASSWORD "Pi-hole password"
-fi
-
-# --- Authentication -----------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}=== Authentication ===${NC}"
-echo ""
-
-API_TOKEN=$(generate_token)
-echo -e "  Generated API token: ${YELLOW}${API_TOKEN:0:8}...${NC}"
-DASHBOARD_TOKEN=$(generate_token)
-echo -e "  Generated dashboard token: ${YELLOW}${DASHBOARD_TOKEN:0:8}...${NC}"
-
-# --- User Profile -------------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}=== User Profile ===${NC}"
-echo ""
-
-prompt USER_NAME "Your first name" ""
-prompt TZ "Timezone" "America/Chicago"
-prompt HOME_ADDRESS "Home address (for weather/travel, empty to skip)" ""
-
-# --- Write .env ---------------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}Writing .env...${NC}"
-
-cat > "$ENV_FILE" << ENVEOF
-# Brain Gateway Configuration
-# Generated by scripts/setup.sh on $(date -Iseconds)
-# Re-run scripts/setup.sh to regenerate
-
-# --- Authentication ---
-API_TOKEN=$API_TOKEN
-DASHBOARD_TOKEN=$DASHBOARD_TOKEN
-
-# --- Primary LLM ---
-MODEL_URL=$MODEL_URL
-MODEL_NAME=$MODEL_NAME
-
-# --- Fallback LLM (empty = disabled) ---
-FALLBACK_MODEL_URL=$FALLBACK_MODEL_URL
-FALLBACK_MODEL_NAME=$FALLBACK_MODEL_NAME
-
-# --- TTS/STT (empty = disabled) ---
-TTS_URL=$TTS_URL
-TTS_VOICE=$TTS_VOICE
-STT_URL=$STT_URL
-
-# --- Home Assistant (empty = disabled) ---
-HA_URL=$HA_URL
-HA_TOKEN=$HA_TOKEN
-
-# --- Speakers (empty = skip TTS announcements) ---
-REMINDER_SPEAKER=$REMINDER_SPEAKER
-FALLBACK_SPEAKER=$FALLBACK_SPEAKER
-MORNING_BRIEFING_SPEAKER=$MORNING_BRIEFING_SPEAKER
-FOCUS_AUDIO_PLAYER=$FOCUS_AUDIO_PLAYER
-
-# --- Presence (empty = disabled) ---
-PRESENCE_ENABLED=$([ -n "$PRESENCE_ENTITY" ] && echo "true" || echo "false")
-PRESENCE_ENTITY=$PRESENCE_ENTITY
-
-# --- Google (credentials in ./credentials/) ---
-GOOGLE_CREDENTIALS_PATH=$GOOGLE_CREDENTIALS_PATH
-GOOGLE_TOKEN_PATH=/app/credentials/google_token.json
-GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY
-MORNING_BRIEFING_ENABLED=$CALENDAR_ENABLED
-
-# --- Vision (empty = disabled) ---
-VISION_ENABLED=$VISION_ENABLED
-VISION_MODEL_URL=$VISION_MODEL_URL
-VISION_MODEL_NAME=$VISION_MODEL_NAME
-
-# --- Pi-hole Focus Blocking (empty = disabled) ---
-PIHOLE_URLS=$PIHOLE_URLS
-PIHOLE_PASSWORD=$PIHOLE_PASSWORD
-FOCUS_BLOCKING_ENABLED=$FOCUS_BLOCKING_ENABLED
-
-# --- Paths ---
-GATEWAY_ROOT_PATH=$PROJECT_DIR
-CHROMA_COLLECTION=personal_rag
-
-# --- Timezone ---
-TZ=$TZ
-HOME_ADDRESS=$HOME_ADDRESS
-
-# --- CORS ---
-CORS_ORIGINS=http://localhost:3001
-
-# --- YNAB (empty = disabled) ---
-YNAB_ACCESS_TOKEN=
-YNAB_BUDGET_ID=
-ENVEOF
-
-echo -e "  ${GREEN}✓${NC} .env written to $ENV_FILE"
-
-# --- Write user_profile.yaml -------------------------------------------------
-
-echo -e "${CYAN}Writing user_profile.yaml...${NC}"
-
-cat > "$PROFILE_FILE" << PROFILEEOF
-# Brain Gateway User Profile
-# Generated by scripts/setup.sh on $(date -Iseconds)
-
-name: "$USER_NAME"
-timezone: "$TZ"
-home_address: "$HOME_ADDRESS"
-
-# Assistant voice (used for TTS)
-assistant_voice: "$TTS_VOICE"
-
-# Home Assistant speakers (fill in your entity IDs)
-speakers:
-  default: "$REMINDER_SPEAKER"
-  morning_briefing: "$MORNING_BRIEFING_SPEAKER"
-  focus_audio: "$FOCUS_AUDIO_PLAYER"
-  aliases: {}
-    # office: "media_player.office_max"
-    # bedroom: "media_player.bedroom_pair"
-
-# Mobile notifications (fill in your HA notify service)
-mobile_notify_services: []
-  # - notify.mobile_app_your_phone
-
-# Temperature sensors (fill in your HA sensor entity IDs)
-closet_temp_sensor: ""
-ambient_temp_sensor: ""
-temp_warning: 85
-temp_critical: 95
-PROFILEEOF
-
-echo -e "  ${GREEN}✓${NC} user_profile.yaml written to $PROFILE_FILE"
-
-# --- Summary ------------------------------------------------------------------
-
-echo ""
-echo -e "${CYAN}╔══════════════════════════════════════╗"
-echo "║          Setup Complete!             ║"
-echo -e "╚══════════════════════════════════════╝${NC}"
-echo ""
-echo "Next steps:"
-echo "  1. Review .env and user_profile.yaml"
-echo "  2. docker compose up -d"
-echo "  3. curl http://localhost:8888/health"
-echo ""
-if [ "$CALENDAR_ENABLED" = "false" ]; then
-    echo -e "  ${YELLOW}Note:${NC} Calendar/email disabled. Add Google credentials to enable."
-fi
-echo ""
+# ── Final URLs ─────────────────────────────────────────────────────────────
+LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+echo
+printf '%s════════════════════════════════════════════════════════════%s\n' "${GREEN}" "${NC}"
+printf '%s✓ Setup complete!%s\n' "${GREEN}${BOLD}" "${NC}"
+printf '%s════════════════════════════════════════════════════════════%s\n' "${GREEN}" "${NC}"
+echo
+say "Dashboard"
+info "  http://${LAN_IP}:3001/"
+say "Settings (change anything later)"
+info "  http://${LAN_IP}:3001/settings"
+say "Health check"
+info "  curl http://localhost:8888/health"
+echo

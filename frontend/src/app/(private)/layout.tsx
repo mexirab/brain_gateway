@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Settings } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
-import SetupGuard from '@/components/setup/SetupGuard';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -24,9 +23,6 @@ export default function PrivateLayout({
 }) {
   return (
     <div className="min-h-screen flex">
-      {/* First-boot redirect to /setup (renders nothing) */}
-      <SetupGuard />
-
       {/* Sidebar — hidden on mobile, shown on md+ */}
       <aside className="hidden md:flex flex-col w-56 bg-surface-raised border-r border-zinc-800 p-4">
         <Link href="/" className="text-lg font-bold text-brand-500 mb-8">

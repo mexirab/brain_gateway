@@ -36,34 +36,39 @@ cd brain_gateway
 bash install.sh
 ```
 
-The script runs in two stages, separated by one reboot:
+The script runs in two stages, separated by one reboot. **You don't have to re-run anything after the reboot** — a bash-profile hook auto-resumes Stage 2 on your next SSH login.
 
 | Stage | What it does |
 |-------|--------------|
-| **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, then prompts you to reboot. |
-| **2 (after reboot)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes a generated `API_TOKEN` to `.env`, runs `scripts/detect_hardware.sh` to append a model recommendation, brings up the stack, waits for the orchestrator to report healthy, prints the wizard URL. |
+| **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, installs a bash-profile auto-resume hook, then prompts you to reboot. |
+| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes a generated `API_TOKEN` to `.env`, runs `scripts/detect_hardware.sh` to append a model recommendation, brings up the stack, waits for the orchestrator to report healthy, removes the auto-resume hook, then hands off to the interactive setup CLI (`scripts/setup.sh`). |
+| **Setup CLI** | 7 interactive prompts: Identity → Model → Voice → Push channels → Integrations → Selfcare → Review. Every prompt has a sensible default; Enter to accept. Saves to `.env` + YAML config via the orchestrator's REST API, then marks setup complete (kill switch flips). |
 
-After the reboot, SSH back in and re-run the same command — the installer detects the marker file (`/var/lib/brain-gateway-install/stage`) and continues from Stage 2:
+The auto-resume hook is `~/.brain-gateway-resume.sh` plus a single sourcing line appended to `~/.bash_profile`. Both are idempotent. The script file is removed by Stage 2; the sourcing line becomes a harmless no-op.
+
+If you ever need to manually re-run Stage 2 (skipped the auto-resume, killed the script, etc.):
 
 ```bash
 cd brain_gateway
-bash install.sh
+bash install.sh   # detects the post-reboot marker and continues from Stage 2
 ```
 
-When Stage 2 finishes, it prints something like:
+**To re-run the setup CLI later** (change something after setup is locked):
 
-```
-✓ Install complete!
-==> Open the setup wizard from any browser on your LAN:
-    http://10.0.0.173:3001/setup
-```
+```bash
+# Option A: use the /settings page in the dashboard (recommended)
+xdg-open http://<box-ip>:3001/settings
 
-Open that URL from any browser on your LAN and walk the [setup wizard](#step-6--run-the-setup-wizard) (the wizard walkthrough is in Step 6 of the manual install below — same flow, same screens).
+# Option B: re-open the setup CLI by clearing the kill switch first
+# (data/app/setup_state.json → set setup_completed: false)
+bash scripts/setup.sh
+```
 
 **To re-run the installer from scratch** (e.g. after a wipe-test):
 
 ```bash
 sudo rm -rf /var/lib/brain-gateway-install
+rm -f ~/.brain-gateway-resume.sh
 bash install.sh
 ```
 

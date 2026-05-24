@@ -156,19 +156,52 @@ stage_1() {
     sudo usermod -aG docker "${USER}"
 
     set_marker "post-reboot"
+    install_resume_hook
 
     echo
     ok "Stage 1 complete."
     echo
     say "${BOLD}REBOOT REQUIRED${NC}"
-    echo "    After the box comes back, SSH in and run:"
-    echo
-    echo "        cd ${REPO_ROOT}"
-    echo "        bash install.sh"
+    echo "    On your next interactive SSH login, install Stage 2 will resume"
+    echo "    automatically (with a 5-second Ctrl-C escape hatch)."
+    echo "    Just: ssh labadmin@<this-box>  ← and wait."
     echo
     confirm "Press Enter to reboot now (or Ctrl-C to reboot manually later)"
 
     sudo reboot
+}
+
+# ── Auto-resume hook (Stage 1 ↔ Stage 2 bridge across the reboot) ──────────
+HOOK_FILE="${HOME}/.brain-gateway-resume.sh"
+
+install_resume_hook() {
+    # Write a script that, on next interactive login, checks the marker and
+    # auto-runs Stage 2. Removed by Stage 2 on success.
+    cat > "${HOOK_FILE}" <<EOF
+#!/usr/bin/env bash
+# Brain Gateway — auto-resume install Stage 2 after reboot.
+# Created by install.sh Stage 1; removed when Stage 2 completes.
+if [ -f /var/lib/brain-gateway-install/stage ] \
+   && [ "\$(cat /var/lib/brain-gateway-install/stage 2>/dev/null)" = "post-reboot" ] \
+   && [ -f "${REPO_ROOT}/install.sh" ]; then
+    echo ""
+    echo "(brain-gateway: resuming install Stage 2 in 5s — Ctrl-C to skip)"
+    sleep 5 || return 0
+    cd "${REPO_ROOT}" && bash install.sh
+fi
+EOF
+    chmod 600 "${HOOK_FILE}"
+    # Idempotently source it from ~/.bash_profile on every interactive login
+    local profile="${HOME}/.bash_profile"
+    touch "${profile}"
+    if ! grep -q "brain-gateway-resume.sh" "${profile}" 2>/dev/null; then
+        printf '\n# brain-gateway install bridge (no-op once the file is removed)\n[ -f ~/.brain-gateway-resume.sh ] && source ~/.brain-gateway-resume.sh\n' >> "${profile}"
+    fi
+}
+
+remove_resume_hook() {
+    # Just remove the file — the source line in ~/.bash_profile becomes a no-op.
+    rm -f "${HOOK_FILE}"
 }
 
 # ── Stage 2: post-reboot app setup ──────────────────────────────────────────
@@ -254,20 +287,19 @@ stage_2() {
         warn "The setup wizard may still work once the orchestrator finishes its startup."
     fi
 
-    local lan_ip
-    lan_ip="$(hostname -I | awk '{print $1}')"
     set_marker "complete"
+    remove_resume_hook
 
     echo
-    ok "${BOLD}Install complete!${NC}"
+    ok "${BOLD}Stage 2 complete — handing off to the setup wizard.${NC}"
     echo
-    say "Open the setup wizard from any browser on your LAN:"
-    echo
-    printf '    %shttp://%s:3001/setup%s\n' "${CYAN}" "${lan_ip}" "${NC}"
-    echo
-    say "Once you've finished the wizard, the dashboard is at:"
-    printf '    %shttp://%s:3001/%s\n' "${CYAN}" "${lan_ip}" "${NC}"
-    echo
+
+    if [ -x "${REPO_ROOT}/scripts/setup.sh" ]; then
+        bash "${REPO_ROOT}/scripts/setup.sh"
+    else
+        warn "scripts/setup.sh not found; run it manually:"
+        info "    cd ${REPO_ROOT} && bash scripts/setup.sh"
+    fi
 }
 
 # ── Stage 3: already installed ──────────────────────────────────────────────
@@ -277,9 +309,10 @@ stage_3() {
 
     ok "${BOLD}Brain Gateway is already installed on this box.${NC}"
     echo
-    say "Setup wizard:  http://${lan_ip}:3001/setup"
-    say "Dashboard:     http://${lan_ip}:3001/"
-    say "Health check:  curl -s http://localhost:8888/health"
+    say "Dashboard:        http://${lan_ip}:3001/"
+    say "Settings page:    http://${lan_ip}:3001/settings"
+    say "Health check:     curl -s http://localhost:8888/health"
+    say "Re-run setup CLI: bash ${REPO_ROOT}/scripts/setup.sh"
     echo
     say "If you want to re-run Stage 2 (e.g. after a manual wipe), reset the marker:"
     echo "    sudo rm ${MARKER}"

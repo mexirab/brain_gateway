@@ -1,11 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-// /setup is intentionally NOT in this list — it's the first-boot wizard
-// and must be reachable on a fresh install when no dashboard password
-// has been configured. The orchestrator's /api/setup/* write endpoints
-// flip to HTTP 410 after setup_state.json marks setup_completed: true,
-// so the kill switch lives on the backend, not here.
 const PROTECTED_PATHS = ['/dashboard', '/chat', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals'];
 const COOKIE_NAME = 'brain_token';
 

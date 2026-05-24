@@ -41,18 +41,18 @@ cd brain_gateway
 bash install.sh
 ```
 
-The installer handles Docker, the NVIDIA driver, the NVIDIA container toolkit, the orchestrator stack, and prints the wizard URL when it's done. A reboot is required midway (to load the new NVIDIA kernel module); the script tells you exactly when and asks you to re-run it after the box comes back. Plan on ~20 minutes end-to-end, mostly waiting on apt and container image pulls.
+The installer is fully interactive — everything happens in your SSH session, no browser needed.
 
-When the installer finishes, it prints a URL like `http://<your-box-ip>:3001/setup`. Open that from any browser on your LAN to walk the setup wizard:
-- **Identity** — your name, timezone, ADHD mode
-- **Model** — confirm the recommended model from your hardware scan
-- **Voice** — pick a TTS voice
-- **Push channels** — ntfy + Pushover (both optional)
-- **Optional integrations** — Home Assistant, Paperless-ngx, etc.
-- **Selfcare nudges** — meal / water / med / movement reminders
-- **Review + launch**
+**What it does, in order:**
+1. Installs Docker + the NVIDIA driver + the NVIDIA container toolkit.
+2. Reboots once (so the new NVIDIA kernel module loads). **You don't have to re-run anything** — a bash-profile hook auto-resumes on your next SSH login.
+3. Brings up the orchestrator stack and waits for it to report healthy.
+4. Hands off to an interactive CLI wizard (`scripts/setup.sh`) that walks you through 7 steps: Identity → Model → Voice → Push channels (ntfy / Pushover) → Integrations (Home Assistant / Paperless) → Selfcare nudges → Review.
+5. Prints the dashboard URL when you're done.
 
-![Setup wizard — TODO: add screenshot](docs/img/setup-wizard.png)
+Plan on ~20 minutes end-to-end, mostly waiting on apt and container image pulls. The CLI wizard itself takes about 5 minutes — every prompt has a sensible default; smash Enter to take it.
+
+After install, change anything later from the web Settings page (`http://<box>:3001/settings`).
 
 Step-by-step install guide with troubleshooting: [`docs/INSTALL.md`](docs/INSTALL.md).
 
@@ -60,7 +60,7 @@ Step-by-step install guide with troubleshooting: [`docs/INSTALL.md`](docs/INSTAL
 
 ## What you can do with it
 
-Once the wizard finishes, you talk to Brain Gateway like a normal assistant — from the web UI, from a voice puck, or via the API. A few of the things it does well:
+Once setup is complete, you talk to Brain Gateway like a normal assistant — from the web UI, from a voice puck, or via the API. A few of the things it does well:
 
 - **Voice-first brain dump.** Mumble a stream of thoughts; it sorts them into reminders, tasks, and long-term memory.
 - **Focus sessions.** Pomodoro sprints with ambient audio, optional Pi-hole site blocking, body-doubling check-ins.

@@ -9,17 +9,6 @@ function isAuthed(request: NextRequest): boolean {
   return request.cookies.get(COOKIE_NAME)?.value === TOKEN;
 }
 
-/**
- * The first-boot setup wizard at /setup is reachable without dashboard auth
- * (the user has nothing to authenticate with yet on a fresh install).
- * Once setup_state.json marks setup_completed: true, the orchestrator's
- * /api/setup/* write endpoints return 410 — the kill switch lives on the
- * backend, so this proxy doesn't need to re-enforce it.
- */
-function isSetupPath(request: NextRequest): boolean {
-  return request.nextUrl.pathname.startsWith('/api/proxy/api/setup/');
-}
-
 /** Return binary response directly instead of parsing as JSON. */
 function isBinaryResponse(res: Response): boolean {
   const ct = res.headers.get('content-type') || '';
@@ -37,7 +26,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  if (!isSetupPath(request) && !isAuthed(request)) {
+  if (!isAuthed(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -62,7 +51,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  if (!isSetupPath(request) && !isAuthed(request)) {
+  if (!isAuthed(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -108,7 +97,7 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  if (!isSetupPath(request) && !isAuthed(request)) {
+  if (!isAuthed(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -134,7 +123,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  if (!isSetupPath(request) && !isAuthed(request)) {
+  if (!isAuthed(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -160,7 +149,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  if (!isSetupPath(request) && !isAuthed(request)) {
+  if (!isAuthed(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
