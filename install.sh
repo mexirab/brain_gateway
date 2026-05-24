@@ -67,11 +67,17 @@ check_gpu() {
     if ! command -v lspci >/dev/null 2>&1; then
         sudo apt-get install -y -qq pciutils
     fi
-    if ! lspci 2>/dev/null | grep -qi nvidia; then
+    # Capture lspci output first to avoid SIGPIPE under `set -o pipefail`:
+    # `grep -q` closes stdin after the first match, lspci then gets SIGPIPE
+    # (exit 141), pipefail propagates that as a failed pipeline, and the
+    # NVIDIA check spuriously dies. Run lspci, grep into a variable, then test.
+    local nvidia_devices
+    nvidia_devices="$(lspci 2>/dev/null | grep -i nvidia || true)"
+    if [ -z "${nvidia_devices}" ]; then
         die "No NVIDIA GPU detected via lspci. This installer only supports NVIDIA GPUs."
     fi
     ok "NVIDIA GPU(s) detected:"
-    lspci | grep -i nvidia | sed 's/^/    /'
+    printf '%s\n' "${nvidia_devices}" | sed 's/^/    /'
 }
 
 require_sudo() {
