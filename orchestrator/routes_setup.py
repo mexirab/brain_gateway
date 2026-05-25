@@ -97,6 +97,32 @@ def is_first_boot() -> bool:
     return not bool(_setup_state().get("setup_completed"))
 
 
+def is_first_chat() -> bool:
+    """True if no chat message has triggered the welcome flow yet.
+
+    Used by `unified_loop` to decide whether to prepend the one-time welcome
+    onto the assistant's first reply. Corrupt/missing setup_state.json
+    degrades to True — the welcome is informational, so a duplicate firing
+    is much less bad than missing it on a fresh install.
+    """
+    return not bool(_setup_state().get("first_chat_completed"))
+
+
+def mark_first_chat_done() -> None:
+    """Idempotent: flip first_chat_completed to True in setup_state.json.
+
+    Preserves any other fields already present (setup_completed, completed_at).
+    Safe to call repeatedly — second+ calls are no-ops if the flag is already
+    set. Atomic write via `_atomic_write_json`.
+    """
+    state = _setup_state()
+    if state.get("first_chat_completed"):
+        return
+    state["first_chat_completed"] = True
+    _atomic_write_json(_SETUP_STATE_PATH, state)
+    logger.info("[SETUP] first chat completed — welcome won't fire again")
+
+
 @router.get("/status")
 async def get_setup_status():
     """Report whether the first-boot setup wizard has been completed."""

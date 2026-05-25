@@ -46,13 +46,15 @@ The installer is fully interactive — everything happens in your SSH session, n
 **What it does, in order:**
 1. Installs Docker + the NVIDIA driver + the NVIDIA container toolkit.
 2. Reboots once (so the new NVIDIA kernel module loads). **You don't have to re-run anything** — a bash-profile hook auto-resumes on your next SSH login.
-3. Brings up the orchestrator stack and waits for it to report healthy.
-4. Hands off to an interactive CLI wizard (`scripts/setup.sh`) that walks you through 7 steps: Identity → Model → Voice → Push channels (ntfy / Pushover) → Integrations (Home Assistant / Paperless) → Selfcare nudges → Review.
+3. Brings up the full local-AI base: orchestrator + LLM (vLLM, model auto-picked to fit your hardware) + TTS (Qwen3-TTS with a generic voice) + STT (Parakeet) + dashboard. Waits for everything to report healthy.
+4. Hands off to a 30-second CLI wizard (`scripts/setup.sh`) that asks two questions: **your name** and **your timezone**. Everything else (assistant name, ADHD mode, model, voice) takes sensible defaults you can change later.
 5. Prints the dashboard URL when you're done.
 
-Plan on ~20 minutes end-to-end, mostly waiting on apt and container image pulls. The CLI wizard itself takes about 5 minutes — every prompt has a sensible default; smash Enter to take it.
+Plan on **~30 minutes end-to-end** on a fresh box — mostly waiting on container images and model weights to download (~50 GB the first time). The wizard itself takes ~30 seconds.
 
-After install, change anything later from the web Settings page (`http://<box>:3001/settings`).
+**After install, talk to Jess.** Open the dashboard at `http://<your-box>:3001/`, log in, and Jess greets you on your first message with a tour of what she can do and what's not yet configured. To wire up Home Assistant, push notifications, document storage, etc., just ask: *"set up Home Assistant"* and Jess walks you through it conversationally — no forms, no SSH gymnastics.
+
+If you prefer a web form for these, the Settings page at `/settings` has full panels for everything.
 
 Step-by-step install guide with troubleshooting: [`docs/INSTALL.md`](docs/INSTALL.md).
 

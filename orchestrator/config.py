@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     tz: str = "America/Chicago"
 
+    # The box's LAN IP, set by install.sh on Stage 2. Used by the first-chat
+    # welcome message to render a clickable /settings URL — Docker network
+    # NAT means the orchestrator container can't enumerate the host's LAN IP
+    # from inside, so host-side detection is required. Empty if unknown.
+    jess_lan_ip: str = ""
+
     # -- Distribution profile ----------------------------------------------------
     # JESS_ADVANCED gates owner-specific tools and integrations from the
     # shippable single-box build (e.g. code_agent, ask_expert, query_budget,

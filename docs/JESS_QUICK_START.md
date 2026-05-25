@@ -14,15 +14,31 @@ There are three ways to talk to it:
 
 ## First 5 minutes
 
-After the setup wizard finishes, try this sequence in the dashboard chat:
+When you open the dashboard for the first time, just say "hi" — Jess greets you with a tour of what's working, what's not yet configured, and how to set up anything optional.
 
-1. *"What can you do?"* — gets a tailored overview based on which integrations you enabled.
-2. *"Remind me to drink water in 15 minutes."* — proves push + voice are wired up.
-3. *"What's on my calendar today?"* — if you connected Google Calendar in the wizard.
-4. *"Brain dump: pay the electric bill, schedule eye exam, look into noise-cancelling headphones."* — watches it categorize and route each item.
-5. *"Start a 25-minute focus timer on email."* — fires the Pomodoro flow with ambient audio + check-ins.
+After that, try this sequence to exercise the features that ship by default:
+
+1. *"What can you do?"* — gets a tailored overview based on which integrations you've enabled.
+2. *"Remind me to drink water in 15 minutes."* — proves the reminder pipeline works.
+3. *"Brain dump: pay the electric bill, schedule eye exam, look into noise-cancelling headphones."* — watches Jess categorize and route each item.
+4. *"Start a 25-minute focus timer on email."* — fires the Pomodoro flow with check-ins.
 
 That's the surface area for 80% of daily use.
+
+---
+
+## Setting up new features (just ask Jess)
+
+The install gives you a working chat + voice + memory + reminders. Everything else (smart home, push notifications, document storage) is configured **after** install — either by asking Jess or via the web Settings page.
+
+| Say this | What Jess does |
+|----------|----------------|
+| *"Set up Home Assistant"* | Asks for your HA URL + a long-lived access token, tests the connection, saves the credentials. After it's saved, restart with `docker compose restart orchestrator` to activate. |
+| *"Set up ntfy"* (Android phone push) | Asks for the ntfy server URL (default `https://ntfy.sh`), a topic name (your private channel), and an HMAC secret. Suggests `openssl rand -hex 32` for the secret. Sends a test push to confirm before saving. Active immediately. |
+| *"Set up Pushover"* (iPhone-preferred phone push) | Asks for your user key + an application token (both from `https://pushover.net`). Sends a test push to confirm. Active immediately. |
+| *"Set up Paperless"* (OCR + auto-tagged document storage) | Asks for the Paperless URL + an API token. Tests the connection. Active immediately. |
+
+If you prefer a web form for these, visit `/settings` in the dashboard — same configuration, different shape.
 
 ---
 

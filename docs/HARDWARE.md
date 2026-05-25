@@ -99,7 +99,7 @@ The default install runs the conversation model + voice + reminders + focus time
 - **Kernel:** 6.5+ (needed for nvidia-driver-580). Default on Ubuntu 22.04.5+ and 24.04+.
 - **CPU:** any x86-64 from the last ~5 years. The orchestrator is I/O-bound, not CPU-bound.
 - **RAM:** 16 GiB minimum (boots); 32 GiB recommended (advanced profile, code agent spill).
-- **Disk:** ~120 GiB free. ~40 GiB for the docker images, ~50 GiB for the HF model cache (vLLM + Qwen3-TTS + Parakeet), the rest for ChromaDB + state.
+- **Disk:** ~120 GiB free. The breakdown: ~40 GiB for docker container images, ~50 GiB for the HF model cache (vLLM + Qwen3-TTS + Parakeet weights — pulled on first `docker compose up`, then cached forever), the rest for ChromaDB + state. First-time install downloads all of this; subsequent boots are local-only.
 - **Network:** any LAN. For off-LAN access from your phone, Tailscale (free tier) + `tailscale serve` is the easiest path; the maintainer's deployment uses exactly this.
 
 ---

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from orchestrator import shared
+from orchestrator import setup_env, shared, welcome
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
     FAST_PATH_COUNT,
@@ -26,8 +26,39 @@ from orchestrator.metrics import (
     VOICE_PIPELINE_LATENCY,
 )
 from orchestrator.mode_router import get_mode_router
+from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_prepend_welcome(text: str) -> str:
+    """If this is the user's first chat, prepend the one-time welcome.
+
+    Pulls assistant_name + user_name from `shared.profile`, the LAN IP from
+    Settings (set host-side by install.sh), and the integration status from
+    setup_env's overrides. Marks first_chat_completed on success so the
+    welcome never fires twice.
+
+    Returns the original text unchanged if first chat has already happened.
+    """
+    if not is_first_chat():
+        return text
+    try:
+        from orchestrator.config import settings  # local import: avoid module-load cycle
+
+        prepend = welcome.generate_welcome(
+            user_name=getattr(shared.profile, "user_name", None) or None,
+            assistant_name=getattr(shared.profile, "assistant_name", "Jess"),
+            lan_ip=settings.jess_lan_ip or None,
+            env_overrides=setup_env.read_overrides(),
+        )
+        mark_first_chat_done()
+        logger.info("[WELCOME] First-chat welcome prepended (%d chars)", len(prepend))
+        return prepend + text
+    except Exception as e:
+        # Welcome is best-effort onboarding polish — never let it break a chat.
+        logger.warning("[WELCOME] Skipped due to error: %s", e)
+        return text
 
 
 class CloudBrain:
@@ -162,8 +193,9 @@ class CloudBrain:
                     REQUEST_COUNT.labels(mode="fast_path").inc()
                     FAST_PATH_COUNT.labels(action=fast_result.action or "unknown").inc()
                     logger.info("[FAST-PATH] Handled: %s -> %s", fast_result.action, fast_result.entity_name)
+                    fast_response_text = _maybe_prepend_welcome(fast_result.response_text)
                     if stream:
-                        return self._stream_text(fast_result.response_text, "fast-path")
+                        return self._stream_text(fast_response_text, "fast-path")
                     return JSONResponse(
                         {
                             "id": f"chatcmpl-fp-{int(time.time())}",
@@ -173,7 +205,7 @@ class CloudBrain:
                             "choices": [
                                 {
                                     "index": 0,
-                                    "message": {"role": "assistant", "content": fast_result.response_text},
+                                    "message": {"role": "assistant", "content": fast_response_text},
                                     "finish_reason": "stop",
                                 }
                             ],
@@ -296,6 +328,8 @@ class CloudBrain:
             return JSONResponse({"error": "Service temporarily unavailable"}, status_code=503)
 
         self._schedule_auto_learn(messages)
+
+        result = _maybe_prepend_welcome(result)
 
         if stream:
             return self._stream_text(result, model_name)

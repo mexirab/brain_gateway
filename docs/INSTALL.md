@@ -41,8 +41,14 @@ The script runs in two stages, separated by one reboot. **You don't have to re-r
 | Stage | What it does |
 |-------|--------------|
 | **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, installs a bash-profile auto-resume hook, then prompts you to reboot. |
-| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes a generated `API_TOKEN` to `.env`, runs `scripts/detect_hardware.sh` to append a model recommendation, brings up the stack, waits for the orchestrator to report healthy, removes the auto-resume hook, then hands off to the interactive setup CLI (`scripts/setup.sh`). |
-| **Setup CLI** | 7 interactive prompts: Identity → Model → Voice → Push channels → Integrations → Selfcare → Review. Every prompt has a sensible default; Enter to accept. Saves to `.env` + YAML config via the orchestrator's REST API, then marks setup complete (kill switch flips). |
+| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `JESS_LAN_IP`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `Qwen/Qwen3-8B-AWQ` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); removes the auto-resume hook; hands off to the setup CLI. |
+| **Setup CLI** | 2 questions: your name, your timezone. Everything else (assistant name, ADHD mode, tone, voice) gets a sensible default. Saves identity via `/api/config/identity`, marks setup complete (kill switch flips), restarts orchestrator, prints the dashboard URL. ~30 seconds. |
+
+### After install — Jess greets you
+
+When you open the dashboard for the first time and send any message, Jess prepends a one-time welcome explaining what's working, what's not yet configured, and how to wire up the optional integrations. You can configure any of them by just asking — *"set up Home Assistant"*, *"set up ntfy"*, *"set up Pushover"*, *"set up Paperless"* — and Jess walks you through the credentials conversationally. The web Settings page at `/settings` is still there as a parallel forms-based path.
+
+This makes the post-install path discoverable without you having to read docs to find the Settings page.
 
 The auto-resume hook is `~/.brain-gateway-resume.sh` plus a single sourcing line appended to `~/.bash_profile`. Both are idempotent. The script file is removed by Stage 2; the sourcing line becomes a harmless no-op.
 

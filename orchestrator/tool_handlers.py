@@ -1036,6 +1036,130 @@ def _handle_document_vault(arguments: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Integration configuration tools (chat-driven)
+# ---------------------------------------------------------------------------
+# These let Jess walk a user through wiring up HA / ntfy / Pushover /
+# Paperless during a chat — e.g. "set up Home Assistant" → Jess asks for
+# the URL + token, then calls configure_home_assistant with the values.
+#
+# All four follow the same shape:
+#   1. validate credentials via setup_env.validate_service() (which dials
+#      the upstream service so we know they work BEFORE persisting)
+#   2. on success, persist via setup_env.set_keys() (chmod-600 .env overlay)
+#   3. apply_to_environ() so the new values are visible to anything that
+#      checks settings at call time (ntfy, Pushover, Paperless are all
+#      read per-delivery, so they activate without a restart)
+#   4. return a structured message that explains whether a restart is
+#      needed (only for HA — its client is initialized once at startup)
+#
+# The tools bypass POST /api/setup/env's HTTP kill switch because they
+# run inside the orchestrator process (no HTTP), and the chat is an
+# authenticated trust context already.
+
+
+async def _configure_integration(
+    service: str,
+    values: Dict[str, str],
+    *,
+    restart_required: bool,
+    success_message: str,
+) -> str:
+    """Shared body for the four configure_* tools.
+
+    Validates `values` via setup_env, persists on success, returns a
+    user-facing string Jess can speak. On validation failure, returns a
+    string that explains what's wrong so Jess can ask the user to retry.
+    """
+    from orchestrator import setup_env
+
+    # Reject empties early so the upstream API doesn't see a placeholder dial.
+    for k, v in values.items():
+        if not v:
+            return f"Missing value for {k}. Need a real value to configure {service}."
+
+    try:
+        ok, detail = await setup_env.validate_service(service, values)
+    except Exception as e:
+        logger.warning("[CONFIGURE %s] validator raised: %s", service, e)
+        return f"Couldn't test the connection ({type(e).__name__}: {e}). Please double-check the values and try again."
+
+    if not ok:
+        return f"Connection test failed: {detail}. Please double-check the values and try again."
+
+    try:
+        setup_env.set_keys(values)
+        setup_env.apply_to_environ()
+    except Exception as e:
+        logger.error("[CONFIGURE %s] persist failed: %s", service, e)
+        return (
+            f"Tested OK but couldn't save ({type(e).__name__}: {e}). Check /app/data/setup_overrides.env permissions."
+        )
+
+    suffix = ""
+    if restart_required:
+        suffix = (
+            " To activate this integration the orchestrator needs to restart — "
+            "run `docker compose restart orchestrator` from the brain_gateway directory on the box."
+        )
+    logger.info("[CONFIGURE %s] saved %s", service, list(values.keys()))
+    return success_message + suffix
+
+
+async def tool_configure_home_assistant(url: str, token: str) -> str:
+    """Set HA_URL + HA_TOKEN. Requires an orchestrator restart to swap the
+    in-memory ha_client (initialized once at startup)."""
+    return await _configure_integration(
+        "ha",
+        {"HA_URL": url, "HA_TOKEN": token},
+        restart_required=True,
+        success_message="Home Assistant connected and saved.",
+    )
+
+
+async def tool_configure_ntfy(url: str, topic: str, hmac_secret: str) -> str:
+    """Set NTFY_URL + NTFY_TOPIC + NTFY_HMAC_SECRET + flip NTFY_ENABLED.
+    No restart needed — reminder_manager checks settings.ntfy_enabled per
+    delivery."""
+    return await _configure_integration(
+        "ntfy",
+        {
+            "NTFY_ENABLED": "true",
+            "NTFY_URL": url,
+            "NTFY_TOPIC": topic,
+            "NTFY_HMAC_SECRET": hmac_secret,
+        },
+        restart_required=False,
+        success_message="ntfy push channel saved and active. Your next reminder will fire to your phone.",
+    )
+
+
+async def tool_configure_pushover(user_key: str, app_token: str) -> str:
+    """Set PUSHOVER_USER_KEY + PUSHOVER_APP_TOKEN + flip PUSHOVER_ENABLED.
+    No restart needed — reminder_manager reads at delivery time."""
+    return await _configure_integration(
+        "pushover",
+        {
+            "PUSHOVER_ENABLED": "true",
+            "PUSHOVER_USER_KEY": user_key,
+            "PUSHOVER_APP_TOKEN": app_token,
+        },
+        restart_required=False,
+        success_message="Pushover push channel saved and active. Your next reminder will fire to your phone.",
+    )
+
+
+async def tool_configure_paperless(url: str, token: str) -> str:
+    """Set PAPERLESS_URL + PAPERLESS_API_TOKEN. paperless_save reads at
+    call time, no restart needed."""
+    return await _configure_integration(
+        "paperless",
+        {"PAPERLESS_URL": url, "PAPERLESS_API_TOKEN": token},
+        restart_required=False,
+        success_message="Paperless-ngx connected and saved. Use the paperless_save tool to push files for OCR.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tool registry registrations
 # Migrated tools use @register_tool and go through the registry pipeline
 # instead of the legacy if-elif chain above.
@@ -1627,3 +1751,38 @@ async def _reg_log_meal(arguments: dict) -> str:
     meal = result["meal"]
     cal_txt = f" ({meal['calories']} kcal)" if meal.get("calories") else ""
     return f"Logged {meal['meal_type']}: {meal['description']}{cal_txt}."
+
+
+# Integration configure_* tools — chat-driven post-install wiring
+# (impl above, schemas in tool_definitions.STATIC_TOOLS).
+@register_tool("configure_home_assistant")
+async def _reg_configure_home_assistant(arguments: dict) -> str:
+    return await tool_configure_home_assistant(
+        arguments.get("url", ""),
+        arguments.get("token", ""),
+    )
+
+
+@register_tool("configure_ntfy")
+async def _reg_configure_ntfy(arguments: dict) -> str:
+    return await tool_configure_ntfy(
+        arguments.get("url", "https://ntfy.sh"),
+        arguments.get("topic", ""),
+        arguments.get("hmac_secret", ""),
+    )
+
+
+@register_tool("configure_pushover")
+async def _reg_configure_pushover(arguments: dict) -> str:
+    return await tool_configure_pushover(
+        arguments.get("user_key", ""),
+        arguments.get("app_token", ""),
+    )
+
+
+@register_tool("configure_paperless")
+async def _reg_configure_paperless(arguments: dict) -> str:
+    return await tool_configure_paperless(
+        arguments.get("url", ""),
+        arguments.get("token", ""),
+    )

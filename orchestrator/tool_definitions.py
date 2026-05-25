@@ -1039,6 +1039,109 @@ STATIC_TOOLS = [
             },
         },
     },
+    # ── Integration configuration (chat-driven post-install wiring) ────────
+    # When the user says "set up Home Assistant" (or similar) on first-chat
+    # via the welcome tour, Jess walks them through the credentials and then
+    # calls one of these tools. Each one validates the supplied credentials
+    # against the upstream service BEFORE persisting, so a typo doesn't get
+    # silently saved.
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_home_assistant",
+            "description": (
+                "Connect a Home Assistant instance for smart home control. "
+                "Use this when the user asks to set up / connect / configure / enable "
+                "Home Assistant. Ask the user for: (1) the HA URL "
+                "(usually http://homeassistant.local:8123 or http://<their-ip>:8123), "
+                "(2) a long-lived access token (in HA → Profile → Long-Lived Access "
+                "Tokens → Create Token). Tests the connection before saving. "
+                "Requires an orchestrator restart after saving (the tool tells you the command)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Home Assistant base URL with no trailing slash."},
+                    "token": {"type": "string", "description": "Long-lived access token from HA."},
+                },
+                "required": ["url", "token"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_ntfy",
+            "description": (
+                "Wire up the ntfy push-notification channel for reminders. "
+                "Use this when the user asks to set up ntfy / phone push (Android). "
+                "Ask for: (1) the ntfy server URL (default https://ntfy.sh is fine), "
+                "(2) a topic name they pick — any long unguessable string, their private "
+                "channel, (3) an HMAC secret (32+ random bytes — for signing Done/Snooze "
+                "callback URLs; suggest `openssl rand -hex 32`). Sends a test push to "
+                "confirm before saving. No restart needed; active immediately."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "ntfy server URL, default https://ntfy.sh"},
+                    "topic": {
+                        "type": "string",
+                        "description": "ntfy topic — a long unguessable string the user picks.",
+                    },
+                    "hmac_secret": {
+                        "type": "string",
+                        "description": "HMAC secret for signing callback URLs (32+ bytes).",
+                    },
+                },
+                "required": ["topic", "hmac_secret"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_pushover",
+            "description": (
+                "Wire up the Pushover push-notification channel for reminders. "
+                "Use this when the user asks to set up Pushover / phone push (iPhone-preferred). "
+                "Ask for: (1) their Pushover user key (30 chars, from the dashboard at "
+                "https://pushover.net), (2) an application token (30 chars, from "
+                "'Create an Application/API Token' at the bottom of the same dashboard). "
+                "Sends a test push to confirm before saving. No restart needed; active immediately."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_key": {"type": "string", "description": "Pushover user key (30 chars, from dashboard)."},
+                    "app_token": {"type": "string", "description": "Pushover application token (30 chars)."},
+                },
+                "required": ["user_key", "app_token"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_paperless",
+            "description": (
+                "Connect a Paperless-ngx instance for OCR + auto-tagged document storage. "
+                "Use this when the user asks to set up Paperless / document storage. "
+                "Ask for: (1) the Paperless URL (e.g. http://paperless.local:8000), "
+                "(2) an API token from Paperless → Settings → API Tokens. Tests the "
+                "connection before saving. No restart needed; the paperless_save tool "
+                "picks up the new credentials at next call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Paperless-ngx base URL with no trailing slash."},
+                    "token": {"type": "string", "description": "Paperless API token (8+ chars)."},
+                },
+                "required": ["url", "token"],
+            },
+        },
+    },
 ]
 
 # Code agent tool — added dynamically when enabled

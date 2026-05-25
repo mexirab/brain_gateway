@@ -120,8 +120,16 @@ stage_1() {
     echo "    - NVIDIA driver 580 (DKMS variant; rebuilds against your current kernel)"
     echo "    - NVIDIA container toolkit (lets containers see the GPU)"
     echo
+    echo "    After the reboot, Stage 2 will bring up the orchestrator + the"
+    echo "    full local-AI stack (LLM + TTS + STT) and hand off to a 30-second"
+    echo "    setup wizard."
+    echo
+    echo "    Plan on ~30 minutes total: ~5 min for apt installs (this stage),"
+    echo "    ~5 min for the reboot, then ~15-20 min for container images +"
+    echo "    model weights to download in Stage 2."
+    echo
     warn "A reboot is required midway so the new NVIDIA kernel module loads."
-    warn "After the box comes back, re-run this script (it'll continue from where it left off)."
+    warn "The install resumes automatically on your next SSH login (5s Ctrl-C escape)."
     echo
     confirm
 
@@ -258,33 +266,108 @@ stage_2() {
         ok "Generated and wrote a fresh API_TOKEN"
     fi
 
+    # JESS_LAN_IP — used by the first-chat welcome to render a clickable
+    # /settings URL. Has to be set host-side because the orchestrator
+    # container can't reliably enumerate the host's LAN IP from inside Docker.
+    local lan_ip_now
+    lan_ip_now="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "${lan_ip_now}" ]; then
+        sed -i.bak '/^JESS_LAN_IP=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+        echo "JESS_LAN_IP=${lan_ip_now}" >> "${ENV_FILE}"
+        ok "Detected LAN IP: ${lan_ip_now} (saved as JESS_LAN_IP)"
+    else
+        warn "Could not detect LAN IP — the welcome message will show '<your-box-ip>' as a placeholder"
+    fi
+
     say "Running hardware scan + appending recommendation to .env..."
     if [ -x "${REPO_ROOT}/scripts/detect_hardware.sh" ]; then
         bash "${REPO_ROOT}/scripts/detect_hardware.sh" >> "${ENV_FILE}" || warn "Hardware scan exited non-zero (continuing)"
+        # Below-floor GPUs (<20 GiB) leave VLLM_MODEL commented out — substitute
+        # a sane 7-8B AWQ default so the install brings up a working brain.
+        if grep -qE '^# VLLM_MODEL=' "${ENV_FILE}" && ! grep -qE '^VLLM_MODEL=' "${ENV_FILE}"; then
+            echo "VLLM_MODEL=Qwen/Qwen3-8B-AWQ  # auto-picked for sub-tier-24 GPU" >> "${ENV_FILE}"
+            warn "GPU is below the 20 GiB tier-24 floor; auto-picked Qwen/Qwen3-8B-AWQ."
+            warn "Change later by editing ${ENV_FILE} and running 'docker compose up -d'."
+        fi
         ok "Hardware scan complete"
     else
         warn "scripts/detect_hardware.sh not found or not executable; skipping"
     fi
 
-    say "Bringing up the core stack (first run pulls images; can take 5-15 min)..."
+    say "Enabling the models profile (LLM + TTS + STT will run as containers)..."
+    if ! grep -qE '^COMPOSE_PROFILES=' "${ENV_FILE}"; then
+        echo "COMPOSE_PROFILES=models" >> "${ENV_FILE}"
+        ok "COMPOSE_PROFILES=models written to .env"
+    elif ! grep -qE '^COMPOSE_PROFILES=.*models' "${ENV_FILE}"; then
+        warn "COMPOSE_PROFILES is set but does not include 'models'."
+        warn "The LLM/TTS/STT containers will NOT start. Edit ${ENV_FILE} if you want them."
+    else
+        ok "COMPOSE_PROFILES already includes 'models'"
+    fi
+
+    say "Bringing up the full stack (first run pulls images + model weights; ~15-25 min)..."
+    info "Container images: ~30 GB. Model weights: ~40-50 GB. Both pulled once, cached after."
     cd "${REPO_ROOT}"
     docker compose up -d
 
-    say "Waiting up to 3 min for the orchestrator to report healthy..."
-    local healthy="no"
-    local i
-    for i in $(seq 1 36); do
-        if curl -s --max-time 2 http://localhost:8888/health >/dev/null 2>&1; then
-            healthy="yes"
-            break
+    # Health-wait — orchestrator + the three model containers if the profile is on.
+    local services=( orchestrator )
+    if grep -qE '^COMPOSE_PROFILES=.*models' "${ENV_FILE}"; then
+        services+=( vllm-primary qwen-tts parakeet-stt )
+    fi
+
+    say "Waiting up to 15 min for ${#services[@]} service(s) to report healthy: ${services[*]}"
+    info "(vLLM cold-start is the slowest — it loads ~6-20 GB of weights into VRAM)"
+
+    local timeout_seconds=900   # 15 min
+    local elapsed=0
+    local poll_interval=10
+    local pending=( "${services[@]}" )
+    local last_report=""
+
+    while [ ${#pending[@]} -gt 0 ] && [ "${elapsed}" -lt "${timeout_seconds}" ]; do
+        local still_pending=()
+        for svc in "${pending[@]}"; do
+            local healthy="no"
+            case "${svc}" in
+                orchestrator)
+                    curl -s --max-time 2 http://localhost:8888/health >/dev/null 2>&1 && healthy="yes" ;;
+                vllm-primary)
+                    curl -s --max-time 2 http://localhost:8080/health >/dev/null 2>&1 && healthy="yes" ;;
+                qwen-tts)
+                    curl -s --max-time 2 http://localhost:8002/health >/dev/null 2>&1 && healthy="yes" ;;
+                parakeet-stt)
+                    curl -s --max-time 2 http://localhost:8003/health >/dev/null 2>&1 && healthy="yes" ;;
+            esac
+            if [ "${healthy}" = "yes" ]; then
+                ok "${svc} is healthy (after ${elapsed}s)"
+            else
+                still_pending+=( "${svc}" )
+            fi
+        done
+        pending=( "${still_pending[@]}" )
+
+        # Periodic status (every ~30s) so the user sees we're alive
+        if [ ${#pending[@]} -gt 0 ] && [ "$((elapsed % 30))" -eq 0 ] && [ "${elapsed}" -gt 0 ]; then
+            local report="${elapsed}s — still waiting on: ${pending[*]}"
+            if [ "${report}" != "${last_report}" ]; then
+                info "${report}"
+                last_report="${report}"
+            fi
         fi
-        sleep 5
+
+        if [ ${#pending[@]} -gt 0 ]; then
+            sleep "${poll_interval}"
+            elapsed=$((elapsed + poll_interval))
+        fi
     done
-    if [ "${healthy}" = "yes" ]; then
-        ok "Orchestrator is healthy"
+
+    if [ ${#pending[@]} -eq 0 ]; then
+        ok "All services healthy."
     else
-        warn "Orchestrator didn't report healthy in 3 min. Check 'docker compose logs orchestrator'."
-        warn "The setup wizard may still work once the orchestrator finishes its startup."
+        warn "Timed out after ${timeout_seconds}s. Still not healthy: ${pending[*]}"
+        warn "Check 'docker compose logs ${pending[0]}' for details."
+        warn "The install will continue — the setup wizard may still work once the stragglers finish loading."
     fi
 
     set_marker "complete"

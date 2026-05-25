@@ -231,22 +231,27 @@ write_env() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 1 — Identity
+# Express setup — 2 questions, ~30 seconds.
+# Everything else (Home Assistant, push channels, integrations, selfcare
+# nudges) is configured AFTER setup completes — either by chatting with Jess
+# ("set up Home Assistant") or from the web Settings page.
 # ═══════════════════════════════════════════════════════════════════════════
-say "Step 1 of 7 — Identity"
-info "Tell Jess your name, what to call her, and your timezone."
+say "Express setup — 2 questions, ~30 seconds"
+info ""
+info "Everything optional (smart home, phone push, document storage, selfcare"
+info "nudges) is configured AFTER you finish setup, either by asking Jess in"
+info "the chat ('set up Home Assistant') or visiting the web Settings page."
+info ""
 
+# ── Question 1: name ──────────────────────────────────────────────────────
+say "1 / 2 — Your name"
 current_identity="$(api_get /api/config/identity 2>/dev/null || echo '{}')"
 def_user="$(echo "${current_identity}" | jq -r '.user_name // ""')"
-def_assistant="$(echo "${current_identity}" | jq -r '.assistant_name // "Jess"')"
-def_tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo 'UTC')"
-
 prompt USER_NAME "Your name" "${def_user}"
-prompt ASSISTANT_NAME "Assistant name" "${def_assistant}"
 
-# Timezone must be a valid IANA name (e.g. America/Chicago). Validate against
-# /usr/share/zoneinfo and re-prompt on bad input. Auto-correct the common
-# 'spaces instead of slashes' typo (US Central → US/Central).
+# ── Question 2: timezone ──────────────────────────────────────────────────
+say "2 / 2 — Timezone"
+def_tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo 'UTC')"
 while true; do
     prompt TIMEZONE "Timezone (IANA format, e.g. America/Chicago)" "${def_tz}"
     TIMEZONE_NORMALIZED="${TIMEZONE// //}"
@@ -262,240 +267,48 @@ while true; do
     info "Full list: ls /usr/share/zoneinfo"
 done
 
-prompt_yn ADHD_MODE "Enable ADHD mode (warmer, more proactive tone)" "Y"
-prompt_choice TONE "Default tone preset" "warm balanced direct" "warm"
+# ── Auto-defaults ──────────────────────────────────────────────────────────
+ASSISTANT_NAME="Jess"
+ADHD_MODE="true"
+TONE="warm"
+TTS_VOICE="aiden"   # qwen-tts's default generic voice; change later in /settings
+MODEL_ID="$(grep -E '^VLLM_MODEL=' "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- | sed 's/  *#.*//' || true)"
 
+# ── Write identity (single PUT with all five identity fields) ─────────────
+say "Writing your settings…"
 identity_body=$(jq -nc \
     --arg user_name "${USER_NAME}" \
     --arg assistant_name "${ASSISTANT_NAME}" \
     --arg timezone "${TIMEZONE}" \
     --argjson adhd_mode "${ADHD_MODE}" \
     --arg tone "${TONE}" \
-    '{user_name: $user_name, assistant_name: $assistant_name, timezone: $timezone, adhd_mode: $adhd_mode, tone_preference: $tone}')
+    '{user_name:$user_name, assistant_name:$assistant_name, timezone:$timezone, adhd_mode:$adhd_mode, tone_preference:$tone}')
 api_put /api/config/identity "${identity_body}" >/dev/null
-ok "Identity saved."
+ok "Identity saved (name=${USER_NAME}, tz=${TIMEZONE}, assistant=${ASSISTANT_NAME}, ADHD mode on, tone=warm)"
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 2 — Model
-# ═══════════════════════════════════════════════════════════════════════════
-say "Step 2 of 7 — Model"
+# Write TTS_VOICE default. The model id was already written to .env by
+# install.sh's hardware-scan step — no need to re-write here.
+write_env "TTS_VOICE=${TTS_VOICE}"
+ok "Voice set to '${TTS_VOICE}' (qwen-tts's default generic voice; change in /settings if you want a different one)"
 
-current_model="$(grep -E '^VLLM_MODEL=' "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
-
-if [ -n "${current_model}" ]; then
-    info "Hardware scan recommended: ${BOLD}${current_model}${NC}"
-    prompt_yn USE_RECOMMENDED "Use this model" "Y"
-    if [ "${USE_RECOMMENDED}" = "true" ]; then
-        MODEL_ID="${current_model}"
-    else
-        prompt MODEL_ID "Model id (HuggingFace, AWQ or AutoRound recommended)" "${current_model}"
-    fi
-else
-    warn "No model recommendation in .env (your GPU is below the 20 GiB tier-24 floor)."
-    info "Pick a 7-8B AWQ model that fits comfortably in your VRAM. Common options:"
-    info "  • Qwen/Qwen3-8B-AWQ            (8B, ~6 GB VRAM, good general quality)"
-    info "  • Qwen/Qwen3-7B-Instruct-AWQ   (7B, ~5 GB VRAM, faster)"
-    prompt MODEL_ID "Model id" "Qwen/Qwen3-8B-AWQ"
-fi
-write_env "VLLM_MODEL=${MODEL_ID}"
-ok "Model saved: ${MODEL_ID}"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 3 — Voice
-# ═══════════════════════════════════════════════════════════════════════════
-say "Step 3 of 7 — Voice"
-
-tts_url="${TTS_URL:-http://localhost:8002}"
-if curl -fsS --max-time 2 "${tts_url}/health" >/dev/null 2>&1; then
-    info "Text-to-Speech is how Jess speaks aloud (over Home Assistant speakers, a"
-    info "voice puck, etc.). Pick a voice from your TTS server below."
-    voices="$(curl -fsS --max-time 5 "${tts_url}/voices" 2>/dev/null | jq -r '.voices[]?' 2>/dev/null || echo "default")"
-    voice_list=""
-    for v in ${voices}; do
-        voice_list+="${v} "
-    done
-    prompt_choice TTS_VOICE "Pick a voice" "${voice_list}" "default"
-    write_env "TTS_VOICE=${TTS_VOICE}"
-    ok "Voice saved: ${TTS_VOICE}"
-else
-    info "Text-to-Speech (voice output) is not running on this box. Most installs"
-    info "either run TTS on a beefier machine OR skip voice entirely and use the"
-    info "web/mobile dashboard for everything."
-    info "Skipping the voice picker — you can configure it later from /settings"
-    info "if you set up a TTS server."
-    TTS_VOICE="default"
-    write_env "TTS_VOICE=${TTS_VOICE}"
-    ok "Voice id stored as 'default' (placeholder)."
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 4 — Phone push notifications (optional)
-# ═══════════════════════════════════════════════════════════════════════════
-say "Step 4 of 7 — Phone push notifications (optional)"
-info ""
-info "These deliver reminders to your phone's lockscreen with one-tap Done /"
-info "Snooze buttons. They are completely OPTIONAL. If you skip them, you'll"
-info "still get reminders via the web dashboard and any speakers you wire up;"
-info "you just won't get them pushed to your phone."
-info ""
-info "Two services are supported. Pick whichever ones you already use (you"
-info "can also skip both and configure them later from /settings):"
-info ""
-info "  • ${BOLD}ntfy${NC}     — free, open-source. Best for Android."
-info "                Install the ntfy app, no signup needed."
-info "                https://ntfy.sh"
-info ""
-info "  • ${BOLD}Pushover${NC} — \$5 one-time per platform after a 30-day trial."
-info "                Best for iPhone (reliable APNs delivery)."
-info "                Requires signup + creating an 'application' on their"
-info "                dashboard to get a user key + app token."
-info "                https://pushover.net"
-info ""
-info "If you've never heard of either, just say N to both — you can always"
-info "come back later via /settings."
-info ""
-
-# ntfy
-prompt_yn USE_NTFY "Enable ntfy push" "N"
-if [ "${USE_NTFY}" = "true" ]; then
-    info ""
-    info "Need: ntfy server URL (default ntfy.sh is fine), a topic name you"
-    info "pick (any long unguessable string — it's your private 'channel'),"
-    info "and an HMAC secret (32+ random bytes — used to sign the Done/Snooze"
-    info "callback URLs so attackers can't forge them)."
-    info "Tip: generate the HMAC secret with: openssl rand -hex 32"
-    info ""
-    prompt NTFY_URL "ntfy server URL" "https://ntfy.sh"
-    prompt NTFY_TOPIC "ntfy topic (any long random string — keep it secret)"
-    prompt_secret NTFY_HMAC_SECRET "HMAC secret (run 'openssl rand -hex 32' for one)"
-    write_env "NTFY_ENABLED=true" "NTFY_URL=${NTFY_URL}" "NTFY_TOPIC=${NTFY_TOPIC}" "NTFY_HMAC_SECRET=${NTFY_HMAC_SECRET}"
-    ok "ntfy configured."
-fi
-
-# Pushover
-prompt_yn USE_PUSHOVER "Enable Pushover push" "N"
-if [ "${USE_PUSHOVER}" = "true" ]; then
-    info ""
-    info "Need: your Pushover user key + an application token. Both come from"
-    info "your Pushover dashboard at https://pushover.net:"
-    info "  1. Sign up / log in. The 'Your User Key' is in the gray box on"
-    info "     the dashboard (a 30-char string starting with 'u')."
-    info "  2. Click 'Create an Application/API Token' at the bottom of the"
-    info "     dashboard, fill in any name (e.g. 'brain-gateway'), submit,"
-    info "     and copy the 30-char API token from the next page."
-    info ""
-    info "If you don't have an account yet: press Ctrl-C, sign up at"
-    info "pushover.net, then re-run 'bash scripts/setup.sh'."
-    info ""
-    prompt_secret PUSHOVER_USER_KEY "Pushover user key (30 chars)"
-    prompt_secret PUSHOVER_APP_TOKEN "Pushover application token (30 chars)"
-    write_env "PUSHOVER_ENABLED=true" "PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY}" "PUSHOVER_APP_TOKEN=${PUSHOVER_APP_TOKEN}"
-    ok "Pushover configured."
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 5 — Integrations (Home Assistant + Paperless-ngx)
-# ═══════════════════════════════════════════════════════════════════════════
-say "Step 5 of 7 — Integrations (optional)"
-
-# Home Assistant
-prompt_yn USE_HA "Enable Home Assistant integration" "N"
-if [ "${USE_HA}" = "true" ]; then
-    prompt HA_URL "Home Assistant URL (no trailing slash)" "http://homeassistant.local:8123"
-    prompt_secret HA_TOKEN "Home Assistant long-lived access token"
-    info "Testing connection…"
-    validate_body=$(jq -nc --arg url "${HA_URL}" --arg token "${HA_TOKEN}" '{service:"ha", values:{HA_URL:$url, HA_TOKEN:$token}}')
-    if api_post_raw /api/setup/env/validate "${validate_body}"; then
-        ok "Connection works."
-        write_env "HA_URL=${HA_URL}" "HA_TOKEN=${HA_TOKEN}"
-    else
-        warn "Validation failed:"
-        cat /tmp/setup_api_response.json | jq . 2>/dev/null || cat /tmp/setup_api_response.json
-        echo
-        prompt_yn SAVE_ANYWAY "Save these values anyway (e.g. HA isn't up yet)" "N"
-        if [ "${SAVE_ANYWAY}" = "true" ]; then
-            write_env "HA_URL=${HA_URL}" "HA_TOKEN=${HA_TOKEN}"
-            ok "HA values saved (unverified)."
-        else
-            warn "Skipping HA integration."
-        fi
-    fi
-fi
-
-# Paperless-ngx
-prompt_yn USE_PAPERLESS "Enable Paperless-ngx integration" "N"
-if [ "${USE_PAPERLESS}" = "true" ]; then
-    prompt PAPERLESS_URL "Paperless-ngx URL" "http://paperless.local:8000"
-    prompt_secret PAPERLESS_API_TOKEN "Paperless API token (8+ chars)"
-    info "Testing connection…"
-    validate_body=$(jq -nc --arg url "${PAPERLESS_URL}" --arg token "${PAPERLESS_API_TOKEN}" '{service:"paperless", values:{PAPERLESS_URL:$url, PAPERLESS_API_TOKEN:$token}}')
-    if api_post_raw /api/setup/env/validate "${validate_body}"; then
-        ok "Connection works."
-        write_env "PAPERLESS_URL=${PAPERLESS_URL}" "PAPERLESS_API_TOKEN=${PAPERLESS_API_TOKEN}"
-    else
-        warn "Validation failed:"
-        cat /tmp/setup_api_response.json | jq . 2>/dev/null || cat /tmp/setup_api_response.json
-        echo
-        prompt_yn SAVE_ANYWAY "Save these values anyway" "N"
-        if [ "${SAVE_ANYWAY}" = "true" ]; then
-            write_env "PAPERLESS_URL=${PAPERLESS_URL}" "PAPERLESS_API_TOKEN=${PAPERLESS_API_TOKEN}"
-            ok "Paperless values saved (unverified)."
-        else
-            warn "Skipping Paperless integration."
-        fi
-    fi
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 6 — Selfcare nudges
-# ═══════════════════════════════════════════════════════════════════════════
-say "Step 6 of 7 — Selfcare nudges"
-info "Jess can nudge you to eat / drink / take meds / move. Set per-category"
-info "intervals here; you can fine-tune later from the /settings page."
-
-selfcare_json='{"categories":{}}'
-for category in medication meal hydration movement; do
-    case "${category}" in
-        medication) default_int=120 ; default_enabled="N" ;;
-        meal)       default_int=240 ; default_enabled="Y" ;;
-        hydration)  default_int=60  ; default_enabled="Y" ;;
-        movement)   default_int=90  ; default_enabled="Y" ;;
-    esac
-    prompt_yn "ENABLE_${category^^}" "Enable ${category} nudges" "${default_enabled}"
-    enabled_var="ENABLE_${category^^}"
-    if [ "${!enabled_var}" = "true" ]; then
-        prompt INTERVAL "  ${category} interval (minutes between nudges)" "${default_int}"
-        selfcare_json=$(echo "${selfcare_json}" | jq --arg cat "${category}" --argjson interval "${INTERVAL}" \
-            '.categories[$cat] = {enabled: true, interval_minutes: $interval}')
-    else
-        selfcare_json=$(echo "${selfcare_json}" | jq --arg cat "${category}" \
-            '.categories[$cat] = {enabled: false}')
-    fi
-done
-api_put /api/config/selfcare "${selfcare_json}" >/dev/null
-ok "Selfcare schedule saved."
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 7 — Review + complete
-# ═══════════════════════════════════════════════════════════════════════════
-say "Step 7 of 7 — Review"
+# ── Recap + complete ──────────────────────────────────────────────────────
+say "Summary"
+printf '%s  Name:     %s%s\n' "${DIM}" "${NC}" "${USER_NAME}"
+printf '%s  Timezone: %s%s\n' "${DIM}" "${NC}" "${TIMEZONE}"
+printf '%s  Model:    %s%s\n' "${DIM}" "${NC}" "${MODEL_ID:-(unset — set VLLM_MODEL in .env)}"
+printf '%s  Voice:    %s%s\n' "${DIM}" "${NC}" "${TTS_VOICE}"
 echo
-printf '%s  Identity:%s %s, assistant %s (tz %s, ADHD mode %s, tone %s)\n' \
-    "${DIM}" "${NC}" "${USER_NAME:-unnamed}" "${ASSISTANT_NAME}" "${TIMEZONE}" "${ADHD_MODE}" "${TONE}"
-printf '%s  Model:   %s %s\n' "${DIM}" "${NC}" "${MODEL_ID}"
-printf '%s  Voice:   %s %s\n' "${DIM}" "${NC}" "${TTS_VOICE}"
-printf '%s  Push:    %s ntfy=%s, pushover=%s\n' "${DIM}" "${NC}" "${USE_NTFY:-false}" "${USE_PUSHOVER:-false}"
-printf '%s  HA:      %s %s\n' "${DIM}" "${NC}" "${USE_HA:-false}"
-printf '%s  Paperless:%s %s\n' "${DIM}" "${NC}" "${USE_PAPERLESS:-false}"
+info "Everything else (Home Assistant, ntfy, Pushover, Paperless, selfcare nudges)"
+info "is configured AFTER setup — chat with Jess or visit /settings."
 echo
-prompt_yn CONFIRM "Mark setup complete and lock the wizard" "Y"
+prompt_yn CONFIRM "Mark setup complete" "Y"
 if [ "${CONFIRM}" != "true" ]; then
-    warn "Setup left in-progress. Re-run this script when you're ready to lock it."
+    warn "Setup left in-progress. Re-run this script when you're ready."
     exit 0
 fi
 
 api_post /api/setup/complete >/dev/null
-ok "Setup is complete and locked."
+ok "Setup complete."
 
 # ── Restart orchestrator so it picks up the new env overrides ──────────────
 say "Restarting the orchestrator to pick up new env values…"
