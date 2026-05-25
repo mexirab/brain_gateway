@@ -25,15 +25,16 @@ ENV_EXAMPLE="${REPO_ROOT}/.env.example"
 # ── Colors (TTY only) ───────────────────────────────────────────────────────
 if [ -t 1 ]; then
     RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
-    CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; NC=$'\033[0m'
+    CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
 else
-    RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; NC=""
+    RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
 fi
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 say()  { printf '%s==>%s %s\n' "${CYAN}" "${NC}" "$*"; }
 ok()   { printf '%s✓%s %s\n'   "${GREEN}" "${NC}" "$*"; }
 warn() { printf '%s!%s %s\n'   "${YELLOW}" "${NC}" "$*"; }
+info() { printf '%s  %s%s\n'   "${DIM}"   "$*"  "${NC}"; }
 die()  { printf '%s✗%s %s\n'   "${RED}"   "${NC}" "$*" >&2; exit 1; }
 
 confirm() {
@@ -304,14 +305,20 @@ stage_2() {
     fi
 
     say "Enabling the models profile (LLM + TTS + STT will run as containers)..."
-    if ! grep -qE '^COMPOSE_PROFILES=' "${ENV_FILE}"; then
+    # Current COMPOSE_PROFILES value, empty if line absent or right-hand-side blank.
+    local cur_profiles
+    cur_profiles="$(grep -E '^COMPOSE_PROFILES=' "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- | sed 's/  *#.*//' | tr -d '[:space:]')"
+    if [ -z "${cur_profiles}" ]; then
+        # Unset OR empty (the .env.example default is `COMPOSE_PROFILES=`).
+        # Strip any existing blank line first so we don't end up with two.
+        sed -i.bak '/^COMPOSE_PROFILES=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
         echo "COMPOSE_PROFILES=models" >> "${ENV_FILE}"
         ok "COMPOSE_PROFILES=models written to .env"
-    elif ! grep -qE '^COMPOSE_PROFILES=.*models' "${ENV_FILE}"; then
-        warn "COMPOSE_PROFILES is set but does not include 'models'."
-        warn "The LLM/TTS/STT containers will NOT start. Edit ${ENV_FILE} if you want them."
+    elif ! echo "${cur_profiles}" | grep -q "models"; then
+        warn "COMPOSE_PROFILES is set to '${cur_profiles}' and does not include 'models'."
+        warn "The LLM/TTS/STT containers will NOT start. Edit ${ENV_FILE} to add it."
     else
-        ok "COMPOSE_PROFILES already includes 'models'"
+        ok "COMPOSE_PROFILES already includes 'models' (current: '${cur_profiles}')"
     fi
 
     say "Bringing up the full stack (first run pulls images + model weights; ~15-25 min)..."
