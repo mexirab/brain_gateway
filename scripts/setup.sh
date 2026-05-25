@@ -68,11 +68,16 @@ api_get() {
 
 api_post() {
     # Usage: api_post /api/path '{"json":"body"}'
+    # Don't use `${2:-{}}` as the curl body — bash's ${VAR:-DEFAULT}
+    # syntax terminates on the FIRST `}`, so it'd parse as ${2:-{}
+    # (default = literal `{`) followed by a stray `}` appended to $2.
+    local body="${2:-}"
+    [ -z "${body}" ] && body='{}'
     curl -fsS --max-time 10 \
         -X POST \
         -H "Authorization: Bearer ${API_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "${2:-{}}" \
+        -d "${body}" \
         "${ORCH}$1"
 }
 
@@ -98,11 +103,14 @@ api_put() {
 
 # Returns 0 on HTTP 2xx, 1 otherwise. Captures HTTP code in $HTTP_CODE.
 api_post_raw() {
+    # Same brace-matching footgun as api_post — see comment there.
+    local body="${2:-}"
+    [ -z "${body}" ] && body='{}'
     HTTP_CODE="$(curl -s -o /tmp/setup_api_response.json -w '%{http_code}' --max-time 10 \
         -X POST \
         -H "Authorization: Bearer ${API_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "${2:-{}}" \
+        -d "${body}" \
         "${ORCH}$1")"
     [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]
 }
