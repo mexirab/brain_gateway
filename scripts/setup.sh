@@ -329,18 +329,45 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 4 — Push channels (ntfy + Pushover)
+# Step 4 — Phone push notifications (optional)
 # ═══════════════════════════════════════════════════════════════════════════
-say "Step 4 of 7 — Push channels (optional)"
-info "Reminders + ACK/snooze can fire to your phone via ntfy and/or Pushover."
-info "Skip either by leaving values blank."
+say "Step 4 of 7 — Phone push notifications (optional)"
+info ""
+info "These deliver reminders to your phone's lockscreen with one-tap Done /"
+info "Snooze buttons. They are completely OPTIONAL. If you skip them, you'll"
+info "still get reminders via the web dashboard and any speakers you wire up;"
+info "you just won't get them pushed to your phone."
+info ""
+info "Two services are supported. Pick whichever ones you already use (you"
+info "can also skip both and configure them later from /settings):"
+info ""
+info "  • ${BOLD}ntfy${NC}     — free, open-source. Best for Android."
+info "                Install the ntfy app, no signup needed."
+info "                https://ntfy.sh"
+info ""
+info "  • ${BOLD}Pushover${NC} — \$5 one-time per platform after a 30-day trial."
+info "                Best for iPhone (reliable APNs delivery)."
+info "                Requires signup + creating an 'application' on their"
+info "                dashboard to get a user key + app token."
+info "                https://pushover.net"
+info ""
+info "If you've never heard of either, just say N to both — you can always"
+info "come back later via /settings."
+info ""
 
 # ntfy
 prompt_yn USE_NTFY "Enable ntfy push" "N"
 if [ "${USE_NTFY}" = "true" ]; then
+    info ""
+    info "Need: ntfy server URL (default ntfy.sh is fine), a topic name you"
+    info "pick (any long unguessable string — it's your private 'channel'),"
+    info "and an HMAC secret (32+ random bytes — used to sign the Done/Snooze"
+    info "callback URLs so attackers can't forge them)."
+    info "Tip: generate the HMAC secret with: openssl rand -hex 32"
+    info ""
     prompt NTFY_URL "ntfy server URL" "https://ntfy.sh"
-    prompt NTFY_TOPIC "ntfy topic (a long unguessable string)"
-    prompt_secret NTFY_HMAC_SECRET "HMAC secret (32+ random bytes; used to sign ACK/snooze callbacks)"
+    prompt NTFY_TOPIC "ntfy topic (any long random string — keep it secret)"
+    prompt_secret NTFY_HMAC_SECRET "HMAC secret (run 'openssl rand -hex 32' for one)"
     write_env "NTFY_ENABLED=true" "NTFY_URL=${NTFY_URL}" "NTFY_TOPIC=${NTFY_TOPIC}" "NTFY_HMAC_SECRET=${NTFY_HMAC_SECRET}"
     ok "ntfy configured."
 fi
@@ -348,8 +375,20 @@ fi
 # Pushover
 prompt_yn USE_PUSHOVER "Enable Pushover push" "N"
 if [ "${USE_PUSHOVER}" = "true" ]; then
-    prompt_secret PUSHOVER_USER_KEY "Pushover user key (from your Pushover dashboard)"
-    prompt_secret PUSHOVER_APP_TOKEN "Pushover application token"
+    info ""
+    info "Need: your Pushover user key + an application token. Both come from"
+    info "your Pushover dashboard at https://pushover.net:"
+    info "  1. Sign up / log in. The 'Your User Key' is in the gray box on"
+    info "     the dashboard (a 30-char string starting with 'u')."
+    info "  2. Click 'Create an Application/API Token' at the bottom of the"
+    info "     dashboard, fill in any name (e.g. 'brain-gateway'), submit,"
+    info "     and copy the 30-char API token from the next page."
+    info ""
+    info "If you don't have an account yet: press Ctrl-C, sign up at"
+    info "pushover.net, then re-run 'bash scripts/setup.sh'."
+    info ""
+    prompt_secret PUSHOVER_USER_KEY "Pushover user key (30 chars)"
+    prompt_secret PUSHOVER_APP_TOKEN "Pushover application token (30 chars)"
     write_env "PUSHOVER_ENABLED=true" "PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY}" "PUSHOVER_APP_TOKEN=${PUSHOVER_APP_TOKEN}"
     ok "Pushover configured."
 fi
