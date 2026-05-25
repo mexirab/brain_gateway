@@ -288,7 +288,13 @@ async def post_setup_complete():
         completed_at = existing.get("completed_at")
         if not (existing.get("setup_completed") and completed_at):
             completed_at = datetime.now(UTC).isoformat()
-        state = {"setup_completed": True, "completed_at": completed_at}
-        _atomic_write_json(_SETUP_STATE_PATH, state)
+        # Merge into existing state instead of replacing — preserves
+        # `first_chat_completed` (and any future fields) if they were set
+        # before /complete fired. Sequence that exposes the bug otherwise:
+        # user chats before finishing wizard → welcome fires + flips flag
+        # → wizard completes → state file wiped → welcome fires AGAIN.
+        existing["setup_completed"] = True
+        existing["completed_at"] = completed_at
+        _atomic_write_json(_SETUP_STATE_PATH, existing)
     logger.info("[SETUP] Setup wizard marked complete")
-    return JSONResponse({"ok": True, **state})
+    return JSONResponse({"ok": True, **existing})

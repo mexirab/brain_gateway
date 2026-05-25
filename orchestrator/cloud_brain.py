@@ -24,6 +24,7 @@ from orchestrator.metrics import (
     REQUEST_ERRORS,
     REQUEST_LATENCY,
     VOICE_PIPELINE_LATENCY,
+    WELCOME_FIRED,
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
@@ -31,7 +32,7 @@ from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
 logger = logging.getLogger(__name__)
 
 
-def _maybe_prepend_welcome(text: str) -> str:
+def _maybe_prepend_welcome(text: str, *, is_voice: bool = False) -> str:
     """If this is the user's first chat, prepend the one-time welcome.
 
     Pulls assistant_name + user_name from `shared.profile`, the LAN IP from
@@ -39,8 +40,19 @@ def _maybe_prepend_welcome(text: str) -> str:
     setup_env's overrides. Marks first_chat_completed on success so the
     welcome never fires twice.
 
-    Returns the original text unchanged if first chat has already happened.
+    Returns the original text unchanged if first chat has already happened,
+    or if this is a voice turn (a multi-line markdown welcome read aloud by
+    TTS sounds awful and stomps over a short HA voice command).
+
+    Welcome generation is best-effort onboarding polish — any exception
+    is logged at ERROR (with stack trace, so the self-audit job catches
+    it) and the original response goes through unchanged. The
+    `mark_first_chat_done` write is deliberately AFTER the prepend +
+    return — losing the mark just means the welcome fires once more, but
+    losing a successfully-generated welcome would be worse.
     """
+    if is_voice:
+        return text
     if not is_first_chat():
         return text
     try:
@@ -52,13 +64,21 @@ def _maybe_prepend_welcome(text: str) -> str:
             lan_ip=settings.jess_lan_ip or None,
             env_overrides=setup_env.read_overrides(),
         )
-        mark_first_chat_done()
-        logger.info("[WELCOME] First-chat welcome prepended (%d chars)", len(prepend))
-        return prepend + text
-    except Exception as e:
-        # Welcome is best-effort onboarding polish — never let it break a chat.
-        logger.warning("[WELCOME] Skipped due to error: %s", e)
+    except Exception:
+        WELCOME_FIRED.labels(result="error").inc()
+        logger.exception("[WELCOME] Skipped due to error generating welcome")
         return text
+
+    # Generation succeeded — best-effort mark, but never lose the welcome
+    # over a transient setup_state.json write failure.
+    try:
+        mark_first_chat_done()
+    except Exception:
+        logger.exception("[WELCOME] Mark-done failed; welcome may fire again")
+
+    WELCOME_FIRED.labels(result="prepended").inc()
+    logger.info("[WELCOME] First-chat welcome prepended (%d chars)", len(prepend))
+    return prepend + text
 
 
 class CloudBrain:
@@ -193,7 +213,12 @@ class CloudBrain:
                     REQUEST_COUNT.labels(mode="fast_path").inc()
                     FAST_PATH_COUNT.labels(action=fast_result.action or "unknown").inc()
                     logger.info("[FAST-PATH] Handled: %s -> %s", fast_result.action, fast_result.entity_name)
-                    fast_response_text = _maybe_prepend_welcome(fast_result.response_text)
+                    # Skip the welcome on the fast path too — fast-path
+                    # is short HA voice-style commands ("turn on lights"),
+                    # not the rich typed-chat first-touch we built the
+                    # welcome for. is_voice would catch most of these,
+                    # but pass it explicitly for clarity.
+                    fast_response_text = _maybe_prepend_welcome(fast_result.response_text, is_voice=True)
                     if stream:
                         return self._stream_text(fast_response_text, "fast-path")
                     return JSONResponse(
@@ -329,7 +354,7 @@ class CloudBrain:
 
         self._schedule_auto_learn(messages)
 
-        result = _maybe_prepend_welcome(result)
+        result = _maybe_prepend_welcome(result, is_voice=is_voice)
 
         if stream:
             return self._stream_text(result, model_name)

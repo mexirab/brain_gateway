@@ -269,8 +269,17 @@ stage_2() {
     # JESS_LAN_IP — used by the first-chat welcome to render a clickable
     # /settings URL. Has to be set host-side because the orchestrator
     # container can't reliably enumerate the host's LAN IP from inside Docker.
+    # Prefer `ip -4 route get` over `hostname -I | awk '{print $1}'` — the
+    # latter can return docker0 (172.17.0.1) or a Tailscale 100.x address
+    # first depending on interface-up order, which renders a URL nobody on
+    # the LAN can reach. `ip route get` always returns the source IP of the
+    # default-route interface, which is the address LAN clients send to.
     local lan_ip_now
-    lan_ip_now="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    lan_ip_now="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+    if [ -z "${lan_ip_now}" ]; then
+        # Fallback to hostname -I if `ip route get` fails (no default route, etc.)
+        lan_ip_now="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
     if [ -n "${lan_ip_now}" ]; then
         sed -i.bak '/^JESS_LAN_IP=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
         echo "JESS_LAN_IP=${lan_ip_now}" >> "${ENV_FILE}"

@@ -623,3 +623,12 @@ RECURRING_REMINDERS_EXPAND_ERRORS = Counter(
     "bgw_recurring_reminders_expand_errors_total",
     "Errors raised while expanding due recurring rules into one-shot reminders.",
 )
+
+# First-chat welcome: lets us answer "did the dream-install onboarding actually
+# fire for the first N users?" — a welcome prepended is end-to-end proof that
+# orchestrator+chat+routing all worked on a fresh install.
+WELCOME_FIRED = Counter(
+    "bgw_welcome_fired_total",
+    "First-chat welcome message attempts.",
+    ["result"],  # prepended | error
+)
