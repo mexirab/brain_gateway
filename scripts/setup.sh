@@ -307,20 +307,26 @@ say "Step 3 of 7 — Voice"
 
 tts_url="${TTS_URL:-http://localhost:8002}"
 if curl -fsS --max-time 2 "${tts_url}/health" >/dev/null 2>&1; then
+    info "Text-to-Speech is how Jess speaks aloud (over Home Assistant speakers, a"
+    info "voice puck, etc.). Pick a voice from your TTS server below."
     voices="$(curl -fsS --max-time 5 "${tts_url}/voices" 2>/dev/null | jq -r '.voices[]?' 2>/dev/null || echo "default")"
-    info "TTS server is up. Available voices:"
     voice_list=""
     for v in ${voices}; do
         voice_list+="${v} "
     done
     prompt_choice TTS_VOICE "Pick a voice" "${voice_list}" "default"
+    write_env "TTS_VOICE=${TTS_VOICE}"
+    ok "Voice saved: ${TTS_VOICE}"
 else
-    warn "TTS server not running (default install profile excludes the model layer)."
-    info "Pick a voice id now; it'll be used when you enable the TTS server later."
-    prompt TTS_VOICE "TTS voice id" "default"
+    info "Text-to-Speech (voice output) is not running on this box. Most installs"
+    info "either run TTS on a beefier machine OR skip voice entirely and use the"
+    info "web/mobile dashboard for everything."
+    info "Skipping the voice picker — you can configure it later from /settings"
+    info "if you set up a TTS server."
+    TTS_VOICE="default"
+    write_env "TTS_VOICE=${TTS_VOICE}"
+    ok "Voice id stored as 'default' (placeholder)."
 fi
-write_env "TTS_VOICE=${TTS_VOICE}"
-ok "Voice saved: ${TTS_VOICE}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 4 — Push channels (ntfy + Pushover)
