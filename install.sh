@@ -292,12 +292,20 @@ stage_2() {
     say "Running hardware scan + appending recommendation to .env..."
     if [ -x "${REPO_ROOT}/scripts/detect_hardware.sh" ]; then
         bash "${REPO_ROOT}/scripts/detect_hardware.sh" >> "${ENV_FILE}" || warn "Hardware scan exited non-zero (continuing)"
-        # Below-floor GPUs (<20 GiB) leave VLLM_MODEL commented out — substitute
-        # a sane 7-8B AWQ default so the install brings up a working brain.
-        if grep -qE '^# VLLM_MODEL=' "${ENV_FILE}" && ! grep -qE '^VLLM_MODEL=' "${ENV_FILE}"; then
+        # Below-floor GPUs (<20 GiB) get a commented `# VLLM_MODEL= … below
+        # the 24GB floor` from detect_hardware. The .env.example ships with
+        # an uncommented `VLLM_MODEL=Lorbus/Qwen3.6-27B-int4-AutoRound`
+        # default (the tier-32 recommendation) which is too big to fit on
+        # a sub-tier-24 GPU. So when below-floor is detected, unconditionally
+        # strip any existing uncommented VLLM_MODEL and substitute a sane
+        # 7-8B AWQ. Safe at install time — the user hasn't had a chance to
+        # customize their .env yet.
+        if grep -qE '^# VLLM_MODEL=.*below the.*floor' "${ENV_FILE}"; then
+            sed -i.bak '/^VLLM_MODEL=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
             echo "VLLM_MODEL=Qwen/Qwen3-8B-AWQ  # auto-picked for sub-tier-24 GPU" >> "${ENV_FILE}"
             warn "GPU is below the 20 GiB tier-24 floor; auto-picked Qwen/Qwen3-8B-AWQ."
-            warn "Change later by editing ${ENV_FILE} and running 'docker compose up -d'."
+            warn "(The .env.example default Lorbus 27B model wouldn't fit; replaced it.)"
+            warn "Change later by editing ${ENV_FILE} and running 'docker compose up -d --force-recreate vllm-primary'."
         fi
         ok "Hardware scan complete"
     else
