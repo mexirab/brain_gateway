@@ -77,12 +77,23 @@ api_post() {
 }
 
 api_put() {
-    curl -fsS --max-time 10 \
+    # On failure, prints the API response body so the user can see the
+    # validation error from the backend (curl -fS would swallow it).
+    local body http_code
+    body="$(curl -s -o /tmp/setup_api_response.json -w '%{http_code}' --max-time 10 \
         -X PUT \
         -H "Authorization: Bearer ${API_TOKEN}" \
         -H "Content-Type: application/json" \
         -d "$2" \
-        "${ORCH}$1"
+        "${ORCH}$1")"
+    http_code="${body}"
+    if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+        warn "PUT ${ORCH}$1 returned HTTP ${http_code}:"
+        cat /tmp/setup_api_response.json | jq . 2>/dev/null || cat /tmp/setup_api_response.json
+        echo
+        return 1
+    fi
+    cat /tmp/setup_api_response.json
 }
 
 # Returns 0 on HTTP 2xx, 1 otherwise. Captures HTTP code in $HTTP_CODE.
@@ -224,7 +235,25 @@ def_tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 
 
 prompt USER_NAME "Your name" "${def_user}"
 prompt ASSISTANT_NAME "Assistant name" "${def_assistant}"
-prompt TIMEZONE "Timezone" "${def_tz}"
+
+# Timezone must be a valid IANA name (e.g. America/Chicago). Validate against
+# /usr/share/zoneinfo and re-prompt on bad input. Auto-correct the common
+# 'spaces instead of slashes' typo (US Central → US/Central).
+while true; do
+    prompt TIMEZONE "Timezone (IANA format, e.g. America/Chicago)" "${def_tz}"
+    TIMEZONE_NORMALIZED="${TIMEZONE// //}"
+    if [ -f "/usr/share/zoneinfo/${TIMEZONE_NORMALIZED}" ]; then
+        TIMEZONE="${TIMEZONE_NORMALIZED}"
+        break
+    fi
+    warn "'${TIMEZONE}' is not a valid IANA timezone."
+    info "Common examples:"
+    info "  America/New_York   America/Chicago    America/Denver     America/Los_Angeles"
+    info "  Europe/London      Europe/Paris       Europe/Berlin      Asia/Tokyo"
+    info "  Australia/Sydney   Pacific/Auckland   UTC"
+    info "Full list: ls /usr/share/zoneinfo"
+done
+
 prompt_yn ADHD_MODE "Enable ADHD mode (warmer, more proactive tone)" "Y"
 prompt_choice TONE "Default tone preset" "warm balanced direct" "warm"
 
