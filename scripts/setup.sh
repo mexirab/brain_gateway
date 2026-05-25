@@ -16,8 +16,12 @@
 set -euo pipefail
 
 # ── Constants + paths ──────────────────────────────────────────────────────
+# setup.sh ships at <repo-root>/scripts/setup.sh, so the repo root is always
+# one level up from $SCRIPT_DIR. Don't try to be clever with `git rev-parse`
+# + `||` here — shell precedence (A || B && C) doubles the output when A
+# succeeds and produces a corrupt path.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null || cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env"
 ORCH="${ORCHESTRATOR_URL:-http://localhost:8888}"
 
