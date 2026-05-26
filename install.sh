@@ -267,6 +267,26 @@ stage_2() {
         ok "Generated and wrote a fresh API_TOKEN"
     fi
 
+    say "Setting DASHBOARD_TOKEN (the password the dashboard /login asks for)..."
+    if grep -qE '^DASHBOARD_TOKEN=[A-Za-z0-9_-]{20,}$' "${ENV_FILE}"; then
+        ok "DASHBOARD_TOKEN already set (looks like a real token); leaving it alone"
+    else
+        local dash_token
+        dash_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+        sed -i.bak '/^DASHBOARD_TOKEN=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+        echo "DASHBOARD_TOKEN=${dash_token}" >> "${ENV_FILE}"
+        ok "Generated and wrote a fresh DASHBOARD_TOKEN (printed at end of install)"
+    fi
+
+    # GATEWAY_ROOT_PATH — the absolute path of this repo, used as the source
+    # for several Docker bind-mounts (data/palace.yaml, searxng/settings.yml,
+    # etc.). The .env.example default is empty so relative paths work, but
+    # Docker is more reliable with an absolute path here — and an absolute
+    # path means `docker compose up` works from any CWD.
+    sed -i.bak '/^GATEWAY_ROOT_PATH=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+    echo "GATEWAY_ROOT_PATH=${REPO_ROOT}" >> "${ENV_FILE}"
+    ok "Set GATEWAY_ROOT_PATH=${REPO_ROOT}"
+
     # JESS_LAN_IP — used by the first-chat welcome to render a clickable
     # /settings URL. Has to be set host-side because the orchestrator
     # container can't reliably enumerate the host's LAN IP from inside Docker.

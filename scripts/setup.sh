@@ -324,8 +324,11 @@ else
     info "    cd ${REPO_ROOT} && docker compose up -d --force-recreate orchestrator"
 fi
 
-# ── Final URLs ─────────────────────────────────────────────────────────────
+# ── Final URLs + dashboard password ────────────────────────────────────────
 LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+# DASHBOARD_TOKEN is the password the dashboard /login form asks for.
+# install.sh generates it; we read it back here so the user sees it.
+DASHBOARD_TOKEN_VALUE="$(grep -E '^DASHBOARD_TOKEN=' "${ENV_FILE}" | tail -1 | cut -d= -f2- | sed 's/  *#.*//')"
 echo
 printf '%s════════════════════════════════════════════════════════════%s\n' "${GREEN}" "${NC}"
 printf '%s✓ Setup complete!%s\n' "${GREEN}${BOLD}" "${NC}"
@@ -333,6 +336,13 @@ printf '%s═══════════════════════�
 echo
 say "Dashboard"
 info "  http://${LAN_IP}:3001/"
+if [ -n "${DASHBOARD_TOKEN_VALUE}" ] && [ "${DASHBOARD_TOKEN_VALUE}" != "changeme" ]; then
+    info "  login password: ${BOLD}${DASHBOARD_TOKEN_VALUE}${NC}"
+    info "  (you can change this later by editing DASHBOARD_TOKEN in .env)"
+else
+    warn "  login password: ${BOLD}changeme${NC} — this is the insecure default!"
+    warn "  Set DASHBOARD_TOKEN in .env to something random and restart the frontend."
+fi
 say "Settings (change anything later)"
 info "  http://${LAN_IP}:3001/settings"
 say "Health check"
