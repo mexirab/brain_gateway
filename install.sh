@@ -301,7 +301,7 @@ stage_2() {
         # 7-8B AWQ. Safe at install time — the user hasn't had a chance to
         # customize their .env yet.
         if grep -qE '^# VLLM_MODEL=.*below the.*floor' "${ENV_FILE}"; then
-            sed -i.bak '/^VLLM_MODEL=/d;/^VLLM_EXTRA_ARGS=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+            sed -i.bak '/^VLLM_MODEL=/d;/^VLLM_EXTRA_ARGS=/d;/^VLLM_MAX_MODEL_LEN=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
             # IMPORTANT: do NOT use trailing `# comment` here — docker-compose's
             # .env parser does NOT strip inline comments, so the literal
             # comment text becomes part of the value. Use separate `#` lines
@@ -315,9 +315,15 @@ stage_2() {
             # line passes --enable-auto-tool-choice. `hermes` is the canonical
             # parser for Qwen3 (non-coder).
             echo "VLLM_EXTRA_ARGS=--tool-call-parser hermes" >> "${ENV_FILE}"
+            # Bump context window: detect_hardware writes 8192 for below-floor,
+            # but the orchestrator's unified system prompt (Jess personality +
+            # ADHD context + ALL tool schemas) is ~4000 tokens, plus 4096
+            # output tokens vLLM defaults to = 8193, just over 8192. 16384
+            # fits comfortably on a 15 GiB card with 8B AWQ + 0.88 utilization.
+            echo "VLLM_MAX_MODEL_LEN=16384" >> "${ENV_FILE}"
             warn "GPU is below the 20 GiB tier-24 floor; auto-picked Qwen/Qwen3-8B-AWQ."
             warn "(The .env.example default Lorbus 27B model wouldn't fit; replaced it.)"
-            warn "Also set VLLM_EXTRA_ARGS=--tool-call-parser hermes (Lorbus-specific MTP/parser flags don't apply)."
+            warn "Also set VLLM_EXTRA_ARGS=--tool-call-parser hermes and VLLM_MAX_MODEL_LEN=16384."
             warn "Change later by editing ${ENV_FILE} and running 'docker compose up -d --force-recreate vllm-primary'."
         fi
         ok "Hardware scan complete"
