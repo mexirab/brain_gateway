@@ -98,6 +98,14 @@ If no, the wizard is live at `/setup`. You can either:
 | `JESS_ADVANCED` | implicit `true` (no gate) | explicit `false` | If you use `code_agent` / `ask_expert` / `query_budget` / `finance_status` / `check_claude_activity`, add `JESS_ADVANCED=true` |
 | `NUT_EXPORTER_PASSWORD` | `:?` (hard-required) | `:-` (soft) | No action; just means fresh installs no longer fail compose validation |
 | `LOKI_PUSH_URL` | hard-required by `:?` | soft `:-` | If you use promtail, ensure `LOKI_PUSH_URL` is still set in `.env` |
+| `MODEL_URL` | `http://${NODE_HELIOS_IP}:${SERVICE_MODEL_PORT:-8080}/v1` | `http://vllm-primary:8000/v1` | If you run vLLM as a host systemd unit (Helios pattern), pin `MODEL_URL=http://<host-ip>:8080/v1` in your `.env`. Compose-managed `vllm-primary` just works with the new default. |
+| `MODEL_NAME` | `Qwen3.5-27B` | `qwen3.6-27b-int4` | Matches the post-Phase-3 `VLLM_SERVED_NAME`. If you point at a different model, set this to that model's served name. |
+| `TTS_URL` | `http://localhost:8002` | `http://qwen-tts:8002` | Pin to `http://localhost:8002` if TTS runs as a host systemd unit. |
+| `STT_URL` | `http://localhost:8003` | `http://parakeet-stt:8003` | Pin to `http://localhost:8003` if STT runs as a host systemd unit. |
+| `GATEWAY_ROOT_PATH` | `/opt/gateway_mvp` | _empty (install.sh fills it)_ | Set to the absolute path of your repo (`$(git rev-parse --show-toplevel)`). Bind-mounts silently break with an empty value at non-standard install paths. |
+| `DASHBOARD_TOKEN` | _missing → frontend fell back to `'changeme'`_ | _empty → still falls back to `'changeme'`_ | Generate a real one: `python3 -c "import secrets; print('DASHBOARD_TOKEN=' + secrets.token_urlsafe(24))" >> .env`. `install.sh` does this on fresh installs. |
+| `JESS_LAN_IP` | _did not exist_ | _empty → welcome shows `<your-box-ip>` placeholder_ | Set to the box's LAN IP (`ip -4 route get 1.1.1.1 \| awk '/src/ {print $7}'`) so the first-chat welcome's `/settings` link is clickable. |
+| `VLLM_EXTRA_ARGS` | _did not exist_ | _Lorbus-27B tuning string in `docker-compose.yml`_ | If you run a non-Lorbus model in compose's `vllm-primary` (e.g. an 8B AWQ on a below-floor card), override to `--tool-call-parser hermes` — the default's MTP speculative-config crashes on models without MTP weights. |
 
 ### 3. Model layer (vLLM / Qwen3-TTS / Parakeet)
 

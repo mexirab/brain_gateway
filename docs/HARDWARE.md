@@ -19,7 +19,7 @@ Tiers are based on the **largest single GPU** the wizard finds (the default `doc
 | Largest GPU VRAM | Tier | Default model | Quant | Context | GPU mem util |
 |------------------|------|---------------|-------|---------|--------------|
 | < 10 GiB | **unsupported** | — | — | — | — |
-| 10–19 GiB | **below floor** | pick a 7–8B AWQ yourself | awq | 8192 | 0.88 |
+| 10–19 GiB | **below floor** | `install.sh` auto-picks `Qwen/Qwen3-8B-AWQ` (with `VLLM_EXTRA_ARGS=--tool-call-parser hermes` to override the Lorbus-specific tuning) | awq | 16384 | 0.88 |
 | 20–29 GiB | **24** | `Qwen/Qwen3-14B-Instruct-AWQ` | awq | 32768 | 0.90 |
 | 30–43 GiB | **32** | `Lorbus/Qwen3.6-27B-int4-AutoRound` | auto_round | 153600 | 0.92 |
 | 44+ GiB | **48** | `Lorbus/Qwen3.6-27B-int4-AutoRound` | auto_round | 153600 | 0.93 |
@@ -34,12 +34,12 @@ Tiers are based on the **largest single GPU** the wizard finds (the default `doc
 
 | Card | VRAM | Tier | Default model | Notes |
 |------|------|------|---------------|-------|
-| RTX 3060 12 GB | 12 GiB | below floor | manual | Boots but quality degrades; pick an 8B AWQ |
-| RTX 4060 Ti 16 GB | 16 GiB | below floor | manual | Same as 3060 12 GB |
+| RTX 3060 12 GB | 12 GiB | below floor | Qwen3-8B-AWQ (auto) | Boots but quality degrades; `install.sh` auto-picks 8B AWQ |
+| RTX 4060 Ti 16 GB | 16 GiB | below floor | Qwen3-8B-AWQ (auto) | Same as 3060 12 GB |
 | RTX 3090 | 24 GiB | 24 | Qwen3-14B-Instruct-AWQ | Solid entry point; common used-card sweet spot |
 | RTX 4090 | 24 GiB | 24 | Qwen3-14B-Instruct-AWQ | Same tier as 3090, faster decode |
-| RTX 5070 Ti | 16 GiB | below floor | manual | Below tier-24 |
-| RTX 5080 | 16 GiB | below floor | manual | Below tier-24 (boot-tested on Uranus) |
+| RTX 5070 Ti | 16 GiB | below floor | Qwen3-8B-AWQ (auto) | Below tier-24 |
+| RTX 5080 | 16 GiB | below floor | Qwen3-8B-AWQ (auto) | Below tier-24 (boot-tested on Uranus) |
 | RTX 5090 | 32 GiB | 32 | Qwen3.6-27B-int4-AutoRound | **Recommended sweet spot**. Helios primary. |
 | RTX A6000 | 48 GiB | 48 | Qwen3.6-27B-int4-AutoRound | Vision-capable; can run a second VL model |
 | RTX PRO 5000 Blackwell | 48 GiB | 48 | Qwen3.6-27B-int4-AutoRound | Same tier as A6000; lower decode bandwidth |
@@ -123,5 +123,5 @@ This bit the Uranus boot-test box (kernel 6.8.0-111 vs prebuilt module for 6.8.0
 ## Where to go next
 
 - Hardware looks good? Run the [5-minute install](../README.md#5-minute-install).
-- Hardware is below floor? Pick a 7–8B AWQ model (any Qwen3-7B-Instruct-AWQ variant works) and set `VLLM_MODEL` manually in `.env` before `docker compose up -d`.
+- Hardware is below floor? `install.sh` auto-picks `Qwen/Qwen3-8B-AWQ` (with `VLLM_EXTRA_ARGS=--tool-call-parser hermes` and `VLLM_MAX_MODEL_LEN=16384`) for you. If you're following the manual path instead, set those three vars yourself in `.env` — they override the Lorbus-27B defaults that would otherwise OOM or crash on `Unsupported speculative method: 'mtp'`.
 - Want to actually benchmark your box? `bash scripts/model_layer_smoketest.sh` boots the model layer, runs a 5-prompt smoke test, and tears it down.

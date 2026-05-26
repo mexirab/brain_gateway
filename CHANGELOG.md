@@ -6,11 +6,13 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ## [1.0.0] — first public release (May 2026)
 
-Brain Gateway is now a self-contained single-box appliance with a browser-based setup wizard. The default install is small, hardware-aware, and free of personal references to the maintainer's deployment.
+Brain Gateway is now a self-contained single-box appliance. One command (`bash install.sh`) brings up Docker + NVIDIA driver + the full local-AI base (LLM + TTS + STT + dashboard) + a 2-question CLI wizard. Hardware-aware (auto-picks a model that fits your GPU), free of personal references to the maintainer's deployment.
 
 ### Added
 
-- **Browser setup wizard** at `/setup` — 7 steps (Welcome / Identity / Model / Voice / Push / Integrations / Selfcare / Review). Writes a `chmod 600` `setup_overrides.env` overlay that `config.py` loads before `Settings()`. Idempotent kill switch: every write endpoint returns HTTP 410 after `setup_completed: true`.
+- **Dream install** — `bash install.sh` brings up the FULL local-AI base on first run (`COMPOSE_PROFILES=models`): orchestrator + vLLM + qwen-tts + parakeet-stt + dashboard. Auto-substitutes `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` on below-floor (<20 GiB) GPUs. Auto-writes `API_TOKEN`, `DASHBOARD_TOKEN`, `JESS_LAN_IP`, `GATEWAY_ROOT_PATH`. Hands off to a 2-question CLI wizard (name + timezone) — everything else takes auto-defaults (`assistant_name=Jess`, `adhd_mode=true`, `tone=warm`, `TTS_VOICE=aiden`). Ends with `docker compose up -d --force-recreate orchestrator` (not `restart` — env-file changes need recreate) and prints the dashboard URL + login password.
+- **First-chat welcome** (`orchestrator/welcome.py`) — one-time markdown tour prepended to the assistant's first reply, listing what's working + un-configured integrations + a clickable `/settings` link. Defangs markdown injection in operator-set identity fields. Skips on fast-path + voice. Metric: `bgw_welcome_fired_total{result}`.
+- **Setup wizard backend** (`/api/setup/*`) — `status`, `hardware`, `complete`, `env`, `env/validate`. Writes a `chmod 600` `setup_overrides.env` overlay that `config.py` loads before `Settings()`. Idempotent kill switch: every write/validate endpoint returns HTTP 410 after `setup_completed: true`. (The matching web `/setup` UI was prototyped through 7 wizard slices and then deleted in favor of the express CLI flow.)
 - **Hardware-aware model recommendation.** `scripts/detect_hardware.sh` reads `nvidia-smi`, classifies the largest GPU into a tier (24 / 32 / 48 GiB), and emits a `KEY=value` block ready to append to `.env`. A `--json` mode writes a structured scan consumed by `GET /api/setup/hardware`.
 - **Containerized model layer.** `vllm-primary`, `qwen-tts`, and `parakeet-stt` have full `docker-compose.yml` stanzas behind a `models` profile. Fresh single-box installs bring them up with `COMPOSE_PROFILES=models`. (Maintainer's reference Helios deployment continues to run them as host systemd units.)
 - **Default + advanced profiles** in `docker-compose.yml`. `nebula-sync`, `promtail`, and `nut-exporter` are now gated behind `COMPOSE_PROFILES=advanced`; the default install brings up only the core stack.
@@ -44,6 +46,8 @@ Brain Gateway is now a self-contained single-box appliance with a browser-based 
 - Helios pi-hole + nginx model-server stanzas from `docker-compose.yml` (2026-04-26).
 - 7-day audit calibration review job (date-stamped, already past).
 - Default `NODE_*_IP` fallbacks in `nebula-sync` config.
+- **Web setup wizard** (`frontend/src/app/setup/*` + `frontend/src/components/setup/*` + `frontend/src/lib/setup-api.ts`) — replaced by the 2-question express CLI wizard at `scripts/setup.sh`. The `/api/setup/*` backend endpoints are unchanged and now consumed by the CLI over localhost.
+- **Short-lived in-chat configure_* tools** (`configure_home_assistant`, `configure_ntfy`, `configure_pushover`, `configure_paperless`) added in d9ce730 and removed in 6ca7d21 — never reached v1.0.0. Credential prompts via chat were a prompt-injection risk (hacker review found exfiltration paths); `/settings` is the supported post-install configuration surface.
 
 ### Security
 

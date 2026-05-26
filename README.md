@@ -4,18 +4,18 @@ A self-hosted, voice-first personal assistant tuned for ADHD support.
 
 One model, one box, one HTTPS URL. Talk to it from your phone, your laptop, or any Home Assistant voice puck. Set reminders, run focus sprints, dump your brain at 2 AM, get nudged through morning routines, and ask it anything — all without your data leaving your network.
 
-> **Status:** v1.0.0 release candidate (May 2026). Single-box install with a browser-based setup wizard. The default build runs the conversation model + voice (TTS/STT) + reminders + focus timer + Home Assistant control. Optional integrations (Google Calendar, Gmail, ntfy/Pushover push, Paperless-ngx, monitoring stack) get wired up through the wizard.
+> **Status:** [v1.0.0](https://github.com/mexirab/brain_gateway/releases/tag/v1.0.0) shipped May 2026. Single-box install with a 2-question CLI wizard. The default build runs the conversation model + voice (TTS/STT) + reminders + focus timer. Optional integrations (Home Assistant, Google Calendar, Gmail, ntfy/Pushover push, Paperless-ngx, monitoring stack) get wired up from the `/settings` page after install.
 
 ---
 
 ## Hardware requirements
 
-Brain Gateway runs the LLM, TTS, and STT models locally on a single NVIDIA GPU. The setup wizard picks a model based on what it finds.
+Brain Gateway runs the LLM, TTS, and STT models locally on a single NVIDIA GPU. `install.sh` interrogates the hardware and picks a model that fits.
 
 | GPU VRAM | Tier | Default model | Notes |
 |----------|------|---------------|-------|
-| **< 20 GiB** | below floor | pick a 7–8B AWQ yourself | Boots but you'll need to set `VLLM_MODEL` manually. Quality degrades. |
-| **20–29 GiB** | 24 GiB | `Qwen/Qwen3-14B-Instruct-AWQ` | RTX 3090 / 4090 / 5070 Ti class. Good general performance. |
+| **< 20 GiB** | below floor | `Qwen/Qwen3-8B-AWQ` (auto) | RTX 4060 Ti / 5070 Ti / 5080 class. Boots; install.sh auto-substitutes the 8B model + bumps context to 16k. Quality is lower than tier 24+. |
+| **20–29 GiB** | 24 GiB | `Qwen/Qwen3-14B-Instruct-AWQ` | RTX 3090 / 4090 class. Good general performance. |
 | **30–43 GiB** | 32 GiB | `Lorbus/Qwen3.6-27B-int4-AutoRound` | RTX 5090 class. Recommended sweet spot. |
 | **44+ GiB** | 48 GiB | `Lorbus/Qwen3.6-27B-int4-AutoRound` | RTX PRO 5000 / A6000 class. Vision-capable; can run a second VL model. |
 
@@ -48,13 +48,11 @@ The installer is fully interactive — everything happens in your SSH session, n
 2. Reboots once (so the new NVIDIA kernel module loads). **You don't have to re-run anything** — a bash-profile hook auto-resumes on your next SSH login.
 3. Brings up the full local-AI base: orchestrator + LLM (vLLM, model auto-picked to fit your hardware) + TTS (Qwen3-TTS with a generic voice) + STT (Parakeet) + dashboard. Waits for everything to report healthy.
 4. Hands off to a 30-second CLI wizard (`scripts/setup.sh`) that asks two questions: **your name** and **your timezone**. Everything else (assistant name, ADHD mode, model, voice) takes sensible defaults you can change later.
-5. Prints the dashboard URL when you're done.
+5. Prints the dashboard URL **and an auto-generated `DASHBOARD_TOKEN` login password** when you're done. Save the password — it's the only time it's shown automatically (it lives in `.env` afterward).
 
 Plan on **~30 minutes end-to-end** on a fresh box — mostly waiting on container images and model weights to download (~50 GB the first time). The wizard itself takes ~30 seconds.
 
-**After install, talk to Jess.** Open the dashboard at `http://<your-box>:3001/`, log in, and Jess greets you on your first message with a tour of what she can do and what's not yet configured. To wire up Home Assistant, push notifications, document storage, etc., just ask: *"set up Home Assistant"* and Jess walks you through it conversationally — no forms, no SSH gymnastics.
-
-If you prefer a web form for these, the Settings page at `/settings` has full panels for everything.
+**After install, talk to Jess.** Open the dashboard at `http://<your-box>:3001/`, log in with the printed `DASHBOARD_TOKEN`, and Jess greets you on your first message with a tour of what she can do and what's not yet configured (Home Assistant, ntfy/Pushover push, Paperless-ngx). She links you straight to the `/settings` page — the single configuration surface — where every optional integration has its own panel.
 
 Step-by-step install guide with troubleshooting: [`docs/INSTALL.md`](docs/INSTALL.md).
 

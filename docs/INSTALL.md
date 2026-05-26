@@ -2,7 +2,7 @@
 
 End-to-end install for a single-box Brain Gateway deployment.
 
-**The fast path** (recommended for almost everyone): `bash install.sh`. The installer handles Docker, the NVIDIA driver, the container toolkit, the orchestrator stack, and prints the wizard URL when it's done. See [The fast path](#the-fast-path).
+**The fast path** (recommended for almost everyone): `bash install.sh`. The installer handles Docker, the NVIDIA driver, the container toolkit, the full local-AI stack (LLM + TTS + STT + dashboard), and a 2-question CLI wizard at the end. See [The fast path](#the-fast-path).
 
 **The manual path:** if you want to know exactly what's being installed, run a custom subset of steps, or you're on a non-standard config (different Linux distro, pre-existing Docker setup, etc.), follow the step-by-step manual install below.
 
@@ -21,7 +21,7 @@ Before you start (either path), confirm:
 - [ ] **RAM:** 16 GiB minimum, 32 GiB if you plan to enable the advanced profile or code agent
 - [ ] **Network:** the box can reach the public internet to pull container images and HuggingFace models (one-time)
 - [ ] **Sudo:** you can `sudo` on the box
-- [ ] **Time:** ~20 minutes for the install itself; the first browser-wizard interaction takes another ~5 minutes
+- [ ] **Time:** ~30 minutes end-to-end on a fresh box (mostly waiting on container images + model weights to download, ~50 GB the first time). The CLI wizard at the end takes ~30 seconds.
 
 ---
 
@@ -41,12 +41,12 @@ The script runs in two stages, separated by one reboot. **You don't have to re-r
 | Stage | What it does |
 |-------|--------------|
 | **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, installs a bash-profile auto-resume hook, then prompts you to reboot. |
-| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `JESS_LAN_IP`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `Qwen/Qwen3-8B-AWQ` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); removes the auto-resume hook; hands off to the setup CLI. |
-| **Setup CLI** | 2 questions: your name, your timezone. Everything else (assistant name, ADHD mode, tone, voice) gets a sensible default. Saves identity via `/api/config/identity`, marks setup complete (kill switch flips), restarts orchestrator, prints the dashboard URL. ~30 seconds. |
+| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `DASHBOARD_TOKEN`, `JESS_LAN_IP`, `GATEWAY_ROOT_PATH`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); removes the auto-resume hook; hands off to the setup CLI. |
+| **Setup CLI** | 2 questions: your name, your timezone. Everything else takes auto-defaults — `assistant_name=Jess`, `adhd_mode=true`, `tone=warm`, `TTS_VOICE=aiden`. Saves identity via `/api/config/identity`, marks setup complete (kill switch flips), `docker compose up -d --force-recreate orchestrator` (recreate, not restart — env-file changes need it), prints the dashboard URL **and the auto-generated `DASHBOARD_TOKEN` login password**. ~30 seconds. |
 
 ### After install — Jess greets you
 
-When you open the dashboard for the first time and send any message, Jess prepends a one-time welcome explaining what's working, what's not yet configured, and how to wire up the optional integrations. You can configure any of them by just asking — *"set up Home Assistant"*, *"set up ntfy"*, *"set up Pushover"*, *"set up Paperless"* — and Jess walks you through the credentials conversationally. The web Settings page at `/settings` is still there as a parallel forms-based path.
+When you open the dashboard for the first time and send any message, Jess prepends a one-time welcome listing what's working, which optional integrations aren't yet configured (Home Assistant, ntfy, Pushover, Paperless), and a clickable link to `/settings`. The Settings page is the single configuration surface — no in-chat setup wizard.
 
 This makes the post-install path discoverable without you having to read docs to find the Settings page.
 
@@ -168,13 +168,16 @@ cd /opt/gateway_mvp
 cp .env.example .env
 ```
 
-You need exactly **one** secret in `.env` before first boot — the orchestrator's API token. Generate one:
+You need two secrets in `.env` before first boot — the orchestrator's API token and the dashboard login password. Generate both:
 
 ```bash
 python3 -c "import secrets; print('API_TOKEN=' + secrets.token_urlsafe(32))" >> .env
+python3 -c "import secrets; print('DASHBOARD_TOKEN=' + secrets.token_urlsafe(24))" >> .env
 ```
 
-Everything else (Home Assistant token, push channel secrets, voice, model) gets entered through the browser wizard in Step 6.
+You'll also want to set `GATEWAY_ROOT_PATH=$(pwd)` so the Docker bind-mounts resolve to absolute paths (the `.env.example` default is empty so the `install.sh` path can fill it in). And, optionally, `JESS_LAN_IP=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')` so the first-chat welcome renders a clickable `/settings` URL.
+
+Everything else (Home Assistant token, push channel secrets, voice, model) gets entered through the CLI wizard in Step 6 — or wired up after install via the `/settings` page.
 
 ---
 
@@ -198,7 +201,7 @@ VLLM_MAX_MODEL_LEN=153600
 VLLM_GPU_MEM_UTIL=0.92
 ```
 
-If your hardware is below the 20 GiB floor, the recommendation is commented out and you'll need to set `VLLM_MODEL` to a 7–8B AWQ model yourself before continuing. See [HARDWARE.md](HARDWARE.md) for picks.
+If your hardware is below the 20 GiB floor, `detect_hardware.sh` comments the recommendation out. In the manual path, set `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` yourself before continuing — the `.env.example` Lorbus defaults won't fit and `VLLM_EXTRA_ARGS`'s MTP speculative-config will crash on an 8B model that has no MTP weights. (`install.sh` does this auto-substitution on the fast path.) See [HARDWARE.md](HARDWARE.md) for other picks.
 
 ---
 
@@ -233,46 +236,30 @@ curl -s http://localhost:8888/health
 
 ---
 
-## Step 6 — Run the setup wizard
+## Step 6 — Run the express setup wizard
 
-Open the wizard in any LAN browser:
-
-```
-http://<your-box-ip>:3001/setup
-```
-
-Or, from the box itself:
+Run the 2-question CLI wizard:
 
 ```bash
-xdg-open http://localhost:3001/setup
+bash scripts/setup.sh
 ```
 
-The wizard walks 7 steps:
+It asks just **your name** and **your timezone**. Everything else takes auto-defaults — `assistant_name=Jess`, `adhd_mode=true`, `tone=warm`, `TTS_VOICE=aiden`. All optional integrations (Home Assistant, ntfy, Pushover, Paperless, selfcare nudge cadence) are configured AFTER setup via the `/settings` page in the dashboard.
 
-| Step | What it asks |
-|------|--------------|
-| **Welcome** | One-screen overview, "let's go" button |
-| **Identity** | Your name, the assistant's name, timezone, ADHD mode toggle |
-| **Model** | Confirms the recommendation from `detect_hardware.sh` (or lets you override) |
-| **Voice** | Pick a TTS voice from the available set |
-| **Push** | Optional: ntfy + Pushover configuration with a live "send test" button |
-| **Integrations** | Optional: Home Assistant URL + token, Paperless-ngx URL + token (each has a "validate" button) |
-| **Selfcare** | Optional: meal / water / med / movement nudge cadence + quiet hours |
-| **Review** | Summary of every choice; click "Launch" to write `.env` and mark setup complete |
+What the wizard does:
+- Saves identity via `PUT /api/config/identity`.
+- Writes `TTS_VOICE` to the `setup_overrides.env` overlay via `POST /api/setup/env`.
+- Calls `POST /api/setup/complete` — the wizard's env-write endpoints become **immutable** (`POST /api/setup/env`, `DELETE /api/setup/env`, and `POST /api/setup/env/validate` all return HTTP 410 from this point on).
+- Runs `docker compose up -d --force-recreate orchestrator` so the new env values are picked up (`restart` does not re-read `.env`).
+- Prints the dashboard URL plus the auto-generated `DASHBOARD_TOKEN` you'll use to log in.
 
-After Launch:
-- The orchestrator picks up the new env via `setup_env.apply_to_environ()` on next read.
-- `setup_state.json` is written to `data/app/` with `setup_completed: true` and a timestamp.
-- The wizard endpoints become **immutable** — `POST /api/setup/env`, `DELETE /api/setup/env`, and `POST /api/setup/env/validate` all return HTTP 410 from this point on. To change settings later, use the `/settings` page in the dashboard.
-- You're redirected to the main dashboard at `http://<your-box-ip>:3001/`.
+To change anything later, use the `/settings` page in the dashboard. There is no web setup wizard — `frontend/src/app/setup/` and `frontend/src/components/setup/` were deleted in favor of this CLI path.
 
-**Wizard didn't show up?** Confirm `setup_state.json` doesn't already exist with `setup_completed: true`:
+**Re-run the wizard later?** Edit `data/app/setup_state.json` and set `setup_completed: false`:
 
 ```bash
 cat data/app/setup_state.json 2>/dev/null
 ```
-
-If it does, either edit it (set `setup_completed: false` to re-show the wizard) or use the `/settings` page instead.
 
 ---
 
@@ -325,13 +312,9 @@ sudo tailscale cert --cert-file /opt/gateway_mvp/certs/<host>.crt \
 
 ---
 
-## Step 9 (optional) — Legacy bash setup helper
+## Step 9 (legacy) — Per-section CLI wizard (now the only wizard)
 
-`scripts/setup.sh` is the **older** interactive terminal wizard that predates the browser-based one. It writes `.env` + `user_profile.yaml` from a sequence of CLI prompts. It still works and may be useful for headless / SSH-only installs, but the browser wizard is the recommended path for everyone else.
-
-```bash
-bash scripts/setup.sh
-```
+`scripts/setup.sh` IS the wizard. Step 6 above describes it. There is no web-based setup wizard — `frontend/src/app/setup/` and `frontend/src/components/setup/` were deleted before v1.0.0 in favor of this short CLI flow.
 
 ---
 
@@ -343,9 +326,10 @@ bash scripts/setup.sh
 | `Failed to initialize NVML: Driver/library version mismatch` | Prebuilt NVIDIA module pinned to wrong kernel | Purge + reinstall DKMS variant (Step 1, troubleshooting) |
 | `Error 804: forward compatibility was attempted on non supported HW` (vLLM on Blackwell) | Driver too old | Install driver 580+ |
 | `brain-orchestrator` keeps restarting | `API_TOKEN` not set | Check `.env` has `API_TOKEN=...`; run `docker compose up -d` again |
-| Wizard returns 410 on `/api/setup/env` | Setup already marked complete | This is by design (kill switch). Edit `data/app/setup_state.json` or use `/settings`. |
+| Wizard returns 410 on `/api/setup/env` | Setup already marked complete | This is by design (kill switch). Edit `data/app/setup_state.json` → `setup_completed: false` to re-run, or use `/settings`. |
 | `qwen-tts` crash-loops with HF 401 | Stale model name in env | Confirm `QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` (or unset to use compose default) |
-| Frontend shows but `/setup` redirects to `/` | `setup_completed: true` already in `setup_state.json` | Either edit that file or accept that setup is done and use `/settings` |
+| Setup CLI can't reach orchestrator | `docker compose up -d` hasn't finished | `docker compose logs orchestrator`; wait until `curl http://localhost:8888/health` returns 200 |
+| Below-floor GPU crashes vLLM with `Unsupported speculative method: 'mtp'` | `.env.example` Lorbus defaults not overridden | `install.sh` does this automatically; if hand-installing, also unset `VLLM_EXTRA_ARGS` or set it to `--tool-call-parser hermes` |
 | Model takes 2+ minutes to first-respond | Cold start — vLLM is loading 16+ GiB of weights into VRAM | Wait. Subsequent requests are fast. |
 
 ---

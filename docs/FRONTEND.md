@@ -37,23 +37,11 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 - Gamified: XP for under-budget months, levels, streaks, quest board
 - SQLite persistence at `/app/data/finance.db`
 
-## First-Boot Setup Wizard (`/setup`)
+## First-Boot Setup (no web wizard)
 
-**All 7 steps shipped (slices 1–7).** Welcome / Identity / Model / Voice / Push / Integrations / Selfcare / Review. Slice 3 (2026-05-21, backend) added the env-overrides writer at `/api/setup/env` + `/api/setup/env/validate` (`orchestrator/setup_env.py`, persists to `/app/data/setup_overrides.env`). Slice 4 (2026-05-21, frontend) — `ModelStep.tsx` writes `VLLM_*` + `MODEL_NAME`. Slice 5 (2026-05-22) — `VoiceStep.tsx` writes `TTS_VOICE`. Slice 6 (2026-05-22) — `PushStep.tsx` first to exercise validate-before-persist (ntfy + Pushover, per-channel Test buttons). Slice 7 (2026-05-22) — `IntegrationsStep.tsx` rounds out the wizard with HA + Paperless. Open follow-ups: extract shared `ChannelCard`/`SecretField`/`TestButton` from PushStep + IntegrationsStep into `setup/wizard-fields.tsx`; enrich `ReviewStep` to summarize every step (currently shows Identity only); replace `SetupGuard`'s client-side redirect with a server-side gate (eliminates the dashboard-content flash).
+The web `/setup` wizard was deleted before v1.0.0. `frontend/src/app/setup/`, `frontend/src/components/setup/`, and `frontend/src/lib/setup-api.ts` are all gone. The 7-step browser flow (Welcome / Identity / Model / Voice / Push / Integrations / Selfcare / Review) was replaced by the 2-question express CLI wizard at `scripts/setup.sh`, which calls the same `/api/setup/*` and `/api/config/*` endpoints over `localhost:8888`. Post-install configuration of every panel (Identity, Selfcare, Quiet Hours, Routines, Speakers, Recurring Reminders) happens via `/settings`.
 
-- **Route:** `/setup` is a top-level route (`frontend/src/app/setup/page.tsx`), NOT under the `(private)` route group — but it still sits behind the dashboard login cookie (`/setup` is in `middleware.ts` `PROTECTED_PATHS` + matcher).
-- **Steps:**
-  - **Welcome** (`WelcomeStep.tsx`) — intro; calls `GET /api/setup/hardware` to show whether a host-side hardware scan exists.
-  - **Identity** (`IdentityStep.tsx`) — edits `assistant_name` / `user_name` / `timezone` / `adhd_mode` / `tone_preference`; saves via the existing `PUT /api/config/identity` on Continue.
-  - **Model** (`ModelStep.tsx`) — reads `GET /api/setup/hardware` for a recommendation, persists `VLLM_MODEL` / `VLLM_QUANTIZATION` / `VLLM_SERVED_NAME` / `VLLM_MAX_MODEL_LEN` / `VLLM_GPU_MEM_UTIL` / `MODEL_NAME` via `POST /api/setup/env`. "Use this" merge-fills empty fields from the recommendation (never overwrites typed values); numeric fields are range-validated client-side; MODEL_NAME ↔ VLLM_SERVED_NAME are mirrored if one is empty (they must match for the orchestrator to reach vLLM). "Skip for now" guards against discarding a dirty draft.
-  - **Voice** (`VoiceStep.tsx`) — single free-text input for `TTS_VOICE` persisted via `POST /api/setup/env`. No live validation: voice availability depends on the TTS model picked in the previous step and the TTS server may not be reachable during first-boot. Info card explains that the full list lives at `/voices` on the running TTS server. Empty-string clear is a silent no-op (matches the rest of the wizard's allow-list-only write contract); the UI warns the user when they're attempting to clear a previously-set value.
-  - **Push** (`PushStep.tsx`) — two independent channels (ntfy + Pushover) inside `<ChannelCard>` shells with their own on/off toggle, fields, and `<TestButton>` that calls `POST /api/setup/env/validate`. Secret fields (HMAC secret, Pushover user key + app token) render with a `"•••••••• (saved — type to replace)"` placeholder when the orchestrator reports `present:true` (the GET never echoes secret values). Eye-icon toggle reveals typed values. Test results are invalidated when CREDENTIAL keys change (not the ENABLED bool — toggling on/off doesn't change what would be tested). ntfy Test requires a `window.confirm` (it publishes a real message to every subscribed device). Continue refuses to advance if a channel is enabled with its required fields empty — prevents silently writing `*_ENABLED=true` to a broken config.
-  - **Integrations** (`IntegrationsStep.tsx`) — Home Assistant + Paperless-ngx. Same `IntegrationCard`/`SecretField`/`TestButton` pattern as PushStep (copy-inlined; shared extraction is a tracked follow-up). The on/off toggle is **UI-only** — neither HA nor Paperless has an `*_ENABLED` key in the wizard's allow-list; they auto-enable when their credentials are set. Validators GET each service's `/api/` (read-only — no PushStep-style "sends a real message" warning needed).
-  - **Selfcare** (`SelfcareStep.tsx`) — per-category on/off toggles (a lighter "baseline" view than the full `SelfcarePanel`; cadence editing stays in Settings); saves via `PUT /api/config/selfcare`. Category constants are shared with `SelfcarePanel` via `lib/selfcare-categories.ts`.
-  - **Review** (`ReviewStep.tsx`) — identity summary; "Finish setup" calls `POST /api/setup/complete`, then redirects to `/dashboard`.
-- **First-boot redirect:** `SetupGuard.tsx` is rendered from `(private)/layout.tsx`; on mount it checks `GET /api/setup/status` and redirects to `/setup` if setup is not complete.
-- **Progress indicator:** `Stepper.tsx`.
-- **API client:** `frontend/src/lib/setup-api.ts` — typed client for `/api/setup/{status,hardware,complete}`, same `/api/proxy` pattern as `settings-api.ts`. Backend lives in `orchestrator/routes_setup.py` (see `TECHNICAL_REFERENCE.md` → Setup Wizard).
+The `/api/setup/*` backend endpoints (`status`, `hardware`, `complete`, `env`, `env/validate`) still exist with the same first-boot-only kill-switch (HTTP 410 after `/complete`) — see `CLAUDE.md` Notes → "Setup-wizard backend".
 
 ## API Pattern
 
@@ -84,11 +72,7 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/settings/QuietHoursPanel.tsx` — Quiet hours start/end + day-of-week filter
 - `frontend/src/components/settings/RecurringRemindersPanel.tsx` — CRUD UI for cron-based recurring reminder rules
 - `frontend/src/lib/settings-api.ts` — Typed client for `/api/config/*`; routed through `/api/proxy` for bearer injection
-- `frontend/src/app/setup/page.tsx` — First-boot setup wizard route (top-level, outside `(private)`); Welcome → Identity → Selfcare → Review
-- `frontend/src/components/setup/SetupGuard.tsx` — First-boot redirect guard; checks `/api/setup/status`, mounted from `(private)/layout.tsx`
-- `frontend/src/components/setup/{Stepper,WelcomeStep,IdentityStep,SelfcareStep,ReviewStep}.tsx` — Wizard progress indicator + step components
-- `frontend/src/lib/setup-api.ts` — Typed client for `/api/setup/{status,hardware,complete}`; routed through `/api/proxy`
-- `frontend/src/lib/selfcare-categories.ts` — Shared selfcare-category constants (used by both `SelfcarePanel` and the wizard's `SelfcareStep`)
+- `frontend/src/lib/selfcare-categories.ts` — Shared selfcare-category constants (consumed by `SelfcarePanel`)
 
 ## API Proxy Notes
 
