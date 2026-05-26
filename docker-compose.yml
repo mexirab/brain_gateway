@@ -372,37 +372,27 @@ services:
             - driver: nvidia
               device_ids: ["0"]
               capabilities: [gpu]
+    # Two-layer command:
+    # - Common args (always safe): model id, quantization, context, GPU mem,
+    #   prefix caching, host/port.
+    # - VLLM_EXTRA_ARGS: model-family-specific tuning, defaulted to the
+    #   Lorbus 27B-AutoRound flags (MTP speculation, qwen3 reasoning,
+    #   fp8 KV cache, etc.). install.sh's below-floor branch overrides this
+    #   to a blank string so 8B AWQ doesn't crash on `Unsupported speculative
+    #   method: 'mtp'` (the 8B model has no MTP weights).
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --model
-      - ${VLLM_MODEL:-Lorbus/Qwen3.6-27B-int4-AutoRound}
-      - --served-model-name
-      - ${VLLM_SERVED_NAME:-qwen3.6-27b-int4}
-      - --quantization
-      - ${VLLM_QUANTIZATION:-auto_round}
-      - --kv-cache-dtype
-      - fp8_e4m3
-      - --max-model-len
-      - "${VLLM_MAX_MODEL_LEN:-153600}"
-      - --gpu-memory-utilization
-      - "${VLLM_GPU_MEM_UTIL:-0.93}"
-      - --max-num-seqs
-      - "2"
-      - --enable-auto-tool-choice
-      - --tool-call-parser
-      - qwen3_coder
-      - --reasoning-parser
-      - qwen3
-      - --speculative-config
-      - '{"method":"mtp","num_speculative_tokens":3}'
-      - --enable-prefix-caching
-      - --language-model-only
-      - --skip-mm-profiling
-      - --performance-mode
-      - interactivity
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
+      - >-
+        exec vllm serve "${VLLM_MODEL:-Lorbus/Qwen3.6-27B-int4-AutoRound}"
+        --served-model-name "${VLLM_SERVED_NAME:-qwen3.6-27b-int4}"
+        --quantization "${VLLM_QUANTIZATION:-auto_round}"
+        --max-model-len "${VLLM_MAX_MODEL_LEN:-153600}"
+        --gpu-memory-utilization "${VLLM_GPU_MEM_UTIL:-0.93}"
+        --enable-auto-tool-choice
+        --enable-prefix-caching
+        --host 0.0.0.0
+        --port 8000
+        ${VLLM_EXTRA_ARGS:---kv-cache-dtype fp8_e4m3 --max-num-seqs 2 --tool-call-parser qwen3_coder --reasoning-parser qwen3 --speculative-config '{"method":"mtp","num_speculative_tokens":3}' --language-model-only --skip-mm-profiling --performance-mode interactivity}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

@@ -301,10 +301,17 @@ stage_2() {
         # 7-8B AWQ. Safe at install time — the user hasn't had a chance to
         # customize their .env yet.
         if grep -qE '^# VLLM_MODEL=.*below the.*floor' "${ENV_FILE}"; then
-            sed -i.bak '/^VLLM_MODEL=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+            sed -i.bak '/^VLLM_MODEL=/d;/^VLLM_EXTRA_ARGS=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
             echo "VLLM_MODEL=Qwen/Qwen3-8B-AWQ  # auto-picked for sub-tier-24 GPU" >> "${ENV_FILE}"
+            # Override the compose default VLLM_EXTRA_ARGS (which carries
+            # Lorbus-27B-specific tuning like MTP speculation, qwen3_coder
+            # parser, fp8 KV cache, --language-model-only). 8B AWQ doesn't
+            # support any of those; an empty value falls back to vLLM's
+            # safe defaults for any non-Lorbus model.
+            echo "VLLM_EXTRA_ARGS=  # auto-cleared for sub-tier-24 GPU (no MTP)" >> "${ENV_FILE}"
             warn "GPU is below the 20 GiB tier-24 floor; auto-picked Qwen/Qwen3-8B-AWQ."
             warn "(The .env.example default Lorbus 27B model wouldn't fit; replaced it.)"
+            warn "Also cleared VLLM_EXTRA_ARGS — the Lorbus-specific MTP/parser flags don't apply to 8B AWQ."
             warn "Change later by editing ${ENV_FILE} and running 'docker compose up -d --force-recreate vllm-primary'."
         fi
         ok "Hardware scan complete"
