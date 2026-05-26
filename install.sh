@@ -302,16 +302,22 @@ stage_2() {
         # customize their .env yet.
         if grep -qE '^# VLLM_MODEL=.*below the.*floor' "${ENV_FILE}"; then
             sed -i.bak '/^VLLM_MODEL=/d;/^VLLM_EXTRA_ARGS=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
-            echo "VLLM_MODEL=Qwen/Qwen3-8B-AWQ  # auto-picked for sub-tier-24 GPU" >> "${ENV_FILE}"
-            # Override the compose default VLLM_EXTRA_ARGS (which carries
-            # Lorbus-27B-specific tuning like MTP speculation, qwen3_coder
-            # parser, fp8 KV cache, --language-model-only). 8B AWQ doesn't
-            # support any of those; an empty value falls back to vLLM's
-            # safe defaults for any non-Lorbus model.
-            echo "VLLM_EXTRA_ARGS=  # auto-cleared for sub-tier-24 GPU (no MTP)" >> "${ENV_FILE}"
+            # IMPORTANT: do NOT use trailing `# comment` here — docker-compose's
+            # .env parser does NOT strip inline comments, so the literal
+            # comment text becomes part of the value. Use separate `#` lines
+            # for documentation.
+            echo "# Below-tier-24 GPU detected; auto-picked these vLLM values:" >> "${ENV_FILE}"
+            echo "VLLM_MODEL=Qwen/Qwen3-8B-AWQ" >> "${ENV_FILE}"
+            # VLLM_EXTRA_ARGS overrides the Lorbus-27B tuning baked into the
+            # compose default (MTP speculation, fp8 KV, qwen3_coder parser,
+            # --language-model-only, etc.). 8B AWQ supports none of those.
+            # We still need --tool-call-parser because the common command
+            # line passes --enable-auto-tool-choice. `hermes` is the canonical
+            # parser for Qwen3 (non-coder).
+            echo "VLLM_EXTRA_ARGS=--tool-call-parser hermes" >> "${ENV_FILE}"
             warn "GPU is below the 20 GiB tier-24 floor; auto-picked Qwen/Qwen3-8B-AWQ."
             warn "(The .env.example default Lorbus 27B model wouldn't fit; replaced it.)"
-            warn "Also cleared VLLM_EXTRA_ARGS — the Lorbus-specific MTP/parser flags don't apply to 8B AWQ."
+            warn "Also set VLLM_EXTRA_ARGS=--tool-call-parser hermes (Lorbus-specific MTP/parser flags don't apply)."
             warn "Change later by editing ${ENV_FILE} and running 'docker compose up -d --force-recreate vllm-primary'."
         fi
         ok "Hardware scan complete"
