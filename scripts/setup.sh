@@ -313,11 +313,15 @@ ok "Setup complete."
 # ── Restart orchestrator so it picks up the new env overrides ──────────────
 say "Restarting the orchestrator to pick up new env values…"
 if command -v docker >/dev/null 2>&1 && [ -f "${REPO_ROOT}/docker-compose.yml" ]; then
-    ( cd "${REPO_ROOT}" && docker compose restart orchestrator 2>&1 | tail -5 ) || warn "Restart returned non-zero (check 'docker compose ps')"
-    ok "Orchestrator restarted."
+    # IMPORTANT: `restart` doesn't re-read .env — it just bounces the
+    # existing container with its original environment baked in at
+    # creation time. We need `up -d --force-recreate` to actually pick
+    # up the new env values setup wrote (TTS_VOICE, etc.).
+    ( cd "${REPO_ROOT}" && docker compose up -d --force-recreate orchestrator 2>&1 | tail -5 ) || warn "Recreate returned non-zero (check 'docker compose ps')"
+    ok "Orchestrator recreated with new env."
 else
-    warn "docker / compose not found; restart the orchestrator manually:"
-    info "    cd ${REPO_ROOT} && docker compose restart orchestrator"
+    warn "docker / compose not found; recreate the orchestrator manually:"
+    info "    cd ${REPO_ROOT} && docker compose up -d --force-recreate orchestrator"
 fi
 
 # ── Final URLs ─────────────────────────────────────────────────────────────
