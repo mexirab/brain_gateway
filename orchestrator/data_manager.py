@@ -3,10 +3,11 @@ Data Manager for Brain Gateway
 Handles structured YAML data (medications, projects) with auto-markdown generation.
 """
 
+import copy
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import yaml
 
@@ -19,6 +20,33 @@ MEDICATIONS_MD = os.path.join(RAG_BASE, "10_profile", "medications.md")
 PROJECTS_YAML = os.path.join(RAG_BASE, "30_projects", "projects.yaml")
 PROJECTS_MD = os.path.join(RAG_BASE, "30_projects", "current.md")
 
+# mtime-keyed YAML cache — every mutation previously re-read and re-parsed
+# the full file from disk. path -> (mtime, parsed data)
+_yaml_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
+
+def _load_yaml_cached(path: str) -> Dict[str, Any]:
+    """Return parsed YAML, re-reading from disk only when the mtime changes.
+
+    Raises FileNotFoundError like open() so callers keep their defaults.
+    Returns a deep copy so callers can mutate freely without corrupting
+    the cache (mutation-then-save is the normal flow here).
+    """
+    mtime = os.stat(path).st_mtime
+    cached = _yaml_cache.get(path)
+    if cached is None or cached[0] != mtime:
+        with open(path) as f:
+            _yaml_cache[path] = (mtime, yaml.safe_load(f) or {})
+    return copy.deepcopy(_yaml_cache[path][1])
+
+
+def _store_yaml_cache(path: str, data: Dict[str, Any]) -> None:
+    """Refresh the cache after a successful write."""
+    try:
+        _yaml_cache[path] = (os.stat(path).st_mtime, copy.deepcopy(data))
+    except OSError:
+        _yaml_cache.pop(path, None)
+
 
 # =============================================================================
 # MEDICATIONS
@@ -28,8 +56,7 @@ PROJECTS_MD = os.path.join(RAG_BASE, "30_projects", "current.md")
 def get_medications() -> Dict[str, Any]:
     """Load medications from YAML."""
     try:
-        with open(MEDICATIONS_YAML) as f:
-            return yaml.safe_load(f) or {}
+        return _load_yaml_cached(MEDICATIONS_YAML)
     except FileNotFoundError:
         logger.warning(f"Medications file not found: {MEDICATIONS_YAML}")
         return {"daily": {"morning": [], "evening": []}, "weekly": [], "as_needed": []}
@@ -43,6 +70,7 @@ def save_medications(data: Dict[str, Any]) -> bool:
     try:
         with open(MEDICATIONS_YAML, "w") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        _store_yaml_cache(MEDICATIONS_YAML, data)
         _generate_medications_md(data)
         return True
     except Exception as e:
@@ -255,8 +283,7 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
 def get_projects() -> Dict[str, Any]:
     """Load projects from YAML."""
     try:
-        with open(PROJECTS_YAML) as f:
-            return yaml.safe_load(f) or {}
+        return _load_yaml_cached(PROJECTS_YAML)
     except FileNotFoundError:
         logger.warning(f"Projects file not found: {PROJECTS_YAML}")
         return {"active": [], "on_hold": [], "someday_maybe": [], "completed": [], "parking_lot": []}
@@ -270,6 +297,7 @@ def save_projects(data: Dict[str, Any]) -> bool:
     try:
         with open(PROJECTS_YAML, "w") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        _store_yaml_cache(PROJECTS_YAML, data)
         _generate_projects_md(data)
         return True
     except Exception as e:

@@ -514,6 +514,7 @@ async def process_emails_for_events():
         from orchestrator.orchestrator import call_model
 
         created_count = 0
+        created_keys: list = []  # (title_lower, date) of events created this run
         for msg in new_msgs:
             state_store.mark_notified(f"e2c:{msg.id}")
             EMAIL_TO_CALENDAR_EMAILS_SCANNED.inc()
@@ -548,6 +549,12 @@ async def process_emails_for_events():
             if not events:
                 continue
 
+            # One calendar fetch per email (was one Google API call per
+            # extracted event). Events we create during this run are tracked
+            # in created_keys so within-batch duplicates still dedup.
+            listing = await cal.list_events(days_ahead=1, calendar_id="primary")
+            day_events = listing.events if listing.success else []
+
             # Check calendar for duplicates and create missing events
             for ev in events:
                 title = ev.get("title", "").strip()
@@ -565,8 +572,8 @@ async def process_emails_for_events():
                 except ValueError:
                     continue
 
-                # Check for duplicates: list events on that day and look for title match
-                if await _event_exists_on_calendar(cal, title, ev_start):
+                # Check for duplicates: look for a title match on that day
+                if _event_exists(day_events, created_keys, title, ev_start):
                     logger.info(f"[EMAIL_TO_CAL] Already on calendar: {title}")
                     continue
 
@@ -589,6 +596,7 @@ async def process_emails_for_events():
 
                 if result.success:
                     created_count += 1
+                    created_keys.append((title.lower(), ev_start.date()))
                     EMAIL_TO_CALENDAR_EVENTS_CREATED.inc()
                     logger.info(f"[EMAIL_TO_CAL] Created: {title} at {start_time}", extra={"component": "email_to_cal"})
                 else:
@@ -628,18 +636,19 @@ def _parse_event_json(raw: str) -> list:
     return []
 
 
-async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
-    """Check if a similar event already exists on the calendar around that time."""
-    response = await cal.list_events(days_ahead=1, calendar_id="primary")
-    if not response.success:
-        return False
-
+def _event_exists(day_events: list, created_keys: list, title: str, start: datetime) -> bool:
+    """Check if a similar event exists in the pre-fetched list or was created this run."""
     title_lower = title.lower()
-    for existing in response.events:
+    for existing in day_events:
         # Check same day and similar title (substring match either direction)
         if existing.start.date() != start.date():
             continue
         existing_title = existing.title.lower()
         if title_lower in existing_title or existing_title in title_lower:
+            return True
+    for created_title, created_date in created_keys:
+        if created_date != start.date():
+            continue
+        if title_lower in created_title or created_title in title_lower:
             return True
     return False

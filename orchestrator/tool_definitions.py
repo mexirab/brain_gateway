@@ -983,14 +983,33 @@ _EXPERT_TOOL = {
 }
 
 
+# Assembled tool-list cache. Rebuilt only when the HA tool cache refreshes
+# (every ~5 min) or a feature flag flips — get_all_tools/get_voice_tools are
+# called on every LLM round, including tool-continuation rounds.
+_tools_cache_key: tuple = ()
+_all_tools_cache: List[Dict[str, Any]] = []
+_voice_tools_cache: List[Dict[str, Any]] = []
+
+
+def _refresh_tool_caches() -> None:
+    global _tools_cache_key, _all_tools_cache, _voice_tools_cache
+    ha_tool = get_ha_tool_definition()  # TTL-cached; may bump _ha_tool_cache_time
+    key = (shared._ha_tool_cache_time, shared.CODE_AGENT_ENABLED, shared.EXPERT_ENABLED)
+    if key != _tools_cache_key:
+        tools = [ha_tool] + STATIC_TOOLS
+        if shared.CODE_AGENT_ENABLED:
+            tools.append(_CODE_AGENT_TOOL)
+        if shared.EXPERT_ENABLED:
+            tools.append(_EXPERT_TOOL)
+        _all_tools_cache = tools
+        _voice_tools_cache = [t for t in tools if t.get("function", {}).get("name") in VOICE_TOOL_NAMES]
+        _tools_cache_key = key
+
+
 def get_all_tools() -> List[Dict[str, Any]]:
     """Get all tools for unified mode (v7): HA tool + all static tools + optional code agent + optional expert."""
-    tools = [get_ha_tool_definition()] + STATIC_TOOLS
-    if shared.CODE_AGENT_ENABLED:
-        tools.append(_CODE_AGENT_TOOL)
-    if shared.EXPERT_ENABLED:
-        tools.append(_EXPERT_TOOL)
-    return tools
+    _refresh_tool_caches()
+    return _all_tools_cache
 
 
 # Tools kept available in voice mode. 38 full tool schemas cost ~6.9k prompt
@@ -1026,4 +1045,5 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
 
 def get_voice_tools() -> List[Dict[str, Any]]:
     """Voice-mode tool subset — trims tool-schema prefill to cut LLM latency."""
-    return [t for t in get_all_tools() if t.get("function", {}).get("name") in VOICE_TOOL_NAMES]
+    _refresh_tool_caches()
+    return _voice_tools_cache

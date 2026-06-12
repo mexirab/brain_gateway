@@ -256,7 +256,13 @@ class CloudBrain:
             import json as _json
 
             _sys_chars = len(system_prompt or "")
-            _tools_chars = len(_json.dumps(tools))
+            # tools is a cached list that only changes when the HA tool cache
+            # refreshes — serialize it once per cache generation, not per turn
+            _size_cache = getattr(self, "_tools_size_cache", None)
+            if _size_cache is None or _size_cache[0] is not tools:
+                _size_cache = (tools, len(_json.dumps(tools)))
+                self._tools_size_cache = _size_cache
+            _tools_chars = _size_cache[1]
             _msgs_chars = sum(len(_json.dumps(m)) for m in messages)
             logger.info(
                 "[UNIFIED] Prompt sizes (chars): system=%d tools=%d messages=%d total=%d (voice=%s tools_n=%d)",

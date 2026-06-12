@@ -920,8 +920,9 @@ async def _reg_home_assistant(arguments: dict) -> str:
 
 
 @register_tool("update_data")
-def _reg_update_data(arguments: dict) -> str:
-    return tool_update_data(arguments)
+async def _reg_update_data(arguments: dict) -> str:
+    # YAML read/write + markdown regeneration is blocking file I/O
+    return await asyncio.to_thread(tool_update_data, arguments)
 
 
 @register_tool("update_memory")

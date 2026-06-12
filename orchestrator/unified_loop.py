@@ -5,6 +5,7 @@ Replaces the two-model Helios→Nemotron flow with a single model that handles
 both conversation and tool execution via OpenAI-compatible tool_calls.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -344,8 +345,12 @@ async def run_unified_tool_loop(
             assistant_msg["tool_calls"] = [tc for tc in message["tool_calls"] if tc.get("id") in executed_ids]
         messages.append(assistant_msg)
 
-        tool_results = []
+        # Parse and validate all calls first, then execute. A batch made up
+        # entirely of read-only tools (e.g. check_calendar + check_email)
+        # runs concurrently; any batch containing a state-mutating terminal
+        # tool keeps the original strict sequential order.
         has_terminal = False
+        parsed_calls = []  # (call_id, tool_name, arguments) — arguments is None when rejected
         for tool_call in new_tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
@@ -355,26 +360,36 @@ async def run_unified_tool_loop(
             except json.JSONDecodeError:
                 arguments = {}
 
+            call_id = tool_call.get("id", f"call_{round_num}")
+
             # Validate tool name against allowlist (prevents hallucinated/injected tools)
             if tool_name not in valid_tool_names:
                 logger.warning("[%s] Rejected unknown tool call: %s", label, tool_name[:50])
-                tool_results.append((tool_call.get("id", f"call_{round_num}"), tool_name, f"Unknown tool: {tool_name}"))
+                parsed_calls.append((call_id, tool_name, None))
                 continue
 
             call_key = (tool_name, json.dumps(arguments, sort_keys=True))
             executed_calls.add(call_key)
+            parsed_calls.append((call_id, tool_name, arguments))
 
+            if tool_name in TERMINAL_TOOLS:
+                has_terminal = True
+
+        async def _run_one(call_id: str, tool_name: str, arguments) -> tuple:
+            if arguments is None:
+                return (call_id, tool_name, f"Unknown tool: {tool_name}")
             # Metrics are recorded inside execute_tool() — no double-counting here
             try:
                 result = await execute_tool(tool_name, arguments)
             except Exception as e:
                 logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
                 result = f"The {tool_name} tool encountered an error. Please try again."
-            result = _cap_tool_result(result, tool_name)
-            tool_results.append((tool_call.get("id", f"call_{round_num}"), tool_name, result))
+            return (call_id, tool_name, _cap_tool_result(result, tool_name))
 
-            if tool_name in TERMINAL_TOOLS:
-                has_terminal = True
+        if len(parsed_calls) > 1 and not has_terminal:
+            tool_results = list(await asyncio.gather(*[_run_one(*pc) for pc in parsed_calls]))
+        else:
+            tool_results = [await _run_one(*pc) for pc in parsed_calls]
 
         # Add tool results to conversation
         # Use proper tool role messages if the model sent native tool_calls
