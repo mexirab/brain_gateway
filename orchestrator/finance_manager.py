@@ -247,12 +247,23 @@ def _get_level_for_xp(total_xp):
     return min(level, 50)  # cap at 50
 
 
+# level_thresholds is seeded once at init and never mutated at runtime —
+# cache lookups so callers (often already inside a get_db() context) don't
+# open a second connection per call.
+_level_cache: dict = {}
+
+
 def _get_level_info(level):
     """Get level info from thresholds table."""
+    cached = _level_cache.get(level)
+    if cached is not None:
+        return dict(cached)
     with get_db() as conn:
         row = conn.execute("SELECT * FROM level_thresholds WHERE level = ?", (level,)).fetchone()
         if row:
-            return dict(row)
+            info = dict(row)
+            _level_cache[level] = info
+            return dict(info)
         # Above max defined level
         return {"level": level, "retirement_min": 0, "title": f"Legend {level}"}
 

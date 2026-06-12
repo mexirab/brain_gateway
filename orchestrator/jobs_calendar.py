@@ -5,6 +5,7 @@ email-to-calendar event extraction.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -549,6 +550,7 @@ async def process_emails_for_events():
         from orchestrator.orchestrator import call_model
 
         created_count = 0
+        created_keys: list = []  # (title_lower, date) of events created this run
         for msg in new_msgs:
             state_store.mark_notified(f"e2c:{msg.id}")
             EMAIL_TO_CALENDAR_EMAILS_SCANNED.inc()
@@ -583,6 +585,13 @@ async def process_emails_for_events():
             if not events:
                 continue
 
+            # One calendar fetch per email (was one Google API call per
+            # extracted event). Events we create during this run are tracked
+            # in created_keys so within-batch duplicates still dedup. The window
+            # is sized to cover the furthest extracted event (see #33).
+            listing = await cal.list_events(days_ahead=_dedup_prefetch_days(events, now.date()), calendar_id="primary")
+            day_events = listing.events if listing.success else []
+
             # Check calendar for duplicates and create missing events
             for ev in events:
                 title = ev.get("title", "").strip()
@@ -600,8 +609,8 @@ async def process_emails_for_events():
                 except ValueError:
                     continue
 
-                # Check for duplicates: list events on that day and look for title match
-                if await _event_exists_on_calendar(cal, title, ev_start):
+                # Check for duplicates: look for a title match on that day
+                if _event_exists(day_events, created_keys, title, ev_start):
                     logger.info(f"[EMAIL_TO_CAL] Already on calendar: {title}")
                     continue
 
@@ -624,6 +633,7 @@ async def process_emails_for_events():
 
                 if result.success:
                     created_count += 1
+                    created_keys.append((title.lower(), ev_start.date()))
                     EMAIL_TO_CALENDAR_EVENTS_CREATED.inc()
                     logger.info(f"[EMAIL_TO_CAL] Created: {title} at {start_time}", extra={"component": "email_to_cal"})
                 else:
@@ -663,29 +673,32 @@ def _parse_event_json(raw: str) -> list:
     return []
 
 
-async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
-    """Check if a similar event already exists on the calendar around that time.
+def _dedup_prefetch_days(events: list, today) -> int:
+    """days_ahead for the dedup pre-fetch, sized to cover the furthest extracted
+    event. list_events queries [now, now + days_ahead); a fixed days_ahead=1
+    missed any event >1 day out and re-created it as a duplicate every scan
+    (#33). +1 reaches through the event's own day; floor of 1 covers same-day
+    or clock-skewed-past events. Unparseable start times are ignored."""
+    event_dates = []
+    for ev in events:
+        with contextlib.suppress(ValueError, AttributeError):
+            event_dates.append(datetime.fromisoformat(ev.get("start_time", "").strip()).date())
+    return max(((max(event_dates) - today).days + 1) if event_dates else 1, 1)
 
-    list_events() queries the window [now, now + days_ahead), so the lookahead
-    must be computed from the extracted event's date — a fixed days_ahead=1
-    meant any emailed event more than a day out was never found and got
-    re-created as a duplicate on every scan.
-    """
-    tz = start.tzinfo or ZoneInfo(TIMEZONE)
-    today = datetime.now(tz).date()
-    # +1 so the window extends through the end of the event's day; floor of 1
-    # keeps same-day (or clock-skewed past) events covered.
-    days_ahead = max((start.date() - today).days + 1, 1)
-    response = await cal.list_events(days_ahead=days_ahead, calendar_id="primary")
-    if not response.success:
-        return False
 
+def _event_exists(day_events: list, created_keys: list, title: str, start: datetime) -> bool:
+    """Check if a similar event exists in the pre-fetched list or was created this run."""
     title_lower = title.lower()
-    for existing in response.events:
+    for existing in day_events:
         # Check same day and similar title (substring match either direction)
         if existing.start.date() != start.date():
             continue
         existing_title = existing.title.lower()
         if title_lower in existing_title or existing_title in title_lower:
+            return True
+    for created_title, created_date in created_keys:
+        if created_date != start.date():
+            continue
+        if title_lower in created_title or created_title in title_lower:
             return True
     return False
