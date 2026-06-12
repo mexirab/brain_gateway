@@ -648,11 +648,23 @@ def get_announcement_history(limit: int = 50, announcement_type: Optional[str] =
 
 def get_announcement_stats() -> Dict[str, Any]:
     """Get announcement statistics."""
+    today = datetime.now().strftime("%Y-%m-%d")
     with get_db() as conn:
-        # Total counts
-        total = conn.execute("SELECT COUNT(*) FROM announcement_history").fetchone()[0]
-        successes = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE success = 1").fetchone()[0]
-        failures = conn.execute("SELECT COUNT(*) FROM announcement_history WHERE success = 0").fetchone()[0]
+        # Single aggregate pass instead of five separate table scans
+        agg = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "COALESCE(SUM(success = 1), 0) AS successes, "
+            "COALESCE(SUM(success = 0), 0) AS failures, "
+            "AVG(latency_ms) AS avg_latency, "
+            "COALESCE(SUM(timestamp >= ?), 0) AS today_count "
+            "FROM announcement_history",
+            (today,),
+        ).fetchone()
+        total = agg["total"]
+        successes = agg["successes"]
+        failures = agg["failures"]
+        avg_latency = agg["avg_latency"]
+        today_count = agg["today_count"]
 
         # By type
         type_rows = conn.execute(
@@ -665,18 +677,6 @@ def get_announcement_stats() -> Dict[str, Any]:
             "SELECT speaker, COUNT(*) as cnt, SUM(success) as ok "
             "FROM announcement_history WHERE speaker IS NOT NULL GROUP BY speaker"
         ).fetchall()
-
-        # Average latency
-        avg_latency = conn.execute(
-            "SELECT AVG(latency_ms) FROM announcement_history WHERE latency_ms IS NOT NULL"
-        ).fetchone()[0]
-
-        # Today's count
-        today = datetime.now().strftime("%Y-%m-%d")
-        today_count = conn.execute(
-            "SELECT COUNT(*) FROM announcement_history WHERE timestamp >= ?",
-            (today,),
-        ).fetchone()[0]
 
     return {
         "total": total,
@@ -1107,16 +1107,15 @@ def seed_exercises(exercises: List[Dict[str, Any]]) -> int:
     """Insert exercises that don't already exist. Returns count inserted."""
     import json as _json
 
-    inserted = 0
     with get_db() as conn:
-        for ex in exercises:
-            existing = conn.execute("SELECT 1 FROM exercises WHERE name = ?", (ex["name"],)).fetchone()
-            if existing:
-                continue
-            conn.execute(
-                """INSERT INTO exercises
-                   (name, primary_muscle, secondary_muscles, equipment, is_compound, movement_pattern)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+        before = conn.total_changes
+        # name is the PRIMARY KEY — INSERT OR IGNORE replaces the previous
+        # one-SELECT-per-exercise existence check
+        conn.executemany(
+            """INSERT OR IGNORE INTO exercises
+               (name, primary_muscle, secondary_muscles, equipment, is_compound, movement_pattern)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [
                 (
                     ex["name"],
                     ex["primary_muscle"],
@@ -1124,10 +1123,11 @@ def seed_exercises(exercises: List[Dict[str, Any]]) -> int:
                     ex.get("equipment", "barbell"),
                     1 if ex.get("is_compound", True) else 0,
                     ex.get("movement_pattern", "other"),
-                ),
-            )
-            inserted += 1
-    return inserted
+                )
+                for ex in exercises
+            ],
+        )
+        return conn.total_changes - before
 
 
 def get_exercises(
