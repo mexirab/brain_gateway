@@ -306,7 +306,7 @@ async def add_memory(body: MemoryAddRequest):
 @router.get("/api/memory/search")
 async def search_memory_api(query: str, n: int = 5):
     """Search RAG memory."""
-    context = rag_context(query)
+    context = await rag_context(query)
     return JSONResponse({"query": query, "results": context})
 
 

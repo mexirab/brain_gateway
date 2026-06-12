@@ -502,6 +502,7 @@ async def _startup_logic():
 
     # Load HA entities at startup
     logger.info("[orchestrator] Loading Home Assistant entities...")
+    ha_client.set_http_client(_http)
     count = await ha_client.refresh_entities()
     shared._ha_tool_cache = None  # Invalidate cache after entity refresh
     shared._ha_tool_cache_time = 0.0

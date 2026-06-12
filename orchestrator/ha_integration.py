@@ -197,10 +197,14 @@ class HomeAssistantClient:
         url: Optional[str] = None,
         token: Optional[str] = None,
         cache_ttl_seconds: int = 300,  # Refresh entity cache every 5 minutes
+        http_client: Optional[httpx.AsyncClient] = None,
     ):
         self.url = (url or os.environ.get("HA_URL", "")).rstrip("/")
         self.token = token or os.environ.get("HA_TOKEN", "")
         self.cache_ttl = timedelta(seconds=cache_ttl_seconds)
+
+        # Shared pooled HTTP client (injected via set_http_client at startup).
+        self._http: Optional[httpx.AsyncClient] = http_client
 
         # Entity cache
         self._entities: Dict[str, Entity] = {}
@@ -209,6 +213,23 @@ class HomeAssistantClient:
 
         # For fuzzy matching: friendly_name -> entity_id
         self._name_to_entity: Dict[str, str] = {}
+
+    def set_http_client(self, http_client: httpx.AsyncClient) -> None:
+        """Inject the shared pooled HTTP client (called from startup_event)."""
+        self._http = http_client
+
+    def _client(self) -> httpx.AsyncClient:
+        """Return the pooled client, lazily creating an owned one as fallback.
+
+        Per-call AsyncClient construction costs a TCP handshake on every HA
+        command — on the fast path that was 20-40% of total latency.
+        """
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(
+                timeout=httpx.Timeout(10, connect=5),
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            )
+        return self._http
 
     @property
     def _headers(self) -> Dict[str, str]:
@@ -227,10 +248,9 @@ class HomeAssistantClient:
             return len(self._entities)
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(f"{self.url}/api/states", headers=self._headers)
-                resp.raise_for_status()
-                states = resp.json()
+            resp = await self._client().get(f"{self.url}/api/states", headers=self._headers, timeout=30)
+            resp.raise_for_status()
+            states = resp.json()
         except Exception as e:
             print(f"[ha_integration] Error fetching entities: {e}")
             return len(self._entities)  # Return existing cache size
@@ -555,28 +575,27 @@ class HomeAssistantClient:
 
         # Make the API call
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                url = f"{self.url}/api/services/{domain}/{service}"
-                resp = await client.post(url, headers=self._headers, json=service_data)
-                resp.raise_for_status()
+            url = f"{self.url}/api/services/{domain}/{service}"
+            resp = await self._client().post(url, headers=self._headers, json=service_data, timeout=10)
+            resp.raise_for_status()
 
-                # Build descriptive message
-                if cmd.action == "set_color_brightness" and isinstance(cmd.value, dict):
-                    msg = f"✓ Set {entity.friendly_name} to {cmd.value['color']} at {cmd.value['brightness']}%"
-                elif cmd.action == "set_color":
-                    msg = f"✓ Set {entity.friendly_name} to {cmd.value}"
-                elif cmd.action == "set_brightness":
-                    msg = f"✓ Set {entity.friendly_name} to {cmd.value}%"
-                else:
-                    msg = f"✓ {service.replace('_', ' ')} {entity.friendly_name}"
+            # Build descriptive message
+            if cmd.action == "set_color_brightness" and isinstance(cmd.value, dict):
+                msg = f"✓ Set {entity.friendly_name} to {cmd.value['color']} at {cmd.value['brightness']}%"
+            elif cmd.action == "set_color":
+                msg = f"✓ Set {entity.friendly_name} to {cmd.value}"
+            elif cmd.action == "set_brightness":
+                msg = f"✓ Set {entity.friendly_name} to {cmd.value}%"
+            else:
+                msg = f"✓ {service.replace('_', ' ')} {entity.friendly_name}"
 
-                return ExecutionResult(
-                    success=True,
-                    action=f"{service} {entity.entity_id}",
-                    entity_id=entity.entity_id,
-                    message=msg,
-                    details={"service_data": service_data},
-                )
+            return ExecutionResult(
+                success=True,
+                action=f"{service} {entity.entity_id}",
+                entity_id=entity.entity_id,
+                message=msg,
+                details={"service_data": service_data},
+            )
         except Exception as e:
             return ExecutionResult(
                 success=False,
@@ -677,33 +696,32 @@ class HomeAssistantClient:
 
         # Make the API call
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                url = f"{self.url}/api/services/{domain}/{service}"
-                resp = await client.post(url, headers=self._headers, json=service_data)
-                resp.raise_for_status()
+            url = f"{self.url}/api/services/{domain}/{service}"
+            resp = await self._client().post(url, headers=self._headers, json=service_data, timeout=10)
+            resp.raise_for_status()
 
-                # Build descriptive message
-                entity = self._entities.get(entity_id)
-                friendly_name = entity.friendly_name if entity else entity_id
+            # Build descriptive message
+            entity = self._entities.get(entity_id)
+            friendly_name = entity.friendly_name if entity else entity_id
 
-                if data and "rgb_color" in data:
-                    msg = f"✓ Set {friendly_name} to color {data['rgb_color']}"
-                    if "brightness" in data:
-                        pct = int((data["brightness"] / 255) * 100)
-                        msg += f" at {pct}%"
-                elif data and "brightness" in data:
+            if data and "rgb_color" in data:
+                msg = f"✓ Set {friendly_name} to color {data['rgb_color']}"
+                if "brightness" in data:
                     pct = int((data["brightness"] / 255) * 100)
-                    msg = f"✓ Set {friendly_name} to {pct}%"
-                else:
-                    msg = f"✓ {service.replace('_', ' ')} {friendly_name}"
+                    msg += f" at {pct}%"
+            elif data and "brightness" in data:
+                pct = int((data["brightness"] / 255) * 100)
+                msg = f"✓ Set {friendly_name} to {pct}%"
+            else:
+                msg = f"✓ {service.replace('_', ' ')} {friendly_name}"
 
-                return ExecutionResult(
-                    success=True,
-                    action=f"{domain}.{service}",
-                    entity_id=entity_id,
-                    message=msg,
-                    details={"service_data": service_data},
-                )
+            return ExecutionResult(
+                success=True,
+                action=f"{domain}.{service}",
+                entity_id=entity_id,
+                message=msg,
+                details={"service_data": service_data},
+            )
         except httpx.HTTPStatusError as e:
             return ExecutionResult(
                 success=False,
@@ -722,13 +740,13 @@ class HomeAssistantClient:
     async def get_entity_state(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """Get current state of a specific entity."""
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    f"{self.url}/api/states/{entity_id}",
-                    headers=self._headers,
-                )
-                resp.raise_for_status()
-                return resp.json()
+            resp = await self._client().get(
+                f"{self.url}/api/states/{entity_id}",
+                headers=self._headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()
         except Exception as e:
             print(f"[ha_integration] Error getting state for {entity_id}: {e}")
             return None

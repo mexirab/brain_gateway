@@ -57,8 +57,19 @@ def last_user_text(messages: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def rag_context(query: str, wing: str = "", room: str = "") -> str:
-    """Query ChromaDB for relevant personal context, optionally filtered by wing/room."""
+async def rag_context(query: str, wing: str = "", room: str = "") -> str:
+    """Query ChromaDB for relevant personal context, optionally filtered by wing/room.
+
+    The embedding encode and ChromaDB query are CPU-bound synchronous calls;
+    run the whole lookup in a worker thread so the event loop (shared with the
+    voice path) never blocks on it.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(_rag_context_sync, query, wing=wing, room=room)
+
+
+def _rag_context_sync(query: str, wing: str = "", room: str = "") -> str:
     original_query = query
     RAG_QUERY_COUNT.inc()
     _rag_t0 = time.time()

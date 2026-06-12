@@ -44,8 +44,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Thread pool for blocking inference calls
-executor = ThreadPoolExecutor(max_workers=2)
+# Thread pool for blocking inference calls. With 2 workers, a third
+# concurrent synthesis (e.g. a reminder firing mid-conversation) queues
+# behind the others — raise TTS_MAX_WORKERS if that happens often.
+executor = ThreadPoolExecutor(max_workers=int(os.environ.get("TTS_MAX_WORKERS", "2")))
 
 # Global model reference
 model = None
@@ -411,7 +413,7 @@ async def load_voice(request: LoadVoiceRequest):
         raise HTTPException(status_code=400, detail=f"Reference audio not found: {request.ref_audio}")
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             executor,
             load_voice_sync,
@@ -472,7 +474,7 @@ async def text_to_speech(request: TTSRequest):
         )
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         audio_data, sample_rate = await loop.run_in_executor(
             executor,
             generate_audio_sync,
@@ -482,7 +484,8 @@ async def text_to_speech(request: TTSRequest):
             request.emotion,
         )
 
-        audio_bytes = audio_to_bytes(audio_data, sample_rate, request.format)
+        # WAV/MP3 encoding is CPU work — keep it off the event loop
+        audio_bytes = await asyncio.to_thread(audio_to_bytes, audio_data, sample_rate, request.format)
 
         media_types = {
             "wav": "audio/wav",
@@ -536,7 +539,7 @@ async def text_to_speech_stream(request: TTSRequest):
     sample_rate = 24000  # Qwen3-TTS default
 
     async def generate():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for sentence in sentences:
             try:
                 audio_data, sr = await loop.run_in_executor(
@@ -547,7 +550,7 @@ async def text_to_speech_stream(request: TTSRequest):
                     request.language,
                     request.emotion,
                 )
-                yield audio_to_pcm_bytes(audio_data)
+                yield await asyncio.to_thread(audio_to_pcm_bytes, audio_data)
             except Exception as e:
                 logger.error(f"Stream TTS failed for sentence '{sentence[:50]}': {e}")
                 break
@@ -598,7 +601,7 @@ async def voice_clone(
             tmp_path = tmp.name
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             audio_data, sample_rate = await loop.run_in_executor(
                 executor,
                 generate_clone_sync,
@@ -610,7 +613,7 @@ async def voice_clone(
         finally:
             os.unlink(tmp_path)
 
-        audio_bytes = audio_to_bytes(audio_data, sample_rate, "wav")
+        audio_bytes = await asyncio.to_thread(audio_to_bytes, audio_data, sample_rate, "wav")
 
         return Response(
             content=audio_bytes,
