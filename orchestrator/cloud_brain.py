@@ -189,7 +189,7 @@ class CloudBrain:
         personal_context = ""
         skip_rag_short_voice = is_voice and len(user_text.split()) < 6
         if not self._is_greeting(user_text) and not skip_rag_short_voice:
-            personal_context = self._rag_search(user_text)
+            personal_context = await self._rag_search(user_text)
             if personal_context:
                 logger.info("[UNIFIED] Pre-fetched RAG context (%d chars)", len(personal_context))
                 routing_info["rag_prefetch"] = True

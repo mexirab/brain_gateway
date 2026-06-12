@@ -228,15 +228,18 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
         # Generate audio via backend
         audio_bytes = await backend.synthesize(text)
 
-        # Save audio with UUID
+        # Save audio with UUID (file I/O off the event loop)
         audio_id = str(uuid.uuid4())[:8]
         audio_dir = "/tmp/brain_audio"
-        os.makedirs(audio_dir, exist_ok=True)
         ext = backend.file_extension
         audio_path = f"{audio_dir}/{audio_id}.{ext}"
 
-        with open(audio_path, "wb") as f:
-            f.write(audio_bytes)
+        def _write_audio() -> None:
+            os.makedirs(audio_dir, exist_ok=True)
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+
+        await asyncio.to_thread(_write_audio)
 
         audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
 
@@ -262,31 +265,45 @@ async def _announce_voice(text: str, speaker: str | None = None, announcement_ty
             _record_announcement(text, announcement_type, None, False, err, None)
             return {"success": False, "error": err}
 
-        # Cast to all target speakers (don't stop at first success)
-        succeeded = []
-        last_error = None
-        async with httpx.AsyncClient(timeout=30) as client:
-            for try_speaker in broadcast_speakers:
-                try:
-                    ha_response = await client.post(
-                        f"{HA_URL}/api/services/media_player/play_media",
-                        headers=headers,
-                        json={
-                            "entity_id": try_speaker,
-                            "media_content_id": audio_url,
-                            "media_content_type": backend.audio_format,
-                        },
-                    )
+        # Cast to all target speakers concurrently (don't stop at first
+        # success). The serial loop added one full HA round-trip per speaker
+        # to every announcement.
+        async def _cast(client: httpx.AsyncClient, try_speaker: str) -> tuple[Optional[str], Optional[str]]:
+            try:
+                ha_response = await client.post(
+                    f"{HA_URL}/api/services/media_player/play_media",
+                    headers=headers,
+                    json={
+                        "entity_id": try_speaker,
+                        "media_content_id": audio_url,
+                        "media_content_type": backend.audio_format,
+                    },
+                    timeout=30,
+                )
+                if ha_response.status_code == 200:
+                    logger.info(f"Played announcement on {try_speaker}")
+                    return try_speaker, None
+                error = f"HA returned {ha_response.status_code} for {try_speaker}"
+            except Exception as speaker_err:
+                error = f"Connection error for {try_speaker}: {speaker_err}"
+            logger.warning(f"play_media failed: {error}")
+            return None, error
 
-                    if ha_response.status_code == 200:
-                        logger.info(f"Played announcement on {try_speaker}")
-                        succeeded.append(try_speaker)
-                    else:
-                        last_error = f"HA returned {ha_response.status_code} for {try_speaker}"
-                        logger.warning(f"play_media failed: {last_error}")
-                except Exception as speaker_err:
-                    last_error = f"Connection error for {try_speaker}: {speaker_err}"
-                    logger.warning(f"play_media failed: {last_error}")
+        # Prefer the shared pooled client; fall back to a temporary one
+        own_client = None
+        client = getattr(shared, "_http", None)
+        if client is None or client.is_closed:
+            own_client = httpx.AsyncClient(timeout=30)
+            client = own_client
+        try:
+            cast_results = await asyncio.gather(*[_cast(client, s) for s in broadcast_speakers])
+        finally:
+            if own_client is not None:
+                await own_client.aclose()
+
+        succeeded = [spk for spk, _ in cast_results if spk]
+        errors = [err for _, err in cast_results if err]
+        last_error = errors[-1] if errors else None
 
         latency_ms = int((_time.time() - t0) * 1000)
         if succeeded:

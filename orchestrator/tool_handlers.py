@@ -2,6 +2,7 @@
 Tool execution handlers: dispatcher + all tool_* functions.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -147,14 +148,14 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
         return f"Failed: {result.message}"
 
 
-def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
+async def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
     """Search the personal knowledge base (memory palace)."""
     if not query:
         return "No query provided"
 
     filter_desc = f" (wing={wing}, room={room})" if wing or room else ""
     logger.info(f"[MEMORY] Searching for: {query}{filter_desc}")
-    context = rag_context(query, wing=wing, room=room)
+    context = await rag_context(query, wing=wing, room=room)
 
     if context:
         return f"Found relevant information:\n{context}"
@@ -396,7 +397,7 @@ async def deliver_reminder_job(reminder_id: str):
     """Called by APScheduler at the scheduled time to deliver a reminder."""
     logger.info(f"[REMINDER] Triggering: {reminder_id}")
 
-    reminder = get_reminder(reminder_id)
+    reminder = await asyncio.to_thread(get_reminder, reminder_id)
     if not reminder:
         logger.warning(f"[REMINDER] {reminder_id} not found")
         return
@@ -426,7 +427,7 @@ async def deliver_reminder_job(reminder_id: str):
 
     if voice_ok or target == "phone":
         REMINDERS_DELIVERED.inc()
-        mark_reminder_completed(reminder_id)
+        await asyncio.to_thread(mark_reminder_completed, reminder_id)
         logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
     else:
         # Schedule a single retry in 2 minutes — but only once (check for existing retry job)
@@ -439,7 +440,7 @@ async def deliver_reminder_job(reminder_id: str):
             )
             await _send_notification(text)
             REMINDERS_DELIVERED.inc()
-            mark_reminder_completed(reminder_id)
+            await asyncio.to_thread(mark_reminder_completed, reminder_id)
         else:
             retry_time = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=2)
             try:
@@ -481,7 +482,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     # Deduplication
     DEDUP_WINDOW_SECONDS = 60
     now = datetime.now()
-    for existing in list_pending_reminders():
+    for existing in await asyncio.to_thread(list_pending_reminders):
         if existing.get("text", "").lower().strip() == reminder_text.lower().strip():
             try:
                 created = datetime.fromisoformat(existing.get("created_at", ""))
@@ -493,7 +494,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
 
     reminder_id = str(uuid.uuid4())[:8]
 
-    add_reminder(reminder_id, reminder_text, trigger_time, target)
+    await asyncio.to_thread(add_reminder, reminder_id, reminder_text, trigger_time, target)
 
     scheduler.add_job(
         deliver_reminder_job,
@@ -522,21 +523,26 @@ async def tool_cancel_reminder(reminder_id: str) -> str:
     except Exception as e:
         logger.debug(f"[SCHEDULER] Job not found: {e}")
 
-    if remove_reminder(reminder_id):
+    if await asyncio.to_thread(remove_reminder, reminder_id):
         return f"Reminder {reminder_id} cancelled."
     return f"Reminder {reminder_id} not found."
 
 
 async def tool_finance_status(include_details: bool = False) -> str:
     """Check Financial Quest Board status: budget, XP, streak, side quests."""
+    logger.info(f"[FINANCE] Checking status (details={include_details})", extra={"component": "finance"})
+
+    # SQLite is synchronous — run the whole report off the event loop
+    return await asyncio.to_thread(_finance_status_sync, include_details)
+
+
+def _finance_status_sync(include_details: bool) -> str:
     from orchestrator.finance_manager import (
         _ensure_budget_period,
         _get_level_info,
         _is_ynab_configured,
         get_db,
     )
-
-    logger.info(f"[FINANCE] Checking status (details={include_details})", extra={"component": "finance"})
 
     try:
         with get_db() as conn:
@@ -898,8 +904,8 @@ from orchestrator.tool_registry import register_tool
 
 
 @register_tool("search_memory")
-def _reg_search_memory(arguments: dict) -> str:
-    return tool_search_memory(
+async def _reg_search_memory(arguments: dict) -> str:
+    return await tool_search_memory(
         arguments.get("query", ""),
         wing=arguments.get("wing", ""),
         room=arguments.get("room", ""),
