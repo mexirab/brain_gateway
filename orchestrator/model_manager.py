@@ -59,14 +59,42 @@ def _validate_ssh_cmd(cmd: str, label: str) -> bool:
     return True
 
 
+def _models_probe_url(url: str) -> str:
+    """OpenAI-compatible liveness endpoint for `url` (normally ends in `/v1`).
+
+    `GET /v1/models` is served by vLLM, Ollama, LM Studio and llama.cpp alike,
+    so it's the portable liveness signal across every BYO backend. The old
+    `/health` path only existed on vLLM.
+    """
+    base = url.rstrip("/")
+    if base.endswith("/models"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/models"
+    return f"{base}/v1/models"
+
+
 async def check_model_health() -> bool:
-    """Check if the primary model server is running and responsive."""
-    url = shared.MODEL_URL
+    """Liveness probe for the primary model server.
+
+    Used to decide whether to SSH-wake a sleeping local GPU box before a chat.
+    - Cloud backends (Anthropic / OpenAI) can't be SSH-woken, and a bare
+      unauthenticated GET would 401/404, so they're assumed reachable; a genuine
+      outage surfaces from the chat call and routes to the brain-asleep reply.
+    - OpenAI-compatible servers are probed at `/v1/models` (see
+      `_models_probe_url`). The previous `/health` probe only existed on vLLM,
+      so every Ollama / LM-Studio BYO install looked permanently offline and
+      every chat fell through to the brain-asleep reply.
+    """
+    backend = (shared.MODEL_BACKEND or "openai_compatible").lower()
+    if backend in ("anthropic", "openai"):
+        return True
+    probe = _models_probe_url(shared.MODEL_URL)
     try:
-        r = await shared._http.get(f"{url.replace('/v1', '')}/health", timeout=5)
+        r = await shared._http.get(probe, timeout=5)
         return r.status_code == 200
     except Exception as e:
-        logger.debug("[MODEL] Health check failed for %s: %s", url, e)
+        logger.debug("[MODEL] Health check failed for %s: %s", probe, e)
         return False
 
 

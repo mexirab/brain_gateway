@@ -23,6 +23,7 @@ import httpx
 from prometheus_client import Gauge
 
 from orchestrator.config import settings
+from orchestrator.model_manager import _models_probe_url
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,11 @@ class ServiceRegistry:
         if name == "ha":
             health_url = f"{url}/api/"
         elif name in ("model", "fallback_model", "vision", "expert"):
-            health_url = url.replace("/v1", "") + "/health"
+            # OpenAI-compatible `/v1/models` — served by vLLM, Ollama, LM Studio
+            # and llama.cpp. The old `/health` path only existed on vLLM, so
+            # Ollama/LM-Studio endpoints answered it with 404. Shared with
+            # model_manager.check_model_health so the two probes can't diverge.
+            health_url = _models_probe_url(url)
         elif name in ("tts", "stt"):
             health_url = f"{url}/health"
         else:
