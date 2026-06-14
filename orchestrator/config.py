@@ -128,7 +128,10 @@ class Settings(BaseSettings):
     calendar_tiered_alerts: bool = True
     calendar_alert_tiers: str = "60,30,15,5"
     morning_briefing_time: str = "07:00"
-    morning_briefing_enabled: bool = False
+    # On by default (product decision 2026-06-14). No-ops safely until a calendar
+    # is connected and a speaker/push route is set, so it's harmless on a fresh
+    # install and "just works" once those are configured.
+    morning_briefing_enabled: bool = True
     morning_briefing_speaker: str = ""
     # Volume floor (0.0–1.0) the morning briefing forces on its target speaker
     # before play_media. Defeats "speaker still at sleep-sound volume" — see
