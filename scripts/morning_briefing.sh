@@ -2,7 +2,7 @@
 # Morning Briefing Script for Brain Gateway
 # Called by Home Assistant automation or cron
 #
-# Uses Jessica's cloned voice via Qwen3-TTS on Uranus
+# Uses a personal cloned voice via Qwen3-TTS on Uranus
 #
 # Usage: ./morning_briefing.sh [speaker_entity]
 # Example: ./morning_briefing.sh media_player.kitchen_display

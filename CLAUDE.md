@@ -290,7 +290,7 @@ ADHD-informed feature specs live in `jess-features/`. Each file is a self-contai
 - Owner: Nadim (ADHD - prefers step-by-step with verification)
 - Docker project: `gateway_mvp` (default from directory name)
 - Helios is always-on (no auto-shutdown); can be manually started/stopped via SSH
-- TTS uses Qwen3-TTS with sentence pause injection. Voice is env-configurable via `TTS_VOICE` (default `default`); the live deployment sets `TTS_VOICE=jessica` for the Jessica McCabe clone, but the codebase no longer hardcodes that branding. Wire IDs `jessica-tts` (server name) and `jessica` (Wyoming bridge voice ID) are retained for HA back-compat — see `docs/VOICE_AND_TTS.md`.
+- TTS uses Qwen3-TTS with sentence pause injection. Voice is env-configurable via `TTS_VOICE` (default `default`); the live deployment sets `TTS_VOICE=jessica` for the personal cloned voice, but the codebase no longer hardcodes that branding. Wire IDs `jessica-tts` (server name) and `jessica` (Wyoming bridge voice ID) are retained for HA back-compat — see `docs/VOICE_AND_TTS.md`.
 - Helios SSH: `labadmin@10.0.0.195` (LAN) or `labadmin@helios.tail74fc4a.ts.net` (Tailscale)
 - Uranus SSH (from Helios): `ssh labadmin@10.0.0.173` (back online 2026-05-18, reimaged — Helios key re-authorized)
 - **Model history:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B (llama.cpp). Qwen3.5-27B served as primary until the 2026-04-26 vLLM Phase 3 cutover replaced it with Lorbus/Qwen3.6-27B-int4-AutoRound on vLLM. `llama-server-moe.service` and `llama-server.service` are both disabled but their unit files remain on disk as historical references.

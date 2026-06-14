@@ -93,7 +93,7 @@ If no, the wizard is live at `/setup`. You can either:
 
 | Variable | Old default | New default | Action |
 |----------|-------------|-------------|--------|
-| `TTS_VOICE` | `jessica` | `default` | If you want to keep the Jessica McCabe clone, add `TTS_VOICE=jessica` to `.env` |
+| `TTS_VOICE` | `jessica` | `default` | If you want to keep the personal cloned voice, add `TTS_VOICE=jessica` to `.env` |
 | `COMPOSE_PROFILES` | unset → all services started | unset → default profile only | If you relied on `nebula-sync` / `promtail` / `nut-exporter`, add `COMPOSE_PROFILES=advanced` |
 | `JESS_ADVANCED` | implicit `true` (no gate) | explicit `false` | If you use `code_agent` / `ask_expert` / `query_budget` / `finance_status` / `check_claude_activity`, add `JESS_ADVANCED=true` |
 | `NUT_EXPORTER_PASSWORD` | `:?` (hard-required) | `:-` (soft) | No action; just means fresh installs no longer fail compose validation |
@@ -118,7 +118,7 @@ If you want to migrate to compose-managed model servers:
 4. Repoint `MODEL_URL`, `TTS_URL`, `STT_URL` to compose-internal DNS (e.g. `http://vllm-primary:8080/v1`)
 5. `docker compose up -d`
 
-If you use the Jessica voice clone (cloning-capable `*-Base` model that returns 401 on HuggingFace), set `QWEN_TTS_MODEL_DIR=/path/to/local/Qwen3-TTS-1.7B-Base` so the compose stanza bind-mounts it. Keep the backup tarball — that model is gated and not re-downloadable.
+If you use the custom voice clone (cloning-capable `*-Base` model that returns 401 on HuggingFace), set `QWEN_TTS_MODEL_DIR=/path/to/local/Qwen3-TTS-1.7B-Base` so the compose stanza bind-mounts it. Keep the backup tarball — that model is gated and not re-downloadable.
 
 ### 4. Doc layout shifted
 

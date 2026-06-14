@@ -192,7 +192,7 @@ curl -X POST http://10.0.0.195:8002/voices/load \
     "name": "jessica",
     "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
     "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
-    "description": "Jessica McCabe - warm, energetic ADHD advocate"
+    "description": "Custom voice - warm, energetic narrator"
   }'
 ```
 
@@ -252,7 +252,7 @@ Location on Helios: `~/tts-voices/voices.json`
   "jessica": {
     "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
     "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
-    "description": "Jessica McCabe - warm, energetic ADHD advocate"
+    "description": "Custom voice - warm, energetic narrator"
   }
 }
 ```

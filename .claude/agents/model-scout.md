@@ -63,7 +63,7 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 | **Primary unified** (conversation + tools) | Qwen3.5-27B | 24 GB (must share GPU1 with TTS+STT on current hw) | Personality, empathy, ADHD-aware coaching, **reliable tool calling** (not hallucinated), valid JSON output, good long-context handling. Tool-calling reliability is non-negotiable — see history note. |
 | **Code agent** | Qwen2.5-Coder-32B | 32 GB | Code generation, refactoring, debugging, multi-file reasoning. Invoked for explicit coding tasks, not conversation. Prefer models with strong HumanEval / SWE-bench scores. |
 | **Vision** | Qwen2.5-VL-7B | 10 GB (RTX 3080) | Image understanding, OCR, scene description, follow-up Q&A. Real-time-ish (sub-10s). Must fit in 10 GB at Q4_K_M. |
-| **TTS** | Qwen3-TTS (Jessica voice clone) | shares GPU1 with primary model | Voice cloning quality, real-time factor <1.0, sentence pause injection. Must coexist with 24GB primary model on same GPU. |
+| **TTS** | Qwen3-TTS (custom voice clone) | shares GPU1 with primary model | Voice cloning quality, real-time factor <1.0, sentence pause injection. Must coexist with 24GB primary model on same GPU. |
 | **STT** | Whisper | shares GPU1 with primary + TTS | Accuracy, speed, streaming support. CPU-viable alternatives acceptable if they free GPU budget. |
 | **Embedding** | (see `EMBEDDING_MODEL` env var) | CPU or small GPU | Semantic quality for RAG/MemPalace, speed for 2-min ingest scheduler, CPU-friendly preferred. |
 
