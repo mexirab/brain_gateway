@@ -286,7 +286,7 @@ class CloudBrain:
                     return await self._unified_fallback(messages, system_prompt, stream, routing_info)
                 logger.error("[UNIFIED] No model available")
                 REQUEST_ERRORS.labels(mode="unified", error_type="model_unavailable").inc()
-                return JSONResponse({"error": "Model unavailable"}, status_code=503)
+                return self._brain_asleep_response(stream, routing_info)
 
         # Run unified tool loop
         logger.info("[UNIFIED] Processing: %s...", user_text[:100])
@@ -392,7 +392,7 @@ class CloudBrain:
         except Exception as e:
             logger.error("[UNIFIED-FALLBACK] Fallback also failed: %s", e)
             REQUEST_ERRORS.labels(mode="unified_fallback", error_type="fallback_failed").inc()
-            return JSONResponse({"error": "All models unavailable"}, status_code=503)
+            return self._brain_asleep_response(stream, routing_info)
 
         self._schedule_auto_learn(messages)
 
@@ -590,4 +590,42 @@ class CloudBrain:
             generate(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    def _brain_asleep_response(self, stream: bool, routing_info: Dict):
+        """Graceful 'the model isn't reachable' reply.
+
+        Returned (HTTP 200, in OpenAI chat-completion shape) instead of a bare
+        503 so the chat UI renders it as Jess speaking, not an opaque error
+        toast. If this code path runs at all, the orchestrator itself is up — so
+        the background nervous system (reminders, calendar, nudges) is still
+        alive; only live conversation + tools are down (e.g. the GPU box is
+        asleep, or a BYO model server is offline). The caller still increments
+        the relevant REQUEST_ERRORS metric, so dashboards/alerts see the outage.
+        """
+        message = (
+            "💤 My conversational brain is offline right now — the model server "
+            "isn't reachable, so I can't chat or run tools at the moment.\n\n"
+            "Your reminders, calendar, and nudges keep running in the background. "
+            "Once the model is back up, try again."
+        )
+        routing_info["mode"] = "brain_asleep"
+        model = self._model_name or "brain-asleep"
+        if stream:
+            return self._stream_text(message, model)
+        return JSONResponse(
+            {
+                "id": f"chatcmpl-asleep-{int(time.time())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": message},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "_routing": routing_info,
+            }
         )

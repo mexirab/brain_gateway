@@ -3,6 +3,8 @@
 *.env
 *secret*
 *token*
+# ...but this is source code (reads token files at runtime), not a secret:
+!scripts/refresh_google_token.py
 
 # Active user profile (contains personal data)
 user_profile.yaml

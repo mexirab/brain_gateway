@@ -131,6 +131,15 @@ FOCUS_ACTIVE = Gauge(
     "Whether a focus session is currently active (1=yes, 0=no)",
 )
 
+# Dead-man's-switch: stamped each time the scheduler fires the daily morning
+# briefing. If the orchestrator/scheduler stops firing it, this goes stale and
+# the MorningBriefingStale alert pages — the detector for the silent-outage
+# class (a down orchestrator looked like a calendar token problem for 2 months).
+MORNING_BRIEFING_LAST_RUN = Gauge(
+    "bgw_morning_briefing_last_run_timestamp_seconds",
+    "Unix timestamp the morning briefing job last fired",
+)
+
 # -- Model Health -----------------------------------------------------------
 HELIOS_ONLINE = Gauge(
     "bgw_helios_online",

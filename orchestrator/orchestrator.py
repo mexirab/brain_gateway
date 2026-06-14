@@ -14,6 +14,7 @@ import collections
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -227,7 +228,30 @@ _http: httpx.AsyncClient = None
 # FASTAPI APP
 # =============================================================================
 
-app = FastAPI(title="Brain Gateway", version="7.0", docs_url=None, redoc_url=None, openapi_url=None)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """ASGI lifespan — replaces the deprecated @app.on_event hooks.
+
+    Delegates to the same startup/shutdown bodies (defined further down as
+    `_startup_logic` / `_shutdown_logic`); they're resolved at call time, after
+    the module is fully imported, so definition order doesn't matter.
+    """
+    await _startup_logic()
+    try:
+        yield
+    finally:
+        await _shutdown_logic()
+
+
+app = FastAPI(
+    title="Brain Gateway",
+    version="7.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=lifespan,
+)
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3001").split(",")
 app.add_middleware(
@@ -410,9 +434,8 @@ async def chat_completions(req: Request):
 # =============================================================================
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up resources on shutdown."""
+async def _shutdown_logic():
+    """Clean up resources on shutdown (invoked from the lifespan handler)."""
     global _http
     if _http:
         await _http.aclose()
@@ -420,9 +443,8 @@ async def shutdown_event():
         logger.info("[orchestrator] Closed shared HTTP client")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup."""
+async def _startup_logic():
+    """Initialize services on startup (invoked from the lifespan handler)."""
     global _http, cloud_brain
     _http = httpx.AsyncClient(
         timeout=httpx.Timeout(60, connect=10),
@@ -605,6 +627,12 @@ async def startup_event():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
+            # Seed the dead-man's-switch gauge to "now" so a fresh restart
+            # doesn't trip MorningBriefingStale before the first briefing fires
+            # (the gauge starts at 0 → time()-0 would look infinitely stale).
+            from orchestrator.metrics import MORNING_BRIEFING_LAST_RUN
+
+            MORNING_BRIEFING_LAST_RUN.set_to_current_time()
 
         # Email-to-calendar autonomy: scan inbox, extract events via LLM,
         # auto-create calendar entries. Disabled by default — flip

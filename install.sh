@@ -15,6 +15,7 @@ set -euo pipefail
 # ── Constants ───────────────────────────────────────────────────────────────
 MARKER_DIR=/var/lib/brain-gateway-install
 MARKER="${MARKER_DIR}/stage"
+ROLE_FILE="${MARKER_DIR}/role"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # This script ships at the repo root; SCRIPT_DIR == REPO_ROOT. Prefer git
 # in case a user runs the script from inside a subdirectory.
@@ -112,8 +113,57 @@ set_marker() {
     echo "$1" | sudo tee "${MARKER}" >/dev/null
 }
 
+# Persist the chosen node role so post-reboot resume / re-runs inherit it
+# without the user having to re-pass --role.
+persist_role() {
+    sudo mkdir -p "${MARKER_DIR}"
+    echo "${JESS_NODE_ROLE}" | sudo tee "${ROLE_FILE}" >/dev/null
+}
+
+# ── Stage 1 (nerves): CPU-only node — no GPU, no reboot, single pass ─────────
+stage_1_nerves() {
+    say "${BOLD}Installing CPU node — orchestrator + 24/7 nervous system${NC}"
+    echo
+    say "About to install:"
+    echo "    - Docker engine + docker-compose-v2 (apt: docker.io, docker-compose-v2)"
+    echo "    - The orchestrator + frontend + support services (Redis, SearXNG, Open WebUI)"
+    echo
+    echo "    No GPU driver and no local model layer — the LLM/TTS/STT live on a separate"
+    echo "    GPU 'brain' box. This node stays up 24/7 serving reminders, calendar, nudges"
+    echo "    and push notifications, none of which need a GPU."
+    echo
+    info "No NVIDIA kernel module to load, so no reboot is required — this is a single pass."
+    echo
+    confirm
+
+    check_arch
+    check_os
+    require_sudo
+    persist_role
+    # No check_gpu — this node has no GPU by design.
+
+    say "Updating apt cache..."
+    sudo apt-get update -qq
+
+    say "Installing Docker + docker-compose-v2..."
+    sudo apt-get install -y -qq docker.io docker-compose-v2 curl gnupg
+
+    say "Adding ${USER} to the docker group..."
+    sudo usermod -aG docker "${USER}"
+
+    ok "System dependencies installed (CPU node — no NVIDIA driver)."
+    echo
+    # No reboot needed → hand straight to the shared app-setup stage.
+    set_marker "post-reboot"
+    stage_2
+}
+
 # ── Stage 1: install system deps ────────────────────────────────────────────
 stage_1() {
+    if [ "${JESS_NODE_ROLE}" = "nerves" ]; then
+        stage_1_nerves
+        return
+    fi
     say "${BOLD}Stage 1 of 2 — installing system dependencies${NC}"
     echo
     say "About to install:"
@@ -138,6 +188,7 @@ stage_1() {
     check_os
     require_sudo
     check_gpu
+    persist_role
 
     say "Updating apt cache..."
     sudo apt-get update -qq
@@ -218,16 +269,18 @@ stage_2() {
     say "${BOLD}Stage 2 of 2 — post-reboot app setup${NC}"
     echo
 
-    say "Verifying NVIDIA driver loaded..."
-    if ! command -v nvidia-smi >/dev/null 2>&1; then
-        die "nvidia-smi is missing. The driver install in Stage 1 didn't complete. Try: sudo apt install -y nvidia-driver-580-open"
+    if [ "${JESS_NODE_ROLE}" != "nerves" ]; then
+        say "Verifying NVIDIA driver loaded..."
+        if ! command -v nvidia-smi >/dev/null 2>&1; then
+            die "nvidia-smi is missing. The driver install in Stage 1 didn't complete. Try: sudo apt install -y nvidia-driver-580-open"
+        fi
+        if ! nvidia-smi >/dev/null 2>&1; then
+            die "nvidia-smi failed. The kernel module didn't load. Check: dmesg | grep -i nvidia"
+        fi
+        local gpu_name
+        gpu_name="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+        ok "Driver loaded; first GPU: ${gpu_name}"
     fi
-    if ! nvidia-smi >/dev/null 2>&1; then
-        die "nvidia-smi failed. The kernel module didn't load. Check: dmesg | grep -i nvidia"
-    fi
-    local gpu_name
-    gpu_name="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-    ok "Driver loaded; first GPU: ${gpu_name}"
 
     say "Verifying Docker daemon..."
     if ! sudo systemctl is-active --quiet docker; then
@@ -238,11 +291,13 @@ stage_2() {
     fi
     ok "Docker daemon is running"
 
-    say "Smoke-testing Docker + GPU integration (pulls ~400 MB CUDA base image)..."
-    if ! docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
-        die "Docker can't see the GPU. Check 'sudo nvidia-ctk runtime configure --runtime=docker' completed cleanly and /etc/docker/daemon.json has the nvidia runtime configured."
+    if [ "${JESS_NODE_ROLE}" != "nerves" ]; then
+        say "Smoke-testing Docker + GPU integration (pulls ~400 MB CUDA base image)..."
+        if ! docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi >/dev/null 2>&1; then
+            die "Docker can't see the GPU. Check 'sudo nvidia-ctk runtime configure --runtime=docker' completed cleanly and /etc/docker/daemon.json has the nvidia runtime configured."
+        fi
+        ok "Docker can see the GPU"
     fi
-    ok "Docker can see the GPU"
 
     say "Preparing .env..."
     if [ ! -f "${ENV_EXAMPLE}" ]; then
@@ -309,6 +364,29 @@ stage_2() {
         warn "Could not detect LAN IP — the welcome message will show '<your-box-ip>' as a placeholder"
     fi
 
+    # On a CPU node the LLM lives on a separate GPU box; point MODEL_URL at it.
+    # The .env.example default (http://vllm-primary:8000/v1) is a compose-internal
+    # DNS name that doesn't exist here, so it must be overridden.
+    if [ "${JESS_NODE_ROLE}" = "nerves" ]; then
+        say "This is a CPU node — the LLM runs on a separate GPU 'brain' box."
+        local brain_url=""
+        if [ -t 0 ]; then
+            read -r -p "    GPU/brain model URL (e.g. http://10.0.0.195:8080/v1), blank to set later: " brain_url || true
+        fi
+        if [ -n "${brain_url}" ]; then
+            sed -i.bak '/^MODEL_URL=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+            echo "MODEL_URL=${brain_url}" >> "${ENV_FILE}"
+            ok "Set MODEL_URL=${brain_url}"
+        else
+            warn "MODEL_URL left unset — conversation + voice stay unavailable until you set it in ${ENV_FILE}."
+            warn "Reminders, calendar, nudges and push run regardless (no GPU needed)."
+        fi
+    fi
+
+    if [ "${JESS_NODE_ROLE}" = "nerves" ]; then
+        say "CPU node — skipping GPU hardware scan (the model layer is remote)."
+        echo "# CPU node: no local GPU; MODEL_URL points at a separate brain box." >> "${ENV_FILE}"
+    else
     say "Running hardware scan + appending recommendation to .env..."
     if [ -x "${REPO_ROOT}/scripts/detect_hardware.sh" ]; then
         bash "${REPO_ROOT}/scripts/detect_hardware.sh" >> "${ENV_FILE}" || warn "Hardware scan exited non-zero (continuing)"
@@ -350,7 +428,14 @@ stage_2() {
     else
         warn "scripts/detect_hardware.sh not found or not executable; skipping"
     fi
+    fi
 
+    if [ "${JESS_NODE_ROLE}" = "nerves" ]; then
+        say "CPU node — leaving COMPOSE_PROFILES empty (no local model containers)."
+        sed -i.bak '/^COMPOSE_PROFILES=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+        echo "COMPOSE_PROFILES=" >> "${ENV_FILE}"
+        ok "COMPOSE_PROFILES empty — only the orchestrator + UI run on this node."
+    else
     say "Enabling the models profile (LLM + TTS + STT will run as containers)..."
     # Current COMPOSE_PROFILES value, empty if line absent or right-hand-side blank.
     local cur_profiles
@@ -367,9 +452,15 @@ stage_2() {
     else
         ok "COMPOSE_PROFILES already includes 'models' (current: '${cur_profiles}')"
     fi
+    fi
 
-    say "Bringing up the full stack (first run pulls images + model weights; ~15-25 min)..."
-    info "Container images: ~30 GB. Model weights: ~40-50 GB. Both pulled once, cached after."
+    if [ "${JESS_NODE_ROLE}" = "nerves" ]; then
+        say "Bringing up the CPU stack (orchestrator + UI; first run pulls images; ~3-5 min)..."
+        info "Container images only (~a few GB) — no GPU model weights on this node."
+    else
+        say "Bringing up the full stack (first run pulls images + model weights; ~15-25 min)..."
+        info "Container images: ~30 GB. Model weights: ~40-50 GB. Both pulled once, cached after."
+    fi
     cd "${REPO_ROOT}"
     docker compose up -d
 
@@ -467,10 +558,48 @@ stage_3() {
     echo
 }
 
+# ── Node role ───────────────────────────────────────────────────────────────
+# 'full' (default) = the shipped single-box product: GPU + orchestrator + the
+# local model layer, everything on one machine. This path is unchanged and must
+# stay release-clean — a user who never heard of multi-node setups sees nothing
+# role-related.
+# 'nerves' = CPU-only node: orchestrator + the 24/7 nervous system (reminders,
+# calendar, nudges, push). No GPU, no driver, no reboot. The LLM/TTS/STT run on a
+# separate GPU 'brain' box that this node points MODEL_URL at.
+# Opt-in only, via --role or JESS_NODE_ROLE. See docs/internal/POWER_TIERING_SPEC.md.
+JESS_NODE_ROLE="${JESS_NODE_ROLE:-full}"
+role_explicit=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --role)   JESS_NODE_ROLE="${2:-}"; role_explicit=1; shift 2 ;;
+        --role=*) JESS_NODE_ROLE="${1#*=}"; role_explicit=1; shift ;;
+        -h|--help)
+            echo "Usage: bash install.sh [--role full|nerves]"
+            echo "  full    (default) single GPU box — orchestrator + local model layer"
+            echo "  nerves  CPU-only orchestrator; LLM runs on a separate GPU box"
+            exit 0 ;;
+        *) shift ;;
+    esac
+done
+
+# Re-runs (post-reboot resume, or a manual re-invoke) inherit the role chosen the
+# first time, so --role only has to be passed once.
+if [ "${role_explicit}" -eq 0 ] && [ -r "${ROLE_FILE}" ]; then
+    JESS_NODE_ROLE="$(tr -d '[:space:]' < "${ROLE_FILE}" 2>/dev/null)"
+    [ -z "${JESS_NODE_ROLE}" ] && JESS_NODE_ROLE=full
+fi
+
 # ── Main ────────────────────────────────────────────────────────────────────
 echo
 echo "${BOLD}Brain Gateway Installer${NC}"
 echo
+
+case "${JESS_NODE_ROLE}" in
+    full)   ;;  # release default — print nothing role-related
+    nerves) say "Node role: ${BOLD}nerves${NC} — CPU orchestrator; model layer on a separate GPU box" ;;
+    brain)  die "Role 'brain' (GPU model-layer-only node) isn't wired into the installer yet — see docs/internal/POWER_TIERING_SPEC.md §5. On a dedicated GPU box, run the model layer via the 'models' compose profile or host systemd units." ;;
+    *)      die "Unknown --role '${JESS_NODE_ROLE}'. Expected: full (default) or nerves." ;;
+esac
 
 stage="$(detect_stage)"
 case "${stage}" in

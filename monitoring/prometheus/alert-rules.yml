@@ -108,6 +108,41 @@ groups:
           summary: "Calendar polling has >5 errors in the last hour"
 
   # ===========================================================================
+  # Dead-man's switches — silent-outage detectors
+  # ===========================================================================
+  # The orchestrator being down for weeks once looked like a calendar-token
+  # problem (it sat unnoticed ~2 months). These page when the daily jobs stop
+  # firing or the Google token stops being refreshed, instead of failing quietly.
+  - name: brain_gateway_deadmans
+    interval: 60s
+    rules:
+      - alert: MorningBriefingStale
+        # Briefing fires daily; >26h without a run means the scheduler stopped.
+        # The `> 0` guard keeps this silent when the briefing is disabled (the
+        # gauge is 0 until the job is scheduled + first fires).
+        expr: time() - bgw_morning_briefing_last_run_timestamp_seconds > 93600 and bgw_morning_briefing_last_run_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Morning briefing hasn't fired in over a day"
+          description: "Last briefing was {{ $value | humanizeDuration }} ago — it should run daily. The orchestrator or its scheduler may be down."
+
+      - alert: GoogleTokenRefreshStale
+        # scripts/refresh_google_token.py runs weekly via cron on the always-on
+        # host and writes this timestamp. >8 days stale = the cron or the refresh
+        # itself is failing; Calendar/Gmail will silently break once the token
+        # lapses. (No `> 0` guard needed — the series only exists once the cron
+        # has succeeded at least once.)
+        expr: time() - jess_google_token_refresh_success_timestamp_seconds > 691200
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Google OAuth token refresh is stale (>8 days)"
+          description: "The weekly token refresh hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/refresh_google_token.py before the token lapses."
+
+  # ===========================================================================
   # UPS / Power Chain
   # ===========================================================================
   # Both UPSes feed Helios via NUT + nut_exporter on port 9199.

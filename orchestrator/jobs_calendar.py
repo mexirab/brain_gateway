@@ -22,6 +22,7 @@ from orchestrator.metrics import (
     CALENDAR_POLL_EVENTS_FOUND,
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
+    MORNING_BRIEFING_LAST_RUN,
 )
 from orchestrator.reminder_manager import _announce_voice, list_pending_reminders
 from orchestrator.shared import TIMEZONE, profile
@@ -359,6 +360,11 @@ async def morning_briefing():
     """
     tz = ZoneInfo(TIMEZONE)
     today = datetime.now(tz).date()
+
+    # Dead-man's-switch heartbeat: proves the scheduler fired the daily job.
+    # Stamped at entry (not after delivery) so the signal is "the job ran",
+    # independent of whether there were events. Watched by MorningBriefingStale.
+    MORNING_BRIEFING_LAST_RUN.set_to_current_time()
 
     try:
         # Build unified event list from available sources
