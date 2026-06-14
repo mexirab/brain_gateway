@@ -36,10 +36,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Backward-compatible constant aliases (prefer `settings.x` in new code)
 # ---------------------------------------------------------------------------
+MODEL_BACKEND = settings.model_backend
 MODEL_URL = settings.model_url
 MODEL_NAME = settings.model_name
+MODEL_API_KEY = settings.model_api_key
+FALLBACK_MODEL_BACKEND = settings.fallback_model_backend
 FALLBACK_MODEL_URL = settings.fallback_model_url
 FALLBACK_MODEL_NAME = settings.fallback_model_name
+FALLBACK_MODEL_API_KEY = settings.fallback_model_api_key
 EMBEDDING_MODEL_NAME = settings.embedding_model
 
 # ---------------------------------------------------------------------------
@@ -84,10 +88,12 @@ def init_backends(http_client: httpx.AsyncClient):
     fb_cfg = llm_cfg.get("fallback", llm_cfg.get("orchestrator", {}))
 
     primary_config = LLMConfig(
-        backend=model_cfg.get("backend", "openai_compatible"),
+        backend=model_cfg.get("backend", MODEL_BACKEND),
         url=model_cfg.get("url", MODEL_URL),
         model=model_cfg.get("model", MODEL_NAME),
-        api_key=_resolve_api_key(model_cfg.get("api_key", "")),
+        # YAML api_key (with ${ENV} indirection) wins; else fall back to the
+        # MODEL_API_KEY env var (raw value). Empty for local backends.
+        api_key=_resolve_api_key(model_cfg.get("api_key", "")) or MODEL_API_KEY,
     )
     primary_backend = create_backend(primary_config, http_client)
 
@@ -97,10 +103,10 @@ def init_backends(http_client: httpx.AsyncClient):
     fb_url = fb_cfg.get("url", FALLBACK_MODEL_URL)
     if fb_url:
         fb_config = LLMConfig(
-            backend=fb_cfg.get("backend", "openai_compatible"),
+            backend=fb_cfg.get("backend", FALLBACK_MODEL_BACKEND),
             url=fb_url,
             model=fb_cfg.get("model", FALLBACK_MODEL_NAME),
-            api_key=_resolve_api_key(fb_cfg.get("api_key", "")),
+            api_key=_resolve_api_key(fb_cfg.get("api_key", "")) or FALLBACK_MODEL_API_KEY,
         )
         fallback_backend = create_backend(fb_config, http_client)
         logger.info("[LLM] Fallback: %s -> %s (%s)", fb_config.backend, fb_config.url, fb_config.model)

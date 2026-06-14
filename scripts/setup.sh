@@ -274,6 +274,61 @@ TONE="warm"
 TTS_VOICE="aiden"   # qwen-tts's default generic voice; change later in /settings
 MODEL_ID="$(grep -E '^VLLM_MODEL=' "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- | sed 's/  *#.*//' || true)"
 
+# ── Optional: model backend ────────────────────────────────────────────────
+# Defaults to the local GPU model layer you just installed (press Enter). You
+# can instead point Jess at a model you run elsewhere or, opt-in, a cloud API.
+say "Model — where Jess's brain runs (optional)"
+info "You just installed the local GPU model layer. Press Enter to keep it, or"
+info "point Jess at a model you run elsewhere (Ollama / LM Studio / another box)"
+info "or a cloud API. Local keeps everything private; cloud is opt-in, your own key."
+info "Either way, your stored memory / RAG / reminders never leave this box."
+prompt_choice MODEL_CHOICE "Model location" "local-gpu local-byo cloud-anthropic cloud-openai" "local-gpu"
+
+MODEL_SUMMARY="local GPU model layer (${MODEL_ID:-vLLM})"
+case "${MODEL_CHOICE}" in
+    local-gpu)
+        ok "Keeping the local GPU model layer."
+        ;;
+    local-byo)
+        info "From inside Docker, reach a server on THIS machine via host.docker.internal"
+        info "(e.g. Ollama → http://host.docker.internal:11434/v1), or another box's LAN IP."
+        prompt MODEL_URL_IN "Model URL" "http://host.docker.internal:11434/v1"
+        prompt MODEL_NAME_IN "Model id to request (e.g. qwen2.5:14b)" ""
+        write_env "MODEL_BACKEND=openai_compatible" "MODEL_URL=${MODEL_URL_IN}" "MODEL_NAME=${MODEL_NAME_IN}"
+        MODEL_SUMMARY="${MODEL_NAME_IN:-server default} @ ${MODEL_URL_IN}"
+        ok "Pointed at your model: ${MODEL_SUMMARY}"
+        warn "Make sure that server is running and the model is pulled before you chat."
+        ;;
+    cloud-anthropic)
+        warn "Cloud mode sends each conversation turn to Anthropic under YOUR API account."
+        warn "Stored memory / RAG / reminders stay local; Anthropic's API doesn't train on it."
+        prompt_yn CLOUD_OK "Send conversation turns to Anthropic's cloud?" "N"
+        if [ "${CLOUD_OK}" = "true" ]; then
+            prompt MODEL_NAME_IN "Anthropic model id" "claude-haiku-4-5"
+            prompt_secret MODEL_KEY_IN "Anthropic API key (sk-ant-…)"
+            write_env "MODEL_BACKEND=anthropic" "MODEL_URL=https://api.anthropic.com" "MODEL_NAME=${MODEL_NAME_IN}" "MODEL_API_KEY=${MODEL_KEY_IN}"
+            MODEL_SUMMARY="Anthropic ${MODEL_NAME_IN} (cloud)"
+            ok "Using ${MODEL_SUMMARY}."
+        else
+            warn "Cloud declined — keeping the local GPU model layer."
+        fi
+        ;;
+    cloud-openai)
+        warn "Cloud mode sends each conversation turn to OpenAI under YOUR API account."
+        warn "Stored memory / RAG / reminders stay local; OpenAI's API doesn't train on it."
+        prompt_yn CLOUD_OK "Send conversation turns to OpenAI's cloud?" "N"
+        if [ "${CLOUD_OK}" = "true" ]; then
+            prompt MODEL_NAME_IN "OpenAI model id" "gpt-4o-mini"
+            prompt_secret MODEL_KEY_IN "OpenAI API key (sk-…)"
+            write_env "MODEL_BACKEND=openai" "MODEL_URL=https://api.openai.com/v1" "MODEL_NAME=${MODEL_NAME_IN}" "MODEL_API_KEY=${MODEL_KEY_IN}"
+            MODEL_SUMMARY="OpenAI ${MODEL_NAME_IN} (cloud)"
+            ok "Using ${MODEL_SUMMARY}."
+        else
+            warn "Cloud declined — keeping the local GPU model layer."
+        fi
+        ;;
+esac
+
 # ── Write identity (single PUT with all five identity fields) ─────────────
 say "Writing your settings…"
 identity_body=$(jq -nc \
@@ -295,7 +350,7 @@ ok "Voice set to '${TTS_VOICE}' (qwen-tts's default generic voice; change in /se
 say "Summary"
 printf '%s  Name:     %s%s\n' "${DIM}" "${NC}" "${USER_NAME}"
 printf '%s  Timezone: %s%s\n' "${DIM}" "${NC}" "${TIMEZONE}"
-printf '%s  Model:    %s%s\n' "${DIM}" "${NC}" "${MODEL_ID:-(unset — set VLLM_MODEL in .env)}"
+printf '%s  Brain:    %s%s\n' "${DIM}" "${NC}" "${MODEL_SUMMARY}"
 printf '%s  Voice:    %s%s\n' "${DIM}" "${NC}" "${TTS_VOICE}"
 echo
 info "Everything else (Home Assistant, ntfy, Pushover, Paperless, selfcare nudges)"

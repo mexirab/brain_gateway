@@ -46,12 +46,21 @@ class Settings(BaseSettings):
     jess_advanced: bool = False
 
     # -- Primary LLM -------------------------------------------------------------
+    # backend selects the wire protocol: "openai_compatible" (vLLM / Ollama /
+    # LM Studio / any OpenAI-shaped server — the local-first default), "anthropic",
+    # or "openai". api_key is only needed for cloud backends (or a secured local
+    # endpoint); leave empty for local. Both can also be set per-model in
+    # user_profile.yaml, which takes precedence over these env vars.
+    model_backend: str = "openai_compatible"
     model_url: str = "http://localhost:8080/v1"
     model_name: str = ""
+    model_api_key: str = ""
 
     # -- Fallback LLM (empty = disabled) -----------------------------------------
+    fallback_model_backend: str = "openai_compatible"
     fallback_model_url: str = ""
     fallback_model_name: str = ""
+    fallback_model_api_key: str = ""
 
     # -- Embedding ---------------------------------------------------------------
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"

@@ -10,7 +10,13 @@ One model, one box, one HTTPS URL. Talk to it from your phone, your laptop, or a
 
 ## Hardware requirements
 
-Brain Gateway runs the LLM, TTS, and STT models locally on a single NVIDIA GPU. `install.sh` interrogates the hardware and picks a model that fits.
+> **No NVIDIA GPU? No Linux box?** You can still run Brain Gateway. The assistant
+> itself is CPU-only — point it at a model on your **Mac** (Ollama / LM Studio),
+> another box, or a **cloud** API (your own key). Local-first, privacy intact.
+> See **[Run on your own model](docs/BYO_MODEL.md)**. The GPU requirements below
+> are only for the all-in-one single-box install (`install.sh`).
+
+Brain Gateway can run the LLM, TTS, and STT models locally on a single NVIDIA GPU. `install.sh` interrogates the hardware and picks a model that fits.
 
 | GPU VRAM | Tier | Default model | Notes |
 |----------|------|---------------|-------|
@@ -99,6 +105,7 @@ Full disclosure of what data is handled, where it lives, and what can leave the 
 | Doc | What |
 |-----|------|
 | [`docs/INSTALL.md`](docs/INSTALL.md) | Full step-by-step install + troubleshooting |
+| [`docs/BYO_MODEL.md`](docs/BYO_MODEL.md) | Run on your Mac / another box / a cloud model — no NVIDIA GPU needed |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | GPU/VRAM tier matrix + benchmark notes |
 | [`docs/UPGRADE.md`](docs/UPGRADE.md) | Upgrading between releases |
 | [`docs/JESS_QUICK_START.md`](docs/JESS_QUICK_START.md) | Everything you can say to it |

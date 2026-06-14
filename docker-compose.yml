@@ -118,12 +118,16 @@ services:
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/gateway_mvp:ro
     environment:
-      # Primary model (conversation + tools) — set MODEL_URL in .env
+      # Primary model (conversation + tools) — Bring Your Own Model; set in .env
+      - MODEL_BACKEND=${MODEL_BACKEND:-openai_compatible}
       - MODEL_URL=${MODEL_URL:-http://localhost:8080/v1}
       - MODEL_NAME=${MODEL_NAME:-}
+      - MODEL_API_KEY=${MODEL_API_KEY:-}
       # Fallback model (empty = disabled)
+      - FALLBACK_MODEL_BACKEND=${FALLBACK_MODEL_BACKEND:-openai_compatible}
       - FALLBACK_MODEL_URL=${FALLBACK_MODEL_URL:-}
       - FALLBACK_MODEL_NAME=${FALLBACK_MODEL_NAME:-}
+      - FALLBACK_MODEL_API_KEY=${FALLBACK_MODEL_API_KEY:-}
       # Embedding model
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-ai/nomic-embed-text-v2-moe}
       # Home Assistant (empty = disabled)
