@@ -91,6 +91,11 @@ case "${choice}" in
         read -r m || m=""; set_env MODEL_NAME "${m}"
         set_env MODEL_API_KEY ""
         warn "Make sure the server is running and the model is pulled (e.g. 'ollama pull ${m:-qwen2.5:14b}')."
+        if [ "${port}" = "11434" ]; then
+            warn "Ollama's default context (4096) truncates Jess's tool-heavy prompt and"
+            warn "silently breaks tool calls. Serve it with a bigger window:"
+            warn "    OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # see docs/BYO_MODEL.md"
+        fi
         ;;
     2)
         set_env MODEL_BACKEND "openai_compatible"

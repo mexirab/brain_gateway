@@ -57,7 +57,9 @@ is, writes `.env`, and brings up the CPU services. When it finishes, open
 **Ollama (recommended):**
 ```bash
 ollama pull qwen2.5:14b   # tool-capable; see "Model choice" below
-ollama serve              # serves an OpenAI-compatible API on :11434
+# Raise the context window — Ollama's default (4096) truncates Jess's
+# tool-heavy prompt and silently breaks tool calls. See "Context window" below.
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # OpenAI-compatible API on :11434
 ```
 
 **Cloud:** nothing to start — just have your API key ready.
@@ -139,6 +141,21 @@ agentic loop. The model **must do OpenAI-style tool calls reliably**, or it will
 Set the model id with `MODEL_NAME` (e.g. `qwen2.5:14b` for Ollama, the exact
 provider id for cloud).
 
+### Context window — raise it for Ollama
+
+Jess's system prompt + ~30 tool schemas is **~9–13k tokens**. Ollama defaults to
+a **4096-token** context and *silently truncates* anything longer — the tool
+schemas and even your message get cut off, so the model emits broken tool calls
+(it says "reminder set" but nothing is saved). Serve Ollama with a bigger window:
+
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve
+```
+
+…or bake it into a Modelfile (`PARAMETER num_ctx 16384`). 16384 is plenty; larger
+just costs more RAM. vLLM, LM Studio, and the cloud APIs already default high
+enough — this caveat is Ollama-specific.
+
 ---
 
 ## What works in BYO mode — and what doesn't
@@ -163,8 +180,12 @@ tools; everything else runs normally.
   (Ollama) on the host.
 - **Cloud calls 401:** wrong/missing `MODEL_API_KEY`, or `MODEL_BACKEND` doesn't
   match the provider (`anthropic` vs `openai`).
-- **It replies but never actually sets reminders/etc.:** your model is too weak at
-  tool calling — switch to one from the table above.
+- **It replies but never actually sets reminders/etc.:** two common causes —
+  (1) **Ollama's context is too small** — the default 4096 truncates the
+  tool-heavy prompt; serve with `OLLAMA_CONTEXT_LENGTH=16384` (see "Context
+  window"). (2) your model is too weak at tool calling — switch to one from the
+  table above. Tell them apart in the logs: `docker compose logs orchestrator |
+  grep 'LLM probe'` — if `prompt_toks` is pinned near 4096, it's truncation.
 - **Logs:** `docker compose logs -f orchestrator`.
 
 See also: `docs/internal/BYO_MODEL_SPEC.md` (design + the env-var reference).
