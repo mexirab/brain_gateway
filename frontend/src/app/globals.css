@@ -2,23 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===========================================================================
+   Design tokens (CSS vars). Mirrors tailwind.config.ts — used by the few places
+   that need var() (body, .glass). Prefer the Tailwind semantic classes
+   (bg-surface-raised, text-content-muted, …) in components.
+   =========================================================================== */
 :root {
-  --bg-primary: #0f1117;
-  --bg-raised: #1a1d2e;
-  --bg-overlay: #242736;
-  --text-primary: #e4e4e7;
-  --text-secondary: #a1a1aa;
-  --accent: #6366f1;
+  /* Surfaces */
+  --surface-base: #0f1117;
+  --surface-raised: #1a1d2e;
+  --surface-overlay: #242736;
+  --surface-inset: #0b0d14;
+
+  /* Content (text) */
+  --content-primary: #e4e4e7;
+  --content-secondary: #a1a1aa;
+  --content-muted: #71717a;
+
+  /* Lines */
+  --line: rgba(255, 255, 255, 0.1);
+
+  /* Brand + status */
+  --brand: #6366f1;
+  --brand-hover: #5558e3;
+
+  /* Back-compat aliases (older code references these) */
+  --bg-primary: var(--surface-base);
+  --bg-raised: var(--surface-raised);
+  --bg-overlay: var(--surface-overlay);
+  --text-primary: var(--content-primary);
+  --text-secondary: var(--content-secondary);
+  --accent: var(--brand);
 }
 
 body {
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  background: var(--surface-base);
+  color: var(--content-primary);
 }
 
-/* Scrollbar styling */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -28,10 +53,91 @@ body {
   border-radius: 3px;
 }
 
-/* Glass card effect */
-.glass {
-  background: rgba(26, 29, 46, 0.8);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  border-radius: 12px;
+@layer components {
+  /* ---- Surfaces / cards -------------------------------------------------- */
+  /* `.glass` is kept (used in ~57 places) but re-tuned to the token system, so
+     existing cards become more coherent for free. `.card` is the going-forward
+     name (identical); `.card-inset` is for nested wells inside a card. */
+  .glass,
+  .card {
+    background: color-mix(in srgb, var(--surface-raised) 80%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .card-inset {
+    @apply rounded-lg border border-line-subtle bg-surface-inset/60;
+  }
+
+  /* ---- Typography scale -------------------------------------------------- */
+  .text-display {
+    @apply text-2xl font-bold tracking-tight text-content-primary;
+  }
+  .text-title {
+    @apply text-lg font-semibold text-content-primary;
+  }
+  .text-eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-content-muted;
+  }
+  .text-label {
+    @apply text-sm font-medium text-content-secondary;
+  }
+  .text-caption {
+    @apply text-xs text-content-muted;
+  }
+
+  /* ---- Buttons ----------------------------------------------------------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg font-medium
+      transition-colors focus-visible:outline-none focus-visible:ring-2
+      focus-visible:ring-brand/50 disabled:pointer-events-none disabled:opacity-50;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  .btn-md {
+    @apply px-4 py-2 text-sm;
+  }
+  .btn-primary {
+    @apply bg-brand text-white hover:bg-brand-hover;
+  }
+  .btn-secondary {
+    @apply border border-line bg-surface-overlay text-content-secondary hover:text-content-primary;
+  }
+  .btn-ghost {
+    @apply text-content-secondary hover:bg-surface-overlay hover:text-content-primary;
+  }
+  .btn-danger {
+    @apply bg-danger/15 text-danger hover:bg-danger/25;
+  }
+
+  /* ---- Badges / pills ---------------------------------------------------- */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .badge-neutral {
+    @apply bg-surface-overlay text-content-secondary;
+  }
+  .badge-brand {
+    @apply bg-brand/15 text-brand;
+  }
+  .badge-success {
+    @apply bg-success/15 text-success;
+  }
+  .badge-warning {
+    @apply bg-warning/15 text-warning;
+  }
+  .badge-danger {
+    @apply bg-danger/15 text-danger;
+  }
+  .badge-info {
+    @apply bg-info/15 text-info;
+  }
+
+  /* ---- Form fields ------------------------------------------------------- */
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface-inset/60 px-3 py-2
+      text-sm text-content-primary placeholder:text-content-muted
+      focus:border-brand/60 focus:outline-none focus:ring-1 focus:ring-brand/40;
+  }
 }
