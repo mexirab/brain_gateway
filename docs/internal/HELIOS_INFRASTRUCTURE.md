@@ -24,8 +24,8 @@ sudo tailscale cert --cert-file /opt/gateway_mvp/certs/helios.crt \
 
 | Path | Content |
 |------|---------|
-| `rag/nadim_rag/10_profile/` | Identity, personality models, AI preferences, Pisces symbolism |
-| `rag/nadim_rag/50_patterns/` | Strengths/frictions, triggers/distortions, rejection-shame loop, social frequency plan |
+| `rag/nadim_rag/10_profile/` | Identity & assistant preferences (personal profile notes) |
+| `rag/nadim_rag/50_patterns/` | Personal behavioral-pattern & self-knowledge notes |
 | `rag/nadim_rag/20_meds/` | Medication data (auto-generated from YAML) |
 | `rag/nadim_rag/30_projects/` | Project data (auto-generated from YAML) |
 
