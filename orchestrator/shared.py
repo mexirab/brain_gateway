@@ -365,6 +365,8 @@ PRESENCE_WELCOME_COOLDOWN = settings.presence_welcome_cooldown
 # Distribution profile
 # ---------------------------------------------------------------------------
 JESS_ADVANCED = settings.jess_advanced
+WORKOUTS_ENABLED = settings.workouts_enabled
+MEALS_ENABLED = settings.meals_enabled
 
 # ---------------------------------------------------------------------------
 # Code Agent (coding-focused model for self-troubleshooting)

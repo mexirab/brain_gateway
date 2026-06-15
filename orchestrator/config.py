@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # full advanced surface used in development.
     jess_advanced: bool = False
 
+    # Optional feature areas — default OFF in the shippable build (productization
+    # 2026-06-14). Workout generation/logging and calorie meal logging are
+    # opt-in; the owner's box flips these true in .env. Core self-care logging
+    # (selfcare_log: meals/meds/water/movement) is unaffected and stays on.
+    # Gating spans tool schemas, tool handlers, API routers, and dashboard nav.
+    workouts_enabled: bool = False
+    meals_enabled: bool = False
+
     # -- Primary LLM -------------------------------------------------------------
     # backend selects the wire protocol: "openai_compatible" (vLLM / Ollama /
     # LM Studio / any OpenAI-shaped server — the local-first default), "anthropic",

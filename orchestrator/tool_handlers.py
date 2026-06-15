@@ -1501,6 +1501,8 @@ with contextlib.suppress(ImportError):
 
 @register_tool("generate_workout")
 async def _reg_generate_workout(arguments: dict) -> str:
+    if not shared.WORKOUTS_ENABLED:
+        return "Workout tracking isn't enabled on this install."
     import asyncio
 
     from orchestrator.workout_manager import generate_workout
@@ -1527,6 +1529,8 @@ async def _reg_generate_workout(arguments: dict) -> str:
 
 @register_tool("log_set")
 async def _reg_log_set(arguments: dict) -> str:
+    if not shared.WORKOUTS_ENABLED:
+        return "Workout tracking isn't enabled on this install."
     import asyncio
 
     from orchestrator.workout_manager import log_set
@@ -1563,6 +1567,8 @@ async def _reg_log_set(arguments: dict) -> str:
 
 @register_tool("workout_status")
 async def _reg_workout_status(arguments: dict) -> str:
+    if not shared.WORKOUTS_ENABLED:
+        return "Workout tracking isn't enabled on this install."
     import asyncio
 
     from orchestrator.workout_manager import get_history, get_status
@@ -1579,6 +1585,8 @@ async def _reg_workout_status(arguments: dict) -> str:
 
 @register_tool("modify_workout")
 async def _reg_modify_workout(arguments: dict) -> str:
+    if not shared.WORKOUTS_ENABLED:
+        return "Workout tracking isn't enabled on this install."
     import asyncio
 
     from orchestrator.workout_manager import modify_workout
@@ -1599,6 +1607,8 @@ async def _reg_modify_workout(arguments: dict) -> str:
 
 @register_tool("log_meal")
 async def _reg_log_meal(arguments: dict) -> str:
+    if not shared.MEALS_ENABLED:
+        return "Meal logging isn't enabled on this install."
     import asyncio
 
     from orchestrator.meal_manager import log_meal

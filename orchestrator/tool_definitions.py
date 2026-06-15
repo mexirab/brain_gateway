@@ -1119,6 +1119,13 @@ ADVANCED_ONLY_TOOL_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Optional feature areas — gated out of the tool schema unless the matching
+# config flag is on (default OFF in the shippable build). See config.py
+# `workouts_enabled` / `meals_enabled`. Core selfcare_log is NOT here — meal /
+# movement self-care tracking stays available regardless.
+WORKOUT_TOOL_NAMES: frozenset[str] = frozenset({"generate_workout", "log_set", "workout_status", "modify_workout"})
+MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
+
 
 def get_all_tools() -> List[Dict[str, Any]]:
     """Get all tools for unified mode (v7): HA tool + static tools + optional code agent + optional expert.
@@ -1130,6 +1137,10 @@ def get_all_tools() -> List[Dict[str, Any]]:
     static = STATIC_TOOLS
     if not shared.JESS_ADVANCED:
         static = [t for t in static if t.get("function", {}).get("name") not in ADVANCED_ONLY_TOOL_NAMES]
+    if not shared.WORKOUTS_ENABLED:
+        static = [t for t in static if t.get("function", {}).get("name") not in WORKOUT_TOOL_NAMES]
+    if not shared.MEALS_ENABLED:
+        static = [t for t in static if t.get("function", {}).get("name") not in MEAL_TOOL_NAMES]
     tools = [get_ha_tool_definition()] + static
     if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
         tools.append(_CODE_AGENT_TOOL)

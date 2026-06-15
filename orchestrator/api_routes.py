@@ -101,8 +101,13 @@ router.include_router(documents_router)
 router.include_router(shopping_router)
 router.include_router(vision_router)
 router.include_router(palace_router)
-router.include_router(workout_router)
-router.include_router(meals_router)
+# Optional feature areas — only mount when enabled (default OFF in the shippable
+# build). With the flag off the tool schemas are hidden too (tool_definitions),
+# so neither the model nor the dashboard can reach these routes.
+if shared.WORKOUTS_ENABLED:
+    router.include_router(workout_router)
+if shared.MEALS_ENABLED:
+    router.include_router(meals_router)
 router.include_router(paperless_router)
 
 
