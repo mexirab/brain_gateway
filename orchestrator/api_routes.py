@@ -1020,7 +1020,13 @@ async def log_claude_code_turn_endpoint(req: Request):
 
     Stores the turn in the rolling SQLite buffer so Jess and the code_agent
     can reference recent Claude Code activity.
+
+    Owner-specific dev surface — gated behind JESS_ADVANCED (the
+    `check_claude_activity` tool that consumes this is gated the same way), so a
+    clean shippable build doesn't expose the Claude Code activity tracker.
     """
+    if not shared.JESS_ADVANCED:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
     from orchestrator.claude_code_tracker import log_turn_from_hook
 
     try:
@@ -1038,7 +1044,12 @@ async def log_claude_code_turn_endpoint(req: Request):
 
 @router.get("/api/claude_code/recent")
 async def get_recent_claude_code_activity(minutes: int = 120, limit: int = 20):
-    """Fetch recent Claude Code turns for dashboards/debugging."""
+    """Fetch recent Claude Code turns for dashboards/debugging.
+
+    Owner-specific dev surface — gated behind JESS_ADVANCED (see the POST
+    sibling above)."""
+    if not shared.JESS_ADVANCED:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
     from orchestrator.state_store import get_claude_code_turns
 
     minutes = max(1, min(minutes, 10080))  # cap at 1 week
