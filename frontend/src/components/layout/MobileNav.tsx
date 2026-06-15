@@ -81,7 +81,7 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
   return (
     <>
       <nav
-        className="md:hidden fixed bottom-0 left-0 right-0 bg-surface-raised border-t border-zinc-800 flex z-50"
+        className="md:hidden fixed bottom-0 left-0 right-0 bg-surface-raised border-t border-line-subtle flex z-50"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         aria-label="Primary"
       >
@@ -93,7 +93,7 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
               href={href}
               aria-current={active ? 'page' : undefined}
               className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] min-w-0 transition-colors ${
-                active ? 'text-brand-500' : 'text-zinc-400 hover:text-white'
+                active ? 'text-brand-500' : 'text-content-secondary hover:text-white'
               }`}
             >
               {active && (
@@ -114,7 +114,7 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
           aria-expanded={moreOpen}
           aria-label="More navigation options"
           className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] min-w-0 transition-colors ${
-            moreOpen || moreActive ? 'text-brand-500' : 'text-zinc-400 hover:text-white'
+            moreOpen || moreActive ? 'text-brand-500' : 'text-content-secondary hover:text-white'
           }`}
         >
           {(moreOpen || moreActive) && (
@@ -139,16 +139,16 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
             role="dialog"
             aria-modal="true"
             aria-label="More navigation"
-            className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-surface-raised border-t border-zinc-800 rounded-t-2xl shadow-xl"
+            className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-surface-raised border-t border-line-subtle rounded-t-2xl shadow-xl"
             style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
           >
             <div className="relative pt-3 pb-2">
-              <div className="mx-auto h-1 w-10 rounded-full bg-zinc-700" aria-hidden />
+              <div className="mx-auto h-1 w-10 rounded-full bg-surface-overlay" aria-hidden />
               <button
                 type="button"
                 onClick={() => setMoreOpen(false)}
                 aria-label="Close menu"
-                className="absolute right-3 top-3 p-1 rounded-md text-zinc-500 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                className="absolute right-3 top-3 p-1 rounded-md text-content-muted hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
               >
                 <X size={18} aria-hidden />
               </button>
@@ -164,7 +164,7 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
                     className={`flex flex-col items-center justify-center gap-1 py-3 rounded-lg border transition-colors min-h-[64px] ${
                       active
                         ? 'border-brand-500/40 bg-brand-500/10 text-brand-500'
-                        : 'border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/40'
+                        : 'border-line-subtle text-content-primary hover:border-line hover:bg-surface-raised/40'
                     }`}
                   >
                     <Icon size={20} aria-hidden />
@@ -176,7 +176,7 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
             <form action="/api/auth/logout" method="POST" className="px-4 pb-3">
               <button
                 type="submit"
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-zinc-800 text-zinc-400 hover:text-red-400 hover:border-red-500/30 transition-colors"
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-line-subtle text-content-secondary hover:text-danger hover:border-danger/30 transition-colors"
               >
                 <LogOut size={16} aria-hidden />
                 <span className="text-sm">Sign Out</span>

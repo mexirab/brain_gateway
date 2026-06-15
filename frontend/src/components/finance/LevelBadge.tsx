@@ -8,22 +8,22 @@ interface LevelBadgeProps {
 }
 
 const LEVEL_COLORS: Record<number, string> = {
-  1: 'text-orange-700',    // Copper
-  2: 'text-amber-600',     // Bronze
-  3: 'text-zinc-300',      // Silver
-  4: 'text-yellow-400',    // Gold
-  5: 'text-zinc-100',      // Platinum
-  6: 'text-cyan-300',      // Diamond
-  7: 'text-emerald-400',   // Emerald
-  8: 'text-blue-400',      // Sapphire
-  9: 'text-red-400',       // Ruby
-  10: 'text-zinc-500',     // Obsidian
-  11: 'text-amber-300',    // Millionaire
+  1: 'text-accent-flame',     // Copper
+  2: 'text-accent-flame',     // Bronze
+  3: 'text-content-secondary',// Silver
+  4: 'text-accent-gold',      // Gold
+  5: 'text-content-primary',  // Platinum
+  6: 'text-accent-cyan',      // Diamond
+  7: 'text-success',          // Emerald
+  8: 'text-info',             // Sapphire
+  9: 'text-danger',           // Ruby
+  10: 'text-content-muted',   // Obsidian
+  11: 'text-accent-gold',     // Millionaire
 };
 
 export default function LevelBadge({ level }: LevelBadgeProps) {
   const info = LEVELS.find((l) => l.level === level) ?? LEVELS[0];
-  const color = LEVEL_COLORS[level] ?? 'text-brand-500';
+  const color = LEVEL_COLORS[level] ?? 'text-brand';
 
   return (
     <div className="flex items-center gap-3">
@@ -31,7 +31,7 @@ export default function LevelBadge({ level }: LevelBadgeProps) {
         <Shield size={32} strokeWidth={1.5} />
       </div>
       <div>
-        <p className="text-xs text-zinc-500 uppercase tracking-wider">Level {info.level}</p>
+        <p className="text-xs text-content-muted uppercase tracking-wider">Level {info.level}</p>
         <p className={`text-sm font-bold ${color}`}>{info.title}</p>
       </div>
     </div>

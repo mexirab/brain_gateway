@@ -10,6 +10,7 @@ import { financeApi } from '@/lib/finance-api';
 import { WINDFALL_MONTHS } from '@/lib/finance-constants';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';
 import type { Windfall } from '@/lib/finance-types';
+import { Card } from '@/components/ui';
 
 export default function BossBattlePage() {
   const {
@@ -64,7 +65,7 @@ export default function BossBattlePage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="animate-spin text-brand-500" size={32} />
+        <Loader2 className="animate-spin text-brand" size={32} />
       </div>
     );
   }
@@ -72,9 +73,9 @@ export default function BossBattlePage() {
   if (error) {
     return (
       <div className="max-w-4xl mx-auto mt-12">
-        <div className="glass p-6 border border-red-500/30 text-center">
-          <p className="text-red-400 font-semibold">Failed to load boss battle</p>
-          <p className="text-sm text-zinc-500 mt-1">{error}</p>
+        <div className="glass p-6 border border-danger/30 text-center">
+          <p className="text-danger font-semibold">Failed to load boss battle</p>
+          <p className="text-sm text-content-muted mt-1">{error}</p>
         </div>
       </div>
     );
@@ -98,8 +99,8 @@ export default function BossBattlePage() {
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-zinc-100">Boss Battle</h1>
-        <p className="text-sm text-zinc-500 mt-0.5">
+        <h1 className="text-2xl font-bold text-content-primary">Boss Battle</h1>
+        <p className="text-sm text-content-muted mt-0.5">
           Windfall months — split your bonus/ESPP wisely
         </p>
       </div>
@@ -112,28 +113,28 @@ export default function BossBattlePage() {
           onDefeatBoss={handleDefeatBoss}
         />
       ) : windfall && bossDefeated ? (
-        <div className="glass p-8 border border-emerald-500/30 text-center">
-          <CheckCircle size={40} className="text-emerald-400 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-emerald-400">
+        <div className="glass p-8 border border-success/30 text-center">
+          <CheckCircle size={40} className="text-success mx-auto mb-3" />
+          <h2 className="text-lg font-bold text-success">
             {windfall === 'bonus' ? 'Bonus' : 'ESPP'} Boss Already Defeated!
           </h2>
-          <p className="text-sm text-zinc-400 mt-1">
+          <p className="text-sm text-content-secondary mt-1">
             You already split this month&apos;s windfall. Great job!
           </p>
         </div>
       ) : (
-        <div className="glass p-8 text-center border border-zinc-700/50">
-          <Swords size={40} className="text-zinc-600 mx-auto mb-3" />
-          <h2 className="text-lg font-semibold text-zinc-400">No Boss This Month</h2>
-          <p className="text-sm text-zinc-600 mt-1">
+        <div className="glass p-8 text-center border border-line/50">
+          <Swords size={40} className="text-content-muted mx-auto mb-3" />
+          <h2 className="text-lg font-semibold text-content-secondary">No Boss This Month</h2>
+          <p className="text-sm text-content-muted mt-1">
             Windfall bosses appear in March, June, October, and December
           </p>
         </div>
       )}
 
       {/* Windfall schedule */}
-      <div className="glass p-5">
-        <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-3 flex items-center gap-2">
+      <Card>
+        <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider mb-3 flex items-center gap-2">
           <Calendar size={14} />
           Windfall Schedule
         </h3>
@@ -150,24 +151,24 @@ export default function BossBattlePage() {
                 key={w.code}
                 className={`flex items-center justify-between p-3 rounded-lg border ${
                   isCurrent
-                    ? 'border-amber-500/30 bg-amber-500/5'
-                    : 'border-zinc-700/50 bg-zinc-800/30'
+                    ? 'border-accent-gold/30 bg-accent-gold/5'
+                    : 'border-line/50 bg-surface-raised/30'
                 }`}
               >
                 <div>
-                  <p className={`text-sm font-medium ${isCurrent ? 'text-amber-400' : 'text-zinc-300'}`}>
+                  <p className={`text-sm font-medium ${isCurrent ? 'text-accent-gold' : 'text-content-primary'}`}>
                     {w.month}
                   </p>
-                  <p className="text-xs text-zinc-500">{w.type}</p>
+                  <p className="text-xs text-content-muted">{w.type}</p>
                 </div>
-                <p className={`text-sm font-mono ${isCurrent ? 'text-amber-400' : 'text-zinc-500'}`}>
+                <p className={`text-sm font-mono ${isCurrent ? 'text-accent-gold' : 'text-content-muted'}`}>
                   ~{w.est}
                 </p>
               </div>
             );
           })}
         </div>
-      </div>
+      </Card>
 
       {/* Past windfalls */}
       <WindfallHistory />
@@ -194,7 +195,7 @@ function WindfallHistory() {
     return (
       <button
         onClick={loadHistory}
-        className="w-full glass p-3 text-sm text-zinc-500 hover:text-zinc-400 transition-colors text-center"
+        className="w-full glass p-3 text-sm text-content-muted hover:text-content-secondary transition-colors text-center"
       >
         Show windfall history
       </button>
@@ -203,41 +204,41 @@ function WindfallHistory() {
 
   if (windfalls.length === 0) {
     return (
-      <div className="glass p-4 text-center text-sm text-zinc-600">
+      <Card padding="sm" className="text-center text-sm text-content-muted">
         No windfall history yet
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="glass p-5">
-      <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-3">
+    <Card>
+      <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider mb-3">
         Windfall History
       </h3>
       <div className="space-y-2">
         {windfalls.map((w) => (
           <div key={w.id} className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs text-content-muted">
                 {new Date(w.created_at).toLocaleDateString('en-US', {
                   month: 'short',
                   year: 'numeric',
                 })}
               </span>
-              <span className="text-zinc-300 capitalize">{w.type}</span>
+              <span className="text-content-primary capitalize">{w.type}</span>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-emerald-400 font-mono text-xs">
+              <span className="text-success font-mono text-xs">
                 ↑{formatCurrency(w.invest_amount || 0)}
               </span>
-              <span className="text-brand-400 font-mono text-xs">
+              <span className="text-brand font-mono text-xs">
                 ↓{formatCurrency(w.spend_amount || 0)}
               </span>
-              <span className="text-zinc-400 font-mono">{formatCurrency(w.amount)}</span>
+              <span className="text-content-secondary font-mono">{formatCurrency(w.amount)}</span>
             </div>
           </div>
         ))}
       </div>
-    </div>
+    </Card>
   );
 }

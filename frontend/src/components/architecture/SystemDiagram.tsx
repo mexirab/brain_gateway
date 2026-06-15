@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { Card } from '@/components/ui';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,35 +44,35 @@ interface FlowPath {
 
 const NODES: DiagramNode[] = [
   // Input layer
-  { id: 'user', label: 'You', sub: 'Voice or Text', x: 330, y: 30, w: 120, h: 56, color: '#f59e0b', glow: '#f59e0b', icon: '🎤', group: 'input' },
-  { id: 'echo', label: 'ATOM Echo', sub: 'Wake Word', x: 140, y: 115, w: 130, h: 52, color: '#f59e0b', glow: '#f59e0b', icon: '📡', group: 'input' },
-  { id: 'webui', label: 'Open WebUI', sub: 'HTTPS Gateway', x: 510, y: 115, w: 140, h: 52, color: '#71717a', glow: '#71717a', icon: '🌐', group: 'input' },
+  { id: 'user', label: 'You', sub: 'Voice or Text', x: 330, y: 30, w: 120, h: 56, color: '#fbbf24', glow: '#fbbf24', icon: '🎤', group: 'input' },
+  { id: 'echo', label: 'ATOM Echo', sub: 'Wake Word', x: 140, y: 115, w: 130, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '📡', group: 'input' },
+  { id: 'webui', label: 'Open WebUI', sub: 'HTTPS Gateway', x: 510, y: 115, w: 140, h: 52, color: '#84838f', glow: '#84838f', icon: '🌐', group: 'input' },
 
   // Processing layer
   { id: 'stt', label: 'Whisper STT', sub: 'Speech → Text', x: 140, y: 205, w: 130, h: 52, color: '#a78bfa', glow: '#a78bfa', icon: '👂', group: 'processing' },
-  { id: 'orchestrator', label: 'Orchestrator', sub: 'Brain Gateway', x: 320, y: 205, w: 160, h: 60, color: '#6366f1', glow: '#6366f1', icon: '🧠', group: 'processing' },
-  { id: 'router', label: 'Mode Router', sub: 'Intent + Emotion', x: 520, y: 205, w: 140, h: 52, color: '#818cf8', glow: '#818cf8', icon: '🎯', group: 'processing' },
+  { id: 'orchestrator', label: 'Orchestrator', sub: 'Brain Gateway', x: 320, y: 205, w: 160, h: 60, color: '#6f63ff', glow: '#6f63ff', icon: '🧠', group: 'processing' },
+  { id: 'router', label: 'Mode Router', sub: 'Intent + Emotion', x: 520, y: 205, w: 140, h: 52, color: '#6f63ff', glow: '#6f63ff', icon: '🎯', group: 'processing' },
 
   // AI layer (unified v7 — single brain model)
-  { id: 'brain', label: 'Brain', sub: 'Qwen3.5-27B · RTX 5090', x: 320, y: 320, w: 160, h: 56, color: '#10b981', glow: '#10b981', icon: '🧠', group: 'ai' },
+  { id: 'brain', label: 'Brain', sub: 'Qwen3.5-27B · RTX 5090', x: 320, y: 320, w: 160, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai' },
 
   // Tools layer (2 rows of 4 to fit width)
-  { id: 'ha', label: 'Home', sub: 'Lights · Switches', x: 50, y: 425, w: 105, h: 46, color: '#06b6d4', glow: '#06b6d4', icon: '🏠', group: 'tools' },
-  { id: 'memory', label: 'Memory', sub: '154 RAG Docs', x: 168, y: 425, w: 105, h: 46, color: '#8b5cf6', glow: '#8b5cf6', icon: '🧩', group: 'tools' },
-  { id: 'calendar', label: 'Calendar', sub: 'Google Cal', x: 286, y: 425, w: 105, h: 46, color: '#f43f5e', glow: '#f43f5e', icon: '📅', group: 'tools' },
-  { id: 'email', label: 'Email', sub: 'Gmail', x: 404, y: 425, w: 105, h: 46, color: '#ef4444', glow: '#ef4444', icon: '📧', group: 'tools' },
-  { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 522, y: 425, w: 105, h: 46, color: '#22c55e', glow: '#22c55e', icon: '🔍', group: 'tools' },
-  { id: 'focus', label: 'Focus', sub: 'Pomodoro', x: 168, y: 480, w: 105, h: 46, color: '#eab308', glow: '#eab308', icon: '🎯', group: 'tools' },
-  { id: 'finance', label: 'Finance', sub: 'YNAB', x: 286, y: 480, w: 105, h: 46, color: '#14b8a6', glow: '#14b8a6', icon: '💰', group: 'tools' },
+  { id: 'ha', label: 'Home', sub: 'Lights · Switches', x: 50, y: 425, w: 105, h: 46, color: '#34d3e0', glow: '#34d3e0', icon: '🏠', group: 'tools' },
+  { id: 'memory', label: 'Memory', sub: '154 RAG Docs', x: 168, y: 425, w: 105, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '🧩', group: 'tools' },
+  { id: 'calendar', label: 'Calendar', sub: 'Google Cal', x: 286, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📅', group: 'tools' },
+  { id: 'email', label: 'Email', sub: 'Gmail', x: 404, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📧', group: 'tools' },
+  { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 522, y: 425, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '🔍', group: 'tools' },
+  { id: 'focus', label: 'Focus', sub: 'Pomodoro', x: 168, y: 480, w: 105, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🎯', group: 'tools' },
+  { id: 'finance', label: 'Finance', sub: 'YNAB', x: 286, y: 480, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
 
   // Output layer
-  { id: 'tts', label: 'Jessica TTS', sub: 'Qwen3-TTS · Voice Clone', x: 180, y: 565, w: 170, h: 52, color: '#ec4899', glow: '#ec4899', icon: '🗣️', group: 'output' },
-  { id: 'speakers', label: 'All Speakers', sub: 'Google Home Group', x: 420, y: 565, w: 160, h: 52, color: '#f97316', glow: '#f97316', icon: '🔊', group: 'output' },
+  { id: 'tts', label: 'Jessica TTS', sub: 'Qwen3-TTS · Voice Clone', x: 180, y: 565, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output' },
+  { id: 'speakers', label: 'All Speakers', sub: 'Google Home Group', x: 420, y: 565, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔊', group: 'output' },
 
   // Background jobs (right side)
-  { id: 'bg_calendar', label: 'Calendar Poll', sub: 'Every 15 min', x: 700, y: 115, w: 140, h: 46, color: '#f43f5e', glow: '#f43f5e', icon: '⏰', group: 'background' },
-  { id: 'bg_travel', label: 'Travel Time', sub: 'Google Maps API', x: 700, y: 172, w: 140, h: 46, color: '#f97316', glow: '#f97316', icon: '🚗', group: 'background' },
-  { id: 'bg_email', label: 'Email Poll', sub: 'Every 30 min', x: 700, y: 229, w: 140, h: 46, color: '#ef4444', glow: '#ef4444', icon: '📬', group: 'background' },
+  { id: 'bg_calendar', label: 'Calendar Poll', sub: 'Every 15 min', x: 700, y: 115, w: 140, h: 46, color: '#fb7185', glow: '#fb7185', icon: '⏰', group: 'background' },
+  { id: 'bg_travel', label: 'Travel Time', sub: 'Google Maps API', x: 700, y: 172, w: 140, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🚗', group: 'background' },
+  { id: 'bg_email', label: 'Email Poll', sub: 'Every 30 min', x: 700, y: 229, w: 140, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📬', group: 'background' },
   { id: 'bg_morning', label: 'Morning Brief', sub: '7:00 AM Daily', x: 700, y: 286, w: 140, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '☀️', group: 'background' },
 ];
 
@@ -81,7 +82,7 @@ const FLOWS: FlowPath[] = [
   {
     name: '🎤 Voice Command',
     description: '"Hey Jess, turn on the bedroom lights to blue"',
-    color: '#f59e0b',
+    color: '#fbbf24',
     edges: [
       { from: 'user', to: 'echo', label: '"Hey Jess..."' },
       { from: 'echo', to: 'stt', label: 'Audio stream' },
@@ -96,7 +97,7 @@ const FLOWS: FlowPath[] = [
   {
     name: '🚗 Travel Alert',
     description: '"Leave in 15 minutes — 20 min drive to Downtown"',
-    color: '#f97316',
+    color: '#fbbf24',
     edges: [
       { from: 'bg_calendar', to: 'calendar', label: 'Check events' },
       { from: 'calendar', to: 'bg_travel', label: 'Event with location' },
@@ -107,7 +108,7 @@ const FLOWS: FlowPath[] = [
   {
     name: '📧 Email Alert',
     description: 'New email from your boss — announced on speakers',
-    color: '#ef4444',
+    color: '#fb7185',
     edges: [
       { from: 'bg_email', to: 'email', label: 'Check inbox' },
       { from: 'email', to: 'tts', label: '"New email from..."' },
@@ -127,7 +128,7 @@ const FLOWS: FlowPath[] = [
   {
     name: '💬 Chat Question',
     description: '"Jess, what pattern do I fall into when I feel rejected?"',
-    color: '#10b981',
+    color: '#34d399',
     edges: [
       { from: 'user', to: 'webui', label: 'Type or speak' },
       { from: 'webui', to: 'orchestrator', label: 'Message' },
@@ -211,11 +212,11 @@ export default function SystemDiagram() {
   const svgHeight = 640;
 
   return (
-    <div className="glass p-4 md:p-6">
+    <Card padding="none" className="p-4 md:p-6">
       <h2 className="text-lg md:text-xl font-bold text-white mb-1">
         How Jess Works
       </h2>
-      <p className="text-xs md:text-sm text-zinc-400 mb-4">
+      <p className="text-xs md:text-sm text-content-secondary mb-4">
         Tap a scenario to see data flow through the system in real time
       </p>
 
@@ -228,7 +229,7 @@ export default function SystemDiagram() {
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${
               i === activeFlow
                 ? 'text-white shadow-lg scale-105'
-                : 'bg-zinc-800/60 text-zinc-400 hover:bg-zinc-700/60 hover:text-zinc-300'
+                : 'bg-surface-raised/60 text-content-secondary hover:bg-surface-overlay/60 hover:text-content-primary'
             }`}
             style={i === activeFlow ? { background: f.color + '30', boxShadow: `0 0 20px ${f.color}30`, border: `1px solid ${f.color}60` } : {}}
           >
@@ -237,7 +238,7 @@ export default function SystemDiagram() {
         ))}
         <button
           onClick={() => setIsPlaying(!isPlaying)}
-          className="ml-auto px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-800/60 text-zinc-400 hover:text-white transition-colors"
+          className="ml-auto px-3 py-1.5 rounded-full text-xs font-medium bg-surface-raised/60 text-content-secondary hover:text-white transition-colors"
         >
           {isPlaying ? '⏸ Pause' : '▶ Play'}
         </button>
@@ -248,7 +249,7 @@ export default function SystemDiagram() {
         className="mb-4 px-4 py-2.5 rounded-lg text-sm transition-all duration-500"
         style={{ background: flow.color + '15', borderLeft: `3px solid ${flow.color}` }}
       >
-        <span className="text-zinc-300">{flow.description}</span>
+        <span className="text-content-primary">{flow.description}</span>
       </div>
 
       {/* SVG Diagram */}
@@ -286,16 +287,16 @@ export default function SystemDiagram() {
           </defs>
 
           {/* Group labels */}
-          <text x="20" y="20" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Input</text>
-          <text x="20" y="199" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Processing</text>
-          <text x="20" y="314" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">AI Model</text>
-          <text x="20" y="420" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Tools</text>
-          <text x="20" y="560" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Output</text>
-          <text x="688" y="104" className="fill-zinc-600 text-[10px] font-bold uppercase tracking-widest">Background</text>
+          <text x="20" y="20" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Input</text>
+          <text x="20" y="199" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Processing</text>
+          <text x="20" y="314" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">AI Model</text>
+          <text x="20" y="420" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Tools</text>
+          <text x="20" y="560" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Output</text>
+          <text x="688" y="104" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Background</text>
 
           {/* Background region for background jobs */}
           <rect x="688" y="108" width="164" height="236" rx="12"
-            fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
+            fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.09)" strokeDasharray="4 4" />
 
           {/* Edges (draw all potential edges dimly, active ones brightly) */}
           {flow.edges.map((edge, i) => {
@@ -311,7 +312,7 @@ export default function SystemDiagram() {
                 <path
                   d={path}
                   fill="none"
-                  stroke={isActive ? flow.color : 'rgba(255,255,255,0.06)'}
+                  stroke={isActive ? flow.color : 'rgba(255,255,255,0.09)'}
                   strokeWidth={isActive ? 2.5 : 1}
                   strokeOpacity={isActive ? 0.8 : 0.3}
                   markerEnd={isActive ? 'url(#arrow)' : undefined}
@@ -342,7 +343,7 @@ export default function SystemDiagram() {
                       return (
                         <>
                           <rect x={lx - edge.label.length * 3.2} y={ly - 9} width={edge.label.length * 6.4} height={16}
-                            rx="4" fill="rgba(15,17,23,0.85)" stroke={flow.color + '40'} strokeWidth={0.5} />
+                            rx="4" fill="#14151fd9" stroke={flow.color + '40'} strokeWidth={0.5} />
                           <text x={lx} y={ly + 3} textAnchor="middle"
                             className="text-[9px]" fill={flow.color} opacity={isCurrentStep ? 1 : 0.7}>
                             {edge.label}
@@ -389,8 +390,8 @@ export default function SystemDiagram() {
                   x={node.x} y={node.y}
                   width={node.w} height={node.h}
                   rx="10"
-                  fill={lit ? node.color + '25' : 'rgba(26,29,46,0.9)'}
-                  stroke={lit ? node.color : 'rgba(255,255,255,0.08)'}
+                  fill={lit ? node.color + '25' : '#14151fe6'}
+                  stroke={lit ? node.color : 'rgba(255,255,255,0.09)'}
                   strokeWidth={lit ? 1.5 : 0.5}
                   className="transition-all duration-300"
                 />
@@ -409,7 +410,7 @@ export default function SystemDiagram() {
                   x={node.x + 30} y={node.y + node.h / 2 - 5}
                   dominantBaseline="middle"
                   className="text-[11px] font-bold"
-                  fill={lit ? '#fff' : '#a1a1aa'}
+                  fill={lit ? '#fff' : '#aaa9b8'}
                 >
                   {node.label}
                 </text>
@@ -419,7 +420,7 @@ export default function SystemDiagram() {
                   x={node.x + 30} y={node.y + node.h / 2 + 9}
                   dominantBaseline="middle"
                   className="text-[8px]"
-                  fill={lit ? node.color : '#52525b'}
+                  fill={lit ? node.color : '#84838f'}
                 >
                   {node.sub}
                 </text>
@@ -449,12 +450,12 @@ export default function SystemDiagram() {
             key={i}
             className="h-1 rounded-full transition-all duration-300 flex-1"
             style={{
-              background: i <= activeStep ? flow.color : 'rgba(255,255,255,0.08)',
+              background: i <= activeStep ? flow.color : 'rgba(255,255,255,0.09)',
               opacity: i <= activeStep ? 1 : 0.5,
             }}
           />
         ))}
       </div>
-    </div>
+    </Card>
   );
 }

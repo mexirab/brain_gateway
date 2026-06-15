@@ -49,6 +49,16 @@ export default function DesignSystemPage() {
         </div>
       </Section>
 
+      {/* Gamification accents ----------------------------------------------- */}
+      <Section title="Accents" eyebrow="Gamification — finance/quest UI">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Swatch label="accent-gold" className="bg-accent-gold" />
+          <Swatch label="accent-violet" className="bg-accent-violet" />
+          <Swatch label="accent-cyan" className="bg-accent-cyan" />
+          <Swatch label="accent-flame" className="bg-accent-flame" />
+        </div>
+      </Section>
+
       {/* Typography --------------------------------------------------------- */}
       <Section title="Typography" eyebrow="Scale">
         <div className="space-y-2">

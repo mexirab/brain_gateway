@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { financeApi } from '@/lib/finance-api';
 import { formatCurrency } from '@/lib/finance-utils';
+import { Card, Button } from '@/components/ui';
 
 interface YnabStatus {
   configured: boolean;
@@ -160,7 +161,7 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="animate-spin text-brand-500" size={32} />
+        <Loader2 className="animate-spin text-brand" size={32} />
       </div>
     );
   }
@@ -169,25 +170,25 @@ export default function SettingsPage() {
     <div className="max-w-2xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-zinc-100">Settings</h1>
-        <p className="text-sm text-zinc-500 mt-0.5">
+        <h1 className="text-2xl font-bold text-content-primary">Settings</h1>
+        <p className="text-sm text-content-muted mt-0.5">
           YNAB integration and category mapping
         </p>
       </div>
 
       {/* Connection Status */}
-      <div className="glass p-5">
-        <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-3 flex items-center gap-2">
+      <Card>
+        <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider mb-3 flex items-center gap-2">
           <Link2 size={14} />
           YNAB Connection
         </h3>
 
         {!status?.configured ? (
           <div className="text-center py-4">
-            <XCircle size={32} className="text-zinc-600 mx-auto mb-2" />
-            <p className="text-zinc-400 text-sm">YNAB not configured</p>
-            <p className="text-zinc-600 text-xs mt-1">
-              Set <code className="bg-zinc-800 px-1 rounded">YNAB_ACCESS_TOKEN</code> in your .env
+            <XCircle size={32} className="text-content-muted mx-auto mb-2" />
+            <p className="text-content-secondary text-sm">YNAB not configured</p>
+            <p className="text-content-muted text-xs mt-1">
+              Set <code className="bg-surface-raised px-1 rounded">YNAB_ACCESS_TOKEN</code> in your .env
               file to enable auto-tracking
             </p>
           </div>
@@ -197,32 +198,32 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {status.connected ? (
-                  <CheckCircle size={18} className="text-emerald-400" />
+                  <CheckCircle size={18} className="text-success" />
                 ) : (
-                  <XCircle size={18} className="text-red-400" />
+                  <XCircle size={18} className="text-danger" />
                 )}
                 <span
-                  className={`text-sm font-medium ${status.connected ? 'text-emerald-400' : 'text-red-400'}`}
+                  className={`text-sm font-medium ${status.connected ? 'text-success' : 'text-danger'}`}
                 >
                   {status.connected ? 'Connected' : 'Disconnected'}
                 </span>
               </div>
               {status.budget_name && (
-                <span className="text-sm text-zinc-400">
-                  Budget: <span className="text-zinc-300">{status.budget_name}</span>
+                <span className="text-sm text-content-secondary">
+                  Budget: <span className="text-content-primary">{status.budget_name}</span>
                 </span>
               )}
             </div>
 
             {/* Sync info */}
             <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-500">
+              <span className="text-content-muted">
                 Last sync:{' '}
                 {status.last_synced_at
                   ? new Date(status.last_synced_at).toLocaleString()
                   : 'Never'}
               </span>
-              <span className="text-zinc-500">
+              <span className="text-content-muted">
                 {status.discretionary_count} / {status.category_count} categories
                 mapped
               </span>
@@ -230,10 +231,10 @@ export default function SettingsPage() {
 
             {/* Action buttons */}
             <div className="flex gap-2">
-              <button
+              <Button
                 onClick={handleSync}
                 disabled={syncing}
-                className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                className="gap-1.5"
               >
                 {syncing ? (
                   <Loader2 size={14} className="animate-spin" />
@@ -241,11 +242,12 @@ export default function SettingsPage() {
                   <RefreshCw size={14} />
                 )}
                 {syncing ? 'Syncing...' : 'Sync Now'}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleResetSync}
                 disabled={resetting}
-                className="flex items-center gap-1.5 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 text-sm font-medium rounded-lg transition-colors border border-zinc-700"
+                className="gap-1.5"
               >
                 {resetting ? (
                   <Loader2 size={14} className="animate-spin" />
@@ -253,34 +255,36 @@ export default function SettingsPage() {
                   <RotateCcw size={14} />
                 )}
                 Reset Sync
-              </button>
+              </Button>
             </div>
 
             {/* Sync result */}
             {syncResult && (
               <p
-                className={`text-sm ${syncResult.startsWith('Error') || syncResult.includes('failed') ? 'text-red-400' : 'text-emerald-400'}`}
+                className={`text-sm ${syncResult.startsWith('Error') || syncResult.includes('failed') ? 'text-danger' : 'text-success'}`}
               >
                 {syncResult}
               </p>
             )}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Category Mapping */}
       {status?.configured && status?.connected && groups.length > 0 && (
-        <div className="glass p-5">
+        <Card>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider flex items-center gap-2">
               <Settings size={14} />
               Category Mapping
             </h3>
             {hasPendingChanges && (
-              <button
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={saveMappings}
                 disabled={savingMapping}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
+                className="gap-1.5"
               >
                 {savingMapping ? (
                   <Loader2 size={12} className="animate-spin" />
@@ -288,10 +292,10 @@ export default function SettingsPage() {
                   <CheckCircle size={12} />
                 )}
                 Save Changes
-              </button>
+              </Button>
             )}
           </div>
-          <p className="text-xs text-zinc-500 mb-4">
+          <p className="text-xs text-content-muted mb-4">
             Check the categories that count as discretionary spending (depletes
             your $1K health bar)
           </p>
@@ -306,28 +310,28 @@ export default function SettingsPage() {
               return (
                 <div
                   key={group.group_name}
-                  className="border border-zinc-800 rounded-lg overflow-hidden"
+                  className="border border-line-subtle rounded-lg overflow-hidden"
                 >
                   {/* Group header */}
                   <button
                     onClick={() => toggleGroup(group.group_name)}
-                    className="w-full flex items-center justify-between p-3 hover:bg-zinc-800/50 transition-colors text-left"
+                    className="w-full flex items-center justify-between p-3 hover:bg-surface-raised/50 transition-colors text-left"
                   >
                     <div className="flex items-center gap-2">
                       {expanded ? (
-                        <ChevronDown size={14} className="text-zinc-500" />
+                        <ChevronDown size={14} className="text-content-muted" />
                       ) : (
-                        <ChevronRight size={14} className="text-zinc-500" />
+                        <ChevronRight size={14} className="text-content-muted" />
                       )}
-                      <span className="text-sm font-medium text-zinc-300">
+                      <span className="text-sm font-medium text-content-primary">
                         {group.group_name}
                       </span>
-                      <span className="text-xs text-zinc-600">
+                      <span className="text-xs text-content-muted">
                         ({group.categories.length})
                       </span>
                     </div>
                     {discCount > 0 && (
-                      <span className="text-xs text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded-full">
+                      <span className="text-xs text-brand bg-brand/10 px-2 py-0.5 rounded-full">
                         {discCount} discretionary
                       </span>
                     )}
@@ -335,7 +339,7 @@ export default function SettingsPage() {
 
                   {/* Category list */}
                   {expanded && (
-                    <div className="border-t border-zinc-800">
+                    <div className="border-t border-line-subtle">
                       {group.categories.map((cat) => {
                         const isDisc = getCategoryValue(
                           cat.name,
@@ -346,7 +350,7 @@ export default function SettingsPage() {
                         return (
                           <label
                             key={cat.name}
-                            className={`flex items-center justify-between p-3 cursor-pointer hover:bg-zinc-800/30 transition-colors ${hasChange ? 'bg-brand-500/5' : ''}`}
+                            className={`flex items-center justify-between p-3 cursor-pointer hover:bg-surface-raised/30 transition-colors ${hasChange ? 'bg-brand/5' : ''}`}
                           >
                             <div className="flex items-center gap-3">
                               <input
@@ -355,13 +359,13 @@ export default function SettingsPage() {
                                 onChange={() =>
                                   toggleCategory(cat.name, isDisc)
                                 }
-                                className="w-4 h-4 accent-brand-500 rounded"
+                                className="w-4 h-4 accent-brand rounded"
                               />
-                              <span className="text-sm text-zinc-300">
+                              <span className="text-sm text-content-primary">
                                 {cat.name}
                               </span>
                             </div>
-                            <div className="flex items-center gap-4 text-xs text-zinc-500">
+                            <div className="flex items-center gap-4 text-xs text-content-muted">
                               {cat.activity > 0 && (
                                 <span>
                                   Spent: {formatCurrency(cat.activity)}
@@ -371,8 +375,8 @@ export default function SettingsPage() {
                                 <span
                                   className={
                                     cat.balance < 0
-                                      ? 'text-red-400'
-                                      : 'text-emerald-400'
+                                      ? 'text-danger'
+                                      : 'text-success'
                                   }
                                 >
                                   {formatCurrency(cat.balance)}
@@ -391,32 +395,34 @@ export default function SettingsPage() {
 
           {/* Unsaved changes indicator */}
           {hasPendingChanges && (
-            <div className="mt-4 flex items-center justify-between p-3 rounded-lg bg-brand-500/10 border border-brand-500/20">
-              <span className="text-sm text-brand-400">
+            <div className="mt-4 flex items-center justify-between p-3 rounded-lg bg-brand/10 border border-brand/20">
+              <span className="text-sm text-brand">
                 {Object.keys(pendingChanges).length} unsaved change
                 {Object.keys(pendingChanges).length !== 1 ? 's' : ''}
               </span>
               <div className="flex gap-2">
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setPendingChanges({})}
-                  className="text-xs text-zinc-400 hover:text-zinc-300"
                 >
                   Discard
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
                   onClick={saveMappings}
                   disabled={savingMapping}
-                  className="flex items-center gap-1 px-3 py-1 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
+                  className="gap-1 py-1"
                 >
                   {savingMapping ? (
                     <Loader2 size={10} className="animate-spin" />
                   ) : null}
                   Save
-                </button>
+                </Button>
               </div>
             </div>
           )}
-        </div>
+        </Card>
       )}
     </div>
   );

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { settingsApi, type Identity, type ToneOption } from '@/lib/settings-api';
+import { Button } from '@/components/ui';
 
 const TONE_CHOICES: Array<{ value: ToneOption; label: string; hint: string }> = [
   { value: '', label: 'Default', hint: 'Falls back to legacy tone constraint' },
@@ -96,30 +97,30 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-white">Identity & Tone</h2>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-content-secondary mt-1">
           What Jess calls herself, what she calls you, and how she talks.
         </p>
       </div>
 
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Assistant name</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Assistant name</span>
           <input
             type="text"
             value={draft.assistant_name}
             onChange={(e) => patch('assistant_name', e.target.value)}
             maxLength={64}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Your name</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Your name</span>
           <input
             type="text"
             value={draft.user_name}
             onChange={(e) => patch('user_name', e.target.value)}
             maxLength={64}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           />
         </label>
       </div>
@@ -133,14 +134,14 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
         />
         <span className="flex flex-col">
           <span className="text-sm text-white">ADHD mode</span>
-          <span className="text-xs text-zinc-500">
+          <span className="text-xs text-content-muted">
             When off, Jess uses a generic tone and skips ADHD-coaching framing.
           </span>
         </span>
       </label>
 
       <fieldset className="space-y-2">
-        <legend className="text-xs uppercase tracking-wider text-zinc-500">Tone preference</legend>
+        <legend className="text-xs uppercase tracking-wider text-content-muted">Tone preference</legend>
         <div className="grid sm:grid-cols-2 gap-2">
           {TONE_CHOICES.map((opt) => (
             <label
@@ -148,7 +149,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
               className={`flex items-start gap-2 px-3 py-2 rounded-md border cursor-pointer transition-colors ${
                 draft.tone_preference === opt.value
                   ? 'border-brand-500/60 bg-brand-500/10'
-                  : 'border-zinc-700 hover:border-zinc-500'
+                  : 'border-line hover:border-line-strong'
               }`}
             >
               <input
@@ -161,7 +162,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
               />
               <span className="flex flex-col">
                 <span className="text-sm text-white">{opt.label}</span>
-                <span className="text-xs text-zinc-500">{opt.hint}</span>
+                <span className="text-xs text-content-muted">{opt.hint}</span>
               </span>
             </label>
           ))}
@@ -196,29 +197,29 @@ export function SaveBar({
   onDiscard: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 pt-2 border-t border-zinc-800">
-      <button
+    <div className="flex items-center gap-3 pt-2 border-t border-line-subtle">
+      <Button
         type="button"
+        variant="primary"
         disabled={!dirty || saving}
         onClick={onSave}
-        className="px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors flex items-center gap-2"
       >
         {saving && <Loader2 size={14} className="animate-spin" />}
         Save changes
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        variant="secondary"
         disabled={!dirty || saving}
         onClick={onDiscard}
-        className="px-3 py-2 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors"
       >
         Discard
-      </button>
+      </Button>
       {dirty && !saving && !statusMsg && (
-        <span className="text-xs text-amber-400">Unsaved changes</span>
+        <span className="text-xs text-warning">Unsaved changes</span>
       )}
-      {statusMsg && !error && <span className="text-xs text-emerald-400">{statusMsg}</span>}
-      {error && <span className="text-xs text-red-400">{error}</span>}
+      {statusMsg && !error && <span className="text-xs text-success">{statusMsg}</span>}
+      {error && <span className="text-xs text-danger">{error}</span>}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import SideQuestModal from '@/components/finance/SideQuestModal';
 import XPToast from '@/components/finance/XPToast';
 import { useFinance } from '@/lib/finance-context';
 import { financeApi } from '@/lib/finance-api';
+import { Card, Button } from '@/components/ui';
 
 export default function SideQuestsPage() {
   const { sideQuests, loading, error, refresh, awardXP, lastXPGain, clearXPGain } =
@@ -60,7 +61,7 @@ export default function SideQuestsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="animate-spin text-brand-500" size={32} />
+        <Loader2 className="animate-spin text-brand" size={32} />
       </div>
     );
   }
@@ -68,9 +69,9 @@ export default function SideQuestsPage() {
   if (error) {
     return (
       <div className="max-w-4xl mx-auto mt-12">
-        <div className="glass p-6 border border-red-500/30 text-center">
-          <p className="text-red-400 font-semibold">Failed to load side quests</p>
-          <p className="text-sm text-zinc-500 mt-1">{error}</p>
+        <div className="glass p-6 border border-danger/30 text-center">
+          <p className="text-danger font-semibold">Failed to load side quests</p>
+          <p className="text-sm text-content-muted mt-1">{error}</p>
         </div>
       </div>
     );
@@ -90,24 +91,21 @@ export default function SideQuestsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-100">Side Quests</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">
+          <h1 className="text-2xl font-bold text-content-primary">Side Quests</h1>
+          <p className="text-sm text-content-muted mt-0.5">
             Save toward big purchases guilt-free
           </p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors"
-        >
+        <Button onClick={() => setShowModal(true)} className="gap-1.5">
           <Plus size={16} />
           New Quest
-        </button>
+        </Button>
       </div>
 
       {/* Active Quests */}
       {active.length > 0 ? (
         <div className="space-y-4">
-          <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+          <h2 className="text-xs font-semibold text-content-muted uppercase tracking-wider">
             Active ({active.length})
           </h2>
           {active.map((quest) => (
@@ -121,19 +119,19 @@ export default function SideQuestsPage() {
           ))}
         </div>
       ) : (
-        <div className="glass p-8 text-center">
-          <ScrollText size={32} className="text-zinc-600 mx-auto mb-3" />
-          <p className="text-zinc-400 text-sm">No active quests</p>
-          <p className="text-zinc-600 text-xs mt-1">
+        <Card padding="none" className="p-8 text-center">
+          <ScrollText size={32} className="text-content-muted mx-auto mb-3" />
+          <p className="text-content-secondary text-sm">No active quests</p>
+          <p className="text-content-muted text-xs mt-1">
             Create a side quest to start saving toward something special
           </p>
-        </div>
+        </Card>
       )}
 
       {/* Completed Quests */}
       {completed.length > 0 && (
         <div className="space-y-4">
-          <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+          <h2 className="text-xs font-semibold text-content-muted uppercase tracking-wider">
             Completed ({completed.length})
           </h2>
           {completed.map((quest) => (
@@ -151,7 +149,7 @@ export default function SideQuestsPage() {
       {/* Abandoned Quests */}
       {abandoned.length > 0 && (
         <div className="space-y-4">
-          <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+          <h2 className="text-xs font-semibold text-content-muted uppercase tracking-wider">
             Abandoned ({abandoned.length})
           </h2>
           {abandoned.map((quest) => (

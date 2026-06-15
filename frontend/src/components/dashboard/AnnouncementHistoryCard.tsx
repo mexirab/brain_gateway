@@ -2,23 +2,24 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Volume2, CheckCircle, XCircle } from 'lucide-react';
+import { Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { AnnouncementEntry, AnnouncementStats } from '@/lib/types';
 
 const TYPE_COLORS: Record<string, string> = {
-  calendar: 'text-blue-400',
-  briefing: 'text-amber-400',
-  reminder: 'text-violet-400',
-  focus: 'text-emerald-400',
-  routine: 'text-cyan-400',
-  progress: 'text-amber-400',
-  selfcare: 'text-pink-400',
-  ambient: 'text-zinc-400',
-  email: 'text-orange-400',
-  interrupt: 'text-red-400',
-  manual: 'text-zinc-500',
-  temperature: 'text-red-400',
-  finance: 'text-green-400',
+  calendar: 'text-info',
+  briefing: 'text-warning',
+  reminder: 'text-brand',
+  focus: 'text-success',
+  routine: 'text-info',
+  progress: 'text-warning',
+  selfcare: 'text-accent-violet',
+  ambient: 'text-content-secondary',
+  email: 'text-warning',
+  interrupt: 'text-danger',
+  manual: 'text-content-muted',
+  temperature: 'text-danger',
+  finance: 'text-success',
 };
 
 function formatTime(ts: string): string {
@@ -59,15 +60,15 @@ export default function AnnouncementHistoryCard() {
   }, [fetchData]);
 
   return (
-    <div className="glass p-5">
-      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-        <Volume2 size={18} className="text-blue-400" />
+    <Card>
+      <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
+        <Volume2 size={18} className="text-info" />
         Announcements
         {stats && (
-          <span className="ml-auto text-xs text-zinc-500 font-normal">
+          <span className="ml-auto text-xs text-content-muted font-normal">
             {stats.today_count} today
             {stats.success_rate < 100 && (
-              <span className="text-red-400 ml-2">{stats.success_rate}% success</span>
+              <span className="text-danger ml-2">{stats.success_rate}% success</span>
             )}
           </span>
         )}
@@ -76,24 +77,24 @@ export default function AnnouncementHistoryCard() {
       {loading && (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-6 bg-zinc-800/50 rounded animate-pulse" />
+            <div key={i} className="h-6 bg-surface-raised/50 rounded animate-pulse" />
           ))}
         </div>
       )}
-      {error && <p className="text-sm text-red-400/70">{error}</p>}
+      {error && <p className="text-sm text-danger/70">{error}</p>}
 
       {!loading && !error && (
         <div className="space-y-3">
           {/* Stats bar */}
           {stats && stats.total > 0 && (
-            <div className="flex gap-4 text-xs text-zinc-500">
+            <div className="flex gap-4 text-xs text-content-muted">
               <span className="flex items-center gap-1">
-                <CheckCircle size={12} className="text-emerald-400" />
+                <CheckCircle size={12} className="text-success" />
                 {stats.successes}
               </span>
               {stats.failures > 0 && (
                 <span className="flex items-center gap-1">
-                  <XCircle size={12} className="text-red-400" />
+                  <XCircle size={12} className="text-danger" />
                   {stats.failures}
                 </span>
               )}
@@ -105,22 +106,22 @@ export default function AnnouncementHistoryCard() {
 
           {/* History list */}
           {history.length === 0 && (
-            <p className="text-sm text-zinc-600">No announcements yet.</p>
+            <p className="text-sm text-content-muted">No announcements yet.</p>
           )}
           <div className="space-y-1.5 max-h-64 overflow-y-auto">
             {history.map((a) => (
               <div
                 key={a.id}
                 className={`flex items-start gap-2 text-xs ${
-                  a.success ? 'text-zinc-400' : 'text-red-400/70'
+                  a.success ? 'text-content-secondary' : 'text-danger/70'
                 }`}
               >
-                <span className="text-zinc-600 shrink-0 w-14 text-right">
+                <span className="text-content-muted shrink-0 w-14 text-right">
                   {formatTime(a.timestamp)}
                 </span>
                 <span
                   className={`shrink-0 w-16 truncate ${
-                    TYPE_COLORS[a.announcement_type] || 'text-zinc-500'
+                    TYPE_COLORS[a.announcement_type] || 'text-content-muted'
                   }`}
                 >
                   {a.announcement_type}
@@ -129,18 +130,18 @@ export default function AnnouncementHistoryCard() {
                   {a.text.length > 80 ? a.text.slice(0, 80) + '...' : a.text}
                 </span>
                 {a.speaker && (
-                  <span className="text-zinc-600 shrink-0 text-[10px]">
+                  <span className="text-content-muted shrink-0 text-[10px]">
                     {speakerShort(a.speaker)}
                   </span>
                 )}
                 {!a.success && (
-                  <XCircle size={12} className="text-red-400 shrink-0" />
+                  <XCircle size={12} className="text-danger shrink-0" />
                 )}
               </div>
             ))}
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

@@ -8,6 +8,7 @@ import {
   type SelfcareSchedule,
 } from '@/lib/settings-api';
 import { SaveBar } from './IdentityPanel';
+import { Button } from '@/components/ui';
 import { CATEGORY_ORDER, CATEGORY_LABELS } from '@/lib/selfcare-categories';
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
@@ -105,7 +106,7 @@ export default function SelfcarePanel({ registerDirty }: PanelProps = {}) {
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-white">Selfcare Nudges</h2>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-content-secondary mt-1">
           One row per category. Disabled rows fire nothing. Time-based categories (meds) take a list of fixed
           times; the others use an interval.
         </p>
@@ -150,7 +151,7 @@ function CategoryCard({
   const enabled = value.enabled !== false;
 
   return (
-    <div className={`rounded-lg border p-4 ${enabled ? 'border-zinc-700 bg-zinc-900/40' : 'border-zinc-800 bg-zinc-900/20'}`}>
+    <div className={`rounded-lg border p-4 ${enabled ? 'border-line bg-surface-base/40' : 'border-line-subtle bg-surface-base/20'}`}>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-white">{label}</h3>
         <label className="flex items-center gap-2 cursor-pointer">
@@ -160,7 +161,7 @@ function CategoryCard({
             onChange={(e) => onChange((c) => ({ ...c, enabled: e.target.checked }))}
             className="h-4 w-4 accent-brand-500"
           />
-          <span className="text-xs text-zinc-400">{enabled ? 'On' : 'Off'}</span>
+          <span className="text-xs text-content-secondary">{enabled ? 'On' : 'Off'}</span>
         </label>
       </div>
 
@@ -191,7 +192,7 @@ function CategoryCard({
           )}
 
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs uppercase tracking-wider text-zinc-500">
+            <span className="text-xs uppercase tracking-wider text-content-muted">
               Message override (optional)
             </span>
             <input
@@ -200,7 +201,7 @@ function CategoryCard({
               onChange={(e) => onChange((c) => ({ ...c, message_template: e.target.value }))}
               placeholder="Leave blank for default"
               maxLength={500}
-              className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+              className="input"
             />
           </label>
         </div>
@@ -228,7 +229,7 @@ function IntervalEditor({
 
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-xs uppercase tracking-wider text-zinc-500">
+      <span className="text-xs uppercase tracking-wider text-content-muted">
         Interval ({useHours ? 'hours' : 'minutes'})
       </span>
       <input
@@ -245,7 +246,7 @@ function IntervalEditor({
             onChange({ interval_minutes: n, interval_hours: undefined });
           }
         }}
-        className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500 w-32"
+        className="input w-32"
       />
     </label>
   );
@@ -263,21 +264,21 @@ function ActiveHoursEditor({
   return (
     <div className="grid grid-cols-2 gap-3">
       <label className="flex flex-col gap-1.5">
-        <span className="text-xs uppercase tracking-wider text-zinc-500">Active from</span>
+        <span className="text-xs uppercase tracking-wider text-content-muted">Active from</span>
         <input
           type="time"
           value={start}
           onChange={(e) => onChange(e.target.value, end)}
-          className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+          className="input"
         />
       </label>
       <label className="flex flex-col gap-1.5">
-        <span className="text-xs uppercase tracking-wider text-zinc-500">Active until</span>
+        <span className="text-xs uppercase tracking-wider text-content-muted">Active until</span>
         <input
           type="time"
           value={end}
           onChange={(e) => onChange(start, e.target.value)}
-          className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+          className="input"
         />
       </label>
     </div>
@@ -293,12 +294,12 @@ function FixedTimesEditor({
 }) {
   return (
     <div className="space-y-2">
-      <span className="text-xs uppercase tracking-wider text-zinc-500">Fire at these times</span>
+      <span className="text-xs uppercase tracking-wider text-content-muted">Fire at these times</span>
       <div className="flex flex-wrap items-center gap-2">
         {times.map((t, i) => (
           <span
             key={i}
-            className="flex items-center gap-1 bg-zinc-800 border border-zinc-700 rounded-md pl-2 pr-1 py-1"
+            className="flex items-center gap-1 bg-surface-raised border border-line rounded-md pl-2 pr-1 py-1"
           >
             <input
               type="time"
@@ -315,20 +316,21 @@ function FixedTimesEditor({
               type="button"
               onClick={() => onChange(times.filter((_, idx) => idx !== i))}
               aria-label={t ? `Remove ${t}` : 'Remove time'}
-              className="p-1 text-zinc-500 hover:text-red-400"
+              className="p-1 text-content-muted hover:text-danger"
             >
               <X size={14} />
             </button>
           </span>
         ))}
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           onClick={() => onChange([...times, '08:00'])}
-          className="flex items-center gap-1 px-2 py-1 rounded-md border border-zinc-700 text-zinc-300 text-sm hover:border-zinc-500"
         >
           <Plus size={14} />
           Add time
-        </button>
+        </Button>
       </div>
     </div>
   );

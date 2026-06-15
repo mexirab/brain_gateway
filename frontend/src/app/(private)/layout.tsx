@@ -29,7 +29,7 @@ export default async function PrivateLayout({
   return (
     <div className="min-h-screen flex">
       {/* Sidebar — hidden on mobile, shown on md+ */}
-      <aside className="hidden md:flex flex-col w-56 bg-surface-raised border-r border-zinc-800 p-4">
+      <aside className="hidden md:flex flex-col w-56 bg-surface-raised border-r border-line-subtle p-4">
         <Link href="/" className="text-lg font-bold text-brand-500 mb-8">
           Jess
         </Link>
@@ -38,7 +38,7 @@ export default async function PrivateLayout({
             <Link
               key={href}
               href={href}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg text-zinc-400 hover:text-white hover:bg-surface-overlay transition-colors"
+              className="flex items-center gap-3 px-3 py-2 rounded-lg text-content-secondary hover:text-white hover:bg-surface-overlay transition-colors"
             >
               <Icon size={18} />
               {label}
@@ -48,7 +48,7 @@ export default async function PrivateLayout({
         <form action="/api/auth/logout" method="POST">
           <button
             type="submit"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-zinc-500 hover:text-red-400 transition-colors w-full"
+            className="flex items-center gap-3 px-3 py-2 rounded-lg text-content-muted hover:text-danger transition-colors w-full"
           >
             <LogOut size={18} />
             Sign Out

@@ -2,6 +2,7 @@
 
 import type { FinanceConfig } from '@/lib/finance-types';
 import { formatCurrency, projectedRetirement } from '@/lib/finance-utils';
+import { Card } from '@/components/ui';
 
 interface RetirementMeterProps {
   config: FinanceConfig;
@@ -40,8 +41,8 @@ export default function RetirementMeter({ config }: RetirementMeterProps) {
     : '';
 
   return (
-    <div className="glass p-5 flex flex-col items-center">
-      <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-3">
+    <Card className="flex flex-col items-center">
+      <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider mb-3">
         Retirement Journey
       </h3>
 
@@ -53,8 +54,8 @@ export default function RetirementMeter({ config }: RetirementMeterProps) {
       >
         <defs>
           <linearGradient id="retirementGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#6366f1" />
-            <stop offset="100%" stopColor="#a855f7" />
+            <stop offset="0%" stopColor="#6f63ff" />
+            <stop offset="100%" stopColor="#a78bfa" />
           </linearGradient>
         </defs>
 
@@ -62,7 +63,7 @@ export default function RetirementMeter({ config }: RetirementMeterProps) {
         <path
           d={bgArc}
           fill="none"
-          stroke="#27272a"
+          stroke="#14151f"
           strokeWidth={strokeWidth}
           strokeLinecap="round"
         />
@@ -81,11 +82,11 @@ export default function RetirementMeter({ config }: RetirementMeterProps) {
       </svg>
 
       {/* Stats below the arc */}
-      <p className="text-lg font-bold text-zinc-100">{formatCurrency(config.retirement_current)}</p>
-      <p className="text-xs text-zinc-500">{yearsLeft} years to go</p>
-      <p className="text-xs text-zinc-400 mt-2">
+      <p className="text-lg font-bold text-content-primary">{formatCurrency(config.retirement_current)}</p>
+      <p className="text-xs text-content-muted">{yearsLeft} years to go</p>
+      <p className="text-xs text-content-secondary mt-2">
         Projected at {config.retirement_target_age}: {formatCurrency(projected)}
       </p>
-    </div>
+    </Card>
   );
 }

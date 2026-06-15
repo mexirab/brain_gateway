@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UtensilsCrossed, Plus, Camera, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
+import { Button, Card } from '@/components/ui';
 import type { Meal, MealsToday, MealHistoryResponse } from '@/lib/types';
 
 type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
@@ -107,43 +108,44 @@ export default function MealsPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-zinc-200 flex items-center gap-3">
-          <UtensilsCrossed size={24} className="text-emerald-400" />
+        <h1 className="text-2xl font-bold text-content-primary flex items-center gap-3">
+          <UtensilsCrossed size={24} className="text-success" />
           Meals
         </h1>
         {today && (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-content-muted">
             {today.total_calories} kcal · {today.meal_count} meals
           </span>
         )}
       </div>
 
       {error && (
-        <div className="glass p-3 text-sm text-red-400/80 border-red-500/30">
+        <Card padding="none" className="p-3 text-sm text-danger/80 border-danger/30">
           {error}
-          <button onClick={() => setError(null)} className="ml-2 text-zinc-500">
+          <button onClick={() => setError(null)} className="ml-2 text-content-muted">
             <X size={12} className="inline" />
           </button>
-        </div>
+        </Card>
       )}
 
       {/* Add actions */}
       <div className="flex gap-2">
-        <button
+        <Button
+          variant="primary"
           onClick={() => {
             resetForm();
             setShowAdd(true);
           }}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors"
+          className="flex-1"
         >
           <Plus size={16} />
           Log meal
-        </button>
+        </Button>
         <label
           className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 border rounded-lg cursor-pointer transition-colors ${
             uploading
-              ? 'bg-zinc-800/30 text-zinc-600 border-zinc-800 cursor-wait'
-              : 'bg-sky-500/20 text-sky-400 border-sky-500/30 hover:bg-sky-500/30'
+              ? 'bg-surface-raised/30 text-content-muted border-line-subtle cursor-wait'
+              : 'bg-info/20 text-info border-info/30 hover:bg-info/30'
           }`}
         >
           <Camera size={16} />
@@ -164,17 +166,17 @@ export default function MealsPage() {
       {showAdd && (
         <form
           onSubmit={handleSave}
-          className="glass p-4 space-y-3 border-emerald-500/20"
+          className="glass p-4 space-y-3 border-success/20"
         >
           {estimateNote && (
-            <p className="text-xs text-sky-400/80">{estimateNote}</p>
+            <p className="text-xs text-info/80">{estimateNote}</p>
           )}
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What did you eat?"
-            className="w-full bg-transparent border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+            className="input w-full"
             autoFocus
           />
           <div className="flex gap-2">
@@ -183,12 +185,12 @@ export default function MealsPage() {
               value={calories}
               onChange={(e) => setCalories(e.target.value)}
               placeholder="kcal (optional)"
-              className="flex-1 bg-transparent border border-zinc-700 rounded-lg px-3 py-2 text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+              className="input flex-1"
             />
             <select
               value={mealType}
               onChange={(e) => setMealType(e.target.value as MealType)}
-              className="bg-surface-overlay border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 text-sm focus:outline-none focus:border-emerald-500"
+              className="input text-sm"
             >
               <option value="breakfast">Breakfast</option>
               <option value="lunch">Lunch</option>
@@ -197,23 +199,24 @@ export default function MealsPage() {
             </select>
           </div>
           <div className="flex gap-2">
-            <button
+            <Button
               type="submit"
+              variant="primary"
               disabled={saving || !description.trim()}
-              className="flex-1 px-4 py-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 disabled:opacity-30"
+              className="flex-1"
             >
               {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => {
                 resetForm();
                 setShowAdd(false);
               }}
-              className="px-4 py-2 text-zinc-500 hover:text-zinc-300"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       )}
@@ -221,19 +224,19 @@ export default function MealsPage() {
       {/* Today's meals */}
       {!loading && today && (
         <div className="space-y-2">
-          <div className="text-xs uppercase tracking-wider text-zinc-500">
+          <div className="text-xs uppercase tracking-wider text-content-muted">
             Today
           </div>
           {today.meals.length === 0 && (
-            <p className="text-sm text-zinc-600 text-center py-6">
+            <p className="text-sm text-content-muted text-center py-6">
               Nothing logged yet today.
             </p>
           )}
           {today.meals.map((m: Meal) => (
-            <div key={m.id} className="glass p-3 flex items-center gap-3 group">
+            <Card key={m.id} padding="none" className="p-3 flex items-center gap-3 group">
               <div className="flex-1">
-                <div className="text-zinc-200">{m.description}</div>
-                <div className="text-[11px] text-zinc-600 mt-0.5">
+                <div className="text-content-primary">{m.description}</div>
+                <div className="text-[11px] text-content-muted mt-0.5">
                   {new Date(m.logged_at).toLocaleTimeString([], {
                     hour: 'numeric',
                     minute: '2-digit',
@@ -243,29 +246,29 @@ export default function MealsPage() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-emerald-400 font-mono text-sm">
+                <div className="text-success font-mono text-sm">
                   {m.calories ? `${m.calories} kcal` : '—'}
                 </div>
               </div>
               <button
                 onClick={() => handleDelete(m.id)}
-                className="opacity-40 group-hover:opacity-100 focus:opacity-100 text-zinc-600 hover:text-red-400 transition-all"
+                className="opacity-40 group-hover:opacity-100 focus:opacity-100 text-content-muted hover:text-danger transition-all"
                 aria-label="delete meal"
               >
                 <Trash2 size={14} />
               </button>
-            </div>
+            </Card>
           ))}
         </div>
       )}
 
       {/* Week chart */}
       {weekTotals.length > 0 && (
-        <div className="glass p-4 space-y-3">
-          <div className="text-xs uppercase tracking-wider text-zinc-500">
+        <Card padding="sm" className="space-y-3">
+          <div className="text-xs uppercase tracking-wider text-content-muted">
             Last 7 days
             {history?.stats.avg_calories ? (
-              <span className="ml-2 text-zinc-600">
+              <span className="ml-2 text-content-muted">
                 avg {history.stats.avg_calories} kcal
               </span>
             ) : null}
@@ -282,25 +285,25 @@ export default function MealsPage() {
                   className="flex-1 flex flex-col items-center gap-1"
                 >
                   <div
-                    className="w-full bg-emerald-500/40 rounded-t"
+                    className="w-full bg-success/40 rounded-t"
                     style={{ height: `${pct}%`, minHeight: '2px' }}
                     title={`${d.total_calories} kcal`}
                   />
-                  <span className="text-[10px] text-zinc-600">{label}</span>
-                  <span className="text-[10px] text-zinc-500 font-mono">
+                  <span className="text-[10px] text-content-muted">{label}</span>
+                  <span className="text-[10px] text-content-muted font-mono">
                     {d.total_calories}
                   </span>
                 </div>
               );
             })}
           </div>
-        </div>
+        </Card>
       )}
 
       {loading && (
         <div className="space-y-2">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-14 bg-zinc-800/30 rounded-lg animate-pulse" />
+            <div key={i} className="h-14 bg-surface-raised/30 rounded-lg animate-pulse" />
           ))}
         </div>
       )}

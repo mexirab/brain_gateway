@@ -5,6 +5,7 @@ import { Home, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { HAEntity } from '@/lib/types';
 import EntityGroup from '@/components/home/EntityGroup';
+import { Card } from '@/components/ui';
 
 const DOMAIN_ORDER = ['light', 'switch', 'fan', 'scene', 'climate', 'cover', 'lock'];
 
@@ -55,17 +56,17 @@ export default function HomePage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Home size={24} className="text-indigo-400" />
+          <Home size={24} className="text-brand" />
           Home Controls
         </h1>
         <div className="flex items-center gap-3">
           {totalEntities > 0 && (
-            <span className="text-xs text-zinc-500">{totalEntities} entities</span>
+            <span className="text-xs text-content-muted">{totalEntities} entities</span>
           )}
           <button
             onClick={fetchEntities}
             disabled={loading}
-            className="p-2 rounded-lg bg-zinc-800/60 text-zinc-400 hover:text-white transition-colors disabled:opacity-50"
+            className="p-2 rounded-lg bg-surface-raised/60 text-content-secondary hover:text-white transition-colors disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
@@ -76,16 +77,16 @@ export default function HomePage() {
       {loading && sortedDomains.length === 0 && (
         <div className="space-y-4">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="glass p-6 h-32 animate-pulse" />
+            <Card key={i} padding="lg" className="h-32 animate-pulse" />
           ))}
         </div>
       )}
 
       {error && (
-        <div className="glass p-6 text-center">
-          <p className="text-sm text-red-400/70">Could not reach Home Assistant</p>
-          <p className="text-xs text-zinc-500 mt-1">{error}</p>
-        </div>
+        <Card padding="lg" className="text-center">
+          <p className="text-sm text-danger/70">Could not reach Home Assistant</p>
+          <p className="text-xs text-content-muted mt-1">{error}</p>
+        </Card>
       )}
 
       {!error && sortedDomains.length > 0 && (
@@ -102,9 +103,9 @@ export default function HomePage() {
       )}
 
       {!loading && !error && sortedDomains.length === 0 && (
-        <div className="glass p-6 text-center">
-          <p className="text-sm text-zinc-500">No controllable entities found</p>
-        </div>
+        <Card padding="lg" className="text-center">
+          <p className="text-sm text-content-muted">No controllable entities found</p>
+        </Card>
       )}
     </div>
   );

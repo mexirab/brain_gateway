@@ -33,13 +33,13 @@ export default function XPToast({ amount, description, onDismiss }: Props) {
           : 'opacity-0 -translate-y-4 scale-95'
       }`}
     >
-      <div className="glass border border-brand-500/30 px-5 py-3 rounded-xl shadow-lg shadow-brand-500/10 flex items-center gap-3">
-        <div className="text-brand-400 animate-bounce">
+      <div className="glass border border-accent-gold/30 px-5 py-3 rounded-xl shadow-lg shadow-accent-gold/10 flex items-center gap-3">
+        <div className="text-accent-gold animate-bounce">
           <Sparkles size={20} />
         </div>
         <div>
-          <p className="text-brand-400 font-bold text-lg">+{amount} XP</p>
-          <p className="text-xs text-zinc-400">{description}</p>
+          <p className="text-accent-gold font-bold text-lg">+{amount} XP</p>
+          <p className="text-xs text-content-secondary">{description}</p>
         </div>
       </div>
     </div>

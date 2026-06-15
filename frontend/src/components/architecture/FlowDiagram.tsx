@@ -1,12 +1,13 @@
 'use client';
 
 import { ArrowDown, Workflow } from 'lucide-react';
+import { Card } from '@/components/ui';
 
 const FLOW_STEPS = [
-  { label: 'User', sub: 'Voice / Web UI', color: 'bg-amber-500/20 border-amber-500/40 text-amber-300' },
-  { label: 'Open WebUI', sub: 'HTTPS Gateway', color: 'bg-zinc-700/40 border-zinc-600/40 text-zinc-300' },
-  { label: 'Orchestrator', sub: 'Mode Router + Intent', color: 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' },
-  { label: 'Brain', sub: 'Qwen3.5-27B · Conversation + Tools', color: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' },
+  { label: 'User', sub: 'Voice / Web UI', color: 'bg-warning/20 border-warning/40 text-warning' },
+  { label: 'Open WebUI', sub: 'HTTPS Gateway', color: 'bg-surface-overlay/40 border-line/40 text-content-primary' },
+  { label: 'Orchestrator', sub: 'Mode Router + Intent', color: 'bg-brand/20 border-brand/40 text-brand' },
+  { label: 'Brain', sub: 'Qwen3.5-27B · Conversation + Tools', color: 'bg-success/20 border-success/40 text-success' },
 ];
 
 const TOOLS = [
@@ -26,9 +27,9 @@ function FlowBox({ label, sub, color }: { label: string; sub: string; color: str
 
 export default function FlowDiagram() {
   return (
-    <div className="glass p-6 md:p-8">
+    <Card padding="none" className="p-6 md:p-8">
       <h2 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
-        <Workflow size={20} className="text-indigo-400" />
+        <Workflow size={20} className="text-brand" />
         Data Flow
       </h2>
 
@@ -38,7 +39,7 @@ export default function FlowDiagram() {
           <div key={step.label} className="flex flex-col items-center">
             <FlowBox {...step} />
             {i < FLOW_STEPS.length - 1 && (
-              <ArrowDown size={20} className="text-zinc-600 my-1" />
+              <ArrowDown size={20} className="text-content-muted my-1" />
             )}
           </div>
         ))}
@@ -46,7 +47,7 @@ export default function FlowDiagram() {
 
       {/* Arrow down to tools */}
       <div className="flex justify-center mb-3">
-        <ArrowDown size={20} className="text-zinc-600" />
+        <ArrowDown size={20} className="text-content-muted" />
       </div>
 
       {/* Tools grid */}
@@ -55,13 +56,13 @@ export default function FlowDiagram() {
           {TOOLS.map((t) => (
             <div
               key={t}
-              className="text-xs px-2.5 py-1.5 rounded-lg bg-zinc-800/70 text-zinc-400 border border-zinc-700/50 text-center whitespace-nowrap"
+              className="text-xs px-2.5 py-1.5 rounded-lg bg-surface-raised/70 text-content-secondary border border-line/50 text-center whitespace-nowrap"
             >
               {t}
             </div>
           ))}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }

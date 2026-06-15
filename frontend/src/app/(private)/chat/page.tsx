@@ -268,13 +268,13 @@ export default function ChatPage() {
               onClick={toggleSidebar}
               aria-label={sidebarOpen ? 'Hide conversation history' : 'Show conversation history'}
               aria-expanded={sidebarOpen}
-              className="hidden md:inline-flex p-2 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors shrink-0"
+              className="hidden md:inline-flex p-2 rounded-lg text-content-muted hover:text-content-primary hover:bg-surface-raised/60 transition-colors shrink-0"
               title={sidebarOpen ? 'Hide history' : 'Show history'}
             >
               {sidebarOpen ? <PanelLeftClose size={18} aria-hidden /> : <PanelLeftOpen size={18} aria-hidden />}
             </button>
             <h1 className="text-xl font-bold flex items-center gap-2 min-w-0">
-              <MessageSquare size={20} className="text-indigo-400 shrink-0" />
+              <MessageSquare size={20} className="text-brand shrink-0" />
               <span className="truncate">
                 {activeConvId
                   ? conversations.find((c) => c.id === activeConvId)?.title || 'Chat'
@@ -286,8 +286,8 @@ export default function ChatPage() {
             onClick={() => setTtsEnabled(!ttsEnabled)}
             className={`p-2 rounded-lg transition-colors shrink-0 ${
               ttsEnabled
-                ? 'bg-indigo-500/20 text-indigo-400'
-                : 'bg-zinc-700/30 text-zinc-500 hover:text-zinc-300'
+                ? 'bg-brand/20 text-brand'
+                : 'bg-surface-overlay/30 text-content-muted hover:text-content-primary'
             }`}
             title={ttsEnabled ? 'Disable voice responses' : 'Enable voice responses'}
           >
@@ -299,10 +299,10 @@ export default function ChatPage() {
         <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 px-4 pb-4">
           {messages.length === 0 && (
             <div className="flex-1 flex items-center justify-center h-full">
-              <div className="text-center text-zinc-500">
+              <div className="text-center text-content-muted">
                 <MessageSquare size={48} className="mx-auto mb-3 opacity-30" />
                 <p className="text-sm">Start a conversation with Jess</p>
-                <p className="text-xs mt-1 text-zinc-600">
+                <p className="text-xs mt-1 text-content-muted">
                   Ask about your schedule, control smart home, get reminders, or just chat
                 </p>
               </div>

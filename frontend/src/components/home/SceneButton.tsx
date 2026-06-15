@@ -32,8 +32,8 @@ export default function SceneButton({ entity }: SceneButtonProps) {
       disabled={acting}
       className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${
         activated
-          ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-500/40'
-          : 'bg-zinc-800/40 text-zinc-400 border border-zinc-700/30 hover:text-white hover:border-zinc-600/50'
+          ? 'bg-brand/30 text-brand border border-brand/40'
+          : 'bg-surface-raised/40 text-content-secondary border border-line/30 hover:text-white hover:border-line-strong/50'
       } disabled:opacity-50`}
     >
       <Sparkles size={14} />

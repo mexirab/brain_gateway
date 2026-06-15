@@ -3,17 +3,17 @@
 import type { RoutingInfo } from '@/lib/types';
 
 const MODE_COLORS: Record<string, string> = {
-  explainer: 'bg-blue-500/20 text-blue-400',
-  mirror: 'bg-purple-500/20 text-purple-400',
-  counterbalance: 'bg-amber-500/20 text-amber-400',
-  challenge: 'bg-red-500/20 text-red-400',
-  baseline: 'bg-emerald-500/20 text-emerald-400',
+  explainer: 'bg-info/20 text-info',
+  mirror: 'bg-brand/20 text-brand',
+  counterbalance: 'bg-warning/20 text-warning',
+  challenge: 'bg-danger/20 text-danger',
+  baseline: 'bg-success/20 text-success',
 };
 
 const INTENSITY_COLORS: Record<string, string> = {
-  low: 'text-zinc-500',
-  medium: 'text-amber-500',
-  high: 'text-red-500',
+  low: 'text-content-muted',
+  medium: 'text-warning',
+  high: 'text-danger',
 };
 
 interface RoutingBadgeProps {

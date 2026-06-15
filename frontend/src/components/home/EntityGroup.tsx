@@ -6,6 +6,7 @@ import type { HAEntity } from '@/lib/types';
 import LightControl from './LightControl';
 import ToggleControl from './ToggleControl';
 import SceneButton from './SceneButton';
+import { Card } from '@/components/ui';
 
 const DOMAIN_ICONS: Record<string, React.ElementType> = {
   light: Lightbulb,
@@ -41,15 +42,15 @@ export default function EntityGroup({ domain, entities, onStateChange }: EntityG
   const onCount = entities.filter((e) => e.state === 'on').length;
 
   return (
-    <div className="glass p-4">
+    <Card padding="sm">
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 w-full text-left mb-2"
       >
-        {open ? <ChevronDown size={16} className="text-zinc-500" /> : <ChevronRight size={16} className="text-zinc-500" />}
-        <Icon size={18} className="text-indigo-400" />
+        {open ? <ChevronDown size={16} className="text-content-muted" /> : <ChevronRight size={16} className="text-content-muted" />}
+        <Icon size={18} className="text-brand" />
         <span className="text-sm font-semibold text-white flex-1">{label}</span>
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-content-muted">
           {entities.length} {onCount > 0 && `(${onCount} on)`}
         </span>
       </button>
@@ -79,6 +80,6 @@ export default function EntityGroup({ domain, entities, onStateChange }: EntityG
           })}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

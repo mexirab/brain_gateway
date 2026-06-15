@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Heart, Pill, Utensils, Droplet, Activity, Check, ChevronDown, ChevronRight, Circle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { SelfcareAction, SelfcareActionState, SelfcareTodayResponse } from '@/lib/types';
 
@@ -66,7 +67,7 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
       : `${label}: no record ever`;
 
   return (
-    <div className="rounded-lg bg-zinc-800/40 border border-zinc-700/30">
+    <div className="rounded-lg bg-surface-raised/40 border border-line/30">
       <button
         onClick={() => hasEntries && setExpanded((v) => !v)}
         disabled={!hasEntries}
@@ -75,21 +76,21 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
         aria-label={ariaLabel}
         className={`w-full flex items-center gap-3 p-2.5 ${
           hasEntries
-            ? 'hover:bg-zinc-800/60 cursor-pointer focus-visible:ring-2 focus-visible:ring-pink-400/50 focus-visible:outline-none'
+            ? 'hover:bg-surface-raised/60 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent-violet/50 focus-visible:outline-none'
             : 'cursor-default'
         } rounded-lg transition-colors text-left`}
       >
-        <Icon size={16} className={logged ? 'text-emerald-400 shrink-0' : 'text-zinc-500 shrink-0'} />
+        <Icon size={16} className={logged ? 'text-success shrink-0' : 'text-content-muted shrink-0'} />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
             <span className="text-sm font-medium text-white">{label}</span>
             {logged && (
-              <span className="text-xs text-emerald-400/80">
+              <span className="text-xs text-success/80">
                 {state.count_today}× today
               </span>
             )}
           </div>
-          <p className="text-xs text-zinc-500 truncate">
+          <p className="text-xs text-content-muted truncate">
             {logged && state.last_today ? (
               <>last {formatTimeOnly(state.last_today)}</>
             ) : logged ? (
@@ -102,23 +103,23 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
           </p>
         </div>
         {logged ? (
-          <Check size={16} className="text-emerald-400 shrink-0" aria-hidden />
+          <Check size={16} className="text-success shrink-0" aria-hidden />
         ) : (
-          <Circle size={16} className="text-zinc-500 shrink-0" aria-hidden />
+          <Circle size={16} className="text-content-muted shrink-0" aria-hidden />
         )}
         {hasEntries && (
           expanded
-            ? <ChevronDown size={14} className="text-zinc-500 shrink-0" aria-hidden />
-            : <ChevronRight size={14} className="text-zinc-500 shrink-0" aria-hidden />
+            ? <ChevronDown size={14} className="text-content-muted shrink-0" aria-hidden />
+            : <ChevronRight size={14} className="text-content-muted shrink-0" aria-hidden />
         )}
       </button>
 
       {expanded && hasEntries && (
-        <div className="border-t border-zinc-700/30 px-3 py-2 space-y-1">
+        <div className="border-t border-line/30 px-3 py-2 space-y-1">
           {state.entries.map((e) => (
             <div key={`${e.logged_at}-${e.detail ?? ''}`} className="flex items-baseline justify-between gap-2 text-xs">
-              <span className="text-zinc-400 truncate">{e.detail || '(no detail)'}</span>
-              <span className="text-zinc-500 shrink-0">{formatTimeOnly(e.logged_at)}</span>
+              <span className="text-content-secondary truncate">{e.detail || '(no detail)'}</span>
+              <span className="text-content-muted shrink-0">{formatTimeOnly(e.logged_at)}</span>
             </div>
           ))}
         </div>
@@ -150,12 +151,12 @@ export default function SelfcareTodayCard() {
   }, [fetchData]);
 
   return (
-    <div className="glass p-5">
-      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-        <Heart size={18} className="text-pink-400" />
+    <Card>
+      <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
+        <Heart size={18} className="text-accent-violet" />
         Selfcare Today
         {data && (
-          <span className="text-xs text-zinc-500 font-normal">
+          <span className="text-xs text-content-muted font-normal">
             {data.today_date}
           </span>
         )}
@@ -164,13 +165,13 @@ export default function SelfcareTodayCard() {
       {loading && (
         <div className="space-y-2">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-12 bg-zinc-800/50 rounded-lg animate-pulse" />
+            <div key={i} className="h-12 bg-surface-raised/50 rounded-lg animate-pulse" />
           ))}
         </div>
       )}
 
       {error && !data && (
-        <p className="text-sm text-red-400/70" title={error}>
+        <p className="text-sm text-danger/70" title={error}>
           Couldn&apos;t load selfcare state
         </p>
       )}
@@ -181,12 +182,12 @@ export default function SelfcareTodayCard() {
             <ActionRow key={action} action={action} state={data.actions[action]} />
           ))}
           {error && (
-            <p className="text-xs text-amber-400/60" title={error}>
+            <p className="text-xs text-warning/60" title={error}>
               (refresh failed — showing last loaded data)
             </p>
           )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

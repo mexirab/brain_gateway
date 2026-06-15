@@ -4,6 +4,7 @@ import FlowDiagram from '@/components/architecture/FlowDiagram';
 import SystemDiagram from '@/components/architecture/SystemDiagram';
 import CapabilityCard from '@/components/architecture/CapabilityCard';
 import { Server, Cpu, Wrench, FileText } from 'lucide-react';
+import { Card } from '@/components/ui';
 
 const STATS = [
   { icon: Server, label: 'Nodes', value: '5' },
@@ -21,7 +22,7 @@ export default function ArchitecturePage() {
           <h1 className="text-3xl md:text-4xl font-bold mb-2">
             Cluster Architecture
           </h1>
-          <p className="text-zinc-400 text-sm md:text-base">
+          <p className="text-content-secondary text-sm md:text-base">
             Brain Gateway runs across a 5-node home lab cluster with a unified AI brain (Qwen3.5-27B) handling both conversation and tool execution.
           </p>
         </div>
@@ -29,13 +30,13 @@ export default function ArchitecturePage() {
         {/* Stats bar */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {STATS.map(({ icon: Icon, label, value }) => (
-            <div key={label} className="glass p-4 flex items-center gap-3">
-              <Icon size={20} className="text-indigo-400 shrink-0" />
+            <Card key={label} padding="sm" className="flex items-center gap-3">
+              <Icon size={20} className="text-brand shrink-0" />
               <div>
                 <div className="text-2xl font-bold text-white">{value}</div>
-                <div className="text-xs text-zinc-500">{label}</div>
+                <div className="text-xs text-content-muted">{label}</div>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
 

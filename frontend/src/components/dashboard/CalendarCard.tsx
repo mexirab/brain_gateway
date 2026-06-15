@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Calendar, Clock } from 'lucide-react';
+import { Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { CalendarEvent } from '@/lib/types';
 
@@ -31,14 +32,14 @@ export default function CalendarCard() {
   };
 
   return (
-    <div className="glass p-5">
+    <Card>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-zinc-300 flex items-center gap-2">
-          <Calendar size={18} className="text-indigo-400" />
+        <h2 className="text-lg font-semibold text-content-primary flex items-center gap-2">
+          <Calendar size={18} className="text-brand" />
           Today
         </h2>
         {source && (
-          <span className="text-[10px] text-zinc-600 uppercase tracking-wider">
+          <span className="text-[10px] text-content-muted uppercase tracking-wider">
             {source === 'phone' ? 'All calendars' : 'Google'}
           </span>
         )}
@@ -47,15 +48,15 @@ export default function CalendarCard() {
       {loading && (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-10 bg-zinc-800/50 rounded-lg animate-pulse" />
+            <div key={i} className="h-10 bg-surface-raised/50 rounded-lg animate-pulse" />
           ))}
         </div>
       )}
 
-      {error && <p className="text-sm text-red-400/70">{error}</p>}
+      {error && <p className="text-sm text-danger/70">{error}</p>}
 
       {!loading && !error && events.length === 0 && (
-        <p className="text-sm text-zinc-500">No events today</p>
+        <p className="text-sm text-content-muted">No events today</p>
       )}
 
       {!loading && !error && events.length > 0 && (
@@ -63,14 +64,14 @@ export default function CalendarCard() {
           {events.map((event) => (
             <div
               key={event.id}
-              className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-800/40 border border-zinc-700/30"
+              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-line/30"
             >
-              <Clock size={14} className="text-zinc-500 shrink-0" />
+              <Clock size={14} className="text-content-muted shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">
                   {event.title}
                 </p>
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-content-muted">
                   {formatTime(event.start, event.all_day)}
                   {event.location && ` \u00b7 ${event.location}`}
                   {event.calendar && ` \u00b7 ${event.calendar}`}
@@ -80,6 +81,6 @@ export default function CalendarCard() {
           ))}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
