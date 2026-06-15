@@ -10,17 +10,17 @@ interface Props {
 }
 
 const TIER_COLORS: Record<number, { bg: string; text: string; glow: string }> = {
-  1: { bg: 'from-orange-900/80 to-orange-700/80', text: 'text-orange-300', glow: 'shadow-orange-500/30' },
-  2: { bg: 'from-amber-900/80 to-amber-700/80', text: 'text-amber-300', glow: 'shadow-amber-500/30' },
-  3: { bg: 'from-slate-700/80 to-slate-500/80', text: 'text-slate-200', glow: 'shadow-slate-400/30' },
-  4: { bg: 'from-yellow-800/80 to-yellow-600/80', text: 'text-yellow-300', glow: 'shadow-yellow-400/30' },
-  5: { bg: 'from-zinc-600/80 to-zinc-400/80', text: 'text-zinc-100', glow: 'shadow-zinc-300/30' },
-  6: { bg: 'from-cyan-800/80 to-cyan-600/80', text: 'text-cyan-200', glow: 'shadow-cyan-400/30' },
-  7: { bg: 'from-emerald-800/80 to-emerald-600/80', text: 'text-emerald-200', glow: 'shadow-emerald-400/30' },
-  8: { bg: 'from-blue-800/80 to-blue-600/80', text: 'text-blue-200', glow: 'shadow-blue-400/30' },
-  9: { bg: 'from-red-800/80 to-red-600/80', text: 'text-red-200', glow: 'shadow-red-400/30' },
-  10: { bg: 'from-zinc-900/80 to-zinc-700/80', text: 'text-zinc-100', glow: 'shadow-zinc-500/30' },
-  11: { bg: 'from-amber-700/80 to-yellow-500/80', text: 'text-yellow-100', glow: 'shadow-yellow-400/50' },
+  1: { bg: 'from-accent-flame/80 to-accent-flame/60', text: 'text-accent-flame', glow: 'shadow-accent-flame/30' },
+  2: { bg: 'from-accent-flame/70 to-accent-gold/60', text: 'text-accent-flame', glow: 'shadow-accent-flame/30' },
+  3: { bg: 'from-surface-overlay/80 to-surface-raised/80', text: 'text-content-secondary', glow: 'shadow-content-muted/30' },
+  4: { bg: 'from-accent-gold/80 to-accent-gold/60', text: 'text-accent-gold', glow: 'shadow-accent-gold/30' },
+  5: { bg: 'from-surface-overlay/80 to-content-muted/40', text: 'text-content-primary', glow: 'shadow-content-secondary/30' },
+  6: { bg: 'from-accent-cyan/80 to-accent-cyan/60', text: 'text-accent-cyan', glow: 'shadow-accent-cyan/30' },
+  7: { bg: 'from-success/80 to-success/60', text: 'text-success', glow: 'shadow-success/30' },
+  8: { bg: 'from-info/80 to-info/60', text: 'text-info', glow: 'shadow-info/30' },
+  9: { bg: 'from-danger/80 to-danger/60', text: 'text-danger', glow: 'shadow-danger/30' },
+  10: { bg: 'from-surface-inset/80 to-surface-raised/80', text: 'text-content-primary', glow: 'shadow-content-muted/30' },
+  11: { bg: 'from-accent-gold/80 to-accent-gold/60', text: 'text-accent-gold', glow: 'shadow-accent-gold/50' },
 };
 
 export default function LevelUpOverlay({ level, onDismiss }: Props) {

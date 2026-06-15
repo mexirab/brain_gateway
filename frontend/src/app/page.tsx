@@ -7,7 +7,7 @@ export default function LandingPage() {
         <h1 className="text-5xl font-bold tracking-tight">
           Meet <span className="text-brand-500">Jess</span>
         </h1>
-        <p className="text-xl text-zinc-400">
+        <p className="text-xl text-content-secondary">
           A personal AI assistant running on a local GPU cluster.
           Voice-first. ADHD-friendly. Always learning.
         </p>
@@ -20,7 +20,7 @@ export default function LandingPage() {
           </Link>
           <Link
             href="/architecture"
-            className="px-6 py-3 bg-surface-raised hover:bg-surface-overlay rounded-lg font-medium transition-colors border border-zinc-700"
+            className="px-6 py-3 bg-surface-raised hover:bg-surface-overlay rounded-lg font-medium transition-colors border border-line"
           >
             Architecture
           </Link>

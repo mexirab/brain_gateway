@@ -25,7 +25,10 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
   const spendAmount = amountNum - investAmount;
 
   const isBoss = type === 'bonus' ? 'Bonus' : 'ESPP';
-  const bossColor = type === 'bonus' ? 'amber' : 'purple';
+  const bossTheme =
+    type === 'bonus'
+      ? { border: 'border-accent-gold/30', iconBg: 'bg-accent-gold/15', iconText: 'text-accent-gold' }
+      : { border: 'border-accent-violet/30', iconBg: 'bg-accent-violet/15', iconText: 'text-accent-violet' };
 
   async function handleDefeat() {
     if (amountNum <= 0) return;
@@ -40,39 +43,39 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
 
   if (defeated) {
     return (
-      <div className="glass p-8 border border-amber-500/40 text-center">
+      <div className="glass p-8 border border-accent-gold/40 text-center">
         <div className="text-5xl mb-3">⚔️</div>
-        <h2 className="text-xl font-bold text-amber-400">Boss Defeated!</h2>
-        <p className="text-sm text-zinc-400 mt-2">
+        <h2 className="text-xl font-bold text-accent-gold">Boss Defeated!</h2>
+        <p className="text-sm text-content-secondary mt-2">
           {isBoss} windfall of {formatCurrency(amountNum)} split successfully
         </p>
         <div className="flex justify-center gap-6 mt-4">
           <div>
-            <p className="text-lg font-bold text-emerald-400">{formatCurrency(investAmount)}</p>
-            <p className="text-xs text-zinc-500">Invested</p>
+            <p className="text-lg font-bold text-success">{formatCurrency(investAmount)}</p>
+            <p className="text-xs text-content-muted">Invested</p>
           </div>
           <div>
-            <p className="text-lg font-bold text-brand-400">{formatCurrency(spendAmount)}</p>
-            <p className="text-xs text-zinc-500">Guilt-Free Spend</p>
+            <p className="text-lg font-bold text-brand">{formatCurrency(spendAmount)}</p>
+            <p className="text-xs text-content-muted">Guilt-Free Spend</p>
           </div>
         </div>
-        <p className="text-sm text-amber-400/80 mt-4 font-medium">+200 XP earned!</p>
+        <p className="text-sm text-accent-gold/80 mt-4 font-medium">+200 XP earned!</p>
       </div>
     );
   }
 
   return (
-    <div className={`glass p-6 border border-${bossColor}-500/30`}>
+    <div className={`glass p-6 border ${bossTheme.border}`}>
       {/* Boss header */}
       <div className="flex items-center gap-3 mb-6">
-        <div className={`p-3 rounded-xl bg-${bossColor}-500/15`}>
-          <Swords size={28} className={`text-${bossColor}-400`} />
+        <div className={`p-3 rounded-xl ${bossTheme.iconBg}`}>
+          <Swords size={28} className={bossTheme.iconText} />
         </div>
         <div>
-          <h2 className="text-lg font-bold text-zinc-100">
+          <h2 className="text-lg font-bold text-content-primary">
             {isBoss} Boss Battle
           </h2>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-content-muted">
             {type === 'bonus'
               ? 'Split your bonus wisely to defeat the boss'
               : 'ESPP windfall — recommended 67% invest / 33% spend'}
@@ -82,17 +85,17 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
 
       {/* Amount input */}
       <div className="mb-5">
-        <label className="block text-xs text-zinc-400 mb-1.5">
+        <label className="block text-xs text-content-secondary mb-1.5">
           Windfall Amount
         </label>
         <div className="relative">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">$</span>
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-content-muted">$</span>
           <input
             type="number"
             placeholder={type === 'bonus' ? '8231' : '8237'}
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="w-full bg-zinc-800 text-zinc-200 text-lg rounded-lg pl-7 pr-3 py-3 border border-zinc-700 focus:border-brand-500 focus:outline-none font-mono"
+            className="input text-lg pl-7 pr-3 py-3 font-mono"
             min="0"
             step="1"
           />
@@ -101,7 +104,7 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
 
       {/* Invest slider */}
       <div className="mb-5">
-        <div className="flex justify-between text-xs text-zinc-400 mb-2">
+        <div className="flex justify-between text-xs text-content-secondary mb-2">
           <span className="flex items-center gap-1">
             <TrendingUp size={12} />
             Invest: {investPercent}%
@@ -118,24 +121,24 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
           step="1"
           value={investPercent}
           onChange={(e) => setInvestPercent(parseInt(e.target.value))}
-          className="w-full accent-brand-500 h-2"
+          className="w-full accent-brand h-2"
         />
 
         {/* Split preview */}
         {amountNum > 0 && (
           <div className="flex justify-between mt-3">
             <div className="text-center flex-1">
-              <p className="text-lg font-bold text-emerald-400 font-mono">
+              <p className="text-lg font-bold text-success font-mono">
                 {formatCurrency(investAmount)}
               </p>
-              <p className="text-xs text-zinc-500">To investments</p>
+              <p className="text-xs text-content-muted">To investments</p>
             </div>
-            <div className="w-px bg-zinc-700 mx-3" />
+            <div className="w-px bg-line mx-3" />
             <div className="text-center flex-1">
-              <p className="text-lg font-bold text-brand-400 font-mono">
+              <p className="text-lg font-bold text-brand font-mono">
                 {formatCurrency(spendAmount)}
               </p>
-              <p className="text-xs text-zinc-500">Guilt-free spend</p>
+              <p className="text-xs text-content-muted">Guilt-free spend</p>
             </div>
           </div>
         )}
@@ -154,8 +157,8 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
             onClick={() => setInvestPercent(opt.pct)}
             className={`flex-1 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
               investPercent === opt.pct
-                ? 'border-brand-500 bg-brand-500/10 text-brand-400'
-                : 'border-zinc-700 text-zinc-400 hover:border-zinc-600'
+                ? 'border-brand bg-brand/10 text-brand'
+                : 'border-line text-content-secondary hover:border-line-strong'
             }`}
           >
             {opt.label}
@@ -167,7 +170,7 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
       <button
         onClick={handleDefeat}
         disabled={busy || amountNum <= 0}
-        className="w-full py-3 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-40 text-white font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-500/10"
+        className="w-full py-3 bg-gradient-to-r from-accent-gold to-accent-flame hover:from-accent-gold/90 hover:to-accent-flame/90 disabled:opacity-40 text-white font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-accent-gold/10"
       >
         {busy ? (
           <Loader2 size={18} className="animate-spin" />
@@ -180,7 +183,7 @@ export default function BossArena({ type, defaultInvestPercent, onDefeatBoss }: 
       </button>
 
       {/* XP reward note */}
-      <p className="text-center text-xs text-zinc-600 mt-2">
+      <p className="text-center text-xs text-content-muted mt-2">
         +200 XP • Jess will announce your victory
       </p>
     </div>

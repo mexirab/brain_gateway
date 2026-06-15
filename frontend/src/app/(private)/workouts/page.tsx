@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Dumbbell, Sparkles, Check, Trash2, History, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
+import { Button, Card } from '@/components/ui';
 import type {
   WorkoutTodayResponse,
   WorkoutToday,
@@ -196,65 +197,67 @@ export default function WorkoutsPage() {
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-zinc-200 flex items-center gap-3">
-          <Dumbbell size={24} className="text-emerald-400" />
+        <h1 className="text-2xl font-bold text-content-primary flex items-center gap-3">
+          <Dumbbell size={24} className="text-success" />
           Workouts
         </h1>
         {isActiveWorkout(today) && (
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm text-content-muted">
             {today.completed_sets}/{today.total_sets} sets
           </span>
         )}
       </div>
 
       {error && (
-        <div className="glass p-3 text-sm text-red-400/80 border-red-500/30">
+        <Card padding="none" className="p-3 text-sm text-danger/80 border-danger/30">
           {error}
-        </div>
+        </Card>
       )}
 
       {/* Empty state */}
       {!loading && !isActiveWorkout(today) && (
-        <div className="glass p-8 text-center space-y-4">
-          <p className="text-zinc-500">No workout today yet.</p>
-          <button
+        <Card padding="none" className="p-8 text-center space-y-4">
+          <p className="text-content-muted">No workout today yet.</p>
+          <Button
+            variant="primary"
             onClick={handleGenerate}
             disabled={generating}
-            className="inline-flex items-center gap-2 px-5 py-3 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors disabled:opacity-50"
           >
             <Sparkles size={16} />
             {generating ? 'Asking Jess…' : 'Ask Jess for a workout'}
-          </button>
-        </div>
+          </Button>
+        </Card>
       )}
 
       {/* Today's plan */}
       {isActiveWorkout(today) && (
-        <div className="glass p-5 space-y-4">
+        <Card className="space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs uppercase tracking-wider text-zinc-500">
+              <div className="text-xs uppercase tracking-wider text-content-muted">
                 {today.workout_type.replace(/_/g, ' ')}
               </div>
               {today.reasoning && (
-                <p className="text-sm text-zinc-400 mt-1">{today.reasoning}</p>
+                <p className="text-sm text-content-secondary mt-1">{today.reasoning}</p>
               )}
             </div>
             <div className="flex items-center gap-3">
               {!today.ended_at && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleEndWorkout}
-                  className="text-xs text-zinc-500 hover:text-emerald-400 whitespace-nowrap"
+                  className="whitespace-nowrap"
                 >
                   End session
-                </button>
+                </Button>
               )}
               <button
                 type="button"
                 onClick={() =>
                   handleDeleteWorkout(today.workout_id, "today's workout")
                 }
-                className="p-1.5 text-zinc-500 hover:text-red-400"
+                className="p-1.5 text-content-muted hover:text-danger"
                 aria-label="Delete today's workout"
                 title="Delete today's workout"
               >
@@ -266,12 +269,12 @@ export default function WorkoutsPage() {
           {today.exercises.map((ex) => (
             <div
               key={ex.name}
-              className="border border-zinc-800 rounded-lg p-4 space-y-3"
+              className="border border-line-subtle rounded-lg p-4 space-y-3"
             >
               <div className="flex items-center justify-between gap-2">
-                <h3 className="font-semibold text-zinc-200">{ex.name}</h3>
+                <h3 className="font-semibold text-content-primary">{ex.name}</h3>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-600 uppercase tracking-wide">
+                  <span className="text-[10px] text-content-muted uppercase tracking-wide">
                     {ex.muscle_groups.slice(0, 3).join(' · ')}
                   </span>
                   {!today.ended_at && (
@@ -280,7 +283,7 @@ export default function WorkoutsPage() {
                       onClick={() =>
                         handleRemoveExercise(today.workout_id, ex.name)
                       }
-                      className="p-2 text-zinc-600/60 hover:text-red-400"
+                      className="p-2 text-content-muted/60 hover:text-danger"
                       aria-label={`Remove ${ex.name}`}
                       title="Remove exercise (completed sets are kept)"
                     >
@@ -299,7 +302,7 @@ export default function WorkoutsPage() {
                         s.completed ? 'opacity-60' : ''
                       }`}
                     >
-                      <span className="w-6 text-xs text-zinc-600">
+                      <span className="w-6 text-xs text-content-muted">
                         {s.set_number}
                       </span>
                       <input
@@ -310,10 +313,10 @@ export default function WorkoutsPage() {
                         onChange={(e) =>
                           updateInput(s.id, 'weight', e.target.value)
                         }
-                        className="w-20 bg-transparent border border-zinc-700 rounded px-2 py-1 text-zinc-200 text-sm focus:outline-none focus:border-emerald-500"
+                        className="input w-20 text-sm"
                         disabled={s.completed}
                       />
-                      <span className="text-zinc-600">×</span>
+                      <span className="text-content-muted">×</span>
                       <input
                         type="number"
                         inputMode="numeric"
@@ -322,11 +325,11 @@ export default function WorkoutsPage() {
                         onChange={(e) =>
                           updateInput(s.id, 'reps', e.target.value)
                         }
-                        className="w-16 bg-transparent border border-zinc-700 rounded px-2 py-1 text-zinc-200 text-sm focus:outline-none focus:border-emerald-500"
+                        className="input w-16 text-sm"
                         disabled={s.completed}
                       />
                       {s.target_reps && !s.completed && (
-                        <span className="text-[10px] text-zinc-600">
+                        <span className="text-[10px] text-content-muted">
                           target {s.target_reps}
                           {s.target_weight_lbs
                             ? ` @ ${s.target_weight_lbs}`
@@ -337,19 +340,19 @@ export default function WorkoutsPage() {
                         {!s.completed ? (
                           <button
                             onClick={() => handleLogSet(s, ex.name)}
-                            className="p-1.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30"
+                            className="p-1.5 rounded bg-success/20 text-success border border-success/30 hover:bg-success/30"
                             aria-label="log set"
                           >
                             <Check size={14} />
                           </button>
                         ) : (
-                          <span className="text-emerald-500/60 p-1.5">
+                          <span className="text-success/60 p-1.5">
                             <Check size={14} />
                           </span>
                         )}
                         <button
                           onClick={() => handleDeleteSet(s.id)}
-                          className="p-1.5 text-zinc-600/60 hover:text-red-400 focus:text-red-400"
+                          className="p-1.5 text-content-muted/60 hover:text-danger focus:text-danger"
                           aria-label="delete set"
                         >
                           <Trash2 size={12} />
@@ -365,21 +368,23 @@ export default function WorkoutsPage() {
           {!today.ended_at && (
             <div className="pt-1">
               {!addPickerOpen ? (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setAddPickerOpen(true)}
                   disabled={catalog.length === 0}
-                  className="w-full inline-flex items-center justify-center gap-2 py-2 text-xs text-zinc-500 hover:text-emerald-400 transition-colors border border-dashed border-zinc-800 rounded-lg disabled:opacity-40 disabled:hover:text-zinc-500"
+                  className="w-full border border-dashed border-line-subtle"
                 >
                   <Plus size={12} />
                   {catalog.length === 0 ? 'Exercise catalog unavailable' : 'Add exercise'}
-                </button>
+                </Button>
               ) : (
                 <div className="flex items-center gap-2">
                   <select
                     value={addSelection}
                     onChange={(e) => setAddSelection(e.target.value)}
-                    className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+                    className="input flex-1 text-sm"
                   >
                     <option value="">Pick an exercise…</option>
                     {catalog.map((ex) => (
@@ -388,58 +393,62 @@ export default function WorkoutsPage() {
                       </option>
                     ))}
                   </select>
-                  <button
+                  <Button
                     type="button"
+                    variant="primary"
+                    size="sm"
                     onClick={handleAddExercise}
                     disabled={!addSelection}
-                    className="px-3 py-1.5 text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded hover:bg-emerald-500/30 disabled:opacity-40"
                   >
                     Add
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setAddPickerOpen(false);
                       setAddSelection('');
                     }}
-                    className="px-2 py-1.5 text-xs text-zinc-500 hover:text-zinc-300"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
           )}
 
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={handleGenerate}
             disabled={generating}
-            className="w-full inline-flex items-center justify-center gap-2 py-2 text-xs text-zinc-500 hover:text-emerald-400 transition-colors"
+            className="w-full"
           >
             <Sparkles size={12} />
             Regenerate today&apos;s workout
-          </button>
-        </div>
+          </Button>
+        </Card>
       )}
 
       {/* History */}
       {history.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-zinc-500">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-content-muted">
             <History size={12} />
             Recent sessions
           </div>
           {history.map((h) => (
-            <div key={h.id} className="glass p-3 text-sm">
+            <Card key={h.id} padding="none" className="p-3 text-sm">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-zinc-300">
+                <span className="text-content-primary">
                   {new Date(h.started_at).toLocaleDateString()} ·{' '}
-                  <span className="text-zinc-500">
+                  <span className="text-content-muted">
                     {h.workout_type.replace(/_/g, ' ')}
                   </span>
                 </span>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-zinc-600">
+                  <span className="text-xs text-content-muted">
                     {h.completed_set_count}/{h.set_count} sets ·{' '}
                     {h.total_volume_lbs.toLocaleString()} lb volume
                   </span>
@@ -451,7 +460,7 @@ export default function WorkoutsPage() {
                         `${new Date(h.started_at).toLocaleDateString()} ${h.workout_type.replace(/_/g, ' ')}`,
                       )
                     }
-                    className="p-2 text-zinc-600/60 hover:text-red-400"
+                    className="p-2 text-content-muted/60 hover:text-danger"
                     aria-label={`Delete ${new Date(h.started_at).toLocaleDateString()} workout`}
                     title="Delete this workout"
                   >
@@ -459,11 +468,11 @@ export default function WorkoutsPage() {
                   </button>
                 </div>
               </div>
-              <div className="text-[11px] text-zinc-600 mt-1">
+              <div className="text-[11px] text-content-muted mt-1">
                 {h.exercises.slice(0, 5).join(', ')}
                 {h.exercises.length > 5 ? '…' : ''}
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       )}
@@ -471,7 +480,7 @@ export default function WorkoutsPage() {
       {loading && (
         <div className="space-y-2">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-24 bg-zinc-800/30 rounded-lg animate-pulse" />
+            <div key={i} className="h-24 bg-surface-raised/30 rounded-lg animate-pulse" />
           ))}
         </div>
       )}

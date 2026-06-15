@@ -24,7 +24,7 @@ export default function FinanceShell({
     <FinanceProvider>
       {/* Sub-navigation tabs */}
       <div className="max-w-4xl mx-auto mb-4">
-        <div className="flex gap-1 bg-zinc-900/50 rounded-xl p-1 border border-zinc-800">
+        <div className="flex gap-1 bg-surface-base/50 rounded-xl p-1 border border-line-subtle">
           {FINANCE_TABS.map((tab) => {
             const active = pathname === tab.href;
             const Icon = tab.icon;
@@ -34,8 +34,8 @@ export default function FinanceShell({
                 href={tab.href}
                 className={`flex items-center gap-1.5 px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors flex-1 justify-center ${
                   active
-                    ? 'bg-zinc-800 text-zinc-100 shadow-sm'
-                    : 'text-zinc-500 hover:text-zinc-300'
+                    ? 'bg-surface-raised text-content-primary shadow-sm'
+                    : 'text-content-muted hover:text-content-primary'
                 }`}
               >
                 <Icon size={14} />

@@ -9,22 +9,24 @@
    =========================================================================== */
 :root {
   /* Surfaces */
-  --surface-base: #0f1117;
-  --surface-raised: #1a1d2e;
-  --surface-overlay: #242736;
-  --surface-inset: #0b0d14;
+  --surface-base: #0b0c12;
+  --surface-raised: #14151f;
+  --surface-overlay: #1d1e2b;
+  --surface-inset: #07080d;
 
   /* Content (text) */
-  --content-primary: #e4e4e7;
-  --content-secondary: #a1a1aa;
-  --content-muted: #71717a;
+  --content-primary: #edecf2;
+  --content-secondary: #aaa9b8;
+  --content-muted: #84838f;
 
   /* Lines */
-  --line: rgba(255, 255, 255, 0.1);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-subtle: rgba(255, 255, 255, 0.05);
+  --line-strong: rgba(255, 255, 255, 0.15);
 
   /* Brand + status */
-  --brand: #6366f1;
-  --brand-hover: #5558e3;
+  --brand: #6f63ff;
+  --brand-hover: #5d50f0;
 
   /* Back-compat aliases (older code references these) */
   --bg-primary: var(--surface-base);
@@ -36,7 +38,14 @@
 }
 
 body {
-  background: var(--surface-base);
+  background:
+    radial-gradient(
+      900px circle at 100% -10%,
+      rgba(111, 99, 255, 0.08),
+      transparent 55%
+    ),
+    var(--surface-base);
+  background-attachment: fixed;
   color: var(--content-primary);
 }
 
@@ -60,10 +69,13 @@ body {
      name (identical); `.card-inset` is for nested wells inside a card. */
   .glass,
   .card {
-    background: color-mix(in srgb, var(--surface-raised) 80%, transparent);
+    background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
     backdrop-filter: blur(12px);
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: 14px;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 8px 24px -12px rgba(0, 0, 0, 0.55);
   }
   .card-inset {
     @apply rounded-lg border border-line-subtle bg-surface-inset/60;
@@ -99,7 +111,9 @@ body {
     @apply px-4 py-2 text-sm;
   }
   .btn-primary {
-    @apply bg-brand text-white hover:bg-brand-hover;
+    /* brand-600 (not the brighter brand DEFAULT) so white label clears WCAG AA
+       contrast on the solid fill; the vivid brand stays for logo/text/accents. */
+    @apply bg-brand-600 text-white hover:bg-brand-700;
   }
   .btn-secondary {
     @apply border border-line bg-surface-overlay text-content-secondary hover:text-content-primary;

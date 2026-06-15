@@ -10,6 +10,7 @@ import {
   type Weekday,
 } from '@/lib/settings-api';
 import { SaveBar } from './IdentityPanel';
+import { Button } from '@/components/ui';
 
 const DAY_LABELS: Array<{ key: Weekday; label: string }> = [
   { key: 'mon', label: 'Mon' },
@@ -144,7 +145,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-white">Routines</h2>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-content-secondary mt-1">
           Step-by-step routines Jess walks you through. Time + day changes take effect immediately —
           power-user fields like Home Assistant actions are preserved.
         </p>
@@ -152,7 +153,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
 
       {/* Routine sub-tabs */}
       {routineIds.length > 1 && (
-        <div className="flex flex-wrap gap-2 border-b border-zinc-800 pb-2">
+        <div className="flex flex-wrap gap-2 border-b border-line-subtle pb-2">
           {routineIds.map((rid) => {
             const isActive = rid === activeId;
             return (
@@ -164,7 +165,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
                 className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
                   isActive
                     ? 'border-brand-500/60 bg-brand-500/10 text-brand-500'
-                    : 'border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white'
+                    : 'border-line text-content-primary hover:border-line-strong hover:text-white'
                 }`}
               >
                 {draft.routines[rid].display_name || rid}
@@ -249,40 +250,40 @@ function RoutineEditor({
     <div className="space-y-5">
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Display name</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Display name</span>
           <input
             type="text"
             value={routine.display_name}
             onChange={(e) => onChange((r) => ({ ...r, display_name: e.target.value }))}
             maxLength={200}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Speaker (HA entity)</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Speaker (HA entity)</span>
           <input
             type="text"
             value={routine.speaker}
             onChange={(e) => onChange((r) => ({ ...r, speaker: e.target.value }))}
             maxLength={200}
             placeholder="media_player.bedroom_pair"
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-brand-500"
+            className="input font-mono"
           />
         </label>
       </div>
 
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Trigger time</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Trigger time</span>
           <input
             type="time"
             value={routine.trigger.time}
             onChange={(e) => onChange((r) => ({ ...r, trigger: { ...r.trigger, time: e.target.value } }))}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Nudge delay (minutes)</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Nudge delay (minutes)</span>
           <input
             type="number"
             min={1}
@@ -293,14 +294,14 @@ function RoutineEditor({
               if (!Number.isFinite(n)) return;
               onChange((r) => ({ ...r, nudge_delay_minutes: n }));
             }}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500 w-32"
+            className="input w-32"
           />
         </label>
       </div>
 
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Max nudges per step</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Max nudges per step</span>
           <input
             type="number"
             min={1}
@@ -311,9 +312,9 @@ function RoutineEditor({
               if (!Number.isFinite(n)) return;
               onChange((r) => ({ ...r, nudge_max: Math.max(1, Math.min(20, Math.floor(n))) }));
             }}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500 w-32"
+            className="input w-32"
           />
-          <span className="text-xs text-zinc-500">
+          <span className="text-xs text-content-muted">
             After this many &ldquo;still on X?&rdquo; nudges, Jess gives up on the step.
           </span>
         </label>
@@ -326,7 +327,7 @@ function RoutineEditor({
           />
           <span className="flex flex-col">
             <span className="text-sm text-white">Auto-skip on max nudges</span>
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-content-muted">
               When max nudges hit: <strong>on</strong> = advance past skippable steps; <strong>off</strong> = end the whole routine.
             </span>
           </span>
@@ -334,7 +335,7 @@ function RoutineEditor({
       </div>
 
       <fieldset>
-        <legend className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Active days</legend>
+        <legend className="text-xs uppercase tracking-wider text-content-muted mb-2">Active days</legend>
         <div className="flex flex-wrap gap-2">
           {DAY_LABELS.map(({ key, label }) => {
             const active = routine.trigger.days.includes(key);
@@ -347,7 +348,7 @@ function RoutineEditor({
                 className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
                   active
                     ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-white'
+                    : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
                 }`}
               >
                 {label}
@@ -360,14 +361,15 @@ function RoutineEditor({
       <div>
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-white">Steps ({routine.steps.length})</h3>
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             onClick={addStep}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 text-zinc-300 text-sm hover:border-zinc-500 hover:text-white"
           >
             <Plus size={14} />
             Add step
-          </button>
+          </Button>
         </div>
         <ul className="space-y-2">
           {routine.steps.map((step, i) => (
@@ -377,21 +379,21 @@ function RoutineEditor({
               // step.id uniqueness within a routine is enforced by both the
               // backend Pydantic regex and `newStep()`'s collision-safe gen.
               key={`${routineId}-${step.id}`}
-              className="rounded-lg border border-zinc-700 bg-zinc-900/40 p-3"
+              className="rounded-lg border border-line bg-surface-base/40 p-3"
             >
               <div className="grid sm:grid-cols-[1fr_120px_auto] gap-3 items-start">
                 <label className="flex flex-col gap-1.5 min-w-0">
-                  <span className="text-xs uppercase tracking-wider text-zinc-500">Label</span>
+                  <span className="text-xs uppercase tracking-wider text-content-muted">Label</span>
                   <input
                     type="text"
                     value={step.label}
                     onChange={(e) => patchStep(i, { label: e.target.value })}
                     maxLength={200}
-                    className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+                    className="input"
                   />
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className="text-xs uppercase tracking-wider text-zinc-500">Est. min</span>
+                  <span className="text-xs uppercase tracking-wider text-content-muted">Est. min</span>
                   <input
                     type="number"
                     min={0}
@@ -402,18 +404,18 @@ function RoutineEditor({
                       if (!Number.isFinite(n)) return;
                       patchStep(i, { est_minutes: n });
                     }}
-                    className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+                    className="input"
                   />
                 </label>
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-xs uppercase tracking-wider text-zinc-500">Actions</span>
+                  <span className="text-xs uppercase tracking-wider text-content-muted">Actions</span>
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
                       onClick={() => moveStep(i, -1)}
                       disabled={i === 0}
                       aria-label="Move step up"
-                      className="p-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="p-1.5 rounded-md border border-line text-content-primary hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <ArrowUp size={14} />
                     </button>
@@ -422,7 +424,7 @@ function RoutineEditor({
                       onClick={() => moveStep(i, 1)}
                       disabled={i === routine.steps.length - 1}
                       aria-label="Move step down"
-                      className="p-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="p-1.5 rounded-md border border-line text-content-primary hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <ArrowDown size={14} />
                     </button>
@@ -431,7 +433,7 @@ function RoutineEditor({
                       onClick={() => removeStep(i)}
                       disabled={routine.steps.length <= 1}
                       aria-label="Delete step"
-                      className="p-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/40 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="p-1.5 rounded-md border border-line text-content-primary hover:bg-danger/20 hover:text-danger hover:border-danger/40 disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -445,7 +447,7 @@ function RoutineEditor({
                   onChange={(e) => patchStep(i, { skippable: e.target.checked })}
                   className="h-4 w-4 accent-brand-500"
                 />
-                <span className="text-xs text-zinc-400">
+                <span className="text-xs text-content-secondary">
                   Skippable — required for &ldquo;Auto-skip on max nudges&rdquo; above to advance past this step
                 </span>
               </label>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Bell, Check } from 'lucide-react';
+import { Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { Reminder } from '@/lib/types';
 
@@ -39,12 +40,12 @@ export default function RemindersCard() {
   };
 
   return (
-    <div className="glass p-5">
-      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-        <Bell size={18} className="text-amber-400" />
+    <Card>
+      <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
+        <Bell size={18} className="text-warning" />
         Reminders
         {reminders.length > 0 && (
-          <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">
+          <span className="text-xs bg-warning/20 text-warning px-2 py-0.5 rounded-full">
             {reminders.length}
           </span>
         )}
@@ -53,15 +54,15 @@ export default function RemindersCard() {
       {loading && (
         <div className="space-y-2">
           {[1, 2].map((i) => (
-            <div key={i} className="h-10 bg-zinc-800/50 rounded-lg animate-pulse" />
+            <div key={i} className="h-10 bg-surface-raised/50 rounded-lg animate-pulse" />
           ))}
         </div>
       )}
 
-      {error && <p className="text-sm text-red-400/70">{error}</p>}
+      {error && <p className="text-sm text-danger/70">{error}</p>}
 
       {!loading && !error && reminders.length === 0 && (
-        <p className="text-sm text-zinc-500">No pending reminders</p>
+        <p className="text-sm text-content-muted">No pending reminders</p>
       )}
 
       {!loading && !error && reminders.length > 0 && (
@@ -69,15 +70,15 @@ export default function RemindersCard() {
           {reminders.map((r) => (
             <div
               key={r.id}
-              className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-800/40 border border-zinc-700/30"
+              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-line/30"
             >
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">{r.text}</p>
-                <p className="text-xs text-zinc-500">{formatTime(r.time)}</p>
+                <p className="text-xs text-content-muted">{formatTime(r.time)}</p>
               </div>
               <button
                 onClick={() => handleComplete(r.id)}
-                className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-zinc-500 hover:text-emerald-400 transition-colors shrink-0"
+                className="p-1.5 rounded-lg hover:bg-success/20 text-content-muted hover:text-success transition-colors shrink-0"
                 title="Complete"
               >
                 <Check size={16} />
@@ -86,6 +87,6 @@ export default function RemindersCard() {
           ))}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

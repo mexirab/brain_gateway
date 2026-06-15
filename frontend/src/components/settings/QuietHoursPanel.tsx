@@ -123,14 +123,14 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-white">Quiet Hours</h2>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-content-secondary mt-1">
           During this window, selfcare nudges are suppressed. Reminders still fire (they may be urgent).
         </p>
       </div>
 
       <div className="grid sm:grid-cols-2 gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Quiet start</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Quiet start</span>
           <input
             type="time"
             value={draft.start}
@@ -138,11 +138,11 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
               setDraft((d) => (d ? { ...d, start: e.target.value } : d));
               setStatusMsg(null);
             }}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Quiet end</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Quiet end</span>
           <input
             type="time"
             value={draft.end}
@@ -150,13 +150,13 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
               setDraft((d) => (d ? { ...d, end: e.target.value } : d));
               setStatusMsg(null);
             }}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           />
         </label>
       </div>
 
       <fieldset>
-        <legend className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+        <legend className="text-xs uppercase tracking-wider text-content-muted mb-2">
           Apply on these days
         </legend>
         <div className="flex flex-wrap gap-2">
@@ -171,7 +171,7 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
                 className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
                   active
                     ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-white'
+                    : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
                 }`}
               >
                 {label}
@@ -181,7 +181,7 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
         </div>
       </fieldset>
 
-      <p className="text-sm text-zinc-400 italic">
+      <p className="text-sm text-content-secondary italic">
         {formatHumanWindow(draft.start, draft.end, draft.days)}
       </p>
 

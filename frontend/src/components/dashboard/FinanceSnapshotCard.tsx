@@ -27,30 +27,30 @@ export default function FinanceSnapshotCard() {
     : 0;
 
   const healthColor =
-    healthPct > 50 ? 'bg-emerald-500' :
-    healthPct > 25 ? 'bg-amber-500' :
-    healthPct > 0  ? 'bg-orange-500' :
-    'bg-red-500';
+    healthPct > 50 ? 'bg-success' :
+    healthPct > 25 ? 'bg-warning' :
+    healthPct > 0  ? 'bg-warning' :
+    'bg-danger';
 
   return (
-    <Link href="/finance" className="block glass p-5 hover:border-indigo-500/40 transition-colors cursor-pointer">
-      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-        <Coins size={18} className="text-amber-400" />
+    <Link href="/finance" className="block glass p-5 hover:border-brand/40 transition-colors cursor-pointer">
+      <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
+        <Coins size={18} className="text-warning" />
         Budget
       </h2>
 
-      {loading && <div className="h-20 bg-zinc-800/50 rounded-lg animate-pulse" />}
-      {error && <p className="text-sm text-red-400/70">{error}</p>}
+      {loading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {error && <p className="text-sm text-danger/70">{error}</p>}
 
       {!loading && !error && budget && game && (
         <div className="space-y-3">
           {/* Health bar */}
           <div>
-            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+            <div className="flex justify-between text-xs text-content-secondary mb-1">
               <span>${(budget.discretionary_budget - budget.discretionary_spent).toFixed(0)} left</span>
               <span>${budget.discretionary_budget.toFixed(0)}</span>
             </div>
-            <div className="h-3 bg-zinc-800 rounded-full overflow-hidden">
+            <div className="h-3 bg-surface-raised rounded-full overflow-hidden">
               <div
                 className={`h-full ${healthColor} rounded-full transition-all`}
                 style={{ width: `${healthPct}%` }}
@@ -61,19 +61,19 @@ export default function FinanceSnapshotCard() {
           {/* Level + XP */}
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-2">
-              <TrendingUp size={14} className="text-indigo-400" />
+              <TrendingUp size={14} className="text-brand" />
               <span className="text-sm text-white">
                 Lv.{game.level}
               </span>
             </div>
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-content-muted">
               {game.total_xp} XP
             </span>
           </div>
 
           {/* Streak */}
           {game.streak_months > 0 && (
-            <div className="text-xs text-amber-400">
+            <div className="text-xs text-warning">
               {game.streak_months} month streak
             </div>
           )}

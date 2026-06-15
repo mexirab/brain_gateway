@@ -3,19 +3,20 @@
 import { useState, useEffect, useRef } from 'react';
 import { FileText, Upload, Search, Trash2, Download, X } from 'lucide-react';
 import { api } from '@/lib/api';
+import { Button } from '@/components/ui';
 import type { VaultDocument } from '@/lib/types';
 
 const CATEGORIES = ['all', 'auto', 'financial', 'medical', 'legal', 'insurance', 'personal', 'housing', 'other'];
 
 const CAT_COLORS: Record<string, string> = {
-  auto: 'bg-blue-500/20 text-blue-400',
-  financial: 'bg-green-500/20 text-green-400',
-  medical: 'bg-red-500/20 text-red-400',
-  legal: 'bg-amber-500/20 text-amber-400',
-  insurance: 'bg-purple-500/20 text-purple-400',
-  personal: 'bg-indigo-500/20 text-indigo-400',
-  housing: 'bg-teal-500/20 text-teal-400',
-  other: 'bg-zinc-500/20 text-zinc-400',
+  auto: 'bg-info/20 text-info',
+  financial: 'bg-success/20 text-success',
+  medical: 'bg-danger/20 text-danger',
+  legal: 'bg-warning/20 text-warning',
+  insurance: 'bg-brand/20 text-brand',
+  personal: 'bg-brand/20 text-brand',
+  housing: 'bg-success/20 text-success',
+  other: 'bg-surface-overlay text-content-secondary',
 };
 
 function formatSize(bytes: number): string {
@@ -60,16 +61,13 @@ export default function DocumentsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <FileText size={24} className="text-indigo-400" />
+          <FileText size={24} className="text-brand" />
           Document Vault
         </h1>
-        <button
-          onClick={() => setShowUpload(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 transition-colors text-sm font-medium"
-        >
+        <Button variant="primary" onClick={() => setShowUpload(true)}>
           <Upload size={16} />
           Upload
-        </button>
+        </Button>
       </div>
 
       {/* Filters */}
@@ -80,8 +78,8 @@ export default function DocumentsPage() {
             onClick={() => setCategory(cat)}
             className={`px-3 py-1 rounded-full text-xs transition-colors ${
               category === cat
-                ? 'bg-indigo-500/30 text-indigo-300'
-                : 'bg-zinc-800/50 text-zinc-500 hover:text-zinc-300'
+                ? 'bg-brand/30 text-brand'
+                : 'bg-surface-raised/50 text-content-muted hover:text-content-primary'
             }`}
           >
             {cat}
@@ -91,13 +89,13 @@ export default function DocumentsPage() {
 
       {/* Search */}
       <div className="relative mb-4">
-        <Search size={16} className="absolute left-3 top-2.5 text-zinc-500" />
+        <Search size={16} className="absolute left-3 top-2.5 text-content-muted" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search documents..."
-          className="w-full pl-9 pr-4 py-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/50"
+          className="input w-full pl-9"
         />
       </div>
 
@@ -105,10 +103,10 @@ export default function DocumentsPage() {
       <div className="flex-1 overflow-y-auto space-y-2">
         {docs.length === 0 && (
           <div className="flex-1 flex items-center justify-center h-full">
-            <div className="text-center text-zinc-500">
+            <div className="text-center text-content-muted">
               <FileText size={48} className="mx-auto mb-3 opacity-30" />
               <p className="text-sm">No documents yet</p>
-              <p className="text-xs mt-1 text-zinc-600">Upload your first document to get started</p>
+              <p className="text-xs mt-1 text-content-muted">Upload your first document to get started</p>
             </div>
           </div>
         )}
@@ -116,30 +114,30 @@ export default function DocumentsPage() {
         {docs.map((doc) => (
           <div
             key={doc.id}
-            className="flex items-center gap-3 px-4 py-3 bg-zinc-800/40 border border-zinc-700/30 rounded-lg group"
+            className="flex items-center gap-3 px-4 py-3 bg-surface-raised/40 border border-line/30 rounded-lg group"
           >
-            <FileText size={20} className="text-zinc-500 shrink-0" />
+            <FileText size={20} className="text-content-muted shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-zinc-200 truncate">{doc.title}</p>
+              <p className="text-sm font-medium text-content-primary truncate">{doc.title}</p>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className={`text-[10px] px-1.5 py-0.5 rounded ${CAT_COLORS[doc.category] || CAT_COLORS.other}`}>
                   {doc.category}
                 </span>
-                <span className="text-[10px] text-zinc-600">{formatSize(doc.file_size)}</span>
-                <span className="text-[10px] text-zinc-600">{formatDate(doc.uploaded_at)}</span>
-                {doc.tags && <span className="text-[10px] text-zinc-600 truncate">{doc.tags}</span>}
+                <span className="text-[10px] text-content-muted">{formatSize(doc.file_size)}</span>
+                <span className="text-[10px] text-content-muted">{formatDate(doc.uploaded_at)}</span>
+                {doc.tags && <span className="text-[10px] text-content-muted truncate">{doc.tags}</span>}
               </div>
             </div>
             <a
               href={`/api/proxy/api/documents/${doc.id}/download`}
-              className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-indigo-400 transition-opacity"
+              className="opacity-0 group-hover:opacity-100 text-content-muted hover:text-brand transition-opacity"
               title="Download"
             >
               <Download size={16} />
             </a>
             <button
               onClick={() => handleDelete(doc.id)}
-              className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-opacity"
+              className="opacity-0 group-hover:opacity-100 text-content-muted hover:text-danger transition-opacity"
               title="Delete"
             >
               <Trash2 size={16} />
@@ -204,10 +202,10 @@ function UploadModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md p-6 space-y-4">
+      <div className="bg-surface-base border border-line rounded-xl w-full max-w-md p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold">Upload Document</h2>
-          <button onClick={onClose} className="text-zinc-500 hover:text-white">
+          <button onClick={onClose} className="text-content-muted hover:text-white">
             <X size={20} />
           </button>
         </div>
@@ -217,7 +215,7 @@ function UploadModal({
           <input ref={fileRef} type="file" onChange={handleFileChange} className="hidden" accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.txt,.md" />
           <button
             onClick={() => fileRef.current?.click()}
-            className="w-full py-8 border-2 border-dashed border-zinc-700 rounded-lg text-zinc-500 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors text-sm"
+            className="w-full py-8 border-2 border-dashed border-line rounded-lg text-content-muted hover:border-brand/50 hover:text-brand transition-colors text-sm"
           >
             {file ? file.name : 'Click to select file'}
           </button>
@@ -228,14 +226,14 @@ function UploadModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Document title"
-          className="w-full px-3 py-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/50"
+          className="input w-full"
         />
 
         {/* Category */}
         <select
           value={category}
           onChange={(e) => setCategory(e.target.value)}
-          className="w-full px-3 py-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500/50"
+          className="input w-full"
         >
           {CATEGORIES.filter((c) => c !== 'all').map((c) => (
             <option key={c} value={c}>{c}</option>
@@ -247,7 +245,7 @@ function UploadModal({
           value={tags}
           onChange={(e) => setTags(e.target.value)}
           placeholder="Tags (comma separated)"
-          className="w-full px-3 py-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/50"
+          className="input w-full"
         />
 
         {/* Notes */}
@@ -256,18 +254,19 @@ function UploadModal({
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Notes (optional)"
           rows={2}
-          className="w-full px-3 py-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/50 resize-none"
+          className="input w-full resize-none"
         />
 
-        {error && <p className="text-red-400 text-xs">{error}</p>}
+        {error && <p className="text-danger text-xs">{error}</p>}
 
-        <button
+        <Button
+          variant="primary"
           onClick={handleSubmit}
           disabled={!file || !title.trim() || uploading}
-          className="w-full py-2.5 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 transition-colors text-sm font-medium disabled:opacity-30"
+          className="w-full"
         >
           {uploading ? 'Uploading...' : 'Upload'}
-        </button>
+        </Button>
       </div>
     </div>
   );

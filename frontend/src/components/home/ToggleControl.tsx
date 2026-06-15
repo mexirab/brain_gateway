@@ -28,14 +28,14 @@ export default function ToggleControl({ entity, onStateChange }: ToggleControlPr
   };
 
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg bg-zinc-800/40 border border-zinc-700/30">
+    <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-raised/40 border border-line/30">
       <button
         onClick={handleToggle}
         disabled={acting}
         className={`p-2 rounded-lg transition-colors shrink-0 ${
           isOn
-            ? 'bg-emerald-500/20 text-emerald-400'
-            : 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-400'
+            ? 'bg-success/20 text-success'
+            : 'bg-surface-raised/60 text-content-muted hover:text-content-secondary'
         }`}
       >
         <Power size={18} />
@@ -43,7 +43,7 @@ export default function ToggleControl({ entity, onStateChange }: ToggleControlPr
       <p className="text-sm font-medium text-white truncate flex-1">
         {entity.friendly_name}
       </p>
-      <span className={`text-xs ${isOn ? 'text-emerald-400' : 'text-zinc-600'}`}>
+      <span className={`text-xs ${isOn ? 'text-success' : 'text-content-muted'}`}>
         {isOn ? 'ON' : 'OFF'}
       </span>
     </div>

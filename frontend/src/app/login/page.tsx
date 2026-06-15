@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Button, Card } from '@/components/ui';
 
 function LoginForm() {
   const [password, setPassword] = useState('');
@@ -43,17 +44,18 @@ function LoginForm() {
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         placeholder="Password"
-        className="w-full px-4 py-3 bg-surface-overlay border border-zinc-700 rounded-lg focus:outline-none focus:border-brand-500 transition-colors"
+        className="input px-4 py-3"
         autoFocus
       />
-      {error && <p className="text-red-400 text-sm">{error}</p>}
-      <button
+      {error && <p className="text-danger text-sm">{error}</p>}
+      <Button
         type="submit"
+        variant="primary"
         disabled={loading || !password}
-        className="w-full py-3 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-lg font-medium transition-colors"
+        className="w-full py-3"
       >
         {loading ? 'Signing in...' : 'Sign In'}
-      </button>
+      </Button>
     </form>
   );
 }
@@ -61,15 +63,15 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <main className="min-h-screen flex items-center justify-center px-6">
-      <div className="glass p-8 w-full max-w-sm space-y-6">
+      <Card padding="none" className="p-8 w-full max-w-sm space-y-6">
         <div className="text-center">
           <h1 className="text-2xl font-bold">Convivial Prophet</h1>
-          <p className="text-zinc-400 mt-1">Enter your password</p>
+          <p className="text-content-secondary mt-1">Enter your password</p>
         </div>
         <Suspense>
           <LoginForm />
         </Suspense>
-      </div>
+      </Card>
     </main>
   );
 }

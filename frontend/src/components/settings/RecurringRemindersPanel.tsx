@@ -8,6 +8,7 @@ import {
   type RecurringRuleInput,
   type Weekday,
 } from '@/lib/settings-api';
+import { Button } from '@/components/ui';
 
 const DAY_LABELS: Array<{ key: Weekday; label: string }> = [
   { key: 'mon', label: 'Mon' },
@@ -175,31 +176,31 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-white">Recurring Reminders</h2>
-          <p className="text-sm text-zinc-400 mt-1">
-            Schedule reminders that fire on a repeating cadence. Cron syntax: <code className="bg-zinc-800 px-1 rounded">m h dom mon dow</code>.
+          <p className="text-sm text-content-secondary mt-1">
+            Schedule reminders that fire on a repeating cadence. Cron syntax: <code className="bg-surface-raised px-1 rounded">m h dom mon dow</code>.
           </p>
         </div>
         {!adding && (
-          <button
+          <Button
             type="button"
+            variant="primary"
             onClick={() => {
               setAdding(true);
               setDraft(DEFAULT_DRAFT);
               setError(null);
               setStatusMsg(null);
             }}
-            className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-md transition-colors"
           >
             <Plus size={14} />
             Add rule
-          </button>
+          </Button>
         )}
       </div>
 
       {(error || statusMsg) && (
         <div
           className={`text-sm rounded-md px-3 py-2 ${
-            error ? 'bg-red-500/10 border border-red-500/30 text-red-300' : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+            error ? 'bg-danger/10 border border-danger/30 text-danger' : 'bg-success/10 border border-success/30 text-success'
           }`}
         >
           {error ?? statusMsg}
@@ -221,13 +222,13 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       )}
 
       {rules.length === 0 && !adding ? (
-        <p className="text-sm text-zinc-500 italic">No recurring reminders yet.</p>
+        <p className="text-sm text-content-muted italic">No recurring reminders yet.</p>
       ) : (
         <ul className="space-y-2">
           {rules.map((rule) => (
             <li
               key={rule.id}
-              className={`rounded-lg border p-4 ${rule.enabled ? 'border-zinc-700 bg-zinc-900/40' : 'border-zinc-800 bg-zinc-900/20 opacity-70'}`}
+              className={`rounded-lg border p-4 ${rule.enabled ? 'border-line bg-surface-base/40' : 'border-line-subtle bg-surface-base/20 opacity-70'}`}
             >
               {editingId === rule.id && editDraft ? (
                 <RuleForm
@@ -245,15 +246,15 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-white truncate">{rule.text}</p>
-                    <p className="text-xs text-zinc-500 mt-1">
-                      <code className="bg-zinc-800 px-1 rounded">{rule.cron_expression}</code> · {summarizeDays(rule.days_of_week)} · {rule.target}
+                    <p className="text-xs text-content-muted mt-1">
+                      <code className="bg-surface-raised px-1 rounded">{rule.cron_expression}</code> · {summarizeDays(rule.days_of_week)} · {rule.target}
                     </p>
-                    <p className="text-xs text-zinc-500 mt-1">
+                    <p className="text-xs text-content-muted mt-1">
                       Next fire: {formatNextFire(rule.next_fire_at)}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <label className="flex items-center gap-1 cursor-pointer text-xs text-zinc-400">
+                    <label className="flex items-center gap-1 cursor-pointer text-xs text-content-secondary">
                       <input
                         type="checkbox"
                         checked={!!rule.enabled}
@@ -268,7 +269,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
                       onClick={() => startEdit(rule)}
                       disabled={working}
                       aria-label="Edit"
-                      className="p-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                      className="p-1.5 rounded-md border border-line text-content-primary hover:bg-surface-raised"
                     >
                       <Edit3 size={14} />
                     </button>
@@ -277,7 +278,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
                       onClick={() => handleDelete(rule.id)}
                       disabled={working}
                       aria-label="Delete"
-                      className="p-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/40"
+                      className="p-1.5 rounded-md border border-line text-content-primary hover:bg-danger/20 hover:text-danger hover:border-danger/40"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -318,38 +319,38 @@ function RuleForm({
   return (
     <div className="space-y-3">
       <label className="flex flex-col gap-1.5">
-        <span className="text-xs uppercase tracking-wider text-zinc-500">Reminder text</span>
+        <span className="text-xs uppercase tracking-wider text-content-muted">Reminder text</span>
         <input
           type="text"
           value={draft.text}
           onChange={(e) => onChange({ ...draft, text: e.target.value })}
           maxLength={500}
           placeholder="e.g. Take vitamins"
-          className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+          className="input"
         />
       </label>
       <div className="grid sm:grid-cols-2 gap-3">
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Cron expression</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Cron expression</span>
           <input
             type="text"
             value={draft.cron_expression}
             onChange={(e) => onChange({ ...draft, cron_expression: e.target.value })}
             placeholder="0 9 * * 1-5"
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-brand-500"
+            className="input font-mono"
           />
-          <span className="text-xs text-zinc-500">
+          <span className="text-xs text-content-muted">
             Examples: <code>0 9 * * *</code> (9am daily), <code>0 9 * * 1-5</code> (weekdays 9am)
           </span>
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs uppercase tracking-wider text-zinc-500">Channel</span>
+          <span className="text-xs uppercase tracking-wider text-content-muted">Channel</span>
           <select
             value={draft.target ?? 'both'}
             onChange={(e) =>
               onChange({ ...draft, target: e.target.value as 'tts' | 'push' | 'both' })
             }
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            className="input"
           >
             <option value="both">TTS + Push</option>
             <option value="tts">TTS only</option>
@@ -358,7 +359,7 @@ function RuleForm({
         </label>
       </div>
       <fieldset>
-        <legend className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Day filter</legend>
+        <legend className="text-xs uppercase tracking-wider text-content-muted mb-2">Day filter</legend>
         <div className="flex flex-wrap gap-2">
           {DAY_LABELS.map(({ key, label }) => {
             const active = (draft.days_of_week ?? []).includes(key);
@@ -371,7 +372,7 @@ function RuleForm({
                 className={`px-3 py-1 rounded-full text-sm border transition-colors ${
                   active
                     ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-white'
+                    : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
                 }`}
               >
                 {label}
@@ -381,24 +382,24 @@ function RuleForm({
         </div>
       </fieldset>
       <div className="flex items-center gap-2 pt-2">
-        <button
+        <Button
           type="button"
+          variant="primary"
           onClick={onSubmit}
           disabled={working}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-brand-600 hover:bg-brand-700 disabled:opacity-40 text-white text-sm transition-colors"
         >
           {working ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           {submitLabel}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
           onClick={onCancel}
           disabled={working}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 text-sm transition-colors"
         >
           <X size={14} />
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );

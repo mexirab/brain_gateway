@@ -23,20 +23,20 @@ export default function FutureSelfDamage({ overspend, config }: Props) {
     <div
       className={`glass p-5 border transition-all ${
         critical
-          ? 'border-red-500/50 shadow-red-500/10 shadow-lg'
+          ? 'border-danger/50 shadow-danger/10 shadow-lg'
           : severe
-            ? 'border-red-500/30'
-            : 'border-orange-500/30'
+            ? 'border-danger/30'
+            : 'border-accent-flame/30'
       }`}
     >
       <div className="flex items-start gap-3">
         <div
           className={`mt-0.5 ${
             critical
-              ? 'text-red-400 animate-pulse'
+              ? 'text-danger animate-pulse'
               : severe
-                ? 'text-red-400'
-                : 'text-orange-400'
+                ? 'text-danger'
+                : 'text-accent-flame'
           }`}
         >
           {critical ? <AlertTriangle size={20} /> : <TrendingUp size={20} />}
@@ -44,24 +44,24 @@ export default function FutureSelfDamage({ overspend, config }: Props) {
         <div>
           <h3
             className={`text-sm font-semibold ${
-              critical ? 'text-red-400' : severe ? 'text-red-400' : 'text-orange-400'
+              critical ? 'text-danger' : severe ? 'text-danger' : 'text-accent-flame'
             }`}
           >
             Future Self Damage
           </h3>
-          <p className="text-sm text-zinc-300 mt-1">
+          <p className="text-sm text-content-primary mt-1">
             You overspent{' '}
-            <span className="text-red-400 font-semibold">
+            <span className="text-danger font-semibold">
               {formatCurrency(overspend)}
             </span>{' '}
             this month. At 7% over {years} years, that costs Future You{' '}
-            <span className="text-red-300 font-bold text-base">
+            <span className="text-danger font-bold text-base">
               {formatCurrency(damage)}
             </span>
             .
           </p>
           {critical && (
-            <p className="text-xs text-red-400/80 mt-2 italic">
+            <p className="text-xs text-danger/80 mt-2 italic">
               That&apos;s more than your entire monthly budget wiped out.
             </p>
           )}

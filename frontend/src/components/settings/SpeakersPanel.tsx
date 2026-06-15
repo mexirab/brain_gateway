@@ -141,14 +141,14 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-white">Speakers</h2>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-content-secondary mt-1">
           Pick which speaker each kind of announcement plays on. Use a single Home Assistant{' '}
-          <code className="text-xs bg-zinc-800 px-1 rounded">media_player.*</code> entity, or
+          <code className="text-xs bg-surface-raised px-1 rounded">media_player.*</code> entity, or
           comma-separate for multi-room. Leave blank to inherit the legacy fallback &mdash; the
           field will show that fallback value as a hint.
         </p>
         {discovered.length === 0 && (
-          <p className="text-xs text-amber-400 mt-2">
+          <p className="text-xs text-warning mt-2">
             Couldn&rsquo;t reach Home Assistant for autocomplete suggestions. You can still type
             entity IDs by hand.
           </p>
@@ -181,16 +181,16 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
           return (
             <li
               key={cat}
-              className="rounded-lg border border-zinc-700 bg-zinc-900/40 p-3 sm:grid sm:grid-cols-[200px_1fr] sm:gap-4 sm:items-start"
+              className="rounded-lg border border-line bg-surface-base/40 p-3 sm:grid sm:grid-cols-[200px_1fr] sm:gap-4 sm:items-start"
             >
               <div className="mb-2 sm:mb-0">
                 <div id={titleId} className="text-sm font-medium text-white">
                   {meta.label}
                 </div>
-                <div className="text-xs text-zinc-500 mt-0.5">{meta.hint}</div>
+                <div className="text-xs text-content-muted mt-0.5">{meta.hint}</div>
               </div>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor={inputId} className="text-xs uppercase tracking-wider text-zinc-500">
+                <label htmlFor={inputId} className="text-xs uppercase tracking-wider text-content-muted">
                   Speaker(s)
                 </label>
                 <input
@@ -203,11 +203,11 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
                   placeholder={showFallbackHint ? effective : 'media_player.office_max'}
                   maxLength={500}
                   spellCheck={false}
-                  className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-brand-500"
+                  className="input font-mono"
                 />
                 {showFallbackHint && (
-                  <span className="text-xs text-zinc-500">
-                    Using fallback: <code className="text-zinc-400">{effective}</code>
+                  <span className="text-xs text-content-muted">
+                    Using fallback: <code className="text-content-secondary">{effective}</code>
                   </span>
                 )}
               </div>

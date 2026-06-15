@@ -39,14 +39,14 @@ export default function LightControl({ entity, onStateChange }: LightControlProp
   };
 
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg bg-zinc-800/40 border border-zinc-700/30">
+    <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-raised/40 border border-line/30">
       <button
         onClick={handleToggle}
         disabled={acting}
         className={`p-2 rounded-lg transition-colors shrink-0 ${
           isOn
-            ? 'bg-amber-500/20 text-amber-400'
-            : 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-400'
+            ? 'bg-warning/20 text-warning'
+            : 'bg-surface-raised/60 text-content-muted hover:text-content-secondary'
         }`}
       >
         <Lightbulb size={18} />
@@ -62,11 +62,11 @@ export default function LightControl({ entity, onStateChange }: LightControlProp
             max={255}
             value={brightness}
             onChange={(e) => handleBrightness(Number(e.target.value))}
-            className="w-full h-1 mt-1.5 accent-amber-400 bg-zinc-700 rounded-full appearance-none cursor-pointer"
+            className="w-full h-1 mt-1.5 accent-warning bg-surface-overlay rounded-full appearance-none cursor-pointer"
           />
         )}
       </div>
-      <span className={`text-xs ${isOn ? 'text-amber-400' : 'text-zinc-600'}`}>
+      <span className={`text-xs ${isOn ? 'text-warning' : 'text-content-muted'}`}>
         {isOn ? 'ON' : 'OFF'}
       </span>
     </div>

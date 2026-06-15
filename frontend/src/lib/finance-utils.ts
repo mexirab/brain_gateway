@@ -73,11 +73,11 @@ export function getHealthBarStatus(spent: number, budget: number): HealthBarStat
  */
 export function healthBarColor(status: HealthBarStatus): string {
   switch (status) {
-    case 'safe': return 'bg-emerald-500';
-    case 'caution': return 'bg-yellow-500';
-    case 'warning': return 'bg-orange-500';
-    case 'danger': return 'bg-red-500';
-    case 'over': return 'bg-red-700 animate-pulse';
+    case 'safe': return 'bg-success';
+    case 'caution': return 'bg-warning';
+    case 'warning': return 'bg-accent-flame';
+    case 'danger': return 'bg-danger';
+    case 'over': return 'bg-danger animate-pulse';
   }
 }
 

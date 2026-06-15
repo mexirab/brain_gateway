@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { CheckCircle, Zap, Flame, TrendingUp, TrendingDown, Minus, Brain } from 'lucide-react';
+import { Card } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { ProgressToday, ProgressWeek, ProgressStreaks } from '@/lib/types';
 
@@ -31,7 +32,7 @@ export default function ProgressCard() {
   }, [fetchData]);
 
   const TrendIcon = week?.trend === 'up' ? TrendingUp : week?.trend === 'down' ? TrendingDown : Minus;
-  const trendColor = week?.trend === 'up' ? 'text-emerald-400' : week?.trend === 'down' ? 'text-red-400' : 'text-zinc-500';
+  const trendColor = week?.trend === 'up' ? 'text-success' : week?.trend === 'down' ? 'text-danger' : 'text-content-muted';
 
   // Mini bar chart: normalize heights to max value across 7 days
   const maxActivity = week
@@ -41,9 +42,9 @@ export default function ProgressCard() {
   const activeStreaks = streaks?.streaks.filter((s) => s.current > 0) ?? [];
 
   return (
-    <div className="glass p-5">
-      <h2 className="text-lg font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-        <Zap size={18} className="text-amber-400" />
+    <Card>
+      <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
+        <Zap size={18} className="text-warning" />
         Progress
         {week && (
           <TrendIcon size={16} className={`ml-auto ${trendColor}`} />
@@ -52,12 +53,12 @@ export default function ProgressCard() {
 
       {loading && (
         <div className="space-y-3">
-          <div className="h-8 bg-zinc-800/50 rounded-lg animate-pulse" />
-          <div className="h-16 bg-zinc-800/50 rounded-lg animate-pulse" />
-          <div className="h-6 bg-zinc-800/50 rounded-lg animate-pulse" />
+          <div className="h-8 bg-surface-raised/50 rounded-lg animate-pulse" />
+          <div className="h-16 bg-surface-raised/50 rounded-lg animate-pulse" />
+          <div className="h-6 bg-surface-raised/50 rounded-lg animate-pulse" />
         </div>
       )}
-      {error && <p className="text-sm text-red-400/70">{error}</p>}
+      {error && <p className="text-sm text-danger/70">{error}</p>}
 
       {!loading && !error && today && (
         <div className="space-y-4">
@@ -65,24 +66,24 @@ export default function ProgressCard() {
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center">
               <div className="flex items-center justify-center gap-1">
-                <CheckCircle size={14} className="text-emerald-400" />
+                <CheckCircle size={14} className="text-success" />
                 <span className="text-xl font-bold text-white">{today.tasks_completed}</span>
               </div>
-              <p className="text-xs text-zinc-500">tasks</p>
+              <p className="text-xs text-content-muted">tasks</p>
             </div>
             <div className="text-center">
               <div className="flex items-center justify-center gap-1">
-                <Zap size={14} className="text-amber-400" />
+                <Zap size={14} className="text-warning" />
                 <span className="text-xl font-bold text-white">{today.focus_minutes}</span>
               </div>
-              <p className="text-xs text-zinc-500">focus min</p>
+              <p className="text-xs text-content-muted">focus min</p>
             </div>
             <div className="text-center">
               <div className="flex items-center justify-center gap-1">
-                <Brain size={14} className="text-violet-400" />
+                <Brain size={14} className="text-brand" />
                 <span className="text-xl font-bold text-white">{today.brain_dumps}</span>
               </div>
-              <p className="text-xs text-zinc-500">dumps</p>
+              <p className="text-xs text-content-muted">dumps</p>
             </div>
           </div>
 
@@ -97,12 +98,12 @@ export default function ProgressCard() {
                   <div key={d.date} className="flex-1 flex flex-col items-center gap-1">
                     <div
                       className={`w-full rounded-sm transition-all ${
-                        isToday ? 'bg-emerald-500' : 'bg-zinc-700'
+                        isToday ? 'bg-success' : 'bg-surface-overlay'
                       }`}
                       style={{ height: `${heightPct}%` }}
                       title={`${d.date}: ${d.tasks_completed} tasks, ${d.focus_sessions} sessions`}
                     />
-                    <span className="text-[10px] text-zinc-600">
+                    <span className="text-[10px] text-content-muted">
                       {new Date(d.date + 'T00:00:00').toLocaleDateString('en', { weekday: 'narrow' })}
                     </span>
                   </div>
@@ -117,7 +118,7 @@ export default function ProgressCard() {
               {activeStreaks.map((s) => (
                 <span
                   key={s.category}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 text-xs"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/10 text-warning text-xs"
                 >
                   <Flame size={12} />
                   {s.category.replace('_', ' ')} {s.current}d
@@ -127,6 +128,6 @@ export default function ProgressCard() {
           )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
