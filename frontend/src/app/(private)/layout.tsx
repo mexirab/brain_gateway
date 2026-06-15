@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Settings } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
+import { getFeatureFlags } from '@/lib/features.server';
+import { isNavItemEnabled } from '@/lib/features';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -16,11 +18,14 @@ const NAV_ITEMS = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-export default function PrivateLayout({
+export default async function PrivateLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const flags = await getFeatureFlags();
+  const navItems = NAV_ITEMS.filter(({ href }) => isNavItemEnabled(href, flags));
+
   return (
     <div className="min-h-screen flex">
       {/* Sidebar — hidden on mobile, shown on md+ */}
@@ -29,7 +34,7 @@ export default function PrivateLayout({
           Jess
         </Link>
         <nav className="flex-1 space-y-1">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
+          {navItems.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
@@ -52,7 +57,7 @@ export default function PrivateLayout({
       </aside>
 
       {/* Mobile bottom nav (5 primary tabs + More sheet) */}
-      <MobileNav />
+      <MobileNav flags={flags} />
 
       {/* Main content */}
       <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">

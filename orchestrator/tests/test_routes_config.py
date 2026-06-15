@@ -17,9 +17,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 API_TOKEN = "test-config-token"  # nosec B105 — test-only constant
@@ -107,6 +104,34 @@ def test_get_identity_with_bearer_returns_200(client):
 def test_put_selfcare_without_bearer_returns_401(client):
     r = client.put("/api/config/selfcare", json={"categories": {"water": {"enabled": True}}})
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+
+
+def test_get_features_without_bearer_returns_401(client):
+    r = client.get("/api/config/features")
+    assert r.status_code == 401
+
+
+def test_get_features_reflects_settings(client, monkeypatch):
+    """GET /api/config/features returns the three runtime flags read live from
+    config.settings — the dashboard nav uses these to hide disabled features."""
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "workouts_enabled", True)
+    monkeypatch.setattr(settings, "meals_enabled", False)
+    monkeypatch.setattr(settings, "jess_advanced", True)
+
+    r = client.get("/api/config/features", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json() == {
+        "workouts_enabled": True,
+        "meals_enabled": False,
+        "jess_advanced": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -375,9 +400,7 @@ def test_three_puts_produce_three_audit_rows(client):
     assert r3.status_code == 200, r3.text
 
     with state_store.get_db() as conn:
-        rows = conn.execute(
-            "SELECT panel FROM config_changes ORDER BY id"
-        ).fetchall()
+        rows = conn.execute("SELECT panel FROM config_changes ORDER BY id").fetchall()
     panels = [r["panel"] for r in rows]
     assert len(panels) == 3, f"expected 3 audit rows, got {panels}"
     assert panels == ["identity", "selfcare", "quiet_hours"]
@@ -556,7 +579,8 @@ def test_put_routines_preserves_ha_action_round_trip(client):
     assert r.status_code == 200, r.text
 
     # On-disk file still has ha_action on the meds step.
-    on_disk = _yaml.safe_load(open(overrides_path).read())
+    with open(overrides_path) as _f:
+        on_disk = _yaml.safe_load(_f)
     meds = on_disk["routines"]["morning"]["steps"][0]
     assert meds["ha_action"] == {
         "entity_id": "light.bedroom",

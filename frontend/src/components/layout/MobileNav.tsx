@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { isNavItemEnabled, type FeatureFlags } from '@/lib/features';
 
 interface NavItem {
   href: string;
@@ -49,10 +50,13 @@ function isActive(pathname: string | null, href: string): boolean {
   return pathname === href || pathname.startsWith(href + '/');
 }
 
-export default function MobileNav() {
+export default function MobileNav({ flags }: { flags: FeatureFlags }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreActive = MORE.some((item) => isActive(pathname, item.href));
+
+  const primary = PRIMARY.filter((item) => isNavItemEnabled(item.href, flags));
+  const more = MORE.filter((item) => isNavItemEnabled(item.href, flags));
+  const moreActive = more.some((item) => isActive(pathname, item.href));
 
   // Close the sheet on route change.
   useEffect(() => {
@@ -81,7 +85,7 @@ export default function MobileNav() {
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         aria-label="Primary"
       >
-        {PRIMARY.map(({ href, label, icon: Icon }) => {
+        {primary.map(({ href, label, icon: Icon }) => {
           const active = isActive(pathname, href);
           return (
             <Link
@@ -150,7 +154,7 @@ export default function MobileNav() {
               </button>
             </div>
             <div className="grid grid-cols-3 gap-2 px-4 pb-3">
-              {MORE.map(({ href, label, icon: Icon }) => {
+              {more.map(({ href, label, icon: Icon }) => {
                 const active = isActive(pathname, href);
                 return (
                   <Link

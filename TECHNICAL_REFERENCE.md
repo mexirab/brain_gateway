@@ -248,6 +248,7 @@ All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orche
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET    | `/api/config/features` | Returns `{workouts_enabled, meals_enabled, jess_advanced}` (read live from `config.settings`). Read-only — no PUT. Consumed by the dashboard server layout + `MobileNav` to hide nav links for features whose routes aren't mounted (`/api/workouts/*`, `/api/meals/*`) or are gated behind `JESS_ADVANCED` (Finance), and by the `/workouts`, `/meals`, `/finance` route layouts to render a "feature not enabled" gate on direct hits. |
 | GET    | `/api/config/identity` | Returns `{assistant_name, user_name, adhd_mode, tone_preference, timezone}`. Reads the merged base + overrides view of the user profile. |
 | PUT    | `/api/config/identity` | Partial update of the same shape. Writes to `USER_PROFILE_OVERRIDES_PATH` only (base is `:ro`). Calls `reload_profile()` to mutate the singleton in place. |
 | GET    | `/api/config/selfcare` | Returns `{categories: {medication: {...}, meal: {...}, water: {...}, movement: {...}}}`. |

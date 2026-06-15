@@ -70,6 +70,34 @@ def _format_validation_errors(e: ValidationError) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Feature flags — runtime nav gating
+# ---------------------------------------------------------------------------
+
+
+@router.get("/features")
+async def get_features():
+    """Runtime feature flags so the dashboard nav can hide features that are
+    disabled on this install (otherwise the links 404 — `/api/workouts/*` and
+    `/api/meals/*` aren't mounted when off, and the Finance surface is gated
+    behind `JESS_ADVANCED`).
+
+    Bearer-gated like its `/api/config/*` siblings — these are non-secret
+    booleans, but keeping the whole prefix uniform avoids a one-off public hole.
+    Read from `settings` (the live config source) so it matches what
+    `api_routes.py` used to mount the routers at import time.
+    """
+    from orchestrator.config import settings
+
+    return JSONResponse(
+        {
+            "workouts_enabled": settings.workouts_enabled,
+            "meals_enabled": settings.meals_enabled,
+            "jess_advanced": settings.jess_advanced,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Identity panel
 # ---------------------------------------------------------------------------
 
