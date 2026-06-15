@@ -191,7 +191,7 @@ curl -X POST http://10.0.0.195:8002/voices/load \
   -d '{
     "name": "jessica",
     "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
-    "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
+    "ref_text": "This is a sample sentence read aloud at a natural pace, matching the reference audio above.",
     "description": "Custom voice - warm, energetic narrator"
   }'
 ```
@@ -230,7 +230,7 @@ https://helios.tail74fc4a.ts.net/
 ssh labadmin@10.0.0.195 "docker exec brain-orchestrator python /app/ingest_rag.py \
   --source /rag \
   --persist /chroma/personal_rag \
-  --collection nadim_rag"
+  --collection personal_rag"
 
 # Restart orchestrator to pick up changes
 ssh labadmin@10.0.0.195 "cd /opt/gateway_mvp && docker compose restart orchestrator"
@@ -251,7 +251,7 @@ Location on Helios: `~/tts-voices/voices.json`
 {
   "jessica": {
     "ref_audio": "/home/labadmin/tts-voices/jessica_sample.wav",
-    "ref_text": "And trying to get my brain to focus on anything I was not excited about was like trying to nail jello to the wall.",
+    "ref_text": "This is a sample sentence read aloud at a natural pace, matching the reference audio above.",
     "description": "Custom voice - warm, energetic narrator"
   }
 }
