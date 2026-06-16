@@ -23,7 +23,7 @@ import contextlib
 import hashlib
 import hmac
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -515,7 +515,7 @@ class TestSnoozeRoute:
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "snooze", exp, extra="10")
 
-        before = datetime.now()
+        before = datetime.now(UTC)
         r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
         assert r.status_code == 200
         body = r.json()
@@ -526,7 +526,12 @@ class TestSnoozeRoute:
         # in tests (so next_run_time is None), but trigger.run_date is set.
         job = scheduler.get_job("reminder_r1")
         assert job is not None
-        run_date = job.trigger.run_date.replace(tzinfo=None)
+        # run_date is tz-aware in the scheduler's timezone (e.g. America/Chicago).
+        # Compare tz-aware against a tz-aware `before` so a UTC CI host and a
+        # non-UTC app timezone don't introduce a fixed multi-hour offset.
+        run_date = job.trigger.run_date
+        if run_date.tzinfo is None:
+            run_date = run_date.replace(tzinfo=UTC)
         delta = (run_date - before).total_seconds()
         # ~10 minutes = 600s, tolerate a little timing noise
         assert 540 < delta < 660
