@@ -10,7 +10,7 @@ This checklist covers deploying the optimized architecture for voice-first ADHD 
 ALWAYS-ON (~200W):
 ├── Saturn: Nemotron-8B (brain, 95%+ of tasks)
 ├── Uranus GPU 0: TTS/Jessica (voice output)
-├── Uranus GPU 1: Whisper STT (voice input)
+├── Uranus GPU 1: Parakeet STT (voice input)
 └── Jupiter: Orchestrator + Home Assistant
 
 OFF BY DEFAULT (saves ~150W):
@@ -71,7 +71,7 @@ Verify on **Uranus (10.0.0.173)**:
 ```bash
 # Check services are enabled
 ssh nadim@10.0.0.173 'sudo systemctl is-enabled qwen-tts'     # Should be "enabled"
-ssh nadim@10.0.0.173 'sudo systemctl is-enabled whisper-stt'  # Should be "enabled"
+ssh nadim@10.0.0.173 'sudo systemctl is-enabled parakeet-stt'  # Should be "enabled"
 
 # Check they're running
 curl http://10.0.0.173:8002/health  # TTS
@@ -80,7 +80,7 @@ curl http://10.0.0.173:8003/health  # STT
 
 If not enabled:
 ```bash
-ssh nadim@10.0.0.173 'sudo systemctl enable qwen-tts whisper-stt'
+ssh nadim@10.0.0.173 'sudo systemctl enable qwen-tts parakeet-stt'
 ```
 
 ---

@@ -1,13 +1,13 @@
 # Voice Pipeline (TTS + STT)
 
-FastAPI servers for Qwen3-TTS and Whisper STT, running on Helios (10.0.0.195) as systemd services.
+FastAPI servers for Qwen3-TTS and Parakeet STT, running on Helios (10.0.0.195) as systemd services.
 
 **Deployment:**
 - Both services pinned to GPU1 (RTX PRO 5000 Blackwell, 48GB) alongside the primary Qwen3.5-27B LLM
 - Qwen3-TTS on port 8002 (`QWEN_TTS_DEVICE=cuda:1`)
-- Whisper STT on port 8003 (`WHISPER_DEVICE=cuda:1`)
+- Parakeet STT on port 8003 (`PARAKEET_DEVICE=cuda:0` with `CUDA_VISIBLE_DEVICES=1`) — replaced the old Whisper HTTP STT server on 2026-04-26 (same port, same OpenAI-compatible API). See `README_PARAKEET.md`.
 
-Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whisper` (:10300) and `wyoming-jessica-tts` (:10301).
+Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whisper` (:10300, still `wyoming-faster-whisper` — the HA voice-pipeline STT, independent of the HTTP STT server above) and `wyoming-jessica-tts` (:10301).
 
 ## TTS Features
 
@@ -75,16 +75,16 @@ EOF
 ```bash
 # Copy service files
 sudo cp qwen-tts.service /etc/systemd/system/
-sudo cp whisper-stt.service /etc/systemd/system/
+sudo cp parakeet-stt.service /etc/systemd/system/
 
 # Copy server files to home directory
 cp server.py ~/server.py
-cp stt_server.py ~/stt_server.py
+cp stt_server_parakeet.py ~/stt_server_parakeet.py
 
 # Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable qwen-tts whisper-stt
-sudo systemctl start qwen-tts whisper-stt
+sudo systemctl enable qwen-tts parakeet-stt
+sudo systemctl start qwen-tts parakeet-stt
 ```
 
 ## Configuration
@@ -94,7 +94,7 @@ sudo systemctl start qwen-tts whisper-stt
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QWEN_TTS_MODEL` | (required) | Model path (use Base for cloning) |
-| `QWEN_TTS_DEVICE` | `cuda:1` | GPU device (GPU1 RTX PRO 5000 Blackwell, shared with Qwen3.5-27B + Whisper STT) |
+| `QWEN_TTS_DEVICE` | `cuda:1` | GPU device (GPU1 RTX PRO 5000 Blackwell, shared with Qwen3.5-27B + Parakeet STT) |
 | `QWEN_TTS_PORT` | `8002` | Server port |
 | `QWEN_TTS_DTYPE` | `bfloat16` | Model dtype |
 | `QWEN_TTS_FLASH_ATTN` | `false` | Use FlashAttention 2 (disabled by default) |
@@ -259,11 +259,11 @@ Preset voices are faster on first use.
 ### Service Status
 ```bash
 # Check both services
-sudo systemctl status qwen-tts whisper-stt
+sudo systemctl status qwen-tts parakeet-stt
 
 # View logs
 journalctl -u qwen-tts -f
-journalctl -u whisper-stt -f
+journalctl -u parakeet-stt -f
 ```
 
 ## Hardware Requirements
