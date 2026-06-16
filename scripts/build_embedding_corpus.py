@@ -80,9 +80,7 @@ def _accept(text: str) -> bool:
         return False
     # Drop anything dominated by Fernet ciphertext blobs
     ct_chars = sum(len(m.group(0)) for m in FERNET_PATTERN.finditer(text))
-    if ct_chars > 0.25 * len(text):
-        return False
-    return True
+    return ct_chars <= 0.25 * len(text)
 
 
 def _truncate(text: str) -> str:
@@ -155,13 +153,15 @@ def extract_rag_files(root: Path) -> list[dict]:
         text = _clean(raw)
         if not _accept(text):
             continue
-        items.append({
-            "id": f"rag:{fp.relative_to(root)}",
-            "text": text,
-            "domain": "personal",
-            "source": "rag_file",
-            "session_id": str(fp.relative_to(root)),
-        })
+        items.append(
+            {
+                "id": f"rag:{fp.relative_to(root)}",
+                "text": text,
+                "domain": "personal",
+                "source": "rag_file",
+                "session_id": str(fp.relative_to(root)),
+            }
+        )
     return items
 
 
@@ -183,13 +183,15 @@ def extract_cc_memory(root: Path) -> list[dict]:
         text = _clean(raw)
         if not _accept(text):
             continue
-        items.append({
-            "id": f"cc_mem:{fp.name}",
-            "text": text,
-            "domain": "personal",
-            "source": "cc_memory",
-            "session_id": fp.name,
-        })
+        items.append(
+            {
+                "id": f"cc_mem:{fp.name}",
+                "text": text,
+                "domain": "personal",
+                "source": "cc_memory",
+                "session_id": fp.name,
+            }
+        )
     return items
 
 
@@ -219,9 +221,7 @@ def extract_webui(db_path: Path) -> dict[str, list[str]]:
                 continue
             content = msg.get("content")
             if isinstance(content, list):
-                content = " ".join(
-                    part.get("text", "") for part in content if isinstance(part, dict)
-                )
+                content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
             if not isinstance(content, str):
                 continue
             text = _clean(content)
@@ -240,8 +240,7 @@ def extract_state_store(db_path: Path) -> dict[str, list[tuple[str, str]]]:
     conn = sqlite3.connect(str(db_path))
     try:
         rows = conn.execute(
-            "SELECT conversation_id, role, content, created_at FROM chat_messages "
-            "ORDER BY conversation_id, created_at"
+            "SELECT conversation_id, role, content, created_at FROM chat_messages ORDER BY conversation_id, created_at"
         ).fetchall()
     finally:
         conn.close()
@@ -332,20 +331,22 @@ def extract_mempalace() -> list[dict]:
         return []
     data = col.get(include=["documents", "metadatas"])
     items: list[dict] = []
-    for idx, (doc, meta) in enumerate(zip(data.get("documents", []), data.get("metadatas", []))):
+    for idx, (doc, meta) in enumerate(zip(data.get("documents", []), data.get("metadatas", []), strict=False)):
         if not isinstance(doc, str):
             continue
         text = _clean(doc)
         if not _accept(text):
             continue
         wing = (meta or {}).get("wing", "unknown")
-        items.append({
-            "id": f"palace:{idx}",
-            "text": _truncate(text),
-            "domain": "personal",
-            "source": "mempalace",
-            "session_id": f"palace_wing:{wing}",
-        })
+        items.append(
+            {
+                "id": f"palace:{idx}",
+                "text": _truncate(text),
+                "domain": "personal",
+                "source": "mempalace",
+                "session_id": f"palace_wing:{wing}",
+            }
+        )
     return items
 
 
@@ -364,20 +365,20 @@ def pairs_from_doc(text: str, domain: str) -> Iterable[tuple[str, str, str]]:
 
     # Strategy 2: adjacent markdown sections
     sections = split_markdown_sections(text)
-    for a, b in zip(sections, sections[1:]):
+    for a, b in zip(sections, sections[1:], strict=False):
         yield (a, b, "adj_section")
 
 
 def pairs_from_session_turns(turns: list[str]) -> Iterable[tuple[str, str, str]]:
     """Adjacent user turns within the same session."""
-    for a, b in zip(turns, turns[1:]):
+    for a, b in zip(turns, turns[1:], strict=False):
         if a != b:
             yield (a, b, "adj_turn")
 
 
 def pairs_from_qa(msgs: list[tuple[str, str]]) -> Iterable[tuple[str, str, str]]:
     """Query↔answer pairs from an interleaved (role, text) sequence."""
-    for (r1, t1), (r2, t2) in zip(msgs, msgs[1:]):
+    for (r1, t1), (r2, t2) in zip(msgs, msgs[1:], strict=False):
         if r1 == "user" and r2 == "assistant":
             yield (t1, t2, "qa")
 
@@ -412,12 +413,17 @@ def main() -> int:
 
     print(f"  rag files         : {len(rag_docs)}", file=sys.stderr)
     print(f"  cc memory files   : {len(cc_mem)}", file=sys.stderr)
-    print(f"  owui sessions     : {len(owui_sessions)} "
-          f"({sum(len(v) for v in owui_sessions.values())} turns)", file=sys.stderr)
-    print(f"  state sessions    : {len(state_sessions)} "
-          f"({sum(len(v) for v in state_sessions.values())} msgs)", file=sys.stderr)
-    print(f"  cc sessions       : {len(cc_sessions)} "
-          f"({sum(len(v) for v in cc_sessions.values())} turns)", file=sys.stderr)
+    print(
+        f"  owui sessions     : {len(owui_sessions)} ({sum(len(v) for v in owui_sessions.values())} turns)",
+        file=sys.stderr,
+    )
+    print(
+        f"  state sessions    : {len(state_sessions)} ({sum(len(v) for v in state_sessions.values())} msgs)",
+        file=sys.stderr,
+    )
+    print(
+        f"  cc sessions       : {len(cc_sessions)} ({sum(len(v) for v in cc_sessions.values())} turns)", file=sys.stderr
+    )
     print(f"  mempalace chunks  : {len(palace_items)}", file=sys.stderr)
 
     # --- Generate pairs ---
@@ -434,7 +440,7 @@ def main() -> int:
         by_wing: dict[str, list[str]] = defaultdict(list)
         for item in palace_items:
             by_wing[item["session_id"]].append(item["text"])
-        for wing, texts in by_wing.items():
+        for _wing, texts in by_wing.items():
             combos = list(itertools.combinations(texts, 2))
             random.shuffle(combos)
             for a, p in combos[:PAIRS_PER_SESSION_CAP]:
@@ -445,18 +451,18 @@ def main() -> int:
         random.shuffle(session_pairs)
         return session_pairs[:PAIRS_PER_SESSION_CAP]
 
-    for sid, turns in owui_sessions.items():
+    for _sid, turns in owui_sessions.items():
         sp = list(pairs_from_session_turns(turns))
         for a, p, s in _cap(sp):
             pairs.append({"anchor": a, "positive": p, "strategy": s, "domain": "personal"})
 
-    for sid, turns in cc_sessions.items():
+    for _sid, turns in cc_sessions.items():
         sp = list(pairs_from_session_turns(turns))
         for a, p, s in _cap(sp):
             pairs.append({"anchor": a, "positive": p, "strategy": s, "domain": "technical"})
 
     # Strategy 4: Q↔A pairs — only from brain_state (has interleaved roles).
-    for sid, msgs in state_sessions.items():
+    for _sid, msgs in state_sessions.items():
         sp = list(pairs_from_qa(msgs))
         for a, p, s in _cap(sp):
             pairs.append({"anchor": a, "positive": p, "strategy": s, "domain": "personal"})
@@ -465,7 +471,6 @@ def main() -> int:
 
     # --- Dedupe ---
     seen_keys: set[tuple[str, str]] = set()
-    fingerprints: dict[str, set[str]] = defaultdict(set)  # strategy → fp set
     deduped: list[dict] = []
     near_dupes = 0
     for row in pairs:
@@ -519,9 +524,12 @@ def main() -> int:
     if lens:
         lens_sorted = sorted(lens)
         print("length histogram  :", file=sys.stderr)
-        print(f"  min {lens_sorted[0]}  p25 {lens_sorted[len(lens)//4]}  "
-              f"median {lens_sorted[len(lens)//2]}  p75 {lens_sorted[3*len(lens)//4]}  "
-              f"max {lens_sorted[-1]}", file=sys.stderr)
+        print(
+            f"  min {lens_sorted[0]}  p25 {lens_sorted[len(lens) // 4]}  "
+            f"median {lens_sorted[len(lens) // 2]}  p75 {lens_sorted[3 * len(lens) // 4]}  "
+            f"max {lens_sorted[-1]}",
+            file=sys.stderr,
+        )
 
     # --- Write output ---
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -532,8 +540,7 @@ def main() -> int:
 
     # --- Sample preview ---
     print("=" * 60, file=sys.stderr)
-    print(f"SAMPLE ({args.sample_preview} pairs) — visually confirm these should be 'close':",
-          file=sys.stderr)
+    print(f"SAMPLE ({args.sample_preview} pairs) — visually confirm these should be 'close':", file=sys.stderr)
     sample = random.sample(capped, min(args.sample_preview, len(capped)))
     for i, row in enumerate(sample, 1):
         print(f"\n[{i}] strategy={row['strategy']} domain={row['domain']}", file=sys.stderr)

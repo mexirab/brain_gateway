@@ -21,6 +21,7 @@ branch below via before/after delta reads on the 3-label counter.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from unittest.mock import AsyncMock, patch
@@ -29,7 +30,6 @@ import httpx
 import pytest
 import respx
 from httpx import Response
-
 
 # ---------------------------------------------------------------------------
 # Settings fixtures — flip the live singleton; restore via monkeypatch undo.
@@ -58,9 +58,7 @@ def pushover_on(monkeypatch):
     monkeypatch.setattr(settings, "pushover_upload_timeout_seconds", 10, raising=False)
     # _build_callback_url needs these even when the actual ntfy push is off.
     monkeypatch.setattr(settings, "ntfy_hmac_secret", _NTFY_SECRET, raising=False)
-    monkeypatch.setattr(
-        settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False
-    )
+    monkeypatch.setattr(settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False)
     monkeypatch.setattr(settings, "ntfy_ack_exp_seconds", 1800, raising=False)
     return settings
 
@@ -94,9 +92,7 @@ def ntfy_on(monkeypatch):
     monkeypatch.setattr(settings, "ntfy_hmac_secret", _NTFY_SECRET, raising=False)
     monkeypatch.setattr(settings, "ntfy_url", "http://ntfy.test:8889", raising=False)
     monkeypatch.setattr(settings, "ntfy_topic", "jess-reminders", raising=False)
-    monkeypatch.setattr(
-        settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False
-    )
+    monkeypatch.setattr(settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False)
     monkeypatch.setattr(settings, "ntfy_ack_exp_seconds", 1800, raising=False)
     monkeypatch.setattr(settings, "ntfy_max_snooze_count", 5, raising=False)
     monkeypatch.setattr(settings, "ntfy_default_priority", 3, raising=False)
@@ -107,9 +103,7 @@ def _counter_value(result: str, kind: str, reason: str) -> float:
     """Read current PUSHOVER_PUSH_TOTAL{result, kind, reason} — 0 if never emitted."""
     from orchestrator.metrics import PUSHOVER_PUSH_TOTAL
 
-    return PUSHOVER_PUSH_TOTAL.labels(
-        result=result, kind=kind, reason=reason
-    )._value.get()
+    return PUSHOVER_PUSH_TOTAL.labels(result=result, kind=kind, reason=reason)._value.get()
 
 
 # ===========================================================================
@@ -191,9 +185,7 @@ class TestStripCredentials:
     def test_redacts_both_in_same_string(self):
         from orchestrator.pushover_manager import _strip_credentials
 
-        out = _strip_credentials(
-            "debug: token=1234567890abcdef and user=abcdef1234567890 end"
-        )
+        out = _strip_credentials("debug: token=1234567890abcdef and user=abcdef1234567890 end")
         assert "1234567890abcdef" not in out
         assert "abcdef1234567890" not in out
         assert out.count("<redacted>") == 2
@@ -297,9 +289,7 @@ class TestDeliverViaPushover:
 
         evil = '<a href="http://attacker/">click</a> <script>x()</script>'
         with respx.mock(base_url="http://pushover.test") as mock:
-            route = mock.post("/1/messages.json").mock(
-                return_value=Response(200, json={"status": 1, "request": "r"})
-            )
+            route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1, "request": "r"}))
             await deliver_via_pushover("r1", evil)
         body = route.calls[0].request.content.decode("utf-8", errors="replace")
         # The raw "<a " from the attacker must NOT appear (only the trusted
@@ -317,9 +307,7 @@ class TestDeliverViaPushover:
         from orchestrator.pushover_manager import deliver_via_pushover
 
         with respx.mock(base_url="http://pushover.test") as mock:
-            route = mock.post("/1/messages.json").mock(
-                return_value=Response(200, json={"status": 1, "request": "r"})
-            )
+            route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1, "request": "r"}))
             await deliver_via_pushover("r1", "t", priority=-999)
         body = route.calls[0].request.content.decode("utf-8", errors="replace")
         assert "priority=-2" in body
@@ -330,9 +318,7 @@ class TestDeliverViaPushover:
         from orchestrator.pushover_manager import deliver_via_pushover
 
         with respx.mock(base_url="http://pushover.test") as mock:
-            route = mock.post("/1/messages.json").mock(
-                return_value=Response(200, json={"status": 1, "request": "r"})
-            )
+            route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1, "request": "r"}))
             await deliver_via_pushover("r1", "t", priority=999)
         body = route.calls[0].request.content.decode("utf-8", errors="replace")
         assert "priority=2" in body
@@ -346,9 +332,7 @@ class TestDeliverViaPushover:
         before = _counter_value("fail", "reminder", "http_4xx")
         leaky_body = "error: token=abcdef1234567890 rejected\x01bad"
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                return_value=Response(400, text=leaky_body)
-            )
+            mock.post("/1/messages.json").mock(return_value=Response(400, text=leaky_body))
             result = await deliver_via_pushover("r1", "t")
         assert result["success"] is False
         assert result["status_code"] == 400
@@ -364,9 +348,7 @@ class TestDeliverViaPushover:
 
         before = _counter_value("fail", "reminder", "http_5xx")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                return_value=Response(503, text="overloaded")
-            )
+            mock.post("/1/messages.json").mock(return_value=Response(503, text="overloaded"))
             result = await deliver_via_pushover("r1", "t")
         assert result["success"] is False
         assert result["status_code"] == 503
@@ -378,9 +360,7 @@ class TestDeliverViaPushover:
 
         before = _counter_value("fail", "reminder", "timeout")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                side_effect=httpx.TimeoutException("slow")
-            )
+            mock.post("/1/messages.json").mock(side_effect=httpx.TimeoutException("slow"))
             result = await deliver_via_pushover("r1", "t")
         assert result["success"] is False
         assert "TimeoutException" in result["error"]
@@ -392,9 +372,7 @@ class TestDeliverViaPushover:
 
         before = _counter_value("fail", "reminder", "connect_error")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                side_effect=httpx.ConnectError("dns")
-            )
+            mock.post("/1/messages.json").mock(side_effect=httpx.ConnectError("dns"))
             result = await deliver_via_pushover("r1", "t")
         assert result["success"] is False
         assert "ConnectError" in result["error"]
@@ -449,12 +427,8 @@ class TestDeliverPushoverConfirm:
 
         before = _counter_value("ok", "confirm", "ok")
         with respx.mock(base_url="http://pushover.test") as mock:
-            route = mock.post("/1/messages.json").mock(
-                return_value=Response(200, json={"status": 1})
-            )
-            result = await deliver_pushover_confirm(
-                "\u2713 Logged", "drink water\n(water logged)", "r1"
-            )
+            route = mock.post("/1/messages.json").mock(return_value=Response(200, json={"status": 1}))
+            result = await deliver_pushover_confirm("\u2713 Logged", "drink water\n(water logged)", "r1")
         assert result == {"success": True}
         assert _counter_value("ok", "confirm", "ok") == before + 1
 
@@ -477,9 +451,7 @@ class TestDeliverPushoverConfirm:
 
         before = _counter_value("fail", "confirm", "http_4xx")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                return_value=Response(400, text="rejected")
-            )
+            mock.post("/1/messages.json").mock(return_value=Response(400, text="rejected"))
             result = await deliver_pushover_confirm("t", "m", reminder_id="r1")
         assert result["success"] is False
         assert result["status_code"] == 400
@@ -491,9 +463,7 @@ class TestDeliverPushoverConfirm:
 
         before = _counter_value("fail", "confirm", "http_5xx")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                return_value=Response(503, text="boom")
-            )
+            mock.post("/1/messages.json").mock(return_value=Response(503, text="boom"))
             result = await deliver_pushover_confirm("t", "m")
         assert result["success"] is False
         assert result["status_code"] == 503
@@ -505,9 +475,7 @@ class TestDeliverPushoverConfirm:
 
         before = _counter_value("fail", "confirm", "timeout")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                side_effect=httpx.TimeoutException("slow")
-            )
+            mock.post("/1/messages.json").mock(side_effect=httpx.TimeoutException("slow"))
             result = await deliver_pushover_confirm("t", "m")
         assert result["success"] is False
         assert "TimeoutException" in result["error"]
@@ -519,9 +487,7 @@ class TestDeliverPushoverConfirm:
 
         before = _counter_value("fail", "confirm", "connect_error")
         with respx.mock(base_url="http://pushover.test") as mock:
-            mock.post("/1/messages.json").mock(
-                side_effect=httpx.ConnectError("dns")
-            )
+            mock.post("/1/messages.json").mock(side_effect=httpx.ConnectError("dns"))
             result = await deliver_pushover_confirm("t", "m")
         assert result["success"] is False
         assert "ConnectError" in result["error"]
@@ -534,15 +500,15 @@ class TestDeliverPushoverConfirm:
 
         from orchestrator.pushover_manager import deliver_pushover_confirm
 
-        with respx.mock(base_url="http://pushover.test") as mock, caplog.at_level(
-            logging.WARNING, logger="orchestrator.pushover_manager"
+        with (
+            respx.mock(base_url="http://pushover.test") as mock,
+            caplog.at_level(logging.WARNING, logger="orchestrator.pushover_manager"),
         ):
             mock.post("/1/messages.json").mock(return_value=Response(500))
             await deliver_pushover_confirm("t", "m", reminder_id="abc-123")
 
         assert any("rid=abc-123" in r.getMessage() for r in caplog.records), (
-            f"Expected 'rid=abc-123' in WARNING log, got: "
-            f"{[r.getMessage() for r in caplog.records]}"
+            f"Expected 'rid=abc-123' in WARNING log, got: {[r.getMessage() for r in caplog.records]}"
         )
 
 
@@ -566,14 +532,10 @@ class TestConfigValidator:
             "API_TOKEN": "x",
             "PIHOLE_PASSWORD": "x",
         }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(
-            logging.ERROR, logger="orchestrator.config"
-        ):
+        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
             s = Settings()
         assert s.pushover_enabled is False
-        assert any(
-            "PUSHOVER_ENABLED=true" in r.getMessage() for r in caplog.records
-        )
+        assert any("PUSHOVER_ENABLED=true" in r.getMessage() for r in caplog.records)
 
     def test_enabled_with_short_app_token_disables(self, caplog):
         import logging
@@ -588,9 +550,7 @@ class TestConfigValidator:
             "API_TOKEN": "x",
             "PIHOLE_PASSWORD": "x",
         }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(
-            logging.ERROR, logger="orchestrator.config"
-        ):
+        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
             s = Settings()
         assert s.pushover_enabled is False
 
@@ -680,10 +640,8 @@ def clean_scheduler():
     def _purge():
         for job in list(scheduler.get_jobs()):
             if job.id.startswith("reminder_"):
-                try:
+                with contextlib.suppress(Exception):
                     scheduler.remove_job(job.id)
-                except Exception:
-                    pass
 
     _purge()
     yield scheduler
@@ -705,29 +663,20 @@ class TestFeatureGateWidening:
         assert r.status_code == 404
         assert r.json()["error"] == "disabled"
 
-    def test_snooze_404s_when_both_channels_off(
-        self, client, ntfy_off, pushover_off
-    ):
+    def test_snooze_404s_when_both_channels_off(self, client, ntfy_off, pushover_off):
         r = client.post("/api/reminder/snooze/abc?minutes=10")
         assert r.status_code == 404
         assert r.json()["error"] == "disabled"
 
-    def test_ack_processes_when_only_pushover_on(
-        self, client, ntfy_off, pushover_on, tmp_db
-    ):
+    def test_ack_processes_when_only_pushover_on(self, client, ntfy_off, pushover_on, tmp_db):
         """ntfy off, pushover on → the feature gate must let the request
         through. Bad sig here just means we get 403, not 404."""
         r = client.post(f"/api/reminder/ack/abc?sig={'0' * 32}&exp={int(time.time()) + 300}")
         assert r.status_code == 403
         assert r.json()["error"] == "bad_signature"
 
-    def test_snooze_processes_when_only_pushover_on(
-        self, client, ntfy_off, pushover_on, tmp_db, clean_scheduler
-    ):
-        r = client.post(
-            f"/api/reminder/snooze/abc?sig={'0' * 32}"
-            f"&exp={int(time.time()) + 300}&minutes=10"
-        )
+    def test_snooze_processes_when_only_pushover_on(self, client, ntfy_off, pushover_on, tmp_db, clean_scheduler):
+        r = client.post(f"/api/reminder/snooze/abc?sig={'0' * 32}&exp={int(time.time()) + 300}&minutes=10")
         assert r.status_code == 403
         assert r.json()["error"] == "bad_signature"
 
@@ -758,9 +707,7 @@ class TestAckPushoverConfirmWiring:
         if pending:
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-    def test_ack_fires_pushover_confirm(
-        self, client, ntfy_on, pushover_on, tmp_db
-    ):
+    def test_ack_fires_pushover_confirm(self, client, ntfy_on, pushover_on, tmp_db):
         from orchestrator import state_store
 
         state_store.save_reminder("r1", "take meds now", "2026-04-20T09:00:00")
@@ -768,9 +715,11 @@ class TestAckPushoverConfirmWiring:
         sig = _make_sig("r1", "ack", exp)
 
         pushover_patch, ntfy_patch = self._patch_confirms()
-        with patch(
-            "orchestrator.selfcare_manager.record_medication_logged"
-        ), pushover_patch as mock_pushover, ntfy_patch:
+        with (
+            patch("orchestrator.selfcare_manager.record_medication_logged"),
+            pushover_patch as mock_pushover,
+            ntfy_patch,
+        ):
             r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
             self._drain_tasks()
 
@@ -785,9 +734,7 @@ class TestAckPushoverConfirmWiring:
         assert "take meds now" in message
         assert rid == "r1"
 
-    def test_ack_replay_does_not_fire_pushover_confirm(
-        self, client, ntfy_on, pushover_on, tmp_db
-    ):
+    def test_ack_replay_does_not_fire_pushover_confirm(self, client, ntfy_on, pushover_on, tmp_db):
         """already_acked must short-circuit before BOTH confirm dispatches."""
         from orchestrator import state_store
 
@@ -796,9 +743,7 @@ class TestAckPushoverConfirmWiring:
         sig = _make_sig("r1", "ack", exp)
 
         pushover_patch, ntfy_patch = self._patch_confirms()
-        with patch(
-            "orchestrator.selfcare_manager.record_movement_logged"
-        ), pushover_patch as mock_pushover, ntfy_patch:
+        with patch("orchestrator.selfcare_manager.record_movement_logged"), pushover_patch as mock_pushover, ntfy_patch:
             r1 = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
             self._drain_tasks()
             assert r1.status_code == 200
@@ -811,9 +756,7 @@ class TestAckPushoverConfirmWiring:
             # No second dispatch — replay short-circuits before fire-and-forget
             assert mock_pushover.call_count == 1
 
-    def test_ack_fires_pushover_even_when_pushover_enabled_false_at_caller(
-        self, client, ntfy_on, pushover_off, tmp_db
-    ):
+    def test_ack_fires_pushover_even_when_pushover_enabled_false_at_caller(self, client, ntfy_on, pushover_off, tmp_db):
         """Same fire-and-forget contract as ntfy: the route dispatches
         unconditionally. The pushover_manager function itself is the gate."""
         from orchestrator import state_store
@@ -863,9 +806,7 @@ class TestSnoozePushoverConfirmWiring:
 
         pushover_patch, ntfy_patch = self._patch_confirms()
         with pushover_patch as mock_pushover, ntfy_patch:
-            r = client.post(
-                f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
-            )
+            r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
             self._drain_tasks()
 
         assert r.status_code == 200
@@ -884,18 +825,14 @@ class TestSnoozePushoverConfirmWiring:
 
 class TestDeliverReminderJobDispatch:
     @pytest.mark.asyncio
-    async def test_phone_target_dispatches_pushover(
-        self, pushover_on, tmp_db, monkeypatch
-    ):
+    async def test_phone_target_dispatches_pushover(self, pushover_on, tmp_db, monkeypatch):
         """target='phone' → deliver_via_pushover fired via asyncio.create_task.
         We patch the symbol in the pushover_manager module (which is what the
         inner helper imports at call time)."""
         from orchestrator import state_store
         from orchestrator.tool_handlers import deliver_reminder_job
 
-        state_store.save_reminder(
-            "r1", "take meds", "2026-04-20T09:00:00", target="phone"
-        )
+        state_store.save_reminder("r1", "take meds", "2026-04-20T09:00:00", target="phone")
 
         # Inhibit TTS and HA Companion push paths — they're not under test here
         async def _noop_voice(*a, **kw):
@@ -904,26 +841,21 @@ class TestDeliverReminderJobDispatch:
         async def _noop_notify(*a, **kw):
             return {"success": True}
 
-        monkeypatch.setattr(
-            "orchestrator.tool_handlers._announce_voice", _noop_voice
-        )
-        monkeypatch.setattr(
-            "orchestrator.tool_handlers._send_notification", _noop_notify
-        )
+        monkeypatch.setattr("orchestrator.tool_handlers._announce_voice", _noop_voice)
+        monkeypatch.setattr("orchestrator.tool_handlers._send_notification", _noop_notify)
 
         mock_push = AsyncMock(return_value={"success": True, "request_id": "r"})
         # Also silence the parallel ntfy dispatch so we're only asserting on pushover
         mock_ntfy = AsyncMock(return_value={"success": True})
-        with patch(
-            "orchestrator.pushover_manager.deliver_via_pushover", mock_push
-        ), patch("orchestrator.reminder_manager.deliver_via_ntfy", mock_ntfy):
+        with (
+            patch("orchestrator.pushover_manager.deliver_via_pushover", mock_push),
+            patch("orchestrator.reminder_manager.deliver_via_ntfy", mock_ntfy),
+        ):
             await deliver_reminder_job("r1")
             # Let the detached task run
             import asyncio
 
-            pending = [
-                t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()
-            ]
+            pending = [t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()]
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 
@@ -933,18 +865,14 @@ class TestDeliverReminderJobDispatch:
         assert call_args[1] == "take meds"
 
     @pytest.mark.asyncio
-    async def test_dispatch_happens_even_when_pushover_disabled(
-        self, pushover_off, tmp_db, monkeypatch
-    ):
+    async def test_dispatch_happens_even_when_pushover_disabled(self, pushover_off, tmp_db, monkeypatch):
         """The gate is inside deliver_via_pushover itself — the caller always
         dispatches. This matters for runtime config flips: a fresh read after
         disabling would still see the create_task fire."""
         from orchestrator import state_store
         from orchestrator.tool_handlers import deliver_reminder_job
 
-        state_store.save_reminder(
-            "r2", "water time", "2026-04-20T09:00:00", target="phone"
-        )
+        state_store.save_reminder("r2", "water time", "2026-04-20T09:00:00", target="phone")
 
         async def _noop_voice(*a, **kw):
             return {"success": True}
@@ -952,24 +880,19 @@ class TestDeliverReminderJobDispatch:
         async def _noop_notify(*a, **kw):
             return {"success": True}
 
-        monkeypatch.setattr(
-            "orchestrator.tool_handlers._announce_voice", _noop_voice
-        )
-        monkeypatch.setattr(
-            "orchestrator.tool_handlers._send_notification", _noop_notify
-        )
+        monkeypatch.setattr("orchestrator.tool_handlers._announce_voice", _noop_voice)
+        monkeypatch.setattr("orchestrator.tool_handlers._send_notification", _noop_notify)
 
         mock_push = AsyncMock(return_value={"success": False, "skipped": True, "reason": "disabled"})
         mock_ntfy = AsyncMock(return_value={"success": True})
-        with patch(
-            "orchestrator.pushover_manager.deliver_via_pushover", mock_push
-        ), patch("orchestrator.reminder_manager.deliver_via_ntfy", mock_ntfy):
+        with (
+            patch("orchestrator.pushover_manager.deliver_via_pushover", mock_push),
+            patch("orchestrator.reminder_manager.deliver_via_ntfy", mock_ntfy),
+        ):
             await deliver_reminder_job("r2")
             import asyncio
 
-            pending = [
-                t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()
-            ]
+            pending = [t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()]
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 

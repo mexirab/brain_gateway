@@ -17,13 +17,11 @@ Covers:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Helpers + fixtures
@@ -156,11 +154,7 @@ def test_validate_routines_rejects_non_dict_routine():
 def test_validate_routines_rejects_bad_trigger_time(bad_time):
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {
-            "morning": {"trigger": {"time": bad_time, "days": ["mon"]}}
-        }
-    }
+    payload = {"routines": {"morning": {"trigger": {"time": bad_time, "days": ["mon"]}}}}
     with pytest.raises(ValueError):
         validate_routines(payload)
 
@@ -168,9 +162,7 @@ def test_validate_routines_rejects_bad_trigger_time(bad_time):
 def test_validate_routines_rejects_non_string_trigger_time():
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {"morning": {"trigger": {"time": 700, "days": ["mon"]}}}
-    }
+    payload = {"routines": {"morning": {"trigger": {"time": 700, "days": ["mon"]}}}}
     with pytest.raises(ValueError, match="must be HH:MM string"):
         validate_routines(payload)
 
@@ -179,11 +171,7 @@ def test_validate_routines_rejects_non_string_trigger_time():
 def test_validate_routines_rejects_bad_day_name(bad_day):
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {
-            "morning": {"trigger": {"time": "07:00", "days": ["mon", bad_day]}}
-        }
-    }
+    payload = {"routines": {"morning": {"trigger": {"time": "07:00", "days": ["mon", bad_day]}}}}
     with pytest.raises(ValueError):
         validate_routines(payload)
 
@@ -191,9 +179,7 @@ def test_validate_routines_rejects_bad_day_name(bad_day):
 def test_validate_routines_rejects_non_list_days():
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {"morning": {"trigger": {"time": "07:00", "days": "mon"}}}
-    }
+    payload = {"routines": {"morning": {"trigger": {"time": "07:00", "days": "mon"}}}}
     with pytest.raises(ValueError, match="trigger.days must be a list"):
         validate_routines(payload)
 
@@ -227,9 +213,7 @@ def test_validate_routines_rejects_missing_step_id():
 def test_validate_routines_rejects_non_string_step_id(bad_id):
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {"morning": {"steps": [{"id": bad_id, "label": "x"}]}}
-    }
+    payload = {"routines": {"morning": {"steps": [{"id": bad_id, "label": "x"}]}}}
     with pytest.raises(ValueError):
         validate_routines(payload)
 
@@ -237,11 +221,7 @@ def test_validate_routines_rejects_non_string_step_id(bad_id):
 def test_validate_routines_rejects_negative_est_minutes():
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {
-            "morning": {"steps": [{"id": "x", "label": "x", "est_minutes": -1}]}
-        }
-    }
+    payload = {"routines": {"morning": {"steps": [{"id": "x", "label": "x", "est_minutes": -1}]}}}
     with pytest.raises(ValueError, match="est_minutes"):
         validate_routines(payload)
 
@@ -249,11 +229,7 @@ def test_validate_routines_rejects_negative_est_minutes():
 def test_validate_routines_rejects_oversized_est_minutes():
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {
-            "morning": {"steps": [{"id": "x", "label": "x", "est_minutes": 241}]}
-        }
-    }
+    payload = {"routines": {"morning": {"steps": [{"id": "x", "label": "x", "est_minutes": 241}]}}}
     with pytest.raises(ValueError, match="est_minutes"):
         validate_routines(payload)
 
@@ -262,11 +238,7 @@ def test_validate_routines_rejects_oversized_est_minutes():
 def test_validate_routines_rejects_non_bool_skippable(bad_skip):
     from orchestrator.routines_config import validate_routines
 
-    payload = {
-        "routines": {
-            "morning": {"steps": [{"id": "x", "label": "x", "skippable": bad_skip}]}
-        }
-    }
+    payload = {"routines": {"morning": {"steps": [{"id": "x", "label": "x", "skippable": bad_skip}]}}}
     if bad_skip is None:
         # The validator only checks `if sk is not None` — so None is allowed.
         validate_routines(payload)
@@ -362,9 +334,7 @@ def test_merge_preserves_all_PRESERVED_step_keys():
     }
     incoming = {
         "routines": {
-            "morning": {
-                "steps": [{"id": "everything", "label": "New label", "est_minutes": 5, "skippable": True}]
-            }
+            "morning": {"steps": [{"id": "everything", "label": "New label", "est_minutes": 5, "skippable": True}]}
         }
     }
     merged_step = merge_with_existing(incoming, existing)["routines"]["morning"]["steps"][0]
@@ -421,11 +391,7 @@ def test_merge_preserves_routines_not_in_incoming_payload():
 
     existing = _existing_with_ha_action()
     incoming = {
-        "routines": {
-            "morning": {
-                "steps": [{"id": "meds", "label": "X", "est_minutes": 2, "skippable": False}]
-            }
-        }
+        "routines": {"morning": {"steps": [{"id": "meds", "label": "X", "est_minutes": 2, "skippable": False}]}}
     }
     merged = merge_with_existing(incoming, existing)
     assert "evening" in merged["routines"]
@@ -599,8 +565,13 @@ def test_list_routines_strips_power_user_step_keys(routines_paths):
     assert "est_minutes" in meds
     assert "skippable" in meds
     # Power-user keys stripped:
-    for k in ("ha_action", "fallback_label", "fallback_threshold_minutes",
-              "include_calendar_summary", "calendar_days_ahead"):
+    for k in (
+        "ha_action",
+        "fallback_label",
+        "fallback_threshold_minutes",
+        "include_calendar_summary",
+        "calendar_days_ahead",
+    ):
         assert k not in meds, f"power-user key {k!r} leaked into panel view"
 
     breakfast = morning_steps[1]
@@ -615,7 +586,7 @@ def test_list_routines_defaults_for_missing_routine_fields(routines_paths):
     routines_paths["overrides"].write_text(yaml.safe_dump({"routines": {"weekend": {"steps": []}}}))
     out = list_routines_for_panel()
     weekend = out["routines"]["weekend"]
-    assert weekend["display_name"] == "Weekend"          # rid.title()
+    assert weekend["display_name"] == "Weekend"  # rid.title()
     assert weekend["speaker"] == ""
     assert weekend["nudge_delay_minutes"] == 10
     assert weekend["trigger"]["time"] == "07:00"

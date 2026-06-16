@@ -19,14 +19,14 @@ Notes on the ack route test fakes:
     the scheduler fire, so it's inert.
 """
 
+import contextlib
 import hashlib
 import hmac
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Settings shim — every test needs a known ntfy secret on the live singleton.
@@ -44,9 +44,7 @@ def ntfy_on(monkeypatch):
     monkeypatch.setattr(settings, "ntfy_hmac_secret", _SECRET_32, raising=False)
     monkeypatch.setattr(settings, "ntfy_url", "http://ntfy.test:8889", raising=False)
     monkeypatch.setattr(settings, "ntfy_topic", "jess-reminders", raising=False)
-    monkeypatch.setattr(
-        settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False
-    )
+    monkeypatch.setattr(settings, "ntfy_callback_base_url", "http://helios.test:8888", raising=False)
     monkeypatch.setattr(settings, "ntfy_ack_exp_seconds", 1800, raising=False)
     monkeypatch.setattr(settings, "ntfy_max_snooze_count", 5, raising=False)
     monkeypatch.setattr(settings, "ntfy_default_priority", 3, raising=False)
@@ -98,9 +96,7 @@ class TestVerifyCallbackSignature:
 
         exp = int(time.time()) + 300
         # Valid shape, wrong bytes
-        assert (
-            verify_callback_signature("abc", "ack", exp, "0" * 32) == "bad_signature"
-        )
+        assert verify_callback_signature("abc", "ack", exp, "0" * 32) == "bad_signature"
 
     def test_snooze_extra_must_match(self, ntfy_on):
         from orchestrator.reminder_manager import _sign_callback, verify_callback_signature
@@ -110,10 +106,7 @@ class TestVerifyCallbackSignature:
         # Same extra verifies
         assert verify_callback_signature("abc", "snooze", exp, sig, extra="10") is None
         # Different extra (tampered minutes) fails
-        assert (
-            verify_callback_signature("abc", "snooze", exp, sig, extra="20")
-            == "bad_signature"
-        )
+        assert verify_callback_signature("abc", "snooze", exp, sig, extra="20") == "bad_signature"
 
     def test_sign_callback_is_32_hex_chars(self, ntfy_on):
         from orchestrator.reminder_manager import _sign_callback
@@ -323,9 +316,7 @@ class TestDeliverViaNtfy:
 
         before = NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder")._value.get()
         with respx.mock(base_url="http://ntfy.test:8889") as mock:
-            mock.post("/jess-reminders").mock(
-                side_effect=httpx.ConnectError("dns")
-            )
+            mock.post("/jess-reminders").mock(side_effect=httpx.ConnectError("dns"))
             # Must NOT raise — fire-and-forget contract
             result = await deliver_via_ntfy("r1", "hi")
 
@@ -361,15 +352,11 @@ class TestConfigAutoDisable:
             "API_TOKEN": "x",
             "PIHOLE_PASSWORD": "x",
         }
-        with patch.dict(os.environ, env, clear=False), caplog.at_level(
-            logging.ERROR, logger="orchestrator.config"
-        ):
+        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
             s = Settings()
         assert s.ntfy_enabled is False
         # Error was logged but no exception raised
-        assert any(
-            "NTFY_ENABLED=true" in r.getMessage() for r in caplog.records
-        )
+        assert any("NTFY_ENABLED=true" in r.getMessage() for r in caplog.records)
 
     def test_long_secret_keeps_ntfy_enabled(self):
         """32+ char secret → ntfy stays on."""
@@ -421,9 +408,7 @@ class TestAckRoute:
         assert r.status_code == 404
         assert r.json()["error"] == "disabled"
 
-    def test_unknown_id_with_valid_sig_returns_404_not_found(
-        self, client, ntfy_on, tmp_db
-    ):
+    def test_unknown_id_with_valid_sig_returns_404_not_found(self, client, ntfy_on, tmp_db):
         exp = int(time.time()) + 300
         sig = _make_sig("unknown", "ack", exp)
         r = client.post(f"/api/reminder/ack/unknown?sig={sig}&exp={exp}")
@@ -443,18 +428,14 @@ class TestAckRoute:
         assert r.status_code == 403
         assert r.json()["error"] == "bad_signature"
 
-    def test_success_fires_selfcare_bridge_for_meds(
-        self, client, ntfy_on, tmp_db
-    ):
+    def test_success_fires_selfcare_bridge_for_meds(self, client, ntfy_on, tmp_db):
         from orchestrator import state_store
 
         state_store.save_reminder("r1", "take meds now", "2026-04-20T09:00:00")
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "ack", exp)
 
-        with patch(
-            "orchestrator.selfcare_manager.record_medication_logged"
-        ) as mock_med:
+        with patch("orchestrator.selfcare_manager.record_medication_logged") as mock_med:
             r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
 
         assert r.status_code == 200
@@ -466,20 +447,17 @@ class TestAckRoute:
         assert label.startswith("reminder:")
         assert "take meds now" in label
 
-    def test_success_no_selfcare_for_unrelated_text(
-        self, client, ntfy_on, tmp_db
-    ):
+    def test_success_no_selfcare_for_unrelated_text(self, client, ntfy_on, tmp_db):
         from orchestrator import state_store
 
         state_store.save_reminder("r1", "call the doctor", "2026-04-20T09:00:00")
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "ack", exp)
 
-        with patch(
-            "orchestrator.selfcare_manager.record_medication_logged"
-        ) as mock_med, patch(
-            "orchestrator.selfcare_manager.record_meal_logged"
-        ) as mock_meal:
+        with (
+            patch("orchestrator.selfcare_manager.record_medication_logged") as mock_med,
+            patch("orchestrator.selfcare_manager.record_meal_logged") as mock_meal,
+        ):
             r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
 
         assert r.status_code == 200
@@ -515,10 +493,8 @@ def clean_scheduler():
     def _purge():
         for job in list(scheduler.get_jobs()):
             if job.id.startswith("reminder_"):
-                try:
+                with contextlib.suppress(Exception):
                     scheduler.remove_job(job.id)
-                except Exception:
-                    pass
 
     _purge()
     yield scheduler
@@ -531,9 +507,7 @@ class TestSnoozeRoute:
         assert r.status_code == 404
         assert r.json()["error"] == "disabled"
 
-    def test_valid_snooze_reschedules_job(
-        self, client, ntfy_on, tmp_db, clean_scheduler
-    ):
+    def test_valid_snooze_reschedules_job(self, client, ntfy_on, tmp_db, clean_scheduler):
         from orchestrator import state_store
 
         scheduler = clean_scheduler
@@ -541,10 +515,8 @@ class TestSnoozeRoute:
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "snooze", exp, extra="10")
 
-        before = datetime.now()
-        r = client.post(
-            f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
-        )
+        before = datetime.now(UTC)
+        r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True
@@ -554,14 +526,17 @@ class TestSnoozeRoute:
         # in tests (so next_run_time is None), but trigger.run_date is set.
         job = scheduler.get_job("reminder_r1")
         assert job is not None
-        run_date = job.trigger.run_date.replace(tzinfo=None)
+        # run_date is tz-aware in the scheduler's timezone (e.g. America/Chicago).
+        # Compare tz-aware against a tz-aware `before` so a UTC CI host and a
+        # non-UTC app timezone don't introduce a fixed multi-hour offset.
+        run_date = job.trigger.run_date
+        if run_date.tzinfo is None:
+            run_date = run_date.replace(tzinfo=UTC)
         delta = (run_date - before).total_seconds()
         # ~10 minutes = 600s, tolerate a little timing noise
         assert 540 < delta < 660
 
-    def test_minutes_clamped_before_sig_verify(
-        self, client, ntfy_on, tmp_db, clean_scheduler
-    ):
+    def test_minutes_clamped_before_sig_verify(self, client, ntfy_on, tmp_db, clean_scheduler):
         """minutes=999 gets clamped to 120; sig must be for 120, not 10 or 999."""
         from orchestrator import state_store
 
@@ -570,23 +545,17 @@ class TestSnoozeRoute:
 
         # Signature for the clamped value (120) works
         sig_120 = _make_sig("r1", "snooze", exp, extra="120")
-        r_ok = client.post(
-            f"/api/reminder/snooze/r1?sig={sig_120}&exp={exp}&minutes=999"
-        )
+        r_ok = client.post(f"/api/reminder/snooze/r1?sig={sig_120}&exp={exp}&minutes=999")
         assert r_ok.status_code == 200
 
         # Signature for minutes=10 does NOT work (server clamps to 120 first,
         # so the HMAC expectation binds to "120", not "10").
         sig_10 = _make_sig("r1", "snooze", exp, extra="10")
-        r_bad = client.post(
-            f"/api/reminder/snooze/r1?sig={sig_10}&exp={exp}&minutes=999"
-        )
+        r_bad = client.post(f"/api/reminder/snooze/r1?sig={sig_10}&exp={exp}&minutes=999")
         assert r_bad.status_code == 403
         assert r_bad.json()["error"] == "bad_signature"
 
-    def test_max_snoozes_returns_409(
-        self, client, ntfy_on, tmp_db, monkeypatch, clean_scheduler
-    ):
+    def test_max_snoozes_returns_409(self, client, ntfy_on, tmp_db, monkeypatch, clean_scheduler):
         from orchestrator import state_store
         from orchestrator.config import settings
 
@@ -596,29 +565,21 @@ class TestSnoozeRoute:
 
         # Pre-populate snooze_count = 5 directly
         with state_store.get_db() as conn:
-            conn.execute(
-                "UPDATE reminders SET snooze_count = 5 WHERE id = ?", ("r1",)
-            )
+            conn.execute("UPDATE reminders SET snooze_count = 5 WHERE id = ?", ("r1",))
 
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "snooze", exp, extra="10")
-        r = client.post(
-            f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
-        )
+        r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
         assert r.status_code == 409
         assert r.json()["error"] == "max_snoozes_reached"
         assert r.json()["snooze_count"] == 5
         # Guardrail should have fired BEFORE add_job, so no reminder_r1 job exists
         assert scheduler.get_job("reminder_r1") is None
 
-    def test_unknown_id_with_valid_sig_returns_404(
-        self, client, ntfy_on, tmp_db, clean_scheduler
-    ):
+    def test_unknown_id_with_valid_sig_returns_404(self, client, ntfy_on, tmp_db, clean_scheduler):
         exp = int(time.time()) + 300
         sig = _make_sig("ghost", "snooze", exp, extra="10")
-        r = client.post(
-            f"/api/reminder/snooze/ghost?sig={sig}&exp={exp}&minutes=10"
-        )
+        r = client.post(f"/api/reminder/snooze/ghost?sig={sig}&exp={exp}&minutes=10")
         assert r.status_code == 404
         assert r.json()["error"] == "not_found"
 
@@ -639,9 +600,7 @@ def ntfy_confirm_on(ntfy_on, monkeypatch):
 
 class TestDeliverAckConfirm:
     @pytest.mark.asyncio
-    async def test_ntfy_disabled_returns_disabled_no_http_no_metric(
-        self, ntfy_off, monkeypatch
-    ):
+    async def test_ntfy_disabled_returns_disabled_no_http_no_metric(self, ntfy_off, monkeypatch):
         """ntfy_enabled=False → short-circuit before any HTTP or metric bump."""
         import respx
 
@@ -664,9 +623,7 @@ class TestDeliverAckConfirm:
         assert NTFY_PUSH_TOTAL.labels(result="fail", kind="confirm")._value.get() == before_fail
 
     @pytest.mark.asyncio
-    async def test_confirm_flag_off_returns_disabled_no_http(
-        self, ntfy_on, monkeypatch
-    ):
+    async def test_confirm_flag_off_returns_disabled_no_http(self, ntfy_on, monkeypatch):
         """ntfy_enabled=True but ntfy_confirm_enabled=False → skipped, no HTTP."""
         import respx
 
@@ -685,9 +642,7 @@ class TestDeliverAckConfirm:
         assert NTFY_PUSH_TOTAL.labels(result="skipped", kind="confirm")._value.get() == before_skip
 
     @pytest.mark.asyncio
-    async def test_missing_url_returns_missing_url_and_bumps_skipped_metric(
-        self, ntfy_confirm_on, monkeypatch
-    ):
+    async def test_missing_url_returns_missing_url_and_bumps_skipped_metric(self, ntfy_confirm_on, monkeypatch):
         """Both flags true but NTFY_URL='' → skipped/missing_url + metric bump."""
         import respx
 
@@ -718,24 +673,20 @@ class TestDeliverAckConfirm:
 
         with respx.mock(base_url="http://ntfy.test:8889") as mock:
             route = mock.post("/jess-reminders").mock(return_value=Response(200))
-            result = await deliver_ack_confirm(
-                "\u2713 Logged", "drink water\n(water logged)", "r1"
-            )
+            result = await deliver_ack_confirm("\u2713 Logged", "drink water\n(water logged)", "r1")
 
         assert route.called
         req = route.calls[0].request
         # Title header is sent as UTF-8 bytes (httpx accepts raw bytes
         # values), which ntfy decodes as UTF-8. The raw header bytes must
         # match the caller's UTF-8 encoding of the original string.
-        raw_title = dict(req.headers.raw).get(b"title") or dict(
-            req.headers.raw
-        ).get(b"Title")
-        assert raw_title == "\u2713 Logged".encode("utf-8")
+        raw_title = dict(req.headers.raw).get(b"title") or dict(req.headers.raw).get(b"Title")
+        assert raw_title == "\u2713 Logged".encode()
         # And the decoded view matches too
         assert req.headers.get("Title") == "\u2713 Logged"
         assert req.headers.get("Priority") == "1"
         # Body is raw message bytes (utf-8 encoded)
-        assert req.content == "drink water\n(water logged)".encode("utf-8")
+        assert req.content == b"drink water\n(water logged)"
         # No Actions header on confirms (intentionally different from reminders)
         assert "Actions" not in req.headers
 
@@ -744,9 +695,7 @@ class TestDeliverAckConfirm:
         assert after == before + 1
 
     @pytest.mark.asyncio
-    async def test_5xx_response_fail_metric_and_status_code_returned(
-        self, ntfy_confirm_on
-    ):
+    async def test_5xx_response_fail_metric_and_status_code_returned(self, ntfy_confirm_on):
         import respx
         from httpx import Response
 
@@ -810,15 +759,15 @@ class TestDeliverAckConfirm:
 
         from orchestrator.reminder_manager import deliver_ack_confirm
 
-        with respx.mock(base_url="http://ntfy.test:8889") as mock, caplog.at_level(
-            logging.WARNING, logger="orchestrator.reminder_manager"
+        with (
+            respx.mock(base_url="http://ntfy.test:8889") as mock,
+            caplog.at_level(logging.WARNING, logger="orchestrator.reminder_manager"),
         ):
             mock.post("/jess-reminders").mock(return_value=Response(500))
             await deliver_ack_confirm("t", "m", reminder_id="abc-123")
 
         assert any("rid=abc-123" in r.getMessage() for r in caplog.records), (
-            f"Expected 'rid=abc-123' in WARNING log, got: "
-            f"{[r.getMessage() for r in caplog.records]}"
+            f"Expected 'rid=abc-123' in WARNING log, got: {[r.getMessage() for r in caplog.records]}"
         )
 
     @pytest.mark.asyncio
@@ -831,15 +780,15 @@ class TestDeliverAckConfirm:
 
         from orchestrator.reminder_manager import deliver_ack_confirm
 
-        with respx.mock(base_url="http://ntfy.test:8889") as mock, caplog.at_level(
-            logging.ERROR, logger="orchestrator.reminder_manager"
+        with (
+            respx.mock(base_url="http://ntfy.test:8889") as mock,
+            caplog.at_level(logging.ERROR, logger="orchestrator.reminder_manager"),
         ):
             mock.post("/jess-reminders").mock(side_effect=httpx.ConnectError("dns"))
             await deliver_ack_confirm("t", "m", reminder_id="xyz-9")
 
         assert any("rid=xyz-9" in r.getMessage() for r in caplog.records), (
-            f"Expected 'rid=xyz-9' in ERROR log, got: "
-            f"{[r.getMessage() for r in caplog.records]}"
+            f"Expected 'rid=xyz-9' in ERROR log, got: {[r.getMessage() for r in caplog.records]}"
         )
 
 
@@ -864,9 +813,7 @@ class TestAckConfirmWiring:
             new_callable=AsyncMock,
         )
 
-    def test_ack_fires_deliver_ack_confirm_with_check_mark_title(
-        self, client, ntfy_confirm_on, tmp_db
-    ):
+    def test_ack_fires_deliver_ack_confirm_with_check_mark_title(self, client, ntfy_confirm_on, tmp_db):
         """Successful ack → deliver_ack_confirm called with U+2713 title + body
         containing reminder text. Title must NEVER contain the action
         category (security finding)."""
@@ -876,9 +823,7 @@ class TestAckConfirmWiring:
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "ack", exp)
 
-        with patch(
-            "orchestrator.selfcare_manager.record_medication_logged"
-        ), self._patch_confirm() as mock_confirm:
+        with patch("orchestrator.selfcare_manager.record_medication_logged"), self._patch_confirm() as mock_confirm:
             r = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
             # create_task scheduled the coroutine; drive it by awaiting all pending
             # tasks via the event loop. TestClient runs sync, so we need to yield
@@ -905,9 +850,7 @@ class TestAckConfirmWiring:
         assert "medication" in message.lower()
         assert rid == "r1"
 
-    def test_ack_no_action_omits_action_suffix_in_body(
-        self, client, ntfy_confirm_on, tmp_db
-    ):
+    def test_ack_no_action_omits_action_suffix_in_body(self, client, ntfy_confirm_on, tmp_db):
         """When no selfcare action is inferred, body is just the text snippet."""
         from orchestrator import state_store
 
@@ -934,9 +877,7 @@ class TestAckConfirmWiring:
         assert "logged)" not in message
         assert rid == "r1"
 
-    def test_ack_replay_does_not_fire_confirm(
-        self, client, ntfy_confirm_on, tmp_db
-    ):
+    def test_ack_replay_does_not_fire_confirm(self, client, ntfy_confirm_on, tmp_db):
         """already_acked short-circuit happens BEFORE the create_task."""
         from orchestrator import state_store
 
@@ -944,9 +885,7 @@ class TestAckConfirmWiring:
         exp = int(time.time()) + 300
         sig = _make_sig("r1", "ack", exp)
 
-        with patch(
-            "orchestrator.selfcare_manager.record_movement_logged"
-        ), self._patch_confirm() as mock_confirm:
+        with patch("orchestrator.selfcare_manager.record_movement_logged"), self._patch_confirm() as mock_confirm:
             # First ack — confirm fires once
             r1 = client.post(f"/api/reminder/ack/r1?sig={sig}&exp={exp}")
             import asyncio
@@ -969,9 +908,7 @@ class TestAckConfirmWiring:
             # Call count unchanged — replay short-circuits before dispatch
             assert mock_confirm.call_count == first_call_count
 
-    def test_ack_fires_confirm_even_when_confirm_flag_off(
-        self, client, ntfy_on, tmp_db, monkeypatch
-    ):
+    def test_ack_fires_confirm_even_when_confirm_flag_off(self, client, ntfy_on, tmp_db, monkeypatch):
         """Route dispatches unconditionally; the function gates internally.
         This verifies the fire-and-forget contract: api_routes doesn't know
         or care about ntfy_confirm_enabled."""
@@ -1020,9 +957,7 @@ class TestSnoozeConfirmWiring:
         sig = _make_sig("r1", "snooze", exp, extra="10")
 
         with self._patch_confirm() as mock_confirm:
-            r = client.post(
-                f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
-            )
+            r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
             import asyncio
 
             loop = asyncio.get_event_loop()
@@ -1040,9 +975,7 @@ class TestSnoozeConfirmWiring:
         assert "1/5 snoozes used" in message
         assert rid == "r1"
 
-    def test_snooze_fires_confirm_when_flag_off(
-        self, client, ntfy_on, tmp_db, clean_scheduler, monkeypatch
-    ):
+    def test_snooze_fires_confirm_when_flag_off(self, client, ntfy_on, tmp_db, clean_scheduler, monkeypatch):
         """Same fire-and-forget contract as ack: dispatch is unconditional."""
         from orchestrator import state_store
         from orchestrator.config import settings
@@ -1053,9 +986,7 @@ class TestSnoozeConfirmWiring:
         sig = _make_sig("r1", "snooze", exp, extra="10")
 
         with self._patch_confirm() as mock_confirm:
-            r = client.post(
-                f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10"
-            )
+            r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
             import asyncio
 
             loop = asyncio.get_event_loop()

@@ -331,9 +331,7 @@ async def _announce_voice(
                                     f"({announcement_type})"
                                 )
                             else:
-                                logger.warning(
-                                    f"[VOLUME] volume_set returned {vol_resp.status_code} for {try_speaker}"
-                                )
+                                logger.warning(f"[VOLUME] volume_set returned {vol_resp.status_code} for {try_speaker}")
                     except Exception as vol_err:  # noqa: BLE001
                         logger.warning(f"[VOLUME] floor check failed for {try_speaker}: {vol_err}")
 
@@ -530,13 +528,11 @@ def _sign_callback(reminder_id: str, action: str, exp: int, extra: str = "") -> 
     payload compact. Secret is `settings.ntfy_hmac_secret`.
     """
     secret = _settings.ntfy_hmac_secret.encode("utf-8")
-    msg = f"{reminder_id}|{action}|{exp}|{extra}".encode("utf-8")
+    msg = f"{reminder_id}|{action}|{exp}|{extra}".encode()
     return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
 
 
-def verify_callback_signature(
-    reminder_id: str, action: str, exp: int, sig: str, extra: str = ""
-) -> Optional[str]:
+def verify_callback_signature(reminder_id: str, action: str, exp: int, sig: str, extra: str = "") -> Optional[str]:
     """Validate an ntfy callback URL. Returns None on success, error string otherwise.
 
     Separate function so tests can exercise it without a live request.
@@ -608,9 +604,7 @@ async def deliver_via_ntfy(reminder_id: str, text: str, priority: Optional[int] 
     # Bind minutes into the HMAC so an eavesdropper on the open-tailnet ntfy
     # topic can't replay with a modified minutes value to burn the snooze
     # budget.
-    snooze_url = _build_callback_url(
-        reminder_id, "snooze", {"minutes": "10"}, signed_extra="10"
-    )
+    snooze_url = _build_callback_url(reminder_id, "snooze", {"minutes": "10"}, signed_extra="10")
 
     # ntfy action-button format: semicolon-separated, comma-separated fields within
     # See https://docs.ntfy.sh/publish/#action-buttons
@@ -670,9 +664,7 @@ def infer_selfcare_action_from_text(text: str) -> Optional[str]:
     return None
 
 
-async def deliver_ack_confirm(
-    title: str, message: str, reminder_id: Optional[str] = None
-) -> Dict[str, Any]:
+async def deliver_ack_confirm(title: str, message: str, reminder_id: Optional[str] = None) -> Dict[str, Any]:
     """Push a low-priority confirmation notification (F-011 ack/snooze feedback).
 
     Fire-and-forget: called from the ack/snooze routes via

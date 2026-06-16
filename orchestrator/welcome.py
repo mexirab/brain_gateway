@@ -27,7 +27,6 @@ from __future__ import annotations
 import re
 from typing import Dict, Optional
 
-
 # Markdown special chars that change rendering semantics if interpolated
 # into a message. Stripped from operator-set identity fields before they
 # land in the welcome string.
@@ -59,6 +58,7 @@ def _integration_status(env_overrides: Dict[str, str]) -> Dict[str, bool]:
     (case-insensitive), so a hand-edited overrides file with `NTFY_ENABLED=1`
     is correctly recognized as enabled.
     """
+
     def truthy(v: str) -> bool:
         return v.strip().lower() in ("true", "1", "yes", "on")
 
@@ -66,9 +66,7 @@ def _integration_status(env_overrides: Dict[str, str]) -> Dict[str, bool]:
         "ha": bool(env_overrides.get("HA_URL") and env_overrides.get("HA_TOKEN")),
         "ntfy": truthy(env_overrides.get("NTFY_ENABLED", "")),
         "pushover": truthy(env_overrides.get("PUSHOVER_ENABLED", "")),
-        "paperless": bool(
-            env_overrides.get("PAPERLESS_URL") and env_overrides.get("PAPERLESS_API_TOKEN")
-        ),
+        "paperless": bool(env_overrides.get("PAPERLESS_URL") and env_overrides.get("PAPERLESS_API_TOKEN")),
     }
 
 

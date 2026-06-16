@@ -36,17 +36,31 @@ def client(tmp_path, monkeypatch):
     from starlette.middleware.base import BaseHTTPMiddleware
 
     # 1. Isolate persistence paths.
-    from orchestrator import background_jobs, routine_manager, selfcare_schedule, shared, state_store, user_profile
+    from orchestrator import (
+        announcement_routes,
+        background_jobs,
+        routine_manager,
+        selfcare_schedule,
+        shared,
+        state_store,
+        user_profile,
+    )
 
     db_path = str(tmp_path / "config_routes.db")
     sched_path = str(tmp_path / "selfcare_schedule.yaml")
     overrides_path = str(tmp_path / "user_profile_overrides.yaml")
     routines_base = str(tmp_path / "routines_base.yaml")
     routines_overrides = str(tmp_path / "routines_overrides.yaml")
+    ann_routes_path = str(tmp_path / "announcement_routes.yaml")
 
     monkeypatch.setattr(state_store, "DB_PATH", db_path)
     monkeypatch.setattr(selfcare_schedule, "SCHEDULE_PATH", sched_path)
     monkeypatch.setattr(selfcare_schedule, "_cache", None)
+    # PUT /api/config/speakers writes via announcement_routes.save_routes, whose
+    # ROUTES_PATH is captured at import (default /app/data/...). Without this it
+    # writes to /app — Permission denied on a clean CI runner.
+    monkeypatch.setattr(announcement_routes, "ROUTES_PATH", ann_routes_path)
+    monkeypatch.setattr(announcement_routes, "_cache", None)
     monkeypatch.setattr(user_profile, "_OVERRIDES_PATH", overrides_path)
     # Force profile reload on each test so cached overrides from prior tests don't bleed.
     monkeypatch.setattr(user_profile, "_profile", None)

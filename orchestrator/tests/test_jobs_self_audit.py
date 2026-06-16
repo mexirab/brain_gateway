@@ -12,8 +12,8 @@ as test_pushover_bridge / test_paperless_bridge) — never enabled globally.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
+import contextlib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -21,7 +21,6 @@ import httpx
 import pytest
 import respx
 from httpx import Response
-
 
 # ---------------------------------------------------------------------------
 # Settings fixtures
@@ -36,6 +35,10 @@ def audit_on(monkeypatch, tmp_path):
     from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "self_audit_enabled", True, raising=False)
+    # run_self_audit() gates on BOTH flags (self_audit_enabled AND jess_advanced);
+    # jess_advanced defaults to False on a clean env, so without this the audit
+    # short-circuits to result="skipped" in CI.
+    monkeypatch.setattr(settings, "jess_advanced", True, raising=False)
     monkeypatch.setattr(settings, "self_audit_loki_url", _LOKI_URL, raising=False)
     monkeypatch.setattr(settings, "self_audit_lookback_hours", 24, raising=False)
     monkeypatch.setattr(settings, "self_audit_max_clusters", 10, raising=False)
@@ -60,16 +63,12 @@ def _reset_audit_lock():
 
     # Try-acquire then release any leftover state, then yield.
     if jobs_self_audit._AUDIT_LOCK.locked():
-        try:
+        with contextlib.suppress(RuntimeError):
             jobs_self_audit._AUDIT_LOCK.release()
-        except RuntimeError:
-            pass
     yield
     if jobs_self_audit._AUDIT_LOCK.locked():
-        try:
+        with contextlib.suppress(RuntimeError):
             jobs_self_audit._AUDIT_LOCK.release()
-        except RuntimeError:
-            pass
 
 
 # ===========================================================================
@@ -81,9 +80,7 @@ class TestCheckSuggestion:
     def test_investigate_journalctl_with_quoted_arg_allowed(self):
         from orchestrator.jobs_self_audit import _check_suggestion
 
-        ok, reason = _check_suggestion(
-            "INVESTIGATE: journalctl -u foo --since '1h ago'"
-        )
+        ok, reason = _check_suggestion("INVESTIGATE: journalctl -u foo --since '1h ago'")
         assert ok is True
         assert reason == ""
 
@@ -102,9 +99,7 @@ class TestCheckSuggestion:
     def test_fix_docker_logs_tail_allowed(self):
         from orchestrator.jobs_self_audit import _check_suggestion
 
-        ok, _ = _check_suggestion(
-            "FIX: docker logs brain-orchestrator --tail 50"
-        )
+        ok, _ = _check_suggestion("FIX: docker logs brain-orchestrator --tail 50")
         assert ok is True
 
     def test_sudo_wrapper_stripped(self):
@@ -290,7 +285,7 @@ class TestBucketLogs:
     def test_two_identical_entries_collapse(self):
         from orchestrator.jobs_self_audit import _bucket_logs
 
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         entries = [
             _entry("foo", "boom", ts),
             _entry("foo", "boom", ts + timedelta(seconds=1)),
@@ -302,7 +297,7 @@ class TestBucketLogs:
     def test_three_different_services_three_clusters(self):
         from orchestrator.jobs_self_audit import _bucket_logs
 
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         entries = [
             _entry("a", "x", ts),
             _entry("b", "x", ts),
@@ -314,7 +309,7 @@ class TestBucketLogs:
     def test_max_clusters_keeps_most_frequent(self):
         from orchestrator.jobs_self_audit import _bucket_logs
 
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         entries = [
             # service "a" -> 3
             _entry("a", "x", ts),
@@ -336,7 +331,7 @@ class TestBucketLogs:
     def test_first_seen_last_seen_track(self):
         from orchestrator.jobs_self_audit import _bucket_logs
 
-        t0 = datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 4, 24, 10, 0, tzinfo=UTC)
         t1 = t0 + timedelta(minutes=5)
         t2 = t0 + timedelta(minutes=10)
         entries = [
@@ -444,11 +439,7 @@ class TestSanitizeDiagnosis:
         from orchestrator.jobs_self_audit import _sanitize_diagnosis
 
         bad = "FIX: rm -rf /home"
-        diagnosis = (
-            "## foo · CRITICAL\n"
-            "- **Count:** 5x\n"
-            f"- **Suggestion**: {bad}\n"
-        )
+        diagnosis = f"## foo · CRITICAL\n- **Count:** 5x\n- **Suggestion**: {bad}\n"
         out = _sanitize_diagnosis(diagnosis)
         # The exact dangerous command must NOT appear in the output.
         assert bad not in out
@@ -557,7 +548,7 @@ def _loki_alive_response(present: bool) -> dict:
                 "result": [
                     {
                         "stream": {"host": "helios"},
-                        "values": [[str(int(datetime.now(timezone.utc).timestamp() * 1e9)), "ok"]],
+                        "values": [[str(int(datetime.now(UTC).timestamp() * 1e9)), "ok"]],
                     }
                 ],
             },
@@ -567,7 +558,7 @@ def _loki_alive_response(present: bool) -> dict:
 
 def _entries_with_one_cluster(n: int = 3) -> list[dict]:
     """A single Loki stream with N values — bucketed to one cluster."""
-    now_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
+    now_ns = int(datetime.now(UTC).timestamp() * 1e9)
     return [
         {
             "stream": {"container": "brain-orchestrator", "level": "error"},
@@ -594,9 +585,7 @@ def mock_pushover(monkeypatch):
     from orchestrator import pushover_manager
 
     mock = AsyncMock(return_value=None)
-    monkeypatch.setattr(
-        pushover_manager, "deliver_pushover_confirm", mock, raising=False
-    )
+    monkeypatch.setattr(pushover_manager, "deliver_pushover_confirm", mock, raising=False)
     return mock
 
 
@@ -628,14 +617,10 @@ class TestRunSelfAudit:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_loki_unreachable_returns_failed(
-        self, audit_on, mock_pushover, mock_palace
-    ):
+    async def test_loki_unreachable_returns_failed(self, audit_on, mock_pushover, mock_palace):
         from orchestrator.jobs_self_audit import run_self_audit
 
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
-            side_effect=httpx.ConnectError("dns fail")
-        )
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(side_effect=httpx.ConnectError("dns fail"))
 
         with patch(
             "orchestrator.orchestrator.call_model",
@@ -654,17 +639,13 @@ class TestRunSelfAudit:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_loki_empty_and_probe_empty_returns_failed(
-        self, audit_on, mock_pushover, mock_palace
-    ):
+    async def test_loki_empty_and_probe_empty_returns_failed(self, audit_on, mock_pushover, mock_palace):
         from orchestrator.jobs_self_audit import run_self_audit
 
         respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
             return_value=Response(200, json=_loki_query_range_response([]))
         )
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(
-            return_value=Response(200, json=_loki_alive_response(False))
-        )
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(return_value=Response(200, json=_loki_alive_response(False)))
 
         with patch(
             "orchestrator.orchestrator.call_model",
@@ -680,17 +661,13 @@ class TestRunSelfAudit:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_loki_empty_with_probe_alive_returns_clean(
-        self, audit_on, mock_pushover, mock_palace
-    ):
+    async def test_loki_empty_with_probe_alive_returns_clean(self, audit_on, mock_pushover, mock_palace):
         from orchestrator.jobs_self_audit import run_self_audit
 
         respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
             return_value=Response(200, json=_loki_query_range_response([]))
         )
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(
-            return_value=Response(200, json=_loki_alive_response(True))
-        )
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(return_value=Response(200, json=_loki_alive_response(True)))
 
         with patch(
             "orchestrator.orchestrator.call_model",
@@ -708,15 +685,11 @@ class TestRunSelfAudit:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_entries_with_llm_failure_returns_partial(
-        self, audit_on, mock_pushover, mock_palace, tmp_path
-    ):
+    async def test_entries_with_llm_failure_returns_partial(self, audit_on, mock_pushover, mock_palace, tmp_path):
         from orchestrator.jobs_self_audit import run_self_audit
 
         respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
-            return_value=Response(
-                200, json=_loki_query_range_response(_entries_with_one_cluster(3))
-            )
+            return_value=Response(200, json=_loki_query_range_response(_entries_with_one_cluster(3)))
         )
 
         with patch(
@@ -736,15 +709,11 @@ class TestRunSelfAudit:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_entries_with_valid_diagnosis_returns_ok(
-        self, audit_on, mock_pushover, mock_palace, tmp_path
-    ):
+    async def test_entries_with_valid_diagnosis_returns_ok(self, audit_on, mock_pushover, mock_palace, tmp_path):
         from orchestrator.jobs_self_audit import run_self_audit
 
         respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
-            return_value=Response(
-                200, json=_loki_query_range_response(_entries_with_one_cluster(5))
-            )
+            return_value=Response(200, json=_loki_query_range_response(_entries_with_one_cluster(5)))
         )
 
         diagnosis_text = (
@@ -759,9 +728,7 @@ class TestRunSelfAudit:
 
         with patch(
             "orchestrator.orchestrator.call_model",
-            new=AsyncMock(
-                return_value={"choices": [{"message": {"content": diagnosis_text}}]}
-            ),
+            new=AsyncMock(return_value={"choices": [{"message": {"content": diagnosis_text}}]}),
         ):
             result = await run_self_audit()
 

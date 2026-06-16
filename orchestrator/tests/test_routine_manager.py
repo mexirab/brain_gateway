@@ -7,7 +7,6 @@ Requires full orchestrator dependencies (runs inside Docker).
 """
 
 import logging
-from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -303,15 +302,15 @@ class TestGreetingWord:
     @pytest.mark.parametrize(
         "hour,expected",
         [
-            (3, "Evening"),   # before 4am → Evening
-            (4, "Morning"),   # morning starts
+            (3, "Evening"),  # before 4am → Evening
+            (4, "Morning"),  # morning starts
             (11, "Morning"),  # last hour of morning
             (12, "Afternoon"),  # afternoon starts
             (16, "Afternoon"),  # last hour of afternoon
             (17, "Evening"),  # evening starts
             (21, "Evening"),
             (23, "Evening"),
-            (0, "Evening"),   # midnight is still Evening
+            (0, "Evening"),  # midnight is still Evening
         ],
     )
     def test_greeting_word_boundaries(self, rm, hour, expected):
@@ -458,12 +457,14 @@ class TestAdvanceStepSelfcareBridge:
         completed_step = rm._active_session.steps[0]
         assert completed_step.id == "evening_meds"
 
-        # Patch selfcare_manager import target used by advance_step
-        with patch("orchestrator.selfcare_manager.mark_selfcare_from_routine_step") as mock_mark:
-            # Patch _record_routine_progress too since evening routine is
-            # one-step and advance_step('done') will flow into _complete_routine
-            with patch.object(rm, "_record_routine_progress"):
-                await rm.advance_step("done")
+        # Patch selfcare_manager import target used by advance_step.
+        # Patch _record_routine_progress too since evening routine is
+        # one-step and advance_step('done') will flow into _complete_routine
+        with (
+            patch("orchestrator.selfcare_manager.mark_selfcare_from_routine_step") as mock_mark,
+            patch.object(rm, "_record_routine_progress"),
+        ):
+            await rm.advance_step("done")
 
         mock_mark.assert_called_once()
         called_step = mock_mark.call_args.args[0]

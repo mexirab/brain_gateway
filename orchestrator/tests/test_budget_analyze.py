@@ -27,7 +27,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------
@@ -59,15 +58,51 @@ def _seed_small_dataset(name: str = "test_small") -> None:
     _seed_import_stub(name)
     rows = [
         # Gaming outflows — dominates Q1
-        {"txn_date": "2025-01-10", "amount": -200.00, "category": "Gaming", "payee": "Steam", "description": "AAA title"},
+        {
+            "txn_date": "2025-01-10",
+            "amount": -200.00,
+            "category": "Gaming",
+            "payee": "Steam",
+            "description": "AAA title",
+        },
         {"txn_date": "2025-01-20", "amount": -150.00, "category": "Gaming", "payee": "Steam", "description": "DLC"},
-        {"txn_date": "2025-02-05", "amount": -100.00, "category": "Gaming", "payee": "GOG", "description": "indie bundle"},
+        {
+            "txn_date": "2025-02-05",
+            "amount": -100.00,
+            "category": "Gaming",
+            "payee": "GOG",
+            "description": "indie bundle",
+        },
         # Groceries outflows
-        {"txn_date": "2025-01-15", "amount": -80.00, "category": "Groceries", "payee": "Whole Foods", "description": "weekly"},
-        {"txn_date": "2025-02-16", "amount": -90.00, "category": "Groceries", "payee": "Whole Foods", "description": "weekly"},
+        {
+            "txn_date": "2025-01-15",
+            "amount": -80.00,
+            "category": "Groceries",
+            "payee": "Whole Foods",
+            "description": "weekly",
+        },
+        {
+            "txn_date": "2025-02-16",
+            "amount": -90.00,
+            "category": "Groceries",
+            "payee": "Whole Foods",
+            "description": "weekly",
+        },
         # Income inflows
-        {"txn_date": "2025-01-31", "amount": 3000.00, "category": "Income", "payee": "Employer", "description": "salary"},
-        {"txn_date": "2025-02-28", "amount": 3000.00, "category": "Income", "payee": "Employer", "description": "salary"},
+        {
+            "txn_date": "2025-01-31",
+            "amount": 3000.00,
+            "category": "Income",
+            "payee": "Employer",
+            "description": "salary",
+        },
+        {
+            "txn_date": "2025-02-28",
+            "amount": 3000.00,
+            "category": "Income",
+            "payee": "Employer",
+            "description": "salary",
+        },
     ]
     state_store.save_budget_transactions(name, rows)
 
@@ -79,16 +114,22 @@ def _seed_filterable_dataset(name: str = "test_filter") -> None:
     _seed_import_stub(name)
     rows = [
         # Inside 2025 + Gaming + Steam
-        {"txn_date": "2025-03-01", "amount": -250.00, "category": "Gaming", "payee": "Steam",  "description": "game"},
-        {"txn_date": "2025-06-15", "amount": -100.00, "category": "Gaming", "payee": "Steam",  "description": "game"},
+        {"txn_date": "2025-03-01", "amount": -250.00, "category": "Gaming", "payee": "Steam", "description": "game"},
+        {"txn_date": "2025-06-15", "amount": -100.00, "category": "Gaming", "payee": "Steam", "description": "game"},
         # Inside 2025 but wrong category
-        {"txn_date": "2025-07-10", "amount": -40.00,  "category": "Coffee",  "payee": "Blue Bottle", "description": "latte"},
+        {
+            "txn_date": "2025-07-10",
+            "amount": -40.00,
+            "category": "Coffee",
+            "payee": "Blue Bottle",
+            "description": "latte",
+        },
         # Inside 2025 Gaming but different payee (payee_contains=Steam should exclude)
-        {"txn_date": "2025-04-01", "amount": -75.00,  "category": "Gaming", "payee": "Epic", "description": "game"},
+        {"txn_date": "2025-04-01", "amount": -75.00, "category": "Gaming", "payee": "Epic", "description": "game"},
         # Outside date window (2024)
-        {"txn_date": "2024-12-20", "amount": -999.00, "category": "Gaming", "payee": "Steam",  "description": "old"},
+        {"txn_date": "2024-12-20", "amount": -999.00, "category": "Gaming", "payee": "Steam", "description": "old"},
         # Outside date window (2026)
-        {"txn_date": "2026-02-01", "amount": -500.00, "category": "Gaming", "payee": "Steam",  "description": "future"},
+        {"txn_date": "2026-02-01", "amount": -500.00, "category": "Gaming", "payee": "Steam", "description": "future"},
     ]
     state_store.save_budget_transactions(name, rows)
 
@@ -133,24 +174,35 @@ def _seed_mixed_sign_dataset(name: str = "test_signs") -> None:
         {"txn_date": "2025-02-20", "amount": 700.00, "category": "Refunds", "payee": "Amazon", "description": "refund"},
         # Noise small rows
         {"txn_date": "2025-03-01", "amount": -10.00, "category": "Coffee", "payee": "Local", "description": "latte"},
-        {"txn_date": "2025-03-02", "amount": 5.00, "category": "Rebates", "payee": "RetailMeNot", "description": "rebate"},
+        {
+            "txn_date": "2025-03-02",
+            "amount": 5.00,
+            "category": "Rebates",
+            "payee": "RetailMeNot",
+            "description": "rebate",
+        },
     ]
     state_store.save_budget_transactions(name, rows)
 
 
 # ---------------------------------------------------------------------------
-# 1. Empty / whitespace analysis_question → error, expert NOT called
+# 1. Empty / whitespace analysis_question → falls back to a generic prompt
+#    (the "required or error" gate was intentionally removed — see the analyze
+#    branch in budget_manager.query: it made the primary model loop when it
+#    called analyze without the kwarg)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("blank", [None, "", "   ", "\n\t "])
-async def test_analyze_rejects_blank_analysis_question(tmp_db, monkeypatch, blank):
-    """Before any SQL or expert call, blank analysis_question must short-circuit."""
+async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, monkeypatch, blank):
+    """A blank analysis_question is NOT rejected — analyze substitutes a
+    generic pattern-finding prompt and still runs the expert synthesis."""
     from orchestrator import budget_manager
 
     _seed_small_dataset("test_small")
 
-    expert_mock = AsyncMock(return_value="should-not-be-called")
+    synth = "Gaming dominated Q1 spending."
+    expert_mock = AsyncMock(return_value=synth)
     monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
 
     result = await budget_manager.query(
@@ -159,9 +211,13 @@ async def test_analyze_rejects_blank_analysis_question(tmp_db, monkeypatch, blan
         analysis_question=blank,
     )
 
-    assert "error" in result
-    assert "analysis_question is required" in result["error"]
-    expert_mock.assert_not_called()
+    # No rejection; a non-empty generic question is synthesized in place of the
+    # blank input and the expert is invoked exactly once.
+    assert "error" not in result
+    assert result["question_type"] == "analyze"
+    assert result["user_question"].strip()
+    assert result["expert_synthesis"] == synth
+    expert_mock.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,6 @@ import unittest.mock as mock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Exercise catalog fixtures
 # ---------------------------------------------------------------------------
@@ -109,12 +108,10 @@ def test_generate_workout_no_history_returns_full_body(seeded_db):
     from orchestrator import workout_manager
 
     # Both callables return "no history" state
-    with mock.patch.object(
-        workout_manager.state_store, "count_workouts_in_window", return_value=0
-    ), mock.patch.object(
-        workout_manager.state_store, "days_since_last_workout", return_value=None
-    ), mock.patch.object(
-        workout_manager.state_store, "get_recent_muscle_groups", return_value={}
+    with (
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=0),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=None),
+        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
     ):
         result = workout_manager.generate_workout()
 
@@ -128,12 +125,10 @@ def test_generate_workout_long_gap_returns_full_body(seeded_db):
     """5 days since last workout → full_body."""
     from orchestrator import workout_manager
 
-    with mock.patch.object(
-        workout_manager.state_store, "count_workouts_in_window", return_value=1
-    ), mock.patch.object(
-        workout_manager.state_store, "days_since_last_workout", return_value=5
-    ), mock.patch.object(
-        workout_manager.state_store, "get_recent_muscle_groups", return_value={}
+    with (
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=1),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=5),
+        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
     ):
         result = workout_manager.generate_workout()
 
@@ -145,12 +140,10 @@ def test_generate_workout_complement_after_one_session(seeded_db):
     """1 session in last 4 days and less than 4 days ago → full_body_complement."""
     from orchestrator import workout_manager
 
-    with mock.patch.object(
-        workout_manager.state_store, "count_workouts_in_window", return_value=1
-    ), mock.patch.object(
-        workout_manager.state_store, "days_since_last_workout", return_value=1
-    ), mock.patch.object(
-        workout_manager.state_store, "get_recent_muscle_groups", return_value={}
+    with (
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=1),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=1),
+        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
     ):
         result = workout_manager.generate_workout()
 
@@ -165,12 +158,10 @@ def test_generate_workout_split_push_day(seeded_db):
     # quads/hamstrings/glutes loaded high → legs load is highest → push is lowest
     recent = {"quads": 10, "hamstrings": 10, "glutes": 10, "chest": 1, "back": 1}
 
-    with mock.patch.object(
-        workout_manager.state_store, "count_workouts_in_window", return_value=2
-    ), mock.patch.object(
-        workout_manager.state_store, "days_since_last_workout", return_value=1
-    ), mock.patch.object(
-        workout_manager.state_store, "get_recent_muscle_groups", return_value=recent
+    with (
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=2),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=1),
+        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value=recent),
     ):
         result = workout_manager.generate_workout()
 
@@ -191,12 +182,10 @@ def test_generate_workout_split_legs_day(seeded_db):
         "quads": 0,
     }
 
-    with mock.patch.object(
-        workout_manager.state_store, "count_workouts_in_window", return_value=3
-    ), mock.patch.object(
-        workout_manager.state_store, "days_since_last_workout", return_value=0
-    ), mock.patch.object(
-        workout_manager.state_store, "get_recent_muscle_groups", return_value=recent
+    with (
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=3),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=0),
+        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value=recent),
     ):
         result = workout_manager.generate_workout()
 
@@ -208,12 +197,10 @@ def test_generate_workout_sets_structure(seeded_db):
     """Each exercise in the plan must have 3 sets with set_number 1, 2, 3."""
     from orchestrator import workout_manager
 
-    with mock.patch.object(
-        workout_manager.state_store, "count_workouts_in_window", return_value=0
-    ), mock.patch.object(
-        workout_manager.state_store, "days_since_last_workout", return_value=None
-    ), mock.patch.object(
-        workout_manager.state_store, "get_recent_muscle_groups", return_value={}
+    with (
+        mock.patch.object(workout_manager.state_store, "count_workouts_in_window", return_value=0),
+        mock.patch.object(workout_manager.state_store, "days_since_last_workout", return_value=None),
+        mock.patch.object(workout_manager.state_store, "get_recent_muscle_groups", return_value={}),
     ):
         result = workout_manager.generate_workout()
 
@@ -400,9 +387,7 @@ def test_log_set_bridge_exception_does_not_propagate(seeded_db, caplog):
         raise RuntimeError("selfcare api drifted")
 
     with (
-        mock.patch(
-            "orchestrator.selfcare_manager.record_movement_logged", side_effect=_boom
-        ),
+        mock.patch("orchestrator.selfcare_manager.record_movement_logged", side_effect=_boom),
         caplog.at_level(logging.ERROR, logger="orchestrator.workout_manager"),
     ):
         result = workout_manager.log_set("Bench Press", 135.0, 8)
@@ -413,12 +398,10 @@ def test_log_set_bridge_exception_does_not_propagate(seeded_db, caplog):
     assert result["set"]["exercise_name"] == "Bench Press"
 
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-    assert any(
-        "Selfcare movement bridge failed" in r.getMessage() for r in errors
-    ), f"Expected 'Selfcare movement bridge failed' ERROR; got: {[r.getMessage() for r in errors]}"
-    assert any(r.exc_info is not None for r in errors), (
-        "Expected exc_info on ERROR record"
+    assert any("Selfcare movement bridge failed" in r.getMessage() for r in errors), (
+        f"Expected 'Selfcare movement bridge failed' ERROR; got: {[r.getMessage() for r in errors]}"
     )
+    assert any(r.exc_info is not None for r in errors), "Expected exc_info on ERROR record"
 
 
 def test_log_set_bridge_fires_with_explicit_workout_id(seeded_db):
@@ -427,9 +410,7 @@ def test_log_set_bridge_fires_with_explicit_workout_id(seeded_db):
 
     wid = state_store.create_workout("full_body", True)
     with mock.patch("orchestrator.selfcare_manager.record_movement_logged") as mock_rec:
-        result = workout_manager.log_set(
-            "Barbell Squat", 225.0, 5, workout_id=wid
-        )
+        result = workout_manager.log_set("Barbell Squat", 225.0, 5, workout_id=wid)
 
     assert result["ok"] is True
     assert result["workout_id"] == wid

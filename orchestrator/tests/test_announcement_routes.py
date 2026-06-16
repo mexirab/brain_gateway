@@ -15,12 +15,10 @@ Covers:
 
 from __future__ import annotations
 
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Fixtures: redirect the YAML path + reset module state per test
@@ -46,18 +44,23 @@ def _isolate_announcement_routes(monkeypatch, tmp_path):
 @pytest.fixture
 def stub_legacy_env(monkeypatch):
     """Stub the shared/reminder_manager fallback constants so test results
-    are deterministic regardless of host env."""
-    import sys
+    are deterministic regardless of host env.
 
-    fake_shared = MagicMock()
-    fake_shared.MORNING_BRIEFING_SPEAKER = "media_player.briefing_default"
-    fake_shared.FOCUS_AUDIO_PLAYER = "media_player.focus_default"
-    monkeypatch.setitem(sys.modules, "orchestrator.shared", fake_shared)
-
-    fake_rm = MagicMock()
-    fake_rm.REMINDER_SPEAKER = "media_player.generic_default"
-    monkeypatch.setitem(sys.modules, "orchestrator.reminder_manager", fake_rm)
-    return {"reminder": "media_player.generic_default", "briefing": "media_player.briefing_default", "focus": "media_player.focus_default"}
+    `_legacy_fallback` reads these via ``from orchestrator import shared`` /
+    ``from orchestrator.reminder_manager import REMINDER_SPEAKER``, which bind
+    to the already-imported real modules' attributes. Patch those attributes
+    directly — swapping the whole module in ``sys.modules`` does NOT take
+    effect once the real package attribute exists (it leaks the real
+    MORNING_BRIEFING_SPEAKER, e.g. ``media_player.bedroom_pair``).
+    """
+    monkeypatch.setattr("orchestrator.shared.MORNING_BRIEFING_SPEAKER", "media_player.briefing_default", raising=False)
+    monkeypatch.setattr("orchestrator.shared.FOCUS_AUDIO_PLAYER", "media_player.focus_default", raising=False)
+    monkeypatch.setattr("orchestrator.reminder_manager.REMINDER_SPEAKER", "media_player.generic_default", raising=False)
+    return {
+        "reminder": "media_player.generic_default",
+        "briefing": "media_player.briefing_default",
+        "focus": "media_player.focus_default",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +232,7 @@ def test_route_for_falls_back_to_default_key(_isolate_announcement_routes, stub_
     assert route_for("unknown_category") == "media_player.fallback_a"
 
 
-def test_route_for_falls_back_to_reminder_when_default_missing(
-    _isolate_announcement_routes, stub_legacy_env
-):
+def test_route_for_falls_back_to_reminder_when_default_missing(_isolate_announcement_routes, stub_legacy_env):
     from orchestrator.announcement_routes import route_for, save_routes
 
     save_routes({"routes": {"reminder": "media_player.reminder_target"}})
