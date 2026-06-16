@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Card } from '@/components/ui';
+import { friendlyError } from '@/lib/errors';
 import type { AnnouncementEntry, AnnouncementStats } from '@/lib/types';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -92,7 +93,7 @@ export default function AnnouncementsPage() {
         setStats(s);
         setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(friendlyError(e, 'Couldn’t load announcements.')))
       .finally(() => setLoading(false));
   }, []);
 
@@ -122,7 +123,7 @@ export default function AnnouncementsPage() {
       setStats(null);
       setConfirmClear(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to clear');
+      setError(friendlyError(e, 'Couldn’t clear history.'));
     } finally {
       setClearing(false);
     }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 interface Props {
   amount: number;
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function XPToast({ amount, description, onDismiss }: Props) {
+  const reduced = useReducedMotion();
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export default function XPToast({ amount, description, onDismiss }: Props) {
       }`}
     >
       <div className="glass border border-accent-gold/30 px-5 py-3 rounded-xl shadow-lg shadow-accent-gold/10 flex items-center gap-3">
-        <div className="text-accent-gold animate-bounce">
+        <div className={`text-accent-gold ${reduced ? '' : 'animate-bounce'}`}>
           <Sparkles size={20} />
         </div>
         <div>

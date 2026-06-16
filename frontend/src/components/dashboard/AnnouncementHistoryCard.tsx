@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Volume2, CheckCircle, XCircle } from 'lucide-react';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { AnnouncementEntry, AnnouncementStats } from '@/lib/types';
 
@@ -49,7 +49,7 @@ export default function AnnouncementHistoryCard() {
         setStats(s);
         setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Couldn’t load announcements.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -81,7 +81,9 @@ export default function AnnouncementHistoryCard() {
           ))}
         </div>
       )}
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!loading && error && (
+        <ErrorState compact message={error} onRetry={fetchData} />
+      )}
 
       {!loading && !error && (
         <div className="space-y-3">

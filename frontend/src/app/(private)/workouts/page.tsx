@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Dumbbell, Sparkles, Check, Trash2, History, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button, Card } from '@/components/ui';
+import { friendlyError } from '@/lib/errors';
 import type {
   WorkoutTodayResponse,
   WorkoutToday,
@@ -56,7 +57,7 @@ export default function WorkoutsPage() {
         setInputs(next);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
+      setError(friendlyError(e, 'Couldn’t load your workout.'));
     } finally {
       setLoading(false);
     }
@@ -86,7 +87,7 @@ export default function WorkoutsPage() {
         await fetchAll();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to generate');
+      setError(friendlyError(e, 'Couldn’t generate a workout.'));
     } finally {
       setGenerating(false);
     }
@@ -111,7 +112,7 @@ export default function WorkoutsPage() {
       });
       await fetchAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to log set');
+      setError(friendlyError(e, 'Couldn’t log that set.'));
     }
   };
 
@@ -120,7 +121,7 @@ export default function WorkoutsPage() {
       await api.deleteWorkoutSet(id);
       await fetchAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(friendlyError(e, 'Couldn’t delete that set.'));
     }
   };
 
@@ -130,7 +131,7 @@ export default function WorkoutsPage() {
       await api.endWorkout(today.workout_id);
       await fetchAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(friendlyError(e, 'Couldn’t end the workout.'));
     }
   };
 
@@ -145,7 +146,7 @@ export default function WorkoutsPage() {
       }
       await fetchAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete workout');
+      setError(friendlyError(e, 'Couldn’t delete that workout.'));
     }
   };
 
@@ -160,7 +161,7 @@ export default function WorkoutsPage() {
       }
       await fetchAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to remove exercise');
+      setError(friendlyError(e, 'Couldn’t remove that exercise.'));
     }
   };
 
@@ -178,7 +179,7 @@ export default function WorkoutsPage() {
       setAddPickerOpen(false);
       await fetchAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to add exercise');
+      setError(friendlyError(e, 'Couldn’t add that exercise.'));
     }
   };
 

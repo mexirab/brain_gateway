@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
+import { friendlyError } from '@/lib/errors';
 import type { ChatMessage, RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
 import MessageBubble from '@/components/chat/MessageBubble';
 import ChatInput from '@/components/chat/ChatInput';
@@ -237,7 +238,7 @@ export default function ChatPage() {
           const updated = [...prev];
           updated[updated.length - 1] = {
             ...updated[updated.length - 1],
-            content: `Error: ${error.message}`,
+            content: friendlyError(error, 'Sorry — I couldn’t reach the model just now. Please try again.'),
           };
           return updated;
         });

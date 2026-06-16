@@ -10,7 +10,7 @@ import { financeApi } from '@/lib/finance-api';
 import { WINDFALL_MONTHS } from '@/lib/finance-constants';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';
 import type { Windfall } from '@/lib/finance-types';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 
 export default function BossBattlePage() {
   const {
@@ -73,10 +73,11 @@ export default function BossBattlePage() {
   if (error) {
     return (
       <div className="max-w-4xl mx-auto mt-12">
-        <div className="glass p-6 border border-danger/30 text-center">
-          <p className="text-danger font-semibold">Failed to load boss battle</p>
-          <p className="text-sm text-content-muted mt-1">{error}</p>
-        </div>
+        <ErrorState
+          title="Couldn’t load boss battle"
+          message="We couldn’t reach your finance data. Check the connection and try again."
+          onRetry={refresh}
+        />
       </div>
     );
   }

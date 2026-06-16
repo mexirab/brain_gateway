@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { FileText, Upload, Search, Trash2, Download, X } from 'lucide-react';
+import { FileText, Upload, Search, Trash2, Download } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Button } from '@/components/ui';
+import { Button, Modal, Input, EmptyState } from '@/components/ui';
+import { friendlyError } from '@/lib/errors';
 import type { VaultDocument } from '@/lib/types';
 
 const CATEGORIES = ['all', 'auto', 'financial', 'medical', 'legal', 'insurance', 'personal', 'housing', 'other'];
@@ -103,11 +104,11 @@ export default function DocumentsPage() {
       <div className="flex-1 overflow-y-auto space-y-2">
         {docs.length === 0 && (
           <div className="flex-1 flex items-center justify-center h-full">
-            <div className="text-center text-content-muted">
-              <FileText size={48} className="mx-auto mb-3 opacity-30" />
-              <p className="text-sm">No documents yet</p>
-              <p className="text-xs mt-1 text-content-muted">Upload your first document to get started</p>
-            </div>
+            <EmptyState
+              icon={<FileText size={48} />}
+              title="No documents yet"
+              description="Upload your first document to get started"
+            />
           </div>
         )}
 
@@ -194,22 +195,29 @@ function UploadModal({
       await api.uploadDocument(file, title.trim(), category, tags, notes);
       onUploaded();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
+      setError(friendlyError(err, 'Upload failed. Try again.'));
     } finally {
       setUploading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-surface-base border border-line rounded-xl w-full max-w-md p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">Upload Document</h2>
-          <button onClick={onClose} className="text-content-muted hover:text-white">
-            <X size={20} />
-          </button>
-        </div>
-
+    <Modal
+      open
+      onClose={onClose}
+      title="Upload Document"
+      footer={
+        <Button
+          variant="primary"
+          onClick={handleSubmit}
+          disabled={!file || !title.trim() || uploading}
+          className="w-full"
+        >
+          {uploading ? 'Uploading...' : 'Upload'}
+        </Button>
+      }
+    >
+      <div className="space-y-4">
         {/* File input */}
         <div>
           <input ref={fileRef} type="file" onChange={handleFileChange} className="hidden" accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.txt,.md" />
@@ -222,11 +230,10 @@ function UploadModal({
         </div>
 
         {/* Title */}
-        <input
+        <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Document title"
-          className="input w-full"
         />
 
         {/* Category */}
@@ -241,11 +248,10 @@ function UploadModal({
         </select>
 
         {/* Tags */}
-        <input
+        <Input
           value={tags}
           onChange={(e) => setTags(e.target.value)}
           placeholder="Tags (comma separated)"
-          className="input w-full"
         />
 
         {/* Notes */}
@@ -258,16 +264,7 @@ function UploadModal({
         />
 
         {error && <p className="text-danger text-xs">{error}</p>}
-
-        <Button
-          variant="primary"
-          onClick={handleSubmit}
-          disabled={!file || !title.trim() || uploading}
-          className="w-full"
-        >
-          {uploading ? 'Uploading...' : 'Upload'}
-        </Button>
       </div>
-    </div>
+    </Modal>
   );
 }

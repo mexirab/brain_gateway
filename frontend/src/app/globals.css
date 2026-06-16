@@ -110,6 +110,14 @@ body {
   .btn-md {
     @apply px-4 py-2 text-sm;
   }
+  /* Square padding for icon-only buttons (no text) — keeps the icon centered
+     without the wide horizontal padding of the text sizes. */
+  .btn-icon-sm {
+    @apply p-1.5 text-xs;
+  }
+  .btn-icon-md {
+    @apply p-2 text-sm;
+  }
   .btn-primary {
     /* brand-600 (not the brighter brand DEFAULT) so white label clears WCAG AA
        contrast on the solid fill; the vivid brand stays for logo/text/accents. */
@@ -123,6 +131,9 @@ body {
   }
   .btn-danger {
     @apply bg-danger/15 text-danger hover:bg-danger/25;
+  }
+  .btn-success {
+    @apply bg-success/15 text-success hover:bg-success/25;
   }
 
   /* ---- Badges / pills ---------------------------------------------------- */
@@ -153,5 +164,31 @@ body {
     @apply w-full rounded-lg border border-line bg-surface-inset/60 px-3 py-2
       text-sm text-content-primary placeholder:text-content-muted
       focus:border-brand/60 focus:outline-none focus:ring-1 focus:ring-brand/40;
+  }
+}
+
+/* ===========================================================================
+   Reduced motion. This is an ADHD-support product — heavy motion (XP toasts,
+   level-up overlays, pulses, bounces, slide/scale transitions) can overwhelm
+   neurodivergent users. When the OS signals `prefers-reduced-motion: reduce`
+   we collapse non-essential animation + transitions to ~instant. Loading
+   spinners (`.animate-spin`) are deliberately KEPT so a pending state still
+   reads as "working" rather than appearing frozen. Finance celebration
+   overlays are additionally gated in JS via `useReducedMotion`.
+   =========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Keep the loading spinner spinning — it conveys ongoing activity, not
+     decoration; a frozen partial circle reads as a hang. */
+  .animate-spin {
+    animation: spin 1s linear infinite !important;
   }
 }

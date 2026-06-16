@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Calendar, Clock } from 'lucide-react';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { CalendarEvent } from '@/lib/types';
 
@@ -12,16 +12,21 @@ export default function CalendarCard() {
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<string>('');
 
-  useEffect(() => {
+  const fetchCalendar = useCallback(() => {
+    setError(null);
     api
       .calendarToday()
       .then((data) => {
         setEvents(data.events);
         setSource(data.source || '');
       })
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Couldn’t load today’s calendar.'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetchCalendar();
+  }, [fetchCalendar]);
 
   const formatTime = (iso: string, allDay: boolean) => {
     if (allDay) return 'All day';
@@ -53,7 +58,9 @@ export default function CalendarCard() {
         </div>
       )}
 
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!loading && error && (
+        <ErrorState compact message={error} onRetry={fetchCalendar} />
+      )}
 
       {!loading && !error && events.length === 0 && (
         <p className="text-sm text-content-muted">No events today</p>

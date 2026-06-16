@@ -37,6 +37,7 @@ function formatHumanWindow(start: string, end: string, days: Weekday[]): string 
 }
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
+import { friendlyError } from '@/lib/errors';
 
 interface PanelProps {
   registerDirty?: DirtyRegister;
@@ -59,7 +60,7 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
       setOriginal(norm);
       setDraft(norm);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load quiet hours');
+      setError(friendlyError(e, 'Couldn’t load quiet hours.'));
     } finally {
       setLoading(false);
     }
@@ -99,7 +100,7 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
       setDraft(norm);
       setStatusMsg('Saved.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(friendlyError(e, 'Couldn’t save your changes.', { preferDetail: true }));
     } finally {
       setSaving(false);
     }

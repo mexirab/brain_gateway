@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Activity, CheckCircle2, XCircle } from 'lucide-react';
+import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { HealthResponse } from '@/lib/types';
 
@@ -26,14 +27,20 @@ export default function SystemHealthCard() {
     );
 
   return (
-    <a href="http://10.0.0.248:3000/d/brain-gateway-overview/brain-gateway-overview" target="_blank" rel="noopener noreferrer" className="block glass p-5 hover:border-brand/40 transition-colors cursor-pointer">
+    <Card
+      as="a"
+      href="http://10.0.0.248:3000/d/brain-gateway-overview/brain-gateway-overview"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block hover:border-brand/40 transition-colors cursor-pointer"
+    >
       <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
         <Activity size={18} className="text-info" />
         System Health
       </h2>
 
       {loading && <div className="h-24 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {error && <p className="text-sm text-danger/70">Orchestrator offline</p>}
+      {!loading && error && <ErrorState compact message="Orchestrator offline" />}
 
       {!loading && !error && health && (
         <div className="space-y-2">
@@ -72,6 +79,6 @@ export default function SystemHealthCard() {
           </div>
         </div>
       )}
-    </a>
+    </Card>
   );
 }

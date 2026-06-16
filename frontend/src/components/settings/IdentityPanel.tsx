@@ -13,6 +13,7 @@ const TONE_CHOICES: Array<{ value: ToneOption; label: string; hint: string }> = 
 ];
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
+import { friendlyError } from '@/lib/errors';
 
 interface PanelProps {
   registerDirty?: DirtyRegister;
@@ -34,7 +35,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
       setOriginal(data);
       setDraft(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load identity');
+      setError(friendlyError(e, 'Couldn’t load your identity settings.'));
     } finally {
       setLoading(false);
     }
@@ -73,7 +74,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
       setDraft(saved);
       setStatusMsg('Saved.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(friendlyError(e, 'Couldn’t save your changes.', { preferDetail: true }));
     } finally {
       setSaving(false);
     }

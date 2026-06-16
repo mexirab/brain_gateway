@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { UtensilsCrossed, Plus, Camera, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button, Card } from '@/components/ui';
+import { friendlyError } from '@/lib/errors';
 import type { Meal, MealsToday, MealHistoryResponse } from '@/lib/types';
 
 type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
@@ -31,7 +32,7 @@ export default function MealsPage() {
       setHistory(h);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
+      setError(friendlyError(e, 'Couldn’t load your meals.'));
     } finally {
       setLoading(false);
     }
@@ -62,7 +63,7 @@ export default function MealsPage() {
       setShowAdd(false);
       await fetchAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save');
+      setError(friendlyError(err, 'Couldn’t save that meal.'));
     } finally {
       setSaving(false);
     }
@@ -98,7 +99,7 @@ export default function MealsPage() {
       await api.deleteMeal(id);
       await fetchAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete');
+      setError(friendlyError(err, 'Couldn’t delete that meal.'));
     }
   };
 
