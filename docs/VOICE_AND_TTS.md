@@ -72,7 +72,7 @@ Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT u
 | Audio normalization | ffmpeg → 16 kHz mono PCM WAV (handles webm/ogg/mp4/wav) |
 | Upload cap | 25 MB (matches OpenAI Whisper API) |
 
-**Old service:** `whisper-stt.service` was stopped + `systemctl disable`d on 2026-04-26. The Wyoming bridge layer (port 10300, used by HA voice pipeline) still uses `wyoming-faster-whisper` and is independent of this HTTP STT swap.
+**Old service:** the Whisper HTTP STT server (`whisper-stt.service` + `tts/stt_server.py`) was stopped + `systemctl disable`d on 2026-04-26 and **removed from the repo on 2026-06-16** (restore from git history if ever needed). The Wyoming bridge layer (port 10300, used by HA voice pipeline) still uses `wyoming-faster-whisper` and is independent of this HTTP STT swap — it was **not** removed.
 
 ```bash
 # Restart Parakeet STT

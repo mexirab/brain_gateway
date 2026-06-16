@@ -109,7 +109,25 @@ class TestLogSelfcare:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def pin_meal_schedule():
+    """Pin selfcare_schedule accessors so meal checks depend only on the
+    injected `now`, not the deployed data/selfcare_schedule.yaml (which on a
+    configured box can disable meal nudges or narrow active_hours, flaking
+    these assertions). category_active_hours -> (None, None) = always active;
+    category_interval_minutes -> the fallback the caller passes."""
+    from orchestrator import selfcare_schedule
+
+    with (
+        patch.object(selfcare_schedule, "category_enabled", return_value=True),
+        patch.object(selfcare_schedule, "category_active_hours", return_value=(None, None)),
+        patch.object(selfcare_schedule, "category_interval_minutes", side_effect=lambda name, fallback: fallback),
+    ):
+        yield
+
+
 @_skip_no_deps
+@pytest.mark.usefixtures("pin_meal_schedule")
 class TestMealCheck:
     def test_no_meal_after_noon(self, sm):
         now = datetime(2026, 3, 20, 13, 30)
@@ -287,3 +305,90 @@ class TestStatus:
         assert sm._state.last_meal_reported is None
         assert sm._state.sitting_since is not None
         assert sm._state.sitting_since.date() == datetime.now().date()
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metric — SELFCARE_LOGGED increments exactly once per logical log
+# ---------------------------------------------------------------------------
+
+
+def _selfcare_value(action):
+    """Read the bgw_selfcare_logged_total sample for an action, 0 if unseen."""
+    from orchestrator.metrics import SELFCARE_LOGGED
+
+    try:
+        return SELFCARE_LOGGED.labels(action=action)._value.get()
+    except Exception:
+        return 0.0
+
+
+@_skip_no_deps
+class TestSelfcareMetric:
+    """One increment per logical self-care log, no double-counting.
+
+    The meal path is the trap: log_selfcare('meal') routes through
+    record_meal_logged(), which is the SOLE incrementer for meals — so a meal
+    log must bump the counter exactly once, not twice (the bug would be if
+    both log_selfcare and record_meal_logged incremented).
+    """
+
+    @pytest.mark.asyncio
+    async def test_log_meal_increments_once(self, sm):
+        before = _selfcare_value("meal")
+        await sm.log_selfcare("meal", "lunch")
+        after = _selfcare_value("meal")
+        assert after - before == 1, "meal must increment exactly once (no double-count via record_meal_logged)"
+
+    @pytest.mark.asyncio
+    async def test_log_medication_increments_once(self, sm):
+        before = _selfcare_value("medication")
+        await sm.log_selfcare("medication", "Adderall")
+        after = _selfcare_value("medication")
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_log_water_increments_once(self, sm):
+        before = _selfcare_value("water")
+        await sm.log_selfcare("water")
+        after = _selfcare_value("water")
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_log_movement_increments_once(self, sm):
+        before = _selfcare_value("movement")
+        await sm.log_selfcare("movement")
+        after = _selfcare_value("movement")
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_log_unknown_does_not_increment(self, sm):
+        # Unknown action returns early before any counter touch.
+        before_meal = _selfcare_value("meal")
+        before_med = _selfcare_value("medication")
+        await sm.log_selfcare("sleep")
+        assert _selfcare_value("meal") == before_meal
+        assert _selfcare_value("medication") == before_med
+
+    def test_record_meal_logged_helper_increments_once(self, sm):
+        before = _selfcare_value("meal")
+        sm.record_meal_logged("dinner")
+        after = _selfcare_value("meal")
+        assert after - before == 1
+
+    def test_record_medication_logged_helper_increments_once(self, sm):
+        before = _selfcare_value("medication")
+        sm.record_medication_logged("routine:meds")
+        after = _selfcare_value("medication")
+        assert after - before == 1
+
+    def test_record_hydration_logged_helper_increments_once(self, sm):
+        before = _selfcare_value("water")
+        sm.record_hydration_logged("glass")
+        after = _selfcare_value("water")
+        assert after - before == 1
+
+    def test_record_movement_logged_helper_increments_once(self, sm):
+        before = _selfcare_value("movement")
+        sm.record_movement_logged("set:squat")
+        after = _selfcare_value("movement")
+        assert after - before == 1

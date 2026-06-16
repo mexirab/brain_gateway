@@ -101,19 +101,19 @@ Then test interactively:
 
 ## Rollback
 
-Whisper's venv, model files, and systemd unit are untouched, so rollback is
-instantaneous and requires no rebuild:
+The Whisper HTTP STT artifacts (`tts/stt_server.py`, `tts/whisper-stt.service`)
+were **removed from the repo on 2026-06-16** — Parakeet has been the sole HTTP
+STT engine since the 2026-04-26 cutover. If you ever need to roll back, restore
+those two files from git history (`git show <pre-2026-06-16>:tts/stt_server.py`),
+re-create the unit, then:
 
 ```bash
 sudo systemctl stop parakeet-stt
-sudo systemctl start whisper-stt
+sudo systemctl start whisper-stt   # after restoring the unit from git history
 ```
 
-Optionally disable Parakeet from auto-start while you investigate:
-
-```bash
-sudo systemctl disable parakeet-stt
-```
+(Whisper's on-box venv + model files on Helios are independent of the repo and
+may still be present, which is what makes a restore quick.)
 
 ## Files
 
@@ -121,5 +121,3 @@ sudo systemctl disable parakeet-stt
 |------|---------|
 | `tts/stt_server_parakeet.py` | FastAPI server (NeMo Parakeet backend) |
 | `tts/parakeet-stt.service` | systemd unit (cuda:1, port 8003) |
-| `tts/stt_server.py` | Whisper server, kept verbatim for rollback |
-| `tts/whisper-stt.service` | Whisper unit, kept verbatim for rollback |

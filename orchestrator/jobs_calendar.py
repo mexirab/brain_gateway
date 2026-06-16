@@ -374,11 +374,14 @@ async def morning_briefing():
         phone_age = (
             time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
         )
-        if shared._phone_calendar_events and phone_age < 86400:  # synced within 24h
+        phone_parsed_count = 0  # how many phone records had a valid start time
+        phone_fresh = bool(shared._phone_calendar_events) and phone_age < 86400  # synced within 24h
+        if phone_fresh:
             for ev in shared._phone_calendar_events:
                 try:
                     start_str = ev.get("start", "")
                     start = _parse_phone_datetime(start_str, tz)
+                    phone_parsed_count += 1
                     if start.tzinfo is None:
                         start = start.replace(tzinfo=tz)
                     if start.date() != today:
@@ -395,6 +398,20 @@ async def morning_briefing():
                     )
                 except (ValueError, TypeError):
                     continue
+
+        # Defensive: if the phone cache is fresh and has records but NONE
+        # parsed (e.g. the iPhone Shortcut is posting empty payloads — observed
+        # 2026-04-17 where all records had title='' and start=''), treat the
+        # sync as broken and fall through to Google rather than announcing
+        # "your calendar is clear" off a corrupted source. Mirrors the same
+        # guard in tool_check_calendar / get_ambient_status.
+        if phone_fresh and phone_parsed_count == 0:
+            logger.warning(
+                f"[MORNING_BRIEFING] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
+                "likely broken iPhone Shortcut payload. Falling through to Google."
+            )
+
+        if phone_fresh and phone_parsed_count > 0:
             logger.info(f"[MORNING_BRIEFING] Using phone calendar ({len(briefing_events)} today's events)")
         else:
             # Source 2: Google Calendar API (fallback)
