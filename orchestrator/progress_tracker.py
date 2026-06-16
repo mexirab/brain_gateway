@@ -468,7 +468,7 @@ def _is_streak_active(last_active: Optional[str], today_str: str) -> bool:
         yesterday = (date.fromisoformat(today_str) - timedelta(days=1)).isoformat()
     except ValueError:
         return False
-    return last_active == today_str or last_active == yesterday
+    return last_active in (today_str, yesterday)
 
 
 def get_streaks() -> Dict[str, Any]:

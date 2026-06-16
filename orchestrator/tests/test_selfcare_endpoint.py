@@ -20,8 +20,10 @@ import pytest
 
 def _can_import():
     try:
-        from orchestrator import api_routes  # noqa: F401
-        from orchestrator import state_store  # noqa: F401
+        from orchestrator import (
+            api_routes,  # noqa: F401
+            state_store,  # noqa: F401
+        )
 
         return True
     except (ImportError, ModuleNotFoundError):

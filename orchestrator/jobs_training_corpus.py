@@ -32,7 +32,7 @@ import re
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator, TypeGuard
 
@@ -46,10 +46,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MIN_LEN = 2
-MAX_RECORD_CHARS = 50_000        # drop any single turn >50 KB
+MAX_RECORD_CHARS = 50_000  # drop any single turn >50 KB
 MAX_JSON_BLOB_BYTES = 5_000_000  # per-row blob ceiling for sqlite reads
-MAX_CC_LINE_BYTES = 2_000_000    # per-line ceiling for jsonl reads
-OVERSIZE_RUN_WARN = 10_000       # nightly-drain new-records anomaly threshold
+MAX_CC_LINE_BYTES = 2_000_000  # per-line ceiling for jsonl reads
+OVERSIZE_RUN_WARN = 10_000  # nightly-drain new-records anomaly threshold
 SQLITE_READ_TIMEOUT_SEC = 30
 
 # System-reminder / tool-dump prefixes that identify wholesale harness noise.
@@ -69,10 +69,10 @@ _NOISE_PREFIXES = (
 # Secret / ciphertext patterns. Shared shape with
 # scripts/build_embedding_corpus.py — keep the two in sync when adding rules.
 SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),                    # OpenAI / Anthropic
-    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),             # GitHub
-    re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),                # Google
-    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{20,}"),          # Slack
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),  # OpenAI / Anthropic
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),  # GitHub
+    re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),  # Google
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{20,}"),  # Slack
     re.compile(r"(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}"),
     re.compile(
         r"(?i)(api[_-]?key|token|secret|password)"
@@ -128,9 +128,7 @@ def _accept(text: object) -> TypeGuard[str]:
         return False
     if len(stripped) > MAX_RECORD_CHARS:
         return False
-    if _looks_secret(stripped):
-        return False
-    return True
+    return not _looks_secret(stripped)
 
 
 def _looks_like_noise(text: str) -> bool:
@@ -141,12 +139,12 @@ def _parse_ts(value: Any) -> str:
     """Best-effort ISO8601 string. Accepts unix epoch (int/float) or a string."""
     if isinstance(value, (int, float)) and value > 0:
         try:
-            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+            return datetime.fromtimestamp(value, tz=UTC).isoformat()
         except (OverflowError, OSError, ValueError):
             pass
     if isinstance(value, str) and value:
         return value
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 def _open_sqlite_ro(db_path: Path) -> sqlite3.Connection:
@@ -204,11 +202,7 @@ def drain_owui(db_path: Path) -> Iterator[Record]:
                         continue
                     content = msg.get("content")
                     if isinstance(content, list):
-                        content = " ".join(
-                            part.get("text", "")
-                            for part in content
-                            if isinstance(part, dict)
-                        )
+                        content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
                     if not _accept(content):
                         continue
                     text = content.strip()

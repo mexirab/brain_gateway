@@ -31,7 +31,7 @@ import re
 import shlex
 import time
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -69,38 +69,63 @@ _AUDIT_LOCK = asyncio.Lock()
 # recognize is rejected. False positives are recoverable (user re-asks);
 # destructive false negatives are not.
 
-_ALLOWED_COMMANDS = frozenset({
-    "journalctl", "systemctl", "docker",
-    "ls", "cat", "tail", "head", "grep", "ss", "top", "htop", "ps",
-    "df", "du", "free", "uptime", "uname", "whoami", "date", "wc",
-    "stat", "find", "awk", "sed", "echo", "tr", "lsof", "nvidia-smi",
-})
+_ALLOWED_COMMANDS = frozenset(
+    {
+        "journalctl",
+        "systemctl",
+        "docker",
+        "ls",
+        "cat",
+        "tail",
+        "head",
+        "grep",
+        "ss",
+        "top",
+        "htop",
+        "ps",
+        "df",
+        "du",
+        "free",
+        "uptime",
+        "uname",
+        "whoami",
+        "date",
+        "wc",
+        "stat",
+        "find",
+        "awk",
+        "sed",
+        "echo",
+        "tr",
+        "lsof",
+        "nvidia-smi",
+    }
+)
 
 # Subcommand allow-list for multi-purpose binaries. Empty set means
 # "binary is fine but reject if it has any subcommand requirement".
 _ALLOWED_SUBCOMMANDS: dict[str, set[str]] = {
-    "systemctl": {"status", "restart", "reload", "is-active", "is-enabled",
-                  "show", "list-units", "list-jobs", "cat"},
+    "systemctl": {"status", "restart", "reload", "is-active", "is-enabled", "show", "list-units", "list-jobs", "cat"},
     "docker": {"logs", "ps", "compose", "stats", "inspect", "image"},
 }
 
 _DANGEROUS_PATTERNS = re.compile(
     r"(?:"
-    r"\|\s*(?:sh|bash|zsh|dash)\b"           # pipe-to-shell
+    r"\|\s*(?:sh|bash|zsh|dash)\b"  # pipe-to-shell
     r"|\$\([^)]*(?:rm|dd|mkfs|chmod|chown|kill|reboot|halt)\b"
     r"|`[^`]*(?:rm|dd|mkfs|chmod|chown|kill|reboot|halt)\b"
-    r"|>\s*(?!/tmp/|/dev/null)\S*/"          # redirect-write outside /tmp
-    r"|\bbase64\s+-d\b"                        # base64-decode pipeline
-    r"|\beval\b"                                 # eval
-    r"|\b(?:nc|ncat|netcat)\s+-l"              # listener
-    r"|:\s*\(\)\s*\{"                            # fork-bomb leading shape
+    r"|>\s*(?!/tmp/|/dev/null)\S*/"  # redirect-write outside /tmp
+    r"|\bbase64\s+-d\b"  # base64-decode pipeline
+    r"|\beval\b"  # eval
+    r"|\b(?:nc|ncat|netcat)\s+-l"  # listener
+    r"|:\s*\(\)\s*\{"  # fork-bomb leading shape
     r")",
     re.IGNORECASE,
 )
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _check_suggestion(suggestion_text: str) -> tuple[bool, str]:
@@ -200,12 +225,7 @@ async def _fetch_loki_errors(
 
     for stream in streams:
         labels = stream.get("stream") or {}
-        service = (
-            labels.get("container")
-            or labels.get("service")
-            or labels.get("unit")
-            or "unknown"
-        )
+        service = labels.get("container") or labels.get("service") or labels.get("unit") or "unknown"
         service = service.lstrip("/")
         level = labels.get("level", "unknown")
         for entry in stream.get("values") or []:
@@ -213,7 +233,7 @@ async def _fetch_loki_errors(
                 continue
             ts_ns, line = entry[0], entry[1]
             try:
-                ts = datetime.fromtimestamp(int(ts_ns) / 1e9, tz=timezone.utc)
+                ts = datetime.fromtimestamp(int(ts_ns) / 1e9, tz=UTC)
             except (ValueError, TypeError):
                 ts = end
             out.append(
@@ -265,9 +285,7 @@ def _normalize_message(line: str) -> str:
     return s[:_BUCKET_PREFIX_LEN].strip()
 
 
-def _bucket_logs(
-    entries: list[dict[str, Any]], max_clusters: int
-) -> list[dict[str, Any]]:
+def _bucket_logs(entries: list[dict[str, Any]], max_clusters: int) -> list[dict[str, Any]]:
     """Group entries by ``(service, normalized_prefix)``. Top-N by count."""
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for e in entries:
@@ -337,9 +355,7 @@ def _format_cluster_for_prompt(cluster: dict[str, Any]) -> str:
     )
 
 
-def _build_audit_prompt(
-    clusters: list[dict[str, Any]], lookback_hours: int
-) -> str:
+def _build_audit_prompt(clusters: list[dict[str, Any]], lookback_hours: int) -> str:
     if not clusters:
         return ""
     blocks = "\n".join(_format_cluster_for_prompt(c) for c in clusters)
@@ -353,9 +369,7 @@ def _build_audit_prompt(
 # --- Diagnosis sanitization -------------------------------------------------
 
 
-_SUGGESTION_LINE_RE = re.compile(
-    r"^(?P<prefix>\s*-?\s*\*\*Suggestion\*\*:\s*)(?P<payload>.+)$"
-)
+_SUGGESTION_LINE_RE = re.compile(r"^(?P<prefix>\s*-?\s*\*\*Suggestion\*\*:\s*)(?P<payload>.+)$")
 # Loosened: don't require severity word at end-of-line (model often appends
 # punctuation or annotations like "(N times)").
 _SEVERITY_HEADER_RE = re.compile(
@@ -495,9 +509,7 @@ async def _push_digest(
 # --- Mempalace indexing -----------------------------------------------------
 
 
-async def _index_to_mempalace(
-    diagnosis_summary: str, severity_counts: dict[str, int]
-) -> None:
+async def _index_to_mempalace(diagnosis_summary: str, severity_counts: dict[str, int]) -> None:
     """Best-effort: store a short summary so future Jess can recall.
 
     The summary is run through ``_redact_secrets`` first — a service that
@@ -567,11 +579,7 @@ async def run_self_audit() -> dict[str, Any]:
     """
     if not (settings.self_audit_enabled and settings.jess_advanced):
         SELF_AUDIT_RUNS_TOTAL.labels(result="skipped").inc()
-        reason = (
-            "SELF_AUDIT_ENABLED=false"
-            if not settings.self_audit_enabled
-            else "JESS_ADVANCED=false"
-        )
+        reason = "SELF_AUDIT_ENABLED=false" if not settings.self_audit_enabled else "JESS_ADVANCED=false"
         return {"result": "skipped", "reason": reason}
 
     if _AUDIT_LOCK.locked():
@@ -636,14 +644,10 @@ async def _run_self_audit_locked() -> dict[str, Any]:
         return {"result": "ok", "clusters": 0}
 
     clusters = _bucket_logs(entries, settings.self_audit_max_clusters)
-    logger.info(
-        "[SELF_AUDIT] %d log entries -> %d clusters", len(entries), len(clusters)
-    )
+    logger.info("[SELF_AUDIT] %d log entries -> %d clusters", len(entries), len(clusters))
 
     prompt = _build_audit_prompt(clusters, settings.self_audit_lookback_hours)
-    raw_diagnosis = await _ask_jess(
-        prompt=prompt, timeout_sec=settings.self_audit_llm_timeout_sec
-    )
+    raw_diagnosis = await _ask_jess(prompt=prompt, timeout_sec=settings.self_audit_llm_timeout_sec)
 
     if raw_diagnosis:
         diagnosis = _sanitize_diagnosis(raw_diagnosis)
@@ -675,8 +679,7 @@ async def _run_self_audit_locked() -> dict[str, Any]:
 
     top_cluster = clusters[0] if clusters else None
     await _push_digest(
-        severity_counts=severity_counts
-        or {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
+        severity_counts=severity_counts or {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
         top_cluster=top_cluster,
         report_filename=Path(report_path).name if report_path else None,
         lookback_hours=settings.self_audit_lookback_hours,
@@ -690,7 +693,10 @@ async def _run_self_audit_locked() -> dict[str, Any]:
 
     logger.info(
         "[SELF_AUDIT] Done · result=%s · clusters=%d · sev=%s · path=%s",
-        result_tag, len(clusters), severity_counts, report_path,
+        result_tag,
+        len(clusters),
+        severity_counts,
+        report_path,
     )
     return {
         "result": result_tag,

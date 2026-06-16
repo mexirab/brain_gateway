@@ -15,12 +15,10 @@ Covers:
 
 from __future__ import annotations
 
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Fixtures: redirect the YAML path + reset module state per test
@@ -57,7 +55,11 @@ def stub_legacy_env(monkeypatch):
     fake_rm = MagicMock()
     fake_rm.REMINDER_SPEAKER = "media_player.generic_default"
     monkeypatch.setitem(sys.modules, "orchestrator.reminder_manager", fake_rm)
-    return {"reminder": "media_player.generic_default", "briefing": "media_player.briefing_default", "focus": "media_player.focus_default"}
+    return {
+        "reminder": "media_player.generic_default",
+        "briefing": "media_player.briefing_default",
+        "focus": "media_player.focus_default",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +231,7 @@ def test_route_for_falls_back_to_default_key(_isolate_announcement_routes, stub_
     assert route_for("unknown_category") == "media_player.fallback_a"
 
 
-def test_route_for_falls_back_to_reminder_when_default_missing(
-    _isolate_announcement_routes, stub_legacy_env
-):
+def test_route_for_falls_back_to_reminder_when_default_missing(_isolate_announcement_routes, stub_legacy_env):
     from orchestrator.announcement_routes import route_for, save_routes
 
     save_routes({"routes": {"reminder": "media_player.reminder_target"}})

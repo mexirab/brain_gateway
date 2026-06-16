@@ -8,7 +8,6 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from orchestrator.jobs_training_corpus import (
@@ -50,8 +49,7 @@ def _make_state_db(path: Path, rows: list[tuple]) -> None:
     )
     for conv_id, role, content, created_at in rows:
         conn.execute(
-            "INSERT INTO chat_messages (conversation_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO chat_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
             (conv_id, role, content, created_at),
         )
     conn.commit()
@@ -75,17 +73,20 @@ class TestDrainOwui:
 
     def test_extracts_user_and_assistant_turns(self, tmp_path):
         db = tmp_path / "webui.db"
-        _make_owui_db(db, [
-            {
-                "id": "c1",
-                "chat": {
-                    "messages": [
-                        {"role": "user", "content": "hello jess", "timestamp": 1775000000},
-                        {"role": "assistant", "content": "hi nadim", "timestamp": 1775000001},
-                    ],
-                },
-            }
-        ])
+        _make_owui_db(
+            db,
+            [
+                {
+                    "id": "c1",
+                    "chat": {
+                        "messages": [
+                            {"role": "user", "content": "hello jess", "timestamp": 1775000000},
+                            {"role": "assistant", "content": "hi nadim", "timestamp": 1775000001},
+                        ],
+                    },
+                }
+            ],
+        )
         records = list(drain_owui(db))
         assert len(records) == 2
         assert {r.role for r in records} == {"user", "assistant"}
@@ -96,34 +97,43 @@ class TestDrainOwui:
 
     def test_falls_back_to_history_messages(self, tmp_path):
         db = tmp_path / "webui.db"
-        _make_owui_db(db, [
-            {
-                "id": "c2",
-                "chat": {
-                    "history": {
-                        "messages": {
-                            "m1": {"role": "user", "content": "from history", "timestamp": 1775000000},
+        _make_owui_db(
+            db,
+            [
+                {
+                    "id": "c2",
+                    "chat": {
+                        "history": {
+                            "messages": {
+                                "m1": {"role": "user", "content": "from history", "timestamp": 1775000000},
+                            },
                         },
                     },
-                },
-            }
-        ])
+                }
+            ],
+        )
         records = list(drain_owui(db))
         assert len(records) == 1
         assert records[0].text == "from history"
 
     def test_skips_short_content(self, tmp_path):
         db = tmp_path / "webui.db"
-        _make_owui_db(db, [
-            {"id": "c3", "chat": {"messages": [{"role": "user", "content": "a"}]}},
-        ])
+        _make_owui_db(
+            db,
+            [
+                {"id": "c3", "chat": {"messages": [{"role": "user", "content": "a"}]}},
+            ],
+        )
         assert list(drain_owui(db)) == []
 
     def test_skips_non_user_assistant_roles(self, tmp_path):
         db = tmp_path / "webui.db"
-        _make_owui_db(db, [
-            {"id": "c4", "chat": {"messages": [{"role": "system", "content": "ignored system prompt"}]}},
-        ])
+        _make_owui_db(
+            db,
+            [
+                {"id": "c4", "chat": {"messages": [{"role": "system", "content": "ignored system prompt"}]}},
+            ],
+        )
         assert list(drain_owui(db)) == []
 
 
@@ -138,11 +148,14 @@ class TestDrainStateStore:
 
     def test_extracts_messages(self, tmp_path):
         db = tmp_path / "state.db"
-        _make_state_db(db, [
-            ("conv1", "user", "test question", "2026-04-15T10:00:00"),
-            ("conv1", "assistant", "test answer", "2026-04-15T10:00:01"),
-            ("conv1", "tool", "should be skipped", "2026-04-15T10:00:02"),
-        ])
+        _make_state_db(
+            db,
+            [
+                ("conv1", "user", "test question", "2026-04-15T10:00:00"),
+                ("conv1", "assistant", "test answer", "2026-04-15T10:00:01"),
+                ("conv1", "tool", "should be skipped", "2026-04-15T10:00:02"),
+            ],
+        )
         records = list(drain_state_store(db))
         assert len(records) == 2
         assert {r.role for r in records} == {"user", "assistant"}
@@ -160,21 +173,24 @@ class TestDrainCcSessions:
     def test_extracts_user_turns_skips_tool_results(self, tmp_path):
         cc = tmp_path / "cc"
         cc.mkdir()
-        _make_cc_jsonl(cc / "session1.jsonl", [
-            {"type": "user", "message": {"role": "user", "content": "a real question from the user"}},
-            # Tool result — should be skipped
-            {
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": [{"type": "tool_result", "content": "stdout blob"}],
+        _make_cc_jsonl(
+            cc / "session1.jsonl",
+            [
+                {"type": "user", "message": {"role": "user", "content": "a real question from the user"}},
+                # Tool result — should be skipped
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "content": "stdout blob"}],
+                    },
                 },
-            },
-            # Assistant turn — should be skipped (cc drain is user-only)
-            {"type": "assistant", "message": {"role": "assistant", "content": "reply"}},
-            # Short turn — dropped (under MIN_LEN=2)
-            {"type": "user", "message": {"role": "user", "content": "x"}},
-        ])
+                # Assistant turn — should be skipped (cc drain is user-only)
+                {"type": "assistant", "message": {"role": "assistant", "content": "reply"}},
+                # Short turn — dropped (under MIN_LEN=2)
+                {"type": "user", "message": {"role": "user", "content": "x"}},
+            ],
+        )
         records = list(drain_cc_sessions(cc))
         assert len(records) == 1
         assert records[0].role == "user"
@@ -186,15 +202,18 @@ class TestDrainCcSessions:
         bracketed prose is kept — tightening of the prior over-broad filter."""
         cc = tmp_path / "cc"
         cc.mkdir()
-        _make_cc_jsonl(cc / "s.jsonl", [
-            # Dropped: harness noise dumps
-            {"type": "user", "message": {"role": "user", "content": "<system-reminder>noise</system-reminder>"}},
-            {"type": "user", "message": {"role": "user", "content": "<command-name>/foo</command-name>"}},
-            {"type": "user", "message": {"role": "user", "content": "<bash-stdout>output</bash-stdout>"}},
-            # Kept: legitimate user prose that happens to start with a bracket
-            {"type": "user", "message": {"role": "user", "content": "[urgent] remind me to send the draft"}},
-            {"type": "user", "message": {"role": "user", "content": "<Component> element rendering question"}},
-        ])
+        _make_cc_jsonl(
+            cc / "s.jsonl",
+            [
+                # Dropped: harness noise dumps
+                {"type": "user", "message": {"role": "user", "content": "<system-reminder>noise</system-reminder>"}},
+                {"type": "user", "message": {"role": "user", "content": "<command-name>/foo</command-name>"}},
+                {"type": "user", "message": {"role": "user", "content": "<bash-stdout>output</bash-stdout>"}},
+                # Kept: legitimate user prose that happens to start with a bracket
+                {"type": "user", "message": {"role": "user", "content": "[urgent] remind me to send the draft"}},
+                {"type": "user", "message": {"role": "user", "content": "<Component> element rendering question"}},
+            ],
+        )
         records = list(drain_cc_sessions(cc))
         assert len(records) == 2
         assert all("remind me" in r.text or "element rendering" in r.text for r in records)
@@ -231,10 +250,16 @@ class TestSecretFilter:
     def test_openai_key_dropped(self, tmp_path):
         cc = tmp_path / "cc"
         cc.mkdir()
-        _make_cc_jsonl(cc / "s.jsonl", [
-            {"type": "user", "message": {"role": "user", "content": "here's the key: sk-abcdefghijklmnopqrstuvwxyz1234567890"}},
-            {"type": "user", "message": {"role": "user", "content": "clean question about the weather"}},
-        ])
+        _make_cc_jsonl(
+            cc / "s.jsonl",
+            [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "here's the key: sk-abcdefghijklmnopqrstuvwxyz1234567890"},
+                },
+                {"type": "user", "message": {"role": "user", "content": "clean question about the weather"}},
+            ],
+        )
         records = list(drain_cc_sessions(cc))
         assert len(records) == 1
         assert "weather" in records[0].text
@@ -242,29 +267,50 @@ class TestSecretFilter:
     def test_private_key_block_dropped(self, tmp_path):
         cc = tmp_path / "cc"
         cc.mkdir()
-        _make_cc_jsonl(cc / "s.jsonl", [
-            {"type": "user", "message": {"role": "user",
-             "content": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg..."}},
-        ])
+        _make_cc_jsonl(
+            cc / "s.jsonl",
+            [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg..."},
+                },
+            ],
+        )
         assert list(drain_cc_sessions(cc)) == []
 
     def test_fernet_ciphertext_dropped(self, tmp_path):
         cc = tmp_path / "cc"
         cc.mkdir()
-        _make_cc_jsonl(cc / "s.jsonl", [
-            {"type": "user", "message": {"role": "user",
-             "content": "gAAAAABp1isCb4iFivPOd1nFVdlQLPaDosUURSOvLOyf5OS1kkmOaTqsA0CauO35RzKAmntr"}},
-        ])
+        _make_cc_jsonl(
+            cc / "s.jsonl",
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": "gAAAAABp1isCb4iFivPOd1nFVdlQLPaDosUURSOvLOyf5OS1kkmOaTqsA0CauO35RzKAmntr",
+                    },
+                },
+            ],
+        )
         assert list(drain_cc_sessions(cc)) == []
 
     def test_bearer_token_dropped_in_owui(self, tmp_path):
         db = tmp_path / "webui.db"
-        _make_owui_db(db, [
-            {"id": "c1", "chat": {"messages": [
-                {"role": "user", "content": "Authorization: Bearer eyJhbGc1234567890abcdefghij.foobar.baz"},
-                {"role": "user", "content": "actually fine message"},
-            ]}},
-        ])
+        _make_owui_db(
+            db,
+            [
+                {
+                    "id": "c1",
+                    "chat": {
+                        "messages": [
+                            {"role": "user", "content": "Authorization: Bearer eyJhbGc1234567890abcdefghij.foobar.baz"},
+                            {"role": "user", "content": "actually fine message"},
+                        ]
+                    },
+                },
+            ],
+        )
         records = list(drain_owui(db))
         assert len(records) == 1
         assert "fine message" in records[0].text
@@ -275,15 +321,26 @@ class TestOwuiListContent:
 
     def test_list_of_parts_joined(self, tmp_path):
         db = tmp_path / "webui.db"
-        _make_owui_db(db, [
-            {"id": "c1", "chat": {"messages": [
-                {"role": "user", "content": [
-                    {"type": "text", "text": "first part"},
-                    {"type": "image", "url": "..."},
-                    {"type": "text", "text": "second part"},
-                ]},
-            ]}},
-        ])
+        _make_owui_db(
+            db,
+            [
+                {
+                    "id": "c1",
+                    "chat": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "first part"},
+                                    {"type": "image", "url": "..."},
+                                    {"type": "text", "text": "second part"},
+                                ],
+                            },
+                        ]
+                    },
+                },
+            ],
+        )
         records = list(drain_owui(db))
         assert len(records) == 1
         assert "first part" in records[0].text
@@ -299,12 +356,18 @@ class TestSameTextCrossSource:
         state = tmp_path / "state.db"
         no_cc = tmp_path / "nope"
 
-        _make_owui_db(owui, [
-            {"id": "c1", "chat": {"messages": [{"role": "user", "content": "same exact question"}]}},
-        ])
-        _make_state_db(state, [
-            ("conv1", "user", "same exact question", "2026-04-15T10:00:00"),
-        ])
+        _make_owui_db(
+            owui,
+            [
+                {"id": "c1", "chat": {"messages": [{"role": "user", "content": "same exact question"}]}},
+            ],
+        )
+        _make_state_db(
+            state,
+            [
+                ("conv1", "user", "same exact question", "2026-04-15T10:00:00"),
+            ],
+        )
 
         counts = run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=no_cc)
         assert counts["owui"] == 1
@@ -324,18 +387,32 @@ class TestRunDrain:
         out = tmp_path / "training_corpus"
         cc.mkdir()
 
-        _make_owui_db(owui, [
-            {"id": "c1", "chat": {"messages": [
-                {"role": "user", "content": "owui question one"},
-                {"role": "assistant", "content": "owui answer one"},
-            ]}},
-        ])
-        _make_state_db(state, [
-            ("ss1", "user", "state store question", "2026-04-15T10:00:00"),
-        ])
-        _make_cc_jsonl(cc / "s.jsonl", [
-            {"type": "user", "message": {"role": "user", "content": "claude code question"}},
-        ])
+        _make_owui_db(
+            owui,
+            [
+                {
+                    "id": "c1",
+                    "chat": {
+                        "messages": [
+                            {"role": "user", "content": "owui question one"},
+                            {"role": "assistant", "content": "owui answer one"},
+                        ]
+                    },
+                },
+            ],
+        )
+        _make_state_db(
+            state,
+            [
+                ("ss1", "user", "state store question", "2026-04-15T10:00:00"),
+            ],
+        )
+        _make_cc_jsonl(
+            cc / "s.jsonl",
+            [
+                {"type": "user", "message": {"role": "user", "content": "claude code question"}},
+            ],
+        )
         return out, owui, state, cc
 
     def test_writes_all_sources_once(self, tmp_path):

@@ -10,7 +10,6 @@ import unittest.mock as mock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -209,8 +208,8 @@ def test_delete_meal_skips_remove_for_unsafe_path(tmp_db, meal_photos_dir, monke
     If a stored row has photo_path outside MEAL_PHOTOS_DIR (e.g. a legacy poison
     row), delete_meal must NOT call os.remove on it.
     """
-    from orchestrator import state_store
     import orchestrator.meal_manager as mm
+    from orchestrator import state_store
 
     # Bypass log_meal sanitization — insert directly via state_store
     meal = state_store.add_meal(
@@ -230,8 +229,8 @@ def test_delete_meal_skips_remove_for_unsafe_path(tmp_db, meal_photos_dir, monke
 
 def test_delete_meal_removes_photo_under_photos_dir(tmp_db, meal_photos_dir, monkeypatch):
     """delete_meal SHOULD call os.remove when photo is inside MEAL_PHOTOS_DIR."""
-    from orchestrator import state_store
     import orchestrator.meal_manager as mm
+    from orchestrator import state_store
 
     safe_path = os.path.join(meal_photos_dir, "real.jpg")
     with open(safe_path, "wb") as f:

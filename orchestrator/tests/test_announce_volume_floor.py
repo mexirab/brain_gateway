@@ -15,14 +15,10 @@ fake that returns 4 deterministic bytes so we don't pull in real TTS.
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import patch
-
 import httpx
 import pytest
 import respx
 from httpx import Response
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -54,9 +50,7 @@ def announce_env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(reminder_manager, "HA_URL", HA_URL, raising=False)
     monkeypatch.setattr(reminder_manager, "HA_TOKEN", "tok", raising=False)
-    monkeypatch.setattr(
-        reminder_manager, "ORCHESTRATOR_URL", "http://orch.test:8888", raising=False
-    )
+    monkeypatch.setattr(reminder_manager, "ORCHESTRATOR_URL", "http://orch.test:8888", raising=False)
     monkeypatch.setattr(reminder_manager, "REMINDER_SPEAKER", SPEAKER, raising=False)
 
     # Suppress the DND + voice-session early returns.
@@ -75,16 +69,12 @@ def announce_env(monkeypatch, tmp_path):
     )
 
     # Redirect /tmp/brain_audio writes into a tmp dir so we don't litter.
-    monkeypatch.setattr(
-        "os.makedirs", lambda path, exist_ok=False: None, raising=True
-    )
+    monkeypatch.setattr("os.makedirs", lambda path, exist_ok=False: None, raising=True)
     # Patch open() only inside reminder_manager so the audio write becomes a
     # no-op.  Easiest path: patch builtins.open scoped via mock_open.
     from unittest.mock import mock_open
 
-    monkeypatch.setattr(
-        "builtins.open", mock_open(), raising=True
-    )
+    monkeypatch.setattr("builtins.open", mock_open(), raising=True)
 
     yield HA_URL, SPEAKER
 
@@ -105,9 +95,7 @@ async def test_min_volume_none_skips_states_and_volume_set(announce_env):
     # volume-floor branch, the GET /states + volume_set routes shouldn't be
     # needed.  Any unexpected request to an unmocked URL would raise.
     with respx.mock(base_url=HA_URL) as mock:
-        play = mock.post("/api/services/media_player/play_media").mock(
-            return_value=Response(200, json={})
-        )
+        play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
         result = await _announce_voice("hello", announcement_type="test", min_volume=None)
 
@@ -138,9 +126,7 @@ async def test_low_current_volume_triggers_bump(announce_env):
 
     with respx.mock(base_url=HA_URL) as mock:
         mock.get(f"/api/states/{SPEAKER}").mock(side_effect=_states_handler)
-        vol_route = mock.post("/api/services/media_player/volume_set").mock(
-            side_effect=_vol_set_handler
-        )
+        vol_route = mock.post("/api/services/media_player/volume_set").mock(side_effect=_vol_set_handler)
         mock.post("/api/services/media_player/play_media").mock(side_effect=_play_handler)
 
         result = await _announce_voice("hi", announcement_type="test", min_volume=0.4)
@@ -169,9 +155,7 @@ async def test_already_loud_speaker_not_touched(announce_env):
         states = mock.get(f"/api/states/{SPEAKER}").mock(
             return_value=Response(200, json={"attributes": {"volume_level": 0.6}})
         )
-        play = mock.post("/api/services/media_player/play_media").mock(
-            return_value=Response(200, json={})
-        )
+        play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
         result = await _announce_voice("hi", announcement_type="test", min_volume=0.4)
 
@@ -189,15 +173,9 @@ async def test_current_volume_none_triggers_bump(announce_env):
 
     with respx.mock(base_url=HA_URL) as mock:
         # attributes present but no volume_level key (typical for off speakers).
-        mock.get(f"/api/states/{SPEAKER}").mock(
-            return_value=Response(200, json={"attributes": {}})
-        )
-        vol_set = mock.post("/api/services/media_player/volume_set").mock(
-            return_value=Response(200, json={})
-        )
-        play = mock.post("/api/services/media_player/play_media").mock(
-            return_value=Response(200, json={})
-        )
+        mock.get(f"/api/states/{SPEAKER}").mock(return_value=Response(200, json={"attributes": {}}))
+        vol_set = mock.post("/api/services/media_player/volume_set").mock(return_value=Response(200, json={}))
+        play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
         result = await _announce_voice("hi", announcement_type="test", min_volume=0.4)
 
@@ -215,18 +193,12 @@ async def test_volume_set_500_does_not_block_play(announce_env, caplog):
 
     HA_URL, SPEAKER = announce_env
 
-    with respx.mock(base_url=HA_URL) as mock, caplog.at_level(
-        logging.WARNING, logger="orchestrator.reminder_manager"
-    ):
-        mock.get(f"/api/states/{SPEAKER}").mock(
-            return_value=Response(200, json={"attributes": {"volume_level": 0.10}})
-        )
+    with respx.mock(base_url=HA_URL) as mock, caplog.at_level(logging.WARNING, logger="orchestrator.reminder_manager"):
+        mock.get(f"/api/states/{SPEAKER}").mock(return_value=Response(200, json={"attributes": {"volume_level": 0.10}}))
         vol_set = mock.post("/api/services/media_player/volume_set").mock(
             return_value=Response(500, json={"error": "boom"})
         )
-        play = mock.post("/api/services/media_player/play_media").mock(
-            return_value=Response(200, json={})
-        )
+        play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
         result = await _announce_voice("hi", announcement_type="test", min_volume=0.4)
 
@@ -253,9 +225,7 @@ async def test_multi_speaker_bumps_each_then_plays_each(announce_env, monkeypatc
     HA_URL, _ = announce_env
     SPK_A = "media_player.kitchen"
     SPK_B = "media_player.office"
-    monkeypatch.setattr(
-        reminder_manager, "REMINDER_SPEAKER", f"{SPK_A},{SPK_B}", raising=False
-    )
+    monkeypatch.setattr(reminder_manager, "REMINDER_SPEAKER", f"{SPK_A},{SPK_B}", raising=False)
 
     with respx.mock(base_url=HA_URL) as mock:
         a_states = mock.get(f"/api/states/{SPK_A}").mock(
@@ -264,12 +234,8 @@ async def test_multi_speaker_bumps_each_then_plays_each(announce_env, monkeypatc
         b_states = mock.get(f"/api/states/{SPK_B}").mock(
             return_value=Response(200, json={"attributes": {"volume_level": 0.10}})
         )
-        vol_set = mock.post("/api/services/media_player/volume_set").mock(
-            return_value=Response(200, json={})
-        )
-        play = mock.post("/api/services/media_player/play_media").mock(
-            return_value=Response(200, json={})
-        )
+        vol_set = mock.post("/api/services/media_player/volume_set").mock(return_value=Response(200, json={}))
+        play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
         result = await _announce_voice("hi", announcement_type="test", min_volume=0.4)
 
