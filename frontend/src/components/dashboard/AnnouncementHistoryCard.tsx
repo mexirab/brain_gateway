@@ -1,10 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
 import { Volume2, CheckCircle, XCircle } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
-import { api } from '@/lib/api';
-import type { AnnouncementEntry, AnnouncementStats } from '@/lib/types';
+import { useAnnouncementsCard } from '@/lib/hooks';
 
 const TYPE_COLORS: Record<string, string> = {
   calendar: 'text-info',
@@ -37,27 +35,9 @@ function speakerShort(speaker: string | null): string {
 }
 
 export default function AnnouncementHistoryCard() {
-  const [history, setHistory] = useState<AnnouncementEntry[]>([]);
-  const [stats, setStats] = useState<AnnouncementStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(() => {
-    Promise.all([api.announcementHistory(15), api.announcementStats()])
-      .then(([h, s]) => {
-        setHistory(h);
-        setStats(s);
-        setError(null);
-      })
-      .catch(() => setError('Couldn’t load announcements.'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  const { data, error, isLoading, mutate } = useAnnouncementsCard();
+  const history = data?.history ?? [];
+  const stats = data?.stats ?? null;
 
   return (
     <Card>
@@ -74,18 +54,18 @@ export default function AnnouncementHistoryCard() {
         )}
       </h2>
 
-      {loading && (
+      {isLoading && (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="h-6 bg-surface-raised/50 rounded animate-pulse" />
           ))}
         </div>
       )}
-      {!loading && error && (
-        <ErrorState compact message={error} onRetry={fetchData} />
+      {!isLoading && error && (
+        <ErrorState compact message="Couldn’t load announcements." onRetry={() => mutate()} />
       )}
 
-      {!loading && !error && (
+      {!isLoading && !error && (
         <div className="space-y-3">
           {/* Stats bar */}
           {stats && stats.total > 0 && (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Volume2,
   CheckCircle,
@@ -9,9 +9,10 @@ import {
   Filter,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
-import type { AnnouncementEntry, AnnouncementStats } from '@/lib/types';
+import { useAnnouncementsPage } from '@/lib/hooks';
+import type { AnnouncementEntry } from '@/lib/types';
 
 const TYPE_COLORS: Record<string, string> = {
   calendar: 'text-info',
@@ -77,31 +78,15 @@ function speakerShort(speaker: string | null): string {
 }
 
 export default function AnnouncementsPage() {
-  const [history, setHistory] = useState<AnnouncementEntry[]>([]);
-  const [stats, setStats] = useState<AnnouncementStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error: loadError, isLoading, mutate } = useAnnouncementsPage();
+  const history = data?.history ?? [];
+  const stats = data?.stats ?? null;
+
   const [filter, setFilter] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const fetchData = useCallback(() => {
-    Promise.all([api.announcementHistory(200), api.announcementStats()])
-      .then(([h, s]) => {
-        setHistory(h);
-        setStats(s);
-        setError(null);
-      })
-      .catch((e) => setError(friendlyError(e, 'Couldn’t load announcements.')))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 15000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
 
   useEffect(() => {
     return () => {
@@ -117,13 +102,13 @@ export default function AnnouncementsPage() {
     }
     if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
     setClearing(true);
+    setActionError(null);
     try {
       await api.clearAnnouncements();
-      setHistory([]);
-      setStats(null);
       setConfirmClear(false);
+      await mutate(); // refetch the now-empty history + fresh stats
     } catch (e) {
-      setError(friendlyError(e, 'Couldn’t clear history.'));
+      setActionError(friendlyError(e, 'Couldn’t clear history.'));
     } finally {
       setClearing(false);
     }
@@ -234,17 +219,20 @@ export default function AnnouncementsPage() {
       )}
 
       {/* Loading */}
-      {loading && (
+      {isLoading && (
         <div className="space-y-3">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="h-16 bg-surface-raised/30 rounded-lg animate-pulse" />
           ))}
         </div>
       )}
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!isLoading && loadError && (
+        <ErrorState compact message="Couldn’t load announcements." onRetry={() => mutate()} />
+      )}
+      {actionError && <p className="text-sm text-danger/70">{actionError}</p>}
 
       {/* Announcement list grouped by date */}
-      {!loading && !error && (
+      {!isLoading && !loadError && (
         <div className="space-y-6">
           {Object.keys(grouped).length === 0 && (
             <p className="text-sm text-content-muted text-center py-12">

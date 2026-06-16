@@ -1,30 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Thermometer, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
-import { api } from '@/lib/api';
-import type { TemperaturesResponse } from '@/lib/types';
+import { useTemperatures } from '@/lib/hooks';
 
 export default function TemperatureCard() {
-  const [data, setData] = useState<TemperaturesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchTemps = () => {
-    setError(null);
-    api
-      .temperatures()
-      .then(setData)
-      .catch(() => setError('Sensors unavailable'))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    fetchTemps();
-    const interval = setInterval(fetchTemps, 60_000); // Poll every 60s
-    return () => clearInterval(interval);
-  }, []);
+  const { data, error, isLoading, mutate } = useTemperatures();
 
   const closetTemp = data?.sensors?.closet?.temperature;
   const kitchenTemp = data?.sensors?.kitchen?.temperature;
@@ -67,12 +48,12 @@ export default function TemperatureCard() {
         )}
       </h2>
 
-      {loading && <div className="h-32 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {!loading && error && (
-        <ErrorState compact message="Sensors unavailable" onRetry={fetchTemps} />
+      {isLoading && <div className="h-32 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {!isLoading && error && (
+        <ErrorState compact message="Sensors unavailable" onRetry={() => mutate()} />
       )}
 
-      {!loading && !error && data && (
+      {!isLoading && !error && data && (
         <div className="space-y-3">
           {/* Main closet temperature */}
           <div className="flex items-baseline justify-between">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useState, useRef } from 'react';
 import {
   ShoppingCart,
   Plus,
@@ -10,61 +10,45 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Card, Button } from '@/components/ui';
+import { Card, Button, ErrorState } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
-import type { ShoppingItem } from '@/lib/types';
+import { useShopping } from '@/lib/hooks';
 
 export default function ShoppingPage() {
-  const [items, setItems] = useState<ShoppingItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [newItem, setNewItem] = useState('');
   const [listName, setListName] = useState('grocery');
   const [filter, setFilter] = useState<string | null>(null);
   const [showChecked, setShowChecked] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const fetchItems = useCallback(() => {
-    api
-      .shoppingList(undefined, showChecked)
-      .then((data) => {
-        setItems(data);
-        setError(null);
-      })
-      .catch((e) => setError(friendlyError(e, 'Couldn’t load your list.')))
-      .finally(() => setLoading(false));
-  }, [showChecked]);
-
-  useEffect(() => {
-    fetchItems();
-    const interval = setInterval(fetchItems, 10000);
-    return () => clearInterval(interval);
-  }, [fetchItems]);
+  const { data: items = [], error: loadError, isLoading, mutate } = useShopping(showChecked);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = newItem.trim();
     if (!trimmed) return;
     setAdding(true);
+    setActionError(null);
     try {
       await api.addShoppingItem(trimmed, listName);
       setNewItem('');
-      fetchItems();
+      mutate();
       inputRef.current?.focus();
     } catch (err) {
-      setError(friendlyError(err, 'Couldn’t add that item.'));
+      setActionError(friendlyError(err, 'Couldn’t add that item.'));
     } finally {
       setAdding(false);
     }
   };
 
   const handleCheck = async (id: number, currentlyChecked: boolean) => {
-    // Optimistic update
-    setItems((prev) =>
-      prev.map((it) =>
-        it.id === id ? { ...it, checked: currentlyChecked ? 0 : 1 } : it,
-      ),
+    setActionError(null);
+    // Optimistic toggle, then reconcile with the server.
+    mutate(
+      items.map((it) => (it.id === id ? { ...it, checked: currentlyChecked ? 0 : 1 } : it)),
+      { revalidate: false },
     );
     try {
       if (currentlyChecked) {
@@ -73,31 +57,31 @@ export default function ShoppingPage() {
         await api.checkShoppingItem(id);
       }
     } catch (err) {
-      // Revert on failure
-      setItems((prev) =>
-        prev.map((it) =>
-          it.id === id ? { ...it, checked: currentlyChecked ? 1 : 0 } : it,
-        ),
-      );
-      setError(friendlyError(err, 'Couldn’t update that item.'));
+      setActionError(friendlyError(err, 'Couldn’t update that item.'));
+    } finally {
+      mutate();
     }
   };
 
   const handleDelete = async (id: number) => {
+    setActionError(null);
+    mutate(items.filter((it) => it.id !== id), { revalidate: false });
     try {
       await api.deleteShoppingItem(id);
-      setItems((prev) => prev.filter((it) => it.id !== id));
     } catch (err) {
-      setError(friendlyError(err, 'Couldn’t delete that item.'));
+      setActionError(friendlyError(err, 'Couldn’t delete that item.'));
+    } finally {
+      mutate();
     }
   };
 
   const handleClearChecked = async () => {
+    setActionError(null);
     try {
       await api.clearCheckedItems(filter || undefined);
-      fetchItems();
+      mutate();
     } catch (err) {
-      setError(friendlyError(err, 'Couldn’t clear checked items.'));
+      setActionError(friendlyError(err, 'Couldn’t clear checked items.'));
     }
   };
 
@@ -190,17 +174,20 @@ export default function ShoppingPage() {
       )}
 
       {/* Loading / Error */}
-      {loading && (
+      {isLoading && (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="h-12 bg-surface-raised/30 rounded-lg animate-pulse" />
           ))}
         </div>
       )}
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!isLoading && loadError && (
+        <ErrorState compact message="Couldn’t load your list." onRetry={() => mutate()} />
+      )}
+      {actionError && <p className="text-sm text-danger/70">{actionError}</p>}
 
       {/* Unchecked items */}
-      {!loading && !error && (
+      {!isLoading && !loadError && (
         <div className="space-y-2">
           {unchecked.length === 0 && checked.length === 0 && (
             <p className="text-sm text-content-muted text-center py-12">
