@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -62,9 +63,7 @@ def save_photo_bytes(data: bytes, extension: str = "jpg") -> str:
     """
     _ensure_photos_dir()
     ext = (extension or "").lower().lstrip(".")
-    if ext == "jpg":
-        ext = "jpg"
-    elif ext not in _ALLOWED_PHOTO_EXTS:
+    if ext == "jpg" or ext not in _ALLOWED_PHOTO_EXTS:
         ext = "jpg"
     filename = f"{uuid.uuid4().hex}.{ext}"
     path = os.path.join(MEAL_PHOTOS_DIR, filename)
@@ -244,10 +243,8 @@ def delete_meal(meal_id: int) -> Dict[str, Any]:
     # photo_path was set before sanitization landed.
     path = meal.get("photo_path")
     if path and _is_under_photos_dir(path) and os.path.exists(path):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(path)
-        except OSError:
-            pass
     elif path:
         logger.warning("[MEAL] Skipped photo cleanup for unsafe path: %r", path)
     return {"ok": True, "meal": meal}
@@ -274,9 +271,7 @@ def get_history(days: int = 7) -> List[Dict[str, Any]]:
     by_date: Dict[str, Dict[str, Any]] = {}
     for m in meals:
         day = m["logged_at"][:10]
-        entry = by_date.setdefault(
-            day, {"date": day, "total_calories": 0, "meal_count": 0, "meals": []}
-        )
+        entry = by_date.setdefault(day, {"date": day, "total_calories": 0, "meal_count": 0, "meals": []})
         entry["total_calories"] += int(m.get("calories") or 0)
         entry["meal_count"] += 1
         entry["meals"].append(m)

@@ -8,9 +8,7 @@ and performance on a 1M-char input.
 
 import logging
 
-
 from orchestrator.unified_loop import MAX_TOOL_RESULT_CHARS, _cap_tool_result
-
 
 # ---------------------------------------------------------------------------
 # 1. Short string passes through unchanged

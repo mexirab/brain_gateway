@@ -198,12 +198,11 @@ def _prepend_silence_wav(wav_bytes: bytes, ms: int) -> bytes:
     """
     if ms <= 0:
         return wav_bytes
-    with io.BytesIO(wav_bytes) as src_io:
-        with wave.open(src_io, "rb") as src:
-            nchannels = src.getnchannels()
-            sampwidth = src.getsampwidth()
-            framerate = src.getframerate()
-            audio_data = src.readframes(src.getnframes())
+    with io.BytesIO(wav_bytes) as src_io, wave.open(src_io, "rb") as src:
+        nchannels = src.getnchannels()
+        sampwidth = src.getsampwidth()
+        framerate = src.getframerate()
+        audio_data = src.readframes(src.getnframes())
     silence_frames = int(framerate * ms / 1000)
     silence_bytes = b"\x00" * (silence_frames * nchannels * sampwidth)
     out_io = io.BytesIO()

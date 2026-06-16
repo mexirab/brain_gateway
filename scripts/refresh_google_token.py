@@ -30,6 +30,7 @@ Cron (weekly, Mondays 04:00) on the always-on host:
 Or reuse the container's Python env (only when the container is up):
     docker exec brain-orchestrator python scripts/refresh_google_token.py
 """
+
 import os
 import sys
 import time
@@ -87,8 +88,7 @@ def main() -> int:
 
     if not creds or not creds.refresh_token:
         print(
-            "[token-refresh] token file has no refresh_token — re-run google_setup.py "
-            "to re-authorize.",
+            "[token-refresh] token file has no refresh_token — re-run google_setup.py to re-authorize.",
             file=sys.stderr,
         )
         return 2

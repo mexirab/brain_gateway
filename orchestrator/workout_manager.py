@@ -85,17 +85,14 @@ def _decide_workout_type() -> tuple[str, str]:
         back_load = recent_muscles.get("back", 0) + recent_muscles.get("biceps", 0)
         chest_load = recent_muscles.get("chest", 0) + recent_muscles.get("triceps", 0)
         leg_load = (
-            recent_muscles.get("quads", 0)
-            + recent_muscles.get("hamstrings", 0)
-            + recent_muscles.get("glutes", 0)
+            recent_muscles.get("quads", 0) + recent_muscles.get("hamstrings", 0) + recent_muscles.get("glutes", 0)
         )
 
         loads = {"push": chest_load, "pull": back_load, "legs": leg_load}
         focus = min(loads, key=loads.get)
         return (
             f"{focus}_day",
-            f"You're {sessions_last_4d} sessions into the last 4 days — earned a split. "
-            f"Least-trained: {focus}.",
+            f"You're {sessions_last_4d} sessions into the last 4 days — earned a split. Least-trained: {focus}.",
         )
 
     # 1 session in last 3 days → full-body, but skew complementary
@@ -237,9 +234,7 @@ def generate_workout() -> Dict[str, Any]:
                 target_reps=reps,
                 target_weight_lbs=weight,
             )
-            sets_planned.append(
-                {"set_number": i, "target_reps": reps, "target_weight_lbs": weight}
-            )
+            sets_planned.append({"set_number": i, "target_reps": reps, "target_weight_lbs": weight})
         plan.append(
             {
                 "name": ex["name"],
@@ -363,9 +358,7 @@ def get_history(days: int = 7) -> List[Dict[str, Any]]:
     for w in workouts:
         sets = w.get("sets", [])
         completed = [s for s in sets if s.get("completed")]
-        total_volume = sum(
-            float(s.get("weight_lbs") or 0) * int(s.get("reps") or 0) for s in completed
-        )
+        total_volume = sum(float(s.get("weight_lbs") or 0) * int(s.get("reps") or 0) for s in completed)
         summaries.append(
             {
                 "id": w["id"],
@@ -399,9 +392,12 @@ def modify_workout(
     removed_count = 0
     if remove_exercises:
         for s in workout.get("sets", []):
-            if s["exercise_name"] in remove_exercises and not s.get("completed"):
-                if state_store.delete_workout_set(s["id"]):
-                    removed_count += 1
+            if (
+                s["exercise_name"] in remove_exercises
+                and not s.get("completed")
+                and state_store.delete_workout_set(s["id"])
+            ):
+                removed_count += 1
 
     added: List[str] = []
     if add_exercises:

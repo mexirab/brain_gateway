@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r orchestrator/requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio respx
       - name: Run tests
         run: python -m pytest orchestrator/tests/ -v
 

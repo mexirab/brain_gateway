@@ -14,13 +14,11 @@ Covers:
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # atomic_write_yaml
@@ -62,9 +60,11 @@ def test_atomic_write_yaml_failure_leaves_original_intact_and_cleans_tmp(tmp_pat
     def _boom(*_args, **_kwargs):
         raise OSError("simulated replace failure")
 
-    with patch.object(config_writer.os, "replace", side_effect=_boom):
-        with pytest.raises(OSError, match="simulated replace failure"):
-            config_writer.atomic_write_yaml(target, {"new": "data"})
+    with (
+        patch.object(config_writer.os, "replace", side_effect=_boom),
+        pytest.raises(OSError, match="simulated replace failure"),
+    ):
+        config_writer.atomic_write_yaml(target, {"new": "data"})
 
     # Original file unchanged.
     with open(target) as f:

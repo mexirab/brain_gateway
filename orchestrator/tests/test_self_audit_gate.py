@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # run_self_audit() gate
 # ---------------------------------------------------------------------------
@@ -33,9 +32,7 @@ class TestRunSelfAuditGate:
         # If the gate leaks, _run_self_audit_locked would be invoked and try
         # to hit Loki. Patch it as a tripwire — it must not be awaited.
         tripwire = AsyncMock(return_value={"result": "ok"})
-        monkeypatch.setattr(
-            jobs_self_audit, "_run_self_audit_locked", tripwire, raising=True
-        )
+        monkeypatch.setattr(jobs_self_audit, "_run_self_audit_locked", tripwire, raising=True)
 
         result = await jobs_self_audit.run_self_audit()
 
@@ -52,9 +49,7 @@ class TestRunSelfAuditGate:
         monkeypatch.setattr(settings, "jess_advanced", True, raising=False)
 
         tripwire = AsyncMock(return_value={"result": "ok"})
-        monkeypatch.setattr(
-            jobs_self_audit, "_run_self_audit_locked", tripwire, raising=True
-        )
+        monkeypatch.setattr(jobs_self_audit, "_run_self_audit_locked", tripwire, raising=True)
 
         result = await jobs_self_audit.run_self_audit()
 
@@ -72,9 +67,7 @@ class TestRunSelfAuditGate:
 
         sentinel = {"result": "ok", "reason": "sentinel"}
         locked_mock = AsyncMock(return_value=sentinel)
-        monkeypatch.setattr(
-            jobs_self_audit, "_run_self_audit_locked", locked_mock, raising=True
-        )
+        monkeypatch.setattr(jobs_self_audit, "_run_self_audit_locked", locked_mock, raising=True)
 
         # Lock must be free, otherwise we'd fast-return "busy".
         assert not jobs_self_audit._AUDIT_LOCK.locked()
