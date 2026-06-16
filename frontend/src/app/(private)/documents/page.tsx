@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText, Upload, Search, Trash2, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button, Modal, Input, EmptyState } from '@/components/ui';
@@ -37,15 +37,15 @@ export default function DocumentsPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const fetchDocs = async () => {
+  const fetchDocs = useCallback(async () => {
     try {
       const cat = category === 'all' ? undefined : category;
       const results = await api.documents(cat, search || undefined);
       setDocs(results);
     } catch { /* ignore */ }
-  };
+  }, [category, search]);
 
-  useEffect(() => { fetchDocs(); }, [category, search]);
+  useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this document permanently?')) return;

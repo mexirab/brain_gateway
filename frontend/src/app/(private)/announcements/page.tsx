@@ -9,7 +9,7 @@ import {
   Filter,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
 import { useAnnouncementsPage } from '@/lib/hooks';
 import type { AnnouncementEntry } from '@/lib/types';
@@ -222,7 +222,7 @@ export default function AnnouncementsPage() {
       {isLoading && (
         <div className="space-y-3">
           {[...Array(8)].map((_, i) => (
-            <div key={i} className="h-16 bg-surface-raised/30 rounded-lg animate-pulse" />
+            <Skeleton key={i} className="h-16" />
           ))}
         </div>
       )}

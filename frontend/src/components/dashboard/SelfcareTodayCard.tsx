@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Heart, Pill, Utensils, Droplet, Activity, Check, ChevronDown, ChevronRight, Circle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useSelfcareToday } from '@/lib/hooks';
 import type { SelfcareAction, SelfcareActionState } from '@/lib/types';
 
@@ -144,7 +144,7 @@ export default function SelfcareTodayCard() {
       {isLoading && (
         <div className="space-y-2">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-12 bg-surface-raised/50 rounded-lg animate-pulse" />
+            <Skeleton key={i} className="h-12" />
           ))}
         </div>
       )}

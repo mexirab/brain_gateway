@@ -1,7 +1,7 @@
 'use client';
 
 import { Volume2, CheckCircle, XCircle } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useAnnouncementsCard } from '@/lib/hooks';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -57,7 +57,7 @@ export default function AnnouncementHistoryCard() {
       {isLoading && (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-6 bg-surface-raised/50 rounded animate-pulse" />
+            <Skeleton key={i} className="h-6" />
           ))}
         </div>
       )}

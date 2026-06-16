@@ -5,7 +5,7 @@ import { Home, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { HAEntity } from '@/lib/types';
 import EntityGroup from '@/components/home/EntityGroup';
-import { Card, Button, ErrorState, EmptyState } from '@/components/ui';
+import { Card, Button, ErrorState, EmptyState, Skeleton } from '@/components/ui';
 
 const DOMAIN_ORDER = ['light', 'switch', 'fan', 'scene', 'climate', 'cover', 'lock'];
 
@@ -79,7 +79,7 @@ export default function HomePage() {
       {loading && sortedDomains.length === 0 && (
         <div className="space-y-4">
           {[1, 2, 3].map((i) => (
-            <Card key={i} padding="lg" className="h-32 animate-pulse" />
+            <Skeleton key={i} className="h-32" />
           ))}
         </div>
       )}
