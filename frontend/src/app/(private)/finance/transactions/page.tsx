@@ -6,7 +6,7 @@ import { Loader2, ArrowUpDown, Tag, ChevronLeft, ChevronRight } from 'lucide-rea
 import { useFinance } from '@/lib/finance-context';
 import { financeApi } from '@/lib/finance-api';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 
 type FilterType = 'all' | 'discretionary' | 'non-discretionary';
 
@@ -68,10 +68,11 @@ function TransactionsContent() {
   if (error) {
     return (
       <div className="max-w-4xl mx-auto mt-12">
-        <div className="glass p-6 border border-danger/30 text-center">
-          <p className="text-danger font-semibold">Failed to load transactions</p>
-          <p className="text-sm text-content-muted mt-1">{error}</p>
-        </div>
+        <ErrorState
+          title="Couldn’t load transactions"
+          message="We couldn’t reach your finance data. Check the connection and try again."
+          onRetry={refresh}
+        />
       </div>
     );
   }

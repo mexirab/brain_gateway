@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Card, Button } from '@/components/ui';
+import { friendlyError } from '@/lib/errors';
 import type { ShoppingItem } from '@/lib/types';
 
 export default function ShoppingPage() {
@@ -31,7 +32,7 @@ export default function ShoppingPage() {
         setItems(data);
         setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(friendlyError(e, 'Couldn’t load your list.')))
       .finally(() => setLoading(false));
   }, [showChecked]);
 
@@ -52,7 +53,7 @@ export default function ShoppingPage() {
       fetchItems();
       inputRef.current?.focus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add');
+      setError(friendlyError(err, 'Couldn’t add that item.'));
     } finally {
       setAdding(false);
     }
@@ -78,7 +79,7 @@ export default function ShoppingPage() {
           it.id === id ? { ...it, checked: currentlyChecked ? 1 : 0 } : it,
         ),
       );
-      setError(err instanceof Error ? err.message : 'Failed to update');
+      setError(friendlyError(err, 'Couldn’t update that item.'));
     }
   };
 
@@ -87,7 +88,7 @@ export default function ShoppingPage() {
       await api.deleteShoppingItem(id);
       setItems((prev) => prev.filter((it) => it.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete');
+      setError(friendlyError(err, 'Couldn’t delete that item.'));
     }
   };
 
@@ -96,7 +97,7 @@ export default function ShoppingPage() {
       await api.clearCheckedItems(filter || undefined);
       fetchItems();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to clear');
+      setError(friendlyError(err, 'Couldn’t clear checked items.'));
     }
   };
 

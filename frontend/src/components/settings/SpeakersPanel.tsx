@@ -9,6 +9,7 @@ import {
 } from '@/lib/settings-api';
 import { SaveBar } from './IdentityPanel';
 import type { DirtyRegister } from '@/app/(private)/settings/page';
+import { friendlyError } from '@/lib/errors';
 
 // Sync this map with `CATEGORIES` in orchestrator/announcement_routes.py.
 // Adding a new backend category without a row here still renders (using
@@ -77,7 +78,7 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
       // crashing on `.map`.
       setDiscovered(disc?.speakers ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load speaker routes');
+      setError(friendlyError(e, 'Couldn’t load speaker routes.'));
     } finally {
       setLoading(false);
     }
@@ -117,7 +118,7 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
       setDraft(JSON.parse(JSON.stringify(saved)));
       setStatusMsg('Saved.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(friendlyError(e, 'Couldn’t save your changes.', { preferDetail: true }));
     } finally {
       setSaving(false);
     }

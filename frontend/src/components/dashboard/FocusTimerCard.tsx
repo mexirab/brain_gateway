@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Timer, Play, Square } from 'lucide-react';
-import { Card, Button } from '@/components/ui';
+import { Card, Button, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { FocusState } from '@/lib/types';
 
@@ -15,10 +15,11 @@ export default function FocusTimerCard() {
   const [acting, setActing] = useState(false);
 
   const fetchFocus = useCallback(() => {
+    setError(null);
     api
       .focus()
       .then(setFocus)
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Couldn’t load the focus timer.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -66,7 +67,9 @@ export default function FocusTimerCard() {
       </h2>
 
       {loading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!loading && error && (
+        <ErrorState compact message={error} onRetry={fetchFocus} />
+      )}
 
       {!loading && !error && focus?.active && (
         <div className="space-y-3">

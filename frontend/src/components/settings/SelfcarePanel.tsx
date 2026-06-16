@@ -12,6 +12,7 @@ import { Button } from '@/components/ui';
 import { CATEGORY_ORDER, CATEGORY_LABELS } from '@/lib/selfcare-categories';
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
+import { friendlyError } from '@/lib/errors';
 
 interface PanelProps {
   registerDirty?: DirtyRegister;
@@ -33,7 +34,7 @@ export default function SelfcarePanel({ registerDirty }: PanelProps = {}) {
       setOriginal(data);
       setDraft(JSON.parse(JSON.stringify(data)));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load selfcare schedule');
+      setError(friendlyError(e, 'Couldn’t load your self-care schedule.'));
     } finally {
       setLoading(false);
     }
@@ -75,7 +76,7 @@ export default function SelfcarePanel({ registerDirty }: PanelProps = {}) {
       setDraft(JSON.parse(JSON.stringify(saved)));
       setStatusMsg('Saved.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(friendlyError(e, 'Couldn’t save your changes.', { preferDetail: true }));
     } finally {
       setSaving(false);
     }

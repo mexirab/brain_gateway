@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Shield, Sparkles } from 'lucide-react';
 import { LEVELS } from '@/lib/finance-constants';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 interface Props {
   level: number;
@@ -24,6 +25,7 @@ const TIER_COLORS: Record<number, { bg: string; text: string; glow: string }> = 
 };
 
 export default function LevelUpOverlay({ level, onDismiss }: Props) {
+  const reduced = useReducedMotion();
   const [visible, setVisible] = useState(false);
 
   const levelInfo = LEVELS.find((l) => l.level === level);
@@ -63,15 +65,15 @@ export default function LevelUpOverlay({ level, onDismiss }: Props) {
         {/* Sparkle decorations */}
         <Sparkles
           size={24}
-          className={`absolute -top-6 -left-4 ${colors.text} animate-pulse`}
+          className={`absolute -top-6 -left-4 ${colors.text} ${reduced ? '' : 'animate-pulse'}`}
         />
         <Sparkles
           size={16}
-          className={`absolute -top-3 right-2 ${colors.text} animate-bounce`}
+          className={`absolute -top-3 right-2 ${colors.text} ${reduced ? '' : 'animate-bounce'}`}
         />
         <Sparkles
           size={20}
-          className={`absolute bottom-0 -right-6 ${colors.text} animate-pulse`}
+          className={`absolute bottom-0 -right-6 ${colors.text} ${reduced ? '' : 'animate-pulse'}`}
         />
 
         {/* Card */}

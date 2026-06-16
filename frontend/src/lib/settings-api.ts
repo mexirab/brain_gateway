@@ -3,12 +3,40 @@
 
 const PROXY = '/api/proxy';
 
+/** Error from a `/api/config/*` call. Carries the HTTP `status` and a cleaned,
+ *  user-facing `detail` (the backend's FastAPI `{"detail": "..."}` message,
+ *  unwrapped from JSON). `friendlyError(e, fallback, { preferDetail: true })`
+ *  surfaces `detail` for 4xx — those are recoverable validation messages
+ *  (bad cron, unknown category) the user needs to see — while still hiding
+ *  raw 5xx/network internals behind the friendly fallback. */
+export class SettingsApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, detail: string, raw: string) {
+    super(`Settings API ${status}: ${raw || detail || 'request failed'}`);
+    this.name = 'SettingsApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function fail(res: Response): Promise<never> {
+  const raw = await res.text().catch(() => '');
+  let detail = '';
+  try {
+    const parsed = JSON.parse(raw);
+    // FastAPI HTTPException → {"detail": "message"}. Only a string detail is
+    // safe to show; 422 returns an array of validation objects — skip those.
+    if (parsed && typeof parsed.detail === 'string') detail = parsed.detail;
+  } catch {
+    /* body wasn't JSON */
+  }
+  throw new SettingsApiError(res.status, detail, raw);
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${PROXY}${path}`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Settings API ${res.status}: ${detail || res.statusText}`);
-  }
+  if (!res.ok) await fail(res);
   return res.json();
 }
 
@@ -18,10 +46,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Settings API ${res.status}: ${detail || res.statusText}`);
-  }
+  if (!res.ok) await fail(res);
   return res.json();
 }
 
@@ -31,19 +56,13 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Settings API ${res.status}: ${detail || res.statusText}`);
-  }
+  if (!res.ok) await fail(res);
   return res.json();
 }
 
 async function del<T>(path: string): Promise<T> {
   const res = await fetch(`${PROXY}${path}`, { method: 'DELETE' });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Settings API ${res.status}: ${detail || res.statusText}`);
-  }
+  if (!res.ok) await fail(res);
   return res.json();
 }
 

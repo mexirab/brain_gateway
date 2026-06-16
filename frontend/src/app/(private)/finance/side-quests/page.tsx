@@ -7,7 +7,7 @@ import SideQuestModal from '@/components/finance/SideQuestModal';
 import XPToast from '@/components/finance/XPToast';
 import { useFinance } from '@/lib/finance-context';
 import { financeApi } from '@/lib/finance-api';
-import { Card, Button } from '@/components/ui';
+import { Card, Button, ErrorState } from '@/components/ui';
 
 export default function SideQuestsPage() {
   const { sideQuests, loading, error, refresh, awardXP, lastXPGain, clearXPGain } =
@@ -69,10 +69,11 @@ export default function SideQuestsPage() {
   if (error) {
     return (
       <div className="max-w-4xl mx-auto mt-12">
-        <div className="glass p-6 border border-danger/30 text-center">
-          <p className="text-danger font-semibold">Failed to load side quests</p>
-          <p className="text-sm text-content-muted mt-1">{error}</p>
-        </div>
+        <ErrorState
+          title="Couldn’t load side quests"
+          message="We couldn’t reach your finance data. Check the connection and try again."
+          onRetry={refresh}
+        />
       </div>
     );
   }

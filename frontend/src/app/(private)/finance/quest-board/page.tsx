@@ -17,7 +17,7 @@ import { WINDFALL_MONTHS, XP_AWARDS } from '@/lib/finance-constants';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';
 import { useFinance } from '@/lib/finance-context';
 import { financeApi } from '@/lib/finance-api';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 
 export default function QuestBoardPage() {
   const {
@@ -90,10 +90,11 @@ export default function QuestBoardPage() {
   if (error) {
     return (
       <div className="max-w-4xl mx-auto mt-12">
-        <div className="glass p-6 border border-danger/30 text-center">
-          <p className="text-danger font-semibold">Failed to load finance data</p>
-          <p className="text-sm text-content-muted mt-1">{error}</p>
-        </div>
+        <ErrorState
+          title="Couldn’t load finance data"
+          message="We couldn’t reach your finance data. Check the connection and try again."
+          onRetry={refresh}
+        />
       </div>
     );
   }

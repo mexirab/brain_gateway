@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Thermometer, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { TemperaturesResponse } from '@/lib/types';
 
@@ -12,10 +12,11 @@ export default function TemperatureCard() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchTemps = () => {
+    setError(null);
     api
       .temperatures()
       .then(setData)
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Sensors unavailable'))
       .finally(() => setLoading(false));
   };
 
@@ -67,7 +68,9 @@ export default function TemperatureCard() {
       </h2>
 
       {loading && <div className="h-32 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {error && <p className="text-sm text-danger/70">Sensors unavailable</p>}
+      {!loading && error && (
+        <ErrorState compact message="Sensors unavailable" onRetry={fetchTemps} />
+      )}
 
       {!loading && !error && data && (
         <div className="space-y-3">

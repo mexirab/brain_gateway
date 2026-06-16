@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Bell, Check } from 'lucide-react';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { Reminder } from '@/lib/types';
 
@@ -12,10 +12,12 @@ export default function RemindersCard() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchReminders = () => {
+    setError(null);
+    setLoading(true);
     api
       .reminders()
       .then((data) => setReminders(data.reminders.filter((r) => r.status === 'pending')))
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Couldn’t load reminders.'))
       .finally(() => setLoading(false));
   };
 
@@ -59,7 +61,9 @@ export default function RemindersCard() {
         </div>
       )}
 
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!loading && error && (
+        <ErrorState compact message={error} onRetry={fetchReminders} />
+      )}
 
       {!loading && !error && reminders.length === 0 && (
         <p className="text-sm text-content-muted">No pending reminders</p>

@@ -23,6 +23,7 @@ const DAY_LABELS: Array<{ key: Weekday; label: string }> = [
 ];
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
+import { friendlyError } from '@/lib/errors';
 
 interface PanelProps {
   registerDirty?: DirtyRegister;
@@ -70,7 +71,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
         setActiveRoutineId(ids.includes('morning') ? 'morning' : ids[0]);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load routines');
+      setError(friendlyError(e, 'Couldn’t load your routines.'));
     } finally {
       setLoading(false);
     }
@@ -117,7 +118,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
         );
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(friendlyError(e, 'Couldn’t save your changes.', { preferDetail: true }));
     } finally {
       setSaving(false);
     }

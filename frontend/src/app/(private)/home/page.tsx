@@ -5,7 +5,7 @@ import { Home, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { HAEntity } from '@/lib/types';
 import EntityGroup from '@/components/home/EntityGroup';
-import { Card } from '@/components/ui';
+import { Card, Button, ErrorState, EmptyState } from '@/components/ui';
 
 const DOMAIN_ORDER = ['light', 'switch', 'fan', 'scene', 'climate', 'cover', 'lock'];
 
@@ -22,7 +22,7 @@ export default function HomePage() {
         setGroups(data.controllable);
         setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch(() => setError('unreachable'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -63,14 +63,16 @@ export default function HomePage() {
           {totalEntities > 0 && (
             <span className="text-xs text-content-muted">{totalEntities} entities</span>
           )}
-          <button
+          <Button
+            icon
+            variant="secondary"
             onClick={fetchEntities}
             disabled={loading}
-            className="p-2 rounded-lg bg-surface-raised/60 text-content-secondary hover:text-white transition-colors disabled:opacity-50"
             title="Refresh"
+            aria-label="Refresh entities"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -83,9 +85,12 @@ export default function HomePage() {
       )}
 
       {error && (
-        <Card padding="lg" className="text-center">
-          <p className="text-sm text-danger/70">Could not reach Home Assistant</p>
-          <p className="text-xs text-content-muted mt-1">{error}</p>
+        <Card padding="lg">
+          <ErrorState
+            title="Could not reach Home Assistant"
+            message="We couldn’t load your devices. Check that Home Assistant is reachable, then try again."
+            onRetry={fetchEntities}
+          />
         </Card>
       )}
 
@@ -103,8 +108,12 @@ export default function HomePage() {
       )}
 
       {!loading && !error && sortedDomains.length === 0 && (
-        <Card padding="lg" className="text-center">
-          <p className="text-sm text-content-muted">No controllable entities found</p>
+        <Card padding="lg">
+          <EmptyState
+            icon={<Home size={40} />}
+            title="No controllable entities found"
+            description="Once Home Assistant exposes devices, they’ll show up here."
+          />
         </Card>
       )}
     </div>

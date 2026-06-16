@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Coins, TrendingUp } from 'lucide-react';
+import { Card, ErrorState } from '@/components/ui';
 import { financeApi } from '@/lib/finance-api';
 import type { BudgetPeriod, GameState } from '@/lib/finance-types';
 
@@ -18,7 +19,7 @@ export default function FinanceSnapshotCard() {
         setBudget(b);
         setGame(g);
       })
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Couldn’t load your budget.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -33,14 +34,14 @@ export default function FinanceSnapshotCard() {
     'bg-danger';
 
   return (
-    <Link href="/finance" className="block glass p-5 hover:border-brand/40 transition-colors cursor-pointer">
+    <Card as={Link} href="/finance" className="block hover:border-brand/40 transition-colors cursor-pointer">
       <h2 className="text-lg font-semibold text-content-primary mb-3 flex items-center gap-2">
         <Coins size={18} className="text-warning" />
         Budget
       </h2>
 
       {loading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!loading && error && <ErrorState compact message={error} />}
 
       {!loading && !error && budget && game && (
         <div className="space-y-3">
@@ -79,6 +80,6 @@ export default function FinanceSnapshotCard() {
           )}
         </div>
       )}
-    </Link>
+    </Card>
   );
 }

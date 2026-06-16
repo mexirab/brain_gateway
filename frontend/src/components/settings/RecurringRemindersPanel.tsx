@@ -46,6 +46,7 @@ function summarizeDays(daysCsv: string): string {
 }
 
 import type { DirtyRegister } from '@/app/(private)/settings/page';
+import { friendlyError } from '@/lib/errors';
 
 interface PanelProps {
   registerDirty?: DirtyRegister;
@@ -69,7 +70,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       const data = await settingsApi.listRecurring();
       setRules(data.rules);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load recurring reminders');
+      setError(friendlyError(e, 'Couldn’t load recurring reminders.'));
     } finally {
       setLoading(false);
     }
@@ -99,7 +100,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       setStatusMsg('Created.');
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Create failed');
+      setError(friendlyError(e, 'Couldn’t create that reminder.', { preferDetail: true }));
     } finally {
       setWorking(false);
     }
@@ -114,7 +115,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       setStatusMsg('Deleted.');
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
+      setError(friendlyError(e, 'Couldn’t delete that reminder.', { preferDetail: true }));
     } finally {
       setWorking(false);
     }
@@ -127,7 +128,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       await settingsApi.updateRecurring(rule.id, { enabled: !rule.enabled });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Toggle failed');
+      setError(friendlyError(e, 'Couldn’t update that reminder.', { preferDetail: true }));
     } finally {
       setWorking(false);
     }
@@ -144,7 +145,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
       setStatusMsg('Updated.');
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Update failed');
+      setError(friendlyError(e, 'Couldn’t update that reminder.', { preferDetail: true }));
     } finally {
       setWorking(false);
     }

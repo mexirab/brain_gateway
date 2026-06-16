@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { CheckCircle, Zap, Flame, TrendingUp, TrendingDown, Minus, Brain } from 'lucide-react';
-import { Card } from '@/components/ui';
+import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { ProgressToday, ProgressWeek, ProgressStreaks } from '@/lib/types';
 
@@ -21,7 +21,7 @@ export default function ProgressCard() {
         setStreaks(s);
         setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch(() => setError('Couldn’t load progress.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -58,7 +58,9 @@ export default function ProgressCard() {
           <div className="h-6 bg-surface-raised/50 rounded-lg animate-pulse" />
         </div>
       )}
-      {error && <p className="text-sm text-danger/70">{error}</p>}
+      {!loading && error && (
+        <ErrorState compact message={error} onRetry={fetchData} />
+      )}
 
       {!loading && !error && today && (
         <div className="space-y-4">
