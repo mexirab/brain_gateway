@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from orchestrator import shared
+from orchestrator.metrics import SELFCARE_LOGGED
 from orchestrator.reminder_manager import _announce_voice, _send_notification
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ def record_meal_logged(label: str = "a meal") -> None:
 
     _state.last_meal_reported = datetime.now()
     save_selfcare_log("meal", label)
+    SELFCARE_LOGGED.labels(action="meal").inc()
     logger.info(f"[SELFCARE] Meal logged: {label}", extra={"component": "selfcare"})
 
 
@@ -99,6 +101,7 @@ def record_medication_logged(label: str = "medication") -> None:
     _state.last_med_confirmation["medication"] = now
     _expand_med_confirmation(label, now)
     save_selfcare_log("medication", label)
+    SELFCARE_LOGGED.labels(action="medication").inc()
     logger.info(f"[SELFCARE] Med logged: {label}", extra={"component": "selfcare"})
 
 
@@ -108,6 +111,7 @@ def record_hydration_logged(label: str = "water") -> None:
 
     _state.last_hydration_nudge = datetime.now()
     save_selfcare_log("water", label)
+    SELFCARE_LOGGED.labels(action="water").inc()
     logger.info(f"[SELFCARE] Hydration logged: {label}", extra={"component": "selfcare"})
 
 
@@ -124,6 +128,7 @@ def record_movement_logged(label: str = "movement") -> None:
     _state.last_movement_nudge = now
     _state.sitting_since = now
     save_selfcare_log("movement", label)
+    SELFCARE_LOGGED.labels(action="movement").inc()
     logger.info(f"[SELFCARE] Movement logged: {label}", extra={"component": "selfcare"})
 
 
@@ -190,6 +195,7 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
         # the generic key because routine step labels like 'routine:meds' can't
         # be mapped to a window by _expand_med_confirmation.
         save_selfcare_log("medication", med_name)
+        SELFCARE_LOGGED.labels(action="medication").inc()
         next_sched = _get_next_med_schedule(med_name)
         logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})
         result = f"Logged. Next dose is {next_sched}." if next_sched else f"Logged — {med_name} taken."
@@ -197,6 +203,7 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
     elif action == "water":
         _state.last_hydration_nudge = now
         save_selfcare_log("water", detail)
+        SELFCARE_LOGGED.labels(action="water").inc()
         logger.info("[SELFCARE] Hydration logged", extra={"component": "selfcare"})
         result = "Logged — stay hydrated!"
 
@@ -204,6 +211,7 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
         _state.last_movement_nudge = now
         _state.sitting_since = now
         save_selfcare_log("movement", detail)
+        SELFCARE_LOGGED.labels(action="movement").inc()
         logger.info("[SELFCARE] Movement logged", extra={"component": "selfcare"})
         result = "Logged — nice to get moving."
 

@@ -17,13 +17,21 @@ class TestSettingsDefaults:
         }
         if env_overrides:
             env.update(env_overrides)
-        with patch.dict(os.environ, env, clear=False):
+        # Full isolation from a configured host box (these "defaults" tests run
+        # in the orchestrator container, which both exports every compose var
+        # AND ships /app/.env):
+        #   - clear=True       → no host process env leaks in
+        #   - patch dotenv     → config.py's module-scope load_dotenv("/app/.env")
+        #                        is a no-op on reload, so .env keys aren't pushed
+        #                        back into the cleared environ
+        #   - _env_file=None   → Settings() itself doesn't re-read /app/.env
+        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
             # Import inside to pick up patched env
             from importlib import import_module, reload
 
             mod = import_module("config")
             reload(mod)
-            return mod.Settings()
+            return mod.Settings(_env_file=None)
 
     def test_default_model_url(self):
         s = self._make_settings()
@@ -51,12 +59,14 @@ class TestTypeCoercion:
     def _make_settings(self, env_overrides):
         env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
         env.update(env_overrides)
-        with patch.dict(os.environ, env, clear=False):
+        # Isolate from host process env + the deployed /app/.env (see the
+        # TestSettingsDefaults._make_settings comment for the three-part guard).
+        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
             from importlib import import_module, reload
 
             mod = import_module("config")
             reload(mod)
-            return mod.Settings()
+            return mod.Settings(_env_file=None)
 
     def test_int_from_string(self):
         s = self._make_settings({"MAX_TOOL_ROUNDS": "10"})
@@ -87,12 +97,14 @@ class TestAlertTiers:
         env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
         if env_overrides:
             env.update(env_overrides)
-        with patch.dict(os.environ, env, clear=False):
+        # Isolate from host process env + the deployed /app/.env (see the
+        # TestSettingsDefaults._make_settings comment for the three-part guard).
+        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
             from importlib import import_module, reload
 
             mod = import_module("config")
             reload(mod)
-            return mod.Settings()
+            return mod.Settings(_env_file=None)
 
     def test_default_tiers(self):
         s = self._make_settings()
@@ -118,12 +130,14 @@ class TestPiholeUrlList:
         env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
         if env_overrides:
             env.update(env_overrides)
-        with patch.dict(os.environ, env, clear=False):
+        # Isolate from host process env + the deployed /app/.env (see the
+        # TestSettingsDefaults._make_settings comment for the three-part guard).
+        with patch.dict(os.environ, env, clear=True), patch("dotenv.load_dotenv"):
             from importlib import import_module, reload
 
             mod = import_module("config")
             reload(mod)
-            return mod.Settings()
+            return mod.Settings(_env_file=None)
 
     def test_empty_returns_empty_list(self):
         s = self._make_settings({"PIHOLE_URLS": ""})

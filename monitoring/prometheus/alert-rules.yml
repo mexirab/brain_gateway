@@ -107,6 +107,18 @@ groups:
         annotations:
           summary: "Calendar polling has >5 errors in the last hour"
 
+      # A routine force-ended because a step nudged past the cap (non-skippable,
+      # or auto-skip disabled) — the 2026-04-17 "evening-meds stuck all night"
+      # class of bug. Surfaces it instead of relying on the user noticing.
+      - alert: RoutineAutoEnded
+        expr: increase(bgw_routine_auto_ended_total[6h]) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Routine '{{ $labels.routine }}' auto-ended on a stuck step"
+          description: "Step '{{ $labels.step }}' nudged past the cap and force-ended the routine. Check the step's skippable/auto_skip config or whether the user is being nudged about something they can't action."
+
   # ===========================================================================
   # Dead-man's switches — silent-outage detectors
   # ===========================================================================

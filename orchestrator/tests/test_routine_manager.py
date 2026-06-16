@@ -11,6 +11,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+
+def _counter_value(counter, **labels):
+    """Read a labelled Prometheus counter sample, treating an unseen
+    label-set as 0 (a child only materializes after the first .labels(...)).
+    """
+    try:
+        return counter.labels(**labels)._value.get()
+    except Exception:
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Import guard — skip if orchestrator deps not available locally
 # ---------------------------------------------------------------------------
@@ -514,3 +525,121 @@ class TestAdvanceStepSelfcareBridge:
             f"Expected 'Selfcare bridge failed' ERROR; got: {[r.getMessage() for r in errors]}"
         )
         assert any(r.exc_info is not None for r in errors), "Expected exc_info on ERROR record"
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics — counter increments at the right call sites
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestRoutineMetrics:
+    """Asserts the bgw_routine_* counters increment exactly where the source
+    increments them. Counters are process-global and monotonic, so each test
+    reads a before/after delta for its specific label-set rather than an
+    absolute value.
+    """
+
+    @pytest.mark.asyncio
+    async def test_started_increments(self, rm):
+        from orchestrator.metrics import ROUTINE_STARTED
+
+        before = _counter_value(ROUTINE_STARTED, routine="morning", triggered_by="user")
+        await rm.start_routine("morning")
+        after = _counter_value(ROUTINE_STARTED, routine="morning", triggered_by="user")
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_steps_advanced_done_increments(self, rm):
+        from orchestrator.metrics import ROUTINE_STEPS_ADVANCED
+
+        await rm.start_routine("morning")
+        before = _counter_value(ROUTINE_STEPS_ADVANCED, routine="morning", action="done")
+        await rm.advance_step("done")  # complete meds
+        after = _counter_value(ROUTINE_STEPS_ADVANCED, routine="morning", action="done")
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_steps_advanced_skip_increments(self, rm):
+        from orchestrator.metrics import ROUTINE_STEPS_ADVANCED
+
+        await rm.start_routine("morning")
+        await rm.advance_step("done")  # past non-skippable meds
+        before = _counter_value(ROUTINE_STEPS_ADVANCED, routine="morning", action="skip")
+        await rm.advance_step("skip")  # skip shower (skippable)
+        after = _counter_value(ROUTINE_STEPS_ADVANCED, routine="morning", action="skip")
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_completed_increments_on_final_step(self, rm):
+        from orchestrator.metrics import ROUTINE_COMPLETED
+
+        before = _counter_value(ROUTINE_COMPLETED, routine="evening")
+        await rm.start_routine("evening")  # single-step routine
+        with patch.object(rm, "_record_routine_progress"):
+            await rm.advance_step("done")  # final step -> _complete_routine
+        after = _counter_value(ROUTINE_COMPLETED, routine="evening")
+        assert after - before == 1
+        assert rm._active_session is None
+
+    @pytest.mark.asyncio
+    async def test_auto_ended_increments_on_non_skippable_past_cap(self, rm, monkeypatch):
+        """The load-bearing one: non-skippable step past cap -> ROUTINE_AUTO_ENDED
+        increments once, then advance_step('stop')."""
+        from orchestrator.metrics import ROUTINE_AUTO_ENDED
+
+        await rm.start_routine("evening")  # single non-skippable step
+        step = rm._active_session.steps[0]
+        assert step.skippable is False
+
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 2, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", True, raising=False)
+        rm._active_session.nudge_count = 2  # next nudge pushes count past cap
+
+        before = _counter_value(ROUTINE_AUTO_ENDED, routine="evening", step=step.id)
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+        after = _counter_value(ROUTINE_AUTO_ENDED, routine="evening", step=step.id)
+
+        assert after - before == 1
+        mock_advance.assert_awaited_once_with("stop")
+
+    @pytest.mark.asyncio
+    async def test_auto_skipped_increments_on_skippable_past_cap(self, rm, monkeypatch):
+        """Skippable step past cap with auto-skip enabled -> ROUTINE_AUTO_SKIPPED
+        increments once, then advance_step('skip')."""
+        from orchestrator.metrics import ROUTINE_AUTO_SKIPPED
+
+        await rm.start_routine("morning")
+        await rm.advance_step("done")  # move to shower (skippable=True)
+        step = rm._active_session.steps[1]
+        assert step.skippable is True
+
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 2, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", True, raising=False)
+        rm._active_session.nudge_count = 2
+
+        before = _counter_value(ROUTINE_AUTO_SKIPPED, routine="morning", step=step.id)
+        with patch.object(rm, "advance_step", new_callable=AsyncMock) as mock_advance:
+            await rm._deliver_nudge()
+        after = _counter_value(ROUTINE_AUTO_SKIPPED, routine="morning", step=step.id)
+
+        assert after - before == 1
+        mock_advance.assert_awaited_once_with("skip")
+
+    @pytest.mark.asyncio
+    async def test_under_cap_does_not_touch_terminal_counters(self, rm, monkeypatch):
+        """A normal nudge under the cap must NOT increment auto-ended/auto-skipped."""
+        from orchestrator.metrics import ROUTINE_AUTO_ENDED, ROUTINE_AUTO_SKIPPED
+
+        await rm.start_routine("evening")
+        step = rm._active_session.steps[0]
+        monkeypatch.setattr(rm.shared, "ROUTINE_NUDGE_MAX", 3, raising=False)
+        monkeypatch.setattr(rm.shared, "ROUTINE_AUTO_SKIP", True, raising=False)
+
+        ended_before = _counter_value(ROUTINE_AUTO_ENDED, routine="evening", step=step.id)
+        skipped_before = _counter_value(ROUTINE_AUTO_SKIPPED, routine="evening", step=step.id)
+        with patch.object(rm, "advance_step", new_callable=AsyncMock):
+            await rm._deliver_nudge()
+        assert _counter_value(ROUTINE_AUTO_ENDED, routine="evening", step=step.id) == ended_before
+        assert _counter_value(ROUTINE_AUTO_SKIPPED, routine="evening", step=step.id) == skipped_before

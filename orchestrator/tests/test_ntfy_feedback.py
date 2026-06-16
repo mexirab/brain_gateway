@@ -59,6 +59,11 @@ def ntfy_off(monkeypatch):
 
     monkeypatch.setattr(settings, "ntfy_enabled", False, raising=False)
     monkeypatch.setattr(settings, "ntfy_hmac_secret", _SECRET_32, raising=False)
+    # Also pin pushover OFF: the ack/snooze route gate is
+    # `if not (ntfy_enabled or pushover_enabled)`, so a host with
+    # PUSHOVER_ENABLED=true would skip the 404-disabled branch and make the
+    # disabled_returns_404 tests flake. Disabling both keeps the gate closed.
+    monkeypatch.setattr(settings, "pushover_enabled", False, raising=False)
     return settings
 
 

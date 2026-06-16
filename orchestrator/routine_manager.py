@@ -12,6 +12,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from orchestrator import shared
+from orchestrator.metrics import (
+    ROUTINE_AUTO_ENDED,
+    ROUTINE_AUTO_SKIPPED,
+    ROUTINE_COMPLETED,
+    ROUTINE_STARTED,
+    ROUTINE_STEPS_ADVANCED,
+)
 from orchestrator.reminder_manager import _announce_voice
 from orchestrator.shared import profile
 
@@ -195,6 +202,7 @@ async def start_routine(routine_id: str, triggered_by: str = "user") -> str:
     # Schedule nudge
     _schedule_nudge(nudge_delay)
 
+    ROUTINE_STARTED.labels(routine=routine_id, triggered_by=triggered_by).inc()
     logger.info(
         f"[ROUTINE] Started '{routine_id}' ({len(steps)} steps, triggered_by={triggered_by})",
         extra={"component": "routine"},
@@ -228,10 +236,12 @@ async def advance_step(action: str = "done") -> str:
         if not step.skippable:
             return f"Can't skip this one — {step.label} is important. Let me know when you're done."
         _active_session.skipped_steps.append(step.id)
+        ROUTINE_STEPS_ADVANCED.labels(routine=_active_session.routine_id, action="skip").inc()
         logger.info(f"[ROUTINE] Skipped step: {step.id}", extra={"component": "routine"})
     else:
         # done / next / finished
         _active_session.completed_steps.append(step.id)
+        ROUTINE_STEPS_ADVANCED.labels(routine=_active_session.routine_id, action="done").inc()
         logger.info(f"[ROUTINE] Completed step: {step.id}", extra={"component": "routine"})
         # Bridge: mark the corresponding selfcare gate so completing the
         # evening_meds step via routine_action("done") also suppresses the
@@ -363,6 +373,7 @@ async def _complete_routine() -> str:
     # Record progress
     _record_routine_progress()
 
+    ROUTINE_COMPLETED.labels(routine=_active_session.routine_id).inc()
     logger.info(
         f"[ROUTINE] Completed '{_active_session.routine_id}' ({completed}/{total} done, {skipped} skipped)",
         extra={"component": "routine"},
@@ -490,6 +501,7 @@ async def _deliver_nudge() -> None:
     if _active_session.nudge_count > nudge_max:
         # Preferred escape: auto-skip the stuck step (gated by setting + skippable).
         if auto_skip and step.skippable:
+            ROUTINE_AUTO_SKIPPED.labels(routine=_active_session.routine_id, step=step.id).inc()
             logger.info(f"[ROUTINE] Auto-skipping step '{step.id}' after {nudge_max} nudges")
             await advance_step("skip")
             return
@@ -498,6 +510,7 @@ async def _deliver_nudge() -> None:
         # on evening_meds (skippable=false) and nudged through the night —
         # user heard "I'll move past your evening meds" as the first thing
         # after quiet hours lifted.
+        ROUTINE_AUTO_ENDED.labels(routine=_active_session.routine_id, step=step.id).inc()
         logger.warning(
             f"[ROUTINE] Auto-ending '{_active_session.routine_id}' — stuck on "
             f"step '{step.id}' (skippable={step.skippable}, "

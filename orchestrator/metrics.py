@@ -641,3 +641,45 @@ WELCOME_FIRED = Counter(
     "First-chat welcome message attempts.",
     ["result"],  # prepended | error
 )
+
+# -- Routine scaffolding (F-006) ---------------------------------------------
+# Visibility into the morning/evening routine state machine. The auto-ended
+# counter is the load-bearing one: a non-skippable step that nudges past its
+# cap force-ends the whole routine (the 2026-04-17 evening-meds-stuck-all-night
+# class of bug). Alerting on bgw_routine_auto_ended_total lets Grafana page on
+# stuck routines instead of relying on the user noticing.
+ROUTINE_STARTED = Counter(
+    "bgw_routine_started_total",
+    "Routine sessions started.",
+    ["routine", "triggered_by"],  # triggered_by: user | scheduled
+)
+ROUTINE_STEPS_ADVANCED = Counter(
+    "bgw_routine_steps_advanced_total",
+    "Routine steps advanced by an explicit user action.",
+    ["routine", "action"],  # action: done | skip
+)
+ROUTINE_COMPLETED = Counter(
+    "bgw_routine_completed_total",
+    "Routine sessions that reached the final step.",
+    ["routine"],
+)
+ROUTINE_AUTO_SKIPPED = Counter(
+    "bgw_routine_auto_skipped_total",
+    "Skippable routine steps auto-skipped after exceeding the nudge cap.",
+    ["routine", "step"],
+)
+ROUTINE_AUTO_ENDED = Counter(
+    "bgw_routine_auto_ended_total",
+    "Routines force-ended because a step nudged past the cap (non-skippable, "
+    "or auto-skip disabled). Stuck-routine signal for alerting.",
+    ["routine", "step"],
+)
+
+# -- Self-care logging (F-008) -----------------------------------------------
+# One increment per logged self-care action, regardless of entry point (the
+# selfcare_log tool, the routine bridge, meal_manager, or workout log_set).
+SELFCARE_LOGGED = Counter(
+    "bgw_selfcare_logged_total",
+    "Self-care actions logged.",
+    ["action"],  # meal | medication | water | movement
+)
