@@ -1,35 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
 import { CheckCircle, Zap, Flame, TrendingUp, TrendingDown, Minus, Brain } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
-import { api } from '@/lib/api';
-import type { ProgressToday, ProgressWeek, ProgressStreaks } from '@/lib/types';
+import { useProgress } from '@/lib/hooks';
 
 export default function ProgressCard() {
-  const [today, setToday] = useState<ProgressToday | null>(null);
-  const [week, setWeek] = useState<ProgressWeek | null>(null);
-  const [streaks, setStreaks] = useState<ProgressStreaks | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(() => {
-    Promise.all([api.progressToday(), api.progressWeek(), api.progressStreaks()])
-      .then(([t, w, s]) => {
-        setToday(t);
-        setWeek(w);
-        setStreaks(s);
-        setError(null);
-      })
-      .catch(() => setError('Couldn’t load progress.'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  const { data, error, isLoading, mutate } = useProgress();
+  const today = data?.today ?? null;
+  const week = data?.week ?? null;
+  const streaks = data?.streaks ?? null;
 
   const TrendIcon = week?.trend === 'up' ? TrendingUp : week?.trend === 'down' ? TrendingDown : Minus;
   const trendColor = week?.trend === 'up' ? 'text-success' : week?.trend === 'down' ? 'text-danger' : 'text-content-muted';
@@ -51,18 +30,18 @@ export default function ProgressCard() {
         )}
       </h2>
 
-      {loading && (
+      {isLoading && (
         <div className="space-y-3">
           <div className="h-8 bg-surface-raised/50 rounded-lg animate-pulse" />
           <div className="h-16 bg-surface-raised/50 rounded-lg animate-pulse" />
           <div className="h-6 bg-surface-raised/50 rounded-lg animate-pulse" />
         </div>
       )}
-      {!loading && error && (
-        <ErrorState compact message={error} onRetry={fetchData} />
+      {!isLoading && error && (
+        <ErrorState compact message="Couldn’t load progress." onRetry={() => mutate()} />
       )}
 
-      {!loading && !error && today && (
+      {!isLoading && !error && today && (
         <div className="space-y-4">
           {/* Today's stats */}
           <div className="grid grid-cols-3 gap-3">

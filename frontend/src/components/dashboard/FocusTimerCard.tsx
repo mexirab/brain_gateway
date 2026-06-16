@@ -1,33 +1,16 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { Timer, Play, Square } from 'lucide-react';
 import { Card, Button, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
-import type { FocusState } from '@/lib/types';
+import { useFocus } from '@/lib/hooks';
 
 export default function FocusTimerCard() {
-  const [focus, setFocus] = useState<FocusState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: focus, error, isLoading, mutate } = useFocus();
   const [taskInput, setTaskInput] = useState('');
   const [durationInput, setDurationInput] = useState(25);
   const [acting, setActing] = useState(false);
-
-  const fetchFocus = useCallback(() => {
-    setError(null);
-    api
-      .focus()
-      .then(setFocus)
-      .catch(() => setError('Couldn’t load the focus timer.'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchFocus();
-    const interval = setInterval(fetchFocus, 15000);
-    return () => clearInterval(interval);
-  }, [fetchFocus]);
 
   const handleStart = async () => {
     if (!taskInput.trim()) return;
@@ -35,7 +18,7 @@ export default function FocusTimerCard() {
     try {
       await api.startFocus(taskInput.trim(), durationInput);
       setTaskInput('');
-      fetchFocus();
+      mutate();
     } catch {
       // silently fail
     } finally {
@@ -47,7 +30,7 @@ export default function FocusTimerCard() {
     setActing(true);
     try {
       await api.stopFocus();
-      fetchFocus();
+      mutate();
     } catch {
       // silently fail
     } finally {
@@ -66,12 +49,12 @@ export default function FocusTimerCard() {
         Focus Timer
       </h2>
 
-      {loading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {!loading && error && (
-        <ErrorState compact message={error} onRetry={fetchFocus} />
+      {isLoading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {!isLoading && error && (
+        <ErrorState compact message="Couldn’t load the focus timer." onRetry={() => mutate()} />
       )}
 
-      {!loading && !error && focus?.active && (
+      {!isLoading && !error && focus?.active && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-white">{focus.task}</p>
@@ -99,7 +82,7 @@ export default function FocusTimerCard() {
         </div>
       )}
 
-      {!loading && !error && !focus?.active && (
+      {!isLoading && !error && !focus?.active && (
         <div className="space-y-3">
           <input
             type="text"

@@ -1,32 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import { Calendar, Clock } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
-import { api } from '@/lib/api';
-import type { CalendarEvent } from '@/lib/types';
+import { useCalendarToday } from '@/lib/hooks';
 
 export default function CalendarCard() {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<string>('');
-
-  const fetchCalendar = useCallback(() => {
-    setError(null);
-    api
-      .calendarToday()
-      .then((data) => {
-        setEvents(data.events);
-        setSource(data.source || '');
-      })
-      .catch(() => setError('Couldn’t load today’s calendar.'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchCalendar();
-  }, [fetchCalendar]);
+  const { data, error, isLoading, mutate } = useCalendarToday();
+  const events = data?.events ?? [];
+  const source = data?.source ?? '';
 
   const formatTime = (iso: string, allDay: boolean) => {
     if (allDay) return 'All day';
@@ -50,7 +31,7 @@ export default function CalendarCard() {
         )}
       </div>
 
-      {loading && (
+      {isLoading && (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
             <div key={i} className="h-10 bg-surface-raised/50 rounded-lg animate-pulse" />
@@ -58,15 +39,15 @@ export default function CalendarCard() {
         </div>
       )}
 
-      {!loading && error && (
-        <ErrorState compact message={error} onRetry={fetchCalendar} />
+      {!isLoading && error && (
+        <ErrorState compact message="Couldn’t load today’s calendar." onRetry={() => mutate()} />
       )}
 
-      {!loading && !error && events.length === 0 && (
+      {!isLoading && !error && events.length === 0 && (
         <p className="text-sm text-content-muted">No events today</p>
       )}
 
-      {!loading && !error && events.length > 0 && (
+      {!isLoading && !error && events.length > 0 && (
         <div className="space-y-2">
           {events.map((event) => (
             <div
@@ -80,8 +61,8 @@ export default function CalendarCard() {
                 </p>
                 <p className="text-xs text-content-muted">
                   {formatTime(event.start, event.all_day)}
-                  {event.location && ` \u00b7 ${event.location}`}
-                  {event.calendar && ` \u00b7 ${event.calendar}`}
+                  {event.location && ` · ${event.location}`}
+                  {event.calendar && ` · ${event.calendar}`}
                 </p>
               </div>
             </div>

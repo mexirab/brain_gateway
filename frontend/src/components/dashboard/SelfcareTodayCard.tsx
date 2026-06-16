@@ -1,13 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Heart, Pill, Utensils, Droplet, Activity, Check, ChevronDown, ChevronRight, Circle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Card } from '@/components/ui';
-import { api } from '@/lib/api';
-import type { SelfcareAction, SelfcareActionState, SelfcareTodayResponse } from '@/lib/types';
-
-const REFRESH_MS = 30_000;
+import { Card, ErrorState } from '@/components/ui';
+import { useSelfcareToday } from '@/lib/hooks';
+import type { SelfcareAction, SelfcareActionState } from '@/lib/types';
 
 const ACTION_LABEL: Record<SelfcareAction, string> = {
   medication: 'Meds',
@@ -129,26 +127,7 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
 }
 
 export default function SelfcareTodayCard() {
-  const [data, setData] = useState<SelfcareTodayResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(() => {
-    api
-      .selfcareToday()
-      .then((d) => {
-        setData(d);
-        setError(null);
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const id = setInterval(fetchData, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [fetchData]);
+  const { data, error, isLoading, mutate } = useSelfcareToday();
 
   return (
     <Card>
@@ -162,7 +141,7 @@ export default function SelfcareTodayCard() {
         )}
       </h2>
 
-      {loading && (
+      {isLoading && (
         <div className="space-y-2">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="h-12 bg-surface-raised/50 rounded-lg animate-pulse" />
@@ -171,9 +150,7 @@ export default function SelfcareTodayCard() {
       )}
 
       {error && !data && (
-        <p className="text-sm text-danger/70" title={error}>
-          Couldn&apos;t load selfcare state
-        </p>
+        <ErrorState compact message="Couldn’t load selfcare state" onRetry={() => mutate()} />
       )}
 
       {data && (
@@ -182,7 +159,7 @@ export default function SelfcareTodayCard() {
             <ActionRow key={action} action={action} state={data.actions[action]} />
           ))}
           {error && (
-            <p className="text-xs text-warning/60" title={error}>
+            <p className="text-xs text-warning/60">
               (refresh failed — showing last loaded data)
             </p>
           )}

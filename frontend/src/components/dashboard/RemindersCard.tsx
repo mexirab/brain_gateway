@@ -1,36 +1,24 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Bell, Check } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
-import type { Reminder } from '@/lib/types';
+import { useReminders } from '@/lib/hooks';
 
 export default function RemindersCard() {
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchReminders = () => {
-    setError(null);
-    setLoading(true);
-    api
-      .reminders()
-      .then((data) => setReminders(data.reminders.filter((r) => r.status === 'pending')))
-      .catch(() => setError('Couldn’t load reminders.'))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    fetchReminders();
-  }, []);
+  const { data, error, isLoading, mutate } = useReminders();
+  const reminders = (data?.reminders ?? []).filter((r) => r.status === 'pending');
 
   const handleComplete = async (id: string) => {
+    // Optimistically drop it, then reconcile with the server.
+    const next = data
+      ? { ...data, reminders: data.reminders.filter((r) => r.id !== id) }
+      : data;
+    mutate(next, { revalidate: false });
     try {
       await api.completeReminder(id);
-      setReminders((prev) => prev.filter((r) => r.id !== id));
-    } catch {
-      // silently fail
+    } finally {
+      mutate();
     }
   };
 
@@ -53,7 +41,7 @@ export default function RemindersCard() {
         )}
       </h2>
 
-      {loading && (
+      {isLoading && (
         <div className="space-y-2">
           {[1, 2].map((i) => (
             <div key={i} className="h-10 bg-surface-raised/50 rounded-lg animate-pulse" />
@@ -61,15 +49,15 @@ export default function RemindersCard() {
         </div>
       )}
 
-      {!loading && error && (
-        <ErrorState compact message={error} onRetry={fetchReminders} />
+      {!isLoading && error && (
+        <ErrorState compact message="Couldn’t load reminders." onRetry={() => mutate()} />
       )}
 
-      {!loading && !error && reminders.length === 0 && (
+      {!isLoading && !error && reminders.length === 0 && (
         <p className="text-sm text-content-muted">No pending reminders</p>
       )}
 
-      {!loading && !error && reminders.length > 0 && (
+      {!isLoading && !error && reminders.length > 0 && (
         <div className="space-y-2">
           {reminders.map((r) => (
             <div

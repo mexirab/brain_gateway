@@ -1,23 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Activity, CheckCircle2, XCircle } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
-import { api } from '@/lib/api';
-import type { HealthResponse } from '@/lib/types';
+import { useHealth } from '@/lib/hooks';
 
 export default function SystemHealthCard() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .health()
-      .then(setHealth)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
+  const { data: health, error, isLoading } = useHealth();
 
   const StatusDot = ({ ok }: { ok: boolean }) =>
     ok ? (
@@ -39,10 +27,10 @@ export default function SystemHealthCard() {
         System Health
       </h2>
 
-      {loading && <div className="h-24 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {!loading && error && <ErrorState compact message="Orchestrator offline" />}
+      {isLoading && <div className="h-24 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {!isLoading && error && <ErrorState compact message="Orchestrator offline" />}
 
-      {!loading && !error && health && (
+      {!isLoading && !error && health && (
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">
             <span className="text-content-secondary">Orchestrator</span>

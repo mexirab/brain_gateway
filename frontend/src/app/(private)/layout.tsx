@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Settings } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
+import { SWRProvider } from '@/components/providers/SWRProvider';
 import { getFeatureFlags } from '@/lib/features.server';
 import { isNavItemEnabled } from '@/lib/features';
 
@@ -61,7 +62,7 @@ export default async function PrivateLayout({
 
       {/* Main content */}
       <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">
-        {children}
+        <SWRProvider>{children}</SWRProvider>
       </main>
     </div>
   );

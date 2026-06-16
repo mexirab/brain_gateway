@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import useSWR from 'swr';
 import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
@@ -129,48 +130,47 @@ export default function ChatPage() {
     return conv.id;
   }, []);
 
-  // Poll for new announcements
+  // Poll for new announcements. SWR pauses while a response is streaming
+  // (isPaused) and automatically when the tab is hidden (refreshInterval),
+  // and dedupes unchanged history so the processing effect only runs on change.
+  const { data: annHistory } = useSWR(
+    'chat:announcement-poll',
+    () => api.announcementHistory(10),
+    { refreshInterval: 15_000, isPaused: () => streamingRef.current },
+  );
+
   useEffect(() => {
-    const poll = async () => {
-      if (streamingRef.current) return;
-      try {
-        const history = await api.announcementHistory(10);
-        if (!history.length) return;
+    if (!annHistory || !annHistory.length) return;
 
-        if (!initRef.current) {
-          lastSeenIdRef.current = Math.max(...history.map((a) => a.id));
-          initRef.current = true;
-          return;
+    // On first load just record the high-water mark — don't replay history.
+    if (!initRef.current) {
+      lastSeenIdRef.current = Math.max(...annHistory.map((a) => a.id));
+      initRef.current = true;
+      return;
+    }
+
+    const newAnnouncements = annHistory
+      .filter((a) => a.id > (lastSeenIdRef.current ?? 0) && a.success === 1)
+      .sort((a, b) => a.id - b.id);
+
+    if (newAnnouncements.length > 0) {
+      const newMsgs: DisplayMessage[] = newAnnouncements.map((a) => ({
+        role: 'assistant' as const,
+        content: a.text,
+        announcement: a,
+      }));
+      setMessages((prev) => [...prev, ...newMsgs]);
+      lastSeenIdRef.current = Math.max(...newAnnouncements.map((a) => a.id));
+
+      // Save announcement messages to conversation if one is active
+      const convId = activeConvIdRef.current;
+      if (convId) {
+        for (const a of newAnnouncements) {
+          api.saveMessage(convId, 'assistant', a.text, undefined, a.announcement_type).catch(() => {});
         }
-
-        const newAnnouncements = history
-          .filter((a) => a.id > (lastSeenIdRef.current ?? 0) && a.success === 1)
-          .sort((a, b) => a.id - b.id);
-
-        if (newAnnouncements.length > 0) {
-          const newMsgs: DisplayMessage[] = newAnnouncements.map((a) => ({
-            role: 'assistant' as const,
-            content: a.text,
-            announcement: a,
-          }));
-          setMessages((prev) => [...prev, ...newMsgs]);
-          lastSeenIdRef.current = Math.max(...newAnnouncements.map((a) => a.id));
-
-          // Save announcement messages to conversation if one is active
-          const convId = activeConvIdRef.current;
-          if (convId) {
-            for (const a of newAnnouncements) {
-              api.saveMessage(convId, 'assistant', a.text, undefined, a.announcement_type).catch(() => {});
-            }
-          }
-        }
-      } catch { /* silent */ }
-    };
-
-    poll();
-    const interval = setInterval(poll, 15_000);
-    return () => clearInterval(interval);
-  }, []);
+      }
+    }
+  }, [annHistory]);
 
   const handleSend = async (text: string) => {
     const userMsg: DisplayMessage = { role: 'user', content: text };

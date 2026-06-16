@@ -1,27 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Coins, TrendingUp } from 'lucide-react';
 import { Card, ErrorState } from '@/components/ui';
-import { financeApi } from '@/lib/finance-api';
-import type { BudgetPeriod, GameState } from '@/lib/finance-types';
+import { useFinanceSnapshot } from '@/lib/hooks';
 
 export default function FinanceSnapshotCard() {
-  const [budget, setBudget] = useState<BudgetPeriod | null>(null);
-  const [game, setGame] = useState<GameState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    Promise.all([financeApi.getCurrentBudget(), financeApi.getGameState()])
-      .then(([b, g]) => {
-        setBudget(b);
-        setGame(g);
-      })
-      .catch(() => setError('Couldn’t load your budget.'))
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, error, isLoading } = useFinanceSnapshot();
+  const budget = data?.budget ?? null;
+  const game = data?.game ?? null;
 
   const healthPct = budget
     ? Math.max(0, Math.min(100, ((budget.discretionary_budget - budget.discretionary_spent) / budget.discretionary_budget) * 100))
@@ -40,10 +27,10 @@ export default function FinanceSnapshotCard() {
         Budget
       </h2>
 
-      {loading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
-      {!loading && error && <ErrorState compact message={error} />}
+      {isLoading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {!isLoading && error && <ErrorState compact message="Couldn’t load your budget." />}
 
-      {!loading && !error && budget && game && (
+      {!isLoading && !error && budget && game && (
         <div className="space-y-3">
           {/* Health bar */}
           <div>
