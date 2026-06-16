@@ -171,6 +171,46 @@ tools; everything else runs normally.
 
 ---
 
+## Run on a dedicated Linux CPU node
+
+The quick-start above (`scripts/byo-setup.sh`) is the right path for a **Mac,
+Windows PC, or any single machine with Docker Desktop**. There's a second
+no-GPU path for a different situation: you have a **spare Linux box** you want to
+keep on 24/7 *and* a **separate GPU machine** that runs the model.
+
+That's the `nerves` role:
+
+```bash
+git clone https://github.com/mexirab/brain_gateway.git
+cd brain_gateway
+bash install.sh --role nerves
+```
+
+`--role nerves` installs a **CPU-only "nervous system" node**: the orchestrator
+plus the always-on machinery (reminders, calendar, nudges, push notifications) —
+none of which needs a GPU. Because there's no NVIDIA kernel module to load,
+**it's a single pass with no reboot** (unlike the full `install.sh`). During
+setup it asks for your **GPU/brain box's model URL** (e.g.
+`http://192.168.1.50:8080/v1`) and writes it to `MODEL_URL`; conversation and
+voice come from that remote box, while reminders and push run locally regardless.
+You can leave `MODEL_URL` blank and fill it in later in `.env`.
+
+| | `scripts/byo-setup.sh` | `install.sh --role nerves` |
+|---|---|---|
+| **For** | Mac / Windows / any Docker Desktop box | A dedicated **Ubuntu** CPU box |
+| **Installs** | Nothing — uses your existing Docker | Docker + compose via `apt` |
+| **Model lives** | Your Mac / another box / cloud | A separate GPU box on your LAN |
+| **Reboot** | No | No (CPU node has no driver to load) |
+| **Best when** | "I just have a laptop" | "I want an always-on hub + a GPU box I can power down" |
+
+Both end up in the same place: a CPU-only orchestrator pointed at a model
+elsewhere, with `COMPOSE_PROFILES` empty so the local GPU model layer never
+starts. The `nerves` role is the Ubuntu-native, `apt`-based sibling; pick it when
+you're standing up a permanent split between an always-on hub and a power-hungry
+GPU box you'd rather not run 24/7.
+
+---
+
 ## Troubleshooting
 
 - **Dashboard loads but chat errors / "model unavailable":** the orchestrator
