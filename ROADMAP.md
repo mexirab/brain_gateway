@@ -108,6 +108,19 @@ Per `/home/labadmin/.claude/plans/ship-jess-as-product.md` Phase 2. Replacing ha
 |-------|----------|-------|
 | TTS output on ATOM Echo tiny speaker | High | Should route to Google speakers group ("all speakers"). Requires HA UI. |
 | ATOM Echo S3R has no LED feedback | Low | S3R variant has no programmable RGB LED (GPIO35 conflicts with PSRAM). Hardware limitation. |
+| Env/time-coupled tests can flake CI | Low | A few unit tests still read ambient state instead of pinning it: `test_selfcare_manager::TestMealCheck` (wall-clock-dependent), `test_config` defaults (host env vars), `test_ntfy_feedback` `disabled_returns_404` (assumes `PUSHOVER_ENABLED` off). Green on a clean CI runner today, but worth pinning clock/env to remove the flake risk. |
+
+## CI & Test Suite Health — DONE (2026-06-16)
+
+The GitHub Actions **Python Lint & Format** check had been red on every PR regardless of content (the `ruff-action@v3` scans the whole repo, and two `scripts/` files were missing from pyproject's `extend-exclude`). Cleared the pre-existing `ruff` debt across `orchestrator/` + `scripts/` (auto-fixes + behavior-preserving SIM/B-rule rewrites; no production behavior change).
+
+Fixing it also surfaced a long-masked **Python Tests** job: it installed only `pytest pytest-asyncio`, so the four `respx`-importing modules aborted collection and the whole suite was silently skipped on `main`. Added `respx` to the job, then fixed the ~37 pre-existing failures it revealed (none caused by the lint work):
+
+- **Event-loop (~21):** pytest-asyncio 1.x leaves no current loop after async tests → sync `get_event_loop()` callers raised (order-dependent flake). Added an autouse `conftest` fixture guaranteeing a loop per test.
+- **Test isolation:** `announcement_routes._cache` global leaking across tests (autouse reset); `sys.modules` stub that missed the real package attribute; unisolated `/app` config write (now tmp-scoped).
+- **Stale / env-coupled tests:** a `budget_analyze` test asserting a deliberately-removed gate; `jobs_self_audit` fixture missing the `jess_advanced` flag; a timezone-naive snooze-reschedule assertion (5h offset on a UTC runner).
+
+All five CI checks (Lint, Tests, Frontend, Docker Build) green; shipped via [PR #23](https://github.com/mexirab/brain_gateway/pull/23).
 
 ## In Progress: Frontend Dashboard (ConvivialProphet.com)
 
