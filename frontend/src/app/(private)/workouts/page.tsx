@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Dumbbell, Sparkles, Check, Trash2, History, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, Skeleton } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
 import type {
   WorkoutTodayResponse,
@@ -481,7 +481,7 @@ export default function WorkoutsPage() {
       {loading && (
         <div className="space-y-2">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-24 bg-surface-raised/30 rounded-lg animate-pulse" />
+            <Skeleton key={i} className="h-24" />
           ))}
         </div>
       )}

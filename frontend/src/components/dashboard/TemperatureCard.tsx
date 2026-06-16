@@ -1,7 +1,7 @@
 'use client';
 
 import { Thermometer, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useTemperatures } from '@/lib/hooks';
 
 export default function TemperatureCard() {
@@ -48,7 +48,7 @@ export default function TemperatureCard() {
         )}
       </h2>
 
-      {isLoading && <div className="h-32 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {isLoading && <Skeleton className="h-32" />}
       {!isLoading && error && (
         <ErrorState compact message="Sensors unavailable" onRetry={() => mutate()} />
       )}

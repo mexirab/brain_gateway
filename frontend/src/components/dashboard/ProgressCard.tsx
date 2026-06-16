@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckCircle, Zap, Flame, TrendingUp, TrendingDown, Minus, Brain } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useProgress } from '@/lib/hooks';
 
 export default function ProgressCard() {
@@ -32,9 +32,9 @@ export default function ProgressCard() {
 
       {isLoading && (
         <div className="space-y-3">
-          <div className="h-8 bg-surface-raised/50 rounded-lg animate-pulse" />
-          <div className="h-16 bg-surface-raised/50 rounded-lg animate-pulse" />
-          <div className="h-6 bg-surface-raised/50 rounded-lg animate-pulse" />
+          <Skeleton className="h-8" />
+          <Skeleton className="h-16" />
+          <Skeleton className="h-6" />
         </div>
       )}
       {!isLoading && error && (

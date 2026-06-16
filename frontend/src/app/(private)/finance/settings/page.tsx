@@ -92,7 +92,7 @@ export default function SettingsPage() {
       // Reload status
       const statusRes = await financeApi.getYnabStatus();
       setStatus(statusRes);
-    } catch (err) {
+    } catch {
       setSyncResult('Sync failed');
     } finally {
       setSyncing(false);
@@ -109,7 +109,7 @@ export default function SettingsPage() {
       setSyncResult('Sync reset. Click "Sync Now" to re-import.');
       const statusRes = await financeApi.getYnabStatus();
       setStatus(statusRes);
-    } catch (err) {
+    } catch {
       setSyncResult('Reset failed');
     } finally {
       setResetting(false);
@@ -142,7 +142,7 @@ export default function SettingsPage() {
       // Reload status for updated counts
       const statusRes = await financeApi.getYnabStatus();
       setStatus(statusRes);
-    } catch (err) {
+    } catch {
       setSyncResult('Failed to save mappings');
     } finally {
       setSavingMapping(false);

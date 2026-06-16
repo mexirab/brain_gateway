@@ -120,7 +120,6 @@ export function currentYearMonth(): string {
  */
 export function projectedRetirement(config: FinanceConfig): number {
   const years = config.retirement_target_age - config.current_age;
-  const annualContribution = config.savings_rate * config.monthly_discretionary * 12 / config.savings_rate;
   // Simplified: current balance compounded + annual contributions compounded
   const futureBalance = config.retirement_current * Math.pow(1 + config.expected_return, years);
   // Annual contribution of ~$28,685 (from plan)

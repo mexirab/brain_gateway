@@ -2,6 +2,7 @@ export { Button } from './Button';
 export { Card } from './Card';
 export { Input } from './Input';
 export { Badge } from './Badge';
+export { Skeleton } from './Skeleton';
 export { PageHeader } from './PageHeader';
 export { ErrorState } from './ErrorState';
 export { EmptyState } from './EmptyState';

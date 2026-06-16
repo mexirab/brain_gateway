@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, ArrowUpDown, Tag, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, ArrowUpDown, Tag } from 'lucide-react';
 import { useFinance } from '@/lib/finance-context';
 import { financeApi } from '@/lib/finance-api';
 import { formatCurrency, currentYearMonth } from '@/lib/finance-utils';

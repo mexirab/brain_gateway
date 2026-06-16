@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { Coins, TrendingUp } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useFinanceSnapshot } from '@/lib/hooks';
 
 export default function FinanceSnapshotCard() {
@@ -27,7 +27,7 @@ export default function FinanceSnapshotCard() {
         Budget
       </h2>
 
-      {isLoading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {isLoading && <Skeleton className="h-20" />}
       {!isLoading && error && <ErrorState compact message="Couldn’t load your budget." />}
 
       {!isLoading && !error && budget && game && (

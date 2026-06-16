@@ -1,7 +1,7 @@
 'use client';
 
 import { Calendar, Clock } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useCalendarToday } from '@/lib/hooks';
 
 export default function CalendarCard() {
@@ -34,7 +34,7 @@ export default function CalendarCard() {
       {isLoading && (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-10 bg-surface-raised/50 rounded-lg animate-pulse" />
+            <Skeleton key={i} className="h-10" />
           ))}
         </div>
       )}

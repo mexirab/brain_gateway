@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UtensilsCrossed, Plus, Camera, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, Skeleton } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
 import type { Meal, MealsToday, MealHistoryResponse } from '@/lib/types';
 
@@ -304,7 +304,7 @@ export default function MealsPage() {
       {loading && (
         <div className="space-y-2">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-14 bg-surface-raised/30 rounded-lg animate-pulse" />
+            <Skeleton key={i} className="h-14" />
           ))}
         </div>
       )}

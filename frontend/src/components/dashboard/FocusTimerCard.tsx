@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Timer, Play, Square } from 'lucide-react';
-import { Card, Button, ErrorState } from '@/components/ui';
+import { Card, Button, ErrorState, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useFocus } from '@/lib/hooks';
 
@@ -49,7 +49,7 @@ export default function FocusTimerCard() {
         Focus Timer
       </h2>
 
-      {isLoading && <div className="h-20 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {isLoading && <Skeleton className="h-20" />}
       {!isLoading && error && (
         <ErrorState compact message="Couldn’t load the focus timer." onRetry={() => mutate()} />
       )}

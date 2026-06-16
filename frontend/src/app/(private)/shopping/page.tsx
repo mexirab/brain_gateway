@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Card, Button, ErrorState } from '@/components/ui';
+import { Card, Button, ErrorState, Skeleton } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
 import { useShopping } from '@/lib/hooks';
 
@@ -177,7 +177,7 @@ export default function ShoppingPage() {
       {isLoading && (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-12 bg-surface-raised/30 rounded-lg animate-pulse" />
+            <Skeleton key={i} className="h-12" />
           ))}
         </div>
       )}

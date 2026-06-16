@@ -1,7 +1,7 @@
 'use client';
 
 import { Activity, CheckCircle2, XCircle } from 'lucide-react';
-import { Card, ErrorState } from '@/components/ui';
+import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useHealth } from '@/lib/hooks';
 
 export default function SystemHealthCard() {
@@ -27,7 +27,7 @@ export default function SystemHealthCard() {
         System Health
       </h2>
 
-      {isLoading && <div className="h-24 bg-surface-raised/50 rounded-lg animate-pulse" />}
+      {isLoading && <Skeleton className="h-24" />}
       {!isLoading && error && <ErrorState compact message="Orchestrator offline" />}
 
       {!isLoading && !error && health && (
