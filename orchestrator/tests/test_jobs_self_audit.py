@@ -35,6 +35,10 @@ def audit_on(monkeypatch, tmp_path):
     from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "self_audit_enabled", True, raising=False)
+    # run_self_audit() gates on BOTH flags (self_audit_enabled AND jess_advanced);
+    # jess_advanced defaults to False on a clean env, so without this the audit
+    # short-circuits to result="skipped" in CI.
+    monkeypatch.setattr(settings, "jess_advanced", True, raising=False)
     monkeypatch.setattr(settings, "self_audit_loki_url", _LOKI_URL, raising=False)
     monkeypatch.setattr(settings, "self_audit_lookback_hours", 24, raising=False)
     monkeypatch.setattr(settings, "self_audit_max_clusters", 10, raising=False)

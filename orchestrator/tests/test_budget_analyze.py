@@ -186,18 +186,23 @@ def _seed_mixed_sign_dataset(name: str = "test_signs") -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. Empty / whitespace analysis_question → error, expert NOT called
+# 1. Empty / whitespace analysis_question → falls back to a generic prompt
+#    (the "required or error" gate was intentionally removed — see the analyze
+#    branch in budget_manager.query: it made the primary model loop when it
+#    called analyze without the kwarg)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("blank", [None, "", "   ", "\n\t "])
-async def test_analyze_rejects_blank_analysis_question(tmp_db, monkeypatch, blank):
-    """Before any SQL or expert call, blank analysis_question must short-circuit."""
+async def test_analyze_blank_question_falls_back_to_generic_prompt(tmp_db, monkeypatch, blank):
+    """A blank analysis_question is NOT rejected — analyze substitutes a
+    generic pattern-finding prompt and still runs the expert synthesis."""
     from orchestrator import budget_manager
 
     _seed_small_dataset("test_small")
 
-    expert_mock = AsyncMock(return_value="should-not-be-called")
+    synth = "Gaming dominated Q1 spending."
+    expert_mock = AsyncMock(return_value=synth)
     monkeypatch.setattr("orchestrator.expert_agent.handle_ask_expert", expert_mock)
 
     result = await budget_manager.query(
@@ -206,9 +211,13 @@ async def test_analyze_rejects_blank_analysis_question(tmp_db, monkeypatch, blan
         analysis_question=blank,
     )
 
-    assert "error" in result
-    assert "analysis_question is required" in result["error"]
-    expert_mock.assert_not_called()
+    # No rejection; a non-empty generic question is synthesized in place of the
+    # blank input and the expert is invoked exactly once.
+    assert "error" not in result
+    assert result["question_type"] == "analyze"
+    assert result["user_question"].strip()
+    assert result["expert_synthesis"] == synth
+    expert_mock.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

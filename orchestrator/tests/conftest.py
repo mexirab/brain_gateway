@@ -37,6 +37,54 @@ if _REPO_ROOT not in sys.path:
 import pytest  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _ensure_event_loop():
+    """Guarantee a usable "current" event loop for every test.
+
+    pytest-asyncio 1.x manages a fresh loop per async test and leaves the main
+    thread with no current loop afterward. Sync tests that reach for
+    ``asyncio.get_event_loop()`` (legacy ``run_until_complete`` /
+    fire-and-forget-drain patterns) then fail with
+    ``RuntimeError: There is no current event loop`` — and which sync test runs
+    right after an async one is ordering-dependent, so the failures are flaky
+    across environments. Re-establish an open loop at the start of each test;
+    pytest-asyncio still installs its own loop for async tests, so this only
+    affects the sync callers.
+    """
+    import asyncio
+
+    try:
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        needs_new = loop.is_closed()
+    except RuntimeError:
+        needs_new = True
+    if needs_new:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_announcement_routes_cache():
+    """Clear the announcement_routes module-level route cache around each test.
+
+    ``announcement_routes._cache`` is a process-global memoization of the
+    effective route map. The first announcement in any test (via
+    ``_announce_voice`` → ``route_for``) populates it from whatever
+    ``REMINDER_SPEAKER`` / on-disk YAML is current at that moment, and it then
+    survives into later tests — so a test that monkeypatches ``REMINDER_SPEAKER``
+    afterwards silently gets the stale cached speaker. Reset before and after
+    each test so ``route_for`` always rebuilds from the current state.
+    """
+    try:
+        from orchestrator import announcement_routes
+    except Exception:
+        yield
+        return
+    announcement_routes._cache = None
+    yield
+    announcement_routes._cache = None
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _init_state_store_schema():
     """
