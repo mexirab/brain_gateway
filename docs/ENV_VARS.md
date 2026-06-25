@@ -220,6 +220,21 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `MORNING_BRIEFING_ENABLED` | `true`/`false` (default true) |
 | `MORNING_BRIEFING_MIN_VOLUME` | Volume floor (0.0–1.0) the briefing forces on its target speaker via `media_player.volume_set` before `play_media`. Bumps up only — never lowers an already-loud speaker. Set to `0` to disable the floor. Default `0.4`. Defeats "speaker still at sleep-sound volume" — see the 2026-04-30 incident where the briefing played at 0.10 because the bedroom_pair was still on overnight fireplace audio. |
 
+## Helios wake-on-demand (PT-C)
+
+Power-tier the GPU box. Helios runs only the model layer (vLLM/TTS/STT) and is powered off most of the time to save electricity. Its NIC Wake-on-LAN is a dead end (Aquantia `atlantic` driver), so remote power control is a power-cycle of a TP-Link Tapo smart plug driven **through Home Assistant** — it reuses `HA_URL`/`HA_TOKEN` and adds no TP-Link credentials or `python-kasa` dependency. BIOS `AC Back = Last State` means restoring plug power auto-boots Helios only if it was running when cut, so **sleep = turn the plug OFF while running** (a hard power-cut; safe because Helios is stateless — all DBs/ChromaDB live on Jupiter, it just reloads model servers on boot). **Wake is automatic** from the brain-asleep chat path (`cloud_brain._brain_asleep_response` → fire-and-forget `helios_power.wake_helios`, debounced); **sleep is manual only** (no idle auto-sleep). Implemented in `orchestrator/helios_power.py`; exposed via `POST /api/helios/wake`, `POST /api/helios/sleep`, `GET /api/helios/power` (all bearer-gated) and the `helios_power` tool (gated behind `HELIOS_WAKE_ENABLED`). Default OFF; a `model_validator` in `config.py` auto-disables the feature (logs an error, never raises) if `HA_URL`/`HA_TOKEN` is missing **or** either plug entity id is malformed (defensive — they're interpolated into HA REST URLs). When enabled, a 60s APScheduler job (`helios_status_poll`, registered in `orchestrator.py`) keeps the gauges fresh so dashboards/alerts don't read stale state.
+
+Metrics: `bgw_helios_wake_total{result}` (`ok|debounced|disabled|error`), `bgw_helios_sleep_total{result}` (`ok|disabled|error`), `bgw_helios_status_total{result}` (`ok|disabled|error`), `bgw_helios_plug_watts` gauge, `bgw_helios_running` gauge (1=running, 0=asleep/unknown). Note `wake_total{result=ok}` means "HA accepted `turn_on`", not "Helios finished booting" — alert on `bgw_helios_running` / `bgw_helios_plug_watts` (kept fresh by the poll job) for actual up/down, and on `rate(bgw_helios_wake_total{result="error"}[15m])` for wake-command failures.
+
+A reusable host helper `~/plug.sh on|off|state|power` (HA-based) exists on Jupiter for manual CLI use; the orchestrator does **not** shell out to it (it runs in a container) — it calls the HA REST API directly.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HELIOS_WAKE_ENABLED` | `false` | Enable wake-on-demand + manual sleep. Auto-disabled if `HA_URL`/`HA_TOKEN` missing. |
+| `HELIOS_PLUG_ENTITY` | `switch.helios_monitoring_plug` | HA switch entity for the smart plug (the relay turned on/off). |
+| `HELIOS_PLUG_POWER_SENSOR` | `sensor.helios_monitoring_plug_current_consumption` | HA sensor entity (watts) used to infer running vs asleep in `/api/helios/power`. |
+| `HELIOS_WAKE_DEBOUNCE_SECONDS` | `300` | Suppress duplicate wakes within this window while Helios boots (~2 min). Clamped to ≥0; setting `0` disables debouncing entirely (every brain-asleep chat fires a real `switch.turn_on`). |
+
 ## Workouts & Meals
 
 | Variable | Default | Purpose |

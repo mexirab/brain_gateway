@@ -1123,3 +1123,55 @@ async def trigger_self_audit():
     )
     status_code = 409 if raw.get("result") == "busy" else 200
     return JSONResponse(payload.model_dump(), status_code=status_code)
+
+
+# ---------------------------------------------------------------------------
+# Helios wake-on-demand (PT-C) — manual power control via Home Assistant
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/helios/wake", response_model=None)
+async def helios_wake():
+    """Power Helios on (smart-plug turn_on via HA). Bearer-gated.
+
+    Debounced inside `helios_power.wake_helios`; a 200 with
+    `{"skipped": "debounced"}` means a recent wake is still in effect. Returns
+    409 when the feature is disabled, 502 on an HA error.
+    """
+    from orchestrator.helios_power import wake_helios
+
+    result = await wake_helios()
+    if result.get("ok"):
+        return JSONResponse(result, status_code=200)
+    status_code = 409 if result.get("skipped") == "disabled" else 502
+    return JSONResponse(result, status_code=status_code)
+
+
+@router.post("/api/helios/sleep", response_model=None)
+async def helios_sleep():
+    """Power Helios off (smart-plug turn_off via HA — a hard cut). Bearer-gated.
+
+    Returns 409 when the feature is disabled, 502 on an HA error.
+    """
+    from orchestrator.helios_power import sleep_helios
+
+    result = await sleep_helios()
+    if result.get("ok"):
+        return JSONResponse(result, status_code=200)
+    status_code = 409 if result.get("skipped") == "disabled" else 502
+    return JSONResponse(result, status_code=status_code)
+
+
+@router.get("/api/helios/power", response_model=None)
+async def helios_power():
+    """Read Helios plug switch state + power draw and infer running/asleep.
+
+    Bearer-gated. Returns 409 when the feature is disabled, 502 on an HA error.
+    """
+    from orchestrator.helios_power import helios_power_status
+
+    result = await helios_power_status()
+    if result.get("ok"):
+        return JSONResponse(result, status_code=200)
+    status_code = 409 if result.get("skipped") == "disabled" else 502
+    return JSONResponse(result, status_code=status_code)

@@ -1318,6 +1318,51 @@ async def _auto_unmute_dnd():
     logger.info("[DND] Auto-unmuted after timed mute")
 
 
+@register_tool("helios_power")
+async def _reg_helios_power(arguments: dict) -> str:
+    """PT-C: power Helios (the GPU box) on/off via the HA-controlled smart plug.
+
+    action=wake → turn the plug on (auto-boots Helios). action=sleep → turn it
+    off (hard power-cut; manual only). action=status → report switch + watts +
+    inferred running/asleep. Gated behind HELIOS_WAKE_ENABLED (the tool isn't
+    exposed to the LLM otherwise); the helios_power functions also self-gate.
+    """
+    from orchestrator import helios_power
+
+    action = (arguments.get("action") or "status").strip().lower()
+
+    if action == "wake":
+        result = await helios_power.wake_helios()
+        if result.get("skipped") == "debounced":
+            return "Helios is already waking — give it a moment, it should be up within ~2 minutes."
+        if result.get("ok"):
+            return "Waking Helios now. Give it about two minutes to boot the model servers, then try again."
+        if result.get("skipped") == "disabled":
+            return "Helios wake-on-demand is turned off, so I can't power the GPU box from here."
+        return f"I couldn't wake Helios: {result.get('error', 'unknown error')}"
+
+    if action == "sleep":
+        result = await helios_power.sleep_helios()
+        if result.get("ok"):
+            return "Done — I've cut power to Helios. It'll auto-boot next time I wake it."
+        if result.get("skipped") == "disabled":
+            return "Helios wake-on-demand is turned off, so I can't power the GPU box from here."
+        return f"I couldn't put Helios to sleep: {result.get('error', 'unknown error')}"
+
+    # status (default)
+    result = await helios_power.helios_power_status()
+    if result.get("skipped") == "disabled":
+        return "Helios wake-on-demand is turned off, so I can't check the GPU box's power state."
+    if not result.get("ok"):
+        return f"I couldn't read Helios's power state: {result.get('error', 'unknown error')}"
+    watts = result.get("watts")
+    watts_str = f"{watts:.0f}W" if isinstance(watts, (int, float)) else "unknown"
+    return (
+        f"Helios looks **{result.get('inferred', 'unknown')}** — "
+        f"plug is {result.get('switch', 'unknown')}, drawing {watts_str}."
+    )
+
+
 @register_tool("shopping_list")
 async def _reg_shopping_list(arguments: dict) -> str:
     import asyncio

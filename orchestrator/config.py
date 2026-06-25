@@ -80,6 +80,24 @@ class Settings(BaseSettings):
     ha_url: str = ""
     ha_token: str = ""
 
+    # -- Helios wake-on-demand (PT-C) --------------------------------------------
+    # Power-tier the GPU box: Helios runs only the model layer (vLLM/TTS/STT) and
+    # is powered off most of the time to save electricity. Its NIC Wake-on-LAN is
+    # a dead end (Aquantia atlantic driver), so remote wake is a power-cycle via a
+    # TP-Link Tapo smart plug, controlled through Home Assistant (reuses HA_URL /
+    # HA_TOKEN — no python-kasa, no TP-Link creds). BIOS AC Back = Last State, so
+    # restoring plug power auto-boots Helios only if it was running when cut →
+    # "sleep" = turn the plug OFF while running (a hard power-cut, acceptable now
+    # that Helios is stateless: all DBs/ChromaDB live on Jupiter, it just reloads
+    # model servers on boot). Wake is automatic from the brain-asleep chat path;
+    # sleep is manual only. Default OFF so the shippable build is unaffected.
+    helios_wake_enabled: bool = False
+    helios_plug_entity: str = "switch.helios_monitoring_plug"
+    helios_plug_power_sensor: str = "sensor.helios_monitoring_plug_current_consumption"
+    # Debounce window: repeated chat attempts while Helios is booting must not
+    # spam switch.turn_on. A wake within this many seconds of a prior wake no-ops.
+    helios_wake_debounce_seconds: int = 300
+
     # -- RAG / ChromaDB ----------------------------------------------------------
     chroma_persist: str = "/app/data/chroma"
     chroma_collection: str = "personal_rag"  # legacy collection name (for migration)
@@ -396,6 +414,48 @@ class Settings(BaseSettings):
             object.__setattr__(self, "pushover_default_priority", -2)
         elif self.pushover_default_priority > 2:
             object.__setattr__(self, "pushover_default_priority", 2)
+        return self
+
+    @model_validator(mode="after")
+    def validate_helios_wake_config(self) -> "Settings":
+        """Auto-disable Helios wake-on-demand if HA isn't configured.
+
+        Wake/sleep go entirely through Home Assistant (switch.turn_on /
+        switch.turn_off). Without HA_URL + HA_TOKEN there's no control path, so
+        flip the feature off and log — never raise, matches the F-011/F-013
+        optional-feature pattern. Also clamp the debounce floor so a misconfigured
+        0/negative value can't disable debouncing entirely.
+        """
+        if self.helios_wake_enabled and (not self.ha_url or not self.ha_token):
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] HELIOS_WAKE_ENABLED=true but HA_URL or HA_TOKEN is "
+                "missing; disabling Helios wake-on-demand. Wake/sleep are routed "
+                "through Home Assistant — set both to re-enable."
+            )
+            object.__setattr__(self, "helios_wake_enabled", False)
+        # Entity ids are interpolated into HA REST URLs (GET /api/states/{id}),
+        # so validate their format defensively even though they come from
+        # operator config — mirrors ha_integration.call_service. A malformed id
+        # disables the feature rather than emitting a broken request at runtime.
+        if self.helios_wake_enabled:
+            import logging
+            import re
+
+            _ENTITY_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+            for field_name in ("helios_plug_entity", "helios_plug_power_sensor"):
+                if not _ENTITY_RE.match(getattr(self, field_name)):
+                    logging.getLogger(__name__).error(
+                        "[CONFIG] HELIOS_WAKE_ENABLED=true but %s=%r is not a valid "
+                        "HA entity id (domain.object); disabling Helios wake-on-demand.",
+                        field_name.upper(),
+                        getattr(self, field_name),
+                    )
+                    object.__setattr__(self, "helios_wake_enabled", False)
+                    break
+        if self.helios_wake_debounce_seconds < 0:
+            object.__setattr__(self, "helios_wake_debounce_seconds", 0)
         return self
 
     @model_validator(mode="after")

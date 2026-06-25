@@ -148,6 +148,9 @@ HA_URL = settings.ha_url
 HA_TOKEN = settings.ha_token
 ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 
+# Helios wake-on-demand (PT-C) — gates the helios_power tool + auto-wake hook.
+HELIOS_WAKE_ENABLED = settings.helios_wake_enabled
+
 # ---------------------------------------------------------------------------
 # RAG / ChromaDB
 # ---------------------------------------------------------------------------

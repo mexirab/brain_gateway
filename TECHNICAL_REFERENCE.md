@@ -152,6 +152,18 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 |--------|------|---------|
 | GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color). Calendar source: phone-sync-first (<24h, at least one parseable record) → Google fallback. Same priority as `check_calendar` and `morning_briefing` — see `docs/GOOGLE_INTEGRATIONS.md` → Phone Calendar Sync. |
 
+### Helios Power (PT-C)
+
+All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, skipped:"disabled", reason}`), 502 on HA error (`{ok:false, error}`). All control runs through Home Assistant `switch.turn_on`/`switch.turn_off` on the Helios smart plug — see `orchestrator/helios_power.py`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/helios/wake` | Power Helios on (`switch.turn_on`). Debounced — a recent wake returns 200 `{ok:true, skipped:"debounced", retry_after_s}`; a fresh wake returns 200 `{ok:true, action:"wake", entity}`. |
+| POST | `/api/helios/sleep` | Power Helios off (`switch.turn_off` — a hard cut; safe, Helios is stateless). 200 `{ok:true, action:"sleep", entity}`. |
+| GET | `/api/helios/power` | Read plug switch state + power draw, infer running/asleep. 200 `{ok:true, switch:"on\|off\|unknown", watts:float\|null, inferred:"running\|asleep\|unknown", entity}`. |
+
+Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bgw_helios_sleep_total{result}` (`ok\|disabled\|error`), `bgw_helios_status_total{result}` (`ok\|disabled\|error`), `bgw_helios_plug_watts` gauge, `bgw_helios_running` gauge. The `helios_status_poll` scheduler job (60s, only when enabled) refreshes the gauges. Auto-wake also fires from the brain-asleep chat path (`cloud_brain._maybe_wake_helios`).
+
 ### Workouts
 
 | Method | Path | Purpose |
@@ -495,6 +507,13 @@ Returns the full workout plan as text (model retains it in context for follow-up
 - Filters (all optional): `year`, `month`, `category`, `payee`, `min_amount`, `max_amount`.
 - Response for `analyze`: `{expert_synthesis: str | null, expert_error: str | null, data: {...}, ...}`. `expert_synthesis=null` + non-null `expert_error` when the expert is unreachable, disabled, or its circuit is open — the `data` block is always populated so the primary model can fall back to surface-level summary.
 - `budget_manager.query()` is `async` (awaits the expert). `by_month` internally capped at 36 entries.
+
+### helios_power
+```json
+{"action": "status"}
+```
+- `action` (enum, required): `wake | sleep | status`. `wake` = power Helios on (HA `switch.turn_on`, debounced), `sleep` = power off (HA `switch.turn_off`, a hard cut), `status` = report inferred running/asleep from switch state + power draw.
+- Only exposed to the LLM when `HELIOS_WAKE_ENABLED=true` (filtered via `HELIOS_TOOL_NAMES` in `get_all_tools()`); the handler stays registered and self-gates. Routes through `orchestrator/helios_power.py` — same dicts as `POST /api/helios/{wake,sleep}` + `GET /api/helios/power`.
 
 ## ChromaDB Schema
 
