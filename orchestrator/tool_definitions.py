@@ -765,6 +765,33 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "helios_power",
+            "description": (
+                "Power the Helios GPU box on or off. Use this when the user says "
+                "'wake the GPU box', 'turn Helios on', 'sleep the GPU box', "
+                "'shut Helios down', 'put the model server to sleep', or asks "
+                "'is Helios on/awake?'. Helios runs the AI model servers and is "
+                "kept powered off to save electricity; waking it (a smart-plug "
+                "power-on) takes about two minutes to boot. Sleep is a hard "
+                "power-cut and is safe — Helios stores no state. Use action=status "
+                "to report whether it's currently running."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["wake", "sleep", "status"],
+                        "description": "wake = power on, sleep = power off, status = report current power state",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "shopping_list",
             "description": "Manage the user's shopping/grocery list. ALWAYS call this when the user says 'add X to my shopping list', 'add X to my grocery list', 'what's on my list', 'remove X from my list', or 'clear checked items'. Supports multiple named lists (grocery, shopping, hardware, etc.).",
             "parameters": {
@@ -1126,6 +1153,11 @@ ADVANCED_ONLY_TOOL_NAMES: frozenset[str] = frozenset(
 WORKOUT_TOOL_NAMES: frozenset[str] = frozenset({"generate_workout", "log_set", "workout_status", "modify_workout"})
 MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
 
+# Helios wake-on-demand (PT-C) — only exposed when HELIOS_WAKE_ENABLED. The
+# handler stays registered regardless (it self-gates), but hiding the schema
+# keeps the LLM from offering GPU-box power control on installs without it.
+HELIOS_TOOL_NAMES: frozenset[str] = frozenset({"helios_power"})
+
 
 def get_all_tools() -> List[Dict[str, Any]]:
     """Get all tools for unified mode (v7): HA tool + static tools + optional code agent + optional expert.
@@ -1141,6 +1173,8 @@ def get_all_tools() -> List[Dict[str, Any]]:
         static = [t for t in static if t.get("function", {}).get("name") not in WORKOUT_TOOL_NAMES]
     if not shared.MEALS_ENABLED:
         static = [t for t in static if t.get("function", {}).get("name") not in MEAL_TOOL_NAMES]
+    if not getattr(shared, "HELIOS_WAKE_ENABLED", False):
+        static = [t for t in static if t.get("function", {}).get("name") not in HELIOS_TOOL_NAMES]
     tools = [get_ha_tool_definition()] + static
     if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
         tools.append(_CODE_AGENT_TOOL)

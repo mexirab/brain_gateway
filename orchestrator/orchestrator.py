@@ -918,6 +918,23 @@ async def _startup_logic():
     )
     logger.info(f"[SCHEDULER] Recurring reminder expansion every {EXPANSION_WINDOW_MINUTES}m")
 
+    # Helios wake-on-demand (PT-C): keep bgw_helios_plug_watts / bgw_helios_running
+    # fresh so dashboards + alerts can trust them. Without this the gauges only
+    # update when a human/LLM happens to query power state. Only when enabled —
+    # otherwise the HA call would be pointless (and the feature is default-OFF).
+    if shared.HELIOS_WAKE_ENABLED:
+        from orchestrator.helios_power import helios_power_status
+
+        scheduler.add_job(
+            helios_power_status,
+            trigger="interval",
+            seconds=60,
+            id="helios_status_poll",
+            name="Helios power-state poll",
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Helios power-state poll every 60s")
+
 
 def _cleanup_audio_files(max_age_hours: int = 1) -> None:
     """Remove old TTS audio files from /tmp/brain_audio."""

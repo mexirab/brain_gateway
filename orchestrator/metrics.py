@@ -300,6 +300,42 @@ SELF_AUDIT_FORMAT_DRIFT_TOTAL = Counter(
     "-- signals Qwen3.5-27B went off-format and the prompt may need tuning",
 )
 
+# -- Helios wake-on-demand (PT-C) --------------------------------------------
+HELIOS_WAKE_TOTAL = Counter(
+    "bgw_helios_wake_total",
+    "Helios power-on (plug turn_on) attempts via Home Assistant",
+    # result: ok | debounced | disabled | error
+    ["result"],
+)
+
+HELIOS_SLEEP_TOTAL = Counter(
+    "bgw_helios_sleep_total",
+    "Helios power-cut (plug turn_off) attempts via Home Assistant",
+    # result: ok | disabled | error
+    ["result"],
+)
+
+HELIOS_STATUS_TOTAL = Counter(
+    "bgw_helios_status_total",
+    "Helios power-state reads via Home Assistant",
+    # result: ok | disabled | error
+    ["result"],
+)
+
+HELIOS_PLUG_WATTS = Gauge(
+    "bgw_helios_plug_watts",
+    # Refreshed by the helios_status_poll scheduler job (every 60s when
+    # HELIOS_WAKE_ENABLED) plus any on-demand /api/helios/power read; only set
+    # when watts parses, so it never reports a misleading 0 on a failed read.
+    "Last-known Helios smart-plug power draw in watts (from HA sensor)",
+)
+
+HELIOS_RUNNING = Gauge(
+    "bgw_helios_running",
+    "Whether Helios is inferred to be running from the plug state (1=running, "
+    "0=asleep/unknown). Refreshed by the helios_status_poll job + on-demand reads.",
+)
+
 # -- Calendar ----------------------------------------------------------------
 CALENDAR_API_CALLS = Counter(
     "bgw_calendar_api_calls_total",

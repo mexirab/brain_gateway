@@ -6,6 +6,7 @@ A single model handles both conversation and tool execution. Handles
 intent routing, prompt building, LLM calls, and response streaming.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -30,6 +31,13 @@ from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
 
 logger = logging.getLogger(__name__)
+
+# Strong references to fire-and-forget Helios wake tasks. `asyncio.create_task`
+# only holds a weak reference, so a detached wake fired from a request handler
+# that returns immediately can be GC'd before its first await (the HA POST) and
+# silently never run. Hold a ref here and clear it via done-callback. Mirrors
+# api_routes._BACKGROUND_TASKS.
+_HELIOS_WAKE_TASKS: set = set()
 
 
 def _maybe_prepend_welcome(text: str, *, is_voice: bool = False) -> str:
@@ -592,6 +600,31 @@ class CloudBrain:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def _maybe_wake_helios(self, routing_info: Dict) -> bool:
+        """Fire a debounced, fire-and-forget Helios wake if the feature is on.
+
+        Returns True if a wake was dispatched (so the caller can tailor the
+        reply), False if the feature is off. The actual HA call runs in a
+        detached task — it never blocks this reply, and its own debounce/disable
+        guards make a no-op cheap when Helios is already booting. We do NOT await
+        it: the 2-minute boot is far longer than any request budget.
+        """
+        if not shared.HELIOS_WAKE_ENABLED:
+            return False
+        try:
+            from orchestrator.helios_power import wake_helios
+
+            task = asyncio.create_task(wake_helios())
+            _HELIOS_WAKE_TASKS.add(task)
+            task.add_done_callback(_HELIOS_WAKE_TASKS.discard)
+            routing_info["helios_wake"] = "dispatched"
+            logger.info("[UNIFIED] Brain asleep + HELIOS_WAKE_ENABLED — dispatched wake")
+            return True
+        except Exception as e:  # noqa: BLE001 — never let wake break the asleep reply
+            logger.warning("[UNIFIED] Helios wake dispatch failed: %s", e)
+            routing_info["helios_wake"] = "dispatch_failed"
+            return False
+
     def _brain_asleep_response(self, stream: bool, routing_info: Dict):
         """Graceful 'the model isn't reachable' reply.
 
@@ -602,13 +635,28 @@ class CloudBrain:
         alive; only live conversation + tools are down (e.g. the GPU box is
         asleep, or a BYO model server is offline). The caller still increments
         the relevant REQUEST_ERRORS metric, so dashboards/alerts see the outage.
+
+        Helios wake-on-demand (PT-C): when HELIOS_WAKE_ENABLED, the model being
+        unreachable usually means the GPU box is powered off, so we fire a wake
+        (debounced, fire-and-forget — never blocks this reply) and tell the user
+        it's booting. The HTTP-200 friendly-reply contract is unchanged.
         """
-        message = (
-            "💤 My conversational brain is offline right now — the model server "
-            "isn't reachable, so I can't chat or run tools at the moment.\n\n"
-            "Your reminders, calendar, and nudges keep running in the background. "
-            "Once the model is back up, try again."
-        )
+        woke = self._maybe_wake_helios(routing_info)
+        if woke:
+            message = (
+                "💤 Helios — my GPU box — is asleep, so I can't chat or run tools "
+                "right this second. I'm waking it now; give it about two minutes, "
+                "then try again.\n\n"
+                "Your reminders, calendar, and nudges keep running in the "
+                "background the whole time."
+            )
+        else:
+            message = (
+                "💤 My conversational brain is offline right now — the model server "
+                "isn't reachable, so I can't chat or run tools at the moment.\n\n"
+                "Your reminders, calendar, and nudges keep running in the background. "
+                "Once the model is back up, try again."
+            )
         routing_info["mode"] = "brain_asleep"
         model = self._model_name or "brain-asleep"
         if stream:
