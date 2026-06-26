@@ -65,19 +65,22 @@ jobs:
         run: docker build -t brain-orchestrator:test orchestrator/
 
   deploy:
-    name: Deploy to Helios
-    # Self-hosted runner on Helios itself. Registered as `actions.runner.mexirab-brain_gateway.helios.service`
-    # in systemd on Helios, polls GitHub Actions for jobs, executes them locally as labadmin.
-    # No SSH from cloud runners, no public exposure, no secrets to manage.
-    runs-on: [self-hosted, linux, helios]
+    name: Deploy to Jupiter
+    # Self-hosted runner on Jupiter (the always-on box). Registered as
+    # `actions.runner.mexirab-brain_gateway.jupiter.service` in systemd on Jupiter,
+    # polls GitHub Actions for jobs, executes them locally as labadmin.
+    # Jupiter is always on (unlike Helios, which is powered off most of the time
+    # post power-tiering) so auto-deploy is reliable. The orchestrator + frontend
+    # now run on Jupiter; Helios is model-layer only.
+    runs-on: [self-hosted, linux, jupiter]
     needs: [lint-python, test-python, lint-frontend, docker-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    # The runner already runs on Helios with docker access, so we don't need
-    # a checkout step — we operate directly on /opt/gateway_mvp.
+    # The runner runs on Jupiter with docker access, so we don't need a checkout
+    # step — we operate directly on the live checkout at /home/labadmin/gateway_nerves.
     steps:
       - name: Pull latest main
         run: |
-          cd /opt/gateway_mvp
+          cd /home/labadmin/gateway_nerves
           BEFORE=$(git rev-parse HEAD)
           git pull --ff-only
           AFTER=$(git rev-parse HEAD)
@@ -87,7 +90,7 @@ jobs:
 
       - name: Rebuild changed services
         run: |
-          cd /opt/gateway_mvp
+          cd /home/labadmin/gateway_nerves
           BEFORE="${{ steps.pull.outputs.before }}"
           AFTER="${{ steps.pull.outputs.after }}"
 
@@ -102,7 +105,7 @@ jobs:
 
           if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$"; then
             echo "::group::Rebuilding orchestrator"
-            docker compose up -d --build orchestrator
+            docker compose up -d --build --force-recreate orchestrator
             echo "::endgroup::"
           fi
 
