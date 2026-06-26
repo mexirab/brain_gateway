@@ -1,58 +1,19 @@
 #!/bin/bash
-# Stop Helios Expert Model (120B)
-# Saves ~150W of power
-#
-# Helios: RTX 5090 (32GB VRAM) + RAM offload
-# Uses llama.cpp for inference
-#
+# Power Helios OFF via its HA-managed Tapo smart plug (saves the GPU box's draw).
+# NOTE: BIOS AC Back = Last State, so "sleep" = cut plug power WHILE Helios runs (a hard
+# power-cut). That records "on" so a later plug-on auto-boots it. Safe: Helios is stateless
+# post power-tiering (all DBs/ChromaDB live on the always-on node). For graceful shutdowns,
+# set BIOS AC Back = Always On and use `ssh helios sudo poweroff` before cutting the plug.
 # Usage: ./stop-helios.sh
-
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+[[ -f "${PROJECT_DIR}/.env" ]] && { set -a; source "${PROJECT_DIR}/.env"; set +a; }
+# shellcheck source=scripts/_helios_plug.sh
+source "${SCRIPT_DIR}/_helios_plug.sh"
 
-# Source environment file if it exists
-if [[ -f "${PROJECT_DIR}/.env" ]]; then
-    # shellcheck source=/dev/null
-    set -a
-    source "${PROJECT_DIR}/.env"
-    set +a
-fi
-
-# Configuration with defaults (can be overridden via .env)
-HELIOS_HOST="${HELIOS_HOST:-helios}"
-HELIOS_PORT="${SERVICE_HELIOS_PORT:-8080}"
-HELIOS_USER="${HELIOS_SSH_USER:-labadmin}"
-HELIOS_IP="${NODE_HELIOS_IP:-10.0.0.195}"
-SERVICE_NAME="llama-server"
-
-echo "[$(date)] Stopping Helios Expert Model..."
-
-# Check if running
-if ! curl -s --connect-timeout 2 "http://${HELIOS_IP}:${HELIOS_PORT}/health" > /dev/null 2>&1; then
-    echo "[$(date)] Helios is already stopped."
-    exit 0
-fi
-
-# Stop llama-server service on Helios
-# Requires passwordless sudo for systemctl commands (see HELIOS_SETUP.md)
-if ! ssh "${HELIOS_USER}@${HELIOS_HOST}" "sudo systemctl stop ${SERVICE_NAME}" 2>/dev/null; then
-    echo ""
-    echo "[$(date)] ERROR: Could not stop service via SSH."
-    echo "Either:"
-    echo "  1. SSH to Helios manually and run: sudo systemctl stop ${SERVICE_NAME}"
-    echo "  2. Configure passwordless sudo (see HELIOS_SETUP.md)"
-    exit 1
-fi
-
-# Verify stopped
-sleep 2
-if curl -s --connect-timeout 2 "http://${HELIOS_IP}:${HELIOS_PORT}/health" > /dev/null 2>&1; then
-    echo "[$(date)] WARNING: Helios may still be running"
-    exit 1
-fi
-
-echo "[$(date)] Helios Expert Model stopped."
-echo "Power savings: ~150W"
-exit 0
+echo "[$(date)] Powering Helios off (cutting smart-plug power)..."
+echo "[$(date)] plug turn_off -> HTTP $(plug_set off)"
+sleep 4
+echo "[$(date)] Plug now: $(plug_state) (draw: $(plug_watts)W)"
+echo "[$(date)] Done. Wake with ./start-helios.sh."
