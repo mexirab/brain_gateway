@@ -254,7 +254,7 @@ class CloudBrain:
         personal_context = ""
         skip_rag_short_voice = is_voice and len(user_text.split()) < 6
         if not self._is_greeting(user_text) and not skip_rag_short_voice:
-            personal_context = self._rag_search(user_text)
+            personal_context = await self._rag_search(user_text)
             if personal_context:
                 logger.info("[UNIFIED] Pre-fetched RAG context (%d chars)", len(personal_context))
                 routing_info["rag_prefetch"] = True
@@ -321,7 +321,13 @@ class CloudBrain:
             import json as _json
 
             _sys_chars = len(system_prompt or "")
-            _tools_chars = len(_json.dumps(tools))
+            # tools is a cached list that only changes when the HA tool cache
+            # refreshes — serialize it once per cache generation, not per turn
+            _size_cache = getattr(self, "_tools_size_cache", None)
+            if _size_cache is None or _size_cache[0] is not tools:
+                _size_cache = (tools, len(_json.dumps(tools)))
+                self._tools_size_cache = _size_cache
+            _tools_chars = _size_cache[1]
             _msgs_chars = sum(len(_json.dumps(m)) for m in messages)
             logger.info(
                 "[UNIFIED] Prompt sizes (chars): system=%d tools=%d messages=%d total=%d (voice=%s tools_n=%d)",

@@ -1158,29 +1158,57 @@ MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
 # keeps the LLM from offering GPU-box power control on installs without it.
 HELIOS_TOOL_NAMES: frozenset[str] = frozenset({"helios_power"})
 
+# Assembled tool-list cache. Rebuilt only when the HA tool cache refreshes
+# (every ~5 min) or a feature flag flips — get_all_tools/get_voice_tools are
+# called on every LLM round, including tool-continuation rounds. The cache key
+# includes every gating flag so a flipped flag can never be served stale.
+_tools_cache_key: tuple = ()
+_all_tools_cache: List[Dict[str, Any]] = []
+_voice_tools_cache: List[Dict[str, Any]] = []
+
+
+def _refresh_tool_caches() -> None:
+    global _tools_cache_key, _all_tools_cache, _voice_tools_cache
+    ha_tool = get_ha_tool_definition()  # TTL-cached; may bump _ha_tool_cache_time
+    key = (
+        shared._ha_tool_cache_time,
+        shared.CODE_AGENT_ENABLED,
+        shared.EXPERT_ENABLED,
+        shared.JESS_ADVANCED,
+        shared.WORKOUTS_ENABLED,
+        shared.MEALS_ENABLED,
+        getattr(shared, "HELIOS_WAKE_ENABLED", False),
+    )
+    if key != _tools_cache_key:
+        static = STATIC_TOOLS
+        if not shared.JESS_ADVANCED:
+            static = [t for t in static if t.get("function", {}).get("name") not in ADVANCED_ONLY_TOOL_NAMES]
+        if not shared.WORKOUTS_ENABLED:
+            static = [t for t in static if t.get("function", {}).get("name") not in WORKOUT_TOOL_NAMES]
+        if not shared.MEALS_ENABLED:
+            static = [t for t in static if t.get("function", {}).get("name") not in MEAL_TOOL_NAMES]
+        if not getattr(shared, "HELIOS_WAKE_ENABLED", False):
+            static = [t for t in static if t.get("function", {}).get("name") not in HELIOS_TOOL_NAMES]
+        tools = [ha_tool] + static
+        if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
+            tools.append(_CODE_AGENT_TOOL)
+        if shared.EXPERT_ENABLED and shared.JESS_ADVANCED:
+            tools.append(_EXPERT_TOOL)
+        _all_tools_cache = tools
+        _voice_tools_cache = [t for t in tools if t.get("function", {}).get("name") in VOICE_TOOL_NAMES]
+        _tools_cache_key = key
+
 
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7): HA tool + static tools + optional code agent + optional expert.
+    """Get all tools for unified mode (v7): HA tool + gated static tools + optional code agent + optional expert.
 
     JESS_ADVANCED gates owner-specific tools (`code_agent`, `ask_expert`,
-    `query_budget`, `finance_status`, `check_claude_activity`) so the
-    shippable build only exposes the core ADHD toolset by default.
+    `query_budget`, `finance_status`, `check_claude_activity`); WORKOUTS/MEALS/
+    HELIOS flags gate their feature areas. Results are cached and rebuilt only
+    when a gating flag or the HA tool cache changes (called every LLM round).
     """
-    static = STATIC_TOOLS
-    if not shared.JESS_ADVANCED:
-        static = [t for t in static if t.get("function", {}).get("name") not in ADVANCED_ONLY_TOOL_NAMES]
-    if not shared.WORKOUTS_ENABLED:
-        static = [t for t in static if t.get("function", {}).get("name") not in WORKOUT_TOOL_NAMES]
-    if not shared.MEALS_ENABLED:
-        static = [t for t in static if t.get("function", {}).get("name") not in MEAL_TOOL_NAMES]
-    if not getattr(shared, "HELIOS_WAKE_ENABLED", False):
-        static = [t for t in static if t.get("function", {}).get("name") not in HELIOS_TOOL_NAMES]
-    tools = [get_ha_tool_definition()] + static
-    if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
-        tools.append(_CODE_AGENT_TOOL)
-    if shared.EXPERT_ENABLED and shared.JESS_ADVANCED:
-        tools.append(_EXPERT_TOOL)
-    return tools
+    _refresh_tool_caches()
+    return _all_tools_cache
 
 
 # Tools kept available in voice mode. 38 full tool schemas cost ~6.9k prompt
@@ -1216,4 +1244,5 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
 
 def get_voice_tools() -> List[Dict[str, Any]]:
     """Voice-mode tool subset — trims tool-schema prefill to cut LLM latency."""
-    return [t for t in get_all_tools() if t.get("function", {}).get("name") in VOICE_TOOL_NAMES]
+    _refresh_tool_caches()
+    return _voice_tools_cache

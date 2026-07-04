@@ -1,115 +1,104 @@
 """
-Regression tests for jobs_calendar._event_exists_on_calendar (email-to-calendar
-dedup).
+Regression tests for email-to-calendar dedup (jobs_calendar).
 
-The dedup check used a fixed cal.list_events(days_ahead=1), so any emailed
-event more than one day out was never found in the window and got re-created
-as a duplicate on every scan. The window must be computed from the extracted
-event's start date.
-
-The fake calendar below mimics the real list_events contract: it only returns
-events inside [now, now + days_ahead), so these tests fail with the old
-fixed-1-day window.
+Two pieces work together after the perf rebase:
+  - _dedup_prefetch_days(events, today): sizes the ONE calendar fetch to cover
+    the furthest extracted event. A fixed days_ahead=1 missed any event >1 day
+    out and re-created it as a duplicate on every scan (#33).
+  - _event_exists(day_events, created_keys, title, start): matches an extracted
+    event against the pre-fetched list and events created earlier this run.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import pytest
-
-from orchestrator.google_calendar import CalendarEvent, CalendarResponse
-from orchestrator.jobs_calendar import _event_exists_on_calendar
+from orchestrator.google_calendar import CalendarEvent
+from orchestrator.jobs_calendar import _dedup_prefetch_days, _event_exists
 from orchestrator.shared import TIMEZONE
 
 _TZ = ZoneInfo(TIMEZONE)
-
-
-class _FakeCalendar:
-    """list_events honoring the [now, now + days_ahead) window semantics."""
-
-    def __init__(self, events, success: bool = True):
-        self._events = events
-        self._success = success
-        self.calls: list[int] = []  # days_ahead per call
-
-    async def list_events(self, days_ahead: int = 7, calendar_id: str = "primary"):
-        self.calls.append(days_ahead)
-        if not self._success:
-            return CalendarResponse(success=False, error="boom")
-        now = datetime.now(_TZ)
-        horizon = now + timedelta(days=days_ahead)
-        visible = [e for e in self._events if now <= e.start < horizon]
-        return CalendarResponse(success=True, events=visible)
 
 
 def _event(title: str, start: datetime) -> CalendarEvent:
     return CalendarEvent(id="ev1", title=title, start=start, end=start + timedelta(hours=1))
 
 
-@pytest.mark.asyncio
-async def test_dedup_finds_event_several_days_out():
-    """The core regression: an emailed event 5 days out already on the
-    calendar must be detected (old fixed days_ahead=1 window missed it)."""
-    start = datetime.now(_TZ).replace(microsecond=0) + timedelta(days=5)
-    cal = _FakeCalendar([_event("Dentist Appointment", start)])
-
-    assert await _event_exists_on_calendar(cal, "dentist appointment", start) is True
-    # The queried window actually covers the event's date.
-    assert len(cal.calls) == 1
-    assert cal.calls[0] >= 6  # 5 days out + 1 to reach through that day
+def _extracted(start: datetime) -> dict:
+    return {"title": "x", "start_time": start.isoformat()}
 
 
-@pytest.mark.asyncio
-async def test_dedup_same_day_event_still_covered():
-    start = datetime.now(_TZ) + timedelta(hours=2)
-    cal = _FakeCalendar([_event("Dentist", start)])
-
-    assert await _event_exists_on_calendar(cal, "Dentist", start) is True
-    assert cal.calls[0] >= 1
+# ---------------------------------------------------------------------------
+# _dedup_prefetch_days — the #33 window-sizing regression
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_dedup_substring_title_match_either_direction():
-    start = datetime.now(_TZ) + timedelta(days=10)
-    cal = _FakeCalendar([_event("Dentist Appointment - Dr. Lee", start)])
+class TestPrefetchWindow:
+    def test_far_out_event_widens_window(self):
+        today = date(2026, 7, 4)
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)  # 5 days out
+        # 5 days out + 1 to reach through that day; old fixed=1 missed it.
+        assert _dedup_prefetch_days([_extracted(start)], today) >= 6
 
-    assert await _event_exists_on_calendar(cal, "dentist appointment", start) is True
+    def test_window_covers_furthest_of_many(self):
+        today = date(2026, 7, 4)
+        events = [
+            _extracted(datetime(2026, 7, 5, 9, 0, tzinfo=_TZ)),
+            _extracted(datetime(2026, 7, 20, 9, 0, tzinfo=_TZ)),  # furthest
+            _extracted(datetime(2026, 7, 6, 9, 0, tzinfo=_TZ)),
+        ]
+        assert _dedup_prefetch_days(events, today) >= 17
 
+    def test_same_day_floors_at_one(self):
+        today = date(2026, 7, 4)
+        start = datetime(2026, 7, 4, 23, 0, tzinfo=_TZ)
+        assert _dedup_prefetch_days([_extracted(start)], today) >= 1
 
-@pytest.mark.asyncio
-async def test_dedup_no_match_returns_false():
-    start = datetime.now(_TZ) + timedelta(days=3)
-    cal = _FakeCalendar([_event("Totally Unrelated", start)])
-
-    assert await _event_exists_on_calendar(cal, "Dentist", start) is False
-
-
-@pytest.mark.asyncio
-async def test_dedup_same_title_different_day_returns_false():
-    start = datetime.now(_TZ) + timedelta(days=3)
-    other_day = start - timedelta(days=1)  # inside the queried window, wrong day
-    cal = _FakeCalendar([_event("Dentist", other_day)])
-
-    assert await _event_exists_on_calendar(cal, "Dentist", start) is False
-
-
-@pytest.mark.asyncio
-async def test_dedup_list_failure_returns_false():
-    start = datetime.now(_TZ) + timedelta(days=2)
-    cal = _FakeCalendar([], success=False)
-
-    assert await _event_exists_on_calendar(cal, "Dentist", start) is False
+    def test_past_or_unparseable_never_below_one(self):
+        today = date(2026, 7, 4)
+        assert _dedup_prefetch_days([], today) == 1
+        assert _dedup_prefetch_days([{"start_time": "not-a-date"}], today) == 1
+        assert _dedup_prefetch_days([{"title": "no start key"}], today) == 1
+        # A past event floors at 1 rather than going negative.
+        past = datetime(2026, 6, 1, 9, 0, tzinfo=_TZ)
+        assert _dedup_prefetch_days([_extracted(past)], today) == 1
 
 
-@pytest.mark.asyncio
-async def test_dedup_naive_start_does_not_crash():
-    """Extracted starts are normally tz-aware, but a naive one must still
-    produce a sane window instead of raising."""
-    naive_start = datetime.now() + timedelta(days=4)
-    aware = naive_start.replace(tzinfo=_TZ)
-    cal = _FakeCalendar([_event("Checkup", aware)])
+# ---------------------------------------------------------------------------
+# _event_exists — matching against the pre-fetched list + this-run creations
+# ---------------------------------------------------------------------------
 
-    assert await _event_exists_on_calendar(cal, "Checkup", naive_start) is True
-    assert cal.calls[0] >= 5
+
+class TestEventExists:
+    def test_same_day_title_match(self):
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)
+        day_events = [_event("Dentist Appointment", start)]
+        assert _event_exists(day_events, [], "dentist appointment", start) is True
+
+    def test_substring_match_either_direction(self):
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)
+        # existing title contains the extracted title
+        assert _event_exists([_event("Dentist Appointment - Dr. Lee", start)], [], "dentist appointment", start)
+        # extracted title contains the existing title
+        assert _event_exists([_event("Dentist", start)], [], "dentist appointment tomorrow", start)
+
+    def test_no_title_match_returns_false(self):
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)
+        assert _event_exists([_event("Totally Unrelated", start)], [], "Dentist", start) is False
+
+    def test_same_title_different_day_returns_false(self):
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)
+        other_day = _event("Dentist", start - timedelta(days=1))
+        assert _event_exists([other_day], [], "Dentist", start) is False
+
+    def test_created_this_run_dedups(self):
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)
+        created_keys = [("dentist appointment", start.date())]
+        # Not on the calendar yet, but created earlier in this same batch.
+        assert _event_exists([], created_keys, "Dentist Appointment", start) is True
+
+    def test_created_this_run_different_day_returns_false(self):
+        start = datetime(2026, 7, 9, 10, 0, tzinfo=_TZ)
+        created_keys = [("dentist", (start - timedelta(days=2)).date())]
+        assert _event_exists([], created_keys, "Dentist", start) is False

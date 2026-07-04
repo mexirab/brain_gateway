@@ -57,8 +57,19 @@ def last_user_text(messages: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def rag_context(query: str, wing: str = "", room: str = "") -> str:
-    """Query ChromaDB for relevant personal context, optionally filtered by wing/room."""
+async def rag_context(query: str, wing: str = "", room: str = "") -> str:
+    """Query ChromaDB for relevant personal context, optionally filtered by wing/room.
+
+    The embedding encode and ChromaDB query are CPU-bound synchronous calls;
+    run the whole lookup in a worker thread so the event loop (shared with the
+    voice path) never blocks on it.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(_rag_context_sync, query, wing=wing, room=room)
+
+
+def _rag_context_sync(query: str, wing: str = "", room: str = "") -> str:
     original_query = query
     RAG_QUERY_COUNT.inc()
     _rag_t0 = time.time()
@@ -337,20 +348,16 @@ PERSONAL CONTEXT (from {user}'s notes):
     else:
         expert_section = ""
 
-    prompt = f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
-
-CURRENT DATE/TIME: {date_str}
-
-PERSONALITY:
-- {profile.assistant_personality}
-- Understand ADHD challenges (task initiation, time blindness, overwhelm)
-- Keep responses concise and natural for voice conversations
-- Celebrate small wins, be encouraging without being patronizing
-
-{tone}
-
-{mode_block}
-{context_section}
+    # Voice mode: omit the AVAILABLE TOOLS + WHEN TO USE TOOLS sections
+    # entirely (previously the full prompt was built and then regex-stripped
+    # every turn). They duplicate the JSON tool schemas sent in the ``tools``
+    # parameter and were costing ~2.3k prefill tokens per voice turn.
+    # DECISION HELPER and IMPORTANT RULES stay — they carry behavior the
+    # schemas don't encode.
+    if is_voice:
+        tools_block = "\n\n"
+    else:
+        tools_block = f"""
 AVAILABLE TOOLS:
 1. home_assistant - Control smart home devices (lights, switches, fans, thermostats, scenes)
 2. search_memory - Search {user}'s memory palace for context. Organized into wings (personal, brain_gateway, conjure, infrastructure, jess) with rooms (health, routines, architecture, etc.). Use wing/room to narrow searches.
@@ -416,7 +423,22 @@ WHEN TO USE TOOLS:
 - check_claude_activity: When {user} asks you to troubleshoot yourself, mentions something that "just broke" or "stopped working", or when a code-related question might be explained by recent Claude Code edits. Action="recent" gives you a compact summary of the last ~2 hours of activity. Action="files_touched" tells you which files changed. Use this BEFORE code_agent when the issue is potentially recent.
 - code_agent: When user asks about how something works in your code, asks you to troubleshoot a code issue, investigate a bug, look at a specific file, search the codebase, run tests, or implement a change. Examples: "how do meal nudges work?", "look at selfcare_manager.py", "why is the calendar polling failing?", "search for where reminders are sent", "run the tests". Use apply_changes=true ONLY when user explicitly asks you to make changes.
 {expert_section}
-DECISION HELPER (decide_for_me):
+"""
+
+    prompt = f"""You are {assistant}, {user}'s personal AI assistant and ADHD coach.
+
+CURRENT DATE/TIME: {date_str}
+
+PERSONALITY:
+- {profile.assistant_personality}
+- Understand ADHD challenges (task initiation, time blindness, overwhelm)
+- Keep responses concise and natural for voice conversations
+- Celebrate small wins, be encouraging without being patronizing
+
+{tone}
+
+{mode_block}
+{context_section}{tools_block}DECISION HELPER (decide_for_me):
 - When using decide_for_me: return ONE concrete recommendation for work/overwhelm, or TWO options max for food/general
 - Never present more than 2 options — user wants you to make the call
 - Be directive, not wishy-washy: "Do X" not "You could try X or Y or Z"
@@ -438,20 +460,5 @@ RESPONSE STYLE:
 - For voice: avoid markdown, bullets, or formatting
 - No emojis unless {user} uses them first
 - Be direct and concise ({user} has ADHD)"""
-
-    # Voice mode: strip the AVAILABLE TOOLS + WHEN TO USE TOOLS sections.
-    # They duplicate the JSON tool schemas sent in the ``tools`` parameter and
-    # were costing ~2.3k prefill tokens per voice turn. DECISION HELPER and
-    # IMPORTANT RULES stay — they carry behavior the schemas don't encode.
-    if is_voice:
-        import re as _re
-
-        prompt = _re.sub(
-            r"\nAVAILABLE TOOLS:.*?(?=\nDECISION HELPER)",
-            "\n",
-            prompt,
-            count=1,
-            flags=_re.DOTALL,
-        )
 
     return prompt
