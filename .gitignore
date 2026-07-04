@@ -117,3 +117,12 @@ secrets.yaml
 # qwen-code project-scoped runtime (created when running `qwen` in repo dir)
 .qwen/
 QWEN.md
+# Homepage runtime-generated files (Homepage writes these into the config dir
+# on boot — we only track services/settings/widgets/bookmarks).
+homepage/config/kubernetes.yaml
+homepage/config/docker.yaml
+homepage/config/proxmox.yaml
+homepage/config/custom.css
+homepage/config/custom.js
+homepage/config/custom.scss
+homepage/config/logs/
