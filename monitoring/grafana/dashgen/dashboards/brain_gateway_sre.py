@@ -1,10 +1,13 @@
 """
-brain-gateway-sre — full application telemetry.
+brain-gateway (uid brain-gateway-overview) — full application telemetry.
 
-Replaces the old "Brain Gateway Deep Dive" which was a duplicate of Overview.
-This dashboard covers every metric defined in orchestrator/metrics.py, grouped
-by subsystem into 12 collapsible rows. Use when Jess Glance shows a symptom
-but you need to drill into which subsystem is misbehaving.
+The single canonical Brain Gateway app dashboard. Consolidates the former
+hand-maintained "Overview" and "Deep Dive" dashboards into this generated one.
+Covers every metric defined in orchestrator/metrics.py, grouped by subsystem
+into collapsible rows. Infra (host CPU/mem/GPU/disk) lives in the separate
+Homelab Infrastructure dashboard — intentionally none of that here. Use when
+Jess Glance shows a symptom but you need to drill into which subsystem is
+misbehaving.
 
 Template variables:
   $tool        — filter tool-call panels to one tool
@@ -90,6 +93,27 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(request_flow, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------------------- Mode Router
+    r, y = row_divider("Mode Router", y)
+    panels.append(r)
+
+    mode_router_row = [
+        timeseries(
+            "Mode Routing (1h)",
+            [("sum by (mode) (increase(bgw_mode_route_total[1h]))", "{{mode}}")],
+            unit="none",
+            stack=True,
+        ),
+        timeseries(
+            "Intensity (1h)",
+            [("sum by (intensity) (increase(bgw_mode_route_total[1h]))", "{{intensity}}")],
+            unit="none",
+            stack=True,
+        ),
+    ]
+    row, y = grid_row(mode_router_row, y, heights=[8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Voice Pipeline
@@ -245,6 +269,45 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------------------- Helios Power Management
+    r, y = row_divider("Helios Power Management", y)
+    panels.append(r)
+
+    helios_row = [
+        stat(
+            "Helios Running",
+            "bgw_helios_running",
+            text_mode="value_and_name",
+            color_mode="background",
+            graph_mode="none",
+            mappings=[
+                {
+                    "type": "value",
+                    "options": {
+                        "0": {"text": "OFF", "color": "red", "index": 0},
+                        "1": {"text": "ON", "color": "green", "index": 1},
+                    },
+                }
+            ],
+            thresholds=GREEN_RED_BINARY,
+        ),
+        stat(
+            "Helios Plug Power",
+            "bgw_helios_plug_watts",
+            unit="watt",
+        ),
+        timeseries(
+            "Model Server Start/Stop (1h)",
+            [
+                ("increase(bgw_model_server_starts_total[1h])", "starts"),
+                ("increase(bgw_model_server_stops_total[1h])", "stops"),
+            ],
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(helios_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Expert Agent
@@ -781,11 +844,13 @@ def build() -> dict:
     ]
 
     return dashboard(
-        title="Brain Gateway SRE",
-        uid="brain-gateway-sre",
+        title="Brain Gateway",
+        uid="brain-gateway-overview",
         description=(
-            "Full application telemetry for Brain Gateway. Every metric in "
-            "orchestrator/metrics.py is covered here, grouped by subsystem. "
+            "Full application telemetry for Brain Gateway — the single canonical "
+            "app dashboard (merged from the former Overview + SRE + Deep Dive). "
+            "Every metric in orchestrator/metrics.py is covered here, grouped by "
+            "subsystem. Infra lives in the Homelab Infrastructure dashboard. "
             "Use filters at the top to drill into a specific tool, mode, "
             "speaker, or palace wing. Paste a request_id into the text "
             "variable to trace a single request end-to-end in the logs row. "
