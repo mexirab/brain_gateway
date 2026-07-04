@@ -9,7 +9,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Feature | How it works | Status |
 |---------|-------------|--------|
 | Voice control | "Hey Jess" wake word → ATOM Echo S3R → HA voice pipeline | Working (office) |
-| Home automation | "Turn off the lights" → fast-path or Nemotron tool call | Working |
+| Home automation | "Turn off the lights" → fast-path or unified-model tool call | Working |
 | Focus timer | "Start focus for 30 minutes" → Pomodoro + Endel audio + Pi-hole blocking | Working |
 | Reminders | "Remind me to call the dentist at 3pm" → TTS announcement on speakers | Working |
 | Personal memory (RAG) | ChromaDB with 154 docs: profile, patterns, meds, projects | Working |
@@ -20,7 +20,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 | Gmail monitoring | check_email/search_email tools + proactive polling (Primary inbox) | Working |
 | Morning briefing | 7:00 AM daily on bedroom pair → today's events + pending reminders via TTS | Working |
 | Email polling | Every 30 min → announce new unread Primary emails via TTS | Working |
-| Calendar polling | Every 15 min → announce events starting within 2 hours | Working |
+| Calendar polling | Every 5 min → announce events starting within 2 hours | Working |
 | Travel-time alerts | Google Maps API → "leave in X minutes" for events with physical locations | Working |
 | Temperature monitoring | Server closet temp dashboard widget + TTS alerts at 80°F/85°F + Grafana metrics | Working |
 | Interactive system diagram | Animated SVG on architecture page showing all data flows | Working |
@@ -152,7 +152,7 @@ All five CI checks (Lint, Tests, Frontend, Docker Build) green; shipped via [PR 
 - ✅ OAuth2 setup (Google Cloud project, Desktop credentials, consent flow)
 - ✅ `check_calendar` tool — "Hey Jess, what's on my calendar this week?"
 - ✅ `create_calendar_event` tool — "Add pickleball Thursday at 7pm"
-- ✅ Proactive polling: every 15 min, TTS announcement for events within 2 hours
+- ✅ Proactive polling: every 5 min, TTS announcement for events within 2 hours
 - ✅ Morning briefing: 7:00 AM on bedroom pair, today's events + pending reminders
 - ✅ Deployed and configured on Jupiter
 

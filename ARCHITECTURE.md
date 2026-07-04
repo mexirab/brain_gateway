@@ -1,8 +1,15 @@
 # Architecture
 
-Deep dive into Brain Gateway internals. See `CLAUDE.md` for quick reference.
+> ⚠️ **SUPERSEDED — this document describes the removed v6 "Nemotron" hybrid two-model loop and predates several architecture changes.** It is kept as a historical record. Do NOT rely on it for current internals. The system now runs a **v7 unified agentic loop** (one model handles conversation + ~30 tools, no delegation, no Nemotron). For accurate current architecture, read:
+> - **`CLAUDE.md` → "Architecture (v7 Unified)"** — the canonical current data flow, cluster topology, and subsystem notes.
+> - **`docs/HA.md`** — Home Assistant on Jupiter (migrated off the Pi 2026-07-04).
+> - **`docs/BACKUP.md`** — nightly state/HA backups.
+>
+> Specifically stale below: the Mode-Router→Helios two-model flow, `_run_nemotron_tool_loop()` / `call_nemotron_orchestrator()` / `ask_orchestrator`, `MAX_TOOL_ROUNDS = 5`, the `nadim_rag` collection (deleted 2026-04-13 — memory now lives in the single `mempalace` ChromaDB collection), and any "Helios always-on / hosts the orchestrator" implication (Helios is power-tiered; the orchestrator runs 24/7 on Jupiter).
 
-## Agentic Loop
+Deep dive into Brain Gateway internals. See `CLAUDE.md` for the current (v7) quick reference.
+
+## Agentic Loop (v6 — superseded, see banner above)
 
 ```
 User Request → Orchestrator

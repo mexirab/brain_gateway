@@ -4,6 +4,31 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — reliability, backups & the Home Assistant migration (2026-07-04)
+
+Maintainer-deployment work: a reliability/backup pass, the June-12 latency branches rebased in, and Home Assistant moved off a failed Raspberry Pi onto the always-on server.
+
+### Infrastructure
+
+- **Home Assistant migrated off the dead Pi to Jupiter.** The Pi at `10.0.0.106` running HA suffered SD-card failure (booted to an emergency console). HA now runs as a docker container on Jupiter (host-networked, `:8123`), pinned to `2026.5.1`, managed from the new `homeassistant/` compose project. `HA_URL` changed `http://10.0.0.106:8123` → `http://10.0.0.248:8123`. All devices are network-based (ESPHome/Cast/Bluetooth-proxies/cloud — no USB radios) so the migration was a config copy. Runbook: `docs/HA.md`.
+- **Nightly off-box backups to Saturn.** `scripts/backup_state.py` (cron 03:30) snapshots orchestrator state consistently — the SQLite DBs + `auto_learn.key` (the Fernet key that decrypts learned facts) + chroma + credentials, excluding the reconstructable `hf_cache` — and rsyncs to Saturn. `homeassistant/backup_ha.sh` (cron 03:45) does the same for the HA config. Prometheus alerts `JessBackupStale` / `JessHABackupStale` fire if a nightly is missed. Docs: `docs/BACKUP.md`, `docs/HA.md`. (Closes the audit's biggest gap: `data/` had no backup, and losing `auto_learn.key` permanently bricked encrypted memories.)
+
+### Fixed
+
+- **Reminder-delivery state machine** (PR #32) — four silent-failure modes fixed: snooze no longer permanently kills a reminder; reminders due during downtime are late-delivered or marked `missed` instead of silently dropped; DND / active-voice-session suppression no longer counts as delivery; the TTS retry is now finite and doesn't spam phone pushes. New `bgw_reminders_failed_total` / `bgw_reminders_missed_total`.
+- **Audit quick-wins** (PR #33) — Helios status-poll log spam (was ~1 error/min while asleep) reduced to state-transition logging; routines settings-save no longer kills an active routine's nudges; medication YAML now written atomically (a crash no longer silently drops all med nudges); email-to-calendar dedup window sized to the event date (was `days_ahead=1`, duplicating far-out events); Anthropic/OpenAI backends accept `extra_body` (the BYO/cloud brain-asleep path was `TypeError`-ing); the dead finance + closet-temperature scheduled jobs are now registered (gated on config).
+- **`code_agent` shell hardening** (PR #34) — `run_command` now tokenizes with `shlex` and runs an argv-token allowlist **without a shell** (was string-prefix + `shell=True`, bypassable by prompt injection to read `/app/.env`).
+
+### Performance
+
+- **June-12 latency branches rebased onto main** (PR #36) — `rag_context` is now async (embedding + Chroma query off the shared event loop, ~100-400ms/request; also fixes the `decide_for_me` food-path `TypeError`); `_announce_voice` casts to all speakers concurrently via the shared pooled HTTP client; per-round tool-list assembly is cached (respecting all feature-flag gates).
+
+### Housekeeping
+
+- Home Assistant setup version-controlled in `homeassistant/` + `docs/HA.md` (PR #37).
+
+---
+
 ## [1.0.0] — first public release (May 2026)
 
 Brain Gateway is now a self-contained single-box appliance. One command (`bash install.sh`) brings up Docker + NVIDIA driver + the full local-AI base (LLM + TTS + STT + dashboard) + a 2-question CLI wizard. Hardware-aware (auto-picks a model that fits your GPU), free of personal references to the maintainer's deployment.
