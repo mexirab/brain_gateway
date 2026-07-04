@@ -4,8 +4,11 @@ export interface HealthResponse {
   ok: boolean;
   version: string;
   architecture: string;
+  // v7 unified: "<model_url> (<model_name>)" — the primary "brain" model.
+  primary?: string;
   primary_status: string;
   // v7 unified: fallback_status; v6 hybrid: nemotron_status
+  fallback?: string;
   fallback_status?: string;
   nemotron_status?: string;
   // v7: model_idle; v6: helios_idle
@@ -36,6 +39,24 @@ export interface FocusState {
   duration: number | null;
   break_duration: number | null;
   started: string | null;
+}
+
+// Service health — GET /api/services (service_registry.status_summary()).
+// Keys are the registry service ids: model, fallback_model, tts, stt, ha,
+// vision, searxng, expert. Only *configured* services appear in `services`;
+// the rest are listed in `unconfigured`.
+export interface ServiceInfo {
+  name: string;
+  configured: boolean;
+  healthy: boolean;
+  last_check_ago: string;
+  last_error: string;
+  features_disabled_when_down: string[];
+}
+
+export interface ServicesResponse {
+  services: Record<string, ServiceInfo>;
+  unconfigured: string[];
 }
 
 export interface Reminder {

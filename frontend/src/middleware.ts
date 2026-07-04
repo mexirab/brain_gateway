@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+// All app routes require auth. `/architecture` is included deliberately: it now
+// shows live infra status via the authenticated `/api/services` + `/health`
+// proxy, so it must not be exposed to anonymous users. It lives under the
+// `(private)` route group to match.
 const PROTECTED_PATHS = ['/dashboard', '/chat', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals'];
 const COOKIE_NAME = 'brain_token';
 

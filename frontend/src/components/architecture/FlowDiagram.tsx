@@ -2,13 +2,8 @@
 
 import { ArrowDown, Workflow } from 'lucide-react';
 import { Card } from '@/components/ui';
-
-const FLOW_STEPS = [
-  { label: 'User', sub: 'Voice / Web UI', color: 'bg-warning/20 border-warning/40 text-warning' },
-  { label: 'Open WebUI', sub: 'HTTPS Gateway', color: 'bg-surface-overlay/40 border-line/40 text-content-primary' },
-  { label: 'Orchestrator', sub: 'Mode Router + Intent', color: 'bg-brand/20 border-brand/40 text-brand' },
-  { label: 'Brain', sub: 'Qwen3.5-27B · Conversation + Tools', color: 'bg-success/20 border-success/40 text-success' },
-];
+import { useHealth } from '@/lib/hooks';
+import { parsePrimaryModel } from '@/lib/model-name';
 
 const TOOLS = [
   'Home Assistant', 'Memory (RAG)', 'Reminders',
@@ -26,6 +21,17 @@ function FlowBox({ label, sub, color }: { label: string; sub: string; color: str
 }
 
 export default function FlowDiagram() {
+  const { data: health } = useHealth();
+  const brainModel = parsePrimaryModel(health?.primary);
+
+  // v7 unified flow: User → Frontend → Orchestrator → Brain. No Open WebUI.
+  const flowSteps = [
+    { label: 'User', sub: 'Voice / Web UI', color: 'bg-warning/20 border-warning/40 text-warning' },
+    { label: 'Frontend', sub: 'Next.js · Jupiter', color: 'bg-surface-overlay/40 border-line/40 text-content-primary' },
+    { label: 'Orchestrator', sub: 'Unified loop · Jupiter', color: 'bg-brand/20 border-brand/40 text-brand' },
+    { label: 'Brain', sub: `${brainModel} · Helios (wake-on-demand)`, color: 'bg-success/20 border-success/40 text-success' },
+  ];
+
   return (
     <Card padding="none" className="p-6 md:p-8">
       <h2 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
@@ -33,12 +39,12 @@ export default function FlowDiagram() {
         Data Flow
       </h2>
 
-      {/* Vertical flow: User -> OpenWebUI -> Orchestrator -> Brain */}
+      {/* Vertical flow: User -> Frontend -> Orchestrator -> Brain */}
       <div className="flex flex-col items-center gap-2 mb-4">
-        {FLOW_STEPS.map((step, i) => (
+        {flowSteps.map((step, i) => (
           <div key={step.label} className="flex flex-col items-center">
             <FlowBox {...step} />
-            {i < FLOW_STEPS.length - 1 && (
+            {i < flowSteps.length - 1 && (
               <ArrowDown size={20} className="text-content-muted my-1" />
             )}
           </div>

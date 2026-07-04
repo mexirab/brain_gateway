@@ -26,6 +26,7 @@ import type {
   MealHistoryResponse,
   MealPhotoEstimate,
   SelfcareTodayResponse,
+  ServicesResponse,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -46,6 +47,7 @@ export async function serverFetch<T>(path: string): Promise<T> {
 
 export const api = {
   health: () => fetcher<HealthResponse>('/health'),
+  services: () => fetcher<ServicesResponse>('/api/services'),
   focus: () => fetcher<FocusState>('/api/focus'),
   startFocus: (task: string, duration: number) =>
     fetcher<{ success: boolean }>('/api/focus/start', {

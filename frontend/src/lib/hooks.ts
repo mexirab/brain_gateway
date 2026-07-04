@@ -39,6 +39,17 @@ export function useHealth(config?: SWRConfiguration) {
   return useSWR('health', () => api.health(), { refreshInterval: POLL.health, ...config });
 }
 
+/**
+ * Per-service health from the orchestrator (`GET /api/services`). Drives the
+ * LIVE node status on the architecture page. Same cadence as `useHealth`.
+ */
+export function useServices(config?: SWRConfiguration) {
+  return useSWR('services', () => api.services(), {
+    refreshInterval: POLL.health,
+    ...config,
+  });
+}
+
 export function useReminders(config?: SWRConfiguration) {
   return useSWR('reminders', () => api.reminders(), config);
 }
