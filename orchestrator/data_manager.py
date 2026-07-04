@@ -10,6 +10,8 @@ from typing import Any, Dict
 
 import yaml
 
+from orchestrator.config_writer import atomic_write_yaml
+
 logger = logging.getLogger(__name__)
 
 # Paths - configurable via environment
@@ -39,10 +41,14 @@ def get_medications() -> Dict[str, Any]:
 
 
 def save_medications(data: Dict[str, Any]) -> bool:
-    """Save medications to YAML and regenerate markdown."""
+    """Save medications to YAML and regenerate markdown.
+
+    Uses atomic_write_yaml (tmpfile + os.replace): a crash mid-write must not
+    corrupt medications.yaml — get_medications() would then return {} and all
+    med nudges would silently die.
+    """
     try:
-        with open(MEDICATIONS_YAML, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        atomic_write_yaml(MEDICATIONS_YAML, data)
         _generate_medications_md(data)
         return True
     except Exception as e:
@@ -266,10 +272,13 @@ def get_projects() -> Dict[str, Any]:
 
 
 def save_projects(data: Dict[str, Any]) -> bool:
-    """Save projects to YAML and regenerate markdown."""
+    """Save projects to YAML and regenerate markdown.
+
+    Atomic for the same reason as save_medications: a torn write would make
+    get_projects() return {} on the next load.
+    """
     try:
-        with open(PROJECTS_YAML, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        atomic_write_yaml(PROJECTS_YAML, data)
         _generate_projects_md(data)
         return True
     except Exception as e:

@@ -7,8 +7,8 @@ All settings PUTs in `routes_config.py` go through this module so that:
 - Every change is recorded in the `config_changes` SQLite table with a
   before/after JSON diff, indexed by panel.
 
-Mirrors the spirit of `data_manager.save_medications()` but adds atomicity
-and the audit trail (data_manager.py:41-50 does a direct yaml.dump).
+`data_manager.save_medications()` / `save_projects()` also write through
+`atomic_write_yaml` (without the audit trail).
 """
 
 from __future__ import annotations
