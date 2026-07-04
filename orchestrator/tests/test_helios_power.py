@@ -48,8 +48,10 @@ def helios_on(monkeypatch):
     monkeypatch.setattr(settings, "helios_plug_power_sensor", _SENSOR, raising=False)
     monkeypatch.setattr(settings, "helios_wake_debounce_seconds", 300, raising=False)
     helios_power.reset_debounce()
+    helios_power.reset_status_state()
     yield settings
     helios_power.reset_debounce()
+    helios_power.reset_status_state()
 
 
 @pytest.fixture
@@ -59,8 +61,10 @@ def helios_off(monkeypatch):
 
     monkeypatch.setattr(settings, "helios_wake_enabled", False, raising=False)
     helios_power.reset_debounce()
+    helios_power.reset_status_state()
     yield settings
     helios_power.reset_debounce()
+    helios_power.reset_status_state()
 
 
 def _metric(counter, **labels) -> float:
@@ -326,6 +330,127 @@ class TestPowerStatus:
         with respx.mock:
             await helios_power_status()
         assert _metric(HELIOS_STATUS_TOTAL, result="disabled") == before + 1
+
+
+# ===========================================================================
+# Status-poll log noise (transition-only logging while Helios sleeps)
+# ===========================================================================
+
+
+class TestStatusPollLogNoise:
+    """The 60s status poll must not ERROR-spam while Helios is asleep.
+
+    Sleeping is the expected state under power tiering — unreachable status
+    reads log once per state transition (INFO), recovery logs once, and only
+    the plug-was-ON case escalates to WARNING (throttled).
+    """
+
+    def _records(self, caplog, min_level):
+        import logging
+
+        return [
+            r
+            for r in caplog.records
+            if r.name == "orchestrator.helios_power" and r.levelno >= getattr(logging, min_level)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_repeated_failures_log_once_not_per_poll(self, helios_on, caplog):
+        import logging
+
+        from orchestrator.helios_power import helios_power_status
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="orchestrator.helios_power"),
+            respx.mock(base_url=_HA_URL) as mock,
+        ):
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+            for _ in range(10):
+                result = await helios_power_status()
+                assert result["ok"] is False  # result contract unchanged
+
+        # No ERROR records at all, and exactly ONE record at INFO-or-above
+        # (the "appears asleep" transition line) despite 10 failed polls.
+        assert self._records(caplog, "ERROR") == []
+        visible = self._records(caplog, "INFO")
+        assert len(visible) == 1
+        assert "asleep" in visible[0].getMessage().lower()
+
+    @pytest.mark.asyncio
+    async def test_recovery_logs_once(self, helios_on, caplog):
+        import logging
+
+        from orchestrator.helios_power import helios_power_status
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+            for _ in range(3):
+                await helios_power_status()
+
+        with (
+            caplog.at_level(logging.INFO, logger="orchestrator.helios_power"),
+            respx.mock(base_url=_HA_URL) as mock,
+        ):
+            mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": "off"}))
+            mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(200, json={"state": "0"}))
+            await helios_power_status()
+            await helios_power_status()  # second success must NOT re-log recovery
+
+        recovered = [r for r in self._records(caplog, "INFO") if "recovered" in r.getMessage().lower()]
+        assert len(recovered) == 1
+        assert "3" in recovered[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_plug_on_escalates_to_warning_but_throttled(self, helios_on, caplog):
+        import logging
+
+        from orchestrator import helios_power
+        from orchestrator.helios_power import helios_power_status
+
+        # Establish a healthy read with the plug ON (box should be running)...
+        with respx.mock(base_url=_HA_URL) as mock:
+            mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": "on"}))
+            mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(200, json={"state": "150"}))
+            await helios_power_status()
+
+        # ...then fail for many consecutive polls.
+        n_polls = helios_power._UNEXPECTED_FAILURE_POLLS + 10
+        with (
+            caplog.at_level(logging.DEBUG, logger="orchestrator.helios_power"),
+            respx.mock(base_url=_HA_URL) as mock,
+        ):
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+            for _ in range(n_polls):
+                await helios_power_status()
+
+        assert self._records(caplog, "ERROR") == []
+        warnings = self._records(caplog, "WARNING")
+        # One transition warning + one escalation at the threshold — NOT one
+        # per poll (the old behavior fired every 60s).
+        assert 1 <= len(warnings) <= 2
+        assert any("consecutive" in r.getMessage() for r in warnings)
+
+    @pytest.mark.asyncio
+    async def test_transition_after_recovery_logs_again(self, helios_on, caplog):
+        """A new outage after recovery is a new transition — it logs once again."""
+        import logging
+
+        from orchestrator.helios_power import helios_power_status
+
+        with caplog.at_level(logging.INFO, logger="orchestrator.helios_power"):
+            with respx.mock(base_url=_HA_URL) as mock:
+                mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+                await helios_power_status()
+            with respx.mock(base_url=_HA_URL) as mock:
+                mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": "off"}))
+                mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(200, json={"state": "0"}))
+                await helios_power_status()
+            with respx.mock(base_url=_HA_URL) as mock:
+                mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+                await helios_power_status()
+
+        asleep_lines = [r for r in self._records(caplog, "INFO") if "asleep" in r.getMessage().lower()]
+        assert len(asleep_lines) == 2  # once per outage, not once per process lifetime
 
 
 # ===========================================================================

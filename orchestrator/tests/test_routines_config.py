@@ -697,6 +697,53 @@ async def test_reload_removes_stale_routine_jobs(routines_paths, fake_scheduler,
 
 
 @pytest.mark.asyncio
+async def test_reload_preserves_live_nudge_jobs(routines_paths, fake_scheduler, monkeypatch):
+    """Regression: a settings PUT during an active routine must NOT prune the
+    live routine_nudge_* job. Killing it disabled the stuck-step auto-skip /
+    auto-end escape, and the orphaned session then blocked every future
+    scheduled routine."""
+    from orchestrator import background_jobs, routine_manager
+    from orchestrator.routines_config import reload_routines_and_reschedule
+
+    monkeypatch.setattr(background_jobs, "trigger_routine", AsyncMock())
+    monkeypatch.setattr(routine_manager, "load_routines", AsyncMock())
+    monkeypatch.setattr(routine_manager, "_routines", {"morning": {}})
+
+    # Simulate an active routine session: its nudge job is in the scheduler
+    # (naming scheme from routine_manager._schedule_nudge), plus a genuinely
+    # stale trigger job that SHOULD be pruned.
+    fake_scheduler._jobs["routine_nudge_073015"] = MagicMock(id="routine_nudge_073015")
+    fake_scheduler._jobs["routine_old_id"] = MagicMock(id="routine_old_id")
+
+    yaml_only_morning = {
+        "routines": {
+            "morning": {
+                "trigger": {"type": "scheduled", "time": "07:00", "days": ["mon"]},
+                "steps": [{"id": "x", "label": "x"}],
+            }
+        }
+    }
+    routines_paths["overrides"].write_text(yaml.safe_dump(yaml_only_morning))
+
+    summary = await reload_routines_and_reschedule()
+
+    # Stale trigger pruned; live nudge job untouched.
+    assert summary["removed"] == ["routine_old_id"]
+    assert "routine_nudge_073015" in fake_scheduler._jobs
+    assert "routine_old_id" not in fake_scheduler._jobs
+
+
+def test_is_routine_trigger_job_classifier():
+    from orchestrator.routines_config import _is_routine_trigger_job
+
+    assert _is_routine_trigger_job("routine_morning")
+    assert _is_routine_trigger_job("routine_evening")
+    assert not _is_routine_trigger_job("routine_nudge_073015")
+    assert not _is_routine_trigger_job("reminder_42")
+    assert not _is_routine_trigger_job("selfcare_check")
+
+
+@pytest.mark.asyncio
 async def test_reload_skips_non_scheduled_triggers(routines_paths, fake_scheduler, monkeypatch):
     from orchestrator import background_jobs, routine_manager
     from orchestrator.routines_config import reload_routines_and_reschedule

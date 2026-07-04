@@ -935,6 +935,73 @@ async def _startup_logic():
         )
         logger.info("[SCHEDULER] Helios power-state poll every 60s")
 
+    # Finance jobs (YNAB sync + spending announcements). Gated on the YNAB
+    # token: sync_ynab_transactions self-gates (silent no-op), but the weekly
+    # summary / mid-month warning read the seeded local finance DB and would
+    # announce meaningless "$0 of $1000" updates via TTS on an install that
+    # never set finance up.
+    from orchestrator.finance_manager import _is_ynab_configured
+
+    if _is_ynab_configured():
+        from orchestrator.background_jobs import (
+            midmonth_budget_warning,
+            sync_ynab_transactions,
+            weekly_spending_summary,
+        )
+
+        scheduler.add_job(
+            sync_ynab_transactions,
+            trigger="interval",
+            minutes=_cfg.ynab_sync_interval,
+            id="ynab_sync",
+            name="YNAB transaction sync",
+            replace_existing=True,
+        )
+        # "Sunday evening" per the job's docstring.
+        scheduler.add_job(
+            weekly_spending_summary,
+            trigger="cron",
+            day_of_week="sun",
+            hour=18,
+            minute=0,
+            id="weekly_spending_summary",
+            name="Weekly spending summary",
+            replace_existing=True,
+        )
+        # Once on the 15th (inside the job's own 13th-17th window) rather than
+        # daily — the warning has no repeat-suppression, so a daily trigger
+        # would re-announce the same overspend five days in a row.
+        scheduler.add_job(
+            midmonth_budget_warning,
+            trigger="cron",
+            day=15,
+            hour=17,
+            minute=0,
+            id="midmonth_budget_warning",
+            name="Mid-month budget warning",
+            replace_existing=True,
+        )
+        logger.info(
+            f"[SCHEDULER] YNAB sync every {_cfg.ynab_sync_interval} min; "
+            "weekly spending summary Sun 18:00; mid-month budget warning on the 15th"
+        )
+
+    # Closet temperature monitor: polls an HA sensor, so only when HA is
+    # configured — with no HA_URL every poll raises and error-spams the log.
+    # A configured-but-missing sensor is fine (non-200 -> silent return).
+    if shared.HA_URL and shared.HA_TOKEN and shared.profile.closet_temp_sensor:
+        from orchestrator.background_jobs import check_closet_temperature
+
+        scheduler.add_job(
+            check_closet_temperature,
+            trigger="interval",
+            minutes=10,
+            id="closet_temp_check",
+            name="Closet temperature check",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Closet temperature check every 10 min ({shared.profile.closet_temp_sensor})")
+
 
 def _cleanup_audio_files(max_age_hours: int = 1) -> None:
     """Remove old TTS audio files from /tmp/brain_audio."""
