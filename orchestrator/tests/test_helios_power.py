@@ -360,12 +360,14 @@ class TestStatusPollLogNoise:
 
         from orchestrator.helios_power import helios_power_status
 
-        with caplog.at_level(logging.DEBUG, logger="orchestrator.helios_power"):
-            with respx.mock(base_url=_HA_URL) as mock:
-                mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
-                for _ in range(10):
-                    result = await helios_power_status()
-                    assert result["ok"] is False  # result contract unchanged
+        with (
+            caplog.at_level(logging.DEBUG, logger="orchestrator.helios_power"),
+            respx.mock(base_url=_HA_URL) as mock,
+        ):
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+            for _ in range(10):
+                result = await helios_power_status()
+                assert result["ok"] is False  # result contract unchanged
 
         # No ERROR records at all, and exactly ONE record at INFO-or-above
         # (the "appears asleep" transition line) despite 10 failed polls.
@@ -385,12 +387,14 @@ class TestStatusPollLogNoise:
             for _ in range(3):
                 await helios_power_status()
 
-        with caplog.at_level(logging.INFO, logger="orchestrator.helios_power"):
-            with respx.mock(base_url=_HA_URL) as mock:
-                mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": "off"}))
-                mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(200, json={"state": "0"}))
-                await helios_power_status()
-                await helios_power_status()  # second success must NOT re-log recovery
+        with (
+            caplog.at_level(logging.INFO, logger="orchestrator.helios_power"),
+            respx.mock(base_url=_HA_URL) as mock,
+        ):
+            mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": "off"}))
+            mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(200, json={"state": "0"}))
+            await helios_power_status()
+            await helios_power_status()  # second success must NOT re-log recovery
 
         recovered = [r for r in self._records(caplog, "INFO") if "recovered" in r.getMessage().lower()]
         assert len(recovered) == 1
@@ -411,11 +415,13 @@ class TestStatusPollLogNoise:
 
         # ...then fail for many consecutive polls.
         n_polls = helios_power._UNEXPECTED_FAILURE_POLLS + 10
-        with caplog.at_level(logging.DEBUG, logger="orchestrator.helios_power"):
-            with respx.mock(base_url=_HA_URL) as mock:
-                mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
-                for _ in range(n_polls):
-                    await helios_power_status()
+        with (
+            caplog.at_level(logging.DEBUG, logger="orchestrator.helios_power"),
+            respx.mock(base_url=_HA_URL) as mock,
+        ):
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+            for _ in range(n_polls):
+                await helios_power_status()
 
         assert self._records(caplog, "ERROR") == []
         warnings = self._records(caplog, "WARNING")

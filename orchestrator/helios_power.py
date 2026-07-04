@@ -102,14 +102,12 @@ def _log_status_failure(exc: Exception) -> None:
     if _status_fail_count == 1:
         if plug_was_on:
             logger.warning(
-                "[HELIOS] Status read failed while plug was ON (%s) — watching for recovery; "
-                "suppressing repeats",
+                "[HELIOS] Status read failed while plug was ON (%s) — watching for recovery; suppressing repeats",
                 err,
             )
         else:
             logger.info(
-                "[HELIOS] Status unreachable (%s) — Helios appears asleep; "
-                "suppressing repeats until state changes",
+                "[HELIOS] Status unreachable (%s) — Helios appears asleep; suppressing repeats until state changes",
                 err,
             )
         return

@@ -213,9 +213,11 @@ async def test_unknown_kwargs_warn_but_do_not_raise(caplog):
     url = "https://api.openai.test/v1"
     async with httpx.AsyncClient() as http:
         backend = OpenAIBackend(_config("openai", url), http)
-        with caplog.at_level(logging.WARNING, logger="orchestrator.llm_backend"):
-            with respx.mock(base_url=url) as mock:
-                mock.post("/chat/completions").mock(return_value=Response(200, json=_openai_response()))
-                await backend.chat_completion(_MESSAGES, system="s", brand_new_flag=1)
+        with (
+            caplog.at_level(logging.WARNING, logger="orchestrator.llm_backend"),
+            respx.mock(base_url=url) as mock,
+        ):
+            mock.post("/chat/completions").mock(return_value=Response(200, json=_openai_response()))
+            await backend.chat_completion(_MESSAGES, system="s", brand_new_flag=1)
 
     assert any("brand_new_flag" in r.getMessage() for r in caplog.records)
