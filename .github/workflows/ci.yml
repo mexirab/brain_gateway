@@ -75,32 +75,51 @@ jobs:
     runs-on: [self-hosted, linux, jupiter]
     needs: [lint-python, test-python, lint-frontend, docker-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Serialize deploys. The runner deploys from ONE shared checkout at
+    # /home/labadmin/gateway_nerves; rapid successive merges must not race on it
+    # (two concurrent `git pull`s advancing the checkout past each other made the
+    # old rebuild decision see an empty diff and silently skip). cancel-in-progress
+    # is false so every merge's deploy is queued and processed, never dropped.
+    concurrency:
+      group: deploy-jupiter
+      cancel-in-progress: false
     # The runner runs on Jupiter with docker access, so we don't need a checkout
     # step — we operate directly on the live checkout at /home/labadmin/gateway_nerves.
     steps:
-      - name: Pull latest main
+      - name: Pull + rebuild changed services
         run: |
+          set -euo pipefail
           cd /home/labadmin/gateway_nerves
-          BEFORE=$(git rev-parse HEAD)
-          git pull --ff-only
-          AFTER=$(git rev-parse HEAD)
-          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
-          echo "after=$AFTER" >> "$GITHUB_OUTPUT"
-        id: pull
 
-      - name: Rebuild changed services
-        run: |
-          cd /home/labadmin/gateway_nerves
-          BEFORE="${{ steps.pull.outputs.before }}"
-          AFTER="${{ steps.pull.outputs.after }}"
+          # Decide what to rebuild by diffing against the LAST-DEPLOYED commit
+          # (recorded in .last-deployed-sha), NOT against this job's own pull.
+          # The checkout is shared and can be advanced out-of-band (a concurrent
+          # deploy, or a manual `git pull` during ops), so a no-op pull does NOT
+          # mean nothing changed relative to what's actually running. The marker
+          # is the source of truth for "what's currently deployed."
+          MARKER=.last-deployed-sha
+          LAST="$(cat "$MARKER" 2>/dev/null || true)"
 
-          if [ "$BEFORE" = "$AFTER" ]; then
-            echo "No new commits, nothing to rebuild."
+          if ! git pull --ff-only; then
+            echo "::error::git pull --ff-only failed — the deploy checkout at /home/labadmin/gateway_nerves is dirty or diverged. Run: cd /home/labadmin/gateway_nerves && git status"
+            git status --short || true
+            exit 1
+          fi
+          HEAD_SHA="$(git rev-parse HEAD)"
+
+          # First run (no/invalid marker): fall back to the parent so we still
+          # rebuild whatever this push changed.
+          if [ -z "$LAST" ] || ! git cat-file -e "${LAST}^{commit}" 2>/dev/null; then
+            LAST="$(git rev-parse HEAD~1)"
+          fi
+
+          if [ "$LAST" = "$HEAD_SHA" ]; then
+            echo "Already deployed $HEAD_SHA — nothing to do."
             exit 0
           fi
 
-          CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
-          echo "Changed files:"
+          echo "Rebuilding for changes ${LAST}..${HEAD_SHA}:"
+          CHANGED="$(git diff --name-only "$LAST" "$HEAD_SHA")"
           echo "$CHANGED"
 
           if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$"; then
@@ -115,10 +134,13 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # Record what we just deployed so the next run diffs from here.
+          echo "$HEAD_SHA" > "$MARKER"
           echo "Deploy complete at $(date -Iseconds)"
 
       - name: Health check
         run: |
+          set -eu
           sleep 5
           curl -sSf http://localhost:8888/health > /dev/null && echo "orchestrator healthy"
           curl -sSf -o /dev/null http://localhost:3001 && echo "frontend reachable"

@@ -79,6 +79,9 @@ monitoring/**/*.bak-*
 # Homepage secrets (env holds HOMEPAGE_VAR_BRAIN_TOKEN) — keep .env.example.
 homepage/.env
 
+# Deploy marker written by the CI deploy job (last-deployed commit SHA).
+.last-deployed-sha
+
 # Temporary/runtime files
 *.tmp
 
