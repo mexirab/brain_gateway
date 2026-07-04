@@ -395,6 +395,51 @@ def increment_snooze_count(reminder_id: str) -> Optional[int]:
         return new_count
 
 
+def reopen_reminder(reminder_id: str) -> bool:
+    """Reset a reminder to 'pending' so a rescheduled delivery can fire again.
+
+    Used by the snooze callback: delivery marks the reminder 'completed', and
+    deliver_reminder_job skips anything non-pending — so without this reset a
+    snoozed reminder would never redeliver. Also clears ack state: a Snooze
+    tap after a Done tap means the user changed their mind, and the next ack
+    must re-fire the selfcare bridge.
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            """UPDATE reminders
+                  SET status = 'pending', completed_at = NULL, ack_at = NULL, acked_via = NULL
+                WHERE id = ?""",
+            (reminder_id,),
+        )
+        return cursor.rowcount > 0
+
+
+def mark_reminder_missed(reminder_id: str) -> bool:
+    """Mark a reminder 'missed' — it came due while the orchestrator was down
+    and is too stale to late-deliver. Terminal state; keeps it out of the
+    pending list instead of stranding it 'pending' forever."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE reminders SET status = 'missed', completed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), reminder_id),
+        )
+        return cursor.rowcount > 0
+
+
+def mark_reminder_failed(reminder_id: str) -> bool:
+    """Mark a reminder 'failed' — every delivery channel failed after retries.
+
+    Terminal state so the row doesn't zombie in the pending list, but distinct
+    from 'completed' so the failure stays visible in the DB and metrics.
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE reminders SET status = 'failed', completed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), reminder_id),
+        )
+        return cursor.rowcount > 0
+
+
 def cancel_reminder(reminder_id: str) -> bool:
     """Mark a reminder as cancelled."""
     with get_db() as conn:

@@ -24,6 +24,8 @@ from orchestrator.metrics import (
     GMAIL_API_ERRORS,
     GMAIL_API_LATENCY,
     REMINDERS_DELIVERED,
+    REMINDERS_FAILED,
+    REMINDERS_MISSED,
     REMINDERS_SET,
     WEB_SEARCH_COUNT,
     WEB_SEARCH_LATENCY,
@@ -487,9 +489,41 @@ def tool_update_data(arguments: Dict[str, Any]) -> str:
     )
 
 
-async def deliver_reminder_job(reminder_id: str):
-    """Called by APScheduler at the scheduled time to deliver a reminder."""
-    logger.info(f"[REMINDER] Triggering: {reminder_id}")
+# Delivery attempts per reminder: the initial try plus one retry. The retry
+# used to be detected by probing the scheduler for the retry job's id, but
+# APScheduler removes date-trigger jobs from the store at submission time, so
+# the probe always said "first try" and a persistent TTS failure retried
+# forever (and re-pushed to the phone every 2 minutes on target="both").
+# Attempt count now travels through the job kwargs instead.
+MAX_REMINDER_DELIVERY_ATTEMPTS = 2
+
+# How long a suppressed delivery waits before trying again. DND lasts until
+# the user wakes (so poll slowly); a voice session window is 60s (so retry
+# quickly). Suppression does NOT consume an attempt — it isn't a failure.
+SUPPRESSED_RESCHEDULE_MINUTES = {"dnd_active": 30, "voice_session_active": 2}
+
+# Past-due reminders older than this at startup are marked 'missed' instead
+# of late-delivered — announcing a two-day-old reminder does more harm than
+# good, but it must not stay 'pending' forever either.
+MISSED_REMINDER_MAX_AGE_HOURS = 24
+
+
+async def deliver_reminder_job(
+    reminder_id: str,
+    attempt: int = 0,
+    late: bool = False,
+    voice_done: bool = False,
+    phone_done: bool = False,
+):
+    """Called by APScheduler at the scheduled time to deliver a reminder.
+
+    attempt/voice_done/phone_done travel through retry-job kwargs so a retry
+    only re-attempts the channels that actually failed. `late=True` marks a
+    reminder that came due while the orchestrator was down (reworded, and
+    voice-suppressed during night hours so a 3am restart doesn't wake the
+    house replaying the backlog).
+    """
+    logger.info(f"[REMINDER] Triggering: {reminder_id} (attempt {attempt + 1})")
 
     reminder = get_reminder(reminder_id)
     if not reminder:
@@ -504,11 +538,62 @@ async def deliver_reminder_job(reminder_id: str):
     target = reminder.get("target", "both")
     from orchestrator.shared import profile
 
-    spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
+    if late:
+        spoken_text = f"Hey {profile.user_name}! While I was offline, this reminder came due: {text}"
+        hour = datetime.now(ZoneInfo(shared.TIMEZONE)).hour
+        if hour >= 22 or hour < 7:
+            logger.info(f"[REMINDER] {reminder_id} is late-delivered at night — phone only, no speakers")
+            target = "phone"
+    else:
+        spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
-    voice_ok = True
-    if target in ["voice", "both"]:
+    def _reschedule(minutes: float, next_attempt: int, v_done: bool, p_done: bool, why: str) -> bool:
+        """Re-arm this job in `minutes`. Returns False if scheduling failed."""
+        run_at = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=minutes)
+        try:
+            scheduler.add_job(
+                deliver_reminder_job,
+                trigger="date",
+                run_date=run_at,
+                args=[reminder_id],
+                kwargs={
+                    "attempt": next_attempt,
+                    "late": late,
+                    "voice_done": v_done,
+                    "phone_done": p_done,
+                },
+                # Same id the ack callback cancels, so a Done tap kills any
+                # pending redelivery regardless of why it was scheduled.
+                id=f"reminder_{reminder_id}_retry",
+                replace_existing=True,
+            )
+            logger.warning(
+                f"[REMINDER] {reminder_id} {why} — rescheduled for {run_at:%H:%M}",
+                extra={"component": "reminder"},
+            )
+            return True
+        except Exception as retry_err:
+            logger.error(
+                f"[REMINDER] {reminder_id} {why} and rescheduling failed: {retry_err}",
+                extra={"component": "reminder"},
+            )
+            return False
+
+    voice_needed = target in ["voice", "both"]
+    phone_needed = target in ["phone", "both"]
+
+    voice_ok = voice_done
+    if voice_needed and not voice_done:
         result = await _announce_voice(spoken_text, announcement_type="reminder")
+        if result.get("suppressed"):
+            # DND or an active voice session — NOT a delivery. The old code
+            # treated success=True as delivered and consumed the reminder;
+            # now it defers the whole delivery (phone included: a 3am DND
+            # push would defeat the point of saying goodnight).
+            reason = result.get("reason", "dnd_active")
+            delay = SUPPRESSED_RESCHEDULE_MINUTES.get(reason, 30)
+            _reschedule(delay, attempt, voice_done, phone_done, f"suppressed ({reason})")
+            return
         voice_ok = result.get("success", False)
         if not voice_ok:
             logger.error(
@@ -516,8 +601,10 @@ async def deliver_reminder_job(reminder_id: str):
                 extra={"component": "reminder"},
             )
 
-    if target in ["phone", "both"]:
-        await _send_notification(text)
+    phone_ok = phone_done
+    if phone_needed and not phone_done:
+        notif = await _send_notification(text)
+        ha_push_ok = bool(notif.get("success"))
         # F-011 + F-013: push channels run in parallel with HA Companion push.
         # Each is individually gated by its own *_enabled flag — no-op when
         # off. Dispatched as detached tasks so a slow push server never
@@ -570,42 +657,121 @@ async def deliver_reminder_job(reminder_id: str):
                 exc_info=True,
             )
 
-    if voice_ok or target == "phone":
+        # ntfy/pushover are detached fire-and-forget tasks, so their outcome
+        # is unknowable here; count the phone channel as delivered if the HA
+        # Companion push succeeded or at least one push channel is enabled and
+        # was dispatched. Before this, the HA result was discarded entirely —
+        # a phone-only reminder with every channel off/down was still marked
+        # completed ("delivered into the void").
+        from orchestrator.config import settings as _settings
+
+        phone_ok = ha_push_ok or _settings.ntfy_enabled or _settings.pushover_enabled
+        if not phone_ok:
+            logger.error(
+                f"[REMINDER] Phone delivery FAILED for {reminder_id}: {notif.get('error') or notif.get('errors')}",
+                extra={"component": "reminder"},
+            )
+
+    voice_satisfied = voice_ok or not voice_needed
+    phone_satisfied = phone_ok or not phone_needed
+
+    if voice_satisfied and phone_satisfied:
         REMINDERS_DELIVERED.inc()
         mark_reminder_completed(reminder_id)
         logger.info(f"[REMINDER] Completed: {reminder_id}", extra={"component": "reminder"})
+        return
+
+    # If rescheduling fails, fall through to the give-up path rather than
+    # stranding the reminder 'pending' with no job to fire it.
+    if attempt + 1 < MAX_REMINDER_DELIVERY_ATTEMPTS and _reschedule(
+        2, attempt + 1, voice_ok, phone_ok, "delivery incomplete"
+    ):
+        return
+
+    # Out of retries. Last-ditch: if nothing at all reached the user, push to
+    # the phone even for target="voice" — a buzz beats silence.
+    if not voice_ok and not phone_ok:
+        fallback = await _send_notification(f"(Couldn't play on speakers) {text}")
+        phone_ok = bool(fallback.get("success"))
+
+    if voice_ok or phone_ok:
+        REMINDERS_DELIVERED.inc()
+        mark_reminder_completed(reminder_id)
+        logger.warning(
+            f"[REMINDER] {reminder_id} completed with degraded delivery "
+            f"(voice_ok={voice_ok}, phone_ok={phone_ok}, target={target})",
+            extra={"component": "reminder"},
+        )
     else:
-        # Schedule a single retry in 2 minutes — but only once (check for existing retry job)
-        retry_job_id = f"reminder_{reminder_id}_retry"
-        existing_retry = scheduler.get_job(retry_job_id)
-        if existing_retry:
-            logger.error(
-                f"[REMINDER] {reminder_id} TTS failed again on retry — giving up, sending phone fallback",
-                extra={"component": "reminder"},
-            )
-            await _send_notification(text)
-            REMINDERS_DELIVERED.inc()
-            mark_reminder_completed(reminder_id)
-        else:
-            retry_time = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=2)
-            try:
+        from orchestrator.state_store import mark_reminder_failed
+
+        REMINDERS_FAILED.inc()
+        mark_reminder_failed(reminder_id)
+        logger.error(
+            f"[REMINDER] {reminder_id} FAILED on every channel after "
+            f"{MAX_REMINDER_DELIVERY_ATTEMPTS} attempts — marked failed: {text[:80]}",
+            extra={"component": "reminder"},
+        )
+
+
+def reschedule_pending_reminders_on_startup() -> Dict[str, int]:
+    """Re-arm pending reminders after a restart.
+
+    Future reminders are rescheduled normally. Past-due ones used to be
+    silently skipped — a reboot at 8:55 ate the 9:00 meds reminder with zero
+    signal, and the row sat 'pending' forever. Now: past-due within
+    MISSED_REMINDER_MAX_AGE_HOURS are delivered immediately with late framing
+    (staggered so a backlog doesn't stampede TTS); anything older is marked
+    'missed' so it stays visible but stops zombieing the pending list.
+    """
+    from orchestrator.state_store import mark_reminder_missed
+
+    now = datetime.now()
+    counts = {"scheduled": 0, "late": 0, "missed": 0}
+    for rem in list_pending_reminders():
+        try:
+            trigger = datetime.fromisoformat(rem["trigger_time"])
+            if trigger.tzinfo is not None:
+                # Stored naive-local by convention, but normalize just in case.
+                trigger = trigger.astimezone(ZoneInfo(shared.TIMEZONE)).replace(tzinfo=None)
+            if trigger > now:
                 scheduler.add_job(
                     deliver_reminder_job,
                     trigger="date",
-                    run_date=retry_time,
-                    args=[reminder_id],
-                    id=retry_job_id,
+                    run_date=trigger,
+                    args=[rem["id"]],
+                    id=f"reminder_{rem['id']}",
                     replace_existing=True,
                 )
+                counts["scheduled"] += 1
+            elif now - trigger <= timedelta(hours=MISSED_REMINDER_MAX_AGE_HOURS):
+                run_at = now + timedelta(seconds=15 + 10 * counts["late"])
+                scheduler.add_job(
+                    deliver_reminder_job,
+                    trigger="date",
+                    run_date=run_at,
+                    args=[rem["id"]],
+                    kwargs={"late": True},
+                    id=f"reminder_{rem['id']}",
+                    replace_existing=True,
+                )
+                counts["late"] += 1
+            else:
+                mark_reminder_missed(rem["id"])
+                REMINDERS_MISSED.inc()
+                counts["missed"] += 1
                 logger.warning(
-                    f"[REMINDER] {reminder_id} TTS failed — scheduled retry at {retry_time:%H:%M}",
+                    f"[REMINDER] {rem['id']} was due {trigger:%Y-%m-%d %H:%M}, >24h ago — marked missed",
                     extra={"component": "reminder"},
                 )
-            except Exception as retry_err:
-                logger.error(
-                    f"[REMINDER] {reminder_id} TTS failed and retry scheduling failed: {retry_err}",
-                    extra={"component": "reminder"},
-                )
+        except Exception as e:
+            logger.warning(f"[STATE] Failed to reload reminder {rem.get('id')}: {e}")
+    if any(counts.values()):
+        logger.info(
+            f"[STATE] Reminder reload: {counts['scheduled']} rescheduled, "
+            f"{counts['late']} past-due delivering late, {counts['missed']} marked missed"
+        )
+    return counts
 
 
 async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "both") -> str:

@@ -91,7 +91,7 @@ from orchestrator.shared import (
 from orchestrator.tool_definitions import get_all_tools
 
 # Tool execution dispatcher
-from orchestrator.tool_handlers import deliver_reminder_job
+from orchestrator.tool_handlers import reschedule_pending_reminders_on_startup
 
 # Unified tool loop (v7)
 from orchestrator.unified_loop import run_unified_tool_loop
@@ -533,26 +533,10 @@ async def _startup_logic():
     )
     logger.info("[orchestrator] CloudBrain initialized (mode=unified_v7)")
 
-    # Reload pending reminders from DB and re-schedule
-    pending = state_store.get_pending_reminders()
-    reloaded = 0
-    for rem in pending:
-        try:
-            trigger = datetime.fromisoformat(rem["trigger_time"])
-            if trigger > datetime.now():
-                scheduler.add_job(
-                    deliver_reminder_job,
-                    trigger="date",
-                    run_date=trigger,
-                    args=[rem["id"]],
-                    id=f"reminder_{rem['id']}",
-                    replace_existing=True,
-                )
-                reloaded += 1
-        except Exception as e:
-            logger.warning(f"[STATE] Failed to reload reminder {rem.get('id')}: {e}")
-    if reloaded:
-        logger.info(f"[STATE] Reloaded {reloaded} pending reminders from DB")
+    # Reload pending reminders from DB and re-schedule. Past-due ones are
+    # late-delivered or marked missed (they used to be silently dropped —
+    # a reboot at 8:55 ate the 9:00 meds reminder with zero signal).
+    reminder_counts = reschedule_pending_reminders_on_startup()
 
     # Restore focus session from DB (survives orchestrator restarts)
     saved_focus = state_store.load_focus_session()
@@ -601,7 +585,7 @@ async def _startup_logic():
             logger.warning("[FOCUS] Defensive startup: could not disable blocking: %s", result.message)
 
     scheduler.start()
-    logger.info(f"[SCHEDULER] Started ({reloaded} reminders reloaded from DB)")
+    logger.info(f"[SCHEDULER] Started ({sum(reminder_counts.values())} reminders reloaded from DB)")
 
     # Schedule proactive calendar polling (if calendar is configured)
     if cal_client.is_configured:
