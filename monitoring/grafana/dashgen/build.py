@@ -36,7 +36,7 @@ OUTPUT_DIR = REPO_ROOT / "monitoring" / "grafana" / "provisioning" / "dashboards
 # Map of (output filename, builder module).
 DASHBOARDS = [
     ("jess-glance.json", jess_glance),
-    ("brain-gateway-sre.json", brain_gateway_sre),
+    ("brain-gateway.json", brain_gateway_sre),
     ("homelab-infra.json", homelab_infra),
 ]
 
