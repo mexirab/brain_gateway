@@ -302,6 +302,19 @@ async def reload_routines_and_reschedule() -> Dict[str, Any]:
         return await _reschedule_locked()
 
 
+def _is_routine_trigger_job(job_id: str) -> bool:
+    """True only for the cron *trigger* jobs this module owns (`routine_<id>`).
+
+    Must explicitly exclude `routine_nudge_*`: those are live step-nudge jobs
+    created by routine_manager._schedule_nudge() while a routine session is
+    running. A bare `startswith("routine_")` match used to sweep them up in the
+    prune step, so any settings PUT during an active routine silently killed
+    the nudge job — the stuck-step auto-skip/auto-end escape never fired and
+    the orphaned session then blocked every future scheduled routine.
+    """
+    return job_id.startswith("routine_") and not job_id.startswith("routine_nudge_")
+
+
 async def _reschedule_locked() -> Dict[str, Any]:
     from orchestrator import routine_manager
     from orchestrator.background_jobs import trigger_routine
@@ -311,8 +324,9 @@ async def _reschedule_locked() -> Dict[str, Any]:
     await routine_manager.load_routines(effective_path())
     loaded = sorted(routine_manager._routines.keys())
 
-    # 2. Find existing routine_* jobs in the scheduler so we can prune
-    existing_routine_jobs = {job.id for job in scheduler.get_jobs() if job.id.startswith("routine_")}
+    # 2. Find existing routine trigger jobs in the scheduler so we can prune
+    #    (never the routine_nudge_* jobs — see _is_routine_trigger_job)
+    existing_routine_jobs = {job.id for job in scheduler.get_jobs() if _is_routine_trigger_job(job.id)}
 
     # 3. Re-register cron triggers from the freshly loaded YAML
     rescheduled: List[str] = []
