@@ -70,9 +70,14 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Generated configs (created from templates by generate-configs.sh)
-# Keep the template, ignore the generated file
+# Generated configs (created from templates) + secrets — keep the .template,
+# ignore the rendered/secret file.
 monitoring/prometheus/prometheus.yml
+monitoring/prometheus/api_token
+monitoring/alertmanager/alertmanager.yml
+monitoring/**/*.bak-*
+# Homepage secrets (env holds HOMEPAGE_VAR_BRAIN_TOKEN) — keep .env.example.
+homepage/.env
 
 # Temporary/runtime files
 *.tmp

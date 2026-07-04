@@ -1,0 +1,79 @@
+# Homepage services — consolidated 2026-07-04.
+# Front door = this launcher; Jess (:3001) is the app; Grafana is the single
+# monitoring pane. The 4 duplicate "Today" widgets (they mirrored Jess's own
+# dashboard cards) were slimmed to one Jess Dashboard tile; the pure-backend
+# UIs (Prometheus, Loki) were de-surfaced (containers still run — view via
+# Grafana). Backup: services.yaml.bak-pre-consolidation-20260704
+- Jess:
+    - Dashboard:
+        icon: mdi-brain
+        href: http://jupiter-amds.tail74fc4a.ts.net:3001/
+        description: Your day — focus, meals, reminders, workouts
+    - Chat:
+        icon: mdi-chat
+        href: http://jupiter-amds.tail74fc4a.ts.net:3001/chat
+        description: Conversation history
+    - Finance:
+        icon: mdi-finance
+        href: http://jupiter-amds.tail74fc4a.ts.net:3001/finance
+        description: YNAB budget + XP
+    - Shopping:
+        icon: mdi-cart
+        href: http://jupiter-amds.tail74fc4a.ts.net:3001/shopping
+        description: Shopping list
+    - Documents:
+        icon: mdi-file-document-multiple
+        href: http://jupiter-amds.tail74fc4a.ts.net:3001/documents
+        description: Document vault
+    - Announcements:
+        icon: mdi-bullhorn
+        href: http://jupiter-amds.tail74fc4a.ts.net:3001/announcements
+        description: TTS history
+
+- Home & Media:
+    - Home Assistant:
+        href: http://jupiter-amds.tail74fc4a.ts.net:8123
+        description: Home automation (on Jupiter)
+        icon: home-assistant
+    - Audiobookshelf:
+        href: http://jupiter-amds.tail74fc4a.ts.net:13378
+        description: Audiobooks + podcasts
+        icon: audiobookshelf
+    - Immich:
+        href: http://jupiter-amds.tail74fc4a.ts.net:2283
+        description: Photo library
+        icon: immich
+
+- Productivity:
+    - Paperless:
+        href: http://jupiter-amds.tail74fc4a.ts.net:8777
+        description: Document archive + OCR
+        icon: paperless-ngx
+    - Actual Budget:
+        href: http://jupiter-amds.tail74fc4a.ts.net:5006
+        description: YNAB alternative (testing)
+        icon: actual-budget
+
+- Chat / LLM:
+    - Open WebUI:
+        href: https://helios.tail74fc4a.ts.net
+        description: Chat UI (Helios — asleep when idle)
+        icon: mdi-chat-processing
+
+- Monitoring:
+    - Grafana:
+        href: http://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview
+        description: Metrics, logs & alerts — the monitoring pane
+        icon: grafana
+    - Brain Gateway health:
+        href: http://jupiter-amds.tail74fc4a.ts.net:8888/health
+        description: Orchestrator health JSON
+        icon: mdi-brain
+    - Pi-hole (Jupiter):
+        href: http://10.0.0.248:8053/admin
+        description: DNS primary
+        icon: pi-hole
+    - Pi-hole (Saturn):
+        href: http://10.0.0.58:8053/admin
+        description: DNS secondary
+        icon: pi-hole

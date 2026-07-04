@@ -1,0 +1,18 @@
+- resources:
+    cpu: true
+    memory: true
+    disk:
+      - /
+      - /mnt/media
+      - /mnt/documents
+    label: Jupiter
+
+- datetime:
+    text_size: xl
+    format:
+      timeStyle: short
+      dateStyle: medium
+
+- search:
+    provider: duckduckgo
+    target: _blank

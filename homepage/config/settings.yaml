@@ -1,0 +1,23 @@
+title: Jess — Brain Gateway
+theme: dark
+color: slate
+headerStyle: clean
+layout:
+  Today:
+    style: row
+    columns: 4
+  Jess Apps:
+    style: row
+    columns: 3
+  Media:
+    style: row
+    columns: 2
+  Productivity:
+    style: row
+    columns: 2
+  Infrastructure:
+    style: row
+    columns: 2
+  Monitoring:
+    style: row
+    columns: 3

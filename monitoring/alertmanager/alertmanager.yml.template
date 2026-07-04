@@ -1,0 +1,20 @@
+route:
+  receiver: "null"
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - alertname=~"OrchestratorDown|MorningBriefingStale|GoogleTokenRefreshStale"
+      receiver: "pushover"
+receivers:
+  - name: "null"
+  - name: "pushover"
+    pushover_configs:
+      - user_key: ${PUSHOVER_USER_KEY}
+        token: ${PUSHOVER_APP_TOKEN}
+        title: "Jess alert: {{ .CommonLabels.alertname }} ({{ .Status }})"
+        message: "{{ range .Alerts }}{{ .Annotations.summary }} {{ end }}"
+        priority: 1
+        send_resolved: true
