@@ -47,6 +47,24 @@ _RUNNING_WATTS_THRESHOLD = 30.0
 # Repeated chat attempts while Helios is booting must not spam switch.turn_on.
 _last_wake_monotonic: Optional[float] = None
 
+# Status-poll noise control. The scheduler calls helios_power_status() every
+# 60s, and under power tiering Helios spends most of its life asleep — an
+# unreachable status read is the EXPECTED steady state, not an incident.
+# Logging it at ERROR every minute produced ~5.7k errors/week of pure noise.
+# Instead we track consecutive failures and log only on state *transitions*:
+# once when reads start failing, once when they recover. The exception is the
+# genuinely suspicious case (last successful read said the plug was ON, i.e.
+# the box should be up, yet reads keep failing) which escalates to WARNING
+# after a few consecutive polls and then re-warns only about once an hour.
+_status_fail_count: int = 0  # consecutive helios_power_status() failures
+_status_last_switch: Optional[str] = None  # switch state from the last successful read
+
+# Plug said ON but status has been unreachable for this many consecutive polls
+# → escalate once to WARNING (at 60s poll cadence this is ~5 minutes).
+_UNEXPECTED_FAILURE_POLLS = 5
+# ...and re-warn only every this-many further consecutive failures (~hourly).
+_UNEXPECTED_REWARN_EVERY = 60
+
 
 def _ha_headers() -> Dict[str, str]:
     return {
@@ -59,6 +77,56 @@ def reset_debounce() -> None:
     """Clear the wake debounce timer (test/diagnostic helper)."""
     global _last_wake_monotonic
     _last_wake_monotonic = None
+
+
+def reset_status_state() -> None:
+    """Clear the status-poll failure tracking (test/diagnostic helper)."""
+    global _status_fail_count, _status_last_switch
+    _status_fail_count = 0
+    _status_last_switch = None
+
+
+def _log_status_failure(exc: Exception) -> None:
+    """Log a failed status read at a level proportional to how surprising it is.
+
+    Called with `_status_fail_count` already incremented for this failure.
+    - 1st failure after a healthy read: one INFO ("appears asleep") — or one
+      WARNING if the plug was ON at the last successful read.
+    - Plug-was-ON failures: escalate to WARNING once after
+      `_UNEXPECTED_FAILURE_POLLS` consecutive polls, then roughly hourly.
+    - Everything else: DEBUG (invisible at the default log level).
+    """
+    err = f"{type(exc).__name__}: {exc}"
+    plug_was_on = _status_last_switch == "on"
+
+    if _status_fail_count == 1:
+        if plug_was_on:
+            logger.warning(
+                "[HELIOS] Status read failed while plug was ON (%s) — watching for recovery; "
+                "suppressing repeats",
+                err,
+            )
+        else:
+            logger.info(
+                "[HELIOS] Status unreachable (%s) — Helios appears asleep; "
+                "suppressing repeats until state changes",
+                err,
+            )
+        return
+
+    if plug_was_on and (
+        _status_fail_count == _UNEXPECTED_FAILURE_POLLS
+        or (_status_fail_count > _UNEXPECTED_FAILURE_POLLS and _status_fail_count % _UNEXPECTED_REWARN_EVERY == 0)
+    ):
+        logger.warning(
+            "[HELIOS] Plug was ON at last successful read but status has been unreachable "
+            "for %d consecutive polls (%s)",
+            _status_fail_count,
+            err,
+        )
+        return
+
+    logger.debug("[HELIOS] Status still unreachable (%d consecutive: %s)", _status_fail_count, err)
 
 
 async def wake_helios() -> Dict[str, Any]:
@@ -187,6 +255,8 @@ async def helios_power_status() -> Dict[str, Any]:
             "reason": "HELIOS_WAKE_ENABLED is false",
         }
 
+    global _status_fail_count, _status_last_switch
+
     switch_entity = _settings.helios_plug_entity
     power_entity = _settings.helios_plug_power_sensor
     try:
@@ -194,11 +264,22 @@ async def helios_power_status() -> Dict[str, Any]:
             switch_state = await _get_state(client, switch_entity)
             power_state = await _get_state(client, power_entity)
     except Exception as e:  # noqa: BLE001 — never raise into the caller
-        logger.error("[HELIOS] Status read failed: %s: %s", type(e).__name__, e)
+        _status_fail_count += 1
+        _log_status_failure(e)
         HELIOS_STATUS_TOTAL.labels(result="error").inc()
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     switch = (switch_state or {}).get("state", "unknown")
+
+    # Reads are working again — log the recovery exactly once per outage.
+    if _status_fail_count:
+        logger.info(
+            "[HELIOS] Status reads recovered after %d consecutive failure(s) — switch=%s",
+            _status_fail_count,
+            switch,
+        )
+        _status_fail_count = 0
+    _status_last_switch = switch
 
     watts: Optional[float] = None
     raw_watts = (power_state or {}).get("state")
