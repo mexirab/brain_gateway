@@ -664,8 +664,19 @@ def _parse_event_json(raw: str) -> list:
 
 
 async def _event_exists_on_calendar(cal, title: str, start: datetime) -> bool:
-    """Check if a similar event already exists on the calendar around that time."""
-    response = await cal.list_events(days_ahead=1, calendar_id="primary")
+    """Check if a similar event already exists on the calendar around that time.
+
+    list_events() queries the window [now, now + days_ahead), so the lookahead
+    must be computed from the extracted event's date — a fixed days_ahead=1
+    meant any emailed event more than a day out was never found and got
+    re-created as a duplicate on every scan.
+    """
+    tz = start.tzinfo or ZoneInfo(TIMEZONE)
+    today = datetime.now(tz).date()
+    # +1 so the window extends through the end of the event's day; floor of 1
+    # keeps same-day (or clock-skewed past) events covered.
+    days_ahead = max((start.date() - today).days + 1, 1)
+    response = await cal.list_events(days_ahead=days_ahead, calendar_id="primary")
     if not response.success:
         return False
 
