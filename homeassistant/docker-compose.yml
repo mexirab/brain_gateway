@@ -1,0 +1,30 @@
+# Home Assistant — runs on Jupiter (the always-on node), migrated off the failed
+# Pi (10.0.0.106) on 2026-07-04. Kept as its own compose project, like the
+# monitoring stack — it's a pulled image with its own lifecycle, not part of the
+# orchestrator's build/deploy. See docs/HA.md for the full runbook.
+#
+# network_mode: host is REQUIRED so Cast/mDNS can discover the Google/Nest
+# speakers on the 10.0.0.x subnet. Pinned to the version the Pi ran (2026.5.1)
+# so a migration doesn't also become an upgrade — bump deliberately later.
+#
+# The /config volume is external runtime state (~125 MB: .storage/, recorder DB,
+# custom_components) and lives OUTSIDE the repo at /home/labadmin/homeassistant/
+# config — never committed. Nightly backup: homeassistant/backup_ha.sh.
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:2026.5.1
+    volumes:
+      - /home/labadmin/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=America/Chicago
+    restart: unless-stopped
+    network_mode: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8123/manifest.json >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s

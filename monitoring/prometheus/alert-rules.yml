@@ -169,6 +169,19 @@ groups:
           summary: "Jess state backup is stale (>36h)"
           description: "The nightly state backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/backup_state.py — auto_learn.key and the SQLite state are unprotected until it runs."
 
+      - alert: JessHABackupStale
+        # Home Assistant runs on Jupiter (migrated off the failed Pi 2026-07-04).
+        # homeassistant/backup_ha.sh runs nightly via cron and writes this. >36h
+        # stale = a nightly HA backup was missed; the config (.storage/auth,
+        # automations, entity registry) is unprotected until it runs.
+        expr: time() - jess_ha_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Home Assistant backup is stale (>36h)"
+          description: "The nightly HA backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + homeassistant/backup_ha.sh."
+
       - alert: JessBackupOffboxFailing
         # Backups still succeed locally, but the off-box copy (JESS_BACKUP_REMOTE)
         # has been failing. Only meaningful once off-box is configured — the

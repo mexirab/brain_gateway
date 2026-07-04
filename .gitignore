@@ -21,6 +21,12 @@ data/app-backup-*/
 # auto_learn.key; never commit them.
 backups/
 jess-state-*.tar.gz
+# Home Assistant runtime state + backups — the /config volume (.storage/auth,
+# secrets, recorder DB) lives outside the repo, but guard against it landing
+# under homeassistant/ if anyone runs from there.
+homeassistant/config/
+homeassistant/backups/
+ha-config-*.tar.gz
 
 # Application runtime state (bind-mounted to /app/data in the container).
 # Holds progress.db, brain_state.db, finance.db, auto_learn.key, etc.
