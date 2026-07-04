@@ -215,7 +215,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `MIN_COS`, `TOP_K` | RAG retrieval params |
 | `GOOGLE_CREDENTIALS_PATH` | OAuth2 client credentials JSON |
 | `GOOGLE_TOKEN_PATH` | OAuth2 refresh token JSON |
-| `CALENDAR_POLL_INTERVAL` | Minutes between calendar polls (default 15) |
+| `CALENDAR_POLL_INTERVAL` | Minutes between calendar polls (default 5) |
 | `MORNING_BRIEFING_TIME` | `HH:MM` for morning briefing (default 07:30) |
 | `MORNING_BRIEFING_ENABLED` | `true`/`false` (default true) |
 | `MORNING_BRIEFING_MIN_VOLUME` | Volume floor (0.0–1.0) the briefing forces on its target speaker via `media_player.volume_set` before `play_media`. Bumps up only — never lowers an already-loud speaker. Set to `0` to disable the floor. Default `0.4`. Defeats "speaker still at sleep-sound volume" — see the 2026-04-30 incident where the briefing played at 0.10 because the bedroom_pair was still on overnight fireplace audio. |

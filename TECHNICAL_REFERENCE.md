@@ -575,7 +575,7 @@ See `.env.example` for full list. Key vars:
 | MIN_COS, TOP_K | RAG params |
 | GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |
 | GOOGLE_TOKEN_PATH | OAuth2 token JSON path |
-| CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 15) |
+| CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 5) |
 | MORNING_BRIEFING_TIME | HH:MM for morning briefing (default: 07:30) |
 | MORNING_BRIEFING_ENABLED | true/false (default: true) |
 
@@ -583,6 +583,6 @@ See `.env.example` for full list. Key vars:
 
 | API | Base URL | Auth |
 |-----|----------|------|
-| Home Assistant | http://10.0.0.106:8123/api | Bearer token |
+| Home Assistant | http://10.0.0.248:8123/api | Bearer token |
 | Google Calendar | https://www.googleapis.com/calendar/v3 | OAuth2 bearer token |
 | SearXNG | http://searxng:8080 (internal) | None |

@@ -142,7 +142,7 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ## Helios Primary Model (Lorbus/Qwen3.6-27B-int4-AutoRound via vLLM)
 
-Helios is always-on in v7. The primary model serves on port 8080 (`vllm-primary.service` running `vllm/vllm-openai:v0.19.1` on GPU0 RTX 5090, since the 2026-04-26 Phase 3 cutover).
+Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 (`vllm-primary.service` running `vllm/vllm-openai:v0.19.1` on GPU0 RTX 5090, since the 2026-04-26 Phase 3 cutover).
 
 ### Check via API
 ```bash

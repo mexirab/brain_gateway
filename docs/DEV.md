@@ -71,10 +71,10 @@ The maintainer's deployment is a 4-node cluster centered on Helios. Brain Gatewa
 
 | Node | IP | GPU | Role |
 |------|-----|-----|------|
-| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | Brain gateway + Docker host; primary LLM, TTS, STT, code agent |
-| Jupiter | 10.0.0.248 | — | Pi-hole primary + monitoring stack (Prometheus, Grafana, Loki) |
-| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (3080), expert reasoner Qwen3-32B (3090), Pi-hole secondary |
-| Uranus | 10.0.0.173 | 2× RTX 5080 | Test box for Phase 1 model-layer boot test |
+| Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | GPU model layer only: primary LLM, TTS, STT, code agent. Power-tiered — asleep most of the time, woken on demand via an HA smart plug. |
+| Jupiter | 10.0.0.248 | — | Always-on hub: orchestrator (:8888), frontend (:3001), Home Assistant (:8123), monitoring stack (Prometheus, Grafana, Loki), Pi-hole primary |
+| Saturn | 10.0.0.58 | RTX 3080 + RTX 3090 | Vision model (3080), expert reasoner Qwen3-32B (3090), Pi-hole secondary, off-box backup target |
+| Uranus | 10.0.0.173 | 2× RTX 5080 | Test box; currently unreachable (not part of the runtime path) |
 
 For Helios-specific details (Tailscale cert, GPU layout, kiosk display, etc.), see [`docs/internal/HELIOS_INFRASTRUCTURE.md`](internal/HELIOS_INFRASTRUCTURE.md).
 
