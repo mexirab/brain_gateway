@@ -33,7 +33,12 @@ async def check_closet_temperature():
         if resp.status_code != 200:
             return
 
-        temp = float(resp.json()["state"])
+        raw_state = resp.json().get("state")
+        if raw_state in (None, "", "unknown", "unavailable"):
+            # HA reports these while a sensor is offline/rebooting — routine,
+            # not an error. Skip silently; this job runs every 10 minutes.
+            return
+        temp = float(raw_state)
         TEMPERATURE_GAUGE.labels(location="closet").set(temp)
 
         # Also grab ambient for delta tracking
@@ -44,9 +49,11 @@ async def check_closet_temperature():
                 timeout=5.0,
             )
             if resp2.status_code == 200:
-                kitchen_temp = float(resp2.json()["state"])
-                TEMPERATURE_GAUGE.labels(location="kitchen").set(kitchen_temp)
-                TEMPERATURE_DELTA.set(temp - kitchen_temp)
+                raw_kitchen = resp2.json().get("state")
+                if raw_kitchen not in (None, "", "unknown", "unavailable"):
+                    kitchen_temp = float(raw_kitchen)
+                    TEMPERATURE_GAUGE.labels(location="kitchen").set(kitchen_temp)
+                    TEMPERATURE_DELTA.set(temp - kitchen_temp)
         except Exception:
             pass
 
