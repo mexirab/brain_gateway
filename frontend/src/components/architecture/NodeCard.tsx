@@ -1,13 +1,14 @@
 'use client';
 
-import { Server, Cpu, Monitor, Home, Mic } from 'lucide-react';
+import { Server, Cpu, Monitor, Home } from 'lucide-react';
+import type { ClusterNode } from '@/lib/constants';
+import type { NodeStatusInfo } from '@/lib/node-status';
 
 const NODE_ICONS: Record<string, React.ElementType> = {
-  jupiter: Server,
+  jupiter: Home,
   saturn: Cpu,
-  uranus: Mic,
-  helios: Monitor,
-  ha: Home,
+  uranus: Monitor,
+  helios: Server,
 };
 
 const NODE_COLORS: Record<string, string> = {
@@ -15,7 +16,6 @@ const NODE_COLORS: Record<string, string> = {
   saturn: 'border-info/30',
   uranus: 'border-accent-violet/30',
   helios: 'border-success/30',
-  ha: 'border-accent-cyan/30',
 };
 
 const GPU_COLORS: Record<string, string> = {
@@ -23,22 +23,27 @@ const GPU_COLORS: Record<string, string> = {
   saturn: 'text-info',
   uranus: 'text-accent-violet',
   helios: 'text-success',
-  ha: 'text-accent-cyan',
+};
+
+// Live-status badge tone → Tailwind classes (dot + text).
+const STATUS_TONE: Record<NodeStatusInfo['tone'], { dot: string; text: string }> = {
+  success: { dot: 'bg-success', text: 'text-success' },
+  warning: { dot: 'bg-warning', text: 'text-warning' },
+  danger: { dot: 'bg-danger', text: 'text-danger' },
+  muted: { dot: 'bg-content-muted', text: 'text-content-muted' },
 };
 
 interface NodeCardProps {
-  id: string;
-  name: string;
-  ip: string;
-  gpu: string | null;
-  role: string;
-  services: readonly string[];
+  node: ClusterNode;
+  status: NodeStatusInfo;
 }
 
-export default function NodeCard({ id, name, ip, gpu, role, services }: NodeCardProps) {
+export default function NodeCard({ node, status }: NodeCardProps) {
+  const { id, name, ip, gpu, role, services } = node;
   const Icon = NODE_ICONS[id] || Server;
   const borderColor = NODE_COLORS[id] || 'border-line-strong/30';
   const accentColor = GPU_COLORS[id] || 'text-content-secondary';
+  const tone = STATUS_TONE[status.tone];
 
   return (
     <div className={`glass p-5 ${borderColor} border-2 hover:scale-[1.02] transition-transform`}>
@@ -50,6 +55,18 @@ export default function NodeCard({ id, name, ip, gpu, role, services }: NodeCard
           <h3 className="text-lg font-bold text-white">{name}</h3>
           <p className="text-xs text-content-muted font-mono">{ip}</p>
         </div>
+        {/* Live status badge — reflects real /api/services health */}
+        <span
+          className={`inline-flex items-center gap-1.5 text-xs font-medium ${tone.text} shrink-0`}
+          title={`Live status: ${status.label}`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${tone.dot} ${
+              status.status === 'online' ? 'animate-pulse' : ''
+            }`}
+          />
+          {status.label}
+        </span>
       </div>
 
       <p className="text-sm text-content-primary mb-2">{role}</p>

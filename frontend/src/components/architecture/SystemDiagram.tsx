@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui';
+import { useHealth, useServices } from '@/lib/hooks';
+import { parsePrimaryModel } from '@/lib/model-name';
+import type { ServicesResponse } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type NodeId =
-  | 'user' | 'echo' | 'wake' | 'stt' | 'webui'
+  | 'user' | 'echo' | 'wake' | 'stt' | 'frontend'
   | 'orchestrator' | 'router' | 'brain'
   | 'ha' | 'memory' | 'calendar' | 'email' | 'web' | 'focus' | 'finance'
   | 'tts' | 'speakers'
@@ -24,6 +27,12 @@ interface DiagramNode {
   glow: string;
   icon: string;
   group?: string;
+  /**
+   * Key in the orchestrator `/api/services` summary that backs this node, if
+   * any. When set, the node shows a LIVE health tint (green/amber/red)
+   * independent of the decorative flow animation.
+   */
+  service?: string;
 }
 
 interface FlowEdge {
@@ -46,27 +55,27 @@ const NODES: DiagramNode[] = [
   // Input layer
   { id: 'user', label: 'You', sub: 'Voice or Text', x: 330, y: 30, w: 120, h: 56, color: '#fbbf24', glow: '#fbbf24', icon: '🎤', group: 'input' },
   { id: 'echo', label: 'ATOM Echo', sub: 'Wake Word', x: 140, y: 115, w: 130, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '📡', group: 'input' },
-  { id: 'webui', label: 'Open WebUI', sub: 'HTTPS Gateway', x: 510, y: 115, w: 140, h: 52, color: '#84838f', glow: '#84838f', icon: '🌐', group: 'input' },
+  { id: 'frontend', label: 'Frontend', sub: 'Next.js · Jupiter', x: 510, y: 115, w: 140, h: 52, color: '#84838f', glow: '#84838f', icon: '🌐', group: 'input' },
 
   // Processing layer
-  { id: 'stt', label: 'Whisper STT', sub: 'Speech → Text', x: 140, y: 205, w: 130, h: 52, color: '#a78bfa', glow: '#a78bfa', icon: '👂', group: 'processing' },
-  { id: 'orchestrator', label: 'Orchestrator', sub: 'Brain Gateway', x: 320, y: 205, w: 160, h: 60, color: '#6f63ff', glow: '#6f63ff', icon: '🧠', group: 'processing' },
+  { id: 'stt', label: 'Whisper STT', sub: 'Speech → Text · Helios', x: 140, y: 205, w: 130, h: 52, color: '#a78bfa', glow: '#a78bfa', icon: '👂', group: 'processing', service: 'stt' },
+  { id: 'orchestrator', label: 'Orchestrator', sub: 'Unified loop · Jupiter', x: 320, y: 205, w: 160, h: 60, color: '#6f63ff', glow: '#6f63ff', icon: '🧠', group: 'processing' },
   { id: 'router', label: 'Mode Router', sub: 'Intent + Emotion', x: 520, y: 205, w: 140, h: 52, color: '#6f63ff', glow: '#6f63ff', icon: '🎯', group: 'processing' },
 
-  // AI layer (unified v7 — single brain model)
-  { id: 'brain', label: 'Brain', sub: 'Qwen3.5-27B · RTX 5090', x: 320, y: 320, w: 160, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai' },
+  // AI layer (unified v7 — single brain model on Helios, wake-on-demand)
+  { id: 'brain', label: 'Brain', sub: 'Primary LLM · Helios', x: 320, y: 320, w: 160, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai', service: 'model' },
 
   // Tools layer (2 rows of 4 to fit width)
-  { id: 'ha', label: 'Home', sub: 'Lights · Switches', x: 50, y: 425, w: 105, h: 46, color: '#34d3e0', glow: '#34d3e0', icon: '🏠', group: 'tools' },
-  { id: 'memory', label: 'Memory', sub: '154 RAG Docs', x: 168, y: 425, w: 105, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '🧩', group: 'tools' },
+  { id: 'ha', label: 'Home', sub: 'Lights · Switches', x: 50, y: 425, w: 105, h: 46, color: '#34d3e0', glow: '#34d3e0', icon: '🏠', group: 'tools', service: 'ha' },
+  { id: 'memory', label: 'Memory', sub: 'RAG Docs', x: 168, y: 425, w: 105, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '🧩', group: 'tools' },
   { id: 'calendar', label: 'Calendar', sub: 'Google Cal', x: 286, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📅', group: 'tools' },
   { id: 'email', label: 'Email', sub: 'Gmail', x: 404, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📧', group: 'tools' },
-  { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 522, y: 425, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '🔍', group: 'tools' },
+  { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 522, y: 425, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '🔍', group: 'tools', service: 'searxng' },
   { id: 'focus', label: 'Focus', sub: 'Pomodoro', x: 168, y: 480, w: 105, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🎯', group: 'tools' },
   { id: 'finance', label: 'Finance', sub: 'YNAB', x: 286, y: 480, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
 
   // Output layer
-  { id: 'tts', label: 'Jessica TTS', sub: 'Qwen3-TTS · Voice Clone', x: 180, y: 565, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output' },
+  { id: 'tts', label: 'Jessica TTS', sub: 'Voice Clone · Helios', x: 180, y: 565, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
   { id: 'speakers', label: 'All Speakers', sub: 'Google Home Group', x: 420, y: 565, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔊', group: 'output' },
 
   // Background jobs (right side)
@@ -130,13 +139,13 @@ const FLOWS: FlowPath[] = [
     description: '"Jess, what pattern do I fall into when I feel rejected?"',
     color: '#34d399',
     edges: [
-      { from: 'user', to: 'webui', label: 'Type or speak' },
-      { from: 'webui', to: 'orchestrator', label: 'Message' },
+      { from: 'user', to: 'frontend', label: 'Type or speak' },
+      { from: 'frontend', to: 'orchestrator', label: 'Message' },
       { from: 'orchestrator', to: 'router', label: 'Classify' },
       { from: 'router', to: 'brain', label: 'Mirror mode' },
       { from: 'brain', to: 'memory', label: 'RAG query' },
       { from: 'memory', to: 'brain', label: 'Pattern docs' },
-      { from: 'brain', to: 'webui', label: 'Personalized response' },
+      { from: 'brain', to: 'frontend', label: 'Personalized response' },
     ],
   },
 ];
@@ -164,6 +173,23 @@ function edgePath(from: DiagramNode, to: DiagramNode): string {
   return `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`;
 }
 
+// LIVE health dot color for a service-backed node, from /api/services.
+// Returns null when the node isn't service-backed or health is unknown, so we
+// don't render a misleading dot. Helios services (model/tts/stt) report as
+// amber ("configured but not healthy" = asleep) rather than red.
+const HELIOS_SERVICES = new Set(['model', 'tts', 'stt']);
+
+function serviceDotColor(
+  node: DiagramNode,
+  services: ServicesResponse | undefined,
+): string | null {
+  if (!node.service || !services) return null;
+  const info = services.services[node.service];
+  if (!info) return null; // unconfigured — nothing to show
+  if (info.healthy) return '#34d399'; // green
+  return HELIOS_SERVICES.has(node.service) ? '#fbbf24' : '#fb7185'; // amber : red
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function SystemDiagram() {
@@ -171,6 +197,18 @@ export default function SystemDiagram() {
   const [activeStep, setActiveStep] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<NodeId | null>(null);
+
+  // Live data — real model name, RAG doc count, and per-service health.
+  const { data: health } = useHealth();
+  const { data: services } = useServices();
+  const brainModel = parsePrimaryModel(health?.primary);
+  const ragDocs = health?.rag_docs;
+
+  // Live sublabel overrides keyed by node id (empty until data loads).
+  const liveSub: Partial<Record<NodeId, string>> = {
+    brain: `${brainModel} · Helios`,
+    ...(ragDocs != null ? { memory: `${ragDocs} RAG Docs` } : {}),
+  };
 
   const flow = FLOWS[activeFlow];
 
@@ -216,9 +254,22 @@ export default function SystemDiagram() {
       <h2 className="text-lg md:text-xl font-bold text-white mb-1">
         How Jess Works
       </h2>
-      <p className="text-xs md:text-sm text-content-secondary mb-4">
+      <p className="text-xs md:text-sm text-content-secondary mb-3">
         Tap a scenario to see data flow through the system in real time
       </p>
+
+      {/* Live-status legend — the dots on service-backed nodes are real health */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 text-[11px] text-content-muted">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: '#34d399' }} /> Live
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: '#fbbf24' }} /> Asleep (Helios)
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: '#fb7185' }} /> Down
+        </span>
+      </div>
 
       {/* Flow selector pills */}
       <div className="flex flex-wrap gap-2 mb-4">
@@ -362,6 +413,8 @@ export default function SystemDiagram() {
             const isActive2 = activeNodes.has(node.id);
             const isHovered = hoveredNode === node.id;
             const lit = isActive2 || isHovered;
+            const dotColor = serviceDotColor(node, services);
+            const sub = liveSub[node.id] ?? node.sub;
 
             return (
               <g
@@ -422,8 +475,23 @@ export default function SystemDiagram() {
                   className="text-[8px]"
                   fill={lit ? node.color : '#84838f'}
                 >
-                  {node.sub}
+                  {sub}
                 </text>
+
+                {/* LIVE health dot (service-backed nodes only) — reflects real
+                    /api/services health, independent of the flow animation. */}
+                {dotColor && (
+                  <circle
+                    cx={node.x + node.w - 9}
+                    cy={node.y + 9}
+                    r={3.5}
+                    fill={dotColor}
+                  >
+                    {dotColor === '#34d399' && (
+                      <animate attributeName="opacity" values="1;0.4;1" dur="2.5s" repeatCount="indefinite" />
+                    )}
+                  </circle>
+                )}
               </g>
             );
           })}
