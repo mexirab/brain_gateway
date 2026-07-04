@@ -19,6 +19,32 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# `extra_body` keys that are vLLM/llama.cpp server extensions with no direct
+# equivalent on the cloud APIs. The cloud backends drop these instead of
+# forwarding them (OpenAI would 400 on unknown params) — and they must never
+# TypeError: the Anthropic/OpenAI backends are the brain-asleep fallback path,
+# so a signature mismatch here takes down every chat while Helios sleeps.
+_VLLM_ONLY_KEYS = frozenset(
+    {
+        "chat_template_kwargs",
+        "guided_json",
+        "guided_regex",
+        "guided_choice",
+        "guided_grammar",
+        "min_p",
+        "repetition_penalty",
+        "best_of",
+        "use_beam_search",
+        "top_k",  # OpenAI has no top_k; Anthropic maps it explicitly below
+    }
+)
+
+
+def _warn_ignored_kwargs(backend_name: str, ignored: Dict[str, Any]) -> None:
+    """One warning per unexpected-kwarg call — accepted for compatibility."""
+    if ignored:
+        logger.warning("[LLM] %s.chat_completion ignoring unsupported kwargs: %s", backend_name, sorted(ignored))
+
 
 @dataclass
 class LLMConfig:
@@ -48,12 +74,17 @@ class LLMBackend(ABC):
         tool_choice: str = "auto",
         timeout: int = 180,
         extra_body: Optional[Dict] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Non-streaming chat completion.
 
         All backends accept OpenAI-format messages and return OpenAI-format response.
         Translation to/from provider-native format is handled internally.
+
+        Implementations MUST accept every keyword `orchestrator.call_model`
+        passes (including `extra_body`) and tolerate unknown future kwargs —
+        raising TypeError here breaks the cloud-fallback chat path entirely.
         """
         ...
 
@@ -85,7 +116,10 @@ class OpenAICompatibleBackend(LLMBackend):
     This is the current behavior — essentially a thin wrapper.
     """
 
-    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180, extra_body=None):
+    async def chat_completion(
+        self, messages, system="", tools=None, tool_choice="auto", timeout=180, extra_body=None, **kwargs
+    ):
+        _warn_ignored_kwargs("OpenAICompatibleBackend", kwargs)
         final_messages = messages.copy()
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
@@ -278,7 +312,25 @@ class AnthropicBackend(LLMBackend):
             "usage": anthropic_resp.get("usage", {}),
         }
 
-    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180):
+    @staticmethod
+    def _apply_extra_body(payload: Dict[str, Any], extra_body: Optional[Dict]) -> None:
+        """Map the generic sampling keys from `extra_body` onto a Messages API
+        payload; drop vLLM-only keys (chat_template_kwargs & co.) instead of
+        forwarding params the API would reject."""
+        for key, value in (extra_body or {}).items():
+            if key in ("max_tokens", "temperature", "top_p"):
+                payload[key] = value
+            elif key == "top_k" and isinstance(value, int) and value > 0:
+                payload["top_k"] = value  # Anthropic supports top_k natively
+            elif key == "stop":
+                payload["stop_sequences"] = value if isinstance(value, list) else [value]
+            else:
+                logger.debug("[LLM] AnthropicBackend dropping unsupported extra_body key: %s", key)
+
+    async def chat_completion(
+        self, messages, system="", tools=None, tool_choice="auto", timeout=180, extra_body=None, **kwargs
+    ):
+        _warn_ignored_kwargs("AnthropicBackend", kwargs)
         anthropic_messages = self._convert_messages_to_anthropic(messages)
 
         payload = {
@@ -294,6 +346,7 @@ class AnthropicBackend(LLMBackend):
             # Anthropic doesn't have tool_choice="none" the same way.
             # For Claude as orchestrator, always use auto (native tool calling).
             payload["tool_choice"] = {"type": "auto"}
+        self._apply_extra_body(payload, extra_body)
 
         headers = {
             "x-api-key": self.config.api_key,
@@ -388,7 +441,10 @@ class OpenAIBackend(LLMBackend):
     Nearly identical to OpenAICompatibleBackend but always uses Bearer auth.
     """
 
-    async def chat_completion(self, messages, system="", tools=None, tool_choice="auto", timeout=180):
+    async def chat_completion(
+        self, messages, system="", tools=None, tool_choice="auto", timeout=180, extra_body=None, **kwargs
+    ):
+        _warn_ignored_kwargs("OpenAIBackend", kwargs)
         final_messages = messages.copy()
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
@@ -402,6 +458,13 @@ class OpenAIBackend(LLMBackend):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
+        if extra_body:
+            # Standard OpenAI params (max_tokens, temperature, stop, ...) pass
+            # through; vLLM server extensions would 400 and are dropped.
+            dropped = _VLLM_ONLY_KEYS.intersection(extra_body)
+            if dropped:
+                logger.debug("[LLM] OpenAIBackend dropping vLLM-only extra_body keys: %s", sorted(dropped))
+            payload.update({k: v for k, v in extra_body.items() if k not in _VLLM_ONLY_KEYS})
 
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
 
