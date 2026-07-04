@@ -118,19 +118,19 @@ scrape_configs:
           service: 'tts'
           node: 'helios'
 
-      # STT (Parakeet TDT v3 on Helios GPU1)
+      # STT (Whisper on Helios GPU1)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_STT_PORT}/health']
         labels:
           service: 'stt'
           node: 'helios'
 
-      # Primary LLM (vllm-primary on Helios GPU0 — Lorbus/Qwen3.6-27B-int4-AutoRound, since 2026-04-26 Phase 3 cutover)
+      # Primary LLM (llama-server on Helios GPU1)
       - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
         labels:
           service: 'llama-primary'
           node: 'helios'
 
-      # Code agent (llama-server-coder on Helios GPU1 — repinned GPU0→GPU1 at Phase 3 cutover)
+      # Code agent (llama-server on Helios GPU0)
       - targets: ['http://${NODE_HELIOS_IP}:8082/v1/models']
         labels:
           service: 'llama-coder'
@@ -170,6 +170,34 @@ scrape_configs:
         labels:
           service: 'orchestrator'
           node: 'helios'
+
+  # ============================================
+  # UPS METRICS (NUT exporter on Helios)
+  # ============================================
+  # Both UPSes are USB-attached to Helios; the NUT systemd service reads them
+  # and the nut_exporter Docker container exposes /ups_metrics on port 9199.
+  # The exporter requires `?ups=<name>` per scrape, so we use relabeling to
+  # turn the static targets into URL params and tag each series with `ups`.
+  #
+  # CyberPower CP1500PFCLCD (1000W) exposes ups.load + input/output voltage.
+  # Goldenmate 2000VA LiFePO4 (iDowell chipset) only exposes status + battery
+  # state — no load watts available from firmware. For Goldenmate watts, use
+  # a Kasa/Tapo smart plug at the wall (separate ingestion via Home Assistant)
+  # or sum nvidia-smi power draw on Helios.
+  - job_name: 'nut'
+    metrics_path: /ups_metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['cyberpower', 'goldenmate']
+        labels:
+          node: 'helios'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: ups
+      - source_labels: [__address__]
+        target_label: __param_ups
+      - target_label: __address__
+        replacement: '${NODE_HELIOS_IP}:9199'
 
   # ============================================
   # NETDATA - Detailed System Metrics

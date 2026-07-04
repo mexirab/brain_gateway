@@ -107,92 +107,24 @@ groups:
         annotations:
           summary: "Calendar polling has >5 errors in the last hour"
 
-      # A routine force-ended because a step nudged past the cap (non-skippable,
-      # or auto-skip disabled) — the 2026-04-17 "evening-meds stuck all night"
-      # class of bug. Surfaces it instead of relying on the user noticing.
-      - alert: RoutineAutoEnded
-        expr: increase(bgw_routine_auto_ended_total[6h]) > 0
-        for: 1m
-        labels:
-          severity: info
-        annotations:
-          summary: "Routine '{{ $labels.routine }}' auto-ended on a stuck step"
-          description: "Step '{{ $labels.step }}' nudged past the cap and force-ended the routine. Check the step's skippable/auto_skip config or whether the user is being nudged about something they can't action."
-
   # ===========================================================================
-  # Dead-man's switches — silent-outage detectors
+  # Self-Hosted App Server (Jupiter)
   # ===========================================================================
-  # The orchestrator being down for weeks once looked like a calendar-token
-  # problem (it sat unnoticed ~2 months). These page when the daily jobs stop
-  # firing or the Google token stops being refreshed, instead of failing quietly.
-  - name: brain_gateway_deadmans
-    interval: 60s
+  # Lightweight self-hosted apps (Actual Budget, etc.) run on Jupiter and are
+  # probed by the blackbox-http job. Every app target carries tier="app", so
+  # this one rule covers all of them — adding an app means adding a scrape
+  # target in prometheus.yml, not a new alert here.
+  - name: app_server
+    interval: 30s
     rules:
-      - alert: MorningBriefingStale
-        # Briefing fires daily; >26h without a run means the scheduler stopped.
-        # The `> 0` guard keeps this silent when the briefing is disabled (the
-        # gauge is 0 until the job is scheduled + first fires).
-        expr: time() - bgw_morning_briefing_last_run_timestamp_seconds > 93600 and bgw_morning_briefing_last_run_timestamp_seconds > 0
-        for: 30m
+      - alert: AppDown
+        expr: probe_success{tier="app"} == 0
+        for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Morning briefing hasn't fired in over a day"
-          description: "Last briefing was {{ $value | humanizeDuration }} ago — it should run daily. The orchestrator or its scheduler may be down."
-
-      - alert: GoogleTokenRefreshStale
-        # scripts/refresh_google_token.py runs weekly via cron on the always-on
-        # host and writes this timestamp. >8 days stale = the cron or the refresh
-        # itself is failing; Calendar/Gmail will silently break once the token
-        # lapses. (No `> 0` guard needed — the series only exists once the cron
-        # has succeeded at least once.)
-        expr: time() - jess_google_token_refresh_success_timestamp_seconds > 691200
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "Google OAuth token refresh is stale (>8 days)"
-          description: "The weekly token refresh hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/refresh_google_token.py before the token lapses."
-
-      - alert: JessBackupStale
-        # scripts/backup_state.py runs nightly via cron on the always-on host and
-        # writes this timestamp. >36h stale = a nightly backup was missed (cron
-        # broken, disk full, or the script failing). The backed-up set includes
-        # auto_learn.key — without a fresh backup, a disk loss permanently bricks
-        # the encrypted memories. (The series only exists once it has succeeded
-        # once, so no `> 0` guard is needed.)
-        expr: time() - jess_backup_success_timestamp_seconds > 129600
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "Jess state backup is stale (>36h)"
-          description: "The nightly state backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/backup_state.py — auto_learn.key and the SQLite state are unprotected until it runs."
-
-      - alert: JessHABackupStale
-        # Home Assistant runs on Jupiter (migrated off the failed Pi 2026-07-04).
-        # homeassistant/backup_ha.sh runs nightly via cron and writes this. >36h
-        # stale = a nightly HA backup was missed; the config (.storage/auth,
-        # automations, entity registry) is unprotected until it runs.
-        expr: time() - jess_ha_backup_success_timestamp_seconds > 129600
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "Home Assistant backup is stale (>36h)"
-          description: "The nightly HA backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + homeassistant/backup_ha.sh."
-
-      - alert: JessBackupOffboxFailing
-        # Backups still succeed locally, but the off-box copy (JESS_BACKUP_REMOTE)
-        # has been failing. Only meaningful once off-box is configured — the
-        # series is absent otherwise, so this stays silent on local-only setups.
-        expr: jess_backup_offbox_success == 0
-        for: 3d
-        labels:
-          severity: info
-        annotations:
-          summary: "Jess off-box backup copy has been failing for 3 days"
-          description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+          summary: "Self-hosted app '{{ $labels.service }}' is down"
+          description: "{{ $labels.service }} on {{ $labels.node }} has failed its HTTP probe for 2 minutes."
 
   # ===========================================================================
   # UPS / Power Chain
@@ -266,3 +198,61 @@ groups:
         annotations:
           summary: "Wall voltage abnormal: {{ $value }}V on {{ $labels.ups }}"
           description: "Sustained out-of-range input voltage. Brownout, surge, or wiring issue."
+
+  - name: brain_gateway_deadmans
+    interval: 60s
+    rules:
+      - alert: MorningBriefingStale
+        expr: time() - bgw_morning_briefing_last_run_timestamp_seconds > 93600 and bgw_morning_briefing_last_run_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Morning briefing has not fired in over a day"
+          description: "Last briefing was {{ $value | humanizeDuration }} ago - should run daily; orchestrator/scheduler may be down."
+      - alert: GoogleTokenRefreshStale
+        expr: time() - jess_google_token_refresh_success_timestamp_seconds > 691200
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Google OAuth token refresh is stale (>8 days)"
+          description: "Weekly token refresh has not succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/refresh_google_token.py."
+      - alert: JessBackupStale
+        expr: time() - jess_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jess state backup is stale (>36h)"
+          description: "The nightly state backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/backup_state.py — auto_learn.key and the SQLite state are unprotected until it runs."
+      - alert: JessHABackupStale
+        # Home Assistant now runs on Jupiter (migrated off the failed Pi 2026-07-04).
+        # /home/labadmin/homeassistant/backup_ha.sh runs nightly and writes this.
+        # >36h stale = a nightly HA backup was missed; the config (.storage/auth,
+        # automations, entity registry) is unprotected until it runs.
+        expr: time() - jess_ha_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Home Assistant backup is stale (>36h)"
+          description: "The nightly HA backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/homeassistant/backup_ha.sh."
+      - alert: JessBackupOffboxFailing
+        expr: jess_backup_offbox_success == 0
+        for: 3d
+        labels:
+          severity: info
+        annotations:
+          summary: "Jess off-box backup copy has been failing for 3 days"
+          description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+  - name: brain_gateway_routine
+    rules:
+      - alert: RoutineAutoEnded
+        expr: increase(bgw_routine_auto_ended_total[6h]) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Routine auto-ended on a stuck step"
+          description: "A routine step nudged past the cap and force-ended. Check the step skippable/auto_skip config."

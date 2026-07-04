@@ -1,0 +1,18 @@
+# Homepage — homelab launcher / front door. Its own compose project (run from
+# this dir). Config lives in ./config (version-controlled); secrets in .env
+# (gitignored — copy .env.example). Consolidated 2026-07-04 to lead with Jess
+# and de-surface pure-backend UIs; see the header of config/services.yaml.
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "7575:3000"
+    volumes:
+      - ./config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    env_file: .env
+    environment:
+      - TZ=America/Chicago
+      - HOMEPAGE_ALLOWED_HOSTS=jupiter-amds.tail74fc4a.ts.net:7575,10.0.0.248:7575,100.102.29.14:7575,localhost:7575
