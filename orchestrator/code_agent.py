@@ -12,6 +12,7 @@ Git checkpoint is created before any write operation.
 import json
 import logging
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -20,29 +21,86 @@ from orchestrator.tool_registry import register_tool
 
 logger = logging.getLogger(__name__)
 
-# Allowlisted commands for run_command tool (prefixes)
-_COMMAND_ALLOWLIST = [
-    "python -m pytest",
-    "pytest",
-    "docker logs",
-    "docker exec",
-    "git diff",
-    "git log",
-    "git status",
-    "git show",
-    "cat ",
-    "head ",
-    "tail ",
-    "wc ",
-    "grep ",
-    "rg ",
-    "find ",
-    "ls ",
-    "systemctl status",
-    "journalctl",
-    "curl -s http://localhost",
-    "curl -s http://10.0.0",
+# Allowlisted commands for run_command, as argv-token prefixes. Commands are
+# tokenized with shlex and executed WITHOUT a shell, so chaining (`;`, `&&`,
+# `|`), redirection, and substitution have no effect — the old string-prefix
+# check ran `shell=True`, and `cat foo; <anything>` sailed through on the
+# "cat " prefix. `docker exec` was dropped: it is arbitrary root execution in
+# any container, which defeats the point of an allowlist.
+_COMMAND_ALLOWLIST: list[list[str]] = [
+    ["python", "-m", "pytest"],
+    ["pytest"],
+    ["docker", "logs"],
+    ["git", "diff"],
+    ["git", "log"],
+    ["git", "status"],
+    ["git", "show"],
+    ["cat"],
+    ["head"],
+    ["tail"],
+    ["wc"],
+    ["grep"],
+    ["rg"],
+    ["find"],
+    ["ls"],
+    ["systemctl", "status"],
+    ["journalctl"],
+    ["curl"],
 ]
+
+# find can execute arbitrary binaries or delete files through these.
+_FIND_BLOCKED_FLAGS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls"}
+
+# curl is for GET-ing LAN debug endpoints only: no local file writes, no
+# request bodies (which can read local files via @path), no method override.
+_CURL_BLOCKED_FLAGS = {
+    "-o",
+    "-O",
+    "--output",
+    "--output-dir",
+    "-T",
+    "--upload-file",
+    "-d",
+    "--data",
+    "--data-binary",
+    "--data-raw",
+    "--data-urlencode",
+    "--json",
+    "-F",
+    "--form",
+    "-K",
+    "--config",
+    "-X",
+    "--request",
+    "-u",
+    "--user",
+}
+_CURL_URL_PREFIXES = ("http://localhost", "http://127.0.0.1", "http://10.0.0.")
+
+
+def _command_rejection(argv: list[str]) -> str | None:
+    """Return a rejection reason for an argv, or None if it is allowed."""
+    if not argv:
+        return "empty command"
+    for prefix in _COMMAND_ALLOWLIST:
+        if argv[: len(prefix)] == prefix:
+            break
+    else:
+        allowed = ", ".join(" ".join(p) for p in _COMMAND_ALLOWLIST[:10])
+        return f"command not allowed. Permitted commands: {allowed}..."
+    if argv[0] == "find":
+        blocked = _FIND_BLOCKED_FLAGS.intersection(argv)
+        if blocked:
+            return f"find flag not allowed: {sorted(blocked)[0]}"
+    if argv[0] == "curl":
+        blocked = _CURL_BLOCKED_FLAGS.intersection(argv)
+        if blocked:
+            return f"curl flag not allowed: {sorted(blocked)[0]}"
+        urls = [a for a in argv if "://" in a]
+        if not urls or not all(u.startswith(_CURL_URL_PREFIXES) for u in urls):
+            return "curl is restricted to http://localhost / http://127.0.0.1 / http://10.0.0.* URLs"
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Inner tools for the coding agent
@@ -169,16 +227,21 @@ def _inner_list_files(arguments: dict) -> str:
 
 
 def _inner_run_command(arguments: dict) -> str:
-    """Run an allowlisted shell command."""
+    """Run an allowlisted command (no shell — see _command_rejection)."""
     command = arguments.get("command", "")
 
-    if not any(command.strip().startswith(prefix) for prefix in _COMMAND_ALLOWLIST):
-        return f"Error: command not allowed. Permitted prefixes: {', '.join(_COMMAND_ALLOWLIST[:10])}..."
+    try:
+        argv = shlex.split(command)
+    except ValueError as parse_err:
+        return f"Error: could not parse command: {parse_err}"
+
+    reason = _command_rejection(argv)
+    if reason:
+        return f"Error: {reason}"
 
     try:
         result = subprocess.run(
-            command,
-            shell=True,
+            argv,
             capture_output=True,
             text=True,
             timeout=60,
