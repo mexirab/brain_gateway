@@ -9,6 +9,7 @@ Domain-specific routes are split into separate modules and included as sub-route
 - routes_vision: /api/vision/*, /api/stt/*, /api/tts/*
 """
 
+import contextlib
 import logging
 import os
 from datetime import datetime, timedelta
@@ -649,6 +650,21 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
             html_headline="Couldn't snooze",
             html_subtext="Something went wrong rescheduling. Check back later.",
         )
+
+    # Delivery already marked this reminder 'completed', and
+    # deliver_reminder_job skips anything non-pending — without this reset the
+    # snoozed job fires into the guard and the reminder never comes back
+    # (while the user holds a "Snoozed until 3:10" confirmation).
+    _ss.reopen_reminder(reminder_id)
+
+    # The snooze supersedes any pending TTS-failure retry; kill it so the
+    # reminder doesn't fire twice (once at +2min from the retry, once at the
+    # snoozed time).
+    retry_job_id = f"reminder_{reminder_id}_retry"
+    if scheduler.get_job(retry_job_id):
+        with contextlib.suppress(Exception):
+            scheduler.remove_job(retry_job_id)
+            logger.info(f"[NTFY-SNOOZE] Cancelled pending retry job for {reminder_id}")
 
     new_count = _ss.increment_snooze_count(reminder_id)
     NTFY_SNOOZE_TOTAL.inc()

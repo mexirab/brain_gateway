@@ -1001,3 +1001,64 @@ class TestSnoozeConfirmWiring:
 
         assert r.status_code == 200
         mock_confirm.assert_called_once()
+
+
+class TestSnoozeAfterDelivery:
+    """Regression for the 2026-07-04 audit P0: delivery marks a reminder
+    'completed'; the snooze callback used to reschedule the job WITHOUT
+    resetting status, so the redelivery hit deliver_reminder_job's
+    "already completed, skipping" guard and the reminder never came back —
+    while the user held a "Snoozed until 3:10" confirmation."""
+
+    def test_snoozed_after_delivery_actually_redelivers(self, client, ntfy_on, tmp_db, clean_scheduler):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from orchestrator import state_store, tool_handlers
+
+        state_store.save_reminder("r1", "take meds", "2026-04-20T09:00:00")
+        # Simulate the first delivery having completed the reminder.
+        state_store.complete_reminder("r1")
+        assert state_store.get_reminder("r1")["status"] == "completed"
+
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "snooze", exp, extra="10")
+        r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
+        assert r.status_code == 200
+
+        # Snooze must reopen the reminder...
+        assert state_store.get_reminder("r1")["status"] == "pending"
+
+        # ...so the rescheduled delivery actually fires instead of skipping.
+        with (
+            patch.object(tool_handlers, "_announce_voice", AsyncMock(return_value={"success": True})),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value={"success": True})) as mock_phone,
+        ):
+            asyncio.get_event_loop().run_until_complete(tool_handlers.deliver_reminder_job("r1"))
+
+        mock_phone.assert_called_once()
+        assert state_store.get_reminder("r1")["status"] == "completed"
+
+    def test_snooze_cancels_pending_tts_retry(self, client, ntfy_on, tmp_db, clean_scheduler):
+        """A snooze supersedes any scheduled TTS-failure retry — otherwise the
+        reminder fires twice (retry at +2min, snooze at +10min)."""
+        from datetime import timedelta
+
+        from orchestrator import state_store
+        from orchestrator.tool_handlers import deliver_reminder_job
+
+        state_store.save_reminder("r1", "tick", "2026-04-20T09:00:00")
+        clean_scheduler.add_job(
+            deliver_reminder_job,
+            trigger="date",
+            run_date=datetime.now(UTC) + timedelta(minutes=2),
+            args=["r1"],
+            id="reminder_r1_retry",
+        )
+
+        exp = int(time.time()) + 300
+        sig = _make_sig("r1", "snooze", exp, extra="10")
+        r = client.post(f"/api/reminder/snooze/r1?sig={sig}&exp={exp}&minutes=10")
+        assert r.status_code == 200
+        assert clean_scheduler.get_job("reminder_r1_retry") is None
+        assert clean_scheduler.get_job("reminder_r1") is not None

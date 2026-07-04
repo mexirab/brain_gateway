@@ -188,6 +188,16 @@ REMINDERS_PENDING = Gauge(
     "Currently pending reminders",
 )
 
+REMINDERS_FAILED = Counter(
+    "bgw_reminders_failed_total",
+    "Reminders that exhausted every delivery channel and were marked failed",
+)
+
+REMINDERS_MISSED = Counter(
+    "bgw_reminders_missed_total",
+    "Reminders found >24h past due at startup and marked missed instead of delivered",
+)
+
 # -- ntfy feedback loop (F-011) ---------------------------------------------
 NTFY_PUSH_TOTAL = Counter(
     "bgw_ntfy_push_total",
