@@ -154,6 +154,33 @@ groups:
           summary: "Google OAuth token refresh is stale (>8 days)"
           description: "The weekly token refresh hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/refresh_google_token.py before the token lapses."
 
+      - alert: JessBackupStale
+        # scripts/backup_state.py runs nightly via cron on the always-on host and
+        # writes this timestamp. >36h stale = a nightly backup was missed (cron
+        # broken, disk full, or the script failing). The backed-up set includes
+        # auto_learn.key — without a fresh backup, a disk loss permanently bricks
+        # the encrypted memories. (The series only exists once it has succeeded
+        # once, so no `> 0` guard is needed.)
+        expr: time() - jess_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jess state backup is stale (>36h)"
+          description: "The nightly state backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + scripts/backup_state.py — auto_learn.key and the SQLite state are unprotected until it runs."
+
+      - alert: JessBackupOffboxFailing
+        # Backups still succeed locally, but the off-box copy (JESS_BACKUP_REMOTE)
+        # has been failing. Only meaningful once off-box is configured — the
+        # series is absent otherwise, so this stays silent on local-only setups.
+        expr: jess_backup_offbox_success == 0
+        for: 3d
+        labels:
+          severity: info
+        annotations:
+          summary: "Jess off-box backup copy has been failing for 3 days"
+          description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+
   # ===========================================================================
   # UPS / Power Chain
   # ===========================================================================

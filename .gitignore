@@ -17,6 +17,10 @@ user_profile.nadim.yaml
 *.bak.*
 .env.bak*
 data/app-backup-*/
+# scripts/backup_state.py output — state archives contain the OAuth token and
+# auto_learn.key; never commit them.
+backups/
+jess-state-*.tar.gz
 
 # Application runtime state (bind-mounted to /app/data in the container).
 # Holds progress.db, brain_state.db, finance.db, auto_learn.key, etc.
