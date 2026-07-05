@@ -309,6 +309,24 @@ class Settings(BaseSettings):
     pushover_api_url: str = "https://api.pushover.net/1/messages.json"
     pushover_upload_timeout_seconds: int = 10
 
+    # -- Telegram bot ------------------------------------------------------------
+    # Two-way capture + reminder channel: a long-polling background task
+    # relays inbound text through /v1/chat/completions (full Jess, tools
+    # included) and delivers reminders with inline Done/Snooze buttons.
+    # Long-polling = outbound HTTPS only; no webhook, no public ingress.
+    # Setup: create a bot with @BotFather, set the token + enable, message
+    # the bot once, copy your chat ID from the orchestrator log into
+    # TELEGRAM_ALLOWED_CHAT_ID, restart. Updates from any other chat are
+    # dropped (ID logged, content never).
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""  # from @BotFather
+    telegram_allowed_chat_id: str = ""  # your chat ID; comma-separated for several
+    telegram_api_base: str = "https://api.telegram.org"
+    telegram_self_url: str = "http://127.0.0.1:8888"  # orchestrator base for the chat relay
+    telegram_poll_timeout_seconds: int = 50  # getUpdates long-poll window
+    telegram_snooze_minutes: int = 10  # snooze button duration
+    telegram_history_turns: int = 16  # rolling RAM-only context window (messages)
+
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
     # mirror state — Paperless owns its files and metadata. document_vault
@@ -414,6 +432,31 @@ class Settings(BaseSettings):
             object.__setattr__(self, "pushover_default_priority", -2)
         elif self.pushover_default_priority > 2:
             object.__setattr__(self, "pushover_default_priority", 2)
+        return self
+
+    @model_validator(mode="after")
+    def validate_telegram_config(self) -> "Settings":
+        """Auto-disable the Telegram bot on a missing token. Log + disable,
+        never raise — optional feature must not block startup.
+
+        An empty TELEGRAM_ALLOWED_CHAT_ID is deliberately allowed: the setup
+        flow is to start the bot without it, message the bot once, and copy
+        your chat ID out of the orchestrator log. Until it's set, every
+        update is dropped and reminder delivery skips the channel.
+        """
+        if self.telegram_enabled and len(self.telegram_bot_token) < 20:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] TELEGRAM_ENABLED=true but TELEGRAM_BOT_TOKEN is "
+                "missing/short; disabling Telegram. Get a token from "
+                "@BotFather and set it in .env to re-enable."
+            )
+            object.__setattr__(self, "telegram_enabled", False)
+        if self.telegram_snooze_minutes < 1:
+            object.__setattr__(self, "telegram_snooze_minutes", 1)
+        elif self.telegram_snooze_minutes > 120:
+            object.__setattr__(self, "telegram_snooze_minutes", 120)
         return self
 
     @model_validator(mode="after")

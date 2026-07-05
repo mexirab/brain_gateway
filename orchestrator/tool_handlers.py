@@ -658,15 +658,40 @@ async def deliver_reminder_job(
                 exc_info=True,
             )
 
-        # ntfy/pushover are detached fire-and-forget tasks, so their outcome
-        # is unknowable here; count the phone channel as delivered if the HA
-        # Companion push succeeded or at least one push channel is enabled and
-        # was dispatched. Before this, the HA result was discarded entirely —
-        # a phone-only reminder with every channel off/down was still marked
-        # completed ("delivered into the void").
+        # Telegram push — reminder message with inline Done/Snooze buttons.
+        # Same detached-task pattern.
+        try:
+            import asyncio as _asyncio_tg
+
+            from orchestrator.telegram_bot import deliver_via_telegram
+
+            async def _telegram_and_log() -> None:
+                try:
+                    await deliver_via_telegram(reminder_id, text)
+                except Exception as push_err:
+                    logger.error(
+                        f"[REMINDER] telegram push raised for {reminder_id}: {push_err}",
+                        extra={"component": "reminder"},
+                        exc_info=True,
+                    )
+
+            _asyncio_tg.create_task(_telegram_and_log())
+        except Exception as tg_err:
+            logger.error(
+                f"[REMINDER] telegram dispatch failed for {reminder_id}: {tg_err}",
+                extra={"component": "reminder"},
+                exc_info=True,
+            )
+
+        # ntfy/pushover/telegram are detached fire-and-forget tasks, so their
+        # outcome is unknowable here; count the phone channel as delivered if
+        # the HA Companion push succeeded or at least one push channel is
+        # enabled and was dispatched. Before this, the HA result was discarded
+        # entirely — a phone-only reminder with every channel off/down was
+        # still marked completed ("delivered into the void").
         from orchestrator.config import settings as _settings
 
-        phone_ok = ha_push_ok or _settings.ntfy_enabled or _settings.pushover_enabled
+        phone_ok = ha_push_ok or _settings.ntfy_enabled or _settings.pushover_enabled or _settings.telegram_enabled
         if not phone_ok:
             logger.error(
                 f"[REMINDER] Phone delivery FAILED for {reminder_id}: {notif.get('error') or notif.get('errors')}",

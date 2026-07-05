@@ -282,6 +282,40 @@ PUSHOVER_PUSH_LATENCY = Histogram(
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
 )
 
+# -- Telegram bot (two-way capture + reminder channel) ------------------------
+TELEGRAM_SEND_TOTAL = Counter(
+    "bgw_telegram_send_total",
+    "Telegram sendMessage attempts",
+    # result: ok | fail | skipped
+    # kind:   reminder | chat | system
+    # reason: ok | http_error | network_error | disabled | missing_token |
+    #         missing_chat_id
+    ["result", "kind", "reason"],
+)
+
+TELEGRAM_SEND_LATENCY = Histogram(
+    "bgw_telegram_send_latency_seconds",
+    "Latency of Telegram sendMessage calls (all chunks of one reply)",
+    ["kind"],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+)
+
+TELEGRAM_UPDATE_TOTAL = Counter(
+    "bgw_telegram_update_total",
+    "Inbound Telegram updates by disposition",
+    # kind:   message | callback | other
+    # result: ok | denied | ignored | error
+    ["kind", "result"],
+)
+
+TELEGRAM_CALLBACK_TOTAL = Counter(
+    "bgw_telegram_callback_total",
+    "Telegram Done/Snooze button taps",
+    # action: ack | snooze | unknown
+    # result: ok | already | not_found | limit | error
+    ["action", "result"],
+)
+
 # -- Self-audit (F-014) -----------------------------------------------------
 SELF_AUDIT_RUNS_TOTAL = Counter(
     "bgw_self_audit_runs_total",
