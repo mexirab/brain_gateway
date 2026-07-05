@@ -8,6 +8,10 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 Maintainer-deployment work: a reliability/backup pass, the June-12 latency branches rebased in, and Home Assistant moved off a failed Raspberry Pi onto the always-on server.
 
+### Added
+
+- **Telegram bot — away-from-home capture** (`orchestrator/telegram_bot.py`). A long-polling background task (outbound HTTPS only — no webhook, no public ingress) that gives you full two-way Jess from anywhere: inbound text relays through `/v1/chat/completions` (mode router, fast-path, tools — task capture, brain dumps, calendar questions), and reminders arrive as Telegram messages with inline **Done / Snooze** buttons handled with the same state-machine semantics as the F-011 ack/snooze routes (retry-job cancellation, selfcare bridge, snooze cap). Locked to `TELEGRAM_ALLOWED_CHAT_ID`; unknown chats are dropped with the ID logged (rate-limited) for first-time setup. Plain-text replies (no parse_mode) so LLM output can't fail Telegram's Markdown parser. RAM-only rolling history per chat, `/new` resets. Default-OFF (`TELEGRAM_ENABLED`); auto-disabled on a missing token. New metrics: `bgw_telegram_send_total`, `bgw_telegram_send_latency_seconds`, `bgw_telegram_update_total`, `bgw_telegram_callback_total`. Docs: `docs/ENV_VARS.md` → Telegram Bot.
+
 ### Infrastructure
 
 - **Home Assistant migrated off the dead Pi to Jupiter.** The Pi at `10.0.0.106` running HA suffered SD-card failure (booted to an emergency console). HA now runs as a docker container on Jupiter (host-networked, `:8123`), pinned to `2026.5.1`, managed from the new `homeassistant/` compose project. `HA_URL` changed `http://10.0.0.106:8123` → `http://10.0.0.248:8123`. All devices are network-based (ESPHome/Cast/Bluetooth-proxies/cloud — no USB radios) so the migration was a config copy. Runbook: `docs/HA.md`.

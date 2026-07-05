@@ -18,16 +18,11 @@ The list below is ordered by tier, and within each tier roughly by priority.
 
 ## Tier 1 — Core gaps (conspicuously missing, not polish)
 
-### 1. Away-from-home capture: Telegram bot ⬜
+### 1. ~~Away-from-home capture: Telegram bot~~ ✅ BUILT (July 2026)
 
-The "no apps" principle currently stops at the front door — voice pucks are house-bound and mobile means browser + token. A Telegram bot closes the loop (~a day of work):
+Shipped as `orchestrator/telegram_bot.py`: long-polling (no webhook / public ingress), locked to the allow-listed chat ID, inbound text through `/v1/chat/completions` (full Jess + tools from anywhere), reminders with inline **Done / Snooze** buttons handled with the F-011 state-machine semantics. Default-OFF — **setup still needed**: BotFather token + chat ID in `.env` (see `docs/ENV_VARS.md` → Telegram Bot).
 
-- Long-polling (no webhook / public ingress needed), locked to my chat ID
-- Text → orchestrator `/v1/chat/completions` → reply — full Jess anywhere, including task/brain-dump capture on the go
-- Reminder + nudge push with inline **Done / Snooze** buttons (reuse the F-011 HMAC ack/snooze routes)
-- Later: photo → `/api/paperless/upload` for receipts/documents from the phone camera
-
-Pitched months ago and dropped; nothing else on this list matters if capture fails the moment I leave the house.
+Stretch goals still open: voice notes → STT → same pipeline; photo → `/api/paperless/upload`; morning briefing as a Telegram digest.
 
 ### 2. Trust layer as a feature ⬜
 
@@ -129,7 +124,7 @@ Needs vLLM 0.19.2+ (KV-calc fix) and the primary moving GPU0 → GPU1 (the 5090 
 ## Priority order
 
 1. ~~Durable task backlog~~ — ✅ DONE (#44/#45/#46)
-2. **Telegram capture bot** — extends capture beyond the house; unlocks push-anywhere for everything else
+2. ~~Telegram capture bot~~ — ✅ BUILT (needs BotFather token + chat ID in `.env` to go live)
 3. **Trust layer** — morning recap + visible delivery state + Grafana row
 4. **Evening shutdown ritual + sleep wind-down ladder** — pair naturally, both cheap now that HA is local
 5. **Geofenced errand reminders** — mostly wiring

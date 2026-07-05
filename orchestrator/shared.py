@@ -180,6 +180,10 @@ MAX_TOOL_ROUNDS = settings.max_tool_rounds
 # ---------------------------------------------------------------------------
 _http: Optional[httpx.AsyncClient] = None
 
+# Telegram long-poll task handle (created in startup when telegram_enabled,
+# cancelled in shutdown). Typed loosely to avoid importing asyncio here.
+telegram_task: Optional[Any] = None
+
 # ---------------------------------------------------------------------------
 # HA tool definition cache
 # ---------------------------------------------------------------------------

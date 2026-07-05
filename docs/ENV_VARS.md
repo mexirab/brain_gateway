@@ -292,6 +292,25 @@ Parallel iOS push channel alongside F-011 ntfy. Pushover has native APNs integra
 | `PUSHOVER_DEVICE` | (empty) | Optional device name to target a specific device; empty = all user devices. |
 | `PUSHOVER_TIMEOUT_SECONDS` | `10` | Per-request httpx timeout. Bucketed into `bgw_pushover_push_latency_seconds`. |
 
+## Telegram Bot
+
+Two-way capture + reminder channel. A dedicated long-polling task inside the orchestrator relays inbound text through the orchestrator's own `/v1/chat/completions` (full Jess: mode router, fast-path, tools — "add milk to the shopping list" from anywhere), and delivers reminders as Telegram messages with inline **Done** / **Snooze** buttons. Button taps are handled in-process with the same semantics as the F-011 ack/snooze routes (state machine, retry-job cancellation, selfcare bridge, snooze cap) — no HMAC involved because a callback only reaches us from an allow-listed chat; the chat-ID check is the auth boundary. Long-polling means outbound HTTPS only: no webhook, no public ingress. Updates from unknown chats are dropped (chat ID logged once/minute, content never). Replies are plain text (no `parse_mode`), so LLM output can neither fail Telegram's Markdown parser nor smuggle formatting. Conversation history is a RAM-only rolling window per chat (`/new` resets it).
+
+**Setup**: (1) create a bot with [@BotFather](https://t.me/BotFather), (2) set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ENABLED=true`, restart, (3) message your bot once, (4) copy the chat ID from the `[TELEGRAM] Dropped message from non-allowlisted chat <ID>` log line into `TELEGRAM_ALLOWED_CHAT_ID`, restart again.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TELEGRAM_ENABLED` | `false` | Enable the bot (long-poll task + reminder channel). Forced off if `TELEGRAM_BOT_TOKEN` is missing/short. |
+| `TELEGRAM_BOT_TOKEN` | (empty) | Bot token from @BotFather. Required when enabled. |
+| `TELEGRAM_ALLOWED_CHAT_ID` | (empty) | Your chat ID (comma-separated for several). Empty = every update dropped, reminder delivery skipped — see setup flow above. |
+| `TELEGRAM_API_BASE` | `https://api.telegram.org` | Bot API base; override only for testing. |
+| `TELEGRAM_SELF_URL` | `http://127.0.0.1:8888` | Orchestrator base URL for the internal chat relay. |
+| `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | `getUpdates` long-poll window. |
+| `TELEGRAM_SNOOZE_MINUTES` | `10` | Snooze button duration (clamped 1–120). |
+| `TELEGRAM_HISTORY_TURNS` | `16` | Rolling RAM-only context window (messages, not pairs) per chat. |
+
+Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_latency_seconds{kind}`, `bgw_telegram_update_total{kind,result}`, `bgw_telegram_callback_total{action,result}`.
+
 ## Self-audit (F-014)
 
 Daily 7am UTC scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki for the last-24h error/warn logs across Helios services, asks Jess to diagnose each cluster (single `call_model` pass, no tool loop), saves a markdown report under `/app/data/self_audits/YYYY-MM-DD.md`, and pushes a one-line digest via Pushover. Read-only by design — Jess emits text only, the orchestrator never executes her output. Three-layer safety: allow-list filter on Jess's suggested shell commands, dangerous-pattern regex, secret-pattern filter on both disk report and mempalace summary. Concurrency lock prevents manual + cron collision. Loki-unreachable is distinguished from a clean week (upfront probe + explicit `result="failed"` digest, never a green "all clean" lie). Summary indexed into mempalace under wing=`system`, room=`audit`. Default-OFF.

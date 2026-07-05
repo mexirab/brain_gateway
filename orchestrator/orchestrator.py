@@ -437,6 +437,18 @@ async def chat_completions(req: Request):
 async def _shutdown_logic():
     """Clean up resources on shutdown (invoked from the lifespan handler)."""
     global _http
+
+    # Stop the Telegram long-poll task before the HTTP layer goes away.
+    telegram_task = getattr(shared, "telegram_task", None)
+    if telegram_task is not None:
+        import contextlib
+
+        telegram_task.cancel()
+        with contextlib.suppress(BaseException):
+            await telegram_task
+        shared.telegram_task = None
+        logger.info("[orchestrator] Stopped Telegram long-poll task")
+
     if _http:
         await _http.aclose()
         _http = None
@@ -772,6 +784,19 @@ async def _startup_logic():
             replace_existing=True,
         )
         logger.info(f"[SCHEDULER] Presence polling every {shared.PRESENCE_POLL_INTERVAL}s")
+
+    # Telegram bot — dedicated forever task, NOT a scheduler job (the 50s
+    # getUpdates long-poll would pin a scheduler worker the whole time).
+    # Cancelled in _shutdown_logic.
+    if _cfg.telegram_enabled and _cfg.telegram_bot_token:
+        import asyncio as _asyncio_tg
+
+        from orchestrator.telegram_bot import telegram_poll_loop
+
+        shared.telegram_task = _asyncio_tg.create_task(telegram_poll_loop(), name="telegram-poll")
+        logger.info("[TELEGRAM] Bot enabled — long-poll task started")
+    elif _cfg.telegram_enabled:
+        logger.warning("[TELEGRAM] telegram_enabled but TELEGRAM_BOT_TOKEN is empty — bot not started")
 
     # Schedule progress tracking jobs (F-005)
     if shared.PROGRESS_ENABLED:
