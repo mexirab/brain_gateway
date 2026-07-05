@@ -539,6 +539,17 @@ async def _startup_logic():
     # a reboot at 8:55 ate the 9:00 meds reminder with zero signal).
     reminder_counts = reschedule_pending_reminders_on_startup()
 
+    # Prime the open-task gauge from the DB. It's otherwise only written on a
+    # task mutation, so after a restart bgw_tasks_open would read 0 (or a stale
+    # value) until the next add/complete — this makes it correct immediately.
+    try:
+        from orchestrator import backlog_manager
+
+        backlog_manager._sync_open_gauge()
+        logger.info("[BACKLOG] Open-task gauge synced on startup (%d open)", state_store.open_task_count())
+    except Exception as e:
+        logger.warning("[BACKLOG] Startup gauge sync failed: %s", e)
+
     # Restore focus session from DB (survives orchestrator restarts)
     saved_focus = state_store.load_focus_session()
     if saved_focus["active"]:
@@ -792,6 +803,23 @@ async def _startup_logic():
             f"[SCHEDULER] Progress summary at {shared.DAILY_SUMMARY_TIME} daily, "
             f"digest {shared.WEEKLY_SUMMARY_DAY} {shared.WEEKLY_SUMMARY_TIME}"
         )
+
+    # Weekly task-backlog review (Sunday 10am): surfaces the open list so
+    # captured tasks get triaged instead of quietly rotting. Core feature, so
+    # scheduled regardless of PROGRESS_ENABLED; stays silent when the list is empty.
+    from orchestrator.background_jobs import weekly_backlog_review
+
+    scheduler.add_job(
+        weekly_backlog_review,
+        trigger="cron",
+        day_of_week="sun",
+        hour=10,
+        minute=0,
+        id="weekly_backlog_review",
+        name="Weekly task backlog review",
+        replace_existing=True,
+    )
+    logger.info("[SCHEDULER] Weekly backlog review scheduled (Sun 10:00)")
 
     # Weekly DB maintenance (vacuum + cleanup, Sundays 3am)
     async def _db_maintenance():

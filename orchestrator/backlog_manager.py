@@ -175,6 +175,16 @@ def _resolve(ref: str) -> tuple[Optional[dict], Optional[str]]:
     return state_store.get_task(best_id), None
 
 
+def match_open(text: str) -> Optional[dict]:
+    """Return the open backlog task that confidently matches `text`, else None.
+
+    Non-interactive (no ambiguity prompt) — used to auto-link a decomposition to
+    the backlog task it's breaking down.
+    """
+    task, err = _resolve(text)
+    return task if err is None else None
+
+
 def complete(ref: str) -> str:
     """Mark a task done by id or fuzzy description. No-guilt, celebratory."""
     task, err = _resolve(ref)
@@ -206,3 +216,28 @@ def backlog_context() -> str:
     top = ", ".join(t["text"] for t in tasks[:5])
     more = f" (+{len(tasks) - 5} more)" if len(tasks) > 5 else ""
     return f"Open tasks ({len(tasks)}): {top}{more}"
+
+
+def weekly_review_summary() -> Optional[str]:
+    """TTS-friendly weekly backlog nudge (keeps the list from becoming a
+    graveyard — the ADHD failure mode where captured tasks quietly rot).
+    Returns None when the list is empty (nothing to say)."""
+    from datetime import datetime
+
+    tasks = state_store.list_tasks("open")
+    if not tasks:
+        return None
+    n = len(tasks)
+    high = sum(1 for t in tasks if t["priority"] == "high")
+    oldest = min(tasks, key=lambda t: t["created_at"])
+    try:
+        age_days = (datetime.now() - datetime.fromisoformat(oldest["created_at"])).days
+    except (ValueError, TypeError):
+        age_days = 0
+
+    lead = f"Weekly check-in: you've got {n} thing{'s' if n != 1 else ''} on your list"
+    hi = f", {high} flagged high" if high else ""
+    age = ""
+    if age_days >= 3:
+        age = f" The oldest — '{oldest['text']}' — has been there {age_days} day{'s' if age_days != 1 else ''}."
+    return f"{lead}{hi}.{age} Want to knock one out, or clear anything that's gone stale?"

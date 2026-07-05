@@ -3930,7 +3930,7 @@
     },
     {
       "type": "row",
-      "title": "Progress Tracking",
+      "title": "Task Backlog",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -3940,6 +3940,285 @@
         "y": 107
       },
       "id": 53
+    },
+    {
+      "type": "stat",
+      "title": "Open Tasks",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "bgw_tasks_open",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 108
+      },
+      "id": 54
+    },
+    {
+      "type": "timeseries",
+      "title": "Task Flow (created / completed / dropped)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(bgw_tasks_created_total[1h])) * 3600",
+          "legendFormat": "created/hr",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_tasks_completed_total[1h]) * 3600",
+          "legendFormat": "completed/hr",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_tasks_dropped_total[1h]) * 3600",
+          "legendFormat": "dropped/hr",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "The durable to-do list (state_store tasks table). Distinct from Task Decomposition above (ephemeral step-tracking) and Reminders (time-based). 'Open Tasks' is a live gauge, primed on startup and updated on every add/complete/drop. A steadily climbing open count with little completion is the backlog-graveyard smell the Sunday review job is meant to catch.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 108
+      },
+      "id": 55
+    },
+    {
+      "type": "timeseries",
+      "title": "Tasks Created by Source (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (increase(bgw_tasks_created_total[24h]))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 108
+      },
+      "id": 56
+    },
+    {
+      "type": "row",
+      "title": "Progress Tracking",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 116
+      },
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -4022,9 +4301,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 108
+        "y": 117
       },
-      "id": 54
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -4107,9 +4386,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 108
+        "y": 117
       },
-      "id": 55
+      "id": 59
     },
     {
       "type": "row",
@@ -4120,9 +4399,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 116
+        "y": 125
       },
-      "id": 56
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4217,9 +4496,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 117
+        "y": 126
       },
-      "id": 57
+      "id": 61
     },
     {
       "type": "gauge",
@@ -4286,9 +4565,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 117
+        "y": 126
       },
-      "id": 58
+      "id": 62
     },
     {
       "type": "timeseries",
@@ -4383,9 +4662,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 117
+        "y": 126
       },
-      "id": 59
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4468,9 +4747,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 117
+        "y": 126
       },
-      "id": 60
+      "id": 64
     },
     {
       "type": "row",
@@ -4481,9 +4760,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 125
+        "y": 134
       },
-      "id": 61
+      "id": 65
     },
     {
       "type": "timeseries",
@@ -4578,9 +4857,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 126
+        "y": 135
       },
-      "id": 62
+      "id": 66
     },
     {
       "type": "timeseries",
@@ -4663,9 +4942,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 126
+        "y": 135
       },
-      "id": 63
+      "id": 67
     },
     {
       "type": "timeseries",
@@ -4760,9 +5039,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 126
+        "y": 135
       },
-      "id": 64
+      "id": 68
     },
     {
       "type": "timeseries",
@@ -4845,9 +5124,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 134
+        "y": 143
       },
-      "id": 65
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -4942,9 +5221,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 134
+        "y": 143
       },
-      "id": 66
+      "id": 70
     },
     {
       "type": "row",
@@ -4955,9 +5234,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 151
       },
-      "id": 67
+      "id": 71
     },
     {
       "type": "timeseries",
@@ -5040,9 +5319,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 143
+        "y": 152
       },
-      "id": 68
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5125,9 +5404,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 143
+        "y": 152
       },
-      "id": 69
+      "id": 73
     },
     {
       "type": "timeseries",
@@ -5222,9 +5501,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 143
+        "y": 152
       },
-      "id": 70
+      "id": 74
     },
     {
       "type": "timeseries",
@@ -5307,9 +5586,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 151
+        "y": 160
       },
-      "id": 71
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5416,9 +5695,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 151
+        "y": 160
       },
-      "id": 72
+      "id": 76
     },
     {
       "type": "piechart",
@@ -5487,9 +5766,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 151
+        "y": 160
       },
-      "id": 73
+      "id": 77
     },
     {
       "type": "row",
@@ -5500,9 +5779,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 159
+        "y": 168
       },
-      "id": 74
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5585,9 +5864,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 160
+        "y": 169
       },
-      "id": 75
+      "id": 79
     },
     {
       "type": "timeseries",
@@ -5682,9 +5961,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 160
+        "y": 169
       },
-      "id": 76
+      "id": 80
     },
     {
       "type": "timeseries",
@@ -5779,9 +6058,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 160
+        "y": 169
       },
-      "id": 77
+      "id": 81
     },
     {
       "type": "row",
@@ -5792,9 +6071,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 168
+        "y": 177
       },
-      "id": 78
+      "id": 82
     },
     {
       "type": "stat",
@@ -5855,9 +6134,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 169
+        "y": 178
       },
-      "id": 79
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -5941,9 +6220,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 169
+        "y": 178
       },
-      "id": 80
+      "id": 84
     },
     {
       "type": "stat",
@@ -6004,9 +6283,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 169
+        "y": 178
       },
-      "id": 81
+      "id": 85
     },
     {
       "type": "row",
@@ -6017,9 +6296,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 177
+        "y": 186
       },
-      "id": 82
+      "id": 86
     },
     {
       "type": "logs",
@@ -6058,9 +6337,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 178
+        "y": 187
       },
-      "id": 83
+      "id": 87
     },
     {
       "type": "logs",
@@ -6099,9 +6378,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 178
+        "y": 187
       },
-      "id": 84
+      "id": 88
     }
   ]
 }

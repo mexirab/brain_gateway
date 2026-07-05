@@ -189,3 +189,20 @@ async def weekly_progress_digest():
         logger.info("[PROGRESS] Weekly digest announced")
     except Exception as e:
         logger.error(f"[PROGRESS] Weekly digest failed: {e}")
+
+
+async def weekly_backlog_review():
+    """Weekly nudge to review the open task backlog so it doesn't silently
+    grow into a graveyard (the ADHD failure mode where captured tasks rot).
+    Stays quiet when the list is empty."""
+    try:
+        from orchestrator import backlog_manager
+
+        summary = backlog_manager.weekly_review_summary()
+        if summary is None:
+            logger.info("[BACKLOG] Weekly review: list empty, nothing to announce")
+            return
+        await _announce_voice(summary, announcement_type="ambient")
+        logger.info("[BACKLOG] Weekly review announced")
+    except Exception as e:
+        logger.error(f"[BACKLOG] Weekly review failed: {e}")

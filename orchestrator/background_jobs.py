@@ -30,6 +30,7 @@ from orchestrator.jobs_monitoring import (  # noqa: F401
     daily_progress_summary,
     trigger_routine,
     update_ambient_led,
+    weekly_backlog_review,
     weekly_progress_digest,
 )
 
@@ -55,4 +56,5 @@ __all__ = [
     "trigger_routine",
     "daily_progress_summary",
     "weekly_progress_digest",
+    "weekly_backlog_review",
 ]

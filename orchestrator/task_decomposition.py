@@ -50,6 +50,7 @@ class DecomposedTask:
     current_step_index: int = 0
     created_at: datetime = field(default_factory=datetime.now)
     mode: str = "next_step_only"  # "full_list" or "next_step_only"
+    backlog_task_id: Optional[str] = None  # linked durable-backlog task, if any
 
 
 # Module state — in-memory only, no persistence
@@ -152,6 +153,16 @@ Return format:
         steps=steps,
         mode=mode,
     )
+    # Auto-link to a matching open backlog task, so finishing the decomposition
+    # checks it off the durable list too.
+    try:
+        from orchestrator import backlog_manager
+
+        matched = backlog_manager.match_open(task_text)
+        if matched:
+            task.backlog_task_id = matched["id"]
+    except Exception as e:  # noqa: BLE001 — linking is best-effort
+        logger.debug("[TASK_DECOMP] Backlog link skipped: %s", e)
     _active_tasks[task_id] = task
     TASK_DECOMP_TASKS_CREATED.inc()
 
@@ -376,6 +387,15 @@ def _format_completion_summary(task: DecomposedTask) -> str:
 
     # Clean up completed task
     _active_tasks.pop(task.task_id, None)
+
+    # If this decomposition was linked to a durable backlog task, check it off.
+    if task.backlog_task_id:
+        try:
+            from orchestrator import backlog_manager
+
+            backlog_manager.complete_by_id(task.backlog_task_id)
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.debug("[TASK_DECOMP] Backlog completion skipped: %s", e)
 
     # Check for streak milestones (F-005)
     try:
