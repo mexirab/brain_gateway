@@ -12,6 +12,8 @@ import type {
   AnnouncementStats,
   AmbientStatus,
   ShoppingItem,
+  Task,
+  TaskPriority,
   Conversation,
   SavedMessage,
   VaultDocument,
@@ -104,6 +106,25 @@ export const api = {
       `/api/shopping/checked${listName ? `?list_name=${listName}` : ''}`,
       { method: 'DELETE' },
     ),
+  // Task backlog
+  tasks: (status: 'open' | 'done' | 'dropped' = 'open') =>
+    fetcher<Task[]>(`/api/tasks?status=${status}`),
+  addTask: (text: string, priority: TaskPriority = 'normal') =>
+    fetcher<Task>('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, priority }),
+    }),
+  completeTask: (id: string) =>
+    fetcher<{ ok: boolean }>(`/api/tasks/${id}/complete`, { method: 'POST' }),
+  dropTask: (id: string) =>
+    fetcher<{ ok: boolean }>(`/api/tasks/${id}/drop`, { method: 'POST' }),
+  setTaskPriority: (id: string, priority: TaskPriority) =>
+    fetcher<{ ok: boolean }>(`/api/tasks/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ priority }),
+    }),
   // Chat conversations
   listConversations: (limit = 50) =>
     fetcher<Conversation[]>(`/api/chat/conversations?limit=${limit}`),

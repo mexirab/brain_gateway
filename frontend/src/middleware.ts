@@ -5,7 +5,7 @@ import type { NextRequest } from 'next/server';
 // shows live infra status via the authenticated `/api/services` + `/health`
 // proxy, so it must not be exposed to anonymous users. It lives under the
 // `(private)` route group to match.
-const PROTECTED_PATHS = ['/dashboard', '/chat', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals'];
+const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals'];
 const COOKIE_NAME = 'brain_token';
 
 export function middleware(request: NextRequest) {
@@ -30,5 +30,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/chat/:path*', '/home/:path*', '/finance/:path*', '/announcements/:path*', '/shopping/:path*', '/documents/:path*', '/architecture/:path*', '/settings/:path*', '/workouts/:path*', '/meals/:path*'],
+  matcher: ['/dashboard/:path*', '/chat/:path*', '/tasks/:path*', '/home/:path*', '/finance/:path*', '/announcements/:path*', '/shopping/:path*', '/documents/:path*', '/architecture/:path*', '/settings/:path*', '/workouts/:path*', '/meals/:path*'],
 };
