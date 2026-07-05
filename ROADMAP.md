@@ -84,7 +84,8 @@ The mode router already classifies per-utterance intensity (panic/shame/spiral).
 | **`.claude/agents/*.md` refresh** | Still describe the removed v6 Nemotron architecture and will mislead the review agents CLAUDE.md invokes; `prod-support.md` also references the deleted Deep-Dive dashboard. | ⬜ |
 | **Grafana Alertmanager datasource** | The loose thread from the dashboard consolidation — alerts don't render in the single pane yet. | ⬜ |
 | **Pin env/time-coupled tests** | `test_selfcare_manager::TestMealCheck` (wall clock), `test_config` defaults (host env), `test_ntfy_feedback` `disabled_returns_404` (assumes `PUSHOVER_ENABLED` off) — green today, flake risk. | ⬜ |
-| **Chores** | Delete the three `perf/*` backup branches (rebased in as #36); rotate off-box backups on Saturn (local KEEP=30 rotates, Saturn grows unbounded); reconcile `homelab-infra.json` dashgen drift; fold alertmanager into `monitoring/docker-compose.yml`; `git rm` `data/palace.yaml` from public view. | ⬜ |
+| **Reconcile `homelab-infra.json` dashgen drift** | Confirmed 2026-07-05 while regenerating Grafana JSON for #46: running `dashgen/build.py` drops ~440 lines of stale hand-edits (`mappings: []` / `values: true`) — the committed JSON is out of sync with its builder. Reverted out of #46 to keep scope clean; reconcile task spawned separately. | 🔶 task spawned |
+| **Chores** | Delete the three `perf/*` backup branches (rebased in as #36); rotate off-box backups on Saturn (local KEEP=30 rotates, Saturn grows unbounded); fold alertmanager into `monitoring/docker-compose.yml`; `git rm` `data/palace.yaml` from public view. | ⬜ |
 
 ## Tier 5 — Carried forward from the old roadmap
 
