@@ -168,7 +168,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
           "max": 100
         },
         "overrides": []
@@ -182,7 +181,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": true
+          "values": false
         }
       },
       "gridPos": {
@@ -237,7 +236,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
           "max": 100
         },
         "overrides": []
@@ -251,7 +249,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": true
+          "values": false
         }
       },
       "gridPos": {
@@ -498,7 +496,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
           "max": 100
         },
         "overrides": []
@@ -512,7 +509,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": true
+          "values": false
         }
       },
       "gridPos": {
@@ -580,7 +577,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
           "max": 100
         },
         "overrides": []
@@ -594,7 +590,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": true
+          "values": false
         }
       },
       "gridPos": {
@@ -1004,7 +1000,7 @@
     },
     {
       "type": "row",
-      "title": "UPS Power",
+      "title": "Network",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -1014,433 +1010,6 @@
         "y": 34
       },
       "id": 16
-    },
-    {
-      "type": "stat",
-      "title": "CyberPower Load",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_ups_load{ups=\"cyberpower\"} * network_ups_tools_ups_realpower_nominal{ups=\"cyberpower\"} / 100",
-          "legendFormat": "__auto",
-          "range": false,
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "watt",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 700
-              },
-              {
-                "color": "red",
-                "value": 900
-              }
-            ]
-          },
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 0,
-        "y": 35
-      },
-      "id": 17
-    },
-    {
-      "type": "bargauge",
-      "title": "Battery Charge",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_battery_charge",
-          "legendFormat": "{{ups}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 20
-              },
-              {
-                "color": "green",
-                "value": 80
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "max": 100
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": true
-        }
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 35
-      },
-      "id": 18
-    },
-    {
-      "type": "bargauge",
-      "title": "Online Status (OL flag)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_ups_status{flag=\"OL\"} or on(ups) (network_ups_tools_battery_charge * 0)",
-          "legendFormat": "{{ups}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "ON BATTERY",
-                  "color": "red",
-                  "index": 0
-                },
-                "1": {
-                  "text": "ONLINE",
-                  "color": "green",
-                  "index": 1
-                }
-              }
-            }
-          ],
-          "max": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": true
-        }
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
-        "y": 35
-      },
-      "id": 19
-    },
-    {
-      "type": "timeseries",
-      "title": "CyberPower Load (watts)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_ups_load{ups=\"cyberpower\"} * network_ups_tools_ups_realpower_nominal{ups=\"cyberpower\"} / 100",
-          "legendFormat": "load",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "watt",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 700
-              },
-              {
-                "color": "red",
-                "value": 900
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 41
-      },
-      "id": 20
-    },
-    {
-      "type": "timeseries",
-      "title": "Input Voltage (CyberPower)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_input_voltage{ups=\"cyberpower\"}",
-          "legendFormat": "input",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_input_voltage_nominal{ups=\"cyberpower\"}",
-          "legendFormat": "nominal",
-          "range": true,
-          "instant": false,
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "volt",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "min": 100,
-          "max": 140
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "description": "US residential 120V nominal. Sustained drift below ~110 or above ~130 means line-side problem \u2014 UPS will start boosting/trimming and eventually flip to battery.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 41
-      },
-      "id": 21
-    },
-    {
-      "type": "row",
-      "title": "Network",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 49
-      },
-      "id": 22
     },
     {
       "type": "timeseries",
@@ -1523,9 +1092,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 50
+        "y": 35
       },
-      "id": 23
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -1608,9 +1177,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 50
+        "y": 35
       },
-      "id": 24
+      "id": 18
     }
   ]
 }
