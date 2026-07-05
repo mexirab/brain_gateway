@@ -287,6 +287,12 @@ PERSONAL CONTEXT (from {user}'s notes):
     if active_tasks:
         context_section += f"\n{active_tasks}\n"
 
+    from orchestrator.backlog_manager import backlog_context
+
+    _backlog = backlog_context()
+    if _backlog:
+        context_section += f"\n{_backlog}\n"
+
     from orchestrator.routine_manager import get_active_routine_context
 
     routine_context = get_active_routine_context()

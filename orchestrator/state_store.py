@@ -249,6 +249,20 @@ CREATE TABLE IF NOT EXISTS config_changes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_config_changes_panel ON config_changes(panel, changed_at);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',      -- open | done | dropped
+    priority TEXT NOT NULL DEFAULT 'normal',  -- low | normal | high
+    source TEXT NOT NULL DEFAULT 'chat',      -- chat | voice | brain_dump
+    notes TEXT,
+    due_date TEXT,
+    created_at TEXT NOT NULL,
+    done_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_open ON tasks(status, priority, created_at);
 """
 
 
@@ -454,6 +468,95 @@ def delete_reminder(reminder_id: str) -> bool:
     """Delete a reminder from storage."""
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Tasks (durable backlog — survives restarts, unlike task_decomposition's
+# in-memory step tracking). Ordered so open/high/oldest surfaces first.
+# ---------------------------------------------------------------------------
+
+# High before normal before low; within a priority, oldest first (FIFO, so
+# tasks don't rot at the bottom).
+_TASK_PRIORITY_RANK = "CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END"
+
+
+def add_task(
+    task_id: str,
+    text: str,
+    *,
+    priority: str = "normal",
+    source: str = "chat",
+    notes: Optional[str] = None,
+    due_date: Optional[str] = None,
+) -> None:
+    """Insert a task into the backlog."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO tasks (id, text, status, priority, source, notes, due_date, created_at)
+               VALUES (?, ?, 'open', ?, ?, ?, ?, ?)""",
+            (task_id, text, priority, source, notes, due_date, datetime.now().isoformat()),
+        )
+
+
+def get_task(task_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single task by id."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_tasks(status: str = "open") -> List[Dict[str, Any]]:
+    """List tasks in surfacing order (high/old first). status=None returns all."""
+    with get_db() as conn:
+        if status is None:
+            rows = conn.execute(f"SELECT * FROM tasks ORDER BY {_TASK_PRIORITY_RANK}, created_at").fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT * FROM tasks WHERE status = ? ORDER BY {_TASK_PRIORITY_RANK}, created_at",
+                (status,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def open_task_count() -> int:
+    """Number of open tasks (for the pending gauge)."""
+    with get_db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'").fetchone()[0]
+
+
+def complete_task(task_id: str) -> bool:
+    """Mark a task done. Only transitions open→done (idempotent replay is a no-op)."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE tasks SET status = 'done', done_at = ? WHERE id = ? AND status = 'open'",
+            (datetime.now().isoformat(), task_id),
+        )
+        return cursor.rowcount > 0
+
+
+def drop_task(task_id: str) -> bool:
+    """Drop a task (status='dropped') — no-guilt removal, kept for history."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE tasks SET status = 'dropped', done_at = ? WHERE id = ? AND status = 'open'",
+            (datetime.now().isoformat(), task_id),
+        )
+        return cursor.rowcount > 0
+
+
+def update_task(
+    task_id: str, *, priority: Optional[str] = None, notes: Optional[str] = None, due_date: Optional[str] = None
+) -> bool:
+    """Update mutable fields of an open task; only provided fields change."""
+    fields = {"priority": priority, "notes": notes, "due_date": due_date}
+    sets = [f"{col} = ?" for col, val in fields.items() if val is not None]
+    params = [val for val in fields.values() if val is not None]
+    if not sets:
+        return False
+    params.append(task_id)
+    with get_db() as conn:
+        cursor = conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ? AND status = 'open'", params)
         return cursor.rowcount > 0
 
 

@@ -580,6 +580,82 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "add_task",
+            "description": (
+                "Add a to-do to the user's durable task backlog (a persistent list that survives "
+                "restarts). Use for open-ended things they want to do with NO specific time — 'add X "
+                "to my list', 'I need to do Y', 'put Z on my to-dos'. NOT for time-triggered reminders "
+                "(use set_reminder when there's a specific time), and NOT for breaking one task into "
+                "steps (use decompose_task)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The task text, e.g. 'call the dentist'"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "normal", "high"],
+                        "description": "Optional priority (default normal; 'someday' → low, 'urgent' → high)",
+                    },
+                    "notes": {"type": "string", "description": "Optional extra detail"},
+                    "due_date": {
+                        "type": "string",
+                        "description": "Optional ISO date (YYYY-MM-DD) if there's a soft deadline",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "Show the user's open backlog tasks (their to-do list). Use for 'what's on my list', 'what do I need to do', 'show my tasks'.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "what_now",
+            "description": (
+                "Surface a SINGLE task for the user to do right now, to beat overwhelm/choice paralysis. "
+                "Use when they ask 'what should I do?', 'what's next?', 'I don't know where to start', "
+                "'pick something for me'. Returns one task, not a list."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_task",
+            "description": "Mark a backlog task done. Match by description ('the dentist thing') or task id — no need for an exact id. Use for 'I did X', 'mark Y done', 'finished Z'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "A description or id of the task to complete"}
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "drop_task",
+            "description": "Remove a backlog task without completing it (no guilt). Use for 'drop X', 'take Y off my list', 'never mind Z', 'I'm not doing that'.",
+            "parameters": {
+                "type": "object",
+                "properties": {"task": {"type": "string", "description": "A description or id of the task to drop"}},
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "start_routine",
             "description": "Start a morning or evening routine — guides the user step by step via voice.",
             "parameters": {
@@ -1238,6 +1314,11 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
         "start_routine",
         "routine_action",
         "routine_status",
+        "add_task",
+        "list_tasks",
+        "what_now",
+        "complete_task",
+        "drop_task",
     }
 )
 

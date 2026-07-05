@@ -188,6 +188,12 @@ REMINDERS_PENDING = Gauge(
     "Currently pending reminders",
 )
 
+# Task backlog (durable to-do list)
+TASKS_CREATED = Counter("bgw_tasks_created_total", "Tasks added to the backlog", ["source"])
+TASKS_COMPLETED = Counter("bgw_tasks_completed_total", "Tasks marked done")
+TASKS_DROPPED = Counter("bgw_tasks_dropped_total", "Tasks dropped (no-guilt removal)")
+TASKS_OPEN = Gauge("bgw_tasks_open", "Currently open backlog tasks")
+
 REMINDERS_FAILED = Counter(
     "bgw_reminders_failed_total",
     "Reminders that exhausted every delivery channel and were marked failed",
