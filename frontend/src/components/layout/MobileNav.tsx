@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   MessageSquare,
+  ListTodo,
   Dumbbell,
   UtensilsCrossed,
   MoreHorizontal,
@@ -31,6 +32,7 @@ interface NavItem {
 const PRIMARY: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/chat', label: 'Chat', icon: MessageSquare },
+  { href: '/tasks', label: 'Tasks', icon: ListTodo },
   { href: '/meals', label: 'Meals', icon: UtensilsCrossed },
   { href: '/workouts', label: 'Workouts', icon: Dumbbell },
 ];

@@ -40,6 +40,7 @@ from orchestrator.routes_meals import router as meals_router
 from orchestrator.routes_palace import router as palace_router
 from orchestrator.routes_paperless import router as paperless_router
 from orchestrator.routes_shopping import router as shopping_router
+from orchestrator.routes_tasks import router as tasks_router
 from orchestrator.routes_vision import router as vision_router
 from orchestrator.routes_workout import router as workout_router
 from orchestrator.schemas import (
@@ -100,6 +101,7 @@ router.include_router(calendar_router)
 router.include_router(chat_router)
 router.include_router(documents_router)
 router.include_router(shopping_router)
+router.include_router(tasks_router)
 router.include_router(vision_router)
 router.include_router(palace_router)
 # Optional feature areas — only mount when enabled (default OFF in the shippable

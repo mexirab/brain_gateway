@@ -30,6 +30,7 @@ const POLL = {
   temperature: 60_000,
   selfcare: 30_000,
   shopping: 10_000,
+  tasks: 15_000,
   financeSnapshot: 60_000,
 } as const;
 
@@ -140,4 +141,11 @@ export function useShopping(showChecked: boolean, config?: SWRConfiguration) {
     () => api.shoppingList(undefined, showChecked),
     { refreshInterval: POLL.shopping, ...config },
   );
+}
+
+export function useTasks(status: 'open' | 'done' | 'dropped' = 'open', config?: SWRConfiguration) {
+  return useSWR(['tasks', status] as const, () => api.tasks(status), {
+    refreshInterval: POLL.tasks,
+    ...config,
+  });
 }

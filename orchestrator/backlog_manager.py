@@ -57,18 +57,19 @@ def _sync_open_gauge() -> None:
         logger.warning("Failed to sync open-task gauge: %s", e)
 
 
-def add_task(
+def create(
     text: str,
     *,
     priority: str = "normal",
     source: str = "chat",
     notes: Optional[str] = None,
     due_date: Optional[str] = None,
-) -> str:
-    """Add a task to the backlog. Returns a short TTS-friendly confirmation."""
+) -> Optional[dict]:
+    """Persist a new task (store + metrics + gauge). Returns the task dict, or
+    None if the text was empty. Shared by the voice tool and the REST route."""
     text = (text or "").strip()
     if not text:
-        return "What's the task? Tell me what to add and I'll put it on your list."
+        return None
     if len(text) > MAX_TASK_TEXT_LENGTH:
         text = text[:MAX_TASK_TEXT_LENGTH].rstrip()
 
@@ -78,11 +79,46 @@ def add_task(
     TASKS_CREATED.labels(source=source).inc()
     _sync_open_gauge()
     logger.info("[BACKLOG] Added task %s (%s): %s", task_id, prio, text[:60])
+    return state_store.get_task(task_id)
+
+
+def complete_by_id(task_id: str) -> bool:
+    """Mark a task done by id (store + metrics + gauge). Shared by tool + REST."""
+    if state_store.complete_task(task_id):
+        TASKS_COMPLETED.inc()
+        _sync_open_gauge()
+        logger.info("[BACKLOG] Completed task %s", task_id)
+        return True
+    return False
+
+
+def drop_by_id(task_id: str) -> bool:
+    """Drop a task by id (store + metrics + gauge). Shared by tool + REST."""
+    if state_store.drop_task(task_id):
+        TASKS_DROPPED.inc()
+        _sync_open_gauge()
+        logger.info("[BACKLOG] Dropped task %s", task_id)
+        return True
+    return False
+
+
+def add_task(
+    text: str,
+    *,
+    priority: str = "normal",
+    source: str = "chat",
+    notes: Optional[str] = None,
+    due_date: Optional[str] = None,
+) -> str:
+    """Add a task to the backlog. Returns a short TTS-friendly confirmation."""
+    task = create(text, priority=priority, source=source, notes=notes, due_date=due_date)
+    if task is None:
+        return "What's the task? Tell me what to add and I'll put it on your list."
 
     open_n = state_store.open_task_count()
     tail = "" if open_n <= 1 else f" ({open_n} on your list now)"
-    prio_note = " — flagged high" if prio == "high" else ""
-    return f"Got it, added to your list{prio_note}: {text}.{tail}"
+    prio_note = " — flagged high" if task["priority"] == "high" else ""
+    return f"Got it, added to your list{prio_note}: {task['text']}.{tail}"
 
 
 def list_open(limit: int = 12) -> str:
@@ -144,10 +180,7 @@ def complete(ref: str) -> str:
     task, err = _resolve(ref)
     if err:
         return err
-    if state_store.complete_task(task["id"]):
-        TASKS_COMPLETED.inc()
-        _sync_open_gauge()
-        logger.info("[BACKLOG] Completed task %s: %s", task["id"], task["text"][:60])
+    if complete_by_id(task["id"]):
         left = state_store.open_task_count()
         tail = " That's your list clear! 🎉" if left == 0 else f" {left} left."
         return f"Done: {task['text']}.{tail}"
@@ -159,10 +192,7 @@ def drop(ref: str) -> str:
     task, err = _resolve(ref)
     if err:
         return err
-    if state_store.drop_task(task["id"]):
-        TASKS_DROPPED.inc()
-        _sync_open_gauge()
-        logger.info("[BACKLOG] Dropped task %s: %s", task["id"], task["text"][:60])
+    if drop_by_id(task["id"]):
         return f"Dropped '{task['text']}' — no worries, it's off your list."
     return f"'{task['text']}' wasn't on your active list."
 

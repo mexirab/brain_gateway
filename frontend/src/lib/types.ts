@@ -215,6 +215,21 @@ export interface ShoppingItem {
   checked_at: string | null;
 }
 
+// Task backlog (durable to-do list)
+export type TaskPriority = 'low' | 'normal' | 'high';
+
+export interface Task {
+  id: string;
+  text: string;
+  status: 'open' | 'done' | 'dropped';
+  priority: TaskPriority;
+  source: string;
+  notes: string | null;
+  due_date: string | null;
+  created_at: string;
+  done_at: string | null;
+}
+
 // Ambient Awareness (F-010)
 export interface AmbientStatus {
   timestamp: string;
