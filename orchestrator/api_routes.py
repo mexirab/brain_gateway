@@ -334,15 +334,41 @@ async def trigger_reminder(body: ReminderTriggerRequest):
 
 @router.get("/api/reminders")
 async def get_reminders_api():
-    """List all pending reminders with scheduler status."""
+    """Pending reminders with scheduler status, plus the last-24h delivery
+    log (trust layer: delivered / missed / failed, with ack channel)."""
+    from orchestrator import state_store as _ss
+
     pending = list_pending_reminders()
 
     scheduled_job_ids = {job.id for job in scheduler.get_jobs()}
     for reminder in pending:
         job_id = f"reminder_{reminder.get('id')}"
         reminder["scheduled"] = job_id in scheduled_job_ids
+        # The card renders `time`; rows store `trigger_time` (pre-existing
+        # mismatch that made the time column render "Invalid Date").
+        reminder.setdefault("time", reminder.get("trigger_time"))
 
-    return JSONResponse({"count": len(pending), "scheduler_jobs": len(scheduled_job_ids), "reminders": pending})
+    recent = [
+        {
+            "id": r["id"],
+            "text": r["text"],
+            "time": r.get("trigger_time"),
+            "status": r["status"],
+            "completed_at": r.get("completed_at"),
+            "acked_via": r.get("acked_via"),
+            "snooze_count": r.get("snooze_count") or 0,
+        }
+        for r in _ss.get_recent_reminder_outcomes(hours=24)
+    ]
+
+    return JSONResponse(
+        {
+            "count": len(pending),
+            "scheduler_jobs": len(scheduled_job_ids),
+            "reminders": pending,
+            "recent": recent,
+        }
+    )
 
 
 @router.post("/api/reminder/complete/{reminder_id}")

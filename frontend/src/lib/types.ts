@@ -67,10 +67,22 @@ export interface Reminder {
   scheduled: boolean;
 }
 
+/** Trust layer: a reminder that reached a terminal state in the last 24h. */
+export interface ReminderOutcome {
+  id: string;
+  text: string;
+  time: string | null;
+  status: 'completed' | 'missed' | 'failed' | string;
+  completed_at: string | null;
+  acked_via: string | null;
+  snooze_count: number;
+}
+
 export interface RemindersResponse {
   count: number;
   scheduler_jobs: number;
   reminders: Reminder[];
+  recent?: ReminderOutcome[];
 }
 
 export interface HAEntity {

@@ -351,6 +351,27 @@ def get_pending_reminders() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def get_recent_reminder_outcomes(hours: int = 24, limit: int = 20) -> List[Dict[str, Any]]:
+    """Terminal-state reminders (completed/missed/failed) whose transition
+    happened in the last N hours, newest first.
+
+    `completed_at` doubles as the transition timestamp for ALL terminal
+    states — mark_reminder_missed/mark_reminder_failed stamp it too. Powers
+    the trust layer: the dashboard delivery log and the morning
+    missed-reminder recap.
+    """
+    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM reminders
+               WHERE status IN ('completed', 'missed', 'failed')
+                 AND completed_at IS NOT NULL AND completed_at >= ?
+               ORDER BY completed_at DESC LIMIT ?""",
+            (cutoff, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def complete_reminder(reminder_id: str) -> bool:
     """Mark a reminder as completed."""
     with get_db() as conn:
