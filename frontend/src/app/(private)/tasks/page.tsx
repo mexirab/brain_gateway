@@ -119,7 +119,7 @@ export default function TasksPage() {
         <select
           value={priority}
           onChange={(e) => setPriority(e.target.value as TaskPriority)}
-          className="input"
+          className="input w-auto shrink-0"
           aria-label="Priority"
         >
           <option value="low">Someday</option>

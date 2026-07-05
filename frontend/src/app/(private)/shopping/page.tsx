@@ -120,7 +120,7 @@ export default function ShoppingPage() {
         <select
           value={listName}
           onChange={(e) => setListName(e.target.value)}
-          className="input"
+          className="input w-auto shrink-0"
         >
           <option value="grocery">Grocery</option>
           <option value="shopping">Shopping</option>
