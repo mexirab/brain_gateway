@@ -191,7 +191,7 @@ export default function MealsPage() {
             <select
               value={mealType}
               onChange={(e) => setMealType(e.target.value as MealType)}
-              className="input text-sm"
+              className="input w-auto shrink-0 text-sm"
             >
               <option value="breakfast">Breakfast</option>
               <option value="lunch">Lunch</option>
