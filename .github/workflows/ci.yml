@@ -19,6 +19,33 @@ jobs:
         with:
           args: format --check orchestrator/
 
+  check-dashboards:
+    name: Grafana Dashboards In Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The Grafana JSON under provisioning/dashboards/json/ is GENERATED from the
+      # Python builders in monitoring/grafana/dashgen/. Regenerate and fail if the
+      # committed JSON differs — that means someone hand-edited the JSON (or a
+      # Grafana-UI edit got snapshotted back into the repo) instead of editing the
+      # builder. build.py uses only the stdlib, so there are no deps to install.
+      - name: Regenerate dashboards from the dashgen builders
+        run: python monitoring/grafana/dashgen/build.py
+      - name: Fail if the committed JSON drifted from the builders
+        run: |
+          if git diff --exit-code -- monitoring/grafana/provisioning/dashboards/json/; then
+            echo "Dashboards are in sync with monitoring/grafana/dashgen/."
+          else
+            echo "::error::Grafana dashboard JSON is out of sync with its dashgen builder (diff above)."
+            echo "These JSON files are GENERATED — do not hand-edit them, and do not rely on Grafana-UI"
+            echo "edits persisting. Edit the builder in monitoring/grafana/dashgen/dashboards/ instead."
+            echo "Fix: cd monitoring/grafana/dashgen && python3 build.py, then commit the regenerated JSON."
+            exit 1
+          fi
+
   test-python:
     name: Python Tests
     runs-on: ubuntu-latest
@@ -73,7 +100,7 @@ jobs:
     # post power-tiering) so auto-deploy is reliable. The orchestrator + frontend
     # now run on Jupiter; Helios is model-layer only.
     runs-on: [self-hosted, linux, jupiter]
-    needs: [lint-python, test-python, lint-frontend, docker-build]
+    needs: [lint-python, test-python, lint-frontend, docker-build, check-dashboards]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     # Serialize deploys. The runner deploys from ONE shared checkout at
     # /home/labadmin/gateway_nerves; rapid successive merges must not race on it
