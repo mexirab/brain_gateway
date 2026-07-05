@@ -284,10 +284,19 @@ class TestReminderRouting:
         mock_rem.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_someday_task_goes_to_rag_not_reminder(self, patched_brain_dump):
+    async def test_someday_task_goes_to_backlog_not_reminder_or_rag(self, patched_brain_dump):
+        # A non-urgent actionable item ("someday task") is a durable to-do, so
+        # it lands on the backlog — not a time-based reminder, and not RAG
+        # (where it would rot un-actionable, the audit's original gap).
         bdm, coll, *_ = patched_brain_dump
 
-        with patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem:
+        with (
+            patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem,
+            patch(
+                "orchestrator.backlog_manager.create",
+                return_value={"id": "abc123", "text": "reorganize bookshelf", "priority": "low"},
+            ) as mock_create,
+        ):
             result = await bdm.process_brain_dump(
                 [
                     {"text": "reorganize bookshelf", "category": "task", "urgency": "someday"},
@@ -295,7 +304,54 @@ class TestReminderRouting:
             )
 
         mock_rem.assert_not_called()
+        coll.upsert.assert_not_called()
+        mock_create.assert_called_once()
+        # "someday" maps to a low-priority backlog item.
+        assert mock_create.call_args.kwargs.get("priority") == "low"
+        assert mock_create.call_args.kwargs.get("source") == "brain_dump"
+        assert result.items[0].routed_to == "backlog"
+
+    @pytest.mark.asyncio
+    async def test_soon_task_goes_to_backlog_high_priority(self, patched_brain_dump):
+        # "soon" isn't urgent enough for a timed reminder, but it's more
+        # pressing than "someday" — it lands on the backlog flagged high.
+        bdm, coll, *_ = patched_brain_dump
+
+        with (
+            patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock) as mock_rem,
+            patch(
+                "orchestrator.backlog_manager.create",
+                return_value={"id": "def456", "text": "renew passport", "priority": "high"},
+            ) as mock_create,
+        ):
+            await bdm.process_brain_dump(
+                [
+                    {"text": "renew passport", "category": "task", "urgency": "soon"},
+                ]
+            )
+
+        mock_rem.assert_not_called()
+        mock_create.assert_called_once()
+        assert mock_create.call_args.kwargs.get("priority") == "high"
+
+    @pytest.mark.asyncio
+    async def test_backlog_create_failure_falls_back_to_rag(self, patched_brain_dump):
+        # If the backlog store rejects the item (create returns None), the item
+        # must not be silently lost — it falls back to RAG so it's at least kept.
+        bdm, coll, *_ = patched_brain_dump
+
+        with (
+            patch("orchestrator.brain_dump_manager._route_to_reminder", new_callable=AsyncMock),
+            patch("orchestrator.backlog_manager.create", return_value=None),
+        ):
+            result = await bdm.process_brain_dump(
+                [
+                    {"text": "sort the garage", "category": "task", "urgency": "someday"},
+                ]
+            )
+
         coll.upsert.assert_called_once()
+        assert result.items[0].routed_to == "memory"
 
     @pytest.mark.asyncio
     async def test_route_to_reminder_full_flow(self, patched_brain_dump):

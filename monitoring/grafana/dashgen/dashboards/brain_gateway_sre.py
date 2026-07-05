@@ -564,6 +564,46 @@ def build() -> dict:
     row, y = grid_row(taskdecomp_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Task Backlog
+    r, y = row_divider("Task Backlog", y)
+    panels.append(r)
+
+    backlog_desc = (
+        "The durable to-do list (state_store tasks table). Distinct from Task "
+        "Decomposition above (ephemeral step-tracking) and Reminders (time-based). "
+        "'Open Tasks' is a live gauge, primed on startup and updated on every "
+        "add/complete/drop. A steadily climbing open count with little completion "
+        "is the backlog-graveyard smell the Sunday review job is meant to catch."
+    )
+    backlog_row = [
+        stat(
+            "Open Tasks",
+            "bgw_tasks_open",
+            unit="none",
+            graph_mode="area",
+            thresholds=[(None, "green"), (15, "yellow"), (30, "red")],
+        ),
+        timeseries(
+            "Task Flow (created / completed / dropped)",
+            [
+                ("sum(rate(bgw_tasks_created_total[1h])) * 3600", "created/hr"),
+                ("rate(bgw_tasks_completed_total[1h]) * 3600", "completed/hr"),
+                ("rate(bgw_tasks_dropped_total[1h]) * 3600", "dropped/hr"),
+            ],
+            unit="none",
+            description=backlog_desc,
+        ),
+        timeseries(
+            "Tasks Created by Source (24h)",
+            [("sum by (source) (increase(bgw_tasks_created_total[24h]))", "{{source}}")],
+            unit="none",
+            stack=True,
+            fill=40,
+        ),
+    ]
+    row, y = grid_row(backlog_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Progress Tracking
     r, y = row_divider("Progress Tracking", y)
     panels.append(r)

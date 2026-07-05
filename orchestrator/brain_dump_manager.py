@@ -49,11 +49,18 @@ class BrainDumpResult:
     summary: str  # TTS-friendly confirmation
 
 
-# Categories that get stored in RAG
-RAG_CATEGORIES = {"idea", "preference", "research", "errand", "task"}
+# Categories that get stored in RAG (notes/knowledge, not actionable)
+RAG_CATEGORIES = {"idea", "preference", "research"}
 
 # Categories that get routed to reminders (when urgency is "now" or "today")
 REMINDER_CATEGORIES = {"task", "errand", "reminder"}
+
+# Actionable categories with no urgent time → the durable backlog. Previously
+# these fell through to RAG, so "add X to my list" (someday task) silently
+# became an un-actionable memory note — the audit's "someday items rot in RAG"
+# gap. Now they land on the to-do list.
+BACKLOG_CATEGORIES = {"task", "errand"}
+_URGENCY_TO_PRIORITY = {"soon": "high", "today": "high", "someday": "low", "later": "low"}
 
 
 async def route_item(item: CapturedItem) -> str:
@@ -64,11 +71,27 @@ async def route_item(item: CapturedItem) -> str:
     if item.category == "reminder" or (item.category in REMINDER_CATEGORIES and item.urgency in ("now", "today")):
         return await _route_to_reminder(item)
 
+    if item.category in BACKLOG_CATEGORIES:
+        return await _route_to_backlog(item)
+
     if item.category in RAG_CATEGORIES:
         return await _route_to_rag(item)
 
     # Fallback: store in RAG
     return await _route_to_rag(item)
+
+
+async def _route_to_backlog(item: CapturedItem) -> str:
+    """Route an actionable, non-time-urgent item to the durable task backlog."""
+    from orchestrator.backlog_manager import create
+
+    prio = _URGENCY_TO_PRIORITY.get(item.urgency, "normal")
+    task = create(item.raw_text, priority=prio, source="brain_dump")
+    if task is None:
+        return await _route_to_rag(item)
+    item.routed_to = "backlog"
+    logger.info("[BRAIN_DUMP] Routed to backlog (%s): %s", prio, item.raw_text[:60])
+    return "added to your task list"
 
 
 async def _route_to_reminder(item: CapturedItem) -> str:
