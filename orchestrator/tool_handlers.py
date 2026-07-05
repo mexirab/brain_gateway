@@ -1348,6 +1348,49 @@ def _reg_task_step(arguments: dict) -> str:
     return tool_task_step(arguments.get("task_id", ""), arguments.get("action", ""))
 
 
+@register_tool("add_task")
+async def _reg_add_task(arguments: dict) -> str:
+    from orchestrator import backlog_manager
+
+    is_voice = shared.is_voice_session_active()
+    return await asyncio.to_thread(
+        backlog_manager.add_task,
+        arguments.get("task", ""),
+        priority=arguments.get("priority", "normal"),
+        source="voice" if is_voice else "chat",
+        notes=arguments.get("notes"),
+        due_date=arguments.get("due_date"),
+    )
+
+
+@register_tool("list_tasks")
+async def _reg_list_tasks(arguments: dict) -> str:
+    from orchestrator import backlog_manager
+
+    return await asyncio.to_thread(backlog_manager.list_open)
+
+
+@register_tool("what_now")
+async def _reg_what_now(arguments: dict) -> str:
+    from orchestrator import backlog_manager
+
+    return await asyncio.to_thread(backlog_manager.pick_next)
+
+
+@register_tool("complete_task")
+async def _reg_complete_task(arguments: dict) -> str:
+    from orchestrator import backlog_manager
+
+    return await asyncio.to_thread(backlog_manager.complete, arguments.get("task", ""))
+
+
+@register_tool("drop_task")
+async def _reg_drop_task(arguments: dict) -> str:
+    from orchestrator import backlog_manager
+
+    return await asyncio.to_thread(backlog_manager.drop, arguments.get("task", ""))
+
+
 @register_tool("decide_for_me")
 async def _reg_decide_for_me(arguments: dict) -> str:
     return await tool_decide_for_me(arguments)
