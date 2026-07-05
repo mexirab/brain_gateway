@@ -64,7 +64,7 @@ hand-maintained install paths.
 | Service selection | `COMPOSE_PROFILES` in `.env` | `models` = LLM+TTS+STT; `advanced` = nebula-sync/promtail/nut-exporter; default = orchestrator+frontend+redis+searxng+open-webui |
 | Power control today | `scripts/start-helios.sh`, `scripts/stop-helios.sh`, `scripts/helios-status.sh` | SSH-based manual start/stop already exists. |
 | Wake-on-LAN | **gone** | Zero WoL/etherwake remnants in tree. Old SSH auto-start/stop config existed; WoL proven non-functional (likely BIOS ErP or NIC not persisting `wol g`). Needs physical/BIOS access to fix. |
-| Tailscale | `helios.tail74fc4a.ts.net`, `jupiter.tail74fc4a.ts.net` | Both nodes on the tailnet — basis for remote access + cross-node model URL. |
+| Tailscale | `helios.tail74fc4a.ts.net`, `jupiter-amds.tail74fc4a.ts.net` | Both nodes on the tailnet — basis for remote access + cross-node model URL. |
 
 ### 3.1 What actually depends on the LLM (verified in code)
 

@@ -41,9 +41,9 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **GPU model layer** (LLM + TTS/STT + code agent). Primary LLM: Lorbus/Qwen3.6-27B-int4-AutoRound served by vLLM 0.19.1 (GPU0 RTX 5090, port 8080), TTS + STT (GPU1 RTX PRO 5000), Code agent: Qwen3-Coder-Next 80B/3B MoE Q4_K_XL (GPU1 RTX PRO 5000 + system RAM via `-ot .ffn_.*_exps.=CPU`, port 8082). **Power-tiered: asleep most of the time, woken on demand via an HA-controlled smart plug** — NOT always-on; the orchestrator/frontend/HA run 24/7 on Jupiter instead. |
-| Jupiter | 10.0.0.248 | jupiter.tail74fc4a.ts.net | - | **Always-on hub**: Orchestrator (`brain-orchestrator` :8888), Frontend (:3001), **Home Assistant** (docker, host-networked, :8123 — migrated here off the dead Pi on 2026-07-04), Monitoring host (Prometheus, Grafana, Loki, Promtail, Blackbox exporter), Pi-hole primary, nebula-sync, Conjure API |
-| Saturn | 10.0.0.58 | - | RTX 3080 (10GB) + RTX 3090 (24GB) | Vision model (Qwen3-VL-8B-Instruct Q4_K_M, RTX 3080, port 8010), Expert reasoning model (Qwen3-32B Q4_K_M, RTX 3090, port 8084 via `expert-model` docker container), Pi-hole secondary, **off-box backup target** (orchestrator state + HA config) |
-| Uranus | 10.0.0.173 | - | 2x RTX 5080 (16GB each) | Non-Helios **test box** (Ubuntu 24.04). **Currently unreachable** (as of 2026-07-04); not part of the runtime path. |
+| Jupiter | 10.0.0.248 | jupiter-amds.tail74fc4a.ts.net | - | **Always-on hub**: Orchestrator (`brain-orchestrator` :8888), Frontend (:3001), **Home Assistant** (docker, host-networked, :8123 — migrated here off the dead Pi on 2026-07-04), Monitoring host (Prometheus, Grafana, Loki, Promtail, Blackbox exporter), Pi-hole primary, nebula-sync, Conjure API |
+| Saturn | 10.0.0.58 | saturn-3090.tail74fc4a.ts.net | RTX 3080 (10GB) + RTX 3090 (24GB) | Vision model (Qwen3-VL-8B-Instruct Q4_K_M, RTX 3080, port 8010), Expert reasoning model (Qwen3-32B Q4_K_M, RTX 3090, port 8084 via `expert-model` docker container), Pi-hole secondary, **off-box backup target** (orchestrator state + HA config) |
+| Uranus | 10.0.0.173 | uranus-5080s.tail74fc4a.ts.net | 2x RTX 5080 (16GB each) | Non-Helios **test box** (Ubuntu 24.04). **Currently unreachable** (as of 2026-07-04); not part of the runtime path. |
 | Pi (retired) | 10.0.0.106 | - | - | **Dead** — ran Home Assistant until its SD card failed 2026-07-04; HA was migrated to Jupiter. Safe to reimage. |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
 
@@ -61,16 +61,16 @@ Services marked **[advanced]** require `COMPOSE_PROFILES=advanced` in `.env` and
 | Expert model (Qwen3-32B Q4_K_M) | 8084 | http://10.0.0.58:8084/v1 |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
 | STT (Parakeet TDT v3) | 8003 | http://10.0.0.195:8003 |
-| Pi-hole (Jupiter primary) | 53/8053 | http://10.0.0.248:8053/admin |
-| Pi-hole (Saturn secondary) | 53/8053 | http://10.0.0.58:8053/admin |
-| Grafana (Jupiter) | 3000 | http://10.0.0.248:3000/d/brain-gateway-overview |
-| Prometheus (Jupiter) | 9090 | http://10.0.0.248:9090 |
+| Pi-hole (Jupiter primary) | 53/8053 | http://jupiter-amds.tail74fc4a.ts.net:8053/admin |
+| Pi-hole (Saturn secondary) | 53/8053 | http://saturn-3090.tail74fc4a.ts.net:8053/admin |
+| Grafana (Jupiter) | 3000 | http://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview |
+| Prometheus (Jupiter) | 9090 | http://jupiter-amds.tail74fc4a.ts.net:9090 |
 | Loki (Jupiter) | 3100 | http://10.0.0.248:3100 |
 | Wyoming Whisper (STT) | 10300 | tcp://10.0.0.195:10300 |
 | Wyoming Jessica (TTS) | 10301 | tcp://10.0.0.195:10301 |
 | Vision Model (Qwen3-VL-8B) | 8010 | http://10.0.0.58:8010 |
-| Frontend (dashboard) | 3001 | http://jupiter.tail74fc4a.ts.net:3001 (future: convivialprophet.com) |
-| SearXNG | 8090 | http://10.0.0.248:8090 (Jupiter) |
+| Frontend (dashboard) | 3001 | http://jupiter-amds.tail74fc4a.ts.net:3001 (future: convivialprophet.com) |
+| SearXNG | 8090 | http://jupiter-amds.tail74fc4a.ts.net:8090 (Jupiter) |
 | Promtail (Helios) **[advanced]** | 9080 (internal) | Scrapes Helios Docker socket → pushes to Loki on Jupiter via tailnet |
 
 ## Architecture (v7 Unified)

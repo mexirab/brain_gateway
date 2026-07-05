@@ -70,10 +70,10 @@
         description: Orchestrator health JSON
         icon: mdi-brain
     - Pi-hole (Jupiter):
-        href: http://10.0.0.248:8053/admin
+        href: http://jupiter-amds.tail74fc4a.ts.net:8053/admin
         description: DNS primary
         icon: pi-hole
     - Pi-hole (Saturn):
-        href: http://10.0.0.58:8053/admin
+        href: http://saturn-3090.tail74fc4a.ts.net:8053/admin
         description: DNS secondary
         icon: pi-hole
