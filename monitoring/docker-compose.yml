@@ -44,9 +44,14 @@ services:
     ports:
       - "${MONITORING_PROMETHEUS_PORT:-9090}:9090"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
-      - ./prometheus/api_token:/etc/prometheus/api_token:ro
+      # DIRECTORY mount, not per-file mounts: a single-file bind is pinned
+      # to the inode at container start, and `git pull` (CI deploy) and most
+      # editors replace files with new inodes — the container would keep
+      # reading the pre-pull file while /-/reload reports success. A
+      # directory mount resolves inner files by path on every access.
+      # (Bit us 2026-07-06: an alert-rules.yml edit was invisible to the
+      # running container until recreate.)
+      - ./prometheus:/etc/prometheus:ro
       - /mnt/logging/prometheus:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -107,6 +112,44 @@ services:
       - monitoring-net
     depends_on:
       - loki
+
+  # ============================================
+  # ALERTMANAGER - Alert Routing (Pushover)
+  # ============================================
+  # The config is GENERATED: alertmanager/alertmanager.yml is rendered from
+  # alertmanager.yml.template by scripts/generate-configs.sh, which injects
+  # PUSHOVER_USER_KEY/PUSHOVER_APP_TOKEN from ../.env. The rendered file is
+  # gitignored — after editing the template, re-run the generator and
+  # `curl -X POST localhost:9093/-/reload` (CI does both on deploy).
+  # Folded in here 2026-07-06, replacing a hand-run container that
+  # bind-mounted a stale render from the old /opt/gateway_mvp checkout.
+  alertmanager:
+    # Digest pinned 2026-07-06 — same supply-chain posture as the pins above.
+    image: prom/alertmanager:latest@sha256:af26fbe4dd1886ac0efd7bd55cd9027da262e105b137a376522b7c14c3626e4a
+    container_name: alertmanager
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Loopback-only, deliberately narrower than the hand-run container's
+      # 0.0.0.0 bind: the API is unauthenticated (anyone who can reach it
+      # can create silences or inject fake "Jess alert" pushes) and every
+      # consumer is local — Prometheus/Grafana use in-network DNS
+      # (alertmanager:9093), CI reloads via localhost. ufw is inactive on
+      # Jupiter, so this bind IS the exposure control.
+      - "127.0.0.1:${MONITORING_ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      # Directory mount for the same inode-replacement reason as prometheus
+      # above (generate-configs.sh truncates in place, but don't depend on it).
+      - ./alertmanager:/etc/alertmanager:ro
+      - /mnt/logging/alertmanager:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - monitoring-net
 
   # ============================================
   # BLACKBOX EXPORTER - HTTP Health Probes
