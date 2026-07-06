@@ -662,23 +662,31 @@ async def _startup_logic():
 
     # Evening shutdown ritual — deliberately NOT gated on calendar config:
     # meds check + parking one unfinished thing still deliver without one.
+    # Registration is guarded: this runs on EVERY boot (enabled by default),
+    # so a malformed EVENING_BRIEFING_TIME must skip the job, not crash-loop
+    # the whole orchestrator out of startup.
     if EVENING_BRIEFING_ENABLED:
-        hour, minute = map(int, EVENING_BRIEFING_TIME.split(":"))
-        scheduler.add_job(
-            evening_briefing,
-            trigger="cron",
-            hour=hour,
-            minute=minute,
-            id="evening_briefing",
-            name="Evening shutdown ritual",
-            replace_existing=True,
-        )
-        logger.info(f"[SCHEDULER] Evening briefing at {EVENING_BRIEFING_TIME}")
-        # Seed the dead-man's-switch gauge, same rationale as the morning one:
-        # a fresh restart must not trip EveningBriefingStale before first fire.
-        from orchestrator.metrics import EVENING_BRIEFING_LAST_RUN
+        try:
+            hour, minute = map(int, EVENING_BRIEFING_TIME.split(":"))
+            scheduler.add_job(
+                evening_briefing,
+                trigger="cron",
+                hour=hour,
+                minute=minute,
+                id="evening_briefing",
+                name="Evening shutdown ritual",
+                replace_existing=True,
+            )
+            logger.info(f"[SCHEDULER] Evening briefing at {EVENING_BRIEFING_TIME}")
+            # Seed the dead-man's-switch gauge, same rationale as the morning
+            # one: a restart must not trip EveningBriefingStale pre-first-fire.
+            from orchestrator.metrics import EVENING_BRIEFING_LAST_RUN
 
-        EVENING_BRIEFING_LAST_RUN.set_to_current_time()
+            EVENING_BRIEFING_LAST_RUN.set_to_current_time()
+        except Exception as e:
+            logger.error(
+                f"[SCHEDULER] Evening briefing registration failed (EVENING_BRIEFING_TIME={EVENING_BRIEFING_TIME!r}): {e}"
+            )
 
     # Initialize routine manager (F-006)
     if shared.ROUTINE_ENABLED:

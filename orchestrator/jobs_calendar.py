@@ -614,9 +614,13 @@ async def evening_briefing():
                 "likely broken iPhone Shortcut payload. Falling through to Google."
             )
 
-        if not (phone_fresh and phone_parsed_count > 0):
+        cal_source = "none"
+        if phone_fresh and phone_parsed_count > 0:
+            cal_source = "phone"
+        else:
             client = get_calendar_client()
             if client and client.is_configured:
+                cal_source = "google"
                 response = await client.list_events(days_ahead=2)
                 if response.success:
                     for event in response.events:
@@ -726,9 +730,10 @@ async def evening_briefing():
         except Exception:
             pass
 
-        await _announce_voice(text, speaker=None, announcement_type="briefing")
+        result = await _announce_voice(text, speaker=None, announcement_type="briefing")
 
-        # Mirror to Telegram so the ritual also lands away from the speakers.
+        # Mirror to Telegram so the ritual also lands away from the speakers
+        # (complementary channel — fires even when TTS failed).
         # Fire-and-forget with a strong task ref; no-ops when the bot is off.
         try:
             from orchestrator.telegram_bot import fire_system_message
@@ -737,8 +742,16 @@ async def evening_briefing():
         except Exception as tg_err:
             logger.warning(f"[EVENING_BRIEFING] Telegram dispatch failed: {tg_err}")
 
+        # Honest outcome in the summary line — "Delivered" must not appear
+        # when TTS actually failed or was suppressed mid-voice-session.
+        if result.get("suppressed"):
+            outcome = f"suppressed({result.get('reason', '?')})"
+        elif result.get("success"):
+            outcome = "delivered"
+        else:
+            outcome = f"failed({result.get('error', '?')})"
         logger.info(
-            f"[EVENING_BRIEFING] Delivered: {len(events)} tomorrow events, "
+            f"[EVENING_BRIEFING] {outcome}: source={cal_source}, {len(events)} tomorrow events, "
             f"meds={'n/a' if meds is None else meds['confirmed']}, parked={'yes' if parked else 'no'}"
         )
 

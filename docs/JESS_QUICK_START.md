@@ -219,7 +219,8 @@ Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-o
 
 | Feature | When |
 |---------|------|
-| Morning briefing | Your configured wakeup time — today's events + pending reminders + weather |
+| Morning briefing | Your configured wakeup time — today's events + pending reminders + weather + yesterday's parked item |
+| Evening shutdown ritual | 9:30 PM (configurable) — tomorrow's first event + leave-by time, evening meds check, parks one unfinished thing for the morning |
 | Calendar alerts | Tiered countdown: 1hr, 30min, 15min, 5min before events |
 | "Leave by" alerts | For events with physical locations, factoring in travel time |
 | Daily progress recap | 6:00 PM — tasks done, focus time, streaks |
