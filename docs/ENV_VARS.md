@@ -308,6 +308,7 @@ Two-way capture + reminder channel. A dedicated long-polling task inside the orc
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | `getUpdates` long-poll window. |
 | `TELEGRAM_SNOOZE_MINUTES` | `10` | Snooze button duration (clamped 1–120). |
 | `TELEGRAM_HISTORY_TURNS` | `16` | Rolling RAM-only context window (messages, not pairs) per chat. |
+| `TELEGRAM_SELFCARE_NUDGES` | `medication` | Which F-008 selfcare nudge kinds mirror to Telegram with a one-tap ✓ Done log button. Comma list of `medication`\|`meal`\|`water`\|`movement`, or `all`. Selfcare nudges don't pass through `deliver_reminder_job`, so this is their ONLY push channel besides the HA companion app. |
 
 Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_latency_seconds{kind}`, `bgw_telegram_update_total{kind,result}`, `bgw_telegram_callback_total{action,result}`.
 

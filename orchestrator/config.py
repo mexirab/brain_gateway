@@ -326,6 +326,11 @@ class Settings(BaseSettings):
     telegram_poll_timeout_seconds: int = 50  # getUpdates long-poll window
     telegram_snooze_minutes: int = 10  # snooze button duration
     telegram_history_turns: int = 16  # rolling RAM-only context window (messages)
+    # Which F-008 selfcare nudge kinds mirror to Telegram with a one-tap
+    # ✓ Done log button. Comma list of medication|meal|water|movement, or
+    # "all". Default meds-only: that's the high-stakes nudge; hourly
+    # movement/hydration pings would be phone spam.
+    telegram_selfcare_nudges: str = "medication"
 
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't

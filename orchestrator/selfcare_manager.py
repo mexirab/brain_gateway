@@ -283,19 +283,41 @@ async def check_selfcare() -> None:
     except ImportError:
         pass
 
-    # Priority order: meds > meals > movement > hydration (one per cycle)
-    nudge = _check_meds(now, now_tz)
+    # Priority order: meds > meals > movement > hydration (one per cycle).
+    # The kind rides along so phone channels can offer a matching one-tap
+    # log action (kind keys match the F-011 selfcare-bridge vocabulary).
+    nudge, kind = _check_meds(now, now_tz), "medication"
     if not nudge:
-        nudge = _check_meals(now)
+        nudge, kind = _check_meals(now), "meal"
     if not nudge:
-        nudge = _check_movement(now)
+        nudge, kind = _check_movement(now), "movement"
     if not nudge:
-        nudge = _check_hydration(now)
+        nudge, kind = _check_hydration(now), "water"
 
     if nudge:
-        await _announce_voice(nudge, announcement_type="selfcare")
-        await _send_notification(nudge)
-        logger.info(f"[SELFCARE] Nudge: {nudge[:60]}", extra={"component": "selfcare"})
+        await _dispatch_nudge(kind, nudge)
+
+
+async def _dispatch_nudge(kind: str, nudge: str) -> None:
+    """Deliver one nudge across channels: TTS + HA companion push + Telegram.
+
+    Selfcare nudges never pass through deliver_reminder_job, so the reminder
+    push channels (F-011 ntfy / F-013 Pushover / Telegram reminders) don't
+    apply here — before this, a med nudge with no HA mobile service was
+    voice-only and vanished whenever TTS was down (observed 2026-07-06:
+    two silent ConnectError drops before the 07:50 nudge landed).
+    """
+    await _announce_voice(nudge, announcement_type="selfcare")
+    await _send_notification(nudge)
+    # Telegram mirror with a one-tap "✓ Done" that logs the action.
+    # Fire-and-forget; kind-gated via TELEGRAM_SELFCARE_NUDGES.
+    try:
+        from orchestrator.telegram_bot import fire_selfcare_nudge
+
+        fire_selfcare_nudge(kind, nudge)
+    except Exception as tg_err:
+        logger.warning(f"[SELFCARE] Telegram nudge dispatch failed: {tg_err}")
+    logger.info(f"[SELFCARE] Nudge ({kind}): {nudge[:60]}", extra={"component": "selfcare"})
 
 
 # ---------------------------------------------------------------------------

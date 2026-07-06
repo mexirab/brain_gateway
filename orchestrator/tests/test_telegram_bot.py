@@ -405,3 +405,86 @@ def test_allowlist_supports_comma_list(tg_on, monkeypatch):
 def test_allowlist_empty_denies_everyone(tg_on, monkeypatch):
     monkeypatch.setattr(settings, "telegram_allowed_chat_id", "", raising=False)
     assert not telegram_bot._chat_allowed("1111")
+
+
+# ---------------------------------------------------------------------------
+# selfcare nudges (F-008 mirror)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_selfcare_nudge_medication_sends_with_done_button(tg_on):
+    with respx.mock:
+        route = respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 11}))
+        result = await telegram_bot.send_selfcare_nudge("medication", "Hey, did you take your Vyvanse?")
+    assert result["success"] is True
+    import json
+
+    body = json.loads(route.calls[0].request.content)
+    assert "Vyvanse" in body["text"]
+    assert body["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "sc:medication"
+
+
+@pytest.mark.asyncio
+async def test_selfcare_nudge_kind_gating(tg_on, monkeypatch):
+    # default TELEGRAM_SELFCARE_NUDGES=medication → movement is skipped
+    monkeypatch.setattr(settings, "telegram_selfcare_nudges", "medication", raising=False)
+    result = await telegram_bot.send_selfcare_nudge("movement", "Stand up and stretch")
+    assert result == {"success": False, "skipped": True, "reason": "kind_not_enabled"}
+
+    # "all" opens every kind
+    monkeypatch.setattr(settings, "telegram_selfcare_nudges", "all", raising=False)
+    with respx.mock:
+        respx.post(f"{BOT}/sendMessage").mock(return_value=_tg_ok({"message_id": 12}))
+        result = await telegram_bot.send_selfcare_nudge("movement", "Stand up and stretch")
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_callback_selfcare_logs_medication(tg_on, monkeypatch):
+    logged = []
+    import orchestrator.selfcare_manager as sc
+
+    monkeypatch.setattr(sc, "record_medication_logged", lambda label: logged.append(label))
+    with respx.mock:
+        answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
+        respx.post(f"{BOT}/editMessageText").mock(return_value=_tg_ok(True))
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            await telegram_bot._handle_callback(client, _callback("sc:medication"))
+    assert logged == ["telegram:medication nudge"]
+    assert answer.called
+
+
+@pytest.mark.asyncio
+async def test_callback_selfcare_rejects_unknown_kind(tg_on, monkeypatch):
+    logged = []
+    import orchestrator.selfcare_manager as sc
+
+    monkeypatch.setattr(sc, "record_medication_logged", lambda label: logged.append(label))
+    with respx.mock:
+        answer = respx.post(f"{BOT}/answerCallbackQuery").mock(return_value=_tg_ok(True))
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            await telegram_bot._handle_callback(client, _callback("sc:rm_rf_slash"))
+    assert logged == []
+    assert answer.called
+
+
+@pytest.mark.asyncio
+async def test_dispatch_nudge_mirrors_to_telegram(tg_on, monkeypatch):
+    import orchestrator.selfcare_manager as sc
+    from orchestrator import telegram_bot as tb
+
+    async def _noop(*a, **k):
+        return {"success": True}
+
+    fired = []
+    monkeypatch.setattr(sc, "_announce_voice", _noop)
+    monkeypatch.setattr(sc, "_send_notification", _noop)
+    monkeypatch.setattr(tb, "fire_selfcare_nudge", lambda kind, text: fired.append((kind, text)))
+
+    await sc._dispatch_nudge("medication", "Hey, did you take your Guanfacine?")
+    assert fired == [("medication", "Hey, did you take your Guanfacine?")]
