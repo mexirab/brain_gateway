@@ -219,6 +219,8 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `MORNING_BRIEFING_TIME` | `HH:MM` for morning briefing (default 07:30) |
 | `MORNING_BRIEFING_ENABLED` | `true`/`false` (default true) |
 | `MORNING_BRIEFING_MIN_VOLUME` | Volume floor (0.0–1.0) the briefing forces on its target speaker via `media_player.volume_set` before `play_media`. Bumps up only — never lowers an already-loud speaker. Set to `0` to disable the floor. Default `0.4`. Defeats "speaker still at sleep-sound volume" — see the 2026-04-30 incident where the briefing played at 0.10 because the bedroom_pair was still on overnight fireplace audio. |
+| `EVENING_BRIEFING_TIME` | `HH:MM` for the evening shutdown ritual (default 21:30 — ahead of the 22:00 quiet-hours start) |
+| `EVENING_BRIEFING_ENABLED` | `true`/`false` (default true). The ritual announces tomorrow's first event + leave-by time, an evening meds check, and parks one unfinished thing (active focus task, else top backlog task) for the morning briefing to offer back. Uses the `briefing` speaker route; mirrors to Telegram when the bot is on; parks silently (no announce) when DND is already active. Runs without a calendar — meds + parking still deliver. |
 
 ## Helios wake-on-demand (PT-C)
 

@@ -528,6 +528,44 @@ async def get_selfcare_status() -> Dict[str, Any]:
     return status
 
 
+def evening_meds_status() -> Optional[Dict[str, Any]]:
+    """Evening medication adherence for the evening shutdown ritual.
+
+    Returns None when the meds category is disabled or no evening meds are
+    scheduled. Otherwise {'names': [...], 'confirmed': bool} using the same
+    semantics as _check_meds: a generic 'medication' confirmation today at
+    hour >= 17 covers everything; else every individual evening med must
+    have its own confirmation today at hour >= 17.
+    """
+    from orchestrator.selfcare_schedule import category_enabled
+
+    if not category_enabled("meds"):
+        return None
+
+    try:
+        from orchestrator.data_manager import get_medications
+
+        evening_meds = get_medications().get("daily", {}).get("evening", [])
+    except Exception as e:
+        logger.warning(f"[SELFCARE] Evening meds lookup failed: {e}")
+        return None
+
+    names = [med.get("name", "") for med in evening_meds if med.get("name")]
+    if not names:
+        return None
+
+    today = datetime.now().date()
+    generic = _state.last_med_confirmation.get("medication")
+    if generic and generic.date() == today and generic.hour >= 17:
+        return {"names": names, "confirmed": True}
+
+    for name in names:
+        last = _state.last_med_confirmation.get(name.lower())
+        if not (last and last.date() == today and last.hour >= 17):
+            return {"names": names, "confirmed": False}
+    return {"names": names, "confirmed": True}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

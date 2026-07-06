@@ -6,7 +6,7 @@ route:
   repeat_interval: 4h
   routes:
     - matchers:
-        - alertname=~"OrchestratorDown|MorningBriefingStale|GoogleTokenRefreshStale"
+        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale"
       receiver: "pushover"
 receivers:
   - name: "null"

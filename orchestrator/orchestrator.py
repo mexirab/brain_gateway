@@ -46,7 +46,7 @@ from orchestrator import (
 from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
-from orchestrator.background_jobs import morning_briefing, poll_calendar, process_emails_for_events
+from orchestrator.background_jobs import evening_briefing, morning_briefing, poll_calendar, process_emails_for_events
 from orchestrator.cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
@@ -76,6 +76,8 @@ from orchestrator.routes_config import router as config_router
 from orchestrator.routes_setup import router as setup_router
 from orchestrator.shared import (
     CALENDAR_POLL_INTERVAL,
+    EVENING_BRIEFING_ENABLED,
+    EVENING_BRIEFING_TIME,
     FALLBACK_MODEL_NAME,
     FALLBACK_MODEL_URL,
     MODEL_NAME,
@@ -657,6 +659,34 @@ async def _startup_logic():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Email-to-calendar every {shared.EMAIL_TO_CALENDAR_INTERVAL} min")
+
+    # Evening shutdown ritual — deliberately NOT gated on calendar config:
+    # meds check + parking one unfinished thing still deliver without one.
+    # Registration is guarded: this runs on EVERY boot (enabled by default),
+    # so a malformed EVENING_BRIEFING_TIME must skip the job, not crash-loop
+    # the whole orchestrator out of startup.
+    if EVENING_BRIEFING_ENABLED:
+        try:
+            hour, minute = map(int, EVENING_BRIEFING_TIME.split(":"))
+            scheduler.add_job(
+                evening_briefing,
+                trigger="cron",
+                hour=hour,
+                minute=minute,
+                id="evening_briefing",
+                name="Evening shutdown ritual",
+                replace_existing=True,
+            )
+            logger.info(f"[SCHEDULER] Evening briefing at {EVENING_BRIEFING_TIME}")
+            # Seed the dead-man's-switch gauge, same rationale as the morning
+            # one: a restart must not trip EveningBriefingStale pre-first-fire.
+            from orchestrator.metrics import EVENING_BRIEFING_LAST_RUN
+
+            EVENING_BRIEFING_LAST_RUN.set_to_current_time()
+        except Exception as e:
+            logger.error(
+                f"[SCHEDULER] Evening briefing registration failed (EVENING_BRIEFING_TIME={EVENING_BRIEFING_TIME!r}): {e}"
+            )
 
     # Initialize routine manager (F-006)
     if shared.ROUTINE_ENABLED:

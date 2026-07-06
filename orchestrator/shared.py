@@ -223,6 +223,8 @@ MORNING_BRIEFING_TIME = settings.morning_briefing_time
 MORNING_BRIEFING_ENABLED = settings.morning_briefing_enabled
 MORNING_BRIEFING_SPEAKER = settings.morning_briefing_speaker or profile.morning_briefing_speaker
 MORNING_BRIEFING_MIN_VOLUME = settings.morning_briefing_min_volume
+EVENING_BRIEFING_TIME = settings.evening_briefing_time
+EVENING_BRIEFING_ENABLED = settings.evening_briefing_enabled
 
 # ---------------------------------------------------------------------------
 # Temperature monitoring
