@@ -265,6 +265,57 @@ def fire_system_message(text: str) -> None:
     task.add_done_callback(_bg_tasks.discard)
 
 
+# Selfcare nudge kinds → the record function names the sc: callback maps to.
+# Keys match the F-011 selfcare-bridge vocabulary (infer_selfcare_action).
+SELFCARE_KINDS = ("medication", "meal", "water", "movement")
+
+
+def _selfcare_nudge_kinds() -> set:
+    """Kinds allowed to push to Telegram (TELEGRAM_SELFCARE_NUDGES)."""
+    raw = _settings.telegram_selfcare_nudges.strip().lower()
+    if raw == "all":
+        return set(SELFCARE_KINDS)
+    return {k.strip() for k in raw.split(",") if k.strip() in SELFCARE_KINDS}
+
+
+async def send_selfcare_nudge(kind: str, text: str) -> Dict[str, Any]:
+    """Mirror a selfcare nudge (F-008) to Telegram with a one-tap ✓ Done
+    button that logs the action (sc:<kind> callback).
+
+    Kind-gated: only kinds listed in TELEGRAM_SELFCARE_NUDGES push (default
+    just `medication` — meds are the high-stakes nudge; hourly movement/
+    hydration pings would be phone spam). Never raises.
+    """
+    from orchestrator.metrics import TELEGRAM_SEND_TOTAL
+
+    if not _settings.telegram_enabled:
+        TELEGRAM_SEND_TOTAL.labels(result="skipped", kind="nudge", reason="disabled").inc()
+        return {"success": False, "skipped": True, "reason": "disabled"}
+    if kind not in _selfcare_nudge_kinds():
+        TELEGRAM_SEND_TOTAL.labels(result="skipped", kind="nudge", reason="kind_not_enabled").inc()
+        return {"success": False, "skipped": True, "reason": "kind_not_enabled"}
+    if not _settings.telegram_bot_token or not _allowed_chat_ids():
+        TELEGRAM_SEND_TOTAL.labels(result="skipped", kind="nudge", reason="missing_chat_id").inc()
+        return {"success": False, "skipped": True, "reason": "unconfigured"}
+
+    keyboard = {"inline_keyboard": [[{"text": "✓ Done", "callback_data": f"sc:{kind}"}]]}
+    ok_any = False
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for chat_id in sorted(_allowed_chat_ids()):
+            result = await _send_text(
+                client, chat_id, f"💊 {text}" if kind == "medication" else text, kind="nudge", reply_markup=keyboard
+            )
+            ok_any = ok_any or bool(result.get("ok"))
+    return {"success": ok_any}
+
+
+def fire_selfcare_nudge(kind: str, text: str) -> None:
+    """Fire-and-forget send_selfcare_nudge with a strong task ref."""
+    task = asyncio.create_task(send_selfcare_nudge(kind, text))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
 # ---------------------------------------------------------------------------
 # Inbound: chat relay
 # ---------------------------------------------------------------------------
@@ -498,6 +549,39 @@ async def _handle_callback(client: httpx.AsyncClient, cb: Dict[str, Any]) -> Non
         logger.info(f"[TELEGRAM-SNOOZE] {reminder_id} snoozed {minutes}m (count={new_count})")
         await _answer_callback(client, callback_id, f"\U0001f4a4 Snoozed until {fire_time}")
         await _strip_buttons(client, cb, f"\U0001f4a4 Snoozed until {fire_time}")
+        return
+
+    if action == "sc" and len(parts) == 2:
+        # One-tap selfcare log from a nudge (sc:<kind>). Same auth boundary
+        # as ack/snooze; kind is validated against the fixed vocabulary, so
+        # arbitrary callback_data from the (allow-listed) chat can't reach
+        # anything else.
+        kind = parts[1]
+        if kind not in SELFCARE_KINDS:
+            TELEGRAM_CALLBACK_TOTAL.labels(action="selfcare", result="error").inc()
+            await _answer_callback(client, callback_id, "Unknown action.")
+            return
+        try:
+            from orchestrator import selfcare_manager
+
+            label = f"telegram:{kind} nudge"
+            if kind == "medication":
+                selfcare_manager.record_medication_logged(label)
+            elif kind == "meal":
+                selfcare_manager.record_meal_logged(label)
+            elif kind == "water":
+                selfcare_manager.record_hydration_logged(label)
+            elif kind == "movement":
+                selfcare_manager.record_movement_logged(label)
+        except Exception as sc_err:
+            logger.error(f"[TELEGRAM-SC] Selfcare log failed for {kind}: {sc_err}", exc_info=True)
+            TELEGRAM_CALLBACK_TOTAL.labels(action="selfcare", result="error").inc()
+            await _answer_callback(client, callback_id, "Couldn't log it — try by voice.")
+            return
+        TELEGRAM_CALLBACK_TOTAL.labels(action="selfcare", result="ok").inc()
+        logger.info(f"[TELEGRAM-SC] {kind} logged via nudge button")
+        await _answer_callback(client, callback_id, "✓ Logged")
+        await _strip_buttons(client, cb, "✓ Logged")
         return
 
     TELEGRAM_CALLBACK_TOTAL.labels(action="unknown", result="error").inc()
