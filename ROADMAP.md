@@ -48,9 +48,9 @@ Quiet-hours plumbing exists but `sleep_mode` is just DND. Build the ladder:
 
 `presence_tracker.py` already polls HA presence — this is mostly wiring. New reminder trigger type bound to presence transitions: "next time I leave home, remind me to take the package" / "next time I'm home, …".
 
-### 6. Evening shutdown ritual ⬜
+### 6. ~~Evening shutdown ritual~~ ✅ BUILT (July 2026)
 
-The mirror of the morning briefing (pitched long ago, never built): tomorrow's first event + leave-by time, meds check, park one unfinished thing (F-007 bookmark). Natural lead-in to the wind-down ladder (#4).
+Shipped as `jobs_calendar.evening_briefing()` (default 21:30, `EVENING_BRIEFING_*` env vars): tomorrow's first event + leave-by time via Google Maps, evening meds check, and parking one unfinished thing (active focus task, else top backlog task) into persistent `app_state` — the morning briefing offers it back and clears it only after a successful announce. DND-aware (parks silently), Telegram-mirrored, with an `EveningBriefingStale` dead-man's-switch alert. Natural lead-in to the wind-down ladder (#4), which is still open.
 
 ## Tier 3 — Richer intelligence (later, but high-leverage)
 
@@ -122,7 +122,7 @@ Needs vLLM 0.19.2+ (KV-calc fix) and the primary moving GPU0 → GPU1 (the 5090 
 1. ~~Durable task backlog~~ — ✅ DONE (#44/#45/#46)
 2. ~~Telegram capture bot~~ — ✅ LIVE (@Jess_brain_bot)
 3. ~~Trust layer~~ — ✅ BUILT (morning recap + delivery log on the dashboard + Grafana trust row)
-4. **Evening shutdown ritual + sleep wind-down ladder** — pair naturally, both cheap now that HA is local
+4. ~~Evening shutdown ritual~~ ✅ BUILT — **sleep wind-down ladder** remains (cheap now that HA is local, and the ritual gives it its T-30 anchor)
 5. **Geofenced errand reminders** — mostly wiring
 6. **Real streaming** — biggest latency lever
 7. **Jess Face deploy** — hardware session when home (Pi + USB mic)

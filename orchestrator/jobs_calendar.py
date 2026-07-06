@@ -1,5 +1,5 @@
 """
-Background jobs: calendar polling, morning briefing, email polling,
+Background jobs: calendar polling, morning + evening briefings, email polling,
 email-to-calendar event extraction.
 """
 
@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -23,6 +23,7 @@ from orchestrator.metrics import (
     CALENDAR_POLL_EVENTS_FOUND,
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
+    EVENING_BRIEFING_LAST_RUN,
     MORNING_BRIEFING_LAST_RUN,
 )
 from orchestrator.reminder_manager import _announce_voice, list_pending_reminders
@@ -482,6 +483,18 @@ async def morning_briefing():
         else:
             parts.append("Your calendar is clear today.")
 
+        # Evening-ritual pickup: offer back the one thing parked last night
+        # (see evening_briefing). Cleared only after a successful announce so
+        # a failed TTS run doesn't silently eat the parked item. A failed
+        # lookup must never sink the briefing.
+        try:
+            parked = state_store.get_app_state("parked_item")
+        except Exception as parked_err:
+            logger.warning(f"[MORNING_BRIEFING] Parked-item lookup failed: {parked_err}")
+            parked = None
+        if parked:
+            parts.append(f"Last night you parked: {parked}. It's ready when you are.")
+
         pending = list_pending_reminders()
         if pending:
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
@@ -519,16 +532,193 @@ async def morning_briefing():
         # Pass speaker=None so _announce_voice consults the Speakers panel
         # via announcement_routes.route_for("briefing"), which itself falls
         # back to MORNING_BRIEFING_SPEAKER when nothing is configured.
-        await _announce_voice(
+        result = await _announce_voice(
             " ".join(parts),
             speaker=None,
             announcement_type="briefing",
             min_volume=min_vol,
         )
+        if parked and result.get("success"):
+            state_store.delete_app_state("parked_item")
         logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
+
+
+async def evening_briefing():
+    """Evening shutdown ritual: the mirror of the morning briefing.
+
+    Tomorrow's first event (+ leave-by time when it has a physical location),
+    evening meds check, and parking one unfinished thing (F-007) so the
+    morning briefing can offer it back.
+
+    Event sources mirror morning_briefing: phone calendar sync first (with the
+    same zero-parsed guard), Google Calendar API fallback. Runs fine with no
+    calendar at all — meds + parking still deliver.
+    """
+    tz = ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+    tomorrow = (now + timedelta(days=1)).date()
+
+    # Dead-man's-switch heartbeat, same contract as the morning gauge:
+    # stamped at entry so the signal is "the job ran". EveningBriefingStale.
+    EVENING_BRIEFING_LAST_RUN.set_to_current_time()
+
+    try:
+        # Build tomorrow's event list (phone-first, Google fallback)
+        events = []
+        phone_age = (
+            time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+        )
+        phone_parsed_count = 0
+        phone_fresh = bool(shared._phone_calendar_events) and phone_age < 86400
+        if phone_fresh:
+            for ev in shared._phone_calendar_events:
+                try:
+                    start = _parse_phone_datetime(ev.get("start", ""), tz)
+                    phone_parsed_count += 1
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=tz)
+                    if start.date() != tomorrow:
+                        continue
+                    events.append(
+                        {
+                            "title": ev.get("title", "(No title)"),
+                            "start": start,
+                            "all_day": ev.get("all_day", False),
+                            "location": ev.get("location", ""),
+                        }
+                    )
+                except (ValueError, TypeError):
+                    continue
+
+        # Same guard as morning_briefing: fresh-but-corrupted phone cache must
+        # not read as "clear tomorrow" — fall through to Google instead.
+        if phone_fresh and phone_parsed_count == 0:
+            logger.warning(
+                f"[EVENING_BRIEFING] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
+                "likely broken iPhone Shortcut payload. Falling through to Google."
+            )
+
+        if not (phone_fresh and phone_parsed_count > 0):
+            client = get_calendar_client()
+            if client and client.is_configured:
+                response = await client.list_events(days_ahead=2)
+                if response.success:
+                    for event in response.events:
+                        start = event.start
+                        if start.tzinfo is None:
+                            start = start.replace(tzinfo=tz)
+                        if start.date() != tomorrow:
+                            continue
+                        events.append(
+                            {
+                                "title": event.title,
+                                "start": start,
+                                "all_day": event.all_day,
+                                "location": event.location,
+                            }
+                        )
+            else:
+                logger.info("[EVENING_BRIEFING] No calendar source available")
+
+        events.sort(key=lambda e: (e["all_day"], e["start"]))
+        timed = [e for e in events if not e["all_day"]]
+
+        parts = [f"Alright {profile.user_name}, wrapping up the day."]
+
+        # Tomorrow's first event + leave-by time
+        first = timed[0] if timed else (events[0] if events else None)
+        if first is None:
+            parts.append("Nothing on the calendar tomorrow.")
+        elif first["all_day"]:
+            parts.append(f"Tomorrow, all day: {first['title']}.")
+        else:
+            time_str = first["start"].strftime("%I:%M %p").lstrip("0")
+            parts.append(f"Tomorrow's first thing: {first['title']} at {time_str}.")
+            if first["location"] and shared.GOOGLE_MAPS_API_KEY and shared.HOME_ADDRESS:
+                travel = await get_travel_time(shared.HOME_ADDRESS, first["location"], first["start"])
+                if travel:
+                    drive_min = travel.duration_in_traffic_minutes
+                    leave_at = first["start"] - timedelta(minutes=drive_min + shared.TRAVEL_TIME_BUFFER)
+                    leave_str = leave_at.strftime("%I:%M %p").lstrip("0")
+                    parts.append(f"It's about a {drive_min} minute drive, so plan to leave around {leave_str}.")
+        if len(events) > 1:
+            more = len(events) - 1
+            parts.append(f"Plus {more} more event{'s' if more > 1 else ''} tomorrow.")
+
+        # Evening meds check — a failed lookup must never sink the ritual.
+        try:
+            from orchestrator.selfcare_manager import evening_meds_status
+
+            meds = evening_meds_status()
+        except Exception as meds_err:
+            logger.warning(f"[EVENING_BRIEFING] Meds status lookup failed: {meds_err}")
+            meds = None
+        if meds is not None:
+            if meds["confirmed"]:
+                parts.append("Evening meds are logged — nice.")
+            else:
+                parts.append("Evening meds check: you haven't logged them yet.")
+
+        # Park one unfinished thing (F-007): active focus task first, else the
+        # top open backlog task. Persisted in app_state so the morning
+        # briefing can offer it back even across a restart.
+        parked = None
+        parked_from_focus = False
+        if shared.current_focus_session.get("active"):
+            parked = shared.current_focus_session.get("task_description") or shared.current_focus_session.get("task")
+            parked_from_focus = bool(parked)
+        if not parked:
+            try:
+                open_tasks = state_store.list_tasks("open")
+            except Exception as task_err:
+                logger.warning(f"[EVENING_BRIEFING] Backlog lookup failed: {task_err}")
+                open_tasks = []
+            if open_tasks:
+                parked = open_tasks[0]["text"]
+        if parked:
+            try:
+                state_store.set_app_state("parked_item", parked)
+            except Exception as park_err:
+                logger.warning(f"[EVENING_BRIEFING] Failed to persist parked item: {park_err}")
+                parked = None
+        if parked:
+            if parked_from_focus:
+                parts.append(f"You were in the middle of {parked} — I've parked it for tomorrow.")
+            else:
+                parts.append(f"I'm parking one thing for the morning: {parked}.")
+            parts.append("It'll be waiting — you're done for today.")
+        else:
+            parts.append("Nothing left to park. You're done for today.")
+
+        text = " ".join(parts)
+
+        # If the user already said goodnight, park silently — no speakers, no
+        # phone buzz. The morning briefing still offers the parked item back.
+        if shared.DND_ACTIVE:
+            logger.info("[EVENING_BRIEFING] DND active — parked silently, skipping announce")
+            return
+
+        await _announce_voice(text, speaker=None, announcement_type="briefing")
+
+        # Mirror to Telegram so the ritual also lands away from the speakers.
+        # Fire-and-forget with a strong task ref; no-ops when the bot is off.
+        try:
+            from orchestrator.telegram_bot import fire_system_message
+
+            fire_system_message(f"🌙 {text}")
+        except Exception as tg_err:
+            logger.warning(f"[EVENING_BRIEFING] Telegram dispatch failed: {tg_err}")
+
+        logger.info(
+            f"[EVENING_BRIEFING] Delivered: {len(events)} tomorrow events, "
+            f"meds={'n/a' if meds is None else meds['confirmed']}, parked={'yes' if parked else 'no'}"
+        )
+
+    except Exception as e:
+        logger.error(f"[EVENING_BRIEFING] Error: {e}")
 
 
 _EVENT_EXTRACTION_PROMPT = """\

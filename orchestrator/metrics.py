@@ -140,6 +140,13 @@ MORNING_BRIEFING_LAST_RUN = Gauge(
     "Unix timestamp the morning briefing job last fired",
 )
 
+# Same dead-man's-switch for the evening shutdown ritual — watched by
+# EveningBriefingStale.
+EVENING_BRIEFING_LAST_RUN = Gauge(
+    "bgw_evening_briefing_last_run_timestamp_seconds",
+    "Unix timestamp the evening briefing job last fired",
+)
+
 # -- Model Health -----------------------------------------------------------
 HELIOS_ONLINE = Gauge(
     "bgw_helios_online",

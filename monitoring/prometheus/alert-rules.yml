@@ -210,6 +210,14 @@ groups:
         annotations:
           summary: "Morning briefing has not fired in over a day"
           description: "Last briefing was {{ $value | humanizeDuration }} ago - should run daily; orchestrator/scheduler may be down."
+      - alert: EveningBriefingStale
+        expr: time() - bgw_evening_briefing_last_run_timestamp_seconds > 93600 and bgw_evening_briefing_last_run_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evening briefing has not fired in over a day"
+          description: "Last evening ritual was {{ $value | humanizeDuration }} ago - should run daily; orchestrator/scheduler may be down."
       - alert: GoogleTokenRefreshStale
         expr: time() - jess_google_token_refresh_success_timestamp_seconds > 691200
         for: 1h

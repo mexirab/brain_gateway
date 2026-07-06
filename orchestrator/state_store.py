@@ -263,6 +263,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_open ON tasks(status, priority, created_at);
+
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -721,6 +727,33 @@ def clear_notification_flag(key: str) -> None:
     """Clear a persistent flag from the notification_tracking table."""
     with get_db() as conn:
         conn.execute("DELETE FROM notification_tracking WHERE key = ?", (key,))
+
+
+# ---------------------------------------------------------------------------
+# App state (generic key → value, survives restarts)
+# ---------------------------------------------------------------------------
+
+
+def set_app_state(key: str, value: str) -> None:
+    """Set a persistent key → value pair (e.g. the evening ritual's parked item)."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO app_state (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, datetime.now().isoformat()),
+        )
+
+
+def get_app_state(key: str) -> Optional[str]:
+    """Get a persistent value by key, or None if unset."""
+    with get_db() as conn:
+        row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+
+def delete_app_state(key: str) -> None:
+    """Delete a persistent key (no-op if unset)."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM app_state WHERE key = ?", (key,))
 
 
 # ---------------------------------------------------------------------------

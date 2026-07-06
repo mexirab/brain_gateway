@@ -164,6 +164,12 @@ class Settings(BaseSettings):
     # the 2026-04-30 incident where the briefing played at volume_level=0.10.
     # Set to 0 to disable the floor entirely.
     morning_briefing_min_volume: float = 0.4
+    # Evening shutdown ritual: tomorrow's first event + leave-by, evening meds
+    # check, park one unfinished thing (F-007). Mirror of the morning briefing,
+    # same on-by-default rationale — no-ops safely until routes are configured.
+    # Default 21:30 keeps it ahead of the 22:00 quiet-hours start.
+    evening_briefing_time: str = "21:30"
+    evening_briefing_enabled: bool = True
 
     # -- Email -------------------------------------------------------------------
     # Email-to-calendar autonomy is dormant by default. Implementation is
