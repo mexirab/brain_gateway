@@ -689,20 +689,26 @@ async def _startup_logic():
             )
 
     # Sleep wind-down ladder: T-60 lights dim + T-30 screens-away nudge ahead
-    # of WIND_DOWN_BEDTIME. Same guarded-registration rule as the briefings —
-    # a malformed bedtime must not crash-loop startup. Minute math handles a
-    # past-midnight bedtime (rungs land the previous evening).
+    # of WIND_DOWN_BEDTIME. The try/except guards the bedtime parse and job
+    # registration only — an import-time error in jobs_winddown still crashes
+    # startup via the module-top background_jobs import, like every jobs_*
+    # module. Minute math handles a past-midnight bedtime (rungs land the
+    # previous evening).
     if shared.WIND_DOWN_ENABLED:
         try:
             from orchestrator.background_jobs import wind_down_dim, wind_down_nudge
 
             bed_h, bed_m = map(int, shared.WIND_DOWN_BEDTIME.split(":"))
+            if not (0 <= bed_h < 24 and 0 <= bed_m < 60):
+                raise ValueError(f"bedtime out of range: {bed_h:02d}:{bed_m:02d}")
             bed_total = bed_h * 60 + bed_m
+            rung_times = []
             for offset, job_fn, job_id, job_name in (
                 (60, wind_down_dim, "wind_down_dim", "Wind-down: lights dim (T-60)"),
                 (30, wind_down_nudge, "wind_down_nudge", "Wind-down: screens-away nudge (T-30)"),
             ):
                 t = (bed_total - offset) % 1440
+                rung_times.append(f"{t // 60:02d}:{t % 60:02d}")
                 scheduler.add_job(
                     job_fn,
                     trigger="cron",
@@ -711,10 +717,15 @@ async def _startup_logic():
                     id=job_id,
                     name=job_name,
                     replace_existing=True,
+                    # The APScheduler default grace is 1s — a briefly-stalled
+                    # event loop at fire time would silently drop the rung.
+                    # A wind-down that fires minutes late beats one that
+                    # doesn't fire (prod-support M1, 2026-07-06).
+                    misfire_grace_time=300,
                 )
             logger.info(
-                f"[SCHEDULER] Wind-down ladder ahead of {shared.WIND_DOWN_BEDTIME} "
-                f"(scenes: {shared.WIND_DOWN_SCENE or 'none configured'})"
+                f"[SCHEDULER] Wind-down ladder: dim at {rung_times[0]}, nudge at {rung_times[1]} "
+                f"(bedtime {shared.WIND_DOWN_BEDTIME}, scenes: {shared.WIND_DOWN_SCENE or 'none configured'})"
             )
             from orchestrator.metrics import WIND_DOWN_LAST_RUN
 

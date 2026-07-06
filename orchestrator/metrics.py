@@ -147,12 +147,20 @@ EVENING_BRIEFING_LAST_RUN = Gauge(
     "Unix timestamp the evening briefing job last fired",
 )
 
-# Wind-down ladder T-30 rung heartbeat. Dashboard-only (no stale alert —
-# the ladder is comfort, not delivery-critical; a failed lights rung is
-# self-evident in the house).
+# Wind-down ladder T-30 rung heartbeat. No stale alert — the ladder is
+# comfort, not delivery-critical; a failed lights rung is self-evident in
+# the house. Queryable ad hoc; Grafana panel pending in the dashgen builder.
 WIND_DOWN_LAST_RUN = Gauge(
     "bgw_wind_down_last_run_timestamp_seconds",
     "Unix timestamp the wind-down nudge job last fired",
+)
+
+# Per-scene outcomes for the T-60 lights rung — the forensic answer to
+# "lights didn't dim last night" (result: ok | failed | error).
+WIND_DOWN_SCENE_RESULT = Counter(
+    "bgw_wind_down_scene_result_total",
+    "Wind-down scene activations by outcome",
+    ["scene", "result"],
 )
 
 # -- Model Health -----------------------------------------------------------

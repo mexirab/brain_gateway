@@ -20,7 +20,7 @@ import logging
 from zoneinfo import ZoneInfo
 
 from orchestrator import shared
-from orchestrator.metrics import WIND_DOWN_LAST_RUN
+from orchestrator.metrics import WIND_DOWN_LAST_RUN, WIND_DOWN_SCENE_RESULT
 from orchestrator.reminder_manager import _announce_voice
 from orchestrator.shared import TIMEZONE, profile
 
@@ -58,14 +58,20 @@ async def wind_down_dim():
         logger.info("[WIND_DOWN] DND active — skipping lights rung")
         return
 
+    # Entry log: without it, a misfired/dropped job and a broken HA call are
+    # indistinguishable when debugging "lights didn't dim last night".
+    logger.info(f"[WIND_DOWN] Lights rung firing: {len(scenes)} scene(s)")
     for scene in scenes:
         try:
             result = await shared.ha_client.call_service(scene, "turn_on")
             if result.success:
+                WIND_DOWN_SCENE_RESULT.labels(scene=scene, result="ok").inc()
                 logger.info(f"[WIND_DOWN] Scene activated: {scene}")
             else:
+                WIND_DOWN_SCENE_RESULT.labels(scene=scene, result="failed").inc()
                 logger.warning(f"[WIND_DOWN] Scene activation failed: {scene}: {result.message}")
         except Exception as e:
+            WIND_DOWN_SCENE_RESULT.labels(scene=scene, result="error").inc()
             logger.warning(f"[WIND_DOWN] Scene activation error: {scene}: {e}")
 
 
