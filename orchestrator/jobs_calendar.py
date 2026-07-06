@@ -484,14 +484,27 @@ async def morning_briefing():
             parts.append("Your calendar is clear today.")
 
         # Evening-ritual pickup: offer back the one thing parked last night
-        # (see evening_briefing). Cleared only after a successful announce so
-        # a failed TTS run doesn't silently eat the parked item. A failed
-        # lookup must never sink the briefing.
+        # (see evening_briefing). Cleared only after a successfully SPOKEN
+        # announce so a failed or suppressed TTS run doesn't silently eat the
+        # parked item. A failed lookup must never sink the briefing, and a
+        # stale item (evening job disabled/failing for days) must not be
+        # passed off as "last night" — drop it instead.
+        parked = None
         try:
-            parked = state_store.get_app_state("parked_item")
+            parked_entry = state_store.get_app_state_entry("parked_item")
         except Exception as parked_err:
             logger.warning(f"[MORNING_BRIEFING] Parked-item lookup failed: {parked_err}")
-            parked = None
+            parked_entry = None
+        if parked_entry:
+            try:
+                age_h = (datetime.now() - datetime.fromisoformat(parked_entry["updated_at"])).total_seconds() / 3600
+            except (ValueError, TypeError):
+                age_h = None
+            if age_h is not None and age_h <= 36:
+                parked = parked_entry["value"]
+            else:
+                logger.info(f"[MORNING_BRIEFING] Dropping stale parked item ({age_h and round(age_h)}h old)")
+                state_store.delete_app_state("parked_item")
         if parked:
             parts.append(f"Last night you parked: {parked}. It's ready when you are.")
 
@@ -538,7 +551,7 @@ async def morning_briefing():
             announcement_type="briefing",
             min_volume=min_vol,
         )
-        if parked and result.get("success"):
+        if parked and result.get("success") and not result.get("suppressed"):
             state_store.delete_app_state("parked_item")
         logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
 

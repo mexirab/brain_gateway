@@ -358,7 +358,11 @@ async def test_telegram_mirror_fires(reset_shared, patch_evening_deps):
 # ---------------------------------------------------------------------------
 
 
-def _morning_patches(*, parked, announce_result):
+def _parked_entry(value, hours_ago=10):
+    return {"value": value, "updated_at": (datetime.now() - timedelta(hours=hours_ago)).isoformat()}
+
+
+def _morning_patches(*, parked_entry, announce_result):
     mock_client = MagicMock()
     mock_client.is_configured = False
     return {
@@ -370,7 +374,7 @@ def _morning_patches(*, parked, announce_result):
         ),
         "weather": patch("orchestrator.jobs_calendar._get_weather_forecast", new_callable=AsyncMock, return_value=None),
         "reminders": patch("orchestrator.jobs_calendar.list_pending_reminders", return_value=[]),
-        "get_state": patch("orchestrator.state_store.get_app_state", return_value=parked),
+        "get_state": patch("orchestrator.state_store.get_app_state_entry", return_value=parked_entry),
         "delete_state": patch("orchestrator.state_store.delete_app_state"),
         "outcomes": patch("orchestrator.state_store.get_recent_reminder_outcomes", return_value=[]),
     }
@@ -390,7 +394,9 @@ async def _run_morning(patches):
 @_skip_no_deps
 @pytest.mark.asyncio
 async def test_morning_offers_parked_item_and_clears_on_success(reset_shared):
-    mocks = await _run_morning(_morning_patches(parked="the OAuth flow", announce_result={"success": True}))
+    mocks = await _run_morning(
+        _morning_patches(parked_entry=_parked_entry("the OAuth flow"), announce_result={"success": True})
+    )
 
     text = mocks["voice"].await_args.args[0]
     assert "Last night you parked: the OAuth flow" in text
@@ -400,14 +406,46 @@ async def test_morning_offers_parked_item_and_clears_on_success(reset_shared):
 @_skip_no_deps
 @pytest.mark.asyncio
 async def test_morning_keeps_parked_item_when_announce_fails(reset_shared):
-    mocks = await _run_morning(_morning_patches(parked="the OAuth flow", announce_result={"success": False}))
+    mocks = await _run_morning(
+        _morning_patches(parked_entry=_parked_entry("the OAuth flow"), announce_result={"success": False})
+    )
     mocks["delete_state"].assert_not_called()
 
 
 @_skip_no_deps
 @pytest.mark.asyncio
+async def test_morning_keeps_parked_item_when_announce_suppressed(reset_shared):
+    """A suppressed announce (DND / active voice session) reports success=True
+    but nothing was spoken — the parked item must survive to the next run."""
+    mocks = await _run_morning(
+        _morning_patches(
+            parked_entry=_parked_entry("the OAuth flow"),
+            announce_result={"success": True, "suppressed": True},
+        )
+    )
+    mocks["delete_state"].assert_not_called()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_morning_drops_stale_parked_item(reset_shared):
+    """A parked item older than 36h (evening job disabled/failing) is dropped,
+    not announced as 'last night'."""
+    mocks = await _run_morning(
+        _morning_patches(
+            parked_entry=_parked_entry("the OAuth flow", hours_ago=72),
+            announce_result={"success": True},
+        )
+    )
+    text = mocks["voice"].await_args.args[0]
+    assert "parked" not in text.lower()
+    mocks["delete_state"].assert_called_once_with("parked_item")
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
 async def test_morning_no_parked_item_no_mention(reset_shared):
-    mocks = await _run_morning(_morning_patches(parked=None, announce_result={"success": True}))
+    mocks = await _run_morning(_morning_patches(parked_entry=None, announce_result={"success": True}))
     text = mocks["voice"].await_args.args[0]
     assert "parked" not in text.lower()
     mocks["delete_state"].assert_not_called()

@@ -750,6 +750,17 @@ def get_app_state(key: str) -> Optional[str]:
         return row[0] if row else None
 
 
+def get_app_state_entry(key: str) -> Optional[Dict[str, Any]]:
+    """Get a persistent value with its updated_at, or None if unset.
+
+    For callers that need staleness checks (e.g. the morning briefing must
+    not offer back a days-old parked item as "last night").
+    """
+    with get_db() as conn:
+        row = conn.execute("SELECT value, updated_at FROM app_state WHERE key = ?", (key,)).fetchone()
+        return {"value": row[0], "updated_at": row[1]} if row else None
+
+
 def delete_app_state(key: str) -> None:
     """Delete a persistent key (no-op if unset)."""
     with get_db() as conn:
