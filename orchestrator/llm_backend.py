@@ -149,7 +149,13 @@ class OpenAICompatibleBackend(LLMBackend):
         r.raise_for_status()
         return r.json()
 
-    async def stream_chat_completion(self, messages, system="", timeout=180):
+    async def stream_chat_completion(
+        self, messages, system="", timeout=180, tools=None, tool_choice="auto", extra_body=None, **kwargs
+    ):
+        """Streaming completion. Accepts the same tools/extra_body surface as
+        chat_completion so the unified loop can stream tool rounds (vLLM
+        streams tool_calls as index-keyed deltas)."""
+        _warn_ignored_kwargs("OpenAICompatibleBackend", kwargs)
         final_messages = messages.copy()
         if system:
             final_messages.insert(0, {"role": "system", "content": system})
@@ -161,6 +167,13 @@ class OpenAICompatibleBackend(LLMBackend):
             "max_tokens": self.config.max_tokens,
             "stream": True,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
+        if extra_body:
+            payload.update(extra_body)
+        # Never let a caller-provided extra_body flip streaming back off.
+        payload["stream"] = True
 
         headers = {}
         if self.config.api_key:

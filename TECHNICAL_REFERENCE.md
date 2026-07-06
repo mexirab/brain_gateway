@@ -580,6 +580,7 @@ See `.env.example` for full list. Key vars:
 | MORNING_BRIEFING_ENABLED | true/false (default: true) |
 | EVENING_BRIEFING_TIME | HH:MM for the evening shutdown ritual (default: 21:30) |
 | EVENING_BRIEFING_ENABLED | true/false (default: true) |
+| REAL_STREAMING_ENABLED | true/false (default: true) — real SSE token streaming on /v1/chat/completions; false = buffered chunking |
 | WIND_DOWN_ENABLED | true/false (default: true) — T-60 lights + T-30 nudge ahead of bedtime |
 | WIND_DOWN_BEDTIME | HH:MM bedtime anchor (default: 22:30) |
 | WIND_DOWN_SCENE | Comma-separated HA scene ids for the lights rung (empty = skip) |

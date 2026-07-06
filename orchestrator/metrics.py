@@ -184,6 +184,17 @@ WIND_DOWN_SCENE_RESULT = Counter(
     ["scene", "result"],
 )
 
+# Time-to-first-token on streamed chat requests — the metric real streaming
+# exists to improve. Observed at the first SSE content chunk relayed to the
+# client; buffered fallbacks observe at their single final chunk, so a
+# streaming regression shows up as this histogram collapsing toward
+# REQUEST_LATENCY.
+CHAT_TTFT = Histogram(
+    "bgw_chat_ttft_seconds",
+    "Time to first streamed content chunk on /v1/chat/completions",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0],
+)
+
 # -- Model Health -----------------------------------------------------------
 HELIOS_ONLINE = Gauge(
     "bgw_helios_online",
