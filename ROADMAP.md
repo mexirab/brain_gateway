@@ -36,13 +36,9 @@ Tasks table, one-answer-at-a-time `what_now`, brain-dump capture, decompose link
 
 HA is now co-located and reliable, so HA-driven features are suddenly cheap.
 
-### 4. Sleep wind-down ladder ⬜
+### 4. ~~Sleep wind-down ladder~~ ✅ BUILT (July 2026)
 
-Quiet-hours plumbing exists but `sleep_mode` is just DND. Build the ladder:
-
-- T-60: dim lights via HA scene
-- T-30: screens-away nudge + tomorrow preview (first event + leave-by time)
-- Morning-grogginess adaptation when the night ran short (gentler briefing, softer alarm escalation)
+Shipped as `jobs_winddown.py` (`WIND_DOWN_*` env vars, bedtime anchor default 22:30): T-60 (21:30) dims the house via configured HA scene(s) silently — the evening briefing (#6) is the ladder's spoken tomorrow-preview anchor at the same moment; T-30 (22:00) speaks a screens-away nudge with a one-line tomorrow anchor. Both rungs skip under DND (scene.turn_on would raise lights an early goodnight turned off); the nudge also yields to an active guided routine. Morning half: `sleep_mode("on")` stamps `sleep_started_at`, and a night under `WIND_DOWN_SHORT_NIGHT_HOURS` (6.5) softens the morning briefing — gentler greeting, weather skipped. Remaining stretch: softer *alarm/routine* escalation on short nights (routine nudges are unchanged).
 
 ### 5. Geofenced errand reminders ⬜
 
@@ -50,7 +46,7 @@ Quiet-hours plumbing exists but `sleep_mode` is just DND. Build the ladder:
 
 ### 6. ~~Evening shutdown ritual~~ ✅ BUILT (July 2026)
 
-Shipped as `jobs_calendar.evening_briefing()` (default 21:30, `EVENING_BRIEFING_*` env vars): tomorrow's first event + leave-by time via Google Maps, evening meds check, and parking one unfinished thing (active focus task, else top backlog task) into persistent `app_state` — the morning briefing offers it back and clears it only after a successful announce. DND-aware (parks silently), Telegram-mirrored, with an `EveningBriefingStale` dead-man's-switch alert. Natural lead-in to the wind-down ladder (#4), which is still open.
+Shipped as `jobs_calendar.evening_briefing()` (default 21:30, `EVENING_BRIEFING_*` env vars): tomorrow's first event + leave-by time via Google Maps, evening meds check, and parking one unfinished thing (active focus task, else top backlog task) into persistent `app_state` — the morning briefing offers it back and clears it only after a successful announce. DND-aware (parks silently), Telegram-mirrored, with an `EveningBriefingStale` dead-man's-switch alert. Now the spoken anchor of the wind-down ladder (#4).
 
 ## Tier 3 — Richer intelligence (later, but high-leverage)
 
@@ -122,7 +118,7 @@ Needs vLLM 0.19.2+ (KV-calc fix) and the primary moving GPU0 → GPU1 (the 5090 
 1. ~~Durable task backlog~~ — ✅ DONE (#44/#45/#46)
 2. ~~Telegram capture bot~~ — ✅ LIVE (@Jess_brain_bot)
 3. ~~Trust layer~~ — ✅ BUILT (morning recap + delivery log on the dashboard + Grafana trust row)
-4. ~~Evening shutdown ritual~~ ✅ BUILT — **sleep wind-down ladder** remains (cheap now that HA is local, and the ritual gives it its T-30 anchor)
+4. ~~Evening shutdown ritual + sleep wind-down ladder~~ ✅ BOTH BUILT (July 2026)
 5. **Geofenced errand reminders** — mostly wiring
 6. **Real streaming** — biggest latency lever
 7. **Jess Face deploy** — hardware session when home (Pi + USB mic)

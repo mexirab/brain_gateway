@@ -225,6 +225,10 @@ MORNING_BRIEFING_SPEAKER = settings.morning_briefing_speaker or profile.morning_
 MORNING_BRIEFING_MIN_VOLUME = settings.morning_briefing_min_volume
 EVENING_BRIEFING_TIME = settings.evening_briefing_time
 EVENING_BRIEFING_ENABLED = settings.evening_briefing_enabled
+WIND_DOWN_ENABLED = settings.wind_down_enabled
+WIND_DOWN_BEDTIME = settings.wind_down_bedtime
+WIND_DOWN_SCENE = settings.wind_down_scene
+WIND_DOWN_SHORT_NIGHT_HOURS = settings.wind_down_short_night_hours
 
 # ---------------------------------------------------------------------------
 # Temperature monitoring

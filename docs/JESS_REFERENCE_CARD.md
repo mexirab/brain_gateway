@@ -80,7 +80,8 @@
 - **10am, 12pm, 2pm, 4pm** — Ambient status summaries
 - **Every 15 min (if overdue)** — Self-care nudges
 - **6pm** — Daily progress recap
-- **9:30pm** — Evening shutdown ritual (tomorrow's first event + leave-by, meds check, parks one unfinished thing for the morning)
+- **9:30pm** — Evening shutdown ritual (tomorrow's first event + leave-by, meds check, parks one unfinished thing for the morning) + wind-down lights dim
+- **10pm** — Screens-away nudge (wind-down T-30)
 - **Sunday 7pm** — Weekly digest
 - **10 min after chats** — Auto-learn facts from conversation → encrypted memory
 
