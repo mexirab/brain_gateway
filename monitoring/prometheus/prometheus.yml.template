@@ -10,11 +10,13 @@
 #
 # Network Architecture (v7 unified + split deployment):
 #
-#   Jupiter: ${NODE_JUPITER_IP} (Pi-hole primary, monitoring stack — prometheus/grafana/loki,
-#                                 conjure API, netdata)
-#   Helios:  ${NODE_HELIOS_IP}  (Brain gateway, primary LLM on RTX PRO 5000, TTS/STT on PRO 5000,
-#                                 code agent Qwen2.5-Coder-32B on RTX 5090, always-on)
-#   Saturn:  ${NODE_SATURN_IP}  (Vision model Qwen2.5-VL-7B on RTX 3080, Pi-hole secondary)
+#   Jupiter: ${NODE_JUPITER_IP} (Always-on hub: orchestrator, frontend, Home Assistant,
+#                                 monitoring stack — prometheus/grafana/loki/alertmanager,
+#                                 Pi-hole primary, conjure API, netdata)
+#   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM on RTX 5090, TTS/STT + code
+#                                 agent on RTX PRO 5000 — power-tiered, asleep most of the time)
+#   Saturn:  ${NODE_SATURN_IP}  (Vision model on RTX 3080, expert model on RTX 3090,
+#                                 Pi-hole secondary)
 #   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
@@ -23,6 +25,13 @@ global:
 
 rule_files:
   - /etc/prometheus/alert-rules.yml
+
+# Alertmanager runs in the same compose project / docker network
+# (monitoring/docker-compose.yml), so the bare service name resolves.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
   # ============================================
@@ -106,11 +115,11 @@ scrape_configs:
     params:
       module: [http_2xx]
     static_configs:
-      # Brain Gateway Orchestrator (Helios)
-      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_ORCHESTRATOR_PORT}/health']
+      # Brain Gateway Orchestrator (Jupiter — moved off Helios with power-tiering)
+      - targets: ['http://${NODE_JUPITER_IP}:${SERVICE_ORCHESTRATOR_PORT}/health']
         labels:
           service: 'orchestrator'
-          node: 'helios'
+          node: 'jupiter'
 
       # TTS (Qwen3-TTS on Helios GPU1)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
@@ -148,6 +157,15 @@ scrape_configs:
           service: 'conjure'
           node: 'jupiter'
 
+      # Actual Budget (docker on Jupiter). tier=app is load-bearing: the
+      # AppDown alert keys on probe_success{tier="app"} == 0 (Grafana
+      # visibility only — AppDown is not in the Pushover route).
+      - targets: ['http://${NODE_JUPITER_IP}:5006']
+        labels:
+          service: 'actual'
+          node: 'jupiter'
+          tier: 'app'
+
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -166,10 +184,10 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/api_token
     static_configs:
-      - targets: ['${NODE_HELIOS_IP}:${SERVICE_ORCHESTRATOR_PORT}']
+      - targets: ['${NODE_JUPITER_IP}:${SERVICE_ORCHESTRATOR_PORT}']
         labels:
           service: 'orchestrator'
-          node: 'helios'
+          node: 'jupiter'
 
   # ============================================
   # UPS METRICS (NUT exporter on Helios)

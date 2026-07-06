@@ -21,6 +21,19 @@ groups:
           summary: "Node {{ $labels.node }} is down"
           description: "Node exporter on {{ $labels.node }} is unreachable for 3 minutes."
 
+      # Dashboard-only by design: when this fires Prometheus can't deliver
+      # notifications at all, so routing it anywhere via alertmanager is
+      # circular. It exists so the failure is visible in Grafana instead of
+      # every alert silently going nowhere.
+      - alert: AlertmanagerUnreachable
+        expr: prometheus_notifications_alertmanagers_discovered < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus has no reachable Alertmanager"
+          description: "prometheus_notifications_alertmanagers_discovered has been < 1 for 5 minutes — alerts are firing into the void. Check the alertmanager container in the monitoring compose project."
+
       - alert: TTSDown
         expr: probe_success{service="tts"} == 0
         for: 5m

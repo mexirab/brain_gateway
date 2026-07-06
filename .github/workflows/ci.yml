@@ -161,6 +161,35 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # Monitoring configs are rendered + live-mounted from this checkout
+          # (prometheus.yml and alertmanager.yml come from *.template via
+          # scripts/generate-configs.sh), and the containers only re-read them
+          # on an explicit reload. Without this, template/rule changes merge
+          # green but never reach the running stack (bit us during PR #54).
+          # One trigger → render + reload BOTH: the generator rewrites both
+          # outputs and validates them pre-write, and a rendered-but-not-
+          # reloaded file would surprise-apply at the next unrelated restart.
+          # Herestrings (not `echo |`) so grep -q can't SIGPIPE-skip a match
+          # on a huge changeset under pipefail.
+          if grep -qE "^monitoring/(prometheus|alertmanager)/|^monitoring/docker-compose\.yml$|^scripts/(generate-configs|reload-monitoring)\.sh$" <<<"$CHANGED"; then
+            echo "::group::Re-rendering monitoring configs"
+            bash scripts/generate-configs.sh
+            echo "::endgroup::"
+
+            # Renders exist before `up` — compose bind-mounts them, and docker
+            # auto-creates a directory (breaking the mount) if a source file
+            # is missing at container create time.
+            if grep -qE "^monitoring/docker-compose\.yml$" <<<"$CHANGED"; then
+              echo "::group::Reconciling monitoring stack (compose)"
+              docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d --remove-orphans
+              echo "::endgroup::"
+            fi
+
+            echo "::group::Reloading + verifying Prometheus and Alertmanager"
+            bash scripts/reload-monitoring.sh
+            echo "::endgroup::"
+          fi
+
           # Record what we just deployed so the next run diffs from here.
           echo "$HEAD_SHA" > "$MARKER"
           echo "Deploy complete at $(date -Iseconds)"

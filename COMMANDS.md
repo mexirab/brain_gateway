@@ -78,9 +78,25 @@ curl http://localhost:8888/api/ha/entities | jq .
 
 ### Start/stop monitoring stack
 ```bash
-cd /opt/gateway_mvp/monitoring
-docker compose -p monitoring up -d    # Start
-docker compose -p monitoring down     # Stop
+cd ~/gateway_nerves
+bash scripts/generate-configs.sh   # render configs first — compose bind-mounts them
+docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d    # Start
+docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring down     # Stop
+```
+
+### Deploy a Prometheus/Alertmanager config change
+```bash
+cd ~/gateway_nerves
+bash scripts/generate-configs.sh     # render templates + validate (promtool/amtool)
+bash scripts/reload-monitoring.sh    # reload both + verify rules/receivers actually loaded
+```
+Or just merge to main — CI runs both when `monitoring/` or these scripts change.
+Edit the `.template` files, never the renders (`alertmanager/alertmanager.yml` is gitignored — Pushover keys from `.env`).
+
+### Inspect Alertmanager (9093 is loopback-only on Jupiter)
+```bash
+curl -s localhost:9093/api/v2/status | jq .
+docker exec alertmanager amtool alert query
 ```
 
 ### View logs in Grafana
