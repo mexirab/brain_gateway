@@ -320,6 +320,25 @@ async def test_dnd_parks_silently(reset_shared, patch_evening_deps, caplog):
     assert any("DND active" in r.getMessage() for r in caplog.records)
 
 
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_active_routine_parks_silently(reset_shared, patch_evening_deps, caplog):
+    """A guided routine walkthrough mid-flight -> park, but don't talk over it."""
+    from orchestrator import routine_manager
+
+    _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}])
+    with (
+        patch.object(routine_manager, "_active_session", MagicMock()),
+        caplog.at_level(logging.INFO, logger="orchestrator.jobs_calendar"),
+    ):
+        mocks = await _run_evening(patches)
+
+    mocks["set_state"].assert_called_once_with("parked_item", "email the landlord")
+    mocks["voice"].assert_not_awaited()
+    mocks["telegram"].assert_not_called()
+    assert any("Routine session active" in r.getMessage() for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # Telegram mirror
 # ---------------------------------------------------------------------------

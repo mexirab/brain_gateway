@@ -701,6 +701,18 @@ async def evening_briefing():
             logger.info("[EVENING_BRIEFING] DND active — parked silently, skipping announce")
             return
 
+        # Same silent treatment if a guided routine walkthrough is mid-flight
+        # (the evening routine auto-triggers at 21:00 and covers meds +
+        # tomorrow's calendar itself) — don't talk over its step nudges.
+        try:
+            from orchestrator import routine_manager
+
+            if routine_manager._active_session is not None:
+                logger.info("[EVENING_BRIEFING] Routine session active — parked silently, skipping announce")
+                return
+        except Exception:
+            pass
+
         await _announce_voice(text, speaker=None, announcement_type="briefing")
 
         # Mirror to Telegram so the ritual also lands away from the speakers.
