@@ -1523,6 +1523,14 @@ async def _reg_sleep_mode(arguments: dict) -> str:
     if shared.DND_ACTIVE:
         state_store.set_notification_flag("dnd_active")
 
+        # Wind-down morning half: stamp when sleep started so the morning
+        # briefing can detect a short night and go gentle. Last stamp wins;
+        # stamps older than 16h are ignored on read. Never break the tool.
+        with contextlib.suppress(Exception):
+            from datetime import datetime as _dt
+
+            state_store.set_app_state("sleep_started_at", _dt.now().isoformat())
+
         if duration_hours:
             # Schedule auto-unmute
             from datetime import datetime, timedelta

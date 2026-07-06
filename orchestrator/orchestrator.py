@@ -688,6 +688,42 @@ async def _startup_logic():
                 f"[SCHEDULER] Evening briefing registration failed (EVENING_BRIEFING_TIME={EVENING_BRIEFING_TIME!r}): {e}"
             )
 
+    # Sleep wind-down ladder: T-60 lights dim + T-30 screens-away nudge ahead
+    # of WIND_DOWN_BEDTIME. Same guarded-registration rule as the briefings —
+    # a malformed bedtime must not crash-loop startup. Minute math handles a
+    # past-midnight bedtime (rungs land the previous evening).
+    if shared.WIND_DOWN_ENABLED:
+        try:
+            from orchestrator.background_jobs import wind_down_dim, wind_down_nudge
+
+            bed_h, bed_m = map(int, shared.WIND_DOWN_BEDTIME.split(":"))
+            bed_total = bed_h * 60 + bed_m
+            for offset, job_fn, job_id, job_name in (
+                (60, wind_down_dim, "wind_down_dim", "Wind-down: lights dim (T-60)"),
+                (30, wind_down_nudge, "wind_down_nudge", "Wind-down: screens-away nudge (T-30)"),
+            ):
+                t = (bed_total - offset) % 1440
+                scheduler.add_job(
+                    job_fn,
+                    trigger="cron",
+                    hour=t // 60,
+                    minute=t % 60,
+                    id=job_id,
+                    name=job_name,
+                    replace_existing=True,
+                )
+            logger.info(
+                f"[SCHEDULER] Wind-down ladder ahead of {shared.WIND_DOWN_BEDTIME} "
+                f"(scenes: {shared.WIND_DOWN_SCENE or 'none configured'})"
+            )
+            from orchestrator.metrics import WIND_DOWN_LAST_RUN
+
+            WIND_DOWN_LAST_RUN.set_to_current_time()
+        except Exception as e:
+            logger.error(
+                f"[SCHEDULER] Wind-down registration failed (WIND_DOWN_BEDTIME={shared.WIND_DOWN_BEDTIME!r}): {e}"
+            )
+
     # Initialize routine manager (F-006)
     if shared.ROUTINE_ENABLED:
         from orchestrator.background_jobs import trigger_routine

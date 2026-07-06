@@ -374,7 +374,13 @@ def _morning_patches(*, parked_entry, announce_result):
         ),
         "weather": patch("orchestrator.jobs_calendar._get_weather_forecast", new_callable=AsyncMock, return_value=None),
         "reminders": patch("orchestrator.jobs_calendar.list_pending_reminders", return_value=[]),
-        "get_state": patch("orchestrator.state_store.get_app_state_entry", return_value=parked_entry),
+        # morning_briefing reads two app_state keys (sleep_started_at for the
+        # short-night check, parked_item for the pickup) — key the mock off
+        # the argument so the sleep check sees "no stamp".
+        "get_state": patch(
+            "orchestrator.state_store.get_app_state_entry",
+            side_effect=lambda key: parked_entry if key == "parked_item" else None,
+        ),
         "delete_state": patch("orchestrator.state_store.delete_app_state"),
         "outcomes": patch("orchestrator.state_store.get_recent_reminder_outcomes", return_value=[]),
     }

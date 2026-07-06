@@ -171,6 +171,17 @@ class Settings(BaseSettings):
     evening_briefing_time: str = "21:30"
     evening_briefing_enabled: bool = True
 
+    # -- Sleep wind-down ladder ----------------------------------------------------
+    # Two rungs ahead of the bedtime anchor: T-60 dims the house via HA scene(s)
+    # (silent), T-30 speaks a screens-away nudge. The evening briefing is the
+    # ladder's spoken tomorrow-preview anchor. Lights rung no-ops until
+    # WIND_DOWN_SCENE is set (comma-separated scene entity ids). Short nights
+    # (goodnight → morning briefing under the threshold) soften the briefing.
+    wind_down_enabled: bool = True
+    wind_down_bedtime: str = "22:30"
+    wind_down_scene: str = ""
+    wind_down_short_night_hours: float = 6.5
+
     # -- Email -------------------------------------------------------------------
     # Email-to-calendar autonomy is dormant by default. Implementation is
     # complete (see jobs_calendar.process_emails_for_events) and the

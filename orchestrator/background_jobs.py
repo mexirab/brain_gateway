@@ -2,9 +2,10 @@
 Background scheduler jobs — thin re-export facade.
 
 All implementations live in domain-specific modules:
-- jobs_calendar: calendar polling, morning briefing, email polling, email-to-calendar
+- jobs_calendar: calendar polling, morning + evening briefings, email polling, email-to-calendar
 - jobs_finance: YNAB sync, weekly spending summary, mid-month budget warning
 - jobs_monitoring: temperature, ambient awareness, self-care, routines, progress
+- jobs_winddown: sleep wind-down ladder rungs (T-60 lights, T-30 nudge)
 """
 
 # Re-exports for backward compatibility
@@ -34,6 +35,10 @@ from orchestrator.jobs_monitoring import (  # noqa: F401
     weekly_backlog_review,
     weekly_progress_digest,
 )
+from orchestrator.jobs_winddown import (  # noqa: F401
+    wind_down_dim,
+    wind_down_nudge,
+)
 
 __all__ = [
     # Calendar & email
@@ -59,4 +64,7 @@ __all__ = [
     "daily_progress_summary",
     "weekly_progress_digest",
     "weekly_backlog_review",
+    # Wind-down ladder
+    "wind_down_dim",
+    "wind_down_nudge",
 ]

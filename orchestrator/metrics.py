@@ -147,6 +147,14 @@ EVENING_BRIEFING_LAST_RUN = Gauge(
     "Unix timestamp the evening briefing job last fired",
 )
 
+# Wind-down ladder T-30 rung heartbeat. Dashboard-only (no stale alert —
+# the ladder is comfort, not delivery-critical; a failed lights rung is
+# self-evident in the house).
+WIND_DOWN_LAST_RUN = Gauge(
+    "bgw_wind_down_last_run_timestamp_seconds",
+    "Unix timestamp the wind-down nudge job last fired",
+)
+
 # -- Model Health -----------------------------------------------------------
 HELIOS_ONLINE = Gauge(
     "bgw_helios_online",

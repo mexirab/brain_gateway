@@ -464,13 +464,35 @@ async def morning_briefing():
             state_store.clear_notification_flag("dnd_active")
             logger.info("[DND] Auto-cleared sleep mode for morning briefing")
 
-        # Build announcement
-        parts = [f"Good morning {profile.user_name}!"]
+        # Wind-down morning half: goodnight (sleep_mode on) stamps
+        # app_state.sleep_started_at; if the night ran under the threshold,
+        # soften the briefing — gentler greeting, skip the weather chatter.
+        # One-shot: the stamp is cleared after reading. Stamps older than 16h
+        # are not last night (e.g. an afternoon timed mute) — ignored.
+        # A failed lookup must never sink the briefing.
+        short_night = False
+        try:
+            slept_entry = state_store.get_app_state_entry("sleep_started_at")
+            if slept_entry:
+                slept_hours = (datetime.now() - datetime.fromisoformat(slept_entry["value"])).total_seconds() / 3600
+                if 0 < slept_hours <= 16 and slept_hours < shared.WIND_DOWN_SHORT_NIGHT_HOURS:
+                    short_night = True
+                    logger.info(f"[MORNING_BRIEFING] Short night detected ({slept_hours:.1f}h) — going gentle")
+                state_store.delete_app_state("sleep_started_at")
+        except Exception as sn_err:
+            logger.warning(f"[MORNING_BRIEFING] Short-night check failed: {sn_err}")
 
-        # Weather forecast
-        weather = await _get_weather_forecast()
-        if weather:
-            parts.append(weather)
+        # Build announcement
+        if short_night:
+            parts = [f"Morning {profile.user_name}. Short night — I'll keep this brief."]
+        else:
+            parts = [f"Good morning {profile.user_name}!"]
+
+        # Weather forecast (skipped on short nights — essentials only)
+        if not short_night:
+            weather = await _get_weather_forecast()
+            if weather:
+                parts.append(weather)
 
         if briefing_events:
             parts.append(f"You have {len(briefing_events)} event{'s' if len(briefing_events) > 1 else ''} today.")
@@ -559,6 +581,77 @@ async def morning_briefing():
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
 
 
+async def get_tomorrow_events(tz, log_tag: str = "TOMORROW_EVENTS") -> tuple[list, str]:
+    """Build tomorrow's event list: phone-cache-first with the same zero-parsed
+    guard as morning_briefing, Google Calendar fallback.
+
+    Returns (events, source) where events are dicts sorted timed-first by
+    start ({title, start, all_day, location}) and source is phone|google|none.
+    Shared by evening_briefing and the wind-down T-30 nudge.
+    """
+    tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
+    events = []
+    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
+    phone_parsed_count = 0
+    phone_fresh = bool(shared._phone_calendar_events) and phone_age < 86400
+    if phone_fresh:
+        for ev in shared._phone_calendar_events:
+            try:
+                start = _parse_phone_datetime(ev.get("start", ""), tz)
+                phone_parsed_count += 1
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=tz)
+                if start.date() != tomorrow:
+                    continue
+                events.append(
+                    {
+                        "title": ev.get("title", "(No title)"),
+                        "start": start,
+                        "all_day": ev.get("all_day", False),
+                        "location": ev.get("location", ""),
+                    }
+                )
+            except (ValueError, TypeError):
+                continue
+
+    # Same guard as morning_briefing: fresh-but-corrupted phone cache must
+    # not read as "clear tomorrow" — fall through to Google instead.
+    if phone_fresh and phone_parsed_count == 0:
+        logger.warning(
+            f"[{log_tag}] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
+            "likely broken iPhone Shortcut payload. Falling through to Google."
+        )
+
+    source = "none"
+    if phone_fresh and phone_parsed_count > 0:
+        source = "phone"
+    else:
+        client = get_calendar_client()
+        if client and client.is_configured:
+            source = "google"
+            response = await client.list_events(days_ahead=2)
+            if response.success:
+                for event in response.events:
+                    start = event.start
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=tz)
+                    if start.date() != tomorrow:
+                        continue
+                    events.append(
+                        {
+                            "title": event.title,
+                            "start": start,
+                            "all_day": event.all_day,
+                            "location": event.location,
+                        }
+                    )
+        else:
+            logger.info(f"[{log_tag}] No calendar source available")
+
+    events.sort(key=lambda e: (e["all_day"], e["start"]))
+    return events, source
+
+
 async def evening_briefing():
     """Evening shutdown ritual: the mirror of the morning briefing.
 
@@ -571,76 +664,13 @@ async def evening_briefing():
     calendar at all — meds + parking still deliver.
     """
     tz = ZoneInfo(TIMEZONE)
-    now = datetime.now(tz)
-    tomorrow = (now + timedelta(days=1)).date()
 
     # Dead-man's-switch heartbeat, same contract as the morning gauge:
     # stamped at entry so the signal is "the job ran". EveningBriefingStale.
     EVENING_BRIEFING_LAST_RUN.set_to_current_time()
 
     try:
-        # Build tomorrow's event list (phone-first, Google fallback)
-        events = []
-        phone_age = (
-            time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-        )
-        phone_parsed_count = 0
-        phone_fresh = bool(shared._phone_calendar_events) and phone_age < 86400
-        if phone_fresh:
-            for ev in shared._phone_calendar_events:
-                try:
-                    start = _parse_phone_datetime(ev.get("start", ""), tz)
-                    phone_parsed_count += 1
-                    if start.tzinfo is None:
-                        start = start.replace(tzinfo=tz)
-                    if start.date() != tomorrow:
-                        continue
-                    events.append(
-                        {
-                            "title": ev.get("title", "(No title)"),
-                            "start": start,
-                            "all_day": ev.get("all_day", False),
-                            "location": ev.get("location", ""),
-                        }
-                    )
-                except (ValueError, TypeError):
-                    continue
-
-        # Same guard as morning_briefing: fresh-but-corrupted phone cache must
-        # not read as "clear tomorrow" — fall through to Google instead.
-        if phone_fresh and phone_parsed_count == 0:
-            logger.warning(
-                f"[EVENING_BRIEFING] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
-                "likely broken iPhone Shortcut payload. Falling through to Google."
-            )
-
-        cal_source = "none"
-        if phone_fresh and phone_parsed_count > 0:
-            cal_source = "phone"
-        else:
-            client = get_calendar_client()
-            if client and client.is_configured:
-                cal_source = "google"
-                response = await client.list_events(days_ahead=2)
-                if response.success:
-                    for event in response.events:
-                        start = event.start
-                        if start.tzinfo is None:
-                            start = start.replace(tzinfo=tz)
-                        if start.date() != tomorrow:
-                            continue
-                        events.append(
-                            {
-                                "title": event.title,
-                                "start": start,
-                                "all_day": event.all_day,
-                                "location": event.location,
-                            }
-                        )
-            else:
-                logger.info("[EVENING_BRIEFING] No calendar source available")
-
-        events.sort(key=lambda e: (e["all_day"], e["start"]))
+        events, cal_source = await get_tomorrow_events(tz, log_tag="EVENING_BRIEFING")
         timed = [e for e in events if not e["all_day"]]
 
         parts = [f"Alright {profile.user_name}, wrapping up the day."]
