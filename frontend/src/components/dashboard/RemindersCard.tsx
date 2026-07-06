@@ -1,13 +1,25 @@
 'use client';
 
-import { Bell, Check } from 'lucide-react';
+import { AlertTriangle, Bell, Check, XCircle } from 'lucide-react';
 import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useReminders } from '@/lib/hooks';
+import type { ReminderOutcome } from '@/lib/types';
+
+const OUTCOME_ORDER: Record<string, number> = { failed: 0, missed: 1, completed: 2 };
 
 export default function RemindersCard() {
   const { data, error, isLoading, mutate } = useReminders();
   const reminders = (data?.reminders ?? []).filter((r) => r.status === 'pending');
+
+  // Trust layer: last-24h delivery log, problems first, capped so the card
+  // stays a card.
+  const recent = [...(data?.recent ?? [])]
+    .sort((a, b) => (OUTCOME_ORDER[a.status] ?? 3) - (OUTCOME_ORDER[b.status] ?? 3))
+    .slice(0, 6);
+  const undeliveredCount = (data?.recent ?? []).filter(
+    (r) => r.status === 'failed' || r.status === 'missed'
+  ).length;
 
   const handleComplete = async (id: string) => {
     // Optimistically drop it, then reconcile with the server.
@@ -22,11 +34,28 @@ export default function RemindersCard() {
     }
   };
 
-  const formatTime = (iso: string) => {
-    return new Date(iso).toLocaleTimeString('en-US', {
+  const formatTime = (iso: string | null | undefined) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
     });
+  };
+
+  const outcomeLabel = (r: ReminderOutcome) => {
+    if (r.status === 'failed') return 'Failed to deliver';
+    if (r.status === 'missed') return 'Missed';
+    const when = formatTime(r.completed_at);
+    if (r.acked_via) return `Done via ${r.acked_via}${when ? ` · ${when}` : ''}`;
+    return `Delivered${when ? ` · ${when}` : ''}`;
+  };
+
+  const OutcomeIcon = ({ status }: { status: string }) => {
+    if (status === 'failed') return <XCircle size={14} className="text-danger shrink-0" />;
+    if (status === 'missed') return <AlertTriangle size={14} className="text-warning shrink-0" />;
+    return <Check size={14} className="text-success shrink-0" />;
   };
 
   return (
@@ -37,6 +66,11 @@ export default function RemindersCard() {
         {reminders.length > 0 && (
           <span className="text-xs bg-warning/20 text-warning px-2 py-0.5 rounded-full">
             {reminders.length}
+          </span>
+        )}
+        {undeliveredCount > 0 && (
+          <span className="text-xs bg-danger/20 text-danger px-2 py-0.5 rounded-full">
+            {undeliveredCount} not delivered
           </span>
         )}
       </h2>
@@ -77,6 +111,31 @@ export default function RemindersCard() {
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {!isLoading && !error && recent.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-line/30">
+          <p className="text-xs font-medium text-content-muted mb-2">Last 24 h</p>
+          <div className="space-y-1.5">
+            {recent.map((r) => (
+              <div key={r.id} className="flex items-center gap-2 px-1">
+                <OutcomeIcon status={r.status} />
+                <p className="flex-1 min-w-0 text-xs text-content-secondary truncate">{r.text}</p>
+                <span
+                  className={`text-xs shrink-0 ${
+                    r.status === 'failed'
+                      ? 'text-danger'
+                      : r.status === 'missed'
+                        ? 'text-warning'
+                        : 'text-content-muted'
+                  }`}
+                >
+                  {outcomeLabel(r)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </Card>

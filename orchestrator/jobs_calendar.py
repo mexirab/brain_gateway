@@ -352,6 +352,26 @@ def _parse_phone_datetime(s: str, tz=None) -> datetime:
     raise ValueError(f"unrecognized date format: {s!r}")
 
 
+def build_missed_recap(undelivered: list) -> str:
+    """One TTS-friendly sentence owning up to reminders that never reached
+    the user (status missed/failed in the last 24h).
+
+    Plain and factual, no guilt: name up to three, point at the dashboard
+    for the rest. Pure function so the trust-layer recap is unit-testable
+    without the whole briefing.
+    """
+    n = len(undelivered)
+    texts = [str(r.get("text", "")).strip() for r in undelivered[:3]]
+    named = ", ".join(t for t in texts if t)
+    sentence = f"Heads up: {n} reminder{'s' if n != 1 else ''} didn't reach you in the last day"
+    if named:
+        sentence += f": {named}"
+    if n > 3:
+        sentence += f", and {n - 3} more"
+    sentence += ". They're listed on the dashboard."
+    return sentence
+
+
 async def morning_briefing():
     """Morning announcement: today's events from all calendars via TTS.
 
@@ -465,6 +485,30 @@ async def morning_briefing():
         pending = list_pending_reminders()
         if pending:
             parts.append(f"You also have {len(pending)} reminder{'s' if len(pending) > 1 else ''} pending.")
+
+        # Trust layer: own up to anything that didn't reach the user in the
+        # last 24h instead of letting it vanish silently. Failure to build
+        # the recap must never sink the whole briefing.
+        try:
+            undelivered = [
+                r for r in state_store.get_recent_reminder_outcomes(hours=24) if r.get("status") in ("missed", "failed")
+            ]
+        except Exception as trust_err:
+            logger.warning(f"[MORNING_BRIEFING] Missed-recap lookup failed: {trust_err}")
+            undelivered = []
+        if undelivered:
+            recap = build_missed_recap(undelivered)
+            parts.append(recap)
+            # Mirror the recap to Telegram so it's actionable away from the
+            # speakers. Fire-and-forget with a strong task ref (a bare
+            # create_task can be GC'd mid-flight); no-ops when the bot is off.
+            try:
+                from orchestrator.telegram_bot import fire_system_message
+
+                lines = "\n".join(f"• {r['text']}" for r in undelivered[:10])
+                fire_system_message(f"⚠️ Reminders that didn't reach you in the last day:\n{lines}")
+            except Exception as tg_err:
+                logger.warning(f"[MORNING_BRIEFING] Telegram recap dispatch failed: {tg_err}")
 
         # `min_volume` floors the speaker at MORNING_BRIEFING_MIN_VOLUME
         # before play_media — defeats the "speaker still at sleep-sound

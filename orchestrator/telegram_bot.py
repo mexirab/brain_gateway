@@ -230,6 +230,41 @@ async def deliver_via_telegram(reminder_id: str, text: str) -> Dict[str, Any]:
     return {"success": False, "error": "send_failed"}
 
 
+async def send_system_message(text: str) -> Dict[str, Any]:
+    """Send a plain system message (no buttons) to all allow-listed chats.
+
+    Used by the trust layer's morning missed-reminder recap. Same contract
+    as deliver_via_telegram: never raises, silently no-ops when the bot is
+    disabled or unconfigured.
+    """
+    from orchestrator.metrics import TELEGRAM_SEND_TOTAL
+
+    if not _settings.telegram_enabled:
+        TELEGRAM_SEND_TOTAL.labels(result="skipped", kind="system", reason="disabled").inc()
+        return {"success": False, "skipped": True, "reason": "disabled"}
+    if not _settings.telegram_bot_token or not _allowed_chat_ids():
+        TELEGRAM_SEND_TOTAL.labels(result="skipped", kind="system", reason="missing_chat_id").inc()
+        return {"success": False, "skipped": True, "reason": "unconfigured"}
+
+    ok_any = False
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for chat_id in sorted(_allowed_chat_ids()):
+            result = await _send_text(client, chat_id, text, kind="system")
+            ok_any = ok_any or bool(result.get("ok"))
+    return {"success": ok_any}
+
+
+def fire_system_message(text: str) -> None:
+    """Fire-and-forget send_system_message with a strong task ref.
+
+    A bare create_task result can be garbage-collected mid-flight; this
+    parks the task in _bg_tasks (same guard the update dispatcher uses).
+    """
+    task = asyncio.create_task(send_system_message(text))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
 # ---------------------------------------------------------------------------
 # Inbound: chat relay
 # ---------------------------------------------------------------------------

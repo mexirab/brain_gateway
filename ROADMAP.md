@@ -24,13 +24,9 @@ Shipped as `orchestrator/telegram_bot.py`: long-polling (no webhook / public ing
 
 Stretch goals still open: voice notes → STT → same pipeline; photo → `/api/paperless/upload`; morning briefing as a Telegram digest.
 
-### 2. Trust layer as a feature ⬜
+### 2. ~~Trust layer as a feature~~ ✅ BUILT (July 2026)
 
-Delivery was fixed mechanically (#32 state machine, `missed`/`failed` states, metrics). Now expose it so the reliability is *visible*:
-
-- **Morning recap**: "here's what you missed while things were down" — fold missed/failed reminders into the morning briefing
-- **Delivery state per reminder** in the frontend reminders card (delivered / missed / failed / suppressed, with timestamps)
-- **Grafana**: panel row for `bgw_reminders_failed_total` / `bgw_reminders_missed_total` + per-speaker announcement success on the Brain Gateway dashboard
+Shipped: the morning briefing owns up to missed/failed reminders from the last 24h (mirrored to Telegram when the bot is on); the dashboard RemindersCard shows a last-24h delivery log (delivered / missed / failed, ack channel, "N not delivered" badge); Grafana "Reminder Delivery — Trust" row (outcomes, failed/missed 7-day stats, ack latency, per-channel push health, per-speaker TTS success).
 
 ### 3. ~~Durable task backlog~~ ✅ DONE (PRs #44/#45/#46, July 2026)
 
@@ -124,8 +120,8 @@ Needs vLLM 0.19.2+ (KV-calc fix) and the primary moving GPU0 → GPU1 (the 5090 
 ## Priority order
 
 1. ~~Durable task backlog~~ — ✅ DONE (#44/#45/#46)
-2. ~~Telegram capture bot~~ — ✅ BUILT (needs BotFather token + chat ID in `.env` to go live)
-3. **Trust layer** — morning recap + visible delivery state + Grafana row
+2. ~~Telegram capture bot~~ — ✅ LIVE (@Jess_brain_bot)
+3. ~~Trust layer~~ — ✅ BUILT (morning recap + delivery log on the dashboard + Grafana trust row)
 4. **Evening shutdown ritual + sleep wind-down ladder** — pair naturally, both cheap now that HA is local
 5. **Geofenced errand reminders** — mostly wiring
 6. **Real streaming** — biggest latency lever

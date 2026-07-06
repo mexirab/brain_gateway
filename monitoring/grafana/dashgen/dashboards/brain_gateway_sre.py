@@ -817,6 +817,95 @@ def build() -> dict:
     row, y = grid_row(reminders_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Reminder Delivery — Trust
+    # The trust layer: is delivery actually reaching the user, and if not,
+    # which channel is lying? Failed/missed counters come from the PR #32
+    # state machine; per-channel push results from ntfy (F-011), Pushover
+    # (F-013), and Telegram; TTS per-speaker success from announcement
+    # observability.
+    r, y = row_divider("Reminder Delivery — Trust", y)
+    panels.append(r)
+
+    trust_outcomes_row = [
+        timeseries(
+            "Delivery Outcomes (/day)",
+            [
+                ("sum(increase(bgw_reminders_delivered_total[1d]))", "delivered"),
+                ("sum(increase(bgw_reminders_failed_total[1d]))", "failed"),
+                ("sum(increase(bgw_reminders_missed_total[1d]))", "missed"),
+            ],
+            unit="none",
+            description="Rolling 1-day totals. Failed = every channel exhausted; missed = found >24h past due at startup.",
+        ),
+        stat(
+            "Failed (7d)",
+            "sum(increase(bgw_reminders_failed_total[7d])) or vector(0)",
+            unit="none",
+            thresholds=[(0, "green"), (1, "red")],
+        ),
+        stat(
+            "Missed (7d)",
+            "sum(increase(bgw_reminders_missed_total[7d])) or vector(0)",
+            unit="none",
+            thresholds=[(0, "green"), (1, "orange")],
+        ),
+        timeseries(
+            "Ack Latency (trigger → Done tap)",
+            [
+                (
+                    "histogram_quantile(0.50, sum(rate(bgw_reminder_ack_latency_seconds_bucket[6h])) by (le))",
+                    "p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum(rate(bgw_reminder_ack_latency_seconds_bucket[6h])) by (le))",
+                    "p95",
+                ),
+            ],
+            unit="s",
+        ),
+    ]
+    row, y = grid_row(trust_outcomes_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
+    trust_channels_row = [
+        timeseries(
+            "Push Channels — OK (/h)",
+            [
+                ('sum(rate(bgw_ntfy_push_total{result="ok",kind="reminder"}[1h])) * 3600', "ntfy"),
+                ('sum(rate(bgw_pushover_push_total{result="ok",kind="reminder"}[1h])) * 3600', "pushover"),
+                ('sum(rate(bgw_telegram_send_total{result="ok",kind="reminder"}[1h])) * 3600', "telegram"),
+            ],
+            unit="none",
+        ),
+        timeseries(
+            "Push Channels — Failures (/h)",
+            [
+                ('sum(rate(bgw_ntfy_push_total{result="fail"}[1h])) * 3600', "ntfy fail"),
+                ('sum(rate(bgw_pushover_push_total{result="fail"}[1h])) * 3600', "pushover fail"),
+                ('sum(rate(bgw_telegram_send_total{result="fail"}[1h])) * 3600', "telegram fail"),
+            ],
+            unit="none",
+            thresholds=[(0, "green"), (1, "red")],
+        ),
+        timeseries(
+            "TTS by Speaker (success vs fail, /h)",
+            [
+                (
+                    'sum by (speaker) (rate(bgw_tts_announcements_total{success="true"}[1h])) * 3600',
+                    "ok {{speaker}}",
+                ),
+                (
+                    'sum by (speaker) (rate(bgw_tts_announcements_total{success="false"}[1h])) * 3600',
+                    "FAIL {{speaker}}",
+                ),
+            ],
+            unit="none",
+            description="Per-speaker announcement health — a failing speaker group shows up here before anyone notices missed audio.",
+        ),
+    ]
+    row, y = grid_row(trust_channels_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Background Jobs
     r, y = row_divider("Background Jobs", y)
     panels.append(r)

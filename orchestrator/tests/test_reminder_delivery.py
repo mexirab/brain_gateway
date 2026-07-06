@@ -42,11 +42,14 @@ def clean_scheduler():
 
 @pytest.fixture
 def push_channels_off(monkeypatch):
-    """Disable ntfy/pushover so phone delivery rides on _send_notification alone."""
+    """Disable ntfy/pushover/telegram so phone delivery rides on _send_notification alone."""
     from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "ntfy_enabled", False, raising=False)
     monkeypatch.setattr(settings, "pushover_enabled", False, raising=False)
+    # Telegram joined the phone_ok expression in deliver_reminder_job; pin it
+    # off too or these tests flake on hosts where TELEGRAM_ENABLED=true.
+    monkeypatch.setattr(settings, "telegram_enabled", False, raising=False)
     return settings
 
 
