@@ -28,7 +28,20 @@ logger = logging.getLogger(__name__)
 
 
 def _configured_scenes() -> list[str]:
-    return [s.strip() for s in shared.WIND_DOWN_SCENE.split(",") if s.strip()]
+    """Parse WIND_DOWN_SCENE, keeping only scene.* entities.
+
+    A .env typo must not turn into a nightly turn_on of an arbitrary domain
+    (switch.garage_door, lock.*, …) — drop and warn instead.
+    """
+    scenes = []
+    for entry in (s.strip() for s in shared.WIND_DOWN_SCENE.split(",")):
+        if not entry:
+            continue
+        if entry.startswith("scene."):
+            scenes.append(entry)
+        else:
+            logger.warning(f"[WIND_DOWN] Ignoring non-scene entry in WIND_DOWN_SCENE: {entry}")
+    return scenes
 
 
 async def wind_down_dim():

@@ -1505,6 +1505,28 @@ async def _reg_analyze_image(arguments: dict) -> str:
     return await tool_analyze_image(arguments.get("query", "Describe this image in detail."))
 
 
+def _stamp_sleep_started(now=None) -> bool:
+    """Stamp bedtime start (app_state.sleep_started_at) for the wind-down
+    morning half — but only when the mute plausibly means "goodnight".
+
+    sleep_mode(on) is also "mute, people are over" and "be quiet for 2 hours";
+    stamping those would falsely soften the next morning briefing. Rules:
+    the caller must pass only INDEFINITE mutes (timed mutes are meetings/
+    guests/naps), and the local hour must be in the 20:00–05:00 bedtime
+    window. False negatives are benign (briefing stays normal); false
+    positives are the bug. Last stamp wins; read side ignores stamps >16h.
+    """
+    from datetime import datetime as _dt
+
+    from orchestrator import state_store
+
+    now = now or _dt.now()
+    if now.hour >= 20 or now.hour < 5:
+        state_store.set_app_state("sleep_started_at", now.isoformat())
+        return True
+    return False
+
+
 @register_tool("sleep_mode")
 async def _reg_sleep_mode(arguments: dict) -> str:
     import contextlib
@@ -1523,13 +1545,11 @@ async def _reg_sleep_mode(arguments: dict) -> str:
     if shared.DND_ACTIVE:
         state_store.set_notification_flag("dnd_active")
 
-        # Wind-down morning half: stamp when sleep started so the morning
-        # briefing can detect a short night and go gentle. Last stamp wins;
-        # stamps older than 16h are ignored on read. Never break the tool.
-        with contextlib.suppress(Exception):
-            from datetime import datetime as _dt
-
-            state_store.set_app_state("sleep_started_at", _dt.now().isoformat())
+        # Wind-down morning half: only an indefinite mute counts as a
+        # possible goodnight (see _stamp_sleep_started). Never break the tool.
+        if not duration_hours:
+            with contextlib.suppress(Exception):
+                _stamp_sleep_started()
 
         if duration_hours:
             # Schedule auto-unmute

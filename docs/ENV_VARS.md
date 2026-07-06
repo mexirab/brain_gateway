@@ -224,7 +224,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `WIND_DOWN_ENABLED` | `true`/`false` (default true). Sleep wind-down ladder: two rungs ahead of `WIND_DOWN_BEDTIME` — T-60 activates the configured HA scene(s) silently, T-30 speaks a screens-away nudge with a one-line tomorrow anchor (`briefing` speaker route). Both rungs skip under DND; the nudge also skips during an active guided routine. |
 | `WIND_DOWN_BEDTIME` | `HH:MM` bedtime anchor (default 22:30 → lights at 21:30, nudge at 22:00). Past-midnight values wrap correctly (rungs land the previous evening). |
 | `WIND_DOWN_SCENE` | Comma-separated HA scene entity ids for the T-60 lights rung (e.g. `scene.living_room_relax,scene.bedroom_dimmed`). Empty (default) = lights rung no-ops with a log line. |
-| `WIND_DOWN_SHORT_NIGHT_HOURS` | Float, default `6.5`. Saying goodnight (`sleep_mode` on) stamps `sleep_started_at`; if the morning briefing fires within this many hours, it goes gentle — softer greeting, weather skipped. Stamps older than 16h are ignored (afternoon timed mutes aren't bedtime). |
+| `WIND_DOWN_SHORT_NIGHT_HOURS` | Float, default `6.5`. Saying goodnight (an INDEFINITE `sleep_mode` on between 20:00 and 05:00 — timed mutes are meetings/guests, afternoon mutes are naps) stamps `sleep_started_at`; if the morning briefing fires within this many hours, it goes gentle — softer greeting, weather skipped. Stamps older than 16h are ignored. |
 
 ## Helios wake-on-demand (PT-C)
 

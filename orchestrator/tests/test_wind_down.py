@@ -158,6 +158,28 @@ async def test_dim_skipped_under_dnd(reset_shared):
 
 @_skip_no_deps
 @pytest.mark.asyncio
+async def test_dim_ignores_non_scene_entities(reset_shared, caplog):
+    """A .env typo (switch.garage_door) must not get a nightly turn_on."""
+    shared = reset_shared
+    ha = MagicMock()
+    ha.call_service = AsyncMock(return_value=_ha_result())
+
+    from orchestrator import jobs_winddown
+
+    with (
+        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed,switch.garage_door"),
+        patch.object(shared, "ha_client", ha),
+        caplog.at_level(logging.WARNING, logger="orchestrator.jobs_winddown"),
+    ):
+        await jobs_winddown.wind_down_dim()
+
+    assert ha.call_service.await_count == 1
+    assert ha.call_service.await_args.args == ("scene.bedroom_dimmed", "turn_on")
+    assert any("Ignoring non-scene entry" in r.getMessage() for r in caplog.records)
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
 async def test_dim_scene_error_does_not_stop_remaining_scenes(reset_shared):
     shared = reset_shared
     ha = MagicMock()
@@ -261,25 +283,39 @@ async def test_nudge_survives_calendar_failure(reset_shared):
 
 
 # ---------------------------------------------------------------------------
-# sleep_mode stamps sleep_started_at
+# sleep_mode stamps sleep_started_at (goodnight-intent only)
 # ---------------------------------------------------------------------------
 
 
 @_skip_no_deps
 @pytest.mark.asyncio
-async def test_sleep_mode_on_stamps_sleep_started(reset_shared):
+async def test_sleep_mode_indefinite_on_attempts_stamp(reset_shared):
     from orchestrator import tool_handlers
 
     with (
-        patch("orchestrator.state_store.set_app_state") as set_state,
+        patch("orchestrator.tool_handlers._stamp_sleep_started") as stamp,
         patch("orchestrator.state_store.set_notification_flag"),
     ):
         await tool_handlers._reg_sleep_mode({"action": "on"})
 
-    set_state.assert_called_once()
-    key, value = set_state.call_args.args
-    assert key == "sleep_started_at"
-    datetime.fromisoformat(value)  # parseable timestamp
+    stamp.assert_called_once()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_sleep_mode_timed_mute_does_not_stamp(reset_shared):
+    """'Be quiet for 2 hours' is a meeting/guests mute, not a goodnight."""
+    from orchestrator import shared as _shared
+    from orchestrator import tool_handlers
+
+    with (
+        patch("orchestrator.tool_handlers._stamp_sleep_started") as stamp,
+        patch("orchestrator.state_store.set_notification_flag"),
+        patch.object(_shared, "scheduler", MagicMock()),
+    ):
+        await tool_handlers._reg_sleep_mode({"action": "on", "duration_hours": 2})
+
+    stamp.assert_not_called()
 
 
 @_skip_no_deps
@@ -288,12 +324,28 @@ async def test_sleep_mode_off_does_not_stamp(reset_shared):
     from orchestrator import tool_handlers
 
     with (
-        patch("orchestrator.state_store.set_app_state") as set_state,
+        patch("orchestrator.tool_handlers._stamp_sleep_started") as stamp,
         patch("orchestrator.state_store.clear_notification_flag"),
     ):
         await tool_handlers._reg_sleep_mode({"action": "off"})
 
-    set_state.assert_not_called()
+    stamp.assert_not_called()
+
+
+@_skip_no_deps
+def test_stamp_only_in_bedtime_window():
+    """The stamp helper only fires between 20:00 and 05:00 — an indefinite
+    afternoon mute (nap, quiet time) is not a goodnight."""
+    from orchestrator import tool_handlers
+
+    with patch("orchestrator.state_store.set_app_state") as set_state:
+        assert tool_handlers._stamp_sleep_started(now=datetime(2026, 7, 6, 22, 30)) is True
+        assert tool_handlers._stamp_sleep_started(now=datetime(2026, 7, 7, 1, 0)) is True
+        assert tool_handlers._stamp_sleep_started(now=datetime(2026, 7, 6, 15, 0)) is False
+        assert tool_handlers._stamp_sleep_started(now=datetime(2026, 7, 6, 5, 0)) is False
+
+    assert set_state.call_count == 2
+    assert all(c.args[0] == "sleep_started_at" for c in set_state.call_args_list)
 
 
 # ---------------------------------------------------------------------------
