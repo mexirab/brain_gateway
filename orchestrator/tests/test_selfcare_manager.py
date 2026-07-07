@@ -392,3 +392,56 @@ class TestSelfcareMetric:
         sm.record_movement_logged("set:squat")
         after = _selfcare_value("movement")
         assert after - before == 1
+
+
+# ---------------------------------------------------------------------------
+# Meds nudge windows — driven by category_times("meds"), not a hardcoded 8pm
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestCheckMedsWindow:
+    _MEDS = {"daily": {"morning": [{"name": "Vyvanse"}], "evening": [{"name": "Guanfacine"}]}}
+
+    def _ctx(self, times):
+        from orchestrator import data_manager, selfcare_schedule
+
+        return (
+            patch.object(selfcare_schedule, "category_enabled", return_value=True),
+            patch.object(selfcare_schedule, "category_times", return_value=times),
+            patch.object(data_manager, "get_medications", return_value=self._MEDS),
+        )
+
+    def test_evening_nudge_fires_at_configured_9pm(self, sm):
+        now = datetime(2026, 3, 20, 21, 15)  # inside the configured 21:00 window
+        a, b, c = self._ctx(["07:00", "21:00"])
+        with a, b, c:
+            assert sm._check_meds(now, now) == "Hey, did you take your Guanfacine?"
+
+    def test_no_evening_nudge_at_old_hardcoded_8pm(self, sm):
+        """Regression: 8pm is BEFORE the configured 9pm — the old hardcoded
+        20:00-22:00 window would (wrongly) have fired here."""
+        now = datetime(2026, 3, 20, 20, 0)
+        a, b, c = self._ctx(["07:00", "21:00"])
+        with a, b, c:
+            assert sm._check_meds(now, now) is None
+
+    def test_morning_nudge_at_configured_time(self, sm):
+        now = datetime(2026, 3, 20, 7, 30)
+        a, b, c = self._ctx(["07:00", "21:00"])
+        with a, b, c:
+            assert sm._check_meds(now, now) == "Hey, did you take your Vyvanse?"
+
+    def test_confirmed_evening_med_not_renudged(self, sm):
+        now = datetime(2026, 3, 20, 21, 15)
+        sm._state.last_med_confirmation["guanfacine"] = datetime(2026, 3, 20, 21, 5)
+        a, b, c = self._ctx(["07:00", "21:00"])
+        with a, b, c:
+            assert sm._check_meds(now, now) is None
+
+    def test_disabled_meds_category_no_nudge(self, sm):
+        from orchestrator import selfcare_schedule
+
+        now = datetime(2026, 3, 20, 21, 15)
+        with patch.object(selfcare_schedule, "category_enabled", return_value=False):
+            assert sm._check_meds(now, now) is None

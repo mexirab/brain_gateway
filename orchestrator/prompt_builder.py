@@ -277,8 +277,21 @@ def get_unified_system_prompt(
     from orchestrator.task_decomposition import get_active_tasks_context
 
     context_section = ""
+
+    # Structured personal facts (meds/projects) injected DIRECTLY from the YAML
+    # source of truth — the authoritative read path so the model answers
+    # medication/schedule questions from here, never from RAG/memory (which lags
+    # the YAML and can be poisoned by auto_learn). See
+    # data_manager.get_structured_facts_block; the "single source of truth"
+    # directive lives in IMPORTANT RULES so it also survives voice mode.
+    from orchestrator.data_manager import get_structured_facts_block
+
+    _facts = get_structured_facts_block()
+    if _facts:
+        context_section += f"\n{_facts}\n"
+
     if personal_context:
-        context_section = f"""
+        context_section += f"""
 PERSONAL CONTEXT (from {user}'s notes):
 {personal_context}
 """
@@ -452,6 +465,7 @@ PERSONALITY:
 - Triage priority: meds not taken > imminent deadline > smallest quick win > "you're fine, take a break"
 
 IMPORTANT RULES:
+- MEDICATIONS ARE SOURCE-OF-TRUTH: The MEDICATIONS block above (from medications.yaml) is the ONLY authority on {user}'s meds and schedule. Answer medication questions from it — NEVER contradict it from memory or search_memory. If it's absent or you need full details, call get_data(kind="medications"). To CHANGE meds, call update_data — never update_memory.
 - MANDATORY LOGGING: When {user} mentions eating, meals, meds, water, or exercise, you MUST call selfcare_log BEFORE responding. Never confirm a meal/med/water log without actually calling the tool — if the tool isn't called, the system won't know and will keep nagging.
 - For greetings (hi, hello, good morning) — just respond warmly, NO tools
 - For general chat/questions — respond naturally using your knowledge + context above

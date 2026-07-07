@@ -102,7 +102,8 @@ Tools marked **[advanced]** are gated behind `JESS_ADVANCED=true` (default false
 | search_memory | Unified memory palace search (semantic, optional wing/room filtering) |
 | update_memory | Write a new memory directly into the palace (wing/room routed) |
 | set_reminder / cancel_reminder | Voice/phone reminders |
-| update_data | Update meds/projects YAML |
+| update_data | Update meds/projects YAML (source of truth for structured personal facts; write path) |
+| get_data | Read meds/projects/profile from the YAML source of truth (`{kind}`). The authoritative READ path — the model answers meds/schedule questions from here, never from RAG/`search_memory`. Non-terminal. A compact meds+projects block is also injected into every system prompt via `data_manager.get_structured_facts_block`. |
 | start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio, Pi-hole blocking |
 | focus_sprint | Continue next sprint, extend current, or end session with summary |
 | web_search | Search the web via SearXNG |

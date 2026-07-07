@@ -11,9 +11,21 @@ from typing import Any, Dict, Tuple
 
 import yaml
 
-from orchestrator.config_writer import atomic_write_yaml
+from orchestrator.config_writer import atomic_write_yaml, log_config_change
 
 logger = logging.getLogger(__name__)
+
+
+def _rag_docs_enabled() -> bool:
+    """Whether to (re)generate the medications.md / current.md RAG shadow docs.
+
+    Default OFF: the model now reads the YAML directly (get_data + prompt
+    inject), so the derived markdown no longer needs to be a RAG source — and
+    keeping it created a stale, auto_learn-pollutable second copy of the meds.
+    Flip GENERATE_RAG_STRUCTURED_DOCS=true only to restore the old behavior.
+    """
+    return os.environ.get("GENERATE_RAG_STRUCTURED_DOCS", "false").lower() in ("1", "true", "yes")
+
 
 # Paths - configurable via environment
 RAG_BASE = os.environ.get("RAG_BASE", "/app/data/rag")
@@ -75,10 +87,21 @@ def save_medications(data: Dict[str, Any]) -> bool:
     med nudges would silently die.
     """
     try:
+        # Snapshot the pre-write state for the audit trail BEFORE atomic_write
+        # (the cache still holds the old value here).
+        before = get_medications()
         # Atomic write (#33 crash-safety) + refresh the parse cache (perf).
         atomic_write_yaml(MEDICATIONS_YAML, data)
         _store_yaml_cache(MEDICATIONS_YAML, data)
-        _generate_medications_md(data)
+        # Derived RAG shadow doc is OFF by default now (see _rag_docs_enabled).
+        if _rag_docs_enabled():
+            _generate_medications_md(data)
+        # Unify meds writes with the settings-page audit trail they used to
+        # bypass (config_writer docstring). Never let audit failure sink a save.
+        try:
+            log_config_change("medications", before, data)
+        except Exception as audit_err:  # noqa: BLE001
+            logger.warning(f"[DATA] meds audit log failed: {audit_err}")
         return True
     except Exception as e:
         logger.error(f"Error saving medications: {e}")
@@ -306,10 +329,16 @@ def save_projects(data: Dict[str, Any]) -> bool:
     get_projects() return {} on the next load.
     """
     try:
+        before = get_projects()
         # Atomic write (#33 crash-safety) + refresh the parse cache (perf).
         atomic_write_yaml(PROJECTS_YAML, data)
         _store_yaml_cache(PROJECTS_YAML, data)
-        _generate_projects_md(data)
+        if _rag_docs_enabled():
+            _generate_projects_md(data)
+        try:
+            log_config_change("projects", before, data)
+        except Exception as audit_err:  # noqa: BLE001
+            logger.warning(f"[DATA] projects audit log failed: {audit_err}")
         return True
     except Exception as e:
         logger.error(f"Error saving projects: {e}")
@@ -570,6 +599,113 @@ def _generate_projects_md(data: Dict[str, Any]) -> None:
 # =============================================================================
 # UNIFIED TOOL HANDLER
 # =============================================================================
+
+
+# =============================================================================
+# READ-ONLY ACCESS (single source of truth for the model + the prompt)
+# =============================================================================
+# The model has no way to READ these YAMLs except through here — update_data is
+# write-only. Before this, "what are my meds?" fell through to search_memory
+# (the RAG palace), which lags the YAML and can be poisoned by auto_learn. Both
+# the `get_data` tool AND the system-prompt inject render from the SAME helpers
+# below, so a tool answer and the injected block can never disagree.
+
+
+def _fmt_med(med: Dict[str, Any]) -> str:
+    """`Name Dose` (dose omitted when blank)."""
+    name = str(med.get("name", "")).strip()
+    dose = str(med.get("dose", "")).strip()
+    return f"{name} {dose}".strip()
+
+
+def render_medications_compact(data: Dict[str, Any] | None = None) -> str:
+    """Terse names+doses+schedule rendering of the meds YAML (no notes/purpose).
+
+    This is the authoritative text the model sees. Kept small on purpose — it
+    rides in every prompt (1b) and is returned by get_data (1a).
+    """
+    data = get_medications() if data is None else data
+    daily = data.get("daily", {}) or {}
+
+    def _dicts(items) -> list:
+        # Guard non-dict entries (the YAML permits bare strings in some lists);
+        # a stray string must not raise and blank the meds block.
+        return [m for m in (items or []) if isinstance(m, dict) and m.get("name")]
+
+    def _line(meds: list) -> str:
+        parts = [_fmt_med(m) for m in meds]
+        return "; ".join(parts) if parts else "(none)"
+
+    def _with_when(m: Dict[str, Any]) -> str:
+        when = str(m.get("when", "")).strip()
+        return f"{_fmt_med(m)} ({when})" if when else _fmt_med(m)
+
+    lines = [
+        f"Morning: {_line(_dicts(daily.get('morning')))}",
+        f"Evening: {_line(_dicts(daily.get('evening')))}",
+    ]
+    weekly = _dicts(data.get("weekly"))
+    if weekly:
+        lines.append("Weekly: " + "; ".join(_with_when(m) for m in weekly))
+    as_needed = _dicts(data.get("as_needed"))
+    if as_needed:
+        lines.append("As-needed: " + "; ".join(m.get("name", "") for m in as_needed))
+    return "\n".join(lines)
+
+
+_PRIORITY_ORDER = {"high": 0, "medium": 1, "normal": 1, "low": 2}
+
+
+def render_projects_compact(data: Dict[str, Any] | None = None, top_n: int = 5) -> str:
+    """Top-N active project names, highest priority first."""
+    data = get_projects() if data is None else data
+    # Guard non-dict entries — the schema allows bare strings under some project
+    # buckets, and remove_project treats a string under `active` as reachable.
+    active = [p for p in (data.get("active") or []) if isinstance(p, dict) and p.get("name")]
+    ordered = sorted(active, key=lambda p: _PRIORITY_ORDER.get(str(p.get("priority", "medium")).lower(), 1))
+    names = [str(p.get("name", "")).strip() for p in ordered[:top_n]]
+    return "; ".join(names) if names else "(none)"
+
+
+def render_profile_compact() -> str:
+    """Minimal identity line (name + timezone)."""
+    from orchestrator.user_profile import get_profile
+
+    p = get_profile()
+    return f"Name: {p.user_name}; timezone: {p.timezone}"
+
+
+def get_structured_facts_block() -> str:
+    """Compact block injected into every system prompt (1b). Robust: never
+    raises. Meds and projects render under SEPARATE guards so a bad projects
+    entry can't blank the medications block (the safety-critical half)."""
+    parts = []
+    try:
+        parts.append(
+            "MEDICATIONS (authoritative — from medications.yaml, NOT memory):\n" + render_medications_compact()
+        )
+    except Exception as e:  # noqa: BLE001 — meds must ride the prompt even if projects fail
+        logger.warning(f"[DATA] meds block render failed: {e}")
+    try:
+        parts.append(f"ACTIVE PROJECTS (top 3): {render_projects_compact(top_n=3)}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[DATA] projects block render failed: {e}")
+    return "\n".join(parts)
+
+
+def handle_get_data(kind: str) -> str:
+    """Read handler for the `get_data` tool (non-terminal). Returns authoritative
+    YAML-derived text so the model answers from the source, not RAG."""
+    # str() guard: the schema constrains kind to an enum but isn't runtime-
+    # enforced, so a non-string kind from the model must not AttributeError.
+    k = str(kind or "").lower().strip()
+    if k in ("medications", "medication", "meds"):
+        return "MEDICATIONS (from medications.yaml — source of truth):\n" + render_medications_compact()
+    if k in ("projects", "project"):
+        return "ACTIVE PROJECTS (from projects.yaml):\n" + render_projects_compact()
+    if k in ("profile", "identity"):
+        return render_profile_compact()
+    return f"Unknown kind: {kind!r}. Valid kinds: medications, projects, profile."
 
 
 def handle_update_data(action: str, name: str, **kwargs) -> str:

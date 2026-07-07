@@ -217,6 +217,11 @@ class Settings(BaseSettings):
     auto_learn_markdown: bool = False
     auto_learn_encrypt: bool = True
     auto_learn_encryption_key: str = ""
+    # Comma-separated categories auto-learn must never store — these are owned by
+    # a structured YAML source of truth (medications.yaml, etc.), so a
+    # conversation-extracted claim in these domains must NOT become a shadow
+    # "fact" the model reads back. Exposed parsed as shared.AUTO_LEARN_BLOCKED_CATEGORIES.
+    auto_learn_blocked_categories: str = "health,medication,medications,meds,schedule,routine"
 
     # -- Routines (F-006) --------------------------------------------------------
     # NOTE: /app/data is a named Docker volume (finance-data); config files ship

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from orchestrator import shared
 from orchestrator.brain_dump_manager import process_brain_dump
-from orchestrator.data_manager import handle_update_data
+from orchestrator.data_manager import handle_get_data, handle_update_data
 from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
 from orchestrator.google_calendar import get_calendar_client
 from orchestrator.google_gmail import get_gmail_client
@@ -1260,6 +1260,14 @@ async def _reg_home_assistant(arguments: dict) -> str:
 async def _reg_update_data(arguments: dict) -> str:
     # YAML read/write + markdown regeneration is blocking file I/O
     return await asyncio.to_thread(tool_update_data, arguments)
+
+
+@register_tool("get_data")
+async def _reg_get_data(arguments: dict) -> str:
+    # Read-only source-of-truth access (meds/projects/profile). Non-terminal:
+    # the loop continues so the model answers from the returned data. Blocking
+    # file I/O → to_thread.
+    return await asyncio.to_thread(handle_get_data, arguments.get("kind", ""))
 
 
 @register_tool("update_memory")

@@ -106,6 +106,8 @@ One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 808
 | `AUTO_LEARN_MARKDOWN` | `false` | Also append facts to a markdown file |
 | `AUTO_LEARN_ENCRYPT` | `true` | Encrypt stored facts at rest (Fernet) |
 | `AUTO_LEARN_ENCRYPTION_KEY` | (auto-generated) | Fernet key; auto-generated if empty |
+| `AUTO_LEARN_BLOCKED_CATEGORIES` | `health,medication,medications,meds,schedule,routine` | Comma-separated categories auto-learn must NEVER store — these are owned by the structured YAML source of truth, so a conversation-extracted claim in these domains can't become a shadow "fact" the model reads back. Gated at two points (`extract_facts` + `store_fact`); drops are counted by `bgw_auto_learn_category_blocked_total{category}`. |
+| `GENERATE_RAG_STRUCTURED_DOCS` | `false` | Whether `save_medications`/`save_projects` (re)generate the `medications.md` / `current.md` RAG shadow docs. OFF by default: the model reads the YAML directly (`get_data` + prompt inject), so the derived markdown no longer needs to be a RAG source (it was a stale, auto_learn-pollutable second copy). Flip to `true` only to restore the old behavior. |
 
 ## Ambient Awareness
 

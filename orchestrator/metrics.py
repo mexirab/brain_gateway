@@ -606,6 +606,16 @@ AUTO_LEARN_SENSITIVE_FILTERED = Counter(
     "Facts rejected by sensitive data filter",
 )
 
+# Facts dropped because their category is a structured domain (meds/health/
+# schedule/routine) owned by a YAML source of truth. Auto-learn must NOT shadow
+# those — a hallucinated "Naltrexone → morning" once got stored high-confidence
+# and served back as fact. See AUTO_LEARN_BLOCKED_CATEGORIES (shared/config).
+AUTO_LEARN_CATEGORY_BLOCKED = Counter(
+    "bgw_auto_learn_category_blocked_total",
+    "Facts rejected because their category is an owned structured domain",
+    ["category"],
+)
+
 AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
     "bgw_auto_learn_extraction_duration_seconds",
     "Auto-learn extraction pipeline latency",

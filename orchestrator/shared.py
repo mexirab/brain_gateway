@@ -360,6 +360,10 @@ AUTO_LEARN_DEDUP_THRESHOLD = settings.auto_learn_dedup_threshold
 AUTO_LEARN_MARKDOWN = settings.auto_learn_markdown
 AUTO_LEARN_ENCRYPT = settings.auto_learn_encrypt
 AUTO_LEARN_ENCRYPTION_KEY = settings.auto_learn_encryption_key
+# Structured domains auto-learn must never shadow (parsed to a lowercase set).
+AUTO_LEARN_BLOCKED_CATEGORIES = {
+    c.strip().lower() for c in settings.auto_learn_blocked_categories.split(",") if c.strip()
+}
 
 # In-memory conversation buffer for auto-learn (never written to disk)
 _auto_learn_conversations: Dict[str, list] = {}
