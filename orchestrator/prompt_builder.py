@@ -144,7 +144,10 @@ def _rag_context_sync(query: str, wing: str = "", room: str = "") -> str:
     chunks = []
     for _i, (doc, meta, dist) in enumerate(zip(docs, metas, dists, strict=False)):
         if doc is None or len(doc.strip()) < MIN_CHUNK_LEN:
-            logger.debug(f"[RAG] Skipping short chunk ({len(doc)} chars)")
+            # Guard len() — a None document (e.g. a file-marker row) reaching
+            # here previously crashed the whole prompt build with
+            # "NoneType has no len()", taking down every substantive chat.
+            logger.debug("[RAG] Skipping empty/short chunk (%s chars)", 0 if doc is None else len(doc))
             continue
 
         try:
