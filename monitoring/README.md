@@ -85,7 +85,7 @@ bash scripts/reload-monitoring.sh    # reload + verify (PROM_URL / AM_URL env ov
 
 ## Alertmanager
 
-Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes alerts to Pushover; storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
+Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes alerts to Pushover in two tiers: most alerts hit the paging `pushover` receiver (priority 1), while non-paging comfort-feature staleness (currently `WindDownNudgeStale`) routes to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
 
 Port 9093 binds to **127.0.0.1 only** — the API is unauthenticated (anyone reaching it can create silences or inject fake pushes), so the loopback bind is the exposure control. The web UI is NOT reachable from LAN/tailnet; Prometheus/Grafana reach it in-network as `alertmanager:9093` (a Grafana Alertmanager datasource is the planned single-pane view — see ROADMAP). Inspect from Jupiter:
 

@@ -57,6 +57,7 @@ def stat(
     graph_mode: str = "area",
     text_mode: str = "auto",
     mappings: list[dict] | None = None,
+    description: str | None = None,
 ) -> dict:
     """Single big-number stat panel.
 
@@ -71,7 +72,7 @@ def stat(
     else:
         steps = [{"color": "green", "value": None}]
 
-    return {
+    panel = {
         "type": "stat",
         "title": title,
         "datasource": PROMETHEUS,
@@ -99,6 +100,9 @@ def stat(
             },
         },
     }
+    if description:
+        panel["description"] = description
+    return panel
 
 
 def timeseries(

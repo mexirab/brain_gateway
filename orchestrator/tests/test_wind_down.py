@@ -197,6 +197,79 @@ async def test_dim_scene_error_does_not_stop_remaining_scenes(reset_shared):
 
 
 # ---------------------------------------------------------------------------
+# T-60: dim heartbeat (dead-man's-switch)
+#
+# The heartbeat is stamped at the TOP of wind_down_dim, before every early
+# return, so it proves the job FIRED independent of whether it did any work.
+# Without that, a scheduler that drops only the dim job leaves the Sleep
+# Wind-Down panels green/empty (the scene counter stays silent on the no-op
+# nights). These tests pin the stamp to the early-return paths specifically.
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_dim_heartbeat_stamped_on_normal_run(reset_shared):
+    shared = reset_shared
+    ha = MagicMock()
+    ha.call_service = AsyncMock(return_value=_ha_result())
+
+    from orchestrator import jobs_winddown
+
+    with (
+        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed"),
+        patch.object(shared, "ha_client", ha),
+        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
+    ):
+        await jobs_winddown.wind_down_dim()
+
+    dim_hb.set_to_current_time.assert_called_once()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_dim_heartbeat_stamped_even_without_scene(reset_shared):
+    """No WIND_DOWN_SCENE -> no scene attempted, but the job still fired."""
+    shared = reset_shared
+    ha = MagicMock()
+    ha.call_service = AsyncMock()
+
+    from orchestrator import jobs_winddown
+
+    with (
+        patch.object(shared, "WIND_DOWN_SCENE", ""),
+        patch.object(shared, "ha_client", ha),
+        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
+    ):
+        await jobs_winddown.wind_down_dim()
+
+    ha.call_service.assert_not_awaited()
+    dim_hb.set_to_current_time.assert_called_once()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_dim_heartbeat_stamped_even_under_dnd(reset_shared):
+    """DND skips the scene fan-out but the heartbeat must still advance."""
+    shared = reset_shared
+    shared.DND_ACTIVE = True
+    ha = MagicMock()
+    ha.call_service = AsyncMock()
+
+    from orchestrator import jobs_winddown
+
+    with (
+        patch.object(shared, "WIND_DOWN_SCENE", "scene.bedroom_dimmed"),
+        patch.object(shared, "ha_client", ha),
+        patch.object(jobs_winddown, "WIND_DOWN_DIM_LAST_RUN") as dim_hb,
+    ):
+        await jobs_winddown.wind_down_dim()
+
+    ha.call_service.assert_not_awaited()
+    dim_hb.set_to_current_time.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # T-30: screens-away nudge
 # ---------------------------------------------------------------------------
 

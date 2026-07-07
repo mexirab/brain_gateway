@@ -39,6 +39,8 @@ logging.getLogger().addHandler(log_ring)
 
 # Infrastructure
 # Shared state (singletons initialized at module level in shared.py)
+from apscheduler.events import EVENT_JOB_MISSED
+
 from orchestrator import (
     shared,
     state_store,  # REST API routes (infrastructure endpoints)
@@ -457,6 +459,33 @@ async def _shutdown_logic():
         logger.info("[orchestrator] Closed shared HTTP client")
 
 
+def _on_job_missed(event) -> None:
+    """EVENT_JOB_MISSED listener — a scheduler job was dropped after its
+    misfire_grace_time (300s, see shared.py) elapsed, typically because the
+    event loop stalled past the grace window.
+
+    One-shot date-trigger jobs (reminder_* delivery, focus-break delivery,
+    dnd_auto_unmute) have no next occurrence and no runtime recovery — the
+    startup sweep only reschedules at boot — so a miss here is a permanently
+    lost action, not a delayed one. Log loud (ERROR) and bump the counter so it
+    is alertable instead of leaving APScheduler's own log warning as the only
+    trace.
+    """
+    from orchestrator.metrics import SCHEDULER_JOBS_MISSED, scheduler_job_family
+
+    job_id = getattr(event, "job_id", "<unknown>")
+    scheduled = getattr(event, "scheduled_run_time", None)
+    family = scheduler_job_family(job_id)
+    SCHEDULER_JOBS_MISSED.labels(job_family=family).inc()
+    logger.error(
+        "[SCHEDULER] Job MISSED (dropped, not delayed): id=%s family=%s scheduled_run_time=%s "
+        "— event loop stalled past the 300s misfire grace; one-shot jobs are lost permanently",
+        job_id,
+        family,
+        scheduled.isoformat() if scheduled is not None else "<unknown>",
+    )
+
+
 async def _startup_logic():
     """Initialize services on startup (invoked from the lifespan handler)."""
     global _http, cloud_brain
@@ -610,6 +639,12 @@ async def _startup_logic():
         else:
             logger.warning("[FOCUS] Defensive startup: could not disable blocking: %s", result.message)
 
+    # Surface silently-dropped jobs: APScheduler discards any job whose 300s
+    # misfire_grace_time lapses during an event-loop stall, emitting only its
+    # own log warning — no metric, no alert, and one-shot date jobs are gone for
+    # good. Wire the EVENT_JOB_MISSED listener BEFORE start() so no early miss
+    # slips through the gap between start and registration.
+    scheduler.add_listener(_on_job_missed, EVENT_JOB_MISSED)
     scheduler.start()
     logger.info(f"[SCHEDULER] Started ({sum(reminder_counts.values())} reminders reloaded from DB)")
 
@@ -717,19 +752,24 @@ async def _startup_logic():
                     id=job_id,
                     name=job_name,
                     replace_existing=True,
-                    # The APScheduler default grace is 1s — a briefly-stalled
-                    # event loop at fire time would silently drop the rung.
-                    # A wind-down that fires minutes late beats one that
-                    # doesn't fire (prod-support M1, 2026-07-06).
-                    misfire_grace_time=300,
+                    # misfire_grace_time=300 comes from the scheduler-wide
+                    # job_defaults in shared.py (prod-support M1, 2026-07-06).
                 )
             logger.info(
                 f"[SCHEDULER] Wind-down ladder: dim at {rung_times[0]}, nudge at {rung_times[1]} "
                 f"(bedtime {shared.WIND_DOWN_BEDTIME}, scenes: {shared.WIND_DOWN_SCENE or 'none configured'})"
             )
-            from orchestrator.metrics import WIND_DOWN_LAST_RUN
+            from orchestrator.metrics import (
+                WIND_DOWN_DIM_LAST_RUN,
+                WIND_DOWN_LAST_RUN,
+            )
 
+            # Seed both heartbeats to now() at registration, same as the
+            # briefing gauges: without it a fresh deploy shows "No data" and a
+            # stale rule (nudge) would fire on the ~56-year-old default before
+            # the rung's first real run.
             WIND_DOWN_LAST_RUN.set_to_current_time()
+            WIND_DOWN_DIM_LAST_RUN.set_to_current_time()
         except Exception as e:
             logger.error(
                 f"[SCHEDULER] Wind-down registration failed (WIND_DOWN_BEDTIME={shared.WIND_DOWN_BEDTIME!r}): {e}"

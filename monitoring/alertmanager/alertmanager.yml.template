@@ -6,8 +6,14 @@ route:
   repeat_interval: 4h
   routes:
     - matchers:
-        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale"
+        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed"
       receiver: "pushover"
+    # Non-paging tier: comfort-feature staleness that should surface without
+    # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
+    # quiet hours, no emergency retry).
+    - matchers:
+        - alertname=~"WindDownNudgeStale"
+      receiver: "pushover-quiet"
 receivers:
   - name: "null"
   - name: "pushover"
@@ -17,4 +23,12 @@ receivers:
         title: "Jess alert: {{ .CommonLabels.alertname }} ({{ .Status }})"
         message: "{{ range .Alerts }}{{ .Annotations.summary }} {{ end }}"
         priority: 1
+        send_resolved: true
+  - name: "pushover-quiet"
+    pushover_configs:
+      - user_key: ${PUSHOVER_USER_KEY}
+        token: ${PUSHOVER_APP_TOKEN}
+        title: "Jess notice: {{ .CommonLabels.alertname }} ({{ .Status }})"
+        message: "{{ range .Alerts }}{{ .Annotations.summary }} {{ end }}"
+        priority: 0
         send_resolved: true

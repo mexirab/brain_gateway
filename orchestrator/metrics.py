@@ -147,12 +147,33 @@ EVENING_BRIEFING_LAST_RUN = Gauge(
     "Unix timestamp the evening briefing job last fired",
 )
 
-# Wind-down ladder T-30 rung heartbeat. No stale alert — the ladder is
-# comfort, not delivery-critical; a failed lights rung is self-evident in
-# the house. Queryable ad hoc; Grafana panel pending in the dashgen builder.
+# Wind-down ladder T-30 nudge heartbeat. Watched by WindDownNudgeStale
+# (warning → quiet Pushover, non-paging). The nudge is a spoken prompt, so a
+# dropped rung is invisible by omission — and the feature targets exactly the
+# person who won't notice the missing 22:00 nudge. Also surfaced in the
+# "Sleep Wind-Down" row of the brain-gateway dashboard (dashgen builder). Note
+# the alert reads the SAME gauge the startup re-seed touches, so during
+# active-dev weeks (CI recreates the orchestrator on every merge, re-stamping
+# now()) neither the panel nor the alert ages past the stale threshold — the
+# masking hits both. What the alert adds over the panel is steady state: once
+# deploys quiesce for >25.5h, a permanently-dead rung fires and PUSHES, which
+# the passive panel never would. (Making these deadman gauges dev-week-robust —
+# stop seeding, tolerate "No data" — is a cross-cutting follow-up; the
+# morning/evening briefing gauges share the trait.)
 WIND_DOWN_LAST_RUN = Gauge(
     "bgw_wind_down_last_run_timestamp_seconds",
     "Unix timestamp the wind-down nudge job last fired",
+)
+
+# Wind-down ladder T-60 lights-dim heartbeat. Stamped at the TOP of
+# wind_down_dim, before its DND / no-scene early returns — so it proves the
+# job body ran, independent of whether it attempted a scene (the scene
+# counter stays silent on those early returns). No stale alert by design: a
+# lights rung that fails to dim IS self-evident in the house, unlike the
+# nudge. The dashboard panel is the safety net for a silently-dropped dim job.
+WIND_DOWN_DIM_LAST_RUN = Gauge(
+    "bgw_wind_down_dim_last_run_timestamp_seconds",
+    "Unix timestamp the wind-down lights-dim job last fired",
 )
 
 # Per-scene outcomes for the T-60 lights rung — the forensic answer to
@@ -226,6 +247,49 @@ REMINDERS_MISSED = Counter(
     "bgw_reminders_missed_total",
     "Reminders found >24h past due at startup and marked missed instead of delivered",
 )
+
+# -- Scheduler reliability ---------------------------------------------------
+# APScheduler silently drops a job (apart from its own "Run time ... was missed"
+# log warning) when the event loop stalls longer than the job's
+# misfire_grace_time (300s scheduler-wide, see shared.py job_defaults). One-shot
+# date-trigger jobs (reminder_* delivery, focus-break delivery, dnd_auto_unmute)
+# have no next occurrence and no runtime recovery, so a drop is a permanently
+# lost action, not a delayed one. Incremented from the EVENT_JOB_MISSED listener
+# wired in orchestrator.py startup.
+SCHEDULER_JOBS_MISSED = Counter(
+    "bgw_scheduler_jobs_missed_total",
+    "Scheduler jobs dropped after their misfire_grace_time elapsed (event-loop stall)",
+    ["job_family"],
+)
+
+# Job-id prefixes that embed a UUID or timestamp — collapsed to a stable family
+# label so the counter can't explode Prometheus label cardinality. First
+# matching prefix wins. Every other (fixed-string) job id maps to "cron:<id>",
+# which is bounded because those ids are literals in the code (one series per
+# job type). INVARIANT: when you add a scheduler job whose id embeds a
+# UUID/timestamp, add its prefix here — otherwise it lands in cron:<id> and
+# blows up cardinality.
+_JOB_FAMILY_PREFIXES = (
+    ("reminder_", "reminder"),  # reminder_<id>, reminder_<id>_retry
+    ("focus_", "focus"),  # focus_<hhmmss>, focus_checkin_*, focus_restored_*
+    ("routine_", "routine"),  # routine_<id>, routine_nudge_<hhmmss>
+    ("auto_learn_", "auto_learn"),  # auto_learn_<session_key>
+    ("interrupt_checkin_", "interrupt"),  # interrupt_checkin_<hhmmss>
+    ("ambient_summary_", "ambient"),  # ambient_summary_<...>
+)
+
+
+def scheduler_job_family(job_id: str) -> str:
+    """Collapse a raw APScheduler job id to a bounded-cardinality family label.
+
+    Dynamic ids (reminder_<uuid>, focus_<hhmmss>, ...) map to their family;
+    fixed-string ids (calendar_poll, morning_briefing, ...) map to cron:<id>.
+    """
+    for prefix, family in _JOB_FAMILY_PREFIXES:
+        if job_id.startswith(prefix):
+            return family
+    return f"cron:{job_id}"
+
 
 # -- ntfy feedback loop (F-011) ---------------------------------------------
 NTFY_PUSH_TOTAL = Counter(
