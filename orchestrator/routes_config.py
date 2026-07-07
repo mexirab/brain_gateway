@@ -193,6 +193,31 @@ async def put_identity(req: Request):
     return JSONResponse(after)
 
 
+@router.get("/personal-facts")
+async def get_personal_facts():
+    """Read-only view of the structured personal facts the system holds —
+    medications + projects (from the YAML source of truth) + identity. Powers
+    the /personal-facts dashboard 'peek' page so the user can see exactly what
+    Jess reads. Bearer-gated like its /api/config/* siblings; no write path
+    here (edits still go through the model's update_data / the settings page)."""
+    from orchestrator.data_manager import get_medications, get_projects
+
+    # Project the meds to only the fields the page consumes — the raw YAML also
+    # carries `pharmacy` (doctor names) and `interactions`, which are more
+    # sensitive than the med list and aren't rendered. Allowlisting keeps this
+    # to a data-minimized contract and stops future sensitive keys auto-leaking.
+    meds = get_medications()
+    meds_view = {k: meds.get(k) for k in ("daily", "weekly", "as_needed", "reminders") if k in meds}
+
+    return JSONResponse(
+        {
+            "medications": meds_view,
+            "projects": get_projects(),
+            "profile": _identity_snapshot(),
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Selfcare panel — categories.*
 # ---------------------------------------------------------------------------

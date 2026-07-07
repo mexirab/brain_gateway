@@ -18,6 +18,7 @@ import {
   Network,
   LogOut,
   Settings,
+  Pill,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -44,6 +45,7 @@ const MORE: NavItem[] = [
   { href: '/announcements', label: 'Announcements', icon: Volume2 },
   { href: '/home', label: 'Home', icon: Home },
   { href: '/architecture', label: 'Architecture', icon: Network },
+  { href: '/personal-facts', label: 'Facts', icon: Pill },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 

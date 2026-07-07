@@ -183,6 +183,48 @@ export interface DiscoveredSpeaker {
   state: string;
 }
 
+// ----- Personal facts (read-only "peek" view) -----
+
+export interface Medication {
+  name: string;
+  dose?: string;
+  purpose?: string;
+  notes?: string;
+  when?: string;
+  max_per_day?: string;
+}
+
+export interface Medications {
+  daily?: { morning?: Medication[]; evening?: Medication[] };
+  weekly?: Medication[];
+  as_needed?: Medication[];
+  reminders?: { morning?: string; evening?: string; refill?: string };
+}
+
+export interface Project {
+  name: string;
+  status?: string;
+  priority?: string;
+  goal?: string;
+  next_steps?: string[];
+}
+
+export interface Projects {
+  active?: Project[];
+  on_hold?: Project[];
+  someday_maybe?: Array<string | Project>;
+  completed?: Project[];
+  parking_lot?: Array<string | Project>;
+}
+
+/** Everything the system authoritatively believes about the user's structured
+ *  personal facts — sourced from the YAML the model reads (see get_data). */
+export interface PersonalFacts {
+  medications: Medications;
+  projects: Projects;
+  profile: Identity;
+}
+
 // ----- API -----
 
 export const settingsApi = {
@@ -190,6 +232,9 @@ export const settingsApi = {
   getIdentity: () => get<Identity>('/api/config/identity'),
   updateIdentity: (updates: IdentityUpdate) =>
     put<Identity>('/api/config/identity', updates),
+
+  // Personal facts (read-only)
+  getPersonalFacts: () => get<PersonalFacts>('/api/config/personal-facts'),
 
   // Selfcare
   getSelfcare: () => get<SelfcareSchedule>('/api/config/selfcare'),
