@@ -13,6 +13,7 @@ import time
 from typing import Any, Dict, List
 
 from orchestrator.metrics import (
+    CHAT_STREAM_OUTCOME,
     LLM_CALL_COUNT,
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
@@ -400,6 +401,7 @@ async def run_unified_tool_loop(
             logger.warning("[%s] Stream backend resolution failed: %s", label, e)
         if stream_backend is None:
             logger.info("[%s] Backend not stream-capable — buffered rounds", label)
+            CHAT_STREAM_OUTCOME.labels(outcome="not_stream_capable").inc()
 
     # Total gate-safe chars relayed to the client so far. Later rounds insert
     # a paragraph break before their first emission so multi-round answers
@@ -474,11 +476,13 @@ async def run_unified_tool_loop(
                 # Clean failure before anything reached the client — a
                 # buffered retry below is safe and can't double-send text.
                 LLM_CALL_ERRORS.labels(model=model_name, error_type=type(sr["error"]).__name__).inc()
+                CHAT_STREAM_OUTCOME.labels(outcome="pre_emission_retry").inc()
                 logger.warning("[%s] Streamed round failed pre-emission (%s) — buffered retry", label, sr["error"])
             elif sr["error"] is not None:
                 # Partial answer is already on the client's screen; retrying
                 # would duplicate it. End the turn with what got through.
                 LLM_CALL_ERRORS.labels(model=model_name, error_type=type(sr["error"]).__name__).inc()
+                CHAT_STREAM_OUTCOME.labels(outcome="died_mid_emission").inc()
                 TOOL_ROUNDS.observe(round_num + 1)
                 logger.error("[%s] Stream died mid-answer — returning partial (%d chars)", label, sr["emitted"])
                 return clean_response(sr["content"])

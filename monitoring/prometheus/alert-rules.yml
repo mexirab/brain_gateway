@@ -120,6 +120,19 @@ groups:
         annotations:
           summary: "Calendar polling has >5 errors in the last hour"
 
+      # Real streaming: a stream that dies AFTER emitting returns a silently
+      # truncated answer to the user (no user-facing error). Non-paging — it's
+      # a UX degradation, not an outage — but on-call should see a sustained
+      # rate. for:2m rides out the increase() counter-reset blip on CI restarts.
+      - alert: ChatStreamTruncating
+        expr: increase(bgw_chat_stream_outcome_total{outcome="died_mid_emission"}[1h]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chat streams are dying mid-answer — users get truncated replies"
+          description: "{{ $value | humanize }} stream(s) died after emitting in the last hour; the user received a silently truncated answer. Check vLLM health and the '[UNIFIED] Stream died mid-answer' lines in Loki."
+
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
   # ===========================================================================

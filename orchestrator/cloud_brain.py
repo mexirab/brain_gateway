@@ -7,6 +7,7 @@ intent routing, prompt building, LLM calls, and response streaming.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from orchestrator import setup_env, shared, welcome
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
+    CHAT_STREAM_OUTCOME,
     CHAT_TTFT,
     FAST_PATH_COUNT,
     MODE_ROUTE_COUNT,
@@ -556,8 +558,6 @@ class CloudBrain:
             # Schedule/reschedule extraction job
             job_id = f"auto_learn_{session_key}"
 
-            import contextlib
-
             with contextlib.suppress(Exception):
                 shared.scheduler.remove_job(job_id)
 
@@ -608,8 +608,16 @@ class CloudBrain:
           same cancellation the buffered handler gets from starlette.
         """
         chunk_id = f"chatcmpl-{int(time.time())}"
-        queue: asyncio.Queue = asyncio.Queue()
+        # Bounded so a slow/stalled SSE consumer applies real backpressure to the
+        # producer instead of letting it buffer the whole answer in memory.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
         emitted_flag = {"v": False}
+        # Snapshot the original messages BEFORE the primary loop mutates the list
+        # in place (it appends assistant/tool/user turns). The fallback model must
+        # start from the clean request, matching the buffered _unified_fallback
+        # path — otherwise it inherits the primary's dangling tool_call/tool
+        # messages, which a different fallback backend can choke on.
+        original_messages = list(messages)
 
         async def _on_delta(text: str) -> None:
             emitted_flag["v"] = True
@@ -637,21 +645,26 @@ class CloudBrain:
                 if not emitted_flag["v"] and self._fallback_model_url:
                     logger.info("[UNIFIED-STREAM] Nothing emitted — trying fallback model (buffered)")
                     REQUEST_COUNT.labels(mode="unified_fallback").inc()
+                    CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_fallback").inc()
                     try:
                         result = await self._run_unified_loop(
-                            messages=messages,
+                            messages=original_messages,
                             system_prompt=system_prompt,
                             tools=self._get_all_tools(),
                             model_url=self._fallback_model_url,
                             model_name=self._fallback_model_name,
                             http_client=None,
+                            is_voice=is_voice,
                         )
-                        self._schedule_auto_learn(messages)
+                        self._schedule_auto_learn(original_messages)
                         await queue.put(("final", result))
                         return
                     except Exception as fb_err:
                         logger.error("[UNIFIED-STREAM] Fallback also failed: %s", fb_err)
                         REQUEST_ERRORS.labels(mode="unified_fallback", error_type="fallback_failed").inc()
+                        CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_error").inc()
+                else:
+                    CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_error").inc()
                 await queue.put(("error", str(e)))
 
         def _sse(delta: Dict, finish_reason=None) -> str:
@@ -698,8 +711,15 @@ class CloudBrain:
                         yield "data: [DONE]\n\n"
                         return
             finally:
+                # Cancel AND join the producer so it is deterministically unwound
+                # (a mid-flight state-mutating tool finishes cancelling) before the
+                # generator returns, and any non-cancel error it raised during
+                # teardown is retrieved rather than left as "exception never
+                # retrieved".
                 if not task.done():
                     task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
         return StreamingResponse(
             generate(),

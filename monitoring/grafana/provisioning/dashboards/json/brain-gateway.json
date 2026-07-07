@@ -545,6 +545,270 @@
       "id": 5
     },
     {
+      "type": "timeseries",
+      "title": "Chat TTFT (p50 / p95 / p99)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Time to first streamed token on /v1/chat/completions. If this collapses toward Request Latency, streaming has silently degraded to the buffered path \u2014 cross-check the degradation panel.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      },
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "Stream Degradation Events (/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(bgw_chat_stream_outcome_total[5m])) * 60",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Non-happy streaming outcomes (happy path is uncounted; denominator is the TTFT count). died_mid_emission = the user got a truncated answer.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 9
+      },
+      "id": 7
+    },
+    {
+      "type": "stat",
+      "title": "Truncated Answers (died_mid_emission, 24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_chat_stream_outcome_total{outcome=\"died_mid_emission\"}[24h])) or vector(0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Streams that died after emitting \u2192 user saw a silently truncated reply. Watched by the ChatStreamTruncating alert.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "id": 8
+    },
+    {
       "type": "row",
       "title": "Mode Router",
       "collapsed": false,
@@ -553,9 +817,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 17
       },
-      "id": 6
+      "id": 9
     },
     {
       "type": "timeseries",
@@ -638,9 +902,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 18
       },
-      "id": 7
+      "id": 10
     },
     {
       "type": "timeseries",
@@ -723,9 +987,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 18
       },
-      "id": 8
+      "id": 11
     },
     {
       "type": "row",
@@ -736,9 +1000,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 26
       },
-      "id": 9
+      "id": 12
     },
     {
       "type": "timeseries",
@@ -858,9 +1122,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 19
+        "y": 27
       },
-      "id": 10
+      "id": 13
     },
     {
       "type": "timeseries",
@@ -943,9 +1207,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 19
+        "y": 27
       },
-      "id": 11
+      "id": 14
     },
     {
       "type": "stat",
@@ -1018,9 +1282,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 19
+        "y": 27
       },
-      "id": 12
+      "id": 15
     },
     {
       "type": "stat",
@@ -1081,9 +1345,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 19
+        "y": 27
       },
-      "id": 13
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -1199,9 +1463,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 27
+        "y": 35
       },
-      "id": 14
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -1284,9 +1548,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 27
+        "y": 35
       },
-      "id": 15
+      "id": 18
     },
     {
       "type": "stat",
@@ -1355,9 +1619,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 27
+        "y": 35
       },
-      "id": 16
+      "id": 19
     },
     {
       "type": "stat",
@@ -1418,9 +1682,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 27
+        "y": 35
       },
-      "id": 17
+      "id": 20
     },
     {
       "type": "row",
@@ -1431,9 +1695,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 43
       },
-      "id": 18
+      "id": 21
     },
     {
       "type": "timeseries",
@@ -1516,9 +1780,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 36
+        "y": 44
       },
-      "id": 19
+      "id": 22
     },
     {
       "type": "timeseries",
@@ -1613,9 +1877,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 36
+        "y": 44
       },
-      "id": 20
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1698,9 +1962,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 36
+        "y": 44
       },
-      "id": 21
+      "id": 24
     },
     {
       "type": "stat",
@@ -1791,9 +2055,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 36
+        "y": 44
       },
-      "id": 22
+      "id": 25
     },
     {
       "type": "row",
@@ -1804,9 +2068,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 52
       },
-      "id": 23
+      "id": 26
     },
     {
       "type": "stat",
@@ -1887,9 +2151,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 45
+        "y": 53
       },
-      "id": 24
+      "id": 27
     },
     {
       "type": "stat",
@@ -1950,9 +2214,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 45
+        "y": 53
       },
-      "id": 25
+      "id": 28
     },
     {
       "type": "timeseries",
@@ -2047,9 +2311,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 45
+        "y": 53
       },
-      "id": 26
+      "id": 29
     },
     {
       "type": "row",
@@ -2060,9 +2324,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 61
       },
-      "id": 27
+      "id": 30
     },
     {
       "type": "stat",
@@ -2143,9 +2407,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 54
+        "y": 62
       },
-      "id": 28
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -2229,9 +2493,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 54
+        "y": 62
       },
-      "id": 29
+      "id": 32
     },
     {
       "type": "timeseries",
@@ -2350,9 +2614,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 54
+        "y": 62
       },
-      "id": 30
+      "id": 33
     },
     {
       "type": "stat",
@@ -2413,9 +2677,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 54
+        "y": 62
       },
-      "id": 31
+      "id": 34
     },
     {
       "type": "row",
@@ -2426,9 +2690,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 70
       },
-      "id": 32
+      "id": 35
     },
     {
       "type": "timeseries",
@@ -2511,9 +2775,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 63
+        "y": 71
       },
-      "id": 33
+      "id": 36
     },
     {
       "type": "timeseries",
@@ -2608,9 +2872,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 63
+        "y": 71
       },
-      "id": 34
+      "id": 37
     },
     {
       "type": "timeseries",
@@ -2693,9 +2957,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 63
+        "y": 71
       },
-      "id": 35
+      "id": 38
     },
     {
       "type": "row",
@@ -2706,9 +2970,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 71
+        "y": 79
       },
-      "id": 36
+      "id": 39
     },
     {
       "type": "timeseries",
@@ -2791,9 +3055,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 72
+        "y": 80
       },
-      "id": 37
+      "id": 40
     },
     {
       "type": "timeseries",
@@ -2888,9 +3152,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 72
+        "y": 80
       },
-      "id": 38
+      "id": 41
     },
     {
       "type": "stat",
@@ -2951,9 +3215,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 72
+        "y": 80
       },
-      "id": 39
+      "id": 42
     },
     {
       "type": "timeseries",
@@ -3048,9 +3312,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 72
+        "y": 80
       },
-      "id": 40
+      "id": 43
     },
     {
       "type": "row",
@@ -3061,9 +3325,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 88
       },
-      "id": 41
+      "id": 44
     },
     {
       "type": "timeseries",
@@ -3158,9 +3422,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 81
+        "y": 89
       },
-      "id": 42
+      "id": 45
     },
     {
       "type": "timeseries",
@@ -3255,9 +3519,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 81
+        "y": 89
       },
-      "id": 43
+      "id": 46
     },
     {
       "type": "timeseries",
@@ -3352,9 +3616,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 81
+        "y": 89
       },
-      "id": 44
+      "id": 47
     },
     {
       "type": "row",
@@ -3365,9 +3629,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 97
       },
-      "id": 45
+      "id": 48
     },
     {
       "type": "timeseries",
@@ -3450,9 +3714,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 90
+        "y": 98
       },
-      "id": 46
+      "id": 49
     },
     {
       "type": "timeseries",
@@ -3535,9 +3799,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 90
+        "y": 98
       },
-      "id": 47
+      "id": 50
     },
     {
       "type": "timeseries",
@@ -3632,9 +3896,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 90
+        "y": 98
       },
-      "id": 48
+      "id": 51
     },
     {
       "type": "row",
@@ -3645,9 +3909,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 98
+        "y": 106
       },
-      "id": 49
+      "id": 52
     },
     {
       "type": "timeseries",
@@ -3742,9 +4006,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 99
+        "y": 107
       },
-      "id": 50
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -3839,9 +4103,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 99
+        "y": 107
       },
-      "id": 51
+      "id": 54
     },
     {
       "type": "timeseries",
@@ -3924,9 +4188,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 99
+        "y": 107
       },
-      "id": 52
+      "id": 55
     },
     {
       "type": "row",
@@ -3937,9 +4201,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 107
+        "y": 115
       },
-      "id": 53
+      "id": 56
     },
     {
       "type": "stat",
@@ -4008,9 +4272,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 108
+        "y": 116
       },
-      "id": 54
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -4118,9 +4382,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 108
+        "y": 116
       },
-      "id": 55
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -4203,9 +4467,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 108
+        "y": 116
       },
-      "id": 56
+      "id": 59
     },
     {
       "type": "row",
@@ -4216,9 +4480,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 116
+        "y": 124
       },
-      "id": 57
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4301,9 +4565,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 117
+        "y": 125
       },
-      "id": 58
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -4386,9 +4650,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 117
+        "y": 125
       },
-      "id": 59
+      "id": 62
     },
     {
       "type": "row",
@@ -4399,9 +4663,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 125
+        "y": 133
       },
-      "id": 60
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4496,9 +4760,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 126
+        "y": 134
       },
-      "id": 61
+      "id": 64
     },
     {
       "type": "gauge",
@@ -4565,9 +4829,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 126
+        "y": 134
       },
-      "id": 62
+      "id": 65
     },
     {
       "type": "timeseries",
@@ -4662,9 +4926,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 126
+        "y": 134
       },
-      "id": 63
+      "id": 66
     },
     {
       "type": "timeseries",
@@ -4747,9 +5011,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 126
+        "y": 134
       },
-      "id": 64
+      "id": 67
     },
     {
       "type": "row",
@@ -4760,9 +5024,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 134
+        "y": 142
       },
-      "id": 65
+      "id": 68
     },
     {
       "type": "timeseries",
@@ -4857,9 +5121,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 135
+        "y": 143
       },
-      "id": 66
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -4942,9 +5206,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 135
+        "y": 143
       },
-      "id": 67
+      "id": 70
     },
     {
       "type": "timeseries",
@@ -5039,9 +5303,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 135
+        "y": 143
       },
-      "id": 68
+      "id": 71
     },
     {
       "type": "timeseries",
@@ -5124,9 +5388,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 143
+        "y": 151
       },
-      "id": 69
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5221,9 +5485,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 143
+        "y": 151
       },
-      "id": 70
+      "id": 73
     },
     {
       "type": "row",
@@ -5234,9 +5498,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 151
+        "y": 159
       },
-      "id": 71
+      "id": 74
     },
     {
       "type": "timeseries",
@@ -5319,9 +5583,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 152
+        "y": 160
       },
-      "id": 72
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5404,9 +5668,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 152
+        "y": 160
       },
-      "id": 73
+      "id": 76
     },
     {
       "type": "timeseries",
@@ -5501,9 +5765,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 152
+        "y": 160
       },
-      "id": 74
+      "id": 77
     },
     {
       "type": "timeseries",
@@ -5586,9 +5850,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 160
+        "y": 168
       },
-      "id": 75
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5695,9 +5959,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 160
+        "y": 168
       },
-      "id": 76
+      "id": 79
     },
     {
       "type": "piechart",
@@ -5766,9 +6030,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 160
+        "y": 168
       },
-      "id": 77
+      "id": 80
     },
     {
       "type": "row",
@@ -5779,9 +6043,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 168
+        "y": 176
       },
-      "id": 78
+      "id": 81
     },
     {
       "type": "timeseries",
@@ -5864,9 +6128,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 169
+        "y": 177
       },
-      "id": 79
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -5961,9 +6225,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 169
+        "y": 177
       },
-      "id": 80
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -6058,9 +6322,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 169
+        "y": 177
       },
-      "id": 81
+      "id": 84
     },
     {
       "type": "row",
@@ -6071,9 +6335,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 177
+        "y": 185
       },
-      "id": 82
+      "id": 85
     },
     {
       "type": "timeseries",
@@ -6181,9 +6445,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 178
+        "y": 186
       },
-      "id": 83
+      "id": 86
     },
     {
       "type": "stat",
@@ -6248,9 +6512,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 178
+        "y": 186
       },
-      "id": 84
+      "id": 87
     },
     {
       "type": "stat",
@@ -6315,9 +6579,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 178
+        "y": 186
       },
-      "id": 85
+      "id": 88
     },
     {
       "type": "timeseries",
@@ -6412,9 +6676,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 178
+        "y": 186
       },
-      "id": 86
+      "id": 89
     },
     {
       "type": "timeseries",
@@ -6521,9 +6785,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 186
+        "y": 194
       },
-      "id": 87
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6634,9 +6898,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 186
+        "y": 194
       },
-      "id": 88
+      "id": 91
     },
     {
       "type": "timeseries",
@@ -6732,9 +6996,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 186
+        "y": 194
       },
-      "id": 89
+      "id": 92
     },
     {
       "type": "row",
@@ -6745,9 +7009,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 194
+        "y": 202
       },
-      "id": 90
+      "id": 93
     },
     {
       "type": "stat",
@@ -6813,9 +7077,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 195
+        "y": 203
       },
-      "id": 91
+      "id": 94
     },
     {
       "type": "stat",
@@ -6881,9 +7145,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 195
+        "y": 203
       },
-      "id": 92
+      "id": 95
     },
     {
       "type": "timeseries",
@@ -6967,9 +7231,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 195
+        "y": 203
       },
-      "id": 93
+      "id": 96
     },
     {
       "type": "stat",
@@ -7035,9 +7299,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 195
+        "y": 203
       },
-      "id": 94
+      "id": 97
     },
     {
       "type": "row",
@@ -7048,9 +7312,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 203
+        "y": 211
       },
-      "id": 95
+      "id": 98
     },
     {
       "type": "stat",
@@ -7111,9 +7375,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 204
+        "y": 212
       },
-      "id": 96
+      "id": 99
     },
     {
       "type": "timeseries",
@@ -7197,9 +7461,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 204
+        "y": 212
       },
-      "id": 97
+      "id": 100
     },
     {
       "type": "stat",
@@ -7260,9 +7524,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 204
+        "y": 212
       },
-      "id": 98
+      "id": 101
     },
     {
       "type": "timeseries",
@@ -7350,9 +7614,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 212
+        "y": 220
       },
-      "id": 99
+      "id": 102
     },
     {
       "type": "stat",
@@ -7418,9 +7682,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 212
+        "y": 220
       },
-      "id": 100
+      "id": 103
     },
     {
       "type": "stat",
@@ -7486,9 +7750,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 212
+        "y": 220
       },
-      "id": 101
+      "id": 104
     },
     {
       "type": "row",
@@ -7499,9 +7763,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 220
+        "y": 228
       },
-      "id": 102
+      "id": 105
     },
     {
       "type": "logs",
@@ -7540,9 +7804,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 221
+        "y": 229
       },
-      "id": 103
+      "id": 106
     },
     {
       "type": "logs",
@@ -7581,9 +7845,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 221
+        "y": 229
       },
-      "id": 104
+      "id": 107
     }
   ]
 }

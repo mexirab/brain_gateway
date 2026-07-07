@@ -499,3 +499,74 @@ async def test_relay_error_without_emission_uses_fallback():
     events = await _collect_sse(resp)
     assert events == [("content", "Fallback says hi"), ("stop", None), ("done", None)]
     assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Review-fix coverage: stream-outcome counter + fallback messages/is_voice
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_died_mid_emission_increments_outcome_counter():
+    """A stream that dies AFTER emitting increments the died_mid_emission
+    outcome (the silent-truncation signal the ChatStreamTruncating alert reads)."""
+    from orchestrator.metrics import CHAT_STREAM_OUTCOME
+
+    child = CHAT_STREAM_OUTCOME.labels(outcome="died_mid_emission")
+    before = child._value.get()
+    # Emit one chunk (i=0), then raise at i=1 → emitted>0 with an error = death
+    # after emission, the branch that returns the partial answer.
+    backend = FakeStreamBackend([_content_chunk("Partial answer"), _content_chunk(" more")], raise_after=1)
+    result, deltas = await _run_loop(backend)
+    assert "Partial answer" in "".join(deltas)
+    assert child._value.get() == before + 1
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_pre_emission_retry_increments_outcome_counter():
+    """A stream that errors before any token reaches the client counts as
+    pre_emission_retry and falls back to a buffered round."""
+    from orchestrator.metrics import CHAT_STREAM_OUTCOME
+
+    child = CHAT_STREAM_OUTCOME.labels(outcome="pre_emission_retry")
+    before = child._value.get()
+    backend = FakeStreamBackend([_content_chunk("x")], raise_after=0)
+    call_model = AsyncMock(return_value={"choices": [{"message": {"content": "buffered", "tool_calls": None}}]})
+    result, _deltas = await _run_loop(backend, call_model_mock=call_model)
+    assert result == "buffered"
+    assert child._value.get() == before + 1
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_relay_fallback_snapshots_messages_and_passes_is_voice():
+    """The in-producer buffered fallback runs on the ORIGINAL messages (not the
+    primary loop's in-place appends) and carries is_voice — parity with the
+    buffered _unified_fallback, and it bumps loop_failed_fallback."""
+    from orchestrator.metrics import CHAT_STREAM_OUTCOME
+
+    child = CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_fallback")
+    before = child._value.get()
+    captured = {}
+
+    async def loop_fn(**kwargs):
+        if kwargs.get("on_delta") is not None:
+            # primary: pollute the caller's list, then die before emitting
+            kwargs["messages"].append({"role": "assistant", "content": "polluted"})
+            raise RuntimeError("primary died")
+        captured["messages"] = list(kwargs["messages"])
+        captured["is_voice"] = kwargs.get("is_voice")
+        return "fb"
+
+    original = [{"role": "user", "content": "hi"}]
+    resp = _make_brain(loop_fn, fallback_url="http://fb")._stream_loop_response(
+        messages=original, system_prompt="s", tools=[], model_url="u", model_name="m", is_voice=True
+    )
+    events = await _collect_sse(resp)
+    assert events == [("content", "fb"), ("stop", None), ("done", None)]
+    # fallback saw the clean 1-message request, not the primary's appended turn
+    assert captured["messages"] == [{"role": "user", "content": "hi"}]
+    assert captured["is_voice"] is True
+    assert child._value.get() == before + 1
