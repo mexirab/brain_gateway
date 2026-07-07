@@ -18,7 +18,7 @@ categories:
     message_template: "Water check. Take a few sips."
   meds:
     enabled: true
-    times: ["08:00", "20:00"]   # fixed times, not interval
+    times: ["07:00", "20:00"]   # fixed times, not interval
   meals:
     enabled: true
     interval_hours: 4
@@ -82,7 +82,10 @@ def _build_defaults() -> Dict[str, Any]:
             },
             "meds": {
                 "enabled": True,
-                "times": ["08:00", "20:00"],
+                # 07:00 preserves the old hardcoded morning-window start so a
+                # ~07:45 dose keeps its nudge; users set their real times via
+                # Settings → Selfcare. Evening 20:00 = old default.
+                "times": ["07:00", "20:00"],
                 "message_template": "Time for meds.",
             },
             "meals": {

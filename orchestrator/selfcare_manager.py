@@ -325,8 +325,48 @@ async def _dispatch_nudge(kind: str, nudge: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Window length after each configured meds time (the check cycle runs ~every
+# 15 min). Split so the pre-config windows are preserved EXACTLY on defaults:
+# morning was 07:00–10:00 (180 min), evening 20:00–22:00 (120 min).
+_MED_MORNING_WINDOW_MINUTES = 180
+_MED_EVENING_WINDOW_MINUTES = 120
+
+
+def _med_window_starts() -> tuple[Optional[int], Optional[int]]:
+    """(morning_start, evening_start) in minutes-since-midnight, from the
+    configured meds times (Settings → Selfcare `categories.meds.times`) — NOT a
+    hardcoded window. A time before noon opens the morning window, at/after noon
+    the evening window; earliest wins. Falls back to ["07:00","20:00"] (the old
+    hardcoded window starts) so on-defaults behavior is unchanged.
+
+    NOTE: each half-day nudge exists only if a time in that half is configured —
+    e.g. configuring only a morning time disables the evening nudge. This is a
+    deliberate change from the old always-on 20:00 evening window.
+    """
+    from orchestrator.selfcare_schedule import category_times
+
+    times = category_times("meds") or ["07:00", "20:00"]
+    morning = evening = None
+    for t in times:
+        try:
+            h, m = map(int, str(t).split(":"))
+        except (ValueError, AttributeError):
+            continue
+        mins = h * 60 + m
+        if h < 12:
+            morning = mins if morning is None else min(morning, mins)
+        else:
+            evening = mins if evening is None else min(evening, mins)
+    return morning, evening
+
+
 def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
-    """Check if any medication is due and not confirmed."""
+    """Check if any medication is due and not confirmed.
+
+    Windows are driven by `category_times("meds")` (settings-page editable), so
+    changing the meds time actually takes effect — previously the 7–10 / 20–22
+    windows were hardcoded and ignored the schedule.
+    """
     from orchestrator.selfcare_schedule import category_enabled
 
     if not category_enabled("meds"):
@@ -338,13 +378,17 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
         meds_data = get_medications()
         daily = meds_data.get("daily", {})
 
-        current_hour = now_tz.hour
+        now_min = now_tz.hour * 60 + now_tz.minute
+        morning_start, evening_start = _med_window_starts()
 
-        # Generic "medication" confirmation covers meds in the current window
+        # Generic "medication" confirmation covers meds in the current window.
+        # De-dup thresholds (morning hour<12 / evening hour>=17) are unchanged so
+        # an afternoon log can't suppress the evening nudge.
         generic = _state.last_med_confirmation.get("medication")
 
-        # Morning meds: window 7:00-10:00
-        if 7 <= current_hour < 10:
+        # Modulo-1440 so a late-evening configured time whose window crosses
+        # midnight still matches (times are user-editable now).
+        if morning_start is not None and (now_min - morning_start) % 1440 < _MED_MORNING_WINDOW_MINUTES:
             if generic and generic.date() == now.date() and generic.hour < 12:
                 return None  # generic morning confirmation
             for med in daily.get("morning", []):
@@ -356,8 +400,7 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
                     continue  # confirmed this morning
                 return f"Hey, did you take your {med_name}?"
 
-        # Evening meds: window 20:00-22:00
-        if 20 <= current_hour < 22:
+        if evening_start is not None and (now_min - evening_start) % 1440 < _MED_EVENING_WINDOW_MINUTES:
             if generic and generic.date() == now.date() and generic.hour >= 17:
                 return None  # generic evening confirmation
             for med in daily.get("evening", []):

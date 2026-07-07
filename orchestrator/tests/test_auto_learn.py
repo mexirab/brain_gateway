@@ -734,3 +734,33 @@ class TestRunAutoLearn:
 
         result = await is_duplicate("User has a pet cat named Whiskers")
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Structured-domain gate — auto-learn must never shadow YAML-owned facts
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_store_fact_blocks_structured_category():
+    """A health/medication fact must be refused by store_fact BEFORE any
+    ChromaDB write — the guard against re-poisoning the meds store with a
+    conversation-extracted (possibly hallucinated) claim."""
+    from orchestrator import auto_learn, shared
+
+    assert "health" in shared.AUTO_LEARN_BLOCKED_CATEGORIES
+    result = await auto_learn.store_fact(
+        {"fact": "takes Naltrexone in the morning now", "category": "health", "confidence": "high"}
+    )
+    assert result is None
+
+
+@_skip_no_deps
+def test_blocked_categories_cover_structured_domains():
+    from orchestrator import shared
+
+    for cat in ("health", "medication", "meds", "schedule", "routine"):
+        assert cat in shared.AUTO_LEARN_BLOCKED_CATEGORIES
+    # A normal conversational category must NOT be gated.
+    assert "preference" not in shared.AUTO_LEARN_BLOCKED_CATEGORIES

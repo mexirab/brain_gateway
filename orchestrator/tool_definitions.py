@@ -175,6 +175,29 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_data",
+            "description": (
+                "Read the user's authoritative structured data (medications, projects, or profile) "
+                "directly from the source-of-truth YAML. ALWAYS use this to answer questions about "
+                "medications / doses / schedule or projects — never answer those from memory or "
+                "search_memory, which can be stale or wrong."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["medications", "projects", "profile"],
+                        "description": "Which structured data to read",
+                    },
+                },
+                "required": ["kind"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_reminder",
             "description": "Set a reminder for the user. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
             "parameters": {
@@ -1297,6 +1320,7 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
         "home_assistant",
         "search_memory",
         "update_memory",
+        "get_data",  # read meds/projects/profile from source-of-truth by voice
         "brain_dump",
         "shopping_list",
         "set_reminder",

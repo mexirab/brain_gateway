@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from orchestrator import shared
 from orchestrator.metrics import (
+    AUTO_LEARN_CATEGORY_BLOCKED,
     AUTO_LEARN_DUPLICATES_SKIPPED,
     AUTO_LEARN_EXTRACTION_LATENCY,
     AUTO_LEARN_EXTRACTIONS_TOTAL,
@@ -330,6 +331,14 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
             continue
         if fact.get("confidence", "").lower() not in ("high", "medium"):
             continue
+        # Structured domains (meds/health/schedule/routine) are owned by YAML —
+        # auto-learn must never shadow them. First of two gates (the other is in
+        # store_fact, so a caller bypassing extract_facts still can't persist one).
+        category = str(fact.get("category", "")).lower().strip()
+        if category in shared.AUTO_LEARN_BLOCKED_CATEGORIES:
+            AUTO_LEARN_CATEGORY_BLOCKED.labels(category=category).inc()
+            logger.info("[AUTO_LEARN] Dropped structured-domain fact (category=%s) — owned by YAML", category)
+            continue
         if _contains_sensitive_data(fact_text):
             AUTO_LEARN_SENSITIVE_FILTERED.inc()
             logger.info("[AUTO_LEARN] Filtered sensitive data from extraction (category: %s)", fact.get("category"))
@@ -416,6 +425,15 @@ async def store_fact(fact: Dict) -> Optional[str]:
     fact_text = fact["fact"].strip()
     category = fact.get("category", "general").lower().strip()
     confidence = fact.get("confidence", "medium").lower()
+
+    # Defense-in-depth gate (mirrors extract_facts): never persist a structured
+    # domain owned by a YAML source of truth, even if a caller skipped the
+    # extract-time filter.
+    if category in shared.AUTO_LEARN_BLOCKED_CATEGORIES:
+        AUTO_LEARN_CATEGORY_BLOCKED.labels(category=category).inc()
+        logger.info("[AUTO_LEARN] store_fact refused structured-domain category=%s (owned by YAML)", category)
+        return None
+
     now = datetime.now()
 
     # Generate deterministic doc_id
