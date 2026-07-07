@@ -233,6 +233,38 @@ groups:
         annotations:
           summary: "Evening briefing has not fired in over a day"
           description: "Last evening ritual was {{ $value | humanizeDuration }} ago - should run daily; orchestrator/scheduler may be down."
+      - alert: WindDownNudgeStale
+        # 25.5h, matching the dashboard panel's orange threshold: the largest
+        # legitimate gap is 25h (the DST fall-back night) plus the 300s
+        # scheduler misfire grace, and 25.5h leaves ~25m of headroom above that.
+        # The nudge is a spoken prompt — a dropped rung is invisible by
+        # omission, and the feature targets the person least likely to notice.
+        # Routed to the quiet (non-paging) Pushover receiver, not "null": a
+        # comfort rung shouldn't page at midnight, but it must still surface.
+        expr: time() - bgw_wind_down_last_run_timestamp_seconds > 91800 and bgw_wind_down_last_run_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Wind-down nudge has not fired in over a day"
+          description: "Last T-30 screens-away nudge was {{ $value | humanizeDuration }} ago - should run nightly; orchestrator/scheduler may have dropped the rung."
+      - alert: SchedulerJobsMissed
+        # APScheduler silently drops any job whose 300s misfire_grace_time lapses
+        # during an event-loop stall (orchestrator/shared.py job_defaults). The
+        # EVENT_JOB_MISSED listener (orchestrator.py) bumps this counter, keyed by
+        # a bounded job_family. One-shot families (reminder, focus) have no next
+        # occurrence and no runtime recovery, so a drop is a permanently lost
+        # action. for: 2m (not 0m) only rides out the counter-reset extrapolation
+        # blip that increase() can synthesize across an orchestrator restart
+        # (in-process counter, CI redeploys on every merge) — a real miss keeps
+        # this expr true for the full 15m window, so detection is unaffected.
+        expr: sum by (job_family) (increase(bgw_scheduler_jobs_missed_total[15m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler dropped a '{{ $labels.job_family }}' job"
+          description: "The event loop stalled past the 300s misfire grace and APScheduler discarded {{ $value }} '{{ $labels.job_family }}' job(s) in the last 15m. One-shot jobs (reminders, focus breaks) are lost for good — check orchestrator logs for '[SCHEDULER] Job MISSED' and what stalled the loop."
       - alert: GoogleTokenRefreshStale
         expr: time() - jess_google_token_refresh_success_timestamp_seconds > 691200
         for: 1h

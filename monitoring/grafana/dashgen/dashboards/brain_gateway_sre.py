@@ -906,6 +906,75 @@ def build() -> dict:
     row, y = grid_row(trust_channels_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Sleep Wind-Down
+    # The wind-down ladder (PR #56): T-60 lights rung + T-30 nudge rung ahead
+    # of bedtime. The T-30 nudge is watched by the WindDownNudgeStale alert
+    # (quiet Pushover) because a missing spoken nudge is invisible by omission;
+    # the T-60 lights rung has no alert (a failed dim is self-evident in the
+    # house), so its heartbeat panel here is the only place a silently-dropped
+    # dim job shows up.
+    r, y = row_divider("Sleep Wind-Down", y)
+    panels.append(r)
+
+    wind_down_row = [
+        stat(
+            "Nudge Heartbeat Age (T-30)",
+            # The > 0 guard mirrors the briefing stale-alert rules: an unseeded
+            # gauge (WIND_DOWN_ENABLED=false, or registration failed before the
+            # startup seed) shows "No data" instead of a ~56-year orange.
+            "time() - (bgw_wind_down_last_run_timestamp_seconds > 0)",
+            unit="s",
+            # 25.5h, not 25h: the largest legitimate gap is 25h (the DST
+            # fall-back night) + 300s misfire grace; 25.5h adds ~25m of headroom.
+            thresholds=[(None, "green"), (91800, "orange")],
+            description="Seconds since the T-30 screens-away nudge job last fired. "
+            "Fires nightly; > 25.5h (orange) means the scheduler dropped a rung. "
+            "Also alerts (WindDownNudgeStale, quiet Pushover) since a missing "
+            "spoken nudge is invisible in the house. "
+            "Reset to 'now' on orchestrator restart, same as the briefing gauges. "
+            "'No data' means the gauge was never seeded — wind-down disabled or "
+            "registration failed at startup.",
+        ),
+        stat(
+            "Dim Heartbeat Age (T-60)",
+            # Stamped at the top of wind_down_dim before its early returns, so
+            # this ticks even on DND / no-scene nights. Same > 0 unseeded guard.
+            "time() - (bgw_wind_down_dim_last_run_timestamp_seconds > 0)",
+            unit="s",
+            thresholds=[(None, "green"), (91800, "orange")],
+            description="Seconds since the T-60 lights-dim job last fired. "
+            "Ticks nightly regardless of whether it attempted a scene, so an "
+            "orange here means the scheduler dropped ONLY the dim rung while the "
+            "Scene Outcomes panel would otherwise stay silently empty. No alert "
+            "watches this rung — a failed dim is self-evident in the house. "
+            "'No data' means the gauge was never seeded (wind-down disabled or "
+            "registration failed at startup).",
+        ),
+        timeseries(
+            "Scene Outcomes (T-60 lights, /day)",
+            [
+                (
+                    "sum by (scene, result) (increase(bgw_wind_down_scene_result_total[1d]))",
+                    "{{scene}} {{result}}",
+                )
+            ],
+            unit="none",
+            description="Rolling 1-day scene activations by outcome (ok | failed | error). "
+            "The forensic answer to 'lights didn't dim last night'.",
+        ),
+        stat(
+            "Scene Failures (7d)",
+            'sum(increase(bgw_wind_down_scene_result_total{result=~"failed|error"}[7d])) or vector(0)',
+            unit="none",
+            thresholds=[(None, "green"), (1, "orange")],
+            description="Green 0 alongside an empty Scene Outcomes panel means the "
+            "T-60 rung isn't attempting scenes (WIND_DOWN_SCENE unset, or the job "
+            "isn't firing) — not that scenes are healthy.",
+        ),
+    ]
+    row, y = grid_row(wind_down_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Background Jobs
     r, y = row_divider("Background Jobs", y)
     panels.append(r)
@@ -943,6 +1012,56 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(background_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    # Scheduler reliability: APScheduler drops any job whose 300s
+    # misfire_grace_time lapses during an event-loop stall (shared.py
+    # job_defaults). One-shot date jobs (reminder delivery, focus break,
+    # dnd_auto_unmute) have no next occurrence, so a drop is a permanently lost
+    # action. The EVENT_JOB_MISSED listener (orchestrator.py startup) turns each
+    # drop into an ERROR log + a bgw_scheduler_jobs_missed_total bump, collapsed
+    # to a bounded job_family label. Any non-zero series here means a job was
+    # silently discarded — cross-reference the Errors + Warnings logs panel.
+    sched_missed_desc = (
+        "Jobs APScheduler dropped after their 300s misfire grace lapsed during an "
+        "event-loop stall. One-shot families (reminder, focus) are lost permanently — "
+        "there is no runtime re-schedule. Any bar here is a dropped job; 0/flat is healthy."
+    )
+    scheduler_reliability_row = [
+        timeseries(
+            "Scheduler Missed Jobs (by family, /day)",
+            [
+                (
+                    "sum by (job_family) (increase(bgw_scheduler_jobs_missed_total[1d]))",
+                    "{{job_family}}",
+                )
+            ],
+            unit="none",
+            stack=True,
+            fill=40,
+            thresholds=[(None, "green"), (1, "red")],
+            description=sched_missed_desc,
+        ),
+        stat(
+            "Missed Jobs (7d)",
+            "sum(increase(bgw_scheduler_jobs_missed_total[7d])) or vector(0)",
+            unit="none",
+            thresholds=[(None, "green"), (1, "red")],
+            description="Total scheduler jobs dropped in the last 7 days across all "
+            "families. Non-zero = the event loop stalled past the misfire grace and "
+            "silently discarded work.",
+        ),
+        stat(
+            "Missed Jobs (by family, total)",
+            "sum by (job_family) (bgw_scheduler_jobs_missed_total)",
+            unit="none",
+            text_mode="value_and_name",
+            thresholds=[(None, "green"), (1, "red")],
+            description="Cumulative drops per family since orchestrator start. "
+            "Which family is being lost points at where to look first.",
+        ),
+    ]
+    row, y = grid_row(scheduler_reliability_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Logs (with $request_id trace)

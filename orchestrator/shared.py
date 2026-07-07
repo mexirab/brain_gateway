@@ -211,6 +211,16 @@ TIMEZONE = settings.tz
 scheduler = AsyncIOScheduler(
     jobstores={"default": MemoryJobStore()},
     timezone=TIMEZONE,
+    # APScheduler's default misfire_grace_time is 1 second: any job whose
+    # fire time passes while the event loop is stalled >1s is silently
+    # dropped (prod-support M1, 2026-07-06 — first seen on the wind-down
+    # rungs). A briefing/reminder/routine that runs minutes late beats one
+    # that never runs, and one-shot date jobs (reminders, focus break
+    # delivery) have no next occurrence to fall back on. coalesce=True is
+    # already the APScheduler default but is load-bearing here: after a
+    # long stall, each interval job (calendar poll, check-ins) fires ONCE
+    # late and resumes cadence — no catch-up burst.
+    job_defaults={"misfire_grace_time": 300, "coalesce": True},
 )
 
 # ---------------------------------------------------------------------------

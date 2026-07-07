@@ -5,9 +5,21 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # Paging tier: data-at-risk + service-down. JessBackupStale / JessHABackupStale
+    # (nightly state + HA config backups) belong here — an unprotected backup is a
+    # data-loss window, so it should page like OrchestratorDown, not sit silent on
+    # the null receiver.
     - matchers:
-        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale"
+        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale"
       receiver: "pushover"
+    # Non-paging tier: comfort-feature staleness that should surface without
+    # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
+    # quiet hours, no emergency retry). JessBackupOffboxFailing (severity: info,
+    # 3-day window — local backups are fine, only off-box redundancy is down) is
+    # informational, so it surfaces here rather than paging.
+    - matchers:
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing"
+      receiver: "pushover-quiet"
 receivers:
   - name: "null"
   - name: "pushover"
@@ -17,4 +29,12 @@ receivers:
         title: "Jess alert: {{ .CommonLabels.alertname }} ({{ .Status }})"
         message: "{{ range .Alerts }}{{ .Annotations.summary }} {{ end }}"
         priority: 1
+        send_resolved: true
+  - name: "pushover-quiet"
+    pushover_configs:
+      - user_key: ${PUSHOVER_USER_KEY}
+        token: ${PUSHOVER_APP_TOKEN}
+        title: "Jess notice: {{ .CommonLabels.alertname }} ({{ .Status }})"
+        message: "{{ range .Alerts }}{{ .Annotations.summary }} {{ end }}"
+        priority: 0
         send_resolved: true

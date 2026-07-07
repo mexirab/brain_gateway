@@ -20,7 +20,11 @@ import logging
 from zoneinfo import ZoneInfo
 
 from orchestrator import shared
-from orchestrator.metrics import WIND_DOWN_LAST_RUN, WIND_DOWN_SCENE_RESULT
+from orchestrator.metrics import (
+    WIND_DOWN_DIM_LAST_RUN,
+    WIND_DOWN_LAST_RUN,
+    WIND_DOWN_SCENE_RESULT,
+)
 from orchestrator.reminder_manager import _announce_voice
 from orchestrator.shared import TIMEZONE, profile
 
@@ -50,6 +54,14 @@ async def wind_down_dim():
     Skipped under DND — scene.turn_on can raise lights that are already off,
     which is the opposite of what an early goodnight asked for.
     """
+    # Stamp the heartbeat first, before any early return: this proves the job
+    # body ran even on the nights it legitimately does no work (DND, or no
+    # scene configured). Without it, a scheduler that drops ONLY the dim job
+    # leaves every Sleep Wind-Down panel green/empty. No stale alert watches
+    # this — a lights rung that fails to dim is self-evident in the house — but
+    # the dashboard panel needs a signal that separates "fired" from "acted".
+    WIND_DOWN_DIM_LAST_RUN.set_to_current_time()
+
     scenes = _configured_scenes()
     if not scenes:
         logger.info("[WIND_DOWN] No WIND_DOWN_SCENE configured — skipping lights rung")
