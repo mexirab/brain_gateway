@@ -7100,7 +7100,7 @@
     },
     {
       "type": "row",
-      "title": "Sleep Wind-Down",
+      "title": "Telegram Bot",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -7110,6 +7110,276 @@
         "y": 202
       },
       "id": 94
+    },
+    {
+      "type": "timeseries",
+      "title": "Inbound Updates (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind, result) (increase(bgw_telegram_update_total[6h]))",
+          "legendFormat": "{{kind}} / {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 203
+      },
+      "id": 95
+    },
+    {
+      "type": "timeseries",
+      "title": "Media: voice / photo / reply (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind, result) (increase(bgw_telegram_media_total[6h]))",
+          "legendFormat": "{{kind}} / {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Inbound voice (STT) + photo (vision) + spoken voice_reply (TTS) outcomes. voice/result=stt_unreachable is expected when Helios is asleep; tts_failed / vision_failed / send_failed are actionable.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 203
+      },
+      "id": 96
+    },
+    {
+      "type": "timeseries",
+      "title": "Button Taps: Done / Snooze (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (action, result) (increase(bgw_telegram_callback_total[6h]))",
+          "legendFormat": "{{action}} / {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Done/Snooze/selfcare taps. ack/snooze result=not_found or a flat rate while reminders fire points at taps not landing (the 'Done didn't stick' class).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 203
+      },
+      "id": 97
+    },
+    {
+      "type": "row",
+      "title": "Sleep Wind-Down",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 211
+      },
+      "id": 98
     },
     {
       "type": "stat",
@@ -7175,9 +7445,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 203
+        "y": 212
       },
-      "id": 95
+      "id": 99
     },
     {
       "type": "stat",
@@ -7243,9 +7513,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 203
+        "y": 212
       },
-      "id": 96
+      "id": 100
     },
     {
       "type": "timeseries",
@@ -7329,9 +7599,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 203
+        "y": 212
       },
-      "id": 97
+      "id": 101
     },
     {
       "type": "stat",
@@ -7397,9 +7667,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 203
+        "y": 212
       },
-      "id": 98
+      "id": 102
     },
     {
       "type": "row",
@@ -7410,9 +7680,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 211
+        "y": 220
       },
-      "id": 99
+      "id": 103
     },
     {
       "type": "stat",
@@ -7473,9 +7743,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 212
+        "y": 221
       },
-      "id": 100
+      "id": 104
     },
     {
       "type": "timeseries",
@@ -7559,9 +7829,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 212
+        "y": 221
       },
-      "id": 101
+      "id": 105
     },
     {
       "type": "stat",
@@ -7622,9 +7892,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 212
+        "y": 221
       },
-      "id": 102
+      "id": 106
     },
     {
       "type": "timeseries",
@@ -7712,9 +7982,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 220
+        "y": 229
       },
-      "id": 103
+      "id": 107
     },
     {
       "type": "stat",
@@ -7780,9 +8050,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 220
+        "y": 229
       },
-      "id": 104
+      "id": 108
     },
     {
       "type": "stat",
@@ -7848,9 +8118,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 220
+        "y": 229
       },
-      "id": 105
+      "id": 109
     },
     {
       "type": "row",
@@ -7861,9 +8131,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 228
+        "y": 237
       },
-      "id": 106
+      "id": 110
     },
     {
       "type": "logs",
@@ -7902,9 +8172,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 229
+        "y": 238
       },
-      "id": 107
+      "id": 111
     },
     {
       "type": "logs",
@@ -7943,9 +8213,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 229
+        "y": 238
       },
-      "id": 108
+      "id": 112
     }
   ]
 }
