@@ -342,8 +342,23 @@ def build() -> dict:
             ],
             unit="none",
         ),
+        timeseries(
+            "code_agent Preflight vs Helios (1h)",
+            [
+                ("increase(bgw_code_agent_preflight_failures_total[1h])", "preflight skips"),
+                ("bgw_helios_running", "helios running (0/1)"),
+            ],
+            unit="none",
+            description=(
+                "code_agent runs skipped because the code model endpoint was unreachable "
+                "at preflight. Skips while 'helios running' is 0 are EXPECTED (Helios asleep). "
+                "Skips while it is 1 mean Helios is powered but the code model endpoint is "
+                "dead — the user then gets a misleading 'wake Helios' message and it needs "
+                "investigation."
+            ),
+        ),
     ]
-    row, y = grid_row(helios_row, y, heights=[8, 8, 8])
+    row, y = grid_row(helios_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Expert Agent
