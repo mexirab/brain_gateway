@@ -87,6 +87,17 @@ def clean_response(text: str) -> str:
     `<tool_call id=1>`): a literal `<think>`-only match let an attributed tag
     like `<think reason=1>` leak its block through to the user. `\\b` keeps it
     from matching `<thinker>`; the closer allows trailing whitespace.
+
+    Case-sensitive by design: the model/vLLM reasoning parser only ever emits
+    lowercase sentinels, and matching uppercase would risk false-stripping
+    legitimate prose like "<THINK ABOUT IT>". Prose that literally contains a
+    lowercase `<think ...>…</think>` pair IS treated as a sentinel and removed —
+    the safe default for a reasoning-hiding guard (can't structurally tell the
+    model's reasoning tag from identical-looking prose).
+
+    Note the lazy `.*?` is O(n²) on pathological input (a wall of unterminated
+    `<think>`); acceptable here because input is model-generated and bounded by
+    max_tokens — a coerced flood is a bounded, single-request self-inflicted cost.
     """
     text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.DOTALL)
     text = re.sub(r"<tool_call\b[^>]*>.*?</tool_call\s*>", "", text, flags=re.DOTALL)
@@ -107,8 +118,13 @@ class StreamGate:
     _OPEN_NAMES = ("think", "tool_call")
     # Complete open tag WITH optional attributes: <think>, <think reason=1>,
     # <tool_call id="x">. `\b` stops <thinker>/<tool_calls> from matching.
+    # Case-sensitive to match clean_response (model emits lowercase sentinels).
     _OPEN_RE = re.compile(r"<(think|tool_call)\b[^>]*>")
     _CLOSERS = {"think": "</think>", "tool_call": "</tool_call>"}
+    # A real open tag is short; hold back at most this many chars of a suspected
+    # in-progress tag before deciding a run with no '>' is not a sentinel. Bounds
+    # the hold-back buffer against an unterminated `<think aaaa…` flood.
+    _MAX_OPEN_TAG_LEN = 256
 
     def __init__(self):
         self._pending = ""
@@ -163,7 +179,14 @@ class StreamGate:
                 self._pending = rest[m.end() :]
                 continue
             if self._could_be_open_prefix(rest):
-                # Could still become a sentinel tag — hold it back.
+                # Could still become a sentinel tag — hold it back until the tag
+                # completes. Bound the hold: a real open tag is short, so a run
+                # this long with still no '>' is noise, not a sentinel — emit the
+                # '<' and re-scan rather than buffer attacker-controlled bytes.
+                if len(rest) > self._MAX_OPEN_TAG_LEN:
+                    out.append("<")
+                    self._pending = rest[1:]
+                    continue
                 self._pending = rest
                 break
             # A '<' that is provably not a sentinel: emit it and move on.
