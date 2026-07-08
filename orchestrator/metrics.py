@@ -443,6 +443,16 @@ TELEGRAM_CALLBACK_TOTAL = Counter(
     ["action", "result"],
 )
 
+TELEGRAM_MEDIA_TOTAL = Counter(
+    "bgw_telegram_media_total",
+    "Inbound Telegram media (voice/photo) processing outcomes",
+    # kind:   voice | photo
+    # result: ok | disabled | too_long | too_large | download_failed |
+    #         stt_unreachable | stt_failed | empty_transcript |
+    #         wake_failed | vision_failed
+    ["kind", "result"],
+)
+
 # Last-persisted getUpdates offset — makes the poll loop's resume-across-restart
 # visible on a graph (a reset-to-0 or a stuck value is the failure signal for
 # the offset-persistence fix). Set on each _save_offset.

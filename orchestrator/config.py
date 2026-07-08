@@ -358,6 +358,17 @@ class Settings(BaseSettings):
     # "all". Default meds-only: that's the high-stakes nudge; hourly
     # movement/hydration pings would be phone spam.
     telegram_selfcare_nudges: str = "medication"
+    # Inbound media. Voice notes → STT (Whisper on Helios) → full Jess; photos →
+    # vision model (Saturn, always-on) → full Jess. Each gates on its backend
+    # being configured too (stt_url / vision_enabled).
+    telegram_voice_enabled: bool = True
+    telegram_photo_enabled: bool = True
+    # STT lives on Helios, which sleeps most of the time. When a voice note
+    # arrives and STT is unreachable, wake Helios and wait for it to boot rather
+    # than failing. Set false to fail-fast instead (no power cost).
+    telegram_voice_wake_helios: bool = True
+    telegram_voice_max_seconds: int = 300  # reject voice notes longer than this
+    telegram_stt_ready_timeout_seconds: int = 180  # max wait for STT after a wake (box boots ~2 min)
 
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
