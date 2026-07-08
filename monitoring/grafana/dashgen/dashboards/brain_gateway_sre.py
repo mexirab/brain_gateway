@@ -957,6 +957,45 @@ def build() -> dict:
     row, y = grid_row(trust_channels_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Telegram Bot
+    # The away-from-home surface: inbound updates, media (voice→STT / photo→vision
+    # / spoken walkie-talkie reply), and Done/Snooze button taps. The callback
+    # panel is the forensic view for "I tapped Done but kept getting nagged" — a
+    # rising ack{result=not_found} or a flat callback rate during active reminders
+    # is the signal. Media failures while Helios sleeps (stt_unreachable) are
+    # expected; tts_failed/vision_failed are the actionable ones.
+    r, y = row_divider("Telegram Bot", y)
+    panels.append(r)
+
+    telegram_row = [
+        timeseries(
+            "Inbound Updates (6h)",
+            [("sum by (kind, result) (increase(bgw_telegram_update_total[6h]))", "{{kind}} / {{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Media: voice / photo / reply (6h)",
+            [("sum by (kind, result) (increase(bgw_telegram_media_total[6h]))", "{{kind}} / {{result}}")],
+            unit="none",
+            description=(
+                "Inbound voice (STT) + photo (vision) + spoken voice_reply (TTS) outcomes. "
+                "voice/result=stt_unreachable is expected when Helios is asleep; "
+                "tts_failed / vision_failed / send_failed are actionable."
+            ),
+        ),
+        timeseries(
+            "Button Taps: Done / Snooze (6h)",
+            [("sum by (action, result) (increase(bgw_telegram_callback_total[6h]))", "{{action}} / {{result}}")],
+            unit="none",
+            description=(
+                "Done/Snooze/selfcare taps. ack/snooze result=not_found or a flat rate while "
+                "reminders fire points at taps not landing (the 'Done didn't stick' class)."
+            ),
+        ),
+    ]
+    row, y = grid_row(telegram_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Sleep Wind-Down
     # The wind-down ladder (PR #56): T-60 lights rung + T-30 nudge rung ahead
     # of bedtime. The T-30 nudge is watched by the WindDownNudgeStale alert
