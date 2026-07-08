@@ -123,19 +123,11 @@ class TestCodeModelReachable:
 
 
 class TestHandleCodeAgentPreflight:
-    async def test_unreachable_returns_message_increments_counter_and_skips_loop(
-        self, monkeypatch
-    ):
+    async def test_unreachable_returns_message_increments_counter_and_skips_loop(self, monkeypatch):
         monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", True, raising=False)
-        monkeypatch.setattr(
-            shared, "CODE_AGENT_MODEL_URL", "http://helios:8000/v1", raising=False
-        )
-        monkeypatch.setattr(
-            code_agent, "_code_model_reachable", AsyncMock(return_value=False)
-        )
-        loop_tripwire = AsyncMock(
-            side_effect=AssertionError("loop must not run when unreachable")
-        )
+        monkeypatch.setattr(shared, "CODE_AGENT_MODEL_URL", "http://helios:8000/v1", raising=False)
+        monkeypatch.setattr(code_agent, "_code_model_reachable", AsyncMock(return_value=False))
+        loop_tripwire = AsyncMock(side_effect=AssertionError("loop must not run when unreachable"))
         monkeypatch.setattr(code_agent, "_run_code_agent_loop", loop_tripwire)
 
         before = CODE_AGENT_PREFLIGHT_FAILURES._value.get()
@@ -148,12 +140,8 @@ class TestHandleCodeAgentPreflight:
 
     async def test_reachable_runs_loop_and_returns_its_result(self, monkeypatch):
         monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", True, raising=False)
-        monkeypatch.setattr(
-            shared, "CODE_AGENT_MODEL_URL", "http://helios:8000/v1", raising=False
-        )
-        monkeypatch.setattr(
-            code_agent, "_code_model_reachable", AsyncMock(return_value=True)
-        )
+        monkeypatch.setattr(shared, "CODE_AGENT_MODEL_URL", "http://helios:8000/v1", raising=False)
+        monkeypatch.setattr(code_agent, "_code_model_reachable", AsyncMock(return_value=True))
         sentinel = "the loop ran and produced this"
         loop_mock = AsyncMock(return_value=sentinel)
         monkeypatch.setattr(code_agent, "_run_code_agent_loop", loop_mock)
@@ -168,9 +156,7 @@ class TestHandleCodeAgentPreflight:
 
     async def test_disabled_returns_disabled_message_and_never_probes(self, monkeypatch):
         monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", False, raising=False)
-        probe_tripwire = AsyncMock(
-            side_effect=AssertionError("must not probe when disabled")
-        )
+        probe_tripwire = AsyncMock(side_effect=AssertionError("must not probe when disabled"))
         monkeypatch.setattr(code_agent, "_code_model_reachable", probe_tripwire)
 
         result = await code_agent.handle_code_agent({"task": "anything"})
@@ -178,14 +164,10 @@ class TestHandleCodeAgentPreflight:
         assert "disabled" in result.lower()
         probe_tripwire.assert_not_called()
 
-    async def test_empty_model_url_returns_not_configured_and_never_probes(
-        self, monkeypatch
-    ):
+    async def test_empty_model_url_returns_not_configured_and_never_probes(self, monkeypatch):
         monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", True, raising=False)
         monkeypatch.setattr(shared, "CODE_AGENT_MODEL_URL", "", raising=False)
-        probe_tripwire = AsyncMock(
-            side_effect=AssertionError("must not probe with no model_url")
-        )
+        probe_tripwire = AsyncMock(side_effect=AssertionError("must not probe with no model_url"))
         monkeypatch.setattr(code_agent, "_code_model_reachable", probe_tripwire)
 
         result = await code_agent.handle_code_agent({"task": "anything"})
@@ -196,12 +178,8 @@ class TestHandleCodeAgentPreflight:
     async def test_empty_task_short_circuits_before_probe(self, monkeypatch):
         # The `if not task:` guard sits before the model_url/preflight block.
         monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", True, raising=False)
-        monkeypatch.setattr(
-            shared, "CODE_AGENT_MODEL_URL", "http://helios:8000/v1", raising=False
-        )
-        probe_tripwire = AsyncMock(
-            side_effect=AssertionError("must not probe with empty task")
-        )
+        monkeypatch.setattr(shared, "CODE_AGENT_MODEL_URL", "http://helios:8000/v1", raising=False)
+        probe_tripwire = AsyncMock(side_effect=AssertionError("must not probe with empty task"))
         monkeypatch.setattr(code_agent, "_code_model_reachable", probe_tripwire)
 
         result = await code_agent.handle_code_agent({"task": ""})

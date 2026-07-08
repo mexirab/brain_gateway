@@ -53,6 +53,7 @@ async def _code_model_reachable(model_url: str) -> bool:
         logger.info("[CODE_AGENT] Preflight probe failed for %s: %s", url, e)
         return False
 
+
 # Allowlisted commands for run_command, as argv-token prefixes. Commands are
 # tokenized with shlex and executed WITHOUT a shell, so chaining (`;`, `&&`,
 # `|`), redirection, and substitution have no effect — the old string-prefix
