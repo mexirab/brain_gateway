@@ -467,6 +467,78 @@ async def _relay_locked(client: httpx.AsyncClient, chat_id: str, jess_input: str
         return await _ask_jess(chat_id, jess_input)
 
 
+async def _synthesize_speech(client: httpx.AsyncClient, text: str) -> Optional[bytes]:
+    """Synthesize `text` to MP3 via the OpenAI-compatible TTS endpoint (Helios).
+
+    MP3 (not the server's WAV/OGG-Vorbis) because Telegram's sendVoice accepts
+    MP3 and renders it as a proper voice message. Returns None on any failure —
+    the caller has already sent the text reply, so a voice miss is non-fatal.
+    """
+    try:
+        resp = await client.post(
+            f"{_settings.tts_url.rstrip('/')}/v1/audio/speech",
+            json={
+                "model": "tts-1",
+                "input": text,
+                "voice": _settings.tts_voice or "default",
+                "response_format": "mp3",
+            },
+            timeout=60.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("[TELEGRAM] TTS -> %s: %s", resp.status_code, str(resp.text)[:200])
+            return None
+        audio = resp.content
+        return audio if audio else None
+    except Exception as e:
+        logger.warning("[TELEGRAM] TTS failed: %s: %s", type(e).__name__, _redact(str(e)))
+        return None
+
+
+async def _send_voice_reply(client: httpx.AsyncClient, chat_id: str, audio: bytes) -> bool:
+    """sendVoice the synthesized MP3. Multipart (file upload), so it can't reuse
+    the JSON _tg_call. Returns True on success."""
+    try:
+        resp = await client.post(
+            f"{_api_base()}/sendVoice",
+            data={"chat_id": chat_id},
+            files={"voice": ("reply.mp3", audio, "audio/mpeg")},
+            timeout=30.0,
+        )
+        body = resp.json() if resp.content else {}
+        if resp.status_code != 200 or not body.get("ok", False):
+            logger.warning("[TELEGRAM] sendVoice -> %s: %s", resp.status_code, str(body.get("description", ""))[:200])
+            return False
+        return True
+    except Exception as e:
+        logger.warning("[TELEGRAM] sendVoice failed: %s: %s", type(e).__name__, _redact(str(e)))
+        return False
+
+
+async def _maybe_send_voice_reply(client: httpx.AsyncClient, chat_id: str, reply: str) -> None:
+    """Walkie-talkie: speak Jess's reply back as a Telegram voice message. Gated
+    on config + tts_url; best-effort with its own TELEGRAM_MEDIA_TOTAL result."""
+    from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL
+
+    if not _settings.telegram_voice_reply_enabled or not _settings.tts_url:
+        return
+    spoken = (reply or "").strip()
+    if not spoken:
+        return
+    # Cap the spoken portion; the full text already went out as a message.
+    if len(spoken) > _settings.telegram_voice_reply_max_chars:
+        spoken = spoken[: _settings.telegram_voice_reply_max_chars].rstrip() + "…"
+
+    audio = await _synthesize_speech(client, spoken)
+    if audio is None:
+        TELEGRAM_MEDIA_TOTAL.labels(kind="voice_reply", result="tts_failed").inc()
+        return
+    if await _send_voice_reply(client, chat_id, audio):
+        TELEGRAM_MEDIA_TOTAL.labels(kind="voice_reply", result="ok").inc()
+    else:
+        TELEGRAM_MEDIA_TOTAL.labels(kind="voice_reply", result="send_failed").inc()
+
+
 async def _handle_voice(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
     """Bound media concurrency (see _get_media_sem) around the voice handler."""
     async with _get_media_sem():
@@ -553,6 +625,9 @@ async def _handle_voice_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[
     TELEGRAM_MEDIA_TOTAL.labels(kind="voice", result="ok").inc()
     TELEGRAM_UPDATE_TOTAL.labels(kind="voice", result="ok").inc()
     await _send_text(client, chat_id, f"🎤 “{transcript}”\n\n{reply}", kind="chat")
+    # Walkie-talkie: a voice note gets a spoken reply too (best-effort — the text
+    # already went out, so TTS trouble never sinks the turn).
+    await _maybe_send_voice_reply(client, chat_id, reply)
 
 
 def _pick_image(msg: Dict[str, Any]) -> tuple:
