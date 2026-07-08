@@ -81,9 +81,26 @@ TERMINAL_TOOLS = {
 
 
 def clean_response(text: str) -> str:
-    """Remove <think> and <tool_call> tags from model responses."""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
+    """Remove <think> and <tool_call> blocks (with any attributes) from responses.
+
+    The open tag is matched with an attribute-tolerant pattern (`<think ...>`,
+    `<tool_call id=1>`): a literal `<think>`-only match let an attributed tag
+    like `<think reason=1>` leak its block through to the user. `\\b` keeps it
+    from matching `<thinker>`; the closer allows trailing whitespace.
+
+    Case-sensitive by design: the model/vLLM reasoning parser only ever emits
+    lowercase sentinels, and matching uppercase would risk false-stripping
+    legitimate prose like "<THINK ABOUT IT>". Prose that literally contains a
+    lowercase `<think ...>…</think>` pair IS treated as a sentinel and removed —
+    the safe default for a reasoning-hiding guard (can't structurally tell the
+    model's reasoning tag from identical-looking prose).
+
+    Note the lazy `.*?` is O(n²) on pathological input (a wall of unterminated
+    `<think>`); acceptable here because input is model-generated and bounded by
+    max_tokens — a coerced flood is a bounded, single-request self-inflicted cost.
+    """
+    text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<tool_call\b[^>]*>.*?</tool_call\s*>", "", text, flags=re.DOTALL)
     return text.strip()
 
 
@@ -98,12 +115,46 @@ class StreamGate:
     XML-fallback tool calls DO arrive in delta.content).
     """
 
-    _OPEN_TAGS = ("<think>", "<tool_call>")
-    _CLOSERS = {"<think>": "</think>", "<tool_call>": "</tool_call>"}
+    _OPEN_NAMES = ("think", "tool_call")
+    # Complete open tag WITH optional attributes: <think>, <think reason=1>,
+    # <tool_call id="x">. `\b` stops <thinker>/<tool_calls> from matching.
+    # Case-sensitive to match clean_response (model emits lowercase sentinels).
+    # The attribute span is BOUNDED (`{0,256}`) to agree with _MAX_OPEN_TAG_LEN
+    # below — so the streamed and whole-input paths make the identical
+    # match/no-match decision (chunk-invariance): a tag long enough to trip the
+    # stream's hold-back cap is also one the regex refuses to match.
+    _MAX_ATTR_LEN = 256
+    _OPEN_RE = re.compile(r"<(think|tool_call)\b[^>]{0,256}>")
+    _CLOSERS = {"think": "</think>", "tool_call": "</tool_call>"}
+    # Hold-back cap for an in-progress tag with no '>' yet. Chosen strictly above
+    # the longest matchable open tag (len("<tool_call") + _MAX_ATTR_LEN + ">"
+    # = 267) so a real bounded tag NEVER trips the cap mid-stream — only genuine
+    # noise (an unterminated `<think aaaa…` flood) does. Keeps whole vs chunked
+    # feeds in agreement while bounding the buffer.
+    _MAX_OPEN_TAG_LEN = 320
 
     def __init__(self):
         self._pending = ""
         self._suppress_until: str | None = None
+
+    @classmethod
+    def _could_be_open_prefix(cls, rest: str) -> bool:
+        """True if `rest` (starts with '<', no complete open tag yet) could still
+        grow into an open sentinel tag — either a prefix of `<name`, or `<name`
+        followed by an in-progress attribute list (no '>' yet). This is what
+        holds back `<think re…` mid-stream; it must NOT hold `<thinker>`/`<div>`."""
+        for name in cls._OPEN_NAMES:
+            full = "<" + name
+            if full.startswith(rest):
+                return True  # still typing the tag name, e.g. "<thi"
+            if rest.startswith(full):
+                nxt = rest[len(full) : len(full) + 1]
+                # name complete + next char is a boundary (space/newline/end) →
+                # attributes may be arriving. A word char means a different tag
+                # (<thinker>, <tool_calls>), so don't hold.
+                if nxt == "" or not (nxt.isalnum() or nxt == "_"):
+                    return True
+        return False
 
     def feed(self, text: str) -> str:
         """Absorb a content delta, return the part that is safe to emit."""
@@ -129,13 +180,24 @@ class StreamGate:
             out.append(self._pending[:lt])
             rest = self._pending[lt:]
 
-            matched = next((tag for tag in self._OPEN_TAGS if rest.startswith(tag)), None)
-            if matched:
-                self._suppress_until = self._CLOSERS[matched]
-                self._pending = rest[len(matched) :]
+            m = self._OPEN_RE.match(rest)
+            if m:
+                self._suppress_until = self._CLOSERS[m.group(1)]
+                self._pending = rest[m.end() :]
                 continue
-            if any(tag.startswith(rest) for tag in self._OPEN_TAGS):
-                # Could still become a sentinel tag — hold it back.
+            # Hold ONLY while the tag is genuinely still forming: no '>' yet
+            # (a '>' present with no _OPEN_RE match above means it's a complete
+            # non-sentinel like <div> or an over-long tag — emit it). This
+            # `'>' not in rest` guard is what keeps whole and chunked feeds in
+            # lockstep at the cap boundary.
+            if ">" not in rest and self._could_be_open_prefix(rest):
+                # Bound the hold: a real open tag is short, so a run this long
+                # with still no '>' is noise, not a sentinel — emit the '<' and
+                # re-scan rather than buffer attacker-controlled bytes forever.
+                if len(rest) > self._MAX_OPEN_TAG_LEN:
+                    out.append("<")
+                    self._pending = rest[1:]
+                    continue
                 self._pending = rest
                 break
             # A '<' that is provably not a sentinel: emit it and move on.

@@ -570,3 +570,287 @@ async def test_relay_fallback_snapshots_messages_and_passes_is_voice():
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
     assert captured["is_voice"] is True
     assert child._value.get() == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Attributed sentinel-tag hardening (fix/streamgate-attributed-tags)
+#
+# clean_response + StreamGate must suppress sentinel tags that carry
+# attributes (`<think reason=1>`, `<tool_call id="a">`), which previously
+# leaked because only the literal bare tags were matched. These tests pin the
+# deterministic behaviour and then fuzz for chunk-invariance and leaks.
+# ---------------------------------------------------------------------------
+
+
+def _clean():
+    from orchestrator.unified_loop import clean_response
+
+    return clean_response
+
+
+# --- 1. clean_response deterministic cases ---------------------------------
+
+
+@_skip_no_deps
+def test_clean_strips_attributed_think():
+    cr = _clean()
+    assert cr("keep <think reason=1>hidden</think> end") == "keep  end"
+
+
+@_skip_no_deps
+def test_clean_strips_attributed_tool_call():
+    cr = _clean()
+    assert cr('a <tool_call id="a">{}</tool_call> b') == "a  b"
+
+
+@_skip_no_deps
+def test_clean_strips_plain_think():
+    cr = _clean()
+    assert cr("a <think>x</think> b") == "a  b"
+
+
+@_skip_no_deps
+def test_clean_keeps_thinker_lookalike():
+    cr = _clean()
+    # <thinker> must NOT be treated as <think> (word boundary).
+    assert cr("<thinker>keep</thinker>") == "<thinker>keep</thinker>"
+
+
+@_skip_no_deps
+def test_clean_keeps_tool_calls_lookalike():
+    cr = _clean()
+    assert cr("<tool_calls>keep</tool_calls>") == "<tool_calls>keep</tool_calls>"
+
+
+@_skip_no_deps
+def test_clean_strips_multiline_think_dotall():
+    cr = _clean()
+    assert cr("a <think>line1\nline2\nline3</think> b") == "a  b"
+
+
+@_skip_no_deps
+def test_clean_is_case_sensitive_uppercase_not_stripped():
+    cr = _clean()
+    # Documented intentional: uppercase sentinels are left alone.
+    assert cr("<THINK>x</THINK>") == "<THINK>x</THINK>"
+
+
+@_skip_no_deps
+def test_clean_allows_whitespace_in_closer():
+    cr = _clean()
+    assert cr("a <think>x</think > b") == "a  b"
+
+
+# --- 2. StreamGate whole-input parity with clean_response ------------------
+
+
+@_skip_no_deps
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("keep <think reason=1>hidden</think> end", "keep  end"),
+        ('a <tool_call id="a">{}</tool_call> b', "a  b"),
+        ("a <think>x</think> b", "a  b"),
+        ("<thinker>keep</thinker>", "<thinker>keep</thinker>"),
+        ("<tool_calls>keep</tool_calls>", "<tool_calls>keep</tool_calls>"),
+        ("a <think>l1\nl2</think> b", "a  b"),
+    ],
+)
+def test_gate_whole_input_matches_expected(text, expected):
+    g = _gate()
+    assert g.feed(text) + g.flush() == expected
+
+
+# --- 3. StreamGate streaming: attributed blocks split char-by-char ---------
+
+
+@_skip_no_deps
+def test_gate_attributed_tool_call_char_by_char():
+    g = _gate()
+    text = 'before <tool_call id="1">{"name":"x"}</tool_call> after'
+    out = "".join(g.feed(c) for c in text) + g.flush()
+    assert out == "before  after"
+    assert "tool_call" not in out
+    assert '"name"' not in out
+
+
+@_skip_no_deps
+def test_gate_attributed_think_char_by_char():
+    g = _gate()
+    text = "before <think foo=bar>secret reasoning</think> after"
+    out = "".join(g.feed(c) for c in text) + g.flush()
+    assert out == "before  after"
+    assert "secret" not in out
+
+
+# --- 4. lookalikes / bare '<' pass through char-by-char --------------------
+
+
+@_skip_no_deps
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<thinker>keep</thinker>",
+        "<tool_calls>keep</tool_calls>",
+        "3 < 5",
+        "a < b",
+    ],
+)
+def test_gate_lookalikes_pass_through_char_by_char(text):
+    g = _gate()
+    out = "".join(g.feed(c) for c in text) + g.flush()
+    assert out == text
+
+
+# --- 5. Hold-back cap: over-long unterminated tag is emitted, not swallowed -
+
+
+@_skip_no_deps
+def test_gate_holdback_cap_whole_input_emits():
+    g = _gate()
+    text = "<think " + "a" * 300  # no '>' ever
+    out = g.feed(text) + g.flush()
+    assert out == text, "over-long unterminated <think ... run must be emitted, not swallowed"
+
+
+@_skip_no_deps
+def test_gate_holdback_cap_char_by_char_emits():
+    g = _gate()
+    text = "<think " + "a" * 300  # no '>' ever
+    out = "".join(g.feed(c) for c in text) + g.flush()
+    assert out == text, "over-long unterminated <think ... run must be emitted, not swallowed"
+
+
+# --- 5b. Long-attribute tags stay chunk-invariant (cap boundary) -----------
+# The random fuzzer caps at ~14 tokens, so it never generates a tag whose
+# attributes exceed the regex bound / hold-back cap (256/320). That's exactly
+# where a naive cap diverges: whole-input regex-matches and suppresses, while a
+# chunked feed trips the cap and EMITS (leaks) the block. These deterministic
+# cases lock whole == char-by-char at and beyond the boundary.
+
+
+@_skip_no_deps
+def test_gate_long_attribute_tag_chunk_invariant():
+    from orchestrator.unified_loop import StreamGate
+
+    def whole(s):
+        g = StreamGate()
+        return g.feed(s) + g.flush()
+
+    def per_char(s):
+        g = StreamGate()
+        return "".join(g.feed(c) for c in s) + g.flush()
+
+    cases = [
+        "<think " + "a" * 300 + ">hidden</think> tail",  # > bound attrs, has closer
+        "<think " + "a" * 400 + ">x</think>END",  # > cap attrs
+        "<think " + "a" * 256 + ">b</think>Z",  # exactly at bound
+        "<think " + "a" * 257 + ">b</think>Z",  # just over bound
+        "<think " + "a" * 500,  # unterminated flood, no '>'
+        "<tool_call " + "b" * 300 + ">{}</tool_call> ok",
+    ]
+    for s in cases:
+        w, c = whole(s), per_char(s)
+        assert w == c, f"cap-boundary divergence for {s[:30]!r}...: whole={w!r} chunk={c!r}"
+
+
+# --- 6. Unterminated REAL open tag stays suppressed (never leaks) ----------
+
+
+@_skip_no_deps
+def test_gate_unterminated_real_tag_never_leaks():
+    g = _gate()
+    fed = g.feed("<think>secret")
+    flushed = g.flush()
+    assert fed == ""
+    assert flushed == ""
+    assert "secret" not in (fed + flushed)
+
+
+# ---------------------------------------------------------------------------
+# FUZZ TESTS (seeded random — no hypothesis dependency; deterministic; <5s)
+#
+# Property 1 (chunk-invariance): for any input, feeding a StreamGate in
+#   arbitrary random chunk boundaries yields the SAME output as one feed(),
+#   which also equals a single feed()+flush() of the whole string.
+# Property 2 (no-leak): clean_response(s) never contains a complete
+#   <think ...>...</think> or <tool_call ...>...</tool_call> pair.
+# ---------------------------------------------------------------------------
+
+import random  # noqa: E402
+import re as _re  # noqa: E402
+
+# Alphabet biased toward the interesting structural characters plus whole
+# tokens, so random strings frequently produce (partial) sentinel tags.
+_FUZZ_TOKENS = [
+    "<",
+    ">",
+    "/",
+    " ",
+    "\n",
+    "a",
+    "b",
+    "x",
+    "z",
+    "think",
+    "tool_call",
+    "thinker",
+    "tool_calls",
+    "reason=1",
+    'id="a"',
+    "foo=bar",
+    "hello",
+    "3 < 5",
+    "secret",
+]
+
+
+def _random_fuzz_string(rng, max_tokens=14):
+    n = rng.randint(0, max_tokens)
+    return "".join(rng.choice(_FUZZ_TOKENS) for _ in range(n))
+
+
+def _feed_in_random_chunks(gate_factory, s, rng):
+    g = gate_factory()
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        step = rng.randint(1, max(1, n - i))
+        out.append(g.feed(s[i : i + step]))
+        i += step
+    out.append(g.flush())
+    return "".join(out)
+
+
+def _feed_whole(gate_factory, s):
+    g = gate_factory()
+    return g.feed(s) + g.flush()
+
+
+@_skip_no_deps
+def test_fuzz_stream_gate_chunk_invariance():
+    from orchestrator.unified_loop import StreamGate
+
+    rng = random.Random(1337)
+    for _ in range(400):
+        s = _random_fuzz_string(rng)
+        whole = _feed_whole(StreamGate, s)
+        # Re-seed the chunking RNG deterministically per-string is unnecessary;
+        # the outer rng drives everything and the fixed seed keeps it stable.
+        chunked = _feed_in_random_chunks(StreamGate, s, rng)
+        assert chunked == whole, f"chunk-invariance violation for {s!r}: chunked={chunked!r} whole={whole!r}"
+
+
+@_skip_no_deps
+def test_fuzz_clean_response_never_leaks_complete_pair():
+    from orchestrator.unified_loop import clean_response
+
+    think_pair = _re.compile(r"<think\b[^>]*>.*?</think\s*>", _re.DOTALL)
+    tool_pair = _re.compile(r"<tool_call\b[^>]*>.*?</tool_call\s*>", _re.DOTALL)
+    rng = random.Random(2024)
+    for _ in range(400):
+        s = _random_fuzz_string(rng)
+        cleaned = clean_response(s)
+        assert not think_pair.search(cleaned), f"leaked <think> pair from {s!r}: {cleaned!r}"
+        assert not tool_pair.search(cleaned), f"leaked <tool_call> pair from {s!r}: {cleaned!r}"
