@@ -22,7 +22,7 @@ The list below is ordered by tier, and within each tier roughly by priority.
 
 Shipped as `orchestrator/telegram_bot.py`: long-polling (no webhook / public ingress), locked to the allow-listed chat ID, inbound text through `/v1/chat/completions` (full Jess + tools from anywhere), reminders with inline **Done / Snooze** buttons handled with the F-011 state-machine semantics. Default-OFF — **setup still needed**: BotFather token + chat ID in `.env` (see `docs/ENV_VARS.md` → Telegram Bot).
 
-Stretch goals still open: voice notes → STT → same pipeline; photo → `/api/paperless/upload`; morning briefing as a Telegram digest.
+Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model on Saturn → same pipeline) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
 
 ### 2. ~~Trust layer as a feature~~ ✅ BUILT (July 2026)
 
