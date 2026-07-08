@@ -685,12 +685,15 @@ async def _startup_logic():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
-            # Seed the dead-man's-switch gauge to "now" so a fresh restart
-            # doesn't trip MorningBriefingStale before the first briefing fires
-            # (the gauge starts at 0 → time()-0 would look infinitely stale).
-            from orchestrator.metrics import MORNING_BRIEFING_LAST_RUN
-
-            MORNING_BRIEFING_LAST_RUN.set_to_current_time()
+            # NB: intentionally NOT seeding MORNING_BRIEFING_LAST_RUN here. The
+            # MorningBriefingStale alert already guards with
+            # `... and bgw_morning_briefing_last_run_timestamp_seconds > 0`, so the
+            # gauge's default 0 (No data) can't false-page before the first run.
+            # Seeding it to now() on every startup MASKED a genuinely-dead job
+            # during active-dev weeks — each deploy reset the clock so the gauge
+            # never aged past threshold. Unseeded, a dead job ages and fires, and
+            # the dashboard shows honest "No data" until the first real run
+            # (jobs_calendar sets it when the briefing actually fires).
 
         # Email-to-calendar autonomy: scan inbox, extract events via LLM,
         # auto-create calendar entries. Disabled by default — flip
@@ -726,11 +729,10 @@ async def _startup_logic():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Evening briefing at {EVENING_BRIEFING_TIME}")
-            # Seed the dead-man's-switch gauge, same rationale as the morning
-            # one: a restart must not trip EveningBriefingStale pre-first-fire.
-            from orchestrator.metrics import EVENING_BRIEFING_LAST_RUN
-
-            EVENING_BRIEFING_LAST_RUN.set_to_current_time()
+            # NOT seeded — same rationale as the morning gauge above:
+            # EveningBriefingStale guards with `... > 0`, so no pre-first-run
+            # false page, and not re-seeding on every deploy stops masking a
+            # dead job. jobs_calendar sets it when the ritual actually fires.
         except Exception as e:
             logger.error(
                 f"[SCHEDULER] Evening briefing registration failed (EVENING_BRIEFING_TIME={EVENING_BRIEFING_TIME!r}): {e}"
@@ -772,17 +774,14 @@ async def _startup_logic():
                 f"[SCHEDULER] Wind-down ladder: dim at {rung_times[0]}, nudge at {rung_times[1]} "
                 f"(bedtime {shared.WIND_DOWN_BEDTIME}, scenes: {shared.WIND_DOWN_SCENE or 'none configured'})"
             )
-            from orchestrator.metrics import (
-                WIND_DOWN_DIM_LAST_RUN,
-                WIND_DOWN_LAST_RUN,
-            )
-
-            # Seed both heartbeats to now() at registration, same as the
-            # briefing gauges: without it a fresh deploy shows "No data" and a
-            # stale rule (nudge) would fire on the ~56-year-old default before
-            # the rung's first real run.
-            WIND_DOWN_LAST_RUN.set_to_current_time()
-            WIND_DOWN_DIM_LAST_RUN.set_to_current_time()
+            # NOT seeding WIND_DOWN_LAST_RUN / WIND_DOWN_DIM_LAST_RUN here.
+            # WindDownNudgeStale guards with `... and
+            # bgw_wind_down_last_run_timestamp_seconds > 0`, so the default-0
+            # gauge is "No data", not a false page. Seeding to now() on every
+            # deploy masked a dead rung during active-dev weeks; unseeded, the
+            # gauge reflects the last real run (set in jobs_winddown) so a dropped
+            # rung ages past threshold and fires. The dim gauge has no alert — its
+            # dashboard panel just shows "No data" until the first real dim.
         except Exception as e:
             logger.error(
                 f"[SCHEDULER] Wind-down registration failed (WIND_DOWN_BEDTIME={shared.WIND_DOWN_BEDTIME!r}): {e}"

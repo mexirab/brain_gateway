@@ -151,15 +151,16 @@ EVENING_BRIEFING_LAST_RUN = Gauge(
 # (warning → quiet Pushover, non-paging). The nudge is a spoken prompt, so a
 # dropped rung is invisible by omission — and the feature targets exactly the
 # person who won't notice the missing 22:00 nudge. Also surfaced in the
-# "Sleep Wind-Down" row of the brain-gateway dashboard (dashgen builder). Note
-# the alert reads the SAME gauge the startup re-seed touches, so during
-# active-dev weeks (CI recreates the orchestrator on every merge, re-stamping
-# now()) neither the panel nor the alert ages past the stale threshold — the
-# masking hits both. What the alert adds over the panel is steady state: once
-# deploys quiesce for >25.5h, a permanently-dead rung fires and PUSHES, which
-# the passive panel never would. (Making these deadman gauges dev-week-robust —
-# stop seeding, tolerate "No data" — is a cross-cutting follow-up; the
-# morning/evening briefing gauges share the trait.)
+# "Sleep Wind-Down" row of the brain-gateway dashboard (dashgen builder).
+# These heartbeats (morning/evening/wind-down) are NO LONGER seeded to now() at
+# startup: that re-seed masked a genuinely-dead job during active-dev weeks (CI
+# recreates the orchestrator on every merge, re-stamping now() so the gauge never
+# aged past threshold). Each *Stale alert guards with `... and <gauge> > 0`, so
+# the default-0 gauge reads as honest "No data" until the job first fires — no
+# pre-first-run false page — and a job that ran then died ages past threshold and
+# PUSHES. Residual: a job dead from a fresh boot (gauge never leaves 0) shows
+# "No data" but won't page until it runs once; accepted (in-memory gauges reset
+# on restart — persisting last-run is a larger change we deliberately skipped).
 WIND_DOWN_LAST_RUN = Gauge(
     "bgw_wind_down_last_run_timestamp_seconds",
     "Unix timestamp the wind-down nudge job last fired",
