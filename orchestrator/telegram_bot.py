@@ -619,6 +619,55 @@ def _dispatch(client: httpx.AsyncClient, update: Dict[str, Any]) -> None:
     task.add_done_callback(_bg_tasks.discard)
 
 
+# Persisted getUpdates offset. Telegram retains unconfirmed updates for ~24h,
+# so a bot that restarts with offset=0 (the old behavior) re-fetches and
+# re-processes recent updates — re-sending old reminders/nudges/replies. On a
+# day with several deploys that means duplicate meds pings the user never
+# re-triggered. Persisting the offset makes a restart resume exactly where it
+# left off.
+_OFFSET_STATE_KEY = "telegram_update_offset"
+
+
+def _load_offset() -> int:
+    """Restore the last-acknowledged getUpdates offset (0 on first run / bad value)."""
+    from orchestrator import state_store
+
+    try:
+        raw = state_store.get_app_state(_OFFSET_STATE_KEY)
+        return int(raw) if raw else 0
+    except (ValueError, TypeError):
+        return 0
+    except Exception as e:  # noqa: BLE001 — a bad state read must not sink the bot
+        logger.warning("[TELEGRAM] Could not load persisted offset: %s", e)
+        return 0
+
+
+def _save_offset(offset: int) -> None:
+    """Persist the offset so a restart doesn't re-deliver old updates."""
+    from orchestrator import state_store
+    from orchestrator.metrics import TELEGRAM_UPDATE_OFFSET
+
+    try:
+        state_store.set_app_state(_OFFSET_STATE_KEY, str(offset))
+        TELEGRAM_UPDATE_OFFSET.set(offset)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[TELEGRAM] Could not persist offset %d: %s", offset, e)
+
+
+async def _drain_pending(timeout: float = 8.0) -> None:
+    """On shutdown, let in-flight update handlers finish (bounded) so a deploy
+    doesn't DROP an update whose offset was already persisted — especially a
+    fast Done/Snooze ack (a lost ack leaves a reminder nagging). Slow chat
+    relays may still be cut at the timeout; that's the acceptable residual."""
+    pending = [t for t in list(_bg_tasks) if not t.done()]
+    if not pending:
+        return
+    logger.info("[TELEGRAM] Draining %d in-flight handler(s) before shutdown", len(pending))
+    _, still = await asyncio.wait(pending, timeout=timeout)
+    if still:
+        logger.warning("[TELEGRAM] %d handler(s) unfinished after %.0fs drain", len(still), timeout)
+
+
 async def _poll_once(client: httpx.AsyncClient, offset: int) -> tuple:
     """One getUpdates cycle: fetch, dispatch, advance the offset.
 
@@ -665,13 +714,25 @@ async def telegram_poll_loop() -> None:
         logging.getLogger(_name).setLevel(logging.WARNING)
 
     logger.info(f"[TELEGRAM] Long-poll loop starting (timeout={poll_timeout}s)")
-    offset = 0
+    # Resume from the persisted offset so a restart (e.g. a deploy) doesn't
+    # re-fetch and re-send the last ~24h of Telegram updates. Logged
+    # unconditionally (incl. the fresh-0 case) so post-deploy you can tell
+    # "resumed at N" from "code not deployed / offset reset".
+    offset = _load_offset()
+    logger.info(
+        "[TELEGRAM] Resuming from persisted update offset %d%s",
+        offset,
+        "" if offset else " (fresh — no persisted offset)",
+    )
     backoff = 1.0
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(poll_timeout + 15.0, connect=10.0)) as client:
         while True:
             try:
+                prev_offset = offset
                 offset, sleep_hint = await _poll_once(client, offset)
+                if offset != prev_offset:
+                    _save_offset(offset)
                 if sleep_hint > 0:
                     await asyncio.sleep(sleep_hint)
                 elif sleep_hint < 0:
@@ -681,6 +742,9 @@ async def telegram_poll_loop() -> None:
                     backoff = 1.0
             except asyncio.CancelledError:
                 logger.info("[TELEGRAM] Long-poll loop cancelled (shutdown)")
+                # Let already-dispatched handlers finish so a deploy doesn't
+                # drop an update whose offset we already persisted.
+                await _drain_pending()
                 raise
             except Exception as e:
                 logger.warning(

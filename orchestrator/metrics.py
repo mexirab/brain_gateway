@@ -435,6 +435,14 @@ TELEGRAM_CALLBACK_TOTAL = Counter(
     ["action", "result"],
 )
 
+# Last-persisted getUpdates offset — makes the poll loop's resume-across-restart
+# visible on a graph (a reset-to-0 or a stuck value is the failure signal for
+# the offset-persistence fix). Set on each _save_offset.
+TELEGRAM_UPDATE_OFFSET = Gauge(
+    "bgw_telegram_update_offset",
+    "Last persisted Telegram getUpdates offset (0 = fresh/no persisted offset)",
+)
+
 # -- Self-audit (F-014) -----------------------------------------------------
 SELF_AUDIT_RUNS_TOTAL = Counter(
     "bgw_self_audit_runs_total",
