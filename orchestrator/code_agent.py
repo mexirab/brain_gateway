@@ -16,10 +16,43 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import httpx
+
 from orchestrator import shared
+from orchestrator.metrics import CODE_AGENT_PREFLIGHT_FAILURES
 from orchestrator.tool_registry import register_tool
 
 logger = logging.getLogger(__name__)
+
+# Short-timeout reachability probe for the code model. The model runs on Helios,
+# which is powered down most of the time; connect must fail fast so preflight
+# doesn't itself stall (see _code_model_reachable / handle_code_agent).
+_PREFLIGHT_TIMEOUT = httpx.Timeout(4.0, connect=2.0)
+
+
+async def _code_model_reachable(model_url: str) -> bool:
+    """Return True if the code model's OpenAI-compatible endpoint answers quickly.
+
+    Probes ``GET {model_url}/models`` with a short timeout. Any connection error,
+    timeout, or 5xx is treated as unreachable so the caller can fail fast with an
+    actionable message instead of entering the agent loop against a dead endpoint
+    (where every one of up to CODE_AGENT_MAX_ROUNDS rounds would hang on connect).
+    """
+    url = f"{model_url.rstrip('/')}/models"
+    try:
+        # Reuse the shared pooled client (same idiom as the /models liveness
+        # probe in api_routes.py); fall back to a one-off client only in the
+        # unlikely case this runs before startup initialized it.
+        if shared._http is not None:
+            resp = await shared._http.get(url, timeout=_PREFLIGHT_TIMEOUT)
+        else:
+            async with httpx.AsyncClient(timeout=_PREFLIGHT_TIMEOUT) as client:
+                resp = await client.get(url)
+        return resp.status_code < 500
+    except Exception as e:
+        logger.info("[CODE_AGENT] Preflight probe failed for %s: %s", url, e)
+        return False
+
 
 # Allowlisted commands for run_command, as argv-token prefixes. Commands are
 # tokenized with shlex and executed WITHOUT a shell, so chaining (`;`, `&&`,
@@ -571,6 +604,23 @@ async def handle_code_agent(arguments: dict) -> str:
 
     if not task:
         return "No task provided. Describe what you'd like investigated or changed."
+
+    model_url = shared.CODE_AGENT_MODEL_URL
+    if not model_url:
+        return "Code agent is not configured. Set CODE_AGENT_MODEL_URL in .env."
+
+    # Preflight: the code model runs on Helios, which is powered down most of the
+    # time. Probe its endpoint with a short timeout so an asleep Helios fails fast
+    # here instead of hanging on connect for up to 120s on every one of the (up to
+    # CODE_AGENT_MAX_ROUNDS) agent rounds before giving up.
+    if not await _code_model_reachable(model_url):
+        CODE_AGENT_PREFLIGHT_FAILURES.inc()
+        logger.warning("[CODE_AGENT] Code model unreachable at %s — skipping run", model_url)
+        return (
+            "The code model isn't reachable right now — it runs on Helios, which is "
+            "powered down most of the time. Wake Helios (it's on an HA-controlled smart "
+            f"plug) and try again once the model at {model_url} is up."
+        )
 
     mode = "read-write" if apply_changes else "read-only"
     logger.info("[CODE_AGENT] Starting %s task: %s", mode, task[:100])

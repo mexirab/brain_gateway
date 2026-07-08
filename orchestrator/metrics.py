@@ -247,6 +247,14 @@ MODEL_SERVER_START_LATENCY = Histogram(
 )
 HELIOS_START_LATENCY = MODEL_SERVER_START_LATENCY
 
+# code_agent runs skipped at preflight because the code model endpoint (on
+# Helios, powered down most of the time) was unreachable — see code_agent.py.
+# A rising rate means the owner keeps invoking code_agent while Helios sleeps.
+CODE_AGENT_PREFLIGHT_FAILURES = Counter(
+    "bgw_code_agent_preflight_failures_total",
+    "code_agent runs skipped because the code model endpoint was unreachable at preflight",
+)
+
 # -- Reminders ---------------------------------------------------------------
 REMINDERS_SET = Counter(
     "bgw_reminders_set_total",
