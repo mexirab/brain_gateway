@@ -913,3 +913,238 @@ async def test_drain_pending_awaits_inflight_handlers():
     await telegram_bot._drain_pending(timeout=1.0)
     assert flag.get("done") is True
     assert t not in telegram_bot._bg_tasks
+
+
+# ---------------------------------------------------------------------------
+# spoken walkie-talkie reply (feat/telegram-voice-reply)
+# ---------------------------------------------------------------------------
+
+
+TTS_URL = "http://tts.test:5000"
+
+
+@pytest.fixture
+def voice_reply_on(tg_on, monkeypatch):
+    """Enable the spoken walkie-talkie reply with a configured TTS endpoint."""
+    monkeypatch.setattr(settings, "telegram_voice_reply_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "tts_url", TTS_URL, raising=False)
+    monkeypatch.setattr(settings, "tts_voice", "default", raising=False)
+    monkeypatch.setattr(settings, "telegram_voice_reply_max_chars", 1200, raising=False)
+    return settings
+
+
+def _mock_client_with_post(post_mock):
+    """A stand-in httpx client whose .post is the given AsyncMock."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.post = post_mock
+    return client
+
+
+# ----- _synthesize_speech -----
+
+
+@pytest.mark.asyncio
+async def test_synthesize_speech_returns_bytes_on_200(voice_reply_on):
+    from unittest.mock import AsyncMock, MagicMock
+
+    resp = MagicMock(status_code=200, content=b"mp3-bytes")
+    post = AsyncMock(return_value=resp)
+    client = _mock_client_with_post(post)
+
+    audio = await telegram_bot._synthesize_speech(client, "hello there")
+    assert audio == b"mp3-bytes"
+    # Posts to the OpenAI-compatible speech endpoint requesting mp3.
+    called_url = post.await_args.args[0]
+    assert called_url == f"{TTS_URL}/v1/audio/speech"
+    assert post.await_args.kwargs["json"]["response_format"] == "mp3"
+    assert post.await_args.kwargs["json"]["input"] == "hello there"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_speech_empty_content_is_none(voice_reply_on):
+    from unittest.mock import AsyncMock, MagicMock
+
+    resp = MagicMock(status_code=200, content=b"")
+    client = _mock_client_with_post(AsyncMock(return_value=resp))
+    assert await telegram_bot._synthesize_speech(client, "hi") is None
+
+
+@pytest.mark.asyncio
+async def test_synthesize_speech_non_200_is_none(voice_reply_on):
+    from unittest.mock import AsyncMock, MagicMock
+
+    resp = MagicMock(status_code=500, content=b"boom", text="boom")
+    client = _mock_client_with_post(AsyncMock(return_value=resp))
+    assert await telegram_bot._synthesize_speech(client, "hi") is None
+
+
+@pytest.mark.asyncio
+async def test_synthesize_speech_exception_is_none(voice_reply_on):
+    from unittest.mock import AsyncMock
+
+    post = AsyncMock(side_effect=RuntimeError("connect refused"))
+    client = _mock_client_with_post(post)
+    assert await telegram_bot._synthesize_speech(client, "hi") is None
+
+
+# ----- _send_voice_reply -----
+
+
+@pytest.mark.asyncio
+async def test_send_voice_reply_true_on_ok(voice_reply_on):
+    from unittest.mock import AsyncMock, MagicMock
+
+    resp = MagicMock(status_code=200, content=b'{"ok": true}')
+    resp.json.return_value = {"ok": True}
+    post = AsyncMock(return_value=resp)
+    client = _mock_client_with_post(post)
+
+    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is True
+    # Multipart file upload of the mp3.
+    assert "files" in post.await_args.kwargs
+    assert post.await_args.kwargs["data"]["chat_id"] == CHAT_ID
+
+
+@pytest.mark.asyncio
+async def test_send_voice_reply_false_on_ok_false(voice_reply_on):
+    from unittest.mock import AsyncMock, MagicMock
+
+    resp = MagicMock(status_code=200, content=b'{"ok": false}')
+    resp.json.return_value = {"ok": False, "description": "bad"}
+    client = _mock_client_with_post(AsyncMock(return_value=resp))
+    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is False
+
+
+@pytest.mark.asyncio
+async def test_send_voice_reply_false_on_non_200(voice_reply_on):
+    from unittest.mock import AsyncMock, MagicMock
+
+    resp = MagicMock(status_code=400, content=b'{"ok": false}')
+    resp.json.return_value = {"ok": False, "description": "Bad Request"}
+    client = _mock_client_with_post(AsyncMock(return_value=resp))
+    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is False
+
+
+@pytest.mark.asyncio
+async def test_send_voice_reply_false_on_exception(voice_reply_on):
+    from unittest.mock import AsyncMock
+
+    client = _mock_client_with_post(AsyncMock(side_effect=RuntimeError("boom")))
+    assert await telegram_bot._send_voice_reply(client, CHAT_ID, b"mp3") is False
+
+
+# ----- _maybe_send_voice_reply -----
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_disabled_no_synth_no_metric(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(settings, "telegram_voice_reply_enabled", False, raising=False)
+    synth = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+
+    before_ok = _media_total("voice_reply", "ok")
+    before_fail = _media_total("voice_reply", "tts_failed")
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "hi there")
+
+    synth.assert_not_awaited()
+    assert _media_total("voice_reply", "ok") == before_ok  # no metric bumped
+    assert _media_total("voice_reply", "tts_failed") == before_fail
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_empty_tts_url_no_synth(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(settings, "tts_url", "", raising=False)
+    synth = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+
+    before = _media_total("voice_reply", "tts_failed")
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "hi there")
+
+    synth.assert_not_awaited()
+    assert _media_total("voice_reply", "tts_failed") == before
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_blank_reply_no_synth(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    synth = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+
+    before = _media_total("voice_reply", "tts_failed")
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "   \n\t ")
+
+    synth.assert_not_awaited()
+    assert _media_total("voice_reply", "tts_failed") == before
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_happy_path_ok_metric(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    synth = AsyncMock(return_value=b"mp3-bytes")
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+    monkeypatch.setattr(telegram_bot, "_send_voice_reply", send)
+
+    before = _media_total("voice_reply", "ok")
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "all done")
+
+    synth.assert_awaited_once()
+    send.assert_awaited_once()
+    assert send.await_args.args[2] == b"mp3-bytes"  # synthesized audio handed to sender
+    assert _media_total("voice_reply", "ok") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_tts_failed_metric_no_send(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    synth = AsyncMock(return_value=None)
+    send = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+    monkeypatch.setattr(telegram_bot, "_send_voice_reply", send)
+
+    before = _media_total("voice_reply", "tts_failed")
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "all done")
+
+    assert _media_total("voice_reply", "tts_failed") == before + 1
+    send.assert_not_awaited()  # no audio -> never attempt sendVoice
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_send_failed_metric(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    synth = AsyncMock(return_value=b"mp3-bytes")
+    send = AsyncMock(return_value=False)
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+    monkeypatch.setattr(telegram_bot, "_send_voice_reply", send)
+
+    before = _media_total("voice_reply", "send_failed")
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, "all done")
+
+    assert _media_total("voice_reply", "send_failed") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_maybe_voice_reply_truncates_to_max_chars(voice_reply_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(settings, "telegram_voice_reply_max_chars", 50, raising=False)
+    synth = AsyncMock(return_value=b"mp3-bytes")
+    monkeypatch.setattr(telegram_bot, "_synthesize_speech", synth)
+    monkeypatch.setattr(telegram_bot, "_send_voice_reply", AsyncMock(return_value=True))
+
+    long_reply = "x" * 500
+    await telegram_bot._maybe_send_voice_reply(_DummyClient(), CHAT_ID, long_reply)
+
+    spoken = synth.await_args.args[1]
+    assert len(spoken) <= 51  # 50 chars + the ellipsis
+    assert spoken.endswith("…")
