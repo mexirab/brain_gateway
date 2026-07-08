@@ -70,6 +70,22 @@ _CHUNK_AT = 4000
 # Telegram's Bot API caps file downloads at 20 MB; never buffer more than that.
 _MAX_MEDIA_BYTES = 20 * 1024 * 1024
 
+# Bound concurrent media handling. A voice handler can hold a ~20 MB audio
+# buffer and wait up to telegram_stt_ready_timeout_seconds for a Helios boot, so
+# a burst of notes (or a client auto-retry) could otherwise pile up unbounded
+# resident buffers + long-lived tasks. Lazily created so it binds to the running
+# loop, not import time (same discipline as the per-chat locks).
+_MEDIA_CONCURRENCY = 2
+_media_sem: Optional[asyncio.Semaphore] = None
+
+
+def _get_media_sem() -> asyncio.Semaphore:
+    global _media_sem
+    if _media_sem is None:
+        _media_sem = asyncio.Semaphore(_MEDIA_CONCURRENCY)
+    return _media_sem
+
+
 _HELP_TEXT = (
     "Hey, it's Jess. Text me like you would at home:\n"
     '• "add milk to the shopping list"\n'
@@ -452,6 +468,12 @@ async def _relay_locked(client: httpx.AsyncClient, chat_id: str, jess_input: str
 
 
 async def _handle_voice(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
+    """Bound media concurrency (see _get_media_sem) around the voice handler."""
+    async with _get_media_sem():
+        await _handle_voice_impl(client, chat_id, msg)
+
+
+async def _handle_voice_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
     """Transcribe a voice note (waking Helios if STT is asleep) then route the
     transcript through full Jess, exactly like a typed message."""
     from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL, TELEGRAM_UPDATE_TOTAL
@@ -550,6 +572,12 @@ def _pick_image(msg: Dict[str, Any]) -> tuple:
 
 
 async def _handle_photo(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
+    """Bound media concurrency (see _get_media_sem) around the photo handler."""
+    async with _get_media_sem():
+        await _handle_photo_impl(client, chat_id, msg)
+
+
+async def _handle_photo_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
     """Describe a photo via the vision model, then route the description (plus
     any caption) through full Jess so it can capture/answer/act on it."""
     import base64
@@ -590,14 +618,18 @@ async def _handle_photo(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, 
             data_uri, "Describe this image in detail, including any visible text transcribed verbatim."
         )
     except Exception as e:
-        logger.error("[TELEGRAM] Vision analysis failed: %s: %s", type(e).__name__, e)
+        logger.error("[TELEGRAM] Vision analysis failed: %s: %s", type(e).__name__, _redact(str(e)))
         _done("vision_failed")
         await _send_text(client, chat_id, "I couldn't make sense of that photo just now — try again.", kind="system")
         return
 
-    if not (description or "").strip():
+    # analyze_image signals failure by RETURNING a bracketed sentinel string
+    # (e.g. "[Vision model timed out...]"), never by raising — so an empty check
+    # alone would forward that error text into Jess as if it were a real caption.
+    description = (description or "").strip()
+    if not description or (description.startswith("[") and description.endswith("]")):
         _done("vision_failed")
-        await _send_text(client, chat_id, "I couldn't get anything from that image.", kind="system")
+        await _send_text(client, chat_id, "I couldn't make sense of that photo just now — try again.", kind="system")
         return
 
     caption = (msg.get("caption") or "").strip()

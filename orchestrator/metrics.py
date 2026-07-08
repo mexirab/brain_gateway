@@ -430,7 +430,8 @@ TELEGRAM_SEND_LATENCY = Histogram(
 TELEGRAM_UPDATE_TOTAL = Counter(
     "bgw_telegram_update_total",
     "Inbound Telegram updates by disposition",
-    # kind:   message | callback | other
+    # kind:   message | voice | photo | callback | other
+    #         (voice/photo media outcomes are also broken out in TELEGRAM_MEDIA_TOTAL)
     # result: ok | denied | ignored | error
     ["kind", "result"],
 )
