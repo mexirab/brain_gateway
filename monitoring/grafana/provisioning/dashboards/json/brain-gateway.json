@@ -7440,7 +7440,7 @@
           "values": false
         }
       },
-      "description": "Seconds since the T-30 screens-away nudge job last fired. Fires nightly; > 25.5h (orange) means the scheduler dropped a rung. Also alerts (WindDownNudgeStale, quiet Pushover) since a missing spoken nudge is invisible in the house. Reset to 'now' on orchestrator restart, same as the briefing gauges. 'No data' means the gauge was never seeded \u2014 wind-down disabled or registration failed at startup.",
+      "description": "Seconds since the T-30 screens-away nudge job last fired. Fires nightly; > 25.5h (orange) means the scheduler dropped a rung. Also alerts (WindDownNudgeStale, quiet Pushover) since a missing spoken nudge is invisible in the house. NOT seeded at startup (as of 2026-07-08): 'No data' means the job hasn't fired since the last restart, or wind-down is disabled \u2014 the gauge only stamps on a real run.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -7508,7 +7508,7 @@
           "values": false
         }
       },
-      "description": "Seconds since the T-60 lights-dim job last fired. Ticks nightly regardless of whether it attempted a scene, so an orange here means the scheduler dropped ONLY the dim rung while the Scene Outcomes panel would otherwise stay silently empty. No alert watches this rung \u2014 a failed dim is self-evident in the house. 'No data' means the gauge was never seeded (wind-down disabled or registration failed at startup).",
+      "description": "Seconds since the T-60 lights-dim job last fired. Ticks nightly regardless of whether it attempted a scene, so an orange here means the scheduler dropped ONLY the dim rung while the Scene Outcomes panel would otherwise stay silently empty. No alert watches this rung \u2014 a failed dim is self-evident in the house. NOT seeded at startup: 'No data' means the dim job hasn't fired since the last restart, or wind-down is disabled.",
       "gridPos": {
         "h": 8,
         "w": 6,

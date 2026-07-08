@@ -1009,9 +1009,9 @@ def build() -> dict:
     wind_down_row = [
         stat(
             "Nudge Heartbeat Age (T-30)",
-            # The > 0 guard mirrors the briefing stale-alert rules: an unseeded
-            # gauge (WIND_DOWN_ENABLED=false, or registration failed before the
-            # startup seed) shows "No data" instead of a ~56-year orange.
+            # The > 0 guard mirrors the briefing stale-alert rules: the gauge is
+            # unseeded (default 0) until the job first stamps it, so this shows
+            # "No data" instead of a ~56-year orange before the first real run.
             "time() - (bgw_wind_down_last_run_timestamp_seconds > 0)",
             unit="s",
             # 25.5h, not 25h: the largest legitimate gap is 25h (the DST
@@ -1020,15 +1020,15 @@ def build() -> dict:
             description="Seconds since the T-30 screens-away nudge job last fired. "
             "Fires nightly; > 25.5h (orange) means the scheduler dropped a rung. "
             "Also alerts (WindDownNudgeStale, quiet Pushover) since a missing "
-            "spoken nudge is invisible in the house. "
-            "Reset to 'now' on orchestrator restart, same as the briefing gauges. "
-            "'No data' means the gauge was never seeded — wind-down disabled or "
-            "registration failed at startup.",
+            "spoken nudge is invisible in the house. NOT seeded at startup (as of "
+            "2026-07-08): 'No data' means the job hasn't fired since the last "
+            "restart, or wind-down is disabled — the gauge only stamps on a real run.",
         ),
         stat(
             "Dim Heartbeat Age (T-60)",
             # Stamped at the top of wind_down_dim before its early returns, so
-            # this ticks even on DND / no-scene nights. Same > 0 unseeded guard.
+            # this ticks even on DND / no-scene nights. Unseeded (default 0)
+            # until the first real run, same > 0 guard as the nudge panel.
             "time() - (bgw_wind_down_dim_last_run_timestamp_seconds > 0)",
             unit="s",
             thresholds=[(None, "green"), (91800, "orange")],
@@ -1037,8 +1037,8 @@ def build() -> dict:
             "orange here means the scheduler dropped ONLY the dim rung while the "
             "Scene Outcomes panel would otherwise stay silently empty. No alert "
             "watches this rung — a failed dim is self-evident in the house. "
-            "'No data' means the gauge was never seeded (wind-down disabled or "
-            "registration failed at startup).",
+            "NOT seeded at startup: 'No data' means the dim job hasn't fired since "
+            "the last restart, or wind-down is disabled.",
         ),
         timeseries(
             "Scene Outcomes (T-60 lights, /day)",
