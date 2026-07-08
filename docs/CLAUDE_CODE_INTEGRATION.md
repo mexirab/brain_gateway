@@ -49,6 +49,8 @@ Example user-facing phrases:
 
 The injection happens transparently before every `code_agent` tool call. If no activity is found (e.g., hook not installed and JSONL files empty), the system prompt just omits the section rather than failing.
 
+**Preflight reachability check:** because the code model runs on Helios (port 8082), which is power-tiered and asleep most of the time, `code_agent` first probes `GET {CODE_AGENT_MODEL_URL}/models` with a short timeout (4s / 2s-connect) before entering the agent loop. If the endpoint is unreachable (connection error, timeout, or 5xx), it fails fast with an actionable "wake Helios" message and increments `bgw_code_agent_preflight_failures_total` — instead of hanging through up to `CODE_AGENT_MAX_ROUNDS` (10) rounds of 120s connect timeouts.
+
 ## API endpoints
 
 See [`TECHNICAL_REFERENCE.md`](../TECHNICAL_REFERENCE.md#claude-code-integration) for the `/api/claude_code/*` endpoint reference.
