@@ -81,9 +81,15 @@ TERMINAL_TOOLS = {
 
 
 def clean_response(text: str) -> str:
-    """Remove <think> and <tool_call> tags from model responses."""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
+    """Remove <think> and <tool_call> blocks (with any attributes) from responses.
+
+    The open tag is matched with an attribute-tolerant pattern (`<think ...>`,
+    `<tool_call id=1>`): a literal `<think>`-only match let an attributed tag
+    like `<think reason=1>` leak its block through to the user. `\\b` keeps it
+    from matching `<thinker>`; the closer allows trailing whitespace.
+    """
+    text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<tool_call\b[^>]*>.*?</tool_call\s*>", "", text, flags=re.DOTALL)
     return text.strip()
 
 
@@ -98,12 +104,34 @@ class StreamGate:
     XML-fallback tool calls DO arrive in delta.content).
     """
 
-    _OPEN_TAGS = ("<think>", "<tool_call>")
-    _CLOSERS = {"<think>": "</think>", "<tool_call>": "</tool_call>"}
+    _OPEN_NAMES = ("think", "tool_call")
+    # Complete open tag WITH optional attributes: <think>, <think reason=1>,
+    # <tool_call id="x">. `\b` stops <thinker>/<tool_calls> from matching.
+    _OPEN_RE = re.compile(r"<(think|tool_call)\b[^>]*>")
+    _CLOSERS = {"think": "</think>", "tool_call": "</tool_call>"}
 
     def __init__(self):
         self._pending = ""
         self._suppress_until: str | None = None
+
+    @classmethod
+    def _could_be_open_prefix(cls, rest: str) -> bool:
+        """True if `rest` (starts with '<', no complete open tag yet) could still
+        grow into an open sentinel tag — either a prefix of `<name`, or `<name`
+        followed by an in-progress attribute list (no '>' yet). This is what
+        holds back `<think re…` mid-stream; it must NOT hold `<thinker>`/`<div>`."""
+        for name in cls._OPEN_NAMES:
+            full = "<" + name
+            if full.startswith(rest):
+                return True  # still typing the tag name, e.g. "<thi"
+            if rest.startswith(full):
+                nxt = rest[len(full) : len(full) + 1]
+                # name complete + next char is a boundary (space/newline/end) →
+                # attributes may be arriving. A word char means a different tag
+                # (<thinker>, <tool_calls>), so don't hold.
+                if nxt == "" or not (nxt.isalnum() or nxt == "_"):
+                    return True
+        return False
 
     def feed(self, text: str) -> str:
         """Absorb a content delta, return the part that is safe to emit."""
@@ -129,12 +157,12 @@ class StreamGate:
             out.append(self._pending[:lt])
             rest = self._pending[lt:]
 
-            matched = next((tag for tag in self._OPEN_TAGS if rest.startswith(tag)), None)
-            if matched:
-                self._suppress_until = self._CLOSERS[matched]
-                self._pending = rest[len(matched) :]
+            m = self._OPEN_RE.match(rest)
+            if m:
+                self._suppress_until = self._CLOSERS[m.group(1)]
+                self._pending = rest[m.end() :]
                 continue
-            if any(tag.startswith(rest) for tag in self._OPEN_TAGS):
+            if self._could_be_open_prefix(rest):
                 # Could still become a sentinel tag — hold it back.
                 self._pending = rest
                 break
