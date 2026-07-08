@@ -488,3 +488,50 @@ async def test_dispatch_nudge_mirrors_to_telegram(tg_on, monkeypatch):
 
     await sc._dispatch_nudge("medication", "Hey, did you take your Guanfacine?")
     assert fired == [("medication", "Hey, did you take your Guanfacine?")]
+
+
+# ---------------------------------------------------------------------------
+# getUpdates offset persistence — a restart must not re-send old updates
+# ---------------------------------------------------------------------------
+
+
+def test_offset_persistence_roundtrip(monkeypatch):
+    store: dict = {}
+    monkeypatch.setattr(state_store, "set_app_state", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr(state_store, "get_app_state", lambda k: store.get(k))
+
+    telegram_bot._save_offset(123456789)
+    # Stored as a string under the dedicated key...
+    assert store[telegram_bot._OFFSET_STATE_KEY] == "123456789"
+    # ...and reloaded as an int (what a fresh poll loop would resume from).
+    assert telegram_bot._load_offset() == 123456789
+
+
+def test_load_offset_defaults_to_zero(monkeypatch):
+    # No persisted value -> start at 0 (first run).
+    monkeypatch.setattr(state_store, "get_app_state", lambda k: None)
+    assert telegram_bot._load_offset() == 0
+    # Corrupt value -> 0, never raise into the poll loop.
+    monkeypatch.setattr(state_store, "get_app_state", lambda k: "not-an-int")
+    assert telegram_bot._load_offset() == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_pending_awaits_inflight_handlers():
+    """On shutdown, _drain_pending lets an already-dispatched handler finish
+    (so a deploy doesn't drop e.g. a Done-tap ack)."""
+    import asyncio as _a
+
+    flag: dict = {}
+
+    async def slow_handler():
+        await _a.sleep(0.05)
+        flag["done"] = True
+
+    t = _a.create_task(slow_handler())
+    telegram_bot._bg_tasks.add(t)
+    t.add_done_callback(telegram_bot._bg_tasks.discard)
+
+    await telegram_bot._drain_pending(timeout=1.0)
+    assert flag.get("done") is True
+    assert t not in telegram_bot._bg_tasks
