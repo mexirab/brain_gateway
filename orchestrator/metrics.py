@@ -447,10 +447,11 @@ TELEGRAM_CALLBACK_TOTAL = Counter(
 TELEGRAM_MEDIA_TOTAL = Counter(
     "bgw_telegram_media_total",
     "Inbound Telegram media (voice/photo) processing outcomes",
-    # kind:   voice | photo
+    # kind:   voice | photo | voice_reply
     # result: ok | disabled | too_long | too_large | download_failed |
     #         stt_unreachable | stt_failed | empty_transcript |
-    #         wake_failed | vision_failed
+    #         wake_failed | vision_failed |
+    #         tts_failed | send_failed   (voice_reply: spoken walkie-talkie reply)
     ["kind", "result"],
 )
 

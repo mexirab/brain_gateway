@@ -369,6 +369,11 @@ class Settings(BaseSettings):
     telegram_voice_wake_helios: bool = True
     telegram_voice_max_seconds: int = 300  # reject voice notes longer than this
     telegram_stt_ready_timeout_seconds: int = 180  # max wait for STT after a wake (box boots ~2 min)
+    # Walkie-talkie: reply to a VOICE note with a spoken voice message (TTS on
+    # Helios → Telegram sendVoice), alongside the text. Needs tts_url set; Helios
+    # is already awake from the STT step, so no extra wake. Text replies stay text.
+    telegram_voice_reply_enabled: bool = True
+    telegram_voice_reply_max_chars: int = 1200  # cap the spoken portion (TTS latency/size)
 
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
