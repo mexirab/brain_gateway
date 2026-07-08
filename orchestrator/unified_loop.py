@@ -119,12 +119,19 @@ class StreamGate:
     # Complete open tag WITH optional attributes: <think>, <think reason=1>,
     # <tool_call id="x">. `\b` stops <thinker>/<tool_calls> from matching.
     # Case-sensitive to match clean_response (model emits lowercase sentinels).
-    _OPEN_RE = re.compile(r"<(think|tool_call)\b[^>]*>")
+    # The attribute span is BOUNDED (`{0,256}`) to agree with _MAX_OPEN_TAG_LEN
+    # below — so the streamed and whole-input paths make the identical
+    # match/no-match decision (chunk-invariance): a tag long enough to trip the
+    # stream's hold-back cap is also one the regex refuses to match.
+    _MAX_ATTR_LEN = 256
+    _OPEN_RE = re.compile(r"<(think|tool_call)\b[^>]{0,256}>")
     _CLOSERS = {"think": "</think>", "tool_call": "</tool_call>"}
-    # A real open tag is short; hold back at most this many chars of a suspected
-    # in-progress tag before deciding a run with no '>' is not a sentinel. Bounds
-    # the hold-back buffer against an unterminated `<think aaaa…` flood.
-    _MAX_OPEN_TAG_LEN = 256
+    # Hold-back cap for an in-progress tag with no '>' yet. Chosen strictly above
+    # the longest matchable open tag (len("<tool_call") + _MAX_ATTR_LEN + ">"
+    # = 267) so a real bounded tag NEVER trips the cap mid-stream — only genuine
+    # noise (an unterminated `<think aaaa…` flood) does. Keeps whole vs chunked
+    # feeds in agreement while bounding the buffer.
+    _MAX_OPEN_TAG_LEN = 320
 
     def __init__(self):
         self._pending = ""
@@ -178,11 +185,15 @@ class StreamGate:
                 self._suppress_until = self._CLOSERS[m.group(1)]
                 self._pending = rest[m.end() :]
                 continue
-            if self._could_be_open_prefix(rest):
-                # Could still become a sentinel tag — hold it back until the tag
-                # completes. Bound the hold: a real open tag is short, so a run
-                # this long with still no '>' is noise, not a sentinel — emit the
-                # '<' and re-scan rather than buffer attacker-controlled bytes.
+            # Hold ONLY while the tag is genuinely still forming: no '>' yet
+            # (a '>' present with no _OPEN_RE match above means it's a complete
+            # non-sentinel like <div> or an over-long tag — emit it). This
+            # `'>' not in rest` guard is what keeps whole and chunked feeds in
+            # lockstep at the cap boundary.
+            if ">" not in rest and self._could_be_open_prefix(rest):
+                # Bound the hold: a real open tag is short, so a run this long
+                # with still no '>' is noise, not a sentinel — emit the '<' and
+                # re-scan rather than buffer attacker-controlled bytes forever.
                 if len(rest) > self._MAX_OPEN_TAG_LEN:
                     out.append("<")
                     self._pending = rest[1:]
