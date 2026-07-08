@@ -445,3 +445,138 @@ class TestCheckMedsWindow:
         now = datetime(2026, 3, 20, 21, 15)
         with patch.object(selfcare_schedule, "category_enabled", return_value=False):
             assert sm._check_meds(now, now) is None
+
+
+# ---------------------------------------------------------------------------
+# Broad-vs-specific med confirmation classification
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestIsBroadMedConfirmation:
+    """`_is_broad_med_confirmation` decides whether restoring a selfcare_log med
+    row should re-arm the generic 'medication' gate. Broad = window-wide
+    confirmations (Telegram ✓ Done, routine bridge, grouped 'morning meds');
+    specific = a single named drug, which must NOT re-arm the generic gate."""
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "telegram:medication nudge",  # Telegram ✓ Done tap (the regression source)
+            "routine:meds",  # routine bridge step label
+            "morning meds (vyvanse, wellbutrin)",  # grouped confirmation
+            "medication",  # bare default detail
+        ],
+    )
+    def test_broad_labels(self, sm, label):
+        assert sm._is_broad_med_confirmation(label) is True
+
+    @pytest.mark.parametrize("label", ["vyvanse", "guanfacine", "naltrexone"])
+    def test_specific_named_meds_are_not_broad(self, sm, label):
+        assert sm._is_broad_med_confirmation(label) is False
+
+
+# ---------------------------------------------------------------------------
+# _restore_state — rebuilds the generic 'medication' gate from today's
+# broad confirmations so a Telegram ✓ Done tap survives an orchestrator restart
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_deps
+class TestRestoreState:
+    """Regression coverage for the meds-nudge-restore-gate fix.
+
+    The bug: _restore_state rebuilt only per-label keys, leaving the generic
+    'medication' gate (which _check_meds reads FIRST) empty. So a Telegram
+    ✓ Done tap's suppression was lost on every restart and the med nudge
+    re-fired after each deploy.
+
+    Deps are imported lazily inside _restore_state:
+      `from orchestrator.state_store import get_last_selfcare, get_selfcare_today`
+      `from orchestrator.data_manager import get_medications`
+    so we patch at those module-level names.
+    """
+
+    def _run_restore(self, sm, *, today_meds, medications, meds_raises=False):
+        """Invoke _restore_state with mocked state_store + data_manager.
+
+        `today_meds` is what get_selfcare_today('medication') returns; the other
+        get_last_selfcare(...) calls (meal/water/movement) return None.
+        `medications` is what get_medications() returns (or raises if
+        meds_raises)."""
+        from orchestrator import data_manager, state_store
+
+        gm = (
+            MagicMock(side_effect=RuntimeError("meds config unavailable"))
+            if meds_raises
+            else MagicMock(return_value=medications)
+        )
+        with (
+            patch.object(state_store, "get_last_selfcare", return_value=None),
+            patch.object(state_store, "get_selfcare_today", return_value=today_meds),
+            patch.object(data_manager, "get_medications", gm),
+        ):
+            sm._restore_state()
+
+    def test_broad_telegram_done_row_arms_generic_gate(self, sm):
+        """CORE REGRESSION: a broad Telegram ✓ Done row logged this morning must
+        set the generic 'medication' key to that timestamp on restore."""
+        ts = datetime(2026, 3, 20, 7, 45)  # morning, hour < 12
+        self._run_restore(
+            sm,
+            today_meds=[{"detail": "telegram:medication nudge", "logged_at": ts.isoformat()}],
+            medications={"daily": {"morning": [{"name": "Vyvanse"}], "evening": [{"name": "Guanfacine"}]}},
+        )
+        assert sm._state.last_med_confirmation.get("medication") == ts
+
+    def test_specific_named_med_row_does_not_arm_generic_gate(self, sm):
+        """A single named-med row ('guanfacine') keeps per-med suppression but
+        must NOT arm the generic 'medication' key (would suppress the window's
+        other meds)."""
+        ts = datetime(2026, 3, 20, 21, 10)
+        self._run_restore(
+            sm,
+            today_meds=[{"detail": "guanfacine", "logged_at": ts.isoformat()}],
+            medications={"daily": {"morning": [{"name": "Vyvanse"}], "evening": [{"name": "Guanfacine"}]}},
+        )
+        assert "medication" not in sm._state.last_med_confirmation
+        assert sm._state.last_med_confirmation.get("guanfacine") == ts
+
+    def test_multiple_broad_rows_generic_holds_latest_timestamp(self, sm):
+        early = datetime(2026, 3, 20, 7, 5)
+        late = datetime(2026, 3, 20, 9, 30)
+        self._run_restore(
+            sm,
+            today_meds=[
+                {"detail": "telegram:medication nudge", "logged_at": early.isoformat()},
+                {"detail": "routine:meds", "logged_at": late.isoformat()},
+            ],
+            medications={"daily": {"morning": [{"name": "Vyvanse"}], "evening": [{"name": "Guanfacine"}]}},
+        )
+        assert sm._state.last_med_confirmation.get("medication") == late
+
+    def test_configured_med_name_with_marker_substring_stays_specific(self, sm):
+        """Guard: a configured med named 'Medsure' contains the 'meds' marker but
+        must be treated as SPECIFIC (it's in configured_meds), so its named-med
+        row does NOT arm the generic gate."""
+        ts = datetime(2026, 3, 20, 7, 45)
+        self._run_restore(
+            sm,
+            today_meds=[{"detail": "Medsure", "logged_at": ts.isoformat()}],
+            medications={"daily": {"morning": [{"name": "Medsure"}], "evening": []}},
+        )
+        assert "medication" not in sm._state.last_med_confirmation
+        assert sm._state.last_med_confirmation.get("medsure") == ts
+
+    def test_get_medications_raising_still_completes(self, sm):
+        """get_medications raising must not abort restore: configured_meds falls
+        back to empty set and the broad row still arms the generic gate."""
+        ts = datetime(2026, 3, 20, 7, 45)
+        self._run_restore(
+            sm,
+            today_meds=[{"detail": "telegram:medication nudge", "logged_at": ts.isoformat()}],
+            medications=None,
+            meds_raises=True,
+        )
+        # No exception propagated, and the broad row still armed the gate.
+        assert sm._state.last_med_confirmation.get("medication") == ts
