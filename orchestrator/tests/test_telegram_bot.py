@@ -516,6 +516,384 @@ def test_load_offset_defaults_to_zero(monkeypatch):
     assert telegram_bot._load_offset() == 0
 
 
+# ---------------------------------------------------------------------------
+# inbound media: voice notes + photos (feat/telegram-voice-photos)
+# ---------------------------------------------------------------------------
+
+
+def _media_total(kind: str, result: str) -> float:
+    from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL
+
+    return TELEGRAM_MEDIA_TOTAL.labels(kind=kind, result=result)._value.get()
+
+
+@pytest.fixture
+def voice_on(tg_on, monkeypatch):
+    """Enable inbound voice with a configured STT endpoint."""
+    monkeypatch.setattr(settings, "telegram_voice_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "stt_url", "http://stt.test:9000", raising=False)
+    monkeypatch.setattr(settings, "telegram_voice_max_seconds", 300, raising=False)
+    monkeypatch.setattr(settings, "telegram_voice_wake_helios", True, raising=False)
+    monkeypatch.setattr(settings, "telegram_stt_ready_timeout_seconds", 180, raising=False)
+    return settings
+
+
+@pytest.fixture
+def photo_on(tg_on, monkeypatch):
+    monkeypatch.setattr(settings, "telegram_photo_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "vision_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "vision_max_image_size", 10 * 1024 * 1024, raising=False)
+    return settings
+
+
+class _DummyClient:
+    """Stand-in for httpx.AsyncClient; the media handlers only pass it through
+    to the (patched) helpers, so it never needs to make a real request."""
+
+
+def _voice_msg(duration: int = 3, file_id: str = "voice-file-1", file_size: int = 1000) -> dict:
+    return {
+        "chat": {"id": int(CHAT_ID)},
+        "voice": {"duration": duration, "file_id": file_id, "file_size": file_size, "mime_type": "audio/ogg"},
+    }
+
+
+def _photo_msg(caption: str = "") -> dict:
+    m = {
+        "chat": {"id": int(CHAT_ID)},
+        "photo": [
+            {"file_id": "small", "file_size": 100, "width": 90},
+            {"file_id": "big", "file_size": 5000, "width": 1280},
+        ],
+    }
+    if caption:
+        m["caption"] = caption
+    return m
+
+
+def _patch_send(monkeypatch):
+    """Stub _send_text so media handlers never touch HTTP; record the sends."""
+    sends: list = []
+
+    async def _fake_send(client, chat_id, text, kind, reply_markup=None):
+        sends.append({"chat_id": chat_id, "text": text, "kind": kind})
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_bot, "_send_text", _fake_send)
+    return sends
+
+
+# ----- _pick_image -----
+
+
+def test_pick_image_selects_largest_photo():
+    msg = {
+        "photo": [
+            {"file_id": "a", "file_size": 100, "width": 90},
+            {"file_id": "c", "file_size": 9000, "width": 1600},
+            {"file_id": "b", "file_size": 5000, "width": 1280},
+        ]
+    }
+    file_id, mime = telegram_bot._pick_image(msg)
+    assert file_id == "c"
+    assert mime == "image/jpeg"
+
+
+def test_pick_image_supported_document():
+    msg = {"document": {"file_id": "doc1", "mime_type": "image/png"}}
+    assert telegram_bot._pick_image(msg) == ("doc1", "image/png")
+
+
+def test_pick_image_rejects_non_image_document():
+    msg = {"document": {"file_id": "doc2", "mime_type": "application/pdf"}}
+    assert telegram_bot._pick_image(msg) == (None, "")
+
+
+def test_pick_image_empty_message():
+    assert telegram_bot._pick_image({}) == (None, "")
+
+
+# ----- _stt_reachable -----
+
+
+@pytest.mark.asyncio
+async def test_stt_reachable_true_on_200(voice_on):
+    class _C:
+        async def get(self, url, timeout=None):
+            return Response(200, json={})
+
+    assert await telegram_bot._stt_reachable(_C()) is True
+
+
+@pytest.mark.asyncio
+async def test_stt_reachable_true_on_404(voice_on):
+    # A 404 on /v1/models still proves the server is answering.
+    class _C:
+        async def get(self, url, timeout=None):
+            return Response(404, text="not found")
+
+    assert await telegram_bot._stt_reachable(_C()) is True
+
+
+@pytest.mark.asyncio
+async def test_stt_reachable_false_on_500(voice_on):
+    class _C:
+        async def get(self, url, timeout=None):
+            return Response(503, text="down")
+
+    assert await telegram_bot._stt_reachable(_C()) is False
+
+
+@pytest.mark.asyncio
+async def test_stt_reachable_false_on_connect_error(voice_on):
+    import httpx
+
+    class _C:
+        async def get(self, url, timeout=None):
+            raise httpx.ConnectError("refused")
+
+    assert await telegram_bot._stt_reachable(_C()) is False
+
+
+# ----- _handle_voice_impl -----
+
+
+@pytest.mark.asyncio
+async def test_voice_disabled_short_circuits(voice_on, monkeypatch):
+    monkeypatch.setattr(settings, "telegram_voice_enabled", False, raising=False)
+    sends = _patch_send(monkeypatch)
+    downloaded = []
+    monkeypatch.setattr(telegram_bot, "_download_file", lambda *a, **k: downloaded.append(1))
+
+    before = _media_total("voice", "disabled")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
+
+    assert _media_total("voice", "disabled") == before + 1
+    assert downloaded == []  # never attempted the download
+    assert sends and "enabled" in sends[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_voice_disabled_when_stt_url_empty(voice_on, monkeypatch):
+    monkeypatch.setattr(settings, "stt_url", "", raising=False)
+    sends = _patch_send(monkeypatch)
+    before = _media_total("voice", "disabled")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
+    assert _media_total("voice", "disabled") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_voice_too_long(voice_on, monkeypatch):
+    _patch_send(monkeypatch)
+    downloaded = []
+    monkeypatch.setattr(telegram_bot, "_download_file", lambda *a, **k: downloaded.append(1))
+    before = _media_total("voice", "too_long")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg(duration=999))
+    assert _media_total("voice", "too_long") == before + 1
+    assert downloaded == []
+
+
+@pytest.mark.asyncio
+async def test_voice_happy_path_transcribes_and_relays(voice_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    sends = _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio-bytes"))
+    monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=True))
+    monkeypatch.setattr(telegram_bot, "_transcribe", AsyncMock(return_value="add milk to the list"))
+    relay = AsyncMock(return_value="Added milk.")
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    wake = AsyncMock()
+    from orchestrator import helios_power
+
+    monkeypatch.setattr(helios_power, "wake_helios", wake)
+
+    before = _media_total("voice", "ok")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
+
+    assert _media_total("voice", "ok") == before + 1
+    relay.assert_awaited_once()
+    assert relay.await_args.args[2] == "add milk to the list"  # transcript relayed
+    wake.assert_not_awaited()  # STT was reachable; no wake needed
+    # Final reply echoes the transcript back to the user.
+    final = sends[-1]["text"]
+    assert "add milk to the list" in final and "Added milk." in final
+
+
+@pytest.mark.asyncio
+async def test_voice_wakes_helios_then_gives_up(voice_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    sends = _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio"))
+    monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=False))
+    monkeypatch.setattr(telegram_bot, "_wait_for_stt", AsyncMock(return_value=False))
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    wake = AsyncMock(return_value={"ok": True})
+    from orchestrator import helios_power
+
+    monkeypatch.setattr(helios_power, "wake_helios", wake)
+
+    before = _media_total("voice", "stt_unreachable")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
+
+    assert _media_total("voice", "stt_unreachable") == before + 1
+    wake.assert_awaited_once()  # wake attempted
+    relay.assert_not_awaited()  # never got to transcription
+    assert any("Waking" in s["text"] for s in sends)  # "waking" notice sent
+
+
+@pytest.mark.asyncio
+async def test_voice_stt_unreachable_wake_disabled(voice_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(settings, "telegram_voice_wake_helios", False, raising=False)
+    _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio"))
+    monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=False))
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+    wake = AsyncMock()
+    from orchestrator import helios_power
+
+    monkeypatch.setattr(helios_power, "wake_helios", wake)
+
+    before = _media_total("voice", "stt_unreachable")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
+
+    assert _media_total("voice", "stt_unreachable") == before + 1
+    wake.assert_not_awaited()  # wake disabled -> never called
+    relay.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_voice_empty_transcript(voice_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"audio"))
+    monkeypatch.setattr(telegram_bot, "_stt_reachable", AsyncMock(return_value=True))
+    monkeypatch.setattr(telegram_bot, "_transcribe", AsyncMock(return_value=""))
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    before = _media_total("voice", "empty_transcript")
+    await telegram_bot._handle_voice_impl(_DummyClient(), CHAT_ID, _voice_msg())
+
+    assert _media_total("voice", "empty_transcript") == before + 1
+    relay.assert_not_awaited()
+
+
+# ----- _handle_photo_impl -----
+
+
+@pytest.mark.asyncio
+async def test_photo_disabled(photo_on, monkeypatch):
+    monkeypatch.setattr(settings, "vision_enabled", False, raising=False)
+    _patch_send(monkeypatch)
+    downloaded = []
+    monkeypatch.setattr(telegram_bot, "_download_file", lambda *a, **k: downloaded.append(1))
+    before = _media_total("photo", "disabled")
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+    assert _media_total("photo", "disabled") == before + 1
+    assert downloaded == []
+
+
+@pytest.mark.asyncio
+async def test_photo_happy_path_relays_with_caption(photo_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import orchestrator.vision_handler as vh
+
+    sends = _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value="A grocery receipt for milk and eggs."))
+    relay = AsyncMock(return_value="Got it — added milk and eggs.")
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    before = _media_total("photo", "ok")
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg(caption="from the store"))
+
+    assert _media_total("photo", "ok") == before + 1
+    relay.assert_awaited_once()
+    relayed = relay.await_args.args[2]
+    assert "A grocery receipt" in relayed
+    assert "from the store" in relayed  # caption appended
+    assert sends[-1]["text"].startswith("📷")
+
+
+@pytest.mark.asyncio
+async def test_photo_vision_sentinel_not_relayed(photo_on, monkeypatch):
+    """CRITICAL regression: a bracketed sentinel from analyze_image must NOT be
+    forwarded to Jess as a real caption; result is vision_failed."""
+    from unittest.mock import AsyncMock
+
+    import orchestrator.vision_handler as vh
+
+    _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value="[Vision model timed out. Try again later.]"))
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    before = _media_total("photo", "vision_failed")
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    assert _media_total("photo", "vision_failed") == before + 1
+    relay.assert_not_awaited()  # sentinel never reaches Jess
+
+
+@pytest.mark.asyncio
+async def test_photo_vision_raises_is_vision_failed(photo_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import orchestrator.vision_handler as vh
+
+    _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(side_effect=RuntimeError("boom")))
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    before = _media_total("photo", "vision_failed")
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    assert _media_total("photo", "vision_failed") == before + 1
+    relay.assert_not_awaited()
+
+
+# ----- _handle_message dispatch to media handlers -----
+
+
+@pytest.mark.asyncio
+async def test_dispatch_voice_message_routes_to_voice_handler(tg_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    voice_h = AsyncMock()
+    photo_h = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_handle_voice", voice_h)
+    monkeypatch.setattr(telegram_bot, "_handle_photo", photo_h)
+
+    await telegram_bot._handle_message(_DummyClient(), _voice_msg())
+    voice_h.assert_awaited_once()
+    photo_h.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_photo_message_routes_to_photo_handler(tg_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    voice_h = AsyncMock()
+    photo_h = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_handle_voice", voice_h)
+    monkeypatch.setattr(telegram_bot, "_handle_photo", photo_h)
+
+    await telegram_bot._handle_message(_DummyClient(), _photo_msg())
+    photo_h.assert_awaited_once()
+    voice_h.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_drain_pending_awaits_inflight_handlers():
     """On shutdown, _drain_pending lets an already-dispatched handler finish
