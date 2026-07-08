@@ -67,13 +67,33 @@ _chat_locks: Dict[str, asyncio.Lock] = {}
 _TELEGRAM_MSG_LIMIT = 4096
 _CHUNK_AT = 4000
 
+# Telegram's Bot API caps file downloads at 20 MB; never buffer more than that.
+_MAX_MEDIA_BYTES = 20 * 1024 * 1024
+
+# Bound concurrent media handling. A voice handler can hold a ~20 MB audio
+# buffer and wait up to telegram_stt_ready_timeout_seconds for a Helios boot, so
+# a burst of notes (or a client auto-retry) could otherwise pile up unbounded
+# resident buffers + long-lived tasks. Lazily created so it binds to the running
+# loop, not import time (same discipline as the per-chat locks).
+_MEDIA_CONCURRENCY = 2
+_media_sem: Optional[asyncio.Semaphore] = None
+
+
+def _get_media_sem() -> asyncio.Semaphore:
+    global _media_sem
+    if _media_sem is None:
+        _media_sem = asyncio.Semaphore(_MEDIA_CONCURRENCY)
+    return _media_sem
+
+
 _HELP_TEXT = (
     "Hey, it's Jess. Text me like you would at home:\n"
     '• "add milk to the shopping list"\n'
     '• "remind me Thursday 3pm to call the dentist"\n'
     '• "what\'s on my calendar tomorrow?"\n'
     '• "what should I do right now?"\n'
-    "• or just brain-dump a paragraph and I'll sort it.\n\n"
+    "• or just brain-dump a paragraph and I'll sort it.\n"
+    "🎤 Send a voice note and I'll transcribe it. 📷 Send a photo and I'll read it.\n\n"
     "Commands: /new — start a fresh conversation, /help — this message.\n"
     "Reminders show up here with Done / Snooze buttons."
 )
@@ -81,6 +101,12 @@ _HELP_TEXT = (
 
 def _api_base() -> str:
     return f"{_settings.telegram_api_base.rstrip('/')}/bot{_settings.telegram_bot_token}"
+
+
+def _file_base() -> str:
+    """Base URL for downloading a file by its getFile `file_path` (a different
+    path shape from the Bot API methods — note `/file/bot<token>`)."""
+    return f"{_settings.telegram_api_base.rstrip('/')}/file/bot{_settings.telegram_bot_token}"
 
 
 def _redact(text: str) -> str:
@@ -359,6 +385,267 @@ async def _ask_jess(chat_id: str, text: str) -> str:
     return reply or "(no reply)"
 
 
+# ---------------------------------------------------------------------------
+# Inbound: media (voice notes → STT, photos → vision), both routed to full Jess
+# ---------------------------------------------------------------------------
+
+
+async def _download_file(client: httpx.AsyncClient, file_id: str, max_bytes: int) -> Optional[bytes]:
+    """getFile → download the bytes. Returns None on any failure or oversize."""
+    meta = await _tg_call(client, "getFile", {"file_id": file_id})
+    if not meta.get("ok"):
+        return None
+    result = meta.get("result") or {}
+    file_path = result.get("file_path")
+    if not file_path:
+        return None
+    if (result.get("file_size") or 0) > max_bytes:
+        logger.warning("[TELEGRAM] file %s exceeds %d bytes; skipping", file_id, max_bytes)
+        return None
+    try:
+        resp = await client.get(f"{_file_base()}/{file_path}", timeout=30.0)
+        if resp.status_code != 200:
+            logger.warning("[TELEGRAM] file download -> %s", resp.status_code)
+            return None
+        content = resp.content
+        if len(content) > max_bytes:
+            return None
+        return content
+    except Exception as e:
+        logger.warning("[TELEGRAM] file download failed: %s: %s", type(e).__name__, _redact(str(e)))
+        return None
+
+
+async def _stt_reachable(client: httpx.AsyncClient) -> bool:
+    """Fast probe of the STT (Whisper) endpoint. Any HTTP answer (incl. 404 on
+    /v1/models) means the server is up; connect error/timeout means asleep."""
+    try:
+        resp = await client.get(
+            f"{_settings.stt_url.rstrip('/')}/v1/models",
+            timeout=httpx.Timeout(3.0, connect=2.0),
+        )
+        return resp.status_code < 500
+    except Exception:
+        return False
+
+
+async def _wait_for_stt(client: httpx.AsyncClient, timeout_s: int) -> bool:
+    """Poll STT readiness after a Helios wake, up to timeout_s."""
+    deadline = time.monotonic() + max(0, timeout_s)
+    while True:
+        if await _stt_reachable(client):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(5.0)
+
+
+async def _transcribe(client: httpx.AsyncClient, audio: bytes, mime_type: str) -> Optional[str]:
+    """POST audio to the OpenAI-compatible Whisper endpoint. None on failure."""
+    try:
+        resp = await client.post(
+            f"{_settings.stt_url.rstrip('/')}/v1/audio/transcriptions",
+            files={"file": ("voice.oga", audio, mime_type or "audio/ogg")},
+            data={"model": "whisper-1"},
+            timeout=60.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("[TELEGRAM] STT -> %s: %s", resp.status_code, str(resp.text)[:200])
+            return None
+        return (resp.json().get("text") or "").strip()
+    except Exception as e:
+        logger.warning("[TELEGRAM] STT failed: %s: %s", type(e).__name__, _redact(str(e)))
+        return None
+
+
+async def _relay_locked(client: httpx.AsyncClient, chat_id: str, jess_input: str) -> str:
+    """Take the per-chat lock and relay through full Jess (typing indicator +
+    ordered history), same discipline as the text path."""
+    lock = _chat_locks.setdefault(chat_id, asyncio.Lock())
+    async with lock:
+        await _tg_call(client, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        return await _ask_jess(chat_id, jess_input)
+
+
+async def _handle_voice(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
+    """Bound media concurrency (see _get_media_sem) around the voice handler."""
+    async with _get_media_sem():
+        await _handle_voice_impl(client, chat_id, msg)
+
+
+async def _handle_voice_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
+    """Transcribe a voice note (waking Helios if STT is asleep) then route the
+    transcript through full Jess, exactly like a typed message."""
+    from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL, TELEGRAM_UPDATE_TOTAL
+
+    def _done(result: str, update: str = "error") -> None:
+        TELEGRAM_MEDIA_TOTAL.labels(kind="voice", result=result).inc()
+        TELEGRAM_UPDATE_TOTAL.labels(kind="voice", result=update).inc()
+
+    if not _settings.telegram_voice_enabled or not _settings.stt_url:
+        _done("disabled", "ignored")
+        await _send_text(client, chat_id, "Voice notes aren't enabled right now — text me instead.", kind="system")
+        return
+
+    voice = msg.get("voice") or msg.get("audio") or {}
+    if (voice.get("duration") or 0) > _settings.telegram_voice_max_seconds:
+        _done("too_long", "ignored")
+        limit_min = max(1, _settings.telegram_voice_max_seconds // 60)
+        await _send_text(
+            client,
+            chat_id,
+            f"That's a long one — I can transcribe up to {limit_min} min. Send a shorter note.",
+            kind="system",
+        )
+        return
+    file_id = voice.get("file_id")
+    if not file_id or (voice.get("file_size") or 0) > _MAX_MEDIA_BYTES:
+        _done("too_large", "ignored")
+        await _send_text(
+            client, chat_id, "That voice note is too big for me to fetch — try a shorter one.", kind="system"
+        )
+        return
+
+    audio = await _download_file(client, file_id, _MAX_MEDIA_BYTES)
+    if audio is None:
+        _done("download_failed")
+        await _send_text(client, chat_id, "I couldn't download that voice note — try sending it again.", kind="system")
+        return
+
+    # STT lives on Helios. If it's asleep, wake it (per config) and wait.
+    if not await _stt_reachable(client):
+        if not _settings.telegram_voice_wake_helios:
+            _done("stt_unreachable")
+            await _send_text(
+                client, chat_id, "My ears (GPU) are asleep — text me, or wake me first and resend.", kind="system"
+            )
+            return
+        await _send_text(
+            client, chat_id, "🎤 Waking my ears up — this can take a couple minutes. Hang tight…", kind="system"
+        )
+        from orchestrator import helios_power
+
+        wake = await helios_power.wake_helios()
+        if not wake.get("ok"):
+            _done("wake_failed")
+            await _send_text(
+                client, chat_id, "I couldn't wake my GPU to transcribe that. Text me for now.", kind="system"
+            )
+            return
+        if not await _wait_for_stt(client, _settings.telegram_stt_ready_timeout_seconds):
+            _done("stt_unreachable")
+            await _send_text(
+                client, chat_id, "Still booting my ears — give it another minute and resend, or text me.", kind="system"
+            )
+            return
+
+    transcript = await _transcribe(client, audio, voice.get("mime_type") or "audio/ogg")
+    if transcript is None:
+        _done("stt_failed")
+        await _send_text(client, chat_id, "I couldn't transcribe that one — try again.", kind="system")
+        return
+    if not transcript:
+        _done("empty_transcript", "ignored")
+        await _send_text(client, chat_id, "I couldn't make out any words in that. Try again?", kind="system")
+        return
+
+    reply = await _relay_locked(client, chat_id, transcript)
+    TELEGRAM_MEDIA_TOTAL.labels(kind="voice", result="ok").inc()
+    TELEGRAM_UPDATE_TOTAL.labels(kind="voice", result="ok").inc()
+    await _send_text(client, chat_id, f"🎤 “{transcript}”\n\n{reply}", kind="chat")
+
+
+def _pick_image(msg: Dict[str, Any]) -> tuple:
+    """Choose the file to analyze: the largest photo size, or an image document.
+    Returns (file_id, mime_type) or (None, "")."""
+    from orchestrator.vision_handler import SUPPORTED_MIME_TYPES
+
+    photos = msg.get("photo")
+    if photos:  # ascending sizes; the last/biggest is best for OCR
+        largest = max(photos, key=lambda p: (p.get("file_size") or 0, p.get("width") or 0))
+        return largest.get("file_id"), "image/jpeg"
+    doc = msg.get("document") or {}
+    mime = str(doc.get("mime_type") or "")
+    if mime in SUPPORTED_MIME_TYPES and doc.get("file_id"):
+        return doc.get("file_id"), mime
+    return None, ""
+
+
+async def _handle_photo(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
+    """Bound media concurrency (see _get_media_sem) around the photo handler."""
+    async with _get_media_sem():
+        await _handle_photo_impl(client, chat_id, msg)
+
+
+async def _handle_photo_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[str, Any]) -> None:
+    """Describe a photo via the vision model, then route the description (plus
+    any caption) through full Jess so it can capture/answer/act on it."""
+    import base64
+
+    from orchestrator.metrics import TELEGRAM_MEDIA_TOTAL, TELEGRAM_UPDATE_TOTAL
+
+    def _done(result: str, update: str = "error") -> None:
+        TELEGRAM_MEDIA_TOTAL.labels(kind="photo", result=result).inc()
+        TELEGRAM_UPDATE_TOTAL.labels(kind="photo", result=update).inc()
+
+    if not _settings.telegram_photo_enabled or not _settings.vision_enabled:
+        _done("disabled", "ignored")
+        await _send_text(
+            client, chat_id, "Photo understanding isn't enabled right now — text me instead.", kind="system"
+        )
+        return
+
+    file_id, mime = _pick_image(msg)
+    if not file_id:
+        _done("download_failed", "ignored")
+        await _send_text(
+            client, chat_id, "I couldn't find a supported image in that (JPEG/PNG/WebP/GIF).", kind="system"
+        )
+        return
+
+    await _tg_call(client, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
+    img = await _download_file(client, file_id, min(_MAX_MEDIA_BYTES, _settings.vision_max_image_size))
+    if img is None:
+        _done("download_failed")
+        await _send_text(client, chat_id, "I couldn't download that photo — try sending it again.", kind="system")
+        return
+
+    try:
+        from orchestrator.vision_handler import analyze_image
+
+        data_uri = f"data:{mime};base64,{base64.b64encode(img).decode('ascii')}"
+        description = await analyze_image(
+            data_uri, "Describe this image in detail, including any visible text transcribed verbatim."
+        )
+    except Exception as e:
+        logger.error("[TELEGRAM] Vision analysis failed: %s: %s", type(e).__name__, _redact(str(e)))
+        _done("vision_failed")
+        await _send_text(client, chat_id, "I couldn't make sense of that photo just now — try again.", kind="system")
+        return
+
+    # analyze_image signals failure by RETURNING a bracketed sentinel string
+    # (e.g. "[Vision model timed out...]"), never by raising — so an empty check
+    # alone would forward that error text into Jess as if it were a real caption.
+    description = (description or "").strip()
+    if not description or (description.startswith("[") and description.endswith("]")):
+        _done("vision_failed")
+        await _send_text(client, chat_id, "I couldn't make sense of that photo just now — try again.", kind="system")
+        return
+
+    caption = (msg.get("caption") or "").strip()
+    note = f"\n\nMy note with the photo: {caption}" if caption else ""
+    jess_input = f"[I sent you a photo. Here is what image analysis reports it shows:]\n{description}{note}"
+    reply = await _relay_locked(client, chat_id, jess_input)
+    TELEGRAM_MEDIA_TOTAL.labels(kind="photo", result="ok").inc()
+    TELEGRAM_UPDATE_TOTAL.labels(kind="photo", result="ok").inc()
+    await _send_text(client, chat_id, f"📷 {reply}", kind="chat")
+
+
+# ---------------------------------------------------------------------------
+# Inbound: text messages + commands
+# ---------------------------------------------------------------------------
+
+
 async def _handle_message(client: httpx.AsyncClient, msg: Dict[str, Any]) -> None:
     from orchestrator.metrics import TELEGRAM_UPDATE_TOTAL
 
@@ -368,13 +655,22 @@ async def _handle_message(client: httpx.AsyncClient, msg: Dict[str, Any]) -> Non
         TELEGRAM_UPDATE_TOTAL.labels(kind="message", result="denied").inc()
         return
 
+    # Media subtypes route to their own handlers (both end in full Jess).
+    if msg.get("voice") or msg.get("audio"):
+        await _handle_voice(client, chat_id, msg)
+        return
+    doc = msg.get("document") or {}
+    if msg.get("photo") or str(doc.get("mime_type") or "").startswith("image/"):
+        await _handle_photo(client, chat_id, msg)
+        return
+
     text = (msg.get("text") or "").strip()
     if not text:
         TELEGRAM_UPDATE_TOTAL.labels(kind="message", result="ignored").inc()
         await _send_text(
             client,
             chat_id,
-            "I can only handle text so far — voice notes and photos are on the roadmap.",
+            "I can handle text, voice notes, and photos — but not that kind of message yet.",
             kind="system",
         )
         return

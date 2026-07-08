@@ -430,7 +430,8 @@ TELEGRAM_SEND_LATENCY = Histogram(
 TELEGRAM_UPDATE_TOTAL = Counter(
     "bgw_telegram_update_total",
     "Inbound Telegram updates by disposition",
-    # kind:   message | callback | other
+    # kind:   message | voice | photo | callback | other
+    #         (voice/photo media outcomes are also broken out in TELEGRAM_MEDIA_TOTAL)
     # result: ok | denied | ignored | error
     ["kind", "result"],
 )
@@ -441,6 +442,16 @@ TELEGRAM_CALLBACK_TOTAL = Counter(
     # action: ack | snooze | unknown
     # result: ok | already | not_found | limit | error
     ["action", "result"],
+)
+
+TELEGRAM_MEDIA_TOTAL = Counter(
+    "bgw_telegram_media_total",
+    "Inbound Telegram media (voice/photo) processing outcomes",
+    # kind:   voice | photo
+    # result: ok | disabled | too_long | too_large | download_failed |
+    #         stt_unreachable | stt_failed | empty_transcript |
+    #         wake_failed | vision_failed
+    ["kind", "result"],
 )
 
 # Last-persisted getUpdates offset — makes the poll loop's resume-across-restart
