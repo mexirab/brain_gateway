@@ -33,6 +33,21 @@ class SelfCareState:
 _state = SelfCareState()
 
 
+# Detail markers that identify a BROAD "took my meds" confirmation (vs. a single
+# named med). These come from record_medication_logged's callers: the Telegram
+# ✓ Done nudge ("telegram:medication nudge"), the routine bridge ("routine:meds"),
+# grouped confirmations ("morning meds (...)"), and the bare default "medication".
+# _restore_state uses this to decide whether to rebuild the generic "medication"
+# gate that _check_meds reads first.
+_BROAD_MED_MARKERS = ("medication", "meds", "nudge", "routine:")
+
+
+def _is_broad_med_confirmation(label: str) -> bool:
+    """True if a selfcare_log med `detail` was a window-wide confirmation rather
+    than one named med — so restoring it should re-arm the generic gate."""
+    return any(marker in label for marker in _BROAD_MED_MARKERS)
+
+
 def _restore_state() -> None:
     """Restore selfcare state from persistent storage on startup."""
     try:
@@ -52,13 +67,26 @@ def _restore_state() -> None:
             _state.last_movement_nudge = last_movement
             _state.sitting_since = last_movement
 
-        # Restore today's med confirmations
+        # Restore today's med confirmations. _check_meds gates FIRST on the
+        # generic "medication" key (set by record_medication_logged — Telegram
+        # ✓ Done taps, the routine bridge, grouped "morning meds" logs). Rebuilding
+        # only per-label keys (the old behavior) left that generic gate empty, so
+        # every restart re-fired an already-taken med nudge: the "I tapped Done but
+        # the meds reminder keeps coming" bug, amplified by frequent deploys.
         today_meds = get_selfcare_today("medication")
         for entry in today_meds:
             med_name = (entry.get("detail") or "medication").lower()
             logged_at = datetime.fromisoformat(entry["logged_at"])
             _state.last_med_confirmation[med_name] = logged_at
             _expand_med_confirmation(med_name, logged_at)
+            # Broad confirmations re-arm the generic gate; a single named-med log
+            # ("I took my Guanfacine") must NOT, or it would wrongly suppress the
+            # window's other meds. Keep the latest so the current window's hour
+            # check (morning <12 / evening >=17) reflects the most recent dose.
+            if _is_broad_med_confirmation(med_name):
+                prev = _state.last_med_confirmation.get("medication")
+                if prev is None or logged_at > prev:
+                    _state.last_med_confirmation["medication"] = logged_at
 
     except Exception as e:
         logger.warning(f"[SELFCARE] Failed to restore state from DB: {e}")
