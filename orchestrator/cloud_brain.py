@@ -7,6 +7,7 @@ intent routing, prompt building, LLM calls, and response streaming.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -19,6 +20,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from orchestrator import setup_env, shared, welcome
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
+    CHAT_STREAM_OUTCOME,
+    CHAT_TTFT,
     FAST_PATH_COUNT,
     MODE_ROUTE_COUNT,
     REQUEST_COUNT,
@@ -347,6 +350,21 @@ class CloudBrain:
         # template to fail ("System message must be at the beginning" / duplicate system).
         messages = [m for m in messages if m.get("role") != "system"]
 
+        # Real streaming: relay gate-safe tokens while the loop is still
+        # running. Skipped for the literal first-ever chat so the one-time
+        # welcome prepend keeps its ordering, and killable at runtime via
+        # REAL_STREAMING_ENABLED=false (restores chunk-the-finished-string).
+        if stream and shared.REAL_STREAMING_ENABLED and not is_first_chat():
+            routing_info["streaming"] = "real"
+            return self._stream_loop_response(
+                messages=messages.copy(),
+                system_prompt=system_prompt,
+                tools=tools,
+                model_url=model_url,
+                model_name=model_name,
+                is_voice=is_voice,
+            )
+
         try:
             result = await self._run_unified_loop(
                 messages=messages.copy(),
@@ -540,8 +558,6 @@ class CloudBrain:
             # Schedule/reschedule extraction job
             job_id = f"auto_learn_{session_key}"
 
-            import contextlib
-
             with contextlib.suppress(Exception):
                 shared.scheduler.remove_job(job_id)
 
@@ -567,6 +583,149 @@ class CloudBrain:
         messages = shared._auto_learn_conversations.pop(session_key, None)
         if messages:
             await run_auto_learn(messages)
+
+    def _stream_loop_response(
+        self,
+        *,
+        messages: List[Dict],
+        system_prompt: str,
+        tools: List[Dict],
+        model_url: str,
+        model_name: str,
+        is_voice: bool,
+    ):
+        """Real streaming: run the unified loop in a producer task and relay
+        its gate-safe deltas as OpenAI SSE chunks while it executes.
+
+        Semantics parity with the buffered path:
+        - Loop failure with NOTHING emitted yet → try the fallback model
+          (buffered), exactly like _chat_unified_inner's except branch.
+        - Loop failure AFTER emission → the partial text stands; the stream
+          closes cleanly (a retry would double-send).
+        - Rounds that fell back to buffered mode emit their text via the
+          loop's _finalize, so the client always receives the full answer.
+        - Client disconnect cancels the producer (tools mid-flight included);
+          same cancellation the buffered handler gets from starlette.
+        """
+        chunk_id = f"chatcmpl-{int(time.time())}"
+        # Bounded so a slow/stalled SSE consumer applies real backpressure to the
+        # producer instead of letting it buffer the whole answer in memory.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        emitted_flag = {"v": False}
+        # Snapshot the original messages BEFORE the primary loop mutates the list
+        # in place (it appends assistant/tool/user turns). The fallback model must
+        # start from the clean request, matching the buffered _unified_fallback
+        # path — otherwise it inherits the primary's dangling tool_call/tool
+        # messages, which a different fallback backend can choke on.
+        original_messages = list(messages)
+
+        async def _on_delta(text: str) -> None:
+            emitted_flag["v"] = True
+            await queue.put(("delta", text))
+
+        async def producer():
+            try:
+                result = await self._run_unified_loop(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    model_url=model_url,
+                    model_name=model_name,
+                    http_client=None,
+                    is_voice=is_voice,
+                    on_delta=_on_delta,
+                )
+                self._schedule_auto_learn(messages)
+                await queue.put(("final", result))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("[UNIFIED-STREAM] Tool loop failed: %s", e)
+                REQUEST_ERRORS.labels(mode="unified", error_type="tool_loop_failed").inc()
+                if not emitted_flag["v"] and self._fallback_model_url:
+                    logger.info("[UNIFIED-STREAM] Nothing emitted — trying fallback model (buffered)")
+                    REQUEST_COUNT.labels(mode="unified_fallback").inc()
+                    CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_fallback").inc()
+                    try:
+                        result = await self._run_unified_loop(
+                            messages=original_messages,
+                            system_prompt=system_prompt,
+                            tools=self._get_all_tools(),
+                            model_url=self._fallback_model_url,
+                            model_name=self._fallback_model_name,
+                            http_client=None,
+                            is_voice=is_voice,
+                        )
+                        self._schedule_auto_learn(original_messages)
+                        await queue.put(("final", result))
+                        return
+                    except Exception as fb_err:
+                        logger.error("[UNIFIED-STREAM] Fallback also failed: %s", fb_err)
+                        REQUEST_ERRORS.labels(mode="unified_fallback", error_type="fallback_failed").inc()
+                        CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_error").inc()
+                else:
+                    CHAT_STREAM_OUTCOME.labels(outcome="loop_failed_error").inc()
+                await queue.put(("error", str(e)))
+
+        def _sse(delta: Dict, finish_reason=None) -> str:
+            return (
+                "data: "
+                + json.dumps(
+                    {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model_name,
+                        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+                    }
+                )
+                + "\n\n"
+            )
+
+        async def generate():
+            task = asyncio.create_task(producer())
+            emitted = False
+            t0 = time.time()
+            try:
+                while True:
+                    kind, payload = await queue.get()
+                    if kind == "delta":
+                        if not emitted:
+                            emitted = True
+                            CHAT_TTFT.observe(time.time() - t0)
+                        yield _sse({"content": payload})
+                    elif kind == "final":
+                        # Fully-buffered turns (fallback model, non-stream-capable
+                        # backend edge cases) produced no deltas — send the whole
+                        # answer as one chunk so behavior matches _stream_text.
+                        if not emitted and payload:
+                            CHAT_TTFT.observe(time.time() - t0)
+                            yield _sse({"content": payload})
+                        yield _sse({}, finish_reason="stop")
+                        yield "data: [DONE]\n\n"
+                        return
+                    else:  # error
+                        if not emitted:
+                            yield _sse({"content": "Sorry, something went wrong. Please try again."})
+                        yield _sse({}, finish_reason="stop")
+                        yield "data: [DONE]\n\n"
+                        return
+            finally:
+                # Cancel AND join the producer so it is deterministically unwound
+                # (a mid-flight state-mutating tool finishes cancelling) before the
+                # generator returns, and any non-cancel error it raised during
+                # teardown is retrieved rather than left as "exception never
+                # retrieved".
+                if not task.done():
+                    task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def _stream_text(self, text: str, model: str):
         """Stream a text response in SSE format."""

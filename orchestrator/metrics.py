@@ -184,6 +184,38 @@ WIND_DOWN_SCENE_RESULT = Counter(
     ["scene", "result"],
 )
 
+# Time-to-first-token on streamed chat requests — the metric real streaming
+# exists to improve. Observed at the first SSE content chunk relayed to the
+# client; buffered fallbacks observe at their single final chunk, so a
+# streaming regression shows up as this histogram collapsing toward
+# REQUEST_LATENCY.
+CHAT_TTFT = Histogram(
+    "bgw_chat_ttft_seconds",
+    "Time to first streamed content chunk on /v1/chat/completions",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0],
+)
+
+# Streaming degradation events — the happy path (a clean streamed answer) is
+# NOT counted; the denominator is bgw_chat_ttft_seconds_count. Only the
+# non-ideal outcomes land here so on-call can trend "how often is streaming
+# quietly falling back or truncating":
+#   not_stream_capable  — the resolved backend can't stream; the whole request
+#                         ran buffered (primary should always stream, so this
+#                         firing means something is off with it).
+#   pre_emission_retry  — a streamed round errored before any token reached the
+#                         client; retried buffered (invisible to the user).
+#   died_mid_emission   — a stream died AFTER emitting; the user got a SILENTLY
+#                         TRUNCATED answer. Watched by ChatStreamTruncating.
+#   loop_failed_fallback — the whole loop threw with nothing emitted; fell back
+#                          to the fallback model (buffered).
+#   loop_failed_error    — the loop threw and the fallback also failed / was
+#                          unavailable; the client got the generic apology.
+CHAT_STREAM_OUTCOME = Counter(
+    "bgw_chat_stream_outcome_total",
+    "Streaming chat degradation events (happy path uncounted; denominator = bgw_chat_ttft_seconds_count)",
+    ["outcome"],
+)
+
 # -- Model Health -----------------------------------------------------------
 HELIOS_ONLINE = Gauge(
     "bgw_helios_online",

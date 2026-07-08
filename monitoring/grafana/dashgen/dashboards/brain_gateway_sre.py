@@ -95,6 +95,42 @@ def build() -> dict:
     row, y = grid_row(request_flow, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    # Real streaming (SSE token relay through the unified tool loop): TTFT is the
+    # metric the feature exists to improve; the outcome counter surfaces silent
+    # degradation (buffered fallback, mid-emission truncation).
+    streaming_flow = [
+        timeseries(
+            "Chat TTFT (p50 / p95 / p99)",
+            [
+                ("histogram_quantile(0.50, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))", "p50"),
+                ("histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))", "p95"),
+                ("histogram_quantile(0.99, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))", "p99"),
+            ],
+            unit="s",
+            description="Time to first streamed token on /v1/chat/completions. If this "
+            "collapses toward Request Latency, streaming has silently degraded to the "
+            "buffered path — cross-check the degradation panel.",
+        ),
+        timeseries(
+            "Stream Degradation Events (/min)",
+            [("sum by (outcome) (rate(bgw_chat_stream_outcome_total[5m])) * 60", "{{outcome}}")],
+            unit="none",
+            stack=True,
+            description="Non-happy streaming outcomes (happy path is uncounted; denominator "
+            "is the TTFT count). died_mid_emission = the user got a truncated answer.",
+        ),
+        stat(
+            "Truncated Answers (died_mid_emission, 24h)",
+            'sum(increase(bgw_chat_stream_outcome_total{outcome="died_mid_emission"}[24h])) or vector(0)',
+            unit="none",
+            thresholds=[(None, "green"), (1, "orange")],
+            description="Streams that died after emitting → user saw a silently truncated "
+            "reply. Watched by the ChatStreamTruncating alert.",
+        ),
+    ]
+    row, y = grid_row(streaming_flow, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Mode Router
     r, y = row_divider("Mode Router", y)
     panels.append(r)

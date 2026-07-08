@@ -174,6 +174,7 @@ embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=Tr
 # Agentic settings
 # ---------------------------------------------------------------------------
 MAX_TOOL_ROUNDS = settings.max_tool_rounds
+REAL_STREAMING_ENABLED = settings.real_streaming_enabled
 
 # ---------------------------------------------------------------------------
 # Shared httpx client (initialized in startup_event)

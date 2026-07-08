@@ -75,6 +75,11 @@ class Settings(BaseSettings):
 
     # -- Agentic loop ------------------------------------------------------------
     max_tool_rounds: int = 5
+    # Real token streaming: relay the model's tokens through SSE as they
+    # generate (vLLM primary only; fallback backends stay buffered). Kill
+    # switch — flip to false to restore chunk-the-finished-string behavior
+    # without a code change.
+    real_streaming_enabled: bool = True
 
     # -- Home Assistant (empty = disabled) ----------------------------------------
     ha_url: str = ""

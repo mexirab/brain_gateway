@@ -13,6 +13,7 @@ import time
 from typing import Any, Dict, List
 
 from orchestrator.metrics import (
+    CHAT_STREAM_OUTCOME,
     LLM_CALL_COUNT,
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
@@ -84,6 +85,180 @@ def clean_response(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
     return text.strip()
+
+
+class StreamGate:
+    """Stateful filter deciding which streamed content is safe to emit live.
+
+    Mirrors clean_response for a token stream: suppresses <think>…</think>
+    and <tool_call>…</tool_call> blocks, and holds back any trailing text
+    that could be the start of one of those tags until enough characters
+    arrive to disambiguate (vLLM's reasoning parser usually routes thinking
+    to delta.reasoning_content, so the gate is a defensive second layer —
+    XML-fallback tool calls DO arrive in delta.content).
+    """
+
+    _OPEN_TAGS = ("<think>", "<tool_call>")
+    _CLOSERS = {"<think>": "</think>", "<tool_call>": "</tool_call>"}
+
+    def __init__(self):
+        self._pending = ""
+        self._suppress_until: str | None = None
+
+    def feed(self, text: str) -> str:
+        """Absorb a content delta, return the part that is safe to emit."""
+        self._pending += text
+        out: list = []
+        while self._pending:
+            if self._suppress_until:
+                idx = self._pending.find(self._suppress_until)
+                if idx == -1:
+                    # Keep only a tail that could still be a partial closer.
+                    keep = len(self._suppress_until) - 1
+                    self._pending = self._pending[-keep:] if len(self._pending) > keep else self._pending
+                    break
+                self._pending = self._pending[idx + len(self._suppress_until) :]
+                self._suppress_until = None
+                continue
+
+            lt = self._pending.find("<")
+            if lt == -1:
+                out.append(self._pending)
+                self._pending = ""
+                break
+            out.append(self._pending[:lt])
+            rest = self._pending[lt:]
+
+            matched = next((tag for tag in self._OPEN_TAGS if rest.startswith(tag)), None)
+            if matched:
+                self._suppress_until = self._CLOSERS[matched]
+                self._pending = rest[len(matched) :]
+                continue
+            if any(tag.startswith(rest) for tag in self._OPEN_TAGS):
+                # Could still become a sentinel tag — hold it back.
+                self._pending = rest
+                break
+            # A '<' that is provably not a sentinel: emit it and move on.
+            out.append("<")
+            self._pending = rest[1:]
+        return "".join(out)
+
+    def flush(self) -> str:
+        """End of stream: release held-back text (unless mid-suppression)."""
+        if self._suppress_until:
+            self._pending = ""
+            return ""
+        out, self._pending = self._pending, ""
+        return out
+
+
+async def _stream_model_round(
+    backend,
+    messages: List[Dict],
+    system_prompt: str,
+    tools,
+    tool_choice: str,
+    timeout: int,
+    extra_body,
+    emit,
+    label: str,
+) -> Dict[str, Any]:
+    """One streamed model round: relay gate-safe content via `emit` while
+    assembling the full content + tool_calls.
+
+    Never raises after the first emitted character — a mid-stream error is
+    downgraded to "the stream ended here" so the caller can't double-send
+    text by retrying. Returns:
+        {"content", "tool_calls", "finish_reason", "emitted", "reasoning_len",
+         "error": Exception | None}
+    """
+    gate = StreamGate()
+    parts: List[str] = []
+    tool_parts: Dict[int, Dict[str, Any]] = {}
+    finish_reason = None
+    emitted = 0
+    reasoning_len = 0
+    error: Exception | None = None
+
+    try:
+        async for sse in backend.stream_chat_completion(
+            messages,
+            system=system_prompt,
+            timeout=timeout,
+            tools=tools,
+            tool_choice=tool_choice,
+            extra_body=extra_body,
+        ):
+            line = sse.strip()
+            if not line.startswith("data: "):
+                continue
+            data = line[6:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choice = (chunk.get("choices") or [{}])[0]
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+            delta = choice.get("delta") or {}
+
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning:
+                reasoning_len += len(reasoning)
+
+            content = delta.get("content")
+            if content:
+                parts.append(content)
+                safe = gate.feed(content)
+                if safe:
+                    emitted += len(safe)
+                    await emit(safe)
+
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                part = tool_parts.setdefault(
+                    idx, {"id": None, "type": "function", "function": {"name": "", "arguments": ""}}
+                )
+                if tc.get("id"):
+                    part["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    part["function"]["name"] = fn["name"]
+                if fn.get("arguments"):
+                    part["function"]["arguments"] += fn["arguments"]
+    except Exception as e:  # noqa: BLE001 — downgraded by design, see docstring
+        error = e
+        if emitted or tool_parts:
+            logger.warning("[%s] Stream ended early after %d emitted chars: %s", label, emitted, e)
+
+    tail = gate.flush()
+    if tail and error is None:
+        emitted += len(tail)
+        await emit(tail)
+
+    tool_calls = []
+    if error is None:
+        # A truncated stream can leave a tool call with half-baked JSON args —
+        # executing that would be worse than dropping it, so tool_calls are
+        # only trusted from a cleanly-finished stream.
+        for idx in sorted(tool_parts):
+            part = tool_parts[idx]
+            if not part["id"]:
+                part["id"] = f"call_s{idx}"
+            tool_calls.append(part)
+    elif tool_parts:
+        logger.warning("[%s] Dropping %d tool call(s) from a broken stream", label, len(tool_parts))
+
+    return {
+        "content": "".join(parts),
+        "tool_calls": tool_calls,
+        "finish_reason": finish_reason,
+        "emitted": emitted,
+        "reasoning_len": reasoning_len,
+        "error": error,
+    }
 
 
 def parse_xml_tool_calls(content: str) -> List[Dict[str, Any]]:
@@ -185,6 +360,7 @@ async def run_unified_tool_loop(
     max_rounds: int = MAX_TOOL_ROUNDS,
     label: str = "UNIFIED",
     is_voice: bool = False,
+    on_delta=None,
 ) -> str:
     """
     Unified agentic tool loop with native function calling.
@@ -202,6 +378,11 @@ async def run_unified_tool_loop(
         http_client: Not used directly (call_model resolves backend).
         max_rounds: Maximum tool execution rounds.
         label: Log label.
+        on_delta: Optional async callback awaited with gate-safe text as the
+            model generates it (real streaming). Rounds fall back to buffered
+            call_model when the backend can't stream or a stream dies before
+            anything was emitted. The return value stays the canonical final
+            text either way.
 
     Returns:
         Final text response from the model.
@@ -209,6 +390,47 @@ async def run_unified_tool_loop(
     # Import here to avoid circular import (tool_handlers imports shared)
     from orchestrator.orchestrator import call_model
     from orchestrator.tool_handlers import execute_tool
+
+    stream_backend = None
+    if on_delta is not None:
+        try:
+            from orchestrator.orchestrator import get_stream_capable_backend
+
+            stream_backend = get_stream_capable_backend(model_url, model_name)
+        except Exception as e:
+            logger.warning("[%s] Stream backend resolution failed: %s", label, e)
+        if stream_backend is None:
+            logger.info("[%s] Backend not stream-capable — buffered rounds", label)
+            CHAT_STREAM_OUTCOME.labels(outcome="not_stream_capable").inc()
+
+    # Total gate-safe chars relayed to the client so far. Later rounds insert
+    # a paragraph break before their first emission so multi-round answers
+    # ("let me check… <tools run> …here's the answer") read as one message.
+    emitted_total = 0
+
+    def _make_emitter():
+        state = {"sep": emitted_total > 0}
+
+        async def _emit(text: str):
+            nonlocal emitted_total
+            if state["sep"]:
+                state["sep"] = False
+                emitted_total += 2
+                await on_delta("\n\n")
+            emitted_total += len(text)
+            await on_delta(text)
+
+        return _emit
+
+    async def _finalize(text: str, *, already_streamed: bool) -> str:
+        """Return the final text, emitting it first if it never went through
+        the stream (buffered-fallback rounds, error apologies, max-rounds)."""
+        if on_delta is not None and not already_streamed and text:
+            try:
+                await _make_emitter()(text)
+            except Exception as e:  # noqa: BLE001 — emission must not eat the answer
+                logger.warning("[%s] Final emit failed: %s", label, e)
+        return text
 
     # Voice mode: reduce max_tokens for shorter responses (faster TTS) and
     # disable Qwen3 thinking. With vLLM's reasoning parser, thinking gets
@@ -235,43 +457,96 @@ async def run_unified_tool_loop(
         logger.info("[%s] Round %d/%d", label, round_num + 1, max_rounds)
 
         _llm_t0 = time.time()
-        try:
-            llm_resp = await call_model(
-                model_url,
-                model_name,
+        llm_resp = None
+        if stream_backend is not None:
+            sr = await _stream_model_round(
+                stream_backend,
                 messages,
-                system=system_prompt,
-                tools=tools,
-                tool_choice="auto",
-                timeout=120,
-                extra_body=voice_extra,
+                system_prompt,
+                tools,
+                "auto",
+                120,
+                voice_extra,
+                _make_emitter(),
+                label,
             )
             LLM_CALL_COUNT.labels(model=model_name, purpose="unified_loop").inc()
             LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_loop").observe(time.time() - _llm_t0)
-        except Exception as e:
-            LLM_CALL_ERRORS.labels(model=model_name, error_type=type(e).__name__).inc()
-            logger.error("[%s] Call failed: %s", label, e)
-            return "Sorry, I couldn't complete that action. Please try again."
+            if sr["error"] is not None and sr["emitted"] == 0:
+                # Clean failure before anything reached the client — a
+                # buffered retry below is safe and can't double-send text.
+                LLM_CALL_ERRORS.labels(model=model_name, error_type=type(sr["error"]).__name__).inc()
+                CHAT_STREAM_OUTCOME.labels(outcome="pre_emission_retry").inc()
+                logger.warning("[%s] Streamed round failed pre-emission (%s) — buffered retry", label, sr["error"])
+            elif sr["error"] is not None:
+                # Partial answer is already on the client's screen; retrying
+                # would duplicate it. End the turn with what got through.
+                LLM_CALL_ERRORS.labels(model=model_name, error_type=type(sr["error"]).__name__).inc()
+                CHAT_STREAM_OUTCOME.labels(outcome="died_mid_emission").inc()
+                TOOL_ROUNDS.observe(round_num + 1)
+                logger.error("[%s] Stream died mid-answer — returning partial (%d chars)", label, sr["emitted"])
+                return clean_response(sr["content"])
+            else:
+                llm_resp = {
+                    "choices": [{"message": {"content": sr["content"], "tool_calls": sr["tool_calls"] or None}}]
+                }
+                logger.info(
+                    "[%s] LLM probe (stream): raw_len=%d reasoning_len=%d emitted=%d tool_calls=%d elapsed=%.2fs",
+                    label,
+                    len(sr["content"]),
+                    sr["reasoning_len"],
+                    sr["emitted"],
+                    len(sr["tool_calls"]),
+                    time.time() - _llm_t0,
+                )
+
+        streamed_this_round = llm_resp is not None
+
+        if llm_resp is None:
+            try:
+                llm_resp = await call_model(
+                    model_url,
+                    model_name,
+                    messages,
+                    system=system_prompt,
+                    tools=tools,
+                    tool_choice="auto",
+                    timeout=120,
+                    extra_body=voice_extra,
+                )
+                LLM_CALL_COUNT.labels(model=model_name, purpose="unified_loop").inc()
+                LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_loop").observe(time.time() - _llm_t0)
+            except Exception as e:
+                LLM_CALL_ERRORS.labels(model=model_name, error_type=type(e).__name__).inc()
+                logger.error("[%s] Call failed: %s", label, e)
+                return await _finalize(
+                    "Sorry, I couldn't complete that action. Please try again.", already_streamed=False
+                )
+
+            choice = llm_resp.get("choices", [{}])[0]
+            _message_probe = choice.get("message", {})
+            _content_probe = _message_probe.get("content") or ""
+
+            # Per-call LLM telemetry: prompt/completion tokens, think-tag
+            # presence, wall-clock latency. Kept as an INFO log (not just
+            # metrics) so you can correlate a specific turn's token load with
+            # its latency in Loki.
+            _usage = llm_resp.get("usage") or {}
+            _has_think = "<think>" in _content_probe
+            logger.info(
+                "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s elapsed=%.2fs",
+                label,
+                _usage.get("prompt_tokens"),
+                _usage.get("completion_tokens"),
+                len(_content_probe),
+                _has_think,
+                time.time() - _llm_t0,
+            )
 
         choice = llm_resp.get("choices", [{}])[0]
         message = choice.get("message", {})
         tool_calls = message.get("tool_calls") or []
         content = message.get("content") or ""
-
-        # Per-call LLM telemetry: prompt/completion tokens, think-tag presence,
-        # wall-clock latency. Kept as an INFO log (not just metrics) so you can
-        # correlate a specific turn's token load with its latency in Loki.
-        _usage = llm_resp.get("usage") or {}
-        _has_think = "<think>" in content
-        logger.info(
-            "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s elapsed=%.2fs",
-            label,
-            _usage.get("prompt_tokens"),
-            _usage.get("completion_tokens"),
-            len(content),
-            _has_think,
-            time.time() - _llm_t0,
-        )
 
         # Fallback: parse XML <tool_call> tags if no native tool_calls
         if not tool_calls and content:
@@ -295,7 +570,7 @@ async def run_unified_tool_loop(
                     except Exception as e:
                         logger.warning("[%s] Auto selfcare_log failed: %s", label, e)
 
-            return result
+            return await _finalize(result, already_streamed=streamed_this_round)
 
         # Filter out duplicate calls (already executed in a previous round)
         new_tool_calls = []
@@ -336,11 +611,13 @@ async def run_unified_tool_loop(
                 LLM_CALL_COUNT.labels(model=model_name, purpose="unified_final").inc()
                 LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_final").observe(time.time() - _final_t0)
                 final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-                return clean_response(final_content)
+                return await _finalize(clean_response(final_content), already_streamed=False)
             except Exception as e:
                 LLM_CALL_ERRORS.labels(model=model_name, error_type=type(e).__name__).inc()
                 logger.error("[%s] Final response failed: %s", label, e)
-                return "I found some results but couldn't summarize them. Please try again."
+                return await _finalize(
+                    "I found some results but couldn't summarize them. Please try again.", already_streamed=False
+                )
 
         # Execute new tool calls
         logger.info("[%s] Processing %d tool call(s)", label, len(new_tool_calls))
@@ -440,4 +717,7 @@ async def run_unified_tool_loop(
     # Hit max rounds
     TOOL_ROUNDS.observe(max_rounds)
     logger.warning("[%s] Hit max tool rounds (%d)", label, max_rounds)
-    return "I tried to complete that but ran into some complexity. Please try a simpler request."
+    return await _finalize(
+        "I tried to complete that but ran into some complexity. Please try a simpler request.",
+        already_streamed=False,
+    )

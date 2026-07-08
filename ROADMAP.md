@@ -66,7 +66,7 @@ The mode router already classifies per-utterance intensity (panic/shame/spiral).
 
 | Item | Why | Status |
 |------|-----|--------|
-| **Real streaming** | Time-to-first-token is the entire tool loop because streaming is faked (`cloud_brain._stream_text` chunks a finished string). Stream the final answer round's tokens from vLLM through SSE. Single biggest remaining latency lever for voice/chat. | ⬜ |
+| **Real streaming** | ~~Faked~~ ✅ BUILT (July 2026): every model round streams from vLLM; gate-safe tokens relay through SSE while the tool loop runs (`unified_loop.StreamGate` suppresses think/XML-tool-call blocks, tool_calls assemble from deltas, buffered fallback per round). `REAL_STREAMING_ENABLED` kill switch; `bgw_chat_ttft_seconds` histogram. HA Assist/Telegram (`stream=false`) unchanged. | ✅ |
 | **`/api/announce` honesty** | Returns `ok: true` even when every speaker fails (only 500s if the call raises) — dashboard looks successful during an HA outage. Small fix, real honesty. | ⬜ |
 | **`.claude/agents/*.md` refresh** | Still describe the removed v6 Nemotron architecture and will mislead the review agents CLAUDE.md invokes; `prod-support.md` also references the deleted Deep-Dive dashboard. | ⬜ |
 | **Grafana Alertmanager datasource** | The loose thread from the dashboard consolidation — alerts don't render in the single pane yet. | ⬜ |
@@ -120,7 +120,7 @@ Needs vLLM 0.19.2+ (KV-calc fix) and the primary moving GPU0 → GPU1 (the 5090 
 3. ~~Trust layer~~ — ✅ BUILT (morning recap + delivery log on the dashboard + Grafana trust row)
 4. ~~Evening shutdown ritual + sleep wind-down ladder~~ ✅ BOTH BUILT (July 2026)
 5. **Geofenced errand reminders** — mostly wiring
-6. **Real streaming** — biggest latency lever
+6. ~~Real streaming~~ ✅ BUILT (July 2026)
 7. **Jess Face deploy** — hardware session when home (Pi + USB mic)
 8. **Quick honesty/debt fixes** — `/api/announce`, agents docs, Alertmanager datasource (each < an hour, batchable)
 9. **Time-estimation calibration** → **reward economy** → **mood log** — the intelligence tier, in that order

@@ -332,6 +332,19 @@ async def stream_final_response(url: str, model: str, messages: List[Dict], syst
         yield chunk
 
 
+def get_stream_capable_backend(url: str, model: str):
+    """Return the backend when it supports tool-round streaming, else None.
+
+    Only the OpenAI-compatible backend (vLLM) streams tool_calls deltas; the
+    Anthropic/OpenAI fallbacks keep the buffered path — the unified loop
+    treats None as "run this round non-streaming".
+    """
+    from orchestrator.llm_backend import OpenAICompatibleBackend
+
+    backend = _resolve_backend(url, model)
+    return backend if isinstance(backend, OpenAICompatibleBackend) else None
+
+
 def _resolve_backend(url: str, model: str):
     """Pick the backend whose URL matches the call."""
     from orchestrator.llm_backend import LLMConfig, OpenAICompatibleBackend
