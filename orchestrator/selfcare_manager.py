@@ -73,7 +73,28 @@ def _restore_state() -> None:
         # only per-label keys (the old behavior) left that generic gate empty, so
         # every restart re-fired an already-taken med nudge: the "I tapped Done but
         # the meds reminder keeps coming" bug, amplified by frequent deploys.
+        #
+        # KNOWN GAP: the generic gate only suppresses when its hour is <12
+        # (morning) or >=17 (evening), so a broad confirmation logged 12:00–16:59
+        # re-arms the key but matches neither window. Harmless in the default
+        # 07:00/21:00 schedule (no window is open then); if meds `times` move into
+        # that band the duplicate nudge can resurface — a _check_meds limitation to
+        # revisit later (gate on the configured window start, not a fixed hour).
+        try:
+            from orchestrator.data_manager import get_medications
+
+            _daily = get_medications().get("daily", {})
+            configured_meds = {
+                (m.get("name") or "").lower()
+                for window in ("morning", "evening")
+                for m in _daily.get(window, [])
+                if m.get("name")
+            }
+        except Exception:
+            configured_meds = set()
+
         today_meds = get_selfcare_today("medication")
+        generic_ts: Optional[datetime] = None
         for entry in today_meds:
             med_name = (entry.get("detail") or "medication").lower()
             logged_at = datetime.fromisoformat(entry["logged_at"])
@@ -81,12 +102,25 @@ def _restore_state() -> None:
             _expand_med_confirmation(med_name, logged_at)
             # Broad confirmations re-arm the generic gate; a single named-med log
             # ("I took my Guanfacine") must NOT, or it would wrongly suppress the
-            # window's other meds. Keep the latest so the current window's hour
-            # check (morning <12 / evening >=17) reflects the most recent dose.
-            if _is_broad_med_confirmation(med_name):
-                prev = _state.last_med_confirmation.get("medication")
-                if prev is None or logged_at > prev:
-                    _state.last_med_confirmation["medication"] = logged_at
+            # window's other meds. Guard on the configured med list so a future
+            # drug whose NAME contains a marker (e.g. "meds") is still treated as
+            # specific. Keep the latest dose for the window hour-check.
+            if (
+                med_name not in configured_meds
+                and _is_broad_med_confirmation(med_name)
+                and (generic_ts is None or logged_at > generic_ts)
+            ):
+                generic_ts = logged_at
+        if generic_ts is not None:
+            _state.last_med_confirmation["medication"] = generic_ts
+
+        if today_meds:
+            logger.info(
+                "[SELFCARE] Restored %d med confirmation(s); generic gate armed=%s%s",
+                len(today_meds),
+                generic_ts is not None,
+                f" (latest {generic_ts.strftime('%-I:%M %p')})" if generic_ts else "",
+            )
 
     except Exception as e:
         logger.warning(f"[SELFCARE] Failed to restore state from DB: {e}")
