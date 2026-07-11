@@ -78,10 +78,13 @@
 
 **Verify:** with the orchestrator running, `POST /v1/chat/completions` "stop reminding me to take Vyvanse on weekends" → confirm the tool call carries `skip_weekends`/`days`, the YAML gains `days: [mon,tue,wed,thu,fri]` on the Vyvanse entry, and a follow-up on a weekend produces no nudge (or fast-forward the clock in a unit test).
 
-### Slice 4 — Surface + docs
-- `orchestrator/data_manager.py` `render_medications_compact` (line ~643) + `get_structured_facts_block` (line 678): optionally append a compact `(Mon–Fri)` / `(weekends off)` hint per med so the prompt-injected block and `get_data` reflect the schedule — helps the model answer "when do I take X?" correctly.
-- `orchestrator/routes_config.py` `/personal-facts` (line 196): `days` rides along inside the `daily` projection automatically (allowlist is by top-level key `daily`), so the `/personal-facts` peek page shows it — but update `frontend/src/app/(private)/personal-facts/page.tsx` to render the days if you want it visible.
-- Docs: `CLAUDE.md` (update_data / get_data tool rows), `docs/ENV_VARS.md` (n/a — no new env var), `TECHNICAL_REFERENCE.md` (update_data tool schema + med YAML shape), `docs/WORKOUTS_AND_MEALS.md` is unrelated — the med schema isn't documented in a dedicated doc, so add a short note near the meds description in `CLAUDE.md` / `TECHNICAL_REFERENCE.md`.
+### Slice 4 — Reflect the schedule everywhere the meds are shown (REQUIRED, not optional)
+The whole point: if the data says "weekends off" but the schedule views still show Vyvanse as a plain daily med, Jess will contradict herself (tell you weekends are off, then list it as daily, then maybe nudge because a downstream reader ignored `days`). Every place that reads/renders the med schedule MUST reflect `days`. `days` is the source of truth; these are all read-side consumers of it.
+
+- `orchestrator/data_manager.py` `render_medications_compact` (line ~643) + `get_structured_facts_block` (line 678): append a compact schedule hint per med when `days` is present — `(Mon–Fri)`, `(weekends only)`, or `(Mon/Wed/Fri)`. This block is injected into EVERY system prompt and is what `get_data` returns, so it's the primary way the model answers "when do I take X?" correctly. Add a small `_fmt_days(days)` helper that collapses `[mon,tue,wed,thu,fri]`→"Mon–Fri", `[sat,sun]`→"weekends", else a slash list.
+- `orchestrator/routes_config.py` `/personal-facts` (line 196): `days` already rides along inside the `daily` projection (allowlist is by top-level key `daily`), so the API returns it. **Update `frontend/src/app/(private)/personal-facts/page.tsx`** to render the days as a badge/subtitle next to each med so the peek page visibly shows the schedule — this is the user-facing "what does the system think my schedule is" view and must match what Jess says.
+- **Consistency guard:** grep for every consumer of `daily.morning`/`daily.evening` med lists (at minimum `_generate_medications_md` line 223, `render_medications_compact`, `get_structured_facts_block`, `_check_meds`) and confirm each either honors `days` or is display-only and shows it. A reader that silently ignores `days` reintroduces the contradiction.
+- Docs: `CLAUDE.md` (update_data / get_data tool rows + a note that meds carry an optional `days` field), `TECHNICAL_REFERENCE.md` (update_data tool schema + med YAML shape incl. `days`). No new env var, so `docs/ENV_VARS.md` is untouched.
 
 ---
 
@@ -97,7 +100,9 @@ After code lands, run:
 - [ ] Med with no `days` behaves identically to pre-change (regression guard).
 - [ ] Malformed `days` (typo, empty list) fails open (still reminds) + logs WARN.
 - [ ] End-to-end: "no Vyvanse on weekends" chat → YAML updated → no weekend nudge.
-- [ ] `/personal-facts` and `get_data` reflect the new schedule.
+- [ ] `get_data` / the injected prompt block render Vyvanse as `(Mon–Fri)` (not plain daily).
+- [ ] `/personal-facts` API returns `days` AND the page renders it as a visible badge.
+- [ ] Every `daily.*` med reader (grep audit) either honors or displays `days` — no consumer silently ignores it.
 
 ## 6. Retroactive data note
 This change is **forward-only** — it won't edit the existing Vyvanse record. After deploy, either re-ask Jess ("stop reminding me to take Vyvanse on weekends") or hand-edit `medications.yaml` to add `days: [mon, tue, wed, thu, fri]` to the Vyvanse entry.
@@ -105,10 +110,10 @@ This change is **forward-only** — it won't edit the existing Vyvanse record. A
 ## 7. Files touched (summary)
 | File | Change |
 |------|--------|
-| `orchestrator/data_manager.py` | Fix `update_medication` honesty + schedule move; add `days`/`skip_weekends` to add/update + router normalization; compact-render hint |
+| `orchestrator/data_manager.py` | Fix `update_medication` honesty + schedule move; add `days`/`skip_weekends` to add/update + router normalization; `_fmt_days` helper + schedule hint in `render_medications_compact` + `get_structured_facts_block` (+ `_generate_medications_md` if RAG docs enabled) |
 | `orchestrator/selfcare_manager.py` | `_med_allowed_today` helper + weekday gate in `_check_meds` |
 | `orchestrator/tool_definitions.py` | `days` + `skip_weekends` params on `update_data` |
 | `orchestrator/tool_handlers.py` | Pass new args through `tool_update_data` |
-| `orchestrator/routes_config.py` / `frontend/.../personal-facts/page.tsx` | (optional) surface `days` on the peek page |
+| `frontend/src/app/(private)/personal-facts/page.tsx` | **Required:** render each med's `days` as a badge/subtitle so the peek page shows the schedule |
 | `orchestrator/tests/test_data_manager.py`, `test_selfcare_*` | New tests per Slice |
 | `CLAUDE.md`, `TECHNICAL_REFERENCE.md` | Doc the med `days` field + tool params |
