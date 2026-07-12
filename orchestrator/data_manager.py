@@ -178,46 +178,97 @@ def remove_medication(name: str) -> str:
     return f"Medication '{name}' not found."
 
 
-def update_medication(name: str, dose: str = None, purpose: str = None, notes: str = None, schedule: str = None) -> str:
-    """Update an existing medication's properties."""
+_SCHEDULE_BUCKETS = ("morning", "evening", "weekly", "as_needed")
+
+
+def _find_medication(data: Dict[str, Any], name: str):
+    """Locate a med by name across every schedule bucket.
+
+    Returns (containing_list, index, schedule_str) or None. `schedule_str` is
+    the caller-facing bucket name ("morning"/"evening"/"weekly"/"as_needed"),
+    so update_medication can tell whether a requested schedule is a real move.
+    """
+    name_l = name.lower()
+    daily = data.get("daily") or {}
+    for sched in ("morning", "evening"):
+        lst = daily.get(sched) or []
+        for i, med in enumerate(lst):
+            if isinstance(med, dict) and med.get("name", "").lower() == name_l:
+                return lst, i, sched
+    for bucket in ("weekly", "as_needed"):
+        lst = data.get(bucket) or []
+        for i, med in enumerate(lst):
+            if isinstance(med, dict) and med.get("name", "").lower() == name_l:
+                return lst, i, bucket
+    return None
+
+
+def _append_to_schedule(data: Dict[str, Any], med: Dict[str, Any], schedule: str) -> None:
+    """Append an existing med dict into the target schedule bucket."""
+    if schedule in ("morning", "evening"):
+        daily = data.setdefault("daily", {"morning": [], "evening": []})
+        daily.setdefault(schedule, []).append(med)
+    else:  # weekly | as_needed (validated by caller)
+        data.setdefault(schedule, []).append(med)
+
+
+def update_medication(
+    name: str,
+    dose: str = None,
+    purpose: str = None,
+    notes: str = None,
+    schedule: str = None,
+    days: list = None,
+) -> str:
+    """Update an existing medication's properties.
+
+    Honesty contract (was the source of a silent false-success): a found med
+    that ends up with NO changed field returns an explicit "nothing to update"
+    and does NOT write — the previous code wrote an unchanged dict, returned
+    True, and reported "Updated X: ." which the model relayed as done.
+
+    `schedule` now actually relocates the med between buckets (morning/evening/
+    weekly/as_needed); it used to be an accepted-but-ignored dead parameter.
+    """
+    if schedule is not None and schedule not in _SCHEDULE_BUCKETS:
+        return f"Unknown schedule: {schedule}. Use morning, evening, weekly, or as_needed."
+
     data = get_medications()
-    found = False
+    located = _find_medication(data, name)
+    if located is None:
+        return f"Medication '{name}' not found."
+
+    lst, idx, current_schedule = located
+    med = lst[idx]
     updated_fields = []
 
-    def update_med(med_list):
-        nonlocal found, updated_fields
-        for med in med_list:
-            if med.get("name", "").lower() == name.lower():
-                found = True
-                if dose is not None:
-                    med["dose"] = dose
-                    updated_fields.append(f"dose={dose}")
-                if purpose is not None:
-                    med["purpose"] = purpose
-                    updated_fields.append(f"purpose={purpose}")
-                if notes is not None:
-                    med["notes"] = notes
-                    updated_fields.append(f"notes={notes}")
-                return True
-        return False
+    if dose is not None:
+        med["dose"] = dose
+        updated_fields.append(f"dose={dose}")
+    if purpose is not None:
+        med["purpose"] = purpose
+        updated_fields.append(f"purpose={purpose}")
+    if notes is not None:
+        med["notes"] = notes
+        updated_fields.append(f"notes={notes}")
+    if days is not None:
+        med["days"] = days
+        updated_fields.append(f"days={','.join(days)}")
 
-    # Search all schedules
-    if "daily" in data:
-        for sched in ["morning", "evening"]:
-            if sched in data["daily"]:
-                update_med(data["daily"][sched])
+    # Relocate only when the requested schedule differs from the current one.
+    if schedule is not None and schedule != current_schedule:
+        lst.pop(idx)
+        _append_to_schedule(data, med, schedule)
+        updated_fields.append(f"schedule={schedule}")
 
-    if "weekly" in data:
-        update_med(data["weekly"])
+    # Found but nothing actually changed: report honestly and skip the write
+    # (no pointless save + audit entry). NEVER return "Updated X: .".
+    if not updated_fields:
+        return f"No changes to {name} — nothing to update."
 
-    if "as_needed" in data:
-        update_med(data["as_needed"])
-
-    if found:
-        if save_medications(data):
-            return f"Updated {name}: {', '.join(updated_fields)}."
-        return f"Found {name} but failed to save changes."
-    return f"Medication '{name}' not found."
+    if save_medications(data):
+        return f"Updated {name}: {', '.join(updated_fields)}."
+    return f"Found {name} but failed to save changes."
 
 
 def _generate_medications_md(data: Dict[str, Any]) -> None:
@@ -727,6 +778,7 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
             dose=kwargs.get("dose"),
             purpose=kwargs.get("purpose"),
             notes=kwargs.get("notes"),
+            schedule=kwargs.get("schedule"),
         ),
         "remove_project": lambda: remove_project(name),
         "add_project": lambda: add_project(

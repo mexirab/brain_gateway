@@ -158,3 +158,74 @@ def test_bad_projects_entry_does_not_blank_meds(monkeypatch, tmp_path: Path):
     block = data_manager.get_structured_facts_block()
     assert "Vyvanse 30mg" in block  # meds still present despite the bad project entry
     assert "RealProj" in block  # the valid dict project still renders
+
+
+# ---------------------------------------------------------------------------
+# update_medication — honesty (Defect B) + real schedule relocation
+# ---------------------------------------------------------------------------
+
+
+def test_update_medication_noop_is_honest_and_does_not_write(monkeypatch, tmp_path: Path):
+    """A found med with no changed field must report 'nothing to update' and
+    must NOT write — the old code wrote an unchanged dict and returned the
+    hollow 'Updated Vyvanse: .' which the model relayed as done."""
+    from orchestrator import data_manager
+
+    paths = _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    mtime_before = paths["meds_yaml"].stat().st_mtime_ns
+
+    with patch.object(data_manager, "save_medications", wraps=data_manager.save_medications) as spy:
+        msg = data_manager.update_medication("Vyvanse")  # no fields changed
+    assert "nothing to update" in msg.lower()
+    assert msg != "Updated Vyvanse: ."
+    spy.assert_not_called()  # no pointless write + audit entry
+    assert paths["meds_yaml"].stat().st_mtime_ns == mtime_before
+
+
+def test_update_medication_real_change_reports_field(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.update_medication("Vyvanse", dose="40mg")
+    assert msg == "Updated Vyvanse: dose=40mg."
+    assert data_manager.get_medications()["daily"]["morning"][0]["dose"] == "40mg"
+
+
+def test_update_medication_relocates_between_buckets(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.update_medication("Vyvanse", schedule="evening")
+    assert "schedule=evening" in msg
+    data = data_manager.get_medications()
+    assert [m["name"] for m in data["daily"]["morning"]] == []
+    assert [m["name"] for m in data["daily"]["evening"]] == ["Vyvanse"]
+
+
+def test_update_medication_same_schedule_is_noop(monkeypatch, tmp_path: Path):
+    """Requesting the schedule the med already sits in is not a change."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.update_medication("Vyvanse", schedule="morning")
+    assert "nothing to update" in msg.lower()
+
+
+def test_update_medication_not_found(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    assert "not found" in data_manager.update_medication("Nonexistent", dose="1mg").lower()
+
+
+def test_update_medication_bad_schedule_rejected(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    assert "Unknown schedule" in data_manager.update_medication("Vyvanse", schedule="lunchtime")
