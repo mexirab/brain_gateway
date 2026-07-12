@@ -422,6 +422,29 @@ def _med_window_starts() -> tuple[Optional[int], Optional[int]]:
     return morning, evening
 
 
+def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
+    """Whether `med` should be nudged today given its optional `days` list.
+
+    `days` holds lowercase 3-letter ISO weekday abbrevs (mon..sun). Absence of
+    `days` = every day (backward compatible — existing meds are unaffected).
+
+    Fails OPEN: a malformed/empty `days` (typo, wrong type) is treated as "every
+    day" and logged, so a data glitch never silently drops a med reminder — the
+    safe failure for a safety-critical nudge is to remind, not to skip.
+    """
+    days = med.get("days")
+    if not days:
+        return True
+    if not isinstance(days, (list, tuple)):
+        logger.warning(f"[SELFCARE] med {med.get('name')!r} has non-list days={days!r}; treating as every day")
+        return True
+    allowed = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
+    if not allowed:
+        logger.warning(f"[SELFCARE] med {med.get('name')!r} has empty/blank days={days!r}; treating as every day")
+        return True
+    return now_tz.strftime("%a").lower() in allowed
+
+
 def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
     """Check if any medication is due and not confirmed.
 
@@ -457,6 +480,8 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
+                if not _med_allowed_today(med, now_tz):
+                    continue  # e.g. a Mon–Fri stimulant on a weekend
                 last = _state.last_med_confirmation.get(med_name.lower())
                 if last and last.date() == now.date() and last.hour < 12:
                     continue  # confirmed this morning
@@ -469,6 +494,8 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
+                if not _med_allowed_today(med, now_tz):
+                    continue  # e.g. a Mon–Fri stimulant on a weekend
                 last = _state.last_med_confirmation.get(med_name.lower())
                 if last and last.date() == now.date() and last.hour >= 17:
                     continue  # confirmed this evening
