@@ -500,12 +500,19 @@ class TestCheckMedsWeekdays:
 
     def test_malformed_days_fails_open(self, sm):
         """A typo / empty / wrong-type `days` must NOT silently drop the reminder
-        — it fails open to 'every day' (safe failure for a safety-critical nudge)."""
-        for bad in ([], "friday", ["   "], 5):
+        — it fails open to 'every day' (safe failure for a safety-critical nudge).
+
+        The junk-token cases (['weekdays'], ['M-F'], ['bogus']) are the ones that
+        previously failed CLOSED: a non-empty list of unrecognized tokens produced
+        a non-empty set that never matched today, suppressing the med every day
+        while every display path showed it as 'every day'. Must fail open now."""
+        for bad in ([], "friday", ["   "], 5, ["weekdays"], ["M-F"], ["M", "T", "W", "Th", "F"], ["bogus"]):
             meds = {"daily": {"morning": [{"name": "Vyvanse", "days": bad}], "evening": []}}
-            a, b, c = self._ctx(meds)
-            with a, b, c:
-                assert sm._check_meds(_SATURDAY_AM, _SATURDAY_AM) == "Hey, did you take your Vyvanse?", bad
+            # Assert on a weekday AND a weekend — a fail-open med fires on both.
+            for day in (_SATURDAY_AM, _FRIDAY_AM):
+                a, b, c = self._ctx(meds)
+                with a, b, c:
+                    assert sm._check_meds(day, day) == "Hey, did you take your Vyvanse?", (bad, day)
 
     def test_helper_normalizes_case_and_length(self, sm):
         """`days` entries are normalized (lowercase, first 3 chars) so 'Saturday'
@@ -513,6 +520,13 @@ class TestCheckMedsWeekdays:
         assert sm._med_allowed_today({"days": ["Saturday", "SUN"]}, _SATURDAY_AM) is True
         assert sm._med_allowed_today({"days": ["Mon"]}, _SATURDAY_AM) is False
         assert sm._med_allowed_today({}, _SATURDAY_AM) is True
+
+    def test_partial_junk_days_still_enforces_valid_tokens(self, sm):
+        """['mon','bogus'] must still restrict to Monday — the junk is dropped but
+        the recognizable weekday is honored (intersection, not all-or-nothing)."""
+        assert sm._med_allowed_today({"days": ["mon", "bogus"]}, _FRIDAY_AM) is False
+        monday = datetime(2026, 3, 16, 9, 0)
+        assert sm._med_allowed_today({"days": ["mon", "bogus"]}, monday) is True
 
     def test_weekday_mapping_is_locale_independent(self, sm):
         """Today-abbrev comes from datetime.weekday() (index), not strftime('%a'),

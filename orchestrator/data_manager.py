@@ -131,14 +131,19 @@ def normalize_days(days: Any = None, skip_weekends: Any = None) -> Any:
     - Output preserves canonical Mon→Sun order and de-dups.
     - `skip_weekends` truthy → [mon,tue,wed,thu,fri].
     """
-    # Explicitly-provided empty list = "clear the restriction" (distinct from
-    # absent=None). get("days") preserves this: absent→None, present-empty→[].
-    if isinstance(days, (list, tuple)) and len(days) == 0:
-        return CLEAR_DAYS
-    if days:
+    # Only lists/tuples are a valid `days` payload. A non-iterable (e.g. the model
+    # sends days=5 / true) must NOT raise on `for d in days` — fall through to the
+    # skip_weekends / None branches instead. get("days") distinguishes the cases:
+    # absent→None (leave as-is), present-empty→[] (clear).
+    if isinstance(days, (list, tuple)):
+        if len(days) == 0:
+            return CLEAR_DAYS
         seen = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
         canon = [d for d in _CANONICAL_DAYS if d in seen]
-        return canon or None
+        if canon:
+            return canon
+        # else: non-empty but all-junk (typo) → don't clear a real schedule off a
+        # typo, and don't shadow a valid skip_weekends — fall through below.
     if skip_weekends:
         return ["mon", "tue", "wed", "thu", "fri"]
     return None

@@ -441,9 +441,15 @@ def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
     if not isinstance(days, (list, tuple)):
         logger.warning(f"[SELFCARE] med {med.get('name')!r} has non-list days={days!r}; treating as every day")
         return True
-    allowed = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
+    # Intersect with the canonical set so junk tokens are DROPPED, not enforced.
+    # Critical: a hand-edited `days: [M-F]` / `[weekdays]` normalizes to {} here and
+    # must fail OPEN. Without the intersection, non-empty junk ("wee") would never
+    # match today and silently suppress the med every day, while _fmt_days / the
+    # frontend / normalize_days all show it as "every day" — the exact display-vs-
+    # enforcement split (silent med drop) this whole change exists to kill.
+    allowed = {str(d).strip().lower()[:3] for d in days if str(d).strip()} & set(_WEEKDAY_ABBRS)
     if not allowed:
-        logger.warning(f"[SELFCARE] med {med.get('name')!r} has empty/blank days={days!r}; treating as every day")
+        logger.warning(f"[SELFCARE] med {med.get('name')!r} has no recognizable weekday in days={days!r}; treating as every day")
         return True
     # Index-based, not strftime("%a"): a non-English LC_TIME would make "%a"
     # return e.g. "sam"/"дом" and NEVER match the canonical mon..sun set, silently
@@ -691,7 +697,9 @@ def evening_meds_status() -> Optional[Dict[str, Any]]:
 
     # Honor per-med `days`: a Mon–Fri evening med must not surface in the
     # weekend shutdown ritual (else Jess nags for a med she said is weekends-off).
-    now = datetime.now()
+    # Use tz-aware now (like _check_meds) so the weekday/date gate can't drift a day
+    # if the container TZ ever diverges from the configured timezone.
+    now = datetime.now(ZoneInfo(shared.TIMEZONE))
     names = [med.get("name", "") for med in evening_meds if med.get("name") and _med_allowed_today(med, now)]
     if not names:
         return None

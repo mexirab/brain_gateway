@@ -247,6 +247,12 @@ def test_normalize_days_variants():
     assert normalize_days(["Friday", "monday"], None) == ["mon", "fri"]
     # unknown tokens dropped; all-unknown → None (not an empty list)
     assert normalize_days(["bogus", "xyz"], None) is None
+    # non-iterable truthy input must not raise; falls through to skip_weekends/None
+    assert normalize_days(5, None) is None
+    assert normalize_days(True, None) is None
+    assert normalize_days("mon", None) is None  # bare string is not a valid days list
+    # all-junk days must NOT shadow a valid skip_weekends fallback
+    assert normalize_days(["bogus"], True) == ["mon", "tue", "wed", "thu", "fri"]
 
 
 def test_handle_update_data_skip_weekends_writes_days(monkeypatch, tmp_path: Path):
