@@ -314,21 +314,23 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
 
     # Morning
     lines.append("### Morning (with breakfast)")
-    lines.append("| Medication | Dose | Purpose | Notes |")
-    lines.append("|------------|------|---------|-------|")
+    lines.append("| Medication | Dose | Purpose | Notes | Days |")
+    lines.append("|------------|------|---------|-------|------|")
     for med in data.get("daily", {}).get("morning", []):
         lines.append(
-            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |"
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | "
+            f"{med.get('notes', '')} | {_fmt_days(med.get('days')) or 'every day'} |"
         )
     lines.append("")
 
     # Evening
     lines.append("### Evening (before bed)")
-    lines.append("| Medication | Dose | Purpose | Notes |")
-    lines.append("|------------|------|---------|-------|")
+    lines.append("| Medication | Dose | Purpose | Notes | Days |")
+    lines.append("|------------|------|---------|-------|------|")
     for med in data.get("daily", {}).get("evening", []):
         lines.append(
-            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |"
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | "
+            f"{med.get('notes', '')} | {_fmt_days(med.get('days')) or 'every day'} |"
         )
     lines.append("")
 
@@ -693,11 +695,35 @@ def _generate_projects_md(data: Dict[str, Any]) -> None:
 # below, so a tool answer and the injected block can never disagree.
 
 
+_DAY_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
+
+
+def _fmt_days(days: Any) -> str:
+    """Compact human label for a med's `days` list: 'Mon–Fri', 'weekends', else
+    a slash list like 'Mon/Wed/Fri'. '' when absent/empty/malformed so callers
+    can `if hint:`. Mirrors the frontend badge so text and page never disagree."""
+    if not days or not isinstance(days, (list, tuple)):
+        return ""
+    seen = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
+    canon = [d for d in _CANONICAL_DAYS if d in seen]
+    if not canon:
+        return ""
+    if canon == ["mon", "tue", "wed", "thu", "fri"]:
+        return "Mon–Fri"
+    if canon == ["sat", "sun"]:
+        return "weekends"
+    return "/".join(_DAY_LABELS[d] for d in canon)
+
+
 def _fmt_med(med: Dict[str, Any]) -> str:
-    """`Name Dose` (dose omitted when blank)."""
+    """`Name Dose` (dose omitted when blank), plus a `(Mon–Fri)` schedule hint
+    when the med carries a `days` restriction — so the authoritative text the
+    model sees (get_data + prompt inject) reflects weekends-off, not plain daily."""
     name = str(med.get("name", "")).strip()
     dose = str(med.get("dose", "")).strip()
-    return f"{name} {dose}".strip()
+    base = f"{name} {dose}".strip()
+    hint = _fmt_days(med.get("days"))
+    return f"{base} ({hint})" if hint else base
 
 
 def render_medications_compact(data: Dict[str, Any] | None = None) -> str:

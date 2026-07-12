@@ -281,3 +281,41 @@ def test_add_medication_without_days_has_no_days_key(monkeypatch, tmp_path: Path
     data_manager.handle_update_data("add_medication", "Zoloft", dose="50mg")
     added = data_manager.get_medications()["daily"]["morning"][-1]
     assert "days" not in added
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — schedule hint surfaces in the authoritative text (get_data + prompt)
+# ---------------------------------------------------------------------------
+
+
+def test_fmt_days_labels():
+    from orchestrator.data_manager import _fmt_days
+
+    assert _fmt_days(["mon", "tue", "wed", "thu", "fri"]) == "Mon–Fri"
+    assert _fmt_days(["sat", "sun"]) == "weekends"
+    assert _fmt_days(["mon", "wed", "fri"]) == "Mon/Wed/Fri"
+    assert _fmt_days(["SUN", "sat"]) == "weekends"  # order-independent + case
+    assert _fmt_days([]) == ""
+    assert _fmt_days(None) == ""
+    assert _fmt_days("friday") == ""  # non-list → no hint (fail safe)
+
+
+def test_get_data_reflects_weekends_off(monkeypatch, tmp_path: Path):
+    """The whole point: a weekends-off med must read as (Mon–Fri), not plain
+    daily, in the text the model answers 'when do I take X?' from."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    payload = {
+        "daily": {
+            "morning": [{"name": "Vyvanse", "dose": "30mg", "days": ["mon", "tue", "wed", "thu", "fri"]}],
+            "evening": [],
+        },
+        "weekly": [],
+        "as_needed": [],
+    }
+    assert data_manager.save_medications(payload) is True
+    out = data_manager.handle_get_data("medications")
+    assert "Vyvanse 30mg (Mon–Fri)" in out
+    # and the same hint rides the injected prompt block
+    assert "Vyvanse 30mg (Mon–Fri)" in data_manager.get_structured_facts_block()

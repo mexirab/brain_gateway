@@ -682,11 +682,14 @@ def evening_meds_status() -> Optional[Dict[str, Any]]:
         logger.warning(f"[SELFCARE] Evening meds lookup failed: {e}")
         return None
 
-    names = [med.get("name", "") for med in evening_meds if med.get("name")]
+    # Honor per-med `days`: a Mon–Fri evening med must not surface in the
+    # weekend shutdown ritual (else Jess nags for a med she said is weekends-off).
+    now = datetime.now()
+    names = [med.get("name", "") for med in evening_meds if med.get("name") and _med_allowed_today(med, now)]
     if not names:
         return None
 
-    today = datetime.now().date()
+    today = now.date()
     generic = _state.last_med_confirmation.get("medication")
     if generic and generic.date() == today and generic.hour >= 17:
         return {"names": names, "confirmed": True}

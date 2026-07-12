@@ -321,9 +321,24 @@ The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every
 ### update_data
 ```json
 {"action": "add_medication", "name": "Adderall", "dose": "20mg", "schedule": "morning"}
+{"action": "update_medication", "name": "Vyvanse", "skip_weekends": true}
+{"action": "update_medication", "name": "Vyvanse", "days": ["mon", "wed", "fri"]}
 ```
 
 **Actions:** add_medication, remove_medication, update_medication, add_project, update_project_status, add_project_step, complete_step
+
+**Per-med weekday scheduling.** `add_medication` / `update_medication` accept an optional `days` (subset of `mon,tue,wed,thu,fri,sat,sun`) or the `skip_weekends: true` shorthand (→ `[mon,tue,wed,thu,fri]`). Explicit `days` wins if both are sent; unknown tokens are dropped. The value is normalized and stored as a `days` list on the med dict in `medications.yaml`:
+
+```yaml
+daily:
+  morning:
+    - name: Vyvanse
+      dose: 30mg
+      purpose: ADHD
+      days: [mon, tue, wed, thu, fri]   # optional; absent = every day
+```
+
+`selfcare_manager._check_meds` and `evening_meds_status` skip a med whose `days` excludes today (drug-holiday support, e.g. weekends-off stimulants); a malformed/empty `days` fails open (still reminds). The compact renderer (`get_data` + injected prompt block) surfaces a schedule hint — `Vyvanse 30mg (Mon–Fri)` — and the `/personal-facts` page shows it as a badge. `update_medication` also relocates a med between buckets when `schedule` changes, and returns an honest "nothing to update" (without writing) when a found med has no changed field.
 
 ### set_reminder
 ```json
