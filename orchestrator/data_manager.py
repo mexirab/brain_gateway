@@ -110,16 +110,31 @@ def save_medications(data: Dict[str, Any]) -> bool:
 
 _CANONICAL_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
+# Sentinel: the model explicitly asked to REMOVE a med's day restriction (take
+# every day again), which is distinct from "days not mentioned" (None → leave
+# as-is). Without this, "remind me every day again" would silently no-op and the
+# med would stay suppressed on the days the user just re-enabled — the inverse of
+# the Defect-B silent failure this whole change exists to kill.
+CLEAR_DAYS = object()
 
-def normalize_days(days: Any = None, skip_weekends: Any = None) -> list | None:
+
+def normalize_days(days: Any = None, skip_weekends: Any = None) -> Any:
     """Collapse the model-facing `days` / `skip_weekends` inputs to a canonical
-    weekday list, or None when neither was supplied (= "don't touch / every day").
+    weekday list, `CLEAR_DAYS`, or None.
 
+    - None → not supplied; leave any existing schedule untouched.
+    - CLEAR_DAYS → an explicit empty `days` list: drop the restriction (every day).
     - Explicit `days` wins over `skip_weekends` if both are given.
     - Entries are normalized (lowercase, first 3 chars); unknown tokens dropped.
+      An all-unknown `days` (e.g. ["bogus"]) → None, NOT a clear — we won't wipe a
+      real schedule off a typo.
     - Output preserves canonical Mon→Sun order and de-dups.
     - `skip_weekends` truthy → [mon,tue,wed,thu,fri].
     """
+    # Explicitly-provided empty list = "clear the restriction" (distinct from
+    # absent=None). get("days") preserves this: absent→None, present-empty→[].
+    if isinstance(days, (list, tuple)) and len(days) == 0:
+        return CLEAR_DAYS
     if days:
         seen = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
         canon = [d for d in _CANONICAL_DAYS if d in seen]
@@ -146,8 +161,10 @@ def add_medication(
         "purpose": purpose,
         "notes": notes,
     }
-    # Only carry `days` when set — absence means "every day" (backward compatible).
-    if days:
+    # Only carry `days` when a real weekday list is given — absence / CLEAR_DAYS
+    # both mean "every day" (backward compatible; a brand-new med has nothing to
+    # clear, so the sentinel just means "don't add the field").
+    if isinstance(days, list) and days:
         new_med["days"] = days
 
     # Determine where to add based on schedule
@@ -249,7 +266,7 @@ def update_medication(
     purpose: str = None,
     notes: str = None,
     schedule: str = None,
-    days: list = None,
+    days: Any = None,  # list[str] | CLEAR_DAYS | None
 ) -> str:
     """Update an existing medication's properties.
 
@@ -282,7 +299,12 @@ def update_medication(
     if notes is not None:
         med["notes"] = notes
         updated_fields.append(f"notes={notes}")
-    if days is not None:
+    if days is CLEAR_DAYS:
+        # "Take it every day again" — drop the restriction. Only a real change if
+        # the med actually had a `days` field (else it stays an honest no-op).
+        if med.pop("days", None) is not None:
+            updated_fields.append("days=every day")
+    elif isinstance(days, list) and days:
         med["days"] = days
         updated_fields.append(f"days={','.join(days)}")
 

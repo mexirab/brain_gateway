@@ -160,7 +160,7 @@ STATIC_TOOLS = [
                             "type": "string",
                             "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
                         },
-                        "description": "Days this medication is taken (omit = every day). e.g. ['mon','tue','wed','thu','fri'] for weekdays only.",
+                        "description": "Days this medication is taken. Omit = leave schedule unchanged; ['mon','tue','wed','thu','fri'] = weekdays only; [] (empty) = clear any restriction, take every day again.",
                     },
                     "skip_weekends": {
                         "type": "boolean",

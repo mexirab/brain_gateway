@@ -514,6 +514,17 @@ class TestCheckMedsWeekdays:
         assert sm._med_allowed_today({"days": ["Mon"]}, _SATURDAY_AM) is False
         assert sm._med_allowed_today({}, _SATURDAY_AM) is True
 
+    def test_weekday_mapping_is_locale_independent(self, sm):
+        """Today-abbrev comes from datetime.weekday() (index), not strftime('%a'),
+        so a non-English LC_TIME can't silently drop every restricted med. Verify
+        the index→abbrev mapping is correct for each weekday."""
+        # 2026-03-16 is a Monday; walk the whole week.
+        for offset, abbr in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]):
+            day = datetime(2026, 3, 16 + offset, 9, 0)
+            assert sm._med_allowed_today({"days": [abbr]}, day) is True, abbr
+            other = "sun" if abbr != "sun" else "mon"
+            assert sm._med_allowed_today({"days": [other]}, day) is False, abbr
+
 
 # ---------------------------------------------------------------------------
 # Broad-vs-specific med confirmation classification

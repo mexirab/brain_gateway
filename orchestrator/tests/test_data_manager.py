@@ -261,6 +261,43 @@ def test_handle_update_data_skip_weekends_writes_days(monkeypatch, tmp_path: Pat
     assert data_manager.get_medications()["daily"]["morning"][0]["days"] == ["mon", "tue", "wed", "thu", "fri"]
 
 
+def test_normalize_days_clear_sentinel():
+    """Explicit empty list = CLEAR_DAYS sentinel; absent = None; all-unknown =
+    None (a typo must not be mistaken for a clear)."""
+    from orchestrator.data_manager import CLEAR_DAYS, normalize_days
+
+    assert normalize_days([], None) is CLEAR_DAYS
+    assert normalize_days(None, None) is None
+    assert normalize_days(["bogus"], None) is None  # typo, not a clear
+
+
+def test_handle_update_data_clear_days_restores_every_day(monkeypatch, tmp_path: Path):
+    """'Take Vyvanse every day again' (days=[]) must actually drop the restriction
+    — not silently keep the med suppressed on weekends (inverse silent-failure)."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    payload = {
+        "daily": {"morning": [{"name": "Vyvanse", "dose": "30mg", "days": ["mon", "tue", "wed", "thu", "fri"]}], "evening": []},
+        "weekly": [],
+        "as_needed": [],
+    }
+    assert data_manager.save_medications(payload) is True
+    msg = data_manager.handle_update_data("update_medication", "Vyvanse", days=[])
+    assert "every day" in msg.lower()
+    assert "days" not in data_manager.get_medications()["daily"]["morning"][0]
+
+
+def test_clear_days_on_unrestricted_med_is_honest_noop(monkeypatch, tmp_path: Path):
+    """Clearing a med that has no restriction is nothing to do — honest no-op."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True  # Vyvanse has no days
+    msg = data_manager.handle_update_data("update_medication", "Vyvanse", days=[])
+    assert "nothing to update" in msg.lower()
+
+
 def test_handle_add_medication_with_explicit_days(monkeypatch, tmp_path: Path):
     from orchestrator import data_manager
 

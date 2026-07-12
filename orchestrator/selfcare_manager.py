@@ -422,6 +422,9 @@ def _med_window_starts() -> tuple[Optional[int], Optional[int]]:
     return morning, evening
 
 
+_WEEKDAY_ABBRS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # index = datetime.weekday()
+
+
 def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
     """Whether `med` should be nudged today given its optional `days` list.
 
@@ -442,7 +445,11 @@ def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
     if not allowed:
         logger.warning(f"[SELFCARE] med {med.get('name')!r} has empty/blank days={days!r}; treating as every day")
         return True
-    return now_tz.strftime("%a").lower() in allowed
+    # Index-based, not strftime("%a"): a non-English LC_TIME would make "%a"
+    # return e.g. "sam"/"дом" and NEVER match the canonical mon..sun set, silently
+    # dropping every restricted med every day (fail CLOSED). weekday() is locale-free.
+    today = _WEEKDAY_ABBRS[now_tz.weekday()]
+    return today in allowed
 
 
 def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:

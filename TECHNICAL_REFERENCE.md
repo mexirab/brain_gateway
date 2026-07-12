@@ -327,7 +327,7 @@ The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every
 
 **Actions:** add_medication, remove_medication, update_medication, add_project, update_project_status, add_project_step, complete_step
 
-**Per-med weekday scheduling.** `add_medication` / `update_medication` accept an optional `days` (subset of `mon,tue,wed,thu,fri,sat,sun`) or the `skip_weekends: true` shorthand (→ `[mon,tue,wed,thu,fri]`). Explicit `days` wins if both are sent; unknown tokens are dropped. The value is normalized and stored as a `days` list on the med dict in `medications.yaml`:
+**Per-med weekday scheduling.** `add_medication` / `update_medication` accept an optional `days` (subset of `mon,tue,wed,thu,fri,sat,sun`) or the `skip_weekends: true` shorthand (→ `[mon,tue,wed,thu,fri]`). Explicit `days` wins if both are sent; unknown tokens are dropped. Sending `days: []` (empty) on `update_medication` **clears** the restriction (take every day again); omitting `days` leaves the schedule unchanged. Weekday matching is index-based (`datetime.weekday()`), not locale-dependent `strftime`. The value is normalized and stored as a `days` list on the med dict in `medications.yaml`:
 
 ```yaml
 daily:
