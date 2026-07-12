@@ -229,3 +229,55 @@ def test_update_medication_bad_schedule_rejected(monkeypatch, tmp_path: Path):
     _point_paths_at_tmp(monkeypatch, tmp_path)
     assert data_manager.save_medications(_meds_payload()) is True
     assert "Unknown schedule" in data_manager.update_medication("Vyvanse", schedule="lunchtime")
+
+
+# ---------------------------------------------------------------------------
+# days / skip_weekends — model-facing weekday scheduling (Defect A, write side)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_days_variants():
+    from orchestrator.data_manager import normalize_days
+
+    assert normalize_days(None, None) is None
+    assert normalize_days(None, True) == ["mon", "tue", "wed", "thu", "fri"]
+    assert normalize_days(None, False) is None
+    # explicit days win over skip_weekends, canonical order + de-dup + normalize
+    assert normalize_days(["sat", "SUN", "sun"], True) == ["sat", "sun"]
+    assert normalize_days(["Friday", "monday"], None) == ["mon", "fri"]
+    # unknown tokens dropped; all-unknown → None (not an empty list)
+    assert normalize_days(["bogus", "xyz"], None) is None
+
+
+def test_handle_update_data_skip_weekends_writes_days(monkeypatch, tmp_path: Path):
+    """End-to-end write path: 'stop reminding me on weekends' → the Vyvanse
+    entry gains days=[mon..fri]."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.handle_update_data("update_medication", "Vyvanse", skip_weekends=True)
+    assert "days=mon,tue,wed,thu,fri" in msg
+    assert data_manager.get_medications()["daily"]["morning"][0]["days"] == ["mon", "tue", "wed", "thu", "fri"]
+
+
+def test_handle_add_medication_with_explicit_days(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    data_manager.handle_update_data("add_medication", "Ritalin", dose="10mg", days=["mon", "wed", "fri"])
+    added = data_manager.get_medications()["daily"]["morning"][-1]
+    assert added["name"] == "Ritalin"
+    assert added["days"] == ["mon", "wed", "fri"]
+
+
+def test_add_medication_without_days_has_no_days_key(monkeypatch, tmp_path: Path):
+    """Backward compat: a plain add must not sprout an empty days field."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    data_manager.handle_update_data("add_medication", "Zoloft", dose="50mg")
+    added = data_manager.get_medications()["daily"]["morning"][-1]
+    assert "days" not in added

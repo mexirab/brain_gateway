@@ -481,6 +481,8 @@ def tool_update_data(arguments: Dict[str, Any]) -> str:
         schedule=arguments.get("schedule"),
         purpose=arguments.get("purpose"),
         notes=arguments.get("notes"),
+        days=arguments.get("days"),
+        skip_weekends=arguments.get("skip_weekends"),
         status=arguments.get("status"),
         step=arguments.get("step"),
         goal=arguments.get("goal"),

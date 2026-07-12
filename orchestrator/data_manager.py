@@ -108,7 +108,35 @@ def save_medications(data: Dict[str, Any]) -> bool:
         return False
 
 
-def add_medication(name: str, dose: str = "", schedule: str = "morning", purpose: str = "", notes: str = "") -> str:
+_CANONICAL_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def normalize_days(days: Any = None, skip_weekends: Any = None) -> list | None:
+    """Collapse the model-facing `days` / `skip_weekends` inputs to a canonical
+    weekday list, or None when neither was supplied (= "don't touch / every day").
+
+    - Explicit `days` wins over `skip_weekends` if both are given.
+    - Entries are normalized (lowercase, first 3 chars); unknown tokens dropped.
+    - Output preserves canonical Mon→Sun order and de-dups.
+    - `skip_weekends` truthy → [mon,tue,wed,thu,fri].
+    """
+    if days:
+        seen = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
+        canon = [d for d in _CANONICAL_DAYS if d in seen]
+        return canon or None
+    if skip_weekends:
+        return ["mon", "tue", "wed", "thu", "fri"]
+    return None
+
+
+def add_medication(
+    name: str,
+    dose: str = "",
+    schedule: str = "morning",
+    purpose: str = "",
+    notes: str = "",
+    days: list = None,
+) -> str:
     """Add a medication to the specified schedule."""
     data = get_medications()
 
@@ -118,6 +146,9 @@ def add_medication(name: str, dose: str = "", schedule: str = "morning", purpose
         "purpose": purpose,
         "notes": notes,
     }
+    # Only carry `days` when set — absence means "every day" (backward compatible).
+    if days:
+        new_med["days"] = days
 
     # Determine where to add based on schedule
     if schedule in ["morning", "evening"]:
@@ -764,6 +795,10 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
     Unified handler for the update_data tool.
     Routes to the appropriate function based on action.
     """
+    # Normalize the two model-facing weekday inputs down to a single canonical
+    # `days` list once, so add/update never see skip_weekends or raw junk.
+    days = normalize_days(kwargs.get("days"), kwargs.get("skip_weekends"))
+
     action_handlers = {
         "add_medication": lambda: add_medication(
             name=name,
@@ -771,6 +806,7 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
             schedule=kwargs.get("schedule", "morning"),
             purpose=kwargs.get("purpose", ""),
             notes=kwargs.get("notes", ""),
+            days=days,
         ),
         "remove_medication": lambda: remove_medication(name),
         "update_medication": lambda: update_medication(
@@ -779,6 +815,7 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
             purpose=kwargs.get("purpose"),
             notes=kwargs.get("notes"),
             schedule=kwargs.get("schedule"),
+            days=days,
         ),
         "remove_project": lambda: remove_project(name),
         "add_project": lambda: add_project(
