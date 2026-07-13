@@ -490,7 +490,9 @@ class TestCheckMedsWeekdays:
             assert sm._check_meds(_SATURDAY_AM, _SATURDAY_AM) == "Hey, did you take your Vyvanse?"
 
     def test_evening_med_weekday_gate(self, sm):
-        meds = {"daily": {"morning": [], "evening": [{"name": "Guanfacine", "days": ["mon", "tue", "wed", "thu", "fri"]}]}}
+        meds = {
+            "daily": {"morning": [], "evening": [{"name": "Guanfacine", "days": ["mon", "tue", "wed", "thu", "fri"]}]}
+        }
         sat_pm = datetime(2026, 3, 21, 21, 15)
         fri_pm = datetime(2026, 3, 20, 21, 15)
         a, b, c = self._ctx(meds)

@@ -284,7 +284,10 @@ def test_handle_update_data_clear_days_restores_every_day(monkeypatch, tmp_path:
 
     _point_paths_at_tmp(monkeypatch, tmp_path)
     payload = {
-        "daily": {"morning": [{"name": "Vyvanse", "dose": "30mg", "days": ["mon", "tue", "wed", "thu", "fri"]}], "evening": []},
+        "daily": {
+            "morning": [{"name": "Vyvanse", "dose": "30mg", "days": ["mon", "tue", "wed", "thu", "fri"]}],
+            "evening": [],
+        },
         "weekly": [],
         "as_needed": [],
     }

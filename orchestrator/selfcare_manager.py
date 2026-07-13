@@ -449,7 +449,9 @@ def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
     # enforcement split (silent med drop) this whole change exists to kill.
     allowed = {str(d).strip().lower()[:3] for d in days if str(d).strip()} & set(_WEEKDAY_ABBRS)
     if not allowed:
-        logger.warning(f"[SELFCARE] med {med.get('name')!r} has no recognizable weekday in days={days!r}; treating as every day")
+        logger.warning(
+            f"[SELFCARE] med {med.get('name')!r} has no recognizable weekday in days={days!r}; treating as every day"
+        )
         return True
     # Index-based, not strftime("%a"): a non-English LC_TIME would make "%a"
     # return e.g. "sam"/"дом" and NEVER match the canonical mon..sun set, silently
