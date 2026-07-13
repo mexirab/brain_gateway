@@ -10,6 +10,23 @@ import {
   type Medication,
 } from '@/lib/settings-api';
 
+const DAY_ORDER = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+const DAY_LABEL: Record<string, string> = {
+  mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun',
+};
+
+// Mirror the backend `_fmt_days`: 'Mon–Fri' / 'weekends' / 'Mon/Wed/Fri'. Returns
+// '' for no/empty/malformed days so the badge only shows a real restriction.
+function formatDays(days?: string[]): string {
+  if (!Array.isArray(days)) return '';
+  const seen = new Set(days.map((d) => String(d).trim().toLowerCase().slice(0, 3)).filter(Boolean));
+  const canon = DAY_ORDER.filter((d) => seen.has(d));
+  if (canon.length === 0) return '';
+  if (canon.join(',') === 'mon,tue,wed,thu,fri') return 'Mon–Fri';
+  if (canon.join(',') === 'sat,sun') return 'weekends';
+  return canon.map((d) => DAY_LABEL[d]).join('/');
+}
+
 function MedList({ title, meds }: { title: string; meds?: Medication[] }) {
   // Array.isArray guard, not `?? []`: the endpoint returns raw YAML, so a
   // hand-edit could make a bucket a bare string/scalar — `.filter` on that
@@ -21,10 +38,11 @@ function MedList({ title, meds }: { title: string; meds?: Medication[] }) {
       <h3 className="text-eyebrow mb-2">{title}</h3>
       <ul className="space-y-2">
         {items.map((m, i) => (
-          <li key={`${m.name}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
+          <li key={`${m.name}-${i}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <span className="font-medium text-content-primary">{m.name}</span>
             {m.dose && <span className="text-sm text-content-secondary">{m.dose}</span>}
             {m.when && <span className="text-sm text-content-muted">· {m.when}</span>}
+            {formatDays(m.days) && <Badge tone="neutral">{formatDays(m.days)}</Badge>}
             {m.notes && <span className="w-full text-sm text-content-muted">{m.notes}</span>}
           </li>
         ))}

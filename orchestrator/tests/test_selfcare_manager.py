@@ -448,6 +448,101 @@ class TestCheckMedsWindow:
 
 
 # ---------------------------------------------------------------------------
+# Per-med weekday scheduling — `days` gate (drug-holiday, e.g. no Vyvanse on weekends)
+# ---------------------------------------------------------------------------
+
+# 2026-03-20 = Friday, 03-21 = Saturday, 03-22 = Sunday.
+_FRIDAY_AM = datetime(2026, 3, 20, 7, 30)
+_SATURDAY_AM = datetime(2026, 3, 21, 7, 30)
+_SUNDAY_AM = datetime(2026, 3, 22, 7, 30)
+
+
+@_skip_no_deps
+class TestCheckMedsWeekdays:
+    def _ctx(self, meds):
+        from orchestrator import data_manager, selfcare_schedule
+
+        return (
+            patch.object(selfcare_schedule, "category_enabled", return_value=True),
+            patch.object(selfcare_schedule, "category_times", return_value=["07:00", "21:00"]),
+            patch.object(data_manager, "get_medications", return_value=meds),
+        )
+
+    def test_weekday_only_med_suppressed_on_weekend(self, sm):
+        meds = {"daily": {"morning": [{"name": "Vyvanse", "days": ["mon", "tue", "wed", "thu", "fri"]}], "evening": []}}
+        a, b, c = self._ctx(meds)
+        with a, b, c:
+            assert sm._check_meds(_SATURDAY_AM, _SATURDAY_AM) is None
+            assert sm._check_meds(_SUNDAY_AM, _SUNDAY_AM) is None
+
+    def test_weekday_only_med_fires_on_weekday(self, sm):
+        meds = {"daily": {"morning": [{"name": "Vyvanse", "days": ["mon", "tue", "wed", "thu", "fri"]}], "evening": []}}
+        a, b, c = self._ctx(meds)
+        with a, b, c:
+            assert sm._check_meds(_FRIDAY_AM, _FRIDAY_AM) == "Hey, did you take your Vyvanse?"
+
+    def test_no_days_field_unchanged_behavior(self, sm):
+        """Regression guard: a med with no `days` behaves exactly as before —
+        nudges every day including weekends."""
+        meds = {"daily": {"morning": [{"name": "Vyvanse"}], "evening": []}}
+        a, b, c = self._ctx(meds)
+        with a, b, c:
+            assert sm._check_meds(_SATURDAY_AM, _SATURDAY_AM) == "Hey, did you take your Vyvanse?"
+
+    def test_evening_med_weekday_gate(self, sm):
+        meds = {
+            "daily": {"morning": [], "evening": [{"name": "Guanfacine", "days": ["mon", "tue", "wed", "thu", "fri"]}]}
+        }
+        sat_pm = datetime(2026, 3, 21, 21, 15)
+        fri_pm = datetime(2026, 3, 20, 21, 15)
+        a, b, c = self._ctx(meds)
+        with a, b, c:
+            assert sm._check_meds(sat_pm, sat_pm) is None
+            assert sm._check_meds(fri_pm, fri_pm) == "Hey, did you take your Guanfacine?"
+
+    def test_malformed_days_fails_open(self, sm):
+        """A typo / empty / wrong-type `days` must NOT silently drop the reminder
+        — it fails open to 'every day' (safe failure for a safety-critical nudge).
+
+        The junk-token cases (['weekdays'], ['M-F'], ['bogus']) are the ones that
+        previously failed CLOSED: a non-empty list of unrecognized tokens produced
+        a non-empty set that never matched today, suppressing the med every day
+        while every display path showed it as 'every day'. Must fail open now."""
+        for bad in ([], "friday", ["   "], 5, ["weekdays"], ["M-F"], ["M", "T", "W", "Th", "F"], ["bogus"]):
+            meds = {"daily": {"morning": [{"name": "Vyvanse", "days": bad}], "evening": []}}
+            # Assert on a weekday AND a weekend — a fail-open med fires on both.
+            for day in (_SATURDAY_AM, _FRIDAY_AM):
+                a, b, c = self._ctx(meds)
+                with a, b, c:
+                    assert sm._check_meds(day, day) == "Hey, did you take your Vyvanse?", (bad, day)
+
+    def test_helper_normalizes_case_and_length(self, sm):
+        """`days` entries are normalized (lowercase, first 3 chars) so 'Saturday'
+        / 'SAT' match Sat."""
+        assert sm._med_allowed_today({"days": ["Saturday", "SUN"]}, _SATURDAY_AM) is True
+        assert sm._med_allowed_today({"days": ["Mon"]}, _SATURDAY_AM) is False
+        assert sm._med_allowed_today({}, _SATURDAY_AM) is True
+
+    def test_partial_junk_days_still_enforces_valid_tokens(self, sm):
+        """['mon','bogus'] must still restrict to Monday — the junk is dropped but
+        the recognizable weekday is honored (intersection, not all-or-nothing)."""
+        assert sm._med_allowed_today({"days": ["mon", "bogus"]}, _FRIDAY_AM) is False
+        monday = datetime(2026, 3, 16, 9, 0)
+        assert sm._med_allowed_today({"days": ["mon", "bogus"]}, monday) is True
+
+    def test_weekday_mapping_is_locale_independent(self, sm):
+        """Today-abbrev comes from datetime.weekday() (index), not strftime('%a'),
+        so a non-English LC_TIME can't silently drop every restricted med. Verify
+        the index→abbrev mapping is correct for each weekday."""
+        # 2026-03-16 is a Monday; walk the whole week.
+        for offset, abbr in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]):
+            day = datetime(2026, 3, 16 + offset, 9, 0)
+            assert sm._med_allowed_today({"days": [abbr]}, day) is True, abbr
+            other = "sun" if abbr != "sun" else "mon"
+            assert sm._med_allowed_today({"days": [other]}, day) is False, abbr
+
+
+# ---------------------------------------------------------------------------
 # Broad-vs-specific med confirmation classification
 # ---------------------------------------------------------------------------
 

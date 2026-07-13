@@ -192,6 +192,8 @@ export interface Medication {
   notes?: string;
   when?: string;
   max_per_day?: string;
+  /** Days this med is taken (omit = every day). Mirrors the YAML `days` field. */
+  days?: Weekday[];
 }
 
 export interface Medications {

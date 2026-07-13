@@ -422,6 +422,44 @@ def _med_window_starts() -> tuple[Optional[int], Optional[int]]:
     return morning, evening
 
 
+_WEEKDAY_ABBRS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # index = datetime.weekday()
+
+
+def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
+    """Whether `med` should be nudged today given its optional `days` list.
+
+    `days` holds lowercase 3-letter ISO weekday abbrevs (mon..sun). Absence of
+    `days` = every day (backward compatible — existing meds are unaffected).
+
+    Fails OPEN: a malformed/empty `days` (typo, wrong type) is treated as "every
+    day" and logged, so a data glitch never silently drops a med reminder — the
+    safe failure for a safety-critical nudge is to remind, not to skip.
+    """
+    days = med.get("days")
+    if not days:
+        return True
+    if not isinstance(days, (list, tuple)):
+        logger.warning(f"[SELFCARE] med {med.get('name')!r} has non-list days={days!r}; treating as every day")
+        return True
+    # Intersect with the canonical set so junk tokens are DROPPED, not enforced.
+    # Critical: a hand-edited `days: [M-F]` / `[weekdays]` normalizes to {} here and
+    # must fail OPEN. Without the intersection, non-empty junk ("wee") would never
+    # match today and silently suppress the med every day, while _fmt_days / the
+    # frontend / normalize_days all show it as "every day" — the exact display-vs-
+    # enforcement split (silent med drop) this whole change exists to kill.
+    allowed = {str(d).strip().lower()[:3] for d in days if str(d).strip()} & set(_WEEKDAY_ABBRS)
+    if not allowed:
+        logger.warning(
+            f"[SELFCARE] med {med.get('name')!r} has no recognizable weekday in days={days!r}; treating as every day"
+        )
+        return True
+    # Index-based, not strftime("%a"): a non-English LC_TIME would make "%a"
+    # return e.g. "sam"/"дом" and NEVER match the canonical mon..sun set, silently
+    # dropping every restricted med every day (fail CLOSED). weekday() is locale-free.
+    today = _WEEKDAY_ABBRS[now_tz.weekday()]
+    return today in allowed
+
+
 def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
     """Check if any medication is due and not confirmed.
 
@@ -457,6 +495,8 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
+                if not _med_allowed_today(med, now_tz):
+                    continue  # e.g. a Mon–Fri stimulant on a weekend
                 last = _state.last_med_confirmation.get(med_name.lower())
                 if last and last.date() == now.date() and last.hour < 12:
                     continue  # confirmed this morning
@@ -469,6 +509,8 @@ def _check_meds(now: datetime, now_tz: datetime) -> Optional[str]:
                 med_name = med.get("name", "")
                 if not med_name:
                     continue
+                if not _med_allowed_today(med, now_tz):
+                    continue  # e.g. a Mon–Fri stimulant on a weekend
                 last = _state.last_med_confirmation.get(med_name.lower())
                 if last and last.date() == now.date() and last.hour >= 17:
                     continue  # confirmed this evening
@@ -655,11 +697,16 @@ def evening_meds_status() -> Optional[Dict[str, Any]]:
         logger.warning(f"[SELFCARE] Evening meds lookup failed: {e}")
         return None
 
-    names = [med.get("name", "") for med in evening_meds if med.get("name")]
+    # Honor per-med `days`: a Mon–Fri evening med must not surface in the
+    # weekend shutdown ritual (else Jess nags for a med she said is weekends-off).
+    # Use tz-aware now (like _check_meds) so the weekday/date gate can't drift a day
+    # if the container TZ ever diverges from the configured timezone.
+    now = datetime.now(ZoneInfo(shared.TIMEZONE))
+    names = [med.get("name", "") for med in evening_meds if med.get("name") and _med_allowed_today(med, now)]
     if not names:
         return None
 
-    today = datetime.now().date()
+    today = now.date()
     generic = _state.last_med_confirmation.get("medication")
     if generic and generic.date() == today and generic.hour >= 17:
         return {"names": names, "confirmed": True}

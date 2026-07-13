@@ -108,7 +108,55 @@ def save_medications(data: Dict[str, Any]) -> bool:
         return False
 
 
-def add_medication(name: str, dose: str = "", schedule: str = "morning", purpose: str = "", notes: str = "") -> str:
+_CANONICAL_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+# Sentinel: the model explicitly asked to REMOVE a med's day restriction (take
+# every day again), which is distinct from "days not mentioned" (None → leave
+# as-is). Without this, "remind me every day again" would silently no-op and the
+# med would stay suppressed on the days the user just re-enabled — the inverse of
+# the Defect-B silent failure this whole change exists to kill.
+CLEAR_DAYS = object()
+
+
+def normalize_days(days: Any = None, skip_weekends: Any = None) -> Any:
+    """Collapse the model-facing `days` / `skip_weekends` inputs to a canonical
+    weekday list, `CLEAR_DAYS`, or None.
+
+    - None → not supplied; leave any existing schedule untouched.
+    - CLEAR_DAYS → an explicit empty `days` list: drop the restriction (every day).
+    - Explicit `days` wins over `skip_weekends` if both are given.
+    - Entries are normalized (lowercase, first 3 chars); unknown tokens dropped.
+      An all-unknown `days` (e.g. ["bogus"]) → None, NOT a clear — we won't wipe a
+      real schedule off a typo.
+    - Output preserves canonical Mon→Sun order and de-dups.
+    - `skip_weekends` truthy → [mon,tue,wed,thu,fri].
+    """
+    # Only lists/tuples are a valid `days` payload. A non-iterable (e.g. the model
+    # sends days=5 / true) must NOT raise on `for d in days` — fall through to the
+    # skip_weekends / None branches instead. get("days") distinguishes the cases:
+    # absent→None (leave as-is), present-empty→[] (clear).
+    if isinstance(days, (list, tuple)):
+        if len(days) == 0:
+            return CLEAR_DAYS
+        seen = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
+        canon = [d for d in _CANONICAL_DAYS if d in seen]
+        if canon:
+            return canon
+        # else: non-empty but all-junk (typo) → don't clear a real schedule off a
+        # typo, and don't shadow a valid skip_weekends — fall through below.
+    if skip_weekends:
+        return ["mon", "tue", "wed", "thu", "fri"]
+    return None
+
+
+def add_medication(
+    name: str,
+    dose: str = "",
+    schedule: str = "morning",
+    purpose: str = "",
+    notes: str = "",
+    days: list = None,
+) -> str:
     """Add a medication to the specified schedule."""
     data = get_medications()
 
@@ -118,6 +166,11 @@ def add_medication(name: str, dose: str = "", schedule: str = "morning", purpose
         "purpose": purpose,
         "notes": notes,
     }
+    # Only carry `days` when a real weekday list is given — absence / CLEAR_DAYS
+    # both mean "every day" (backward compatible; a brand-new med has nothing to
+    # clear, so the sentinel just means "don't add the field").
+    if isinstance(days, list) and days:
+        new_med["days"] = days
 
     # Determine where to add based on schedule
     if schedule in ["morning", "evening"]:
@@ -178,46 +231,102 @@ def remove_medication(name: str) -> str:
     return f"Medication '{name}' not found."
 
 
-def update_medication(name: str, dose: str = None, purpose: str = None, notes: str = None, schedule: str = None) -> str:
-    """Update an existing medication's properties."""
+_SCHEDULE_BUCKETS = ("morning", "evening", "weekly", "as_needed")
+
+
+def _find_medication(data: Dict[str, Any], name: str):
+    """Locate a med by name across every schedule bucket.
+
+    Returns (containing_list, index, schedule_str) or None. `schedule_str` is
+    the caller-facing bucket name ("morning"/"evening"/"weekly"/"as_needed"),
+    so update_medication can tell whether a requested schedule is a real move.
+    """
+    name_l = name.lower()
+    daily = data.get("daily") or {}
+    for sched in ("morning", "evening"):
+        lst = daily.get(sched) or []
+        for i, med in enumerate(lst):
+            if isinstance(med, dict) and med.get("name", "").lower() == name_l:
+                return lst, i, sched
+    for bucket in ("weekly", "as_needed"):
+        lst = data.get(bucket) or []
+        for i, med in enumerate(lst):
+            if isinstance(med, dict) and med.get("name", "").lower() == name_l:
+                return lst, i, bucket
+    return None
+
+
+def _append_to_schedule(data: Dict[str, Any], med: Dict[str, Any], schedule: str) -> None:
+    """Append an existing med dict into the target schedule bucket."""
+    if schedule in ("morning", "evening"):
+        daily = data.setdefault("daily", {"morning": [], "evening": []})
+        daily.setdefault(schedule, []).append(med)
+    else:  # weekly | as_needed (validated by caller)
+        data.setdefault(schedule, []).append(med)
+
+
+def update_medication(
+    name: str,
+    dose: str = None,
+    purpose: str = None,
+    notes: str = None,
+    schedule: str = None,
+    days: Any = None,  # list[str] | CLEAR_DAYS | None
+) -> str:
+    """Update an existing medication's properties.
+
+    Honesty contract (was the source of a silent false-success): a found med
+    that ends up with NO changed field returns an explicit "nothing to update"
+    and does NOT write — the previous code wrote an unchanged dict, returned
+    True, and reported "Updated X: ." which the model relayed as done.
+
+    `schedule` now actually relocates the med between buckets (morning/evening/
+    weekly/as_needed); it used to be an accepted-but-ignored dead parameter.
+    """
+    if schedule is not None and schedule not in _SCHEDULE_BUCKETS:
+        return f"Unknown schedule: {schedule}. Use morning, evening, weekly, or as_needed."
+
     data = get_medications()
-    found = False
+    located = _find_medication(data, name)
+    if located is None:
+        return f"Medication '{name}' not found."
+
+    lst, idx, current_schedule = located
+    med = lst[idx]
     updated_fields = []
 
-    def update_med(med_list):
-        nonlocal found, updated_fields
-        for med in med_list:
-            if med.get("name", "").lower() == name.lower():
-                found = True
-                if dose is not None:
-                    med["dose"] = dose
-                    updated_fields.append(f"dose={dose}")
-                if purpose is not None:
-                    med["purpose"] = purpose
-                    updated_fields.append(f"purpose={purpose}")
-                if notes is not None:
-                    med["notes"] = notes
-                    updated_fields.append(f"notes={notes}")
-                return True
-        return False
+    if dose is not None:
+        med["dose"] = dose
+        updated_fields.append(f"dose={dose}")
+    if purpose is not None:
+        med["purpose"] = purpose
+        updated_fields.append(f"purpose={purpose}")
+    if notes is not None:
+        med["notes"] = notes
+        updated_fields.append(f"notes={notes}")
+    if days is CLEAR_DAYS:
+        # "Take it every day again" — drop the restriction. Only a real change if
+        # the med actually had a `days` field (else it stays an honest no-op).
+        if med.pop("days", None) is not None:
+            updated_fields.append("days=every day")
+    elif isinstance(days, list) and days:
+        med["days"] = days
+        updated_fields.append(f"days={','.join(days)}")
 
-    # Search all schedules
-    if "daily" in data:
-        for sched in ["morning", "evening"]:
-            if sched in data["daily"]:
-                update_med(data["daily"][sched])
+    # Relocate only when the requested schedule differs from the current one.
+    if schedule is not None and schedule != current_schedule:
+        lst.pop(idx)
+        _append_to_schedule(data, med, schedule)
+        updated_fields.append(f"schedule={schedule}")
 
-    if "weekly" in data:
-        update_med(data["weekly"])
+    # Found but nothing actually changed: report honestly and skip the write
+    # (no pointless save + audit entry). NEVER return "Updated X: .".
+    if not updated_fields:
+        return f"No changes to {name} — nothing to update."
 
-    if "as_needed" in data:
-        update_med(data["as_needed"])
-
-    if found:
-        if save_medications(data):
-            return f"Updated {name}: {', '.join(updated_fields)}."
-        return f"Found {name} but failed to save changes."
-    return f"Medication '{name}' not found."
+    if save_medications(data):
+        return f"Updated {name}: {', '.join(updated_fields)}."
+    return f"Found {name} but failed to save changes."
 
 
 def _generate_medications_md(data: Dict[str, Any]) -> None:
@@ -232,21 +341,23 @@ def _generate_medications_md(data: Dict[str, Any]) -> None:
 
     # Morning
     lines.append("### Morning (with breakfast)")
-    lines.append("| Medication | Dose | Purpose | Notes |")
-    lines.append("|------------|------|---------|-------|")
+    lines.append("| Medication | Dose | Purpose | Notes | Days |")
+    lines.append("|------------|------|---------|-------|------|")
     for med in data.get("daily", {}).get("morning", []):
         lines.append(
-            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |"
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | "
+            f"{med.get('notes', '')} | {_fmt_days(med.get('days')) or 'every day'} |"
         )
     lines.append("")
 
     # Evening
     lines.append("### Evening (before bed)")
-    lines.append("| Medication | Dose | Purpose | Notes |")
-    lines.append("|------------|------|---------|-------|")
+    lines.append("| Medication | Dose | Purpose | Notes | Days |")
+    lines.append("|------------|------|---------|-------|------|")
     for med in data.get("daily", {}).get("evening", []):
         lines.append(
-            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | {med.get('notes', '')} |"
+            f"| {med.get('name', '')} | {med.get('dose', '')} | {med.get('purpose', '')} | "
+            f"{med.get('notes', '')} | {_fmt_days(med.get('days')) or 'every day'} |"
         )
     lines.append("")
 
@@ -611,11 +722,35 @@ def _generate_projects_md(data: Dict[str, Any]) -> None:
 # below, so a tool answer and the injected block can never disagree.
 
 
+_DAY_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat", "sun": "Sun"}
+
+
+def _fmt_days(days: Any) -> str:
+    """Compact human label for a med's `days` list: 'Mon–Fri', 'weekends', else
+    a slash list like 'Mon/Wed/Fri'. '' when absent/empty/malformed so callers
+    can `if hint:`. Mirrors the frontend badge so text and page never disagree."""
+    if not days or not isinstance(days, (list, tuple)):
+        return ""
+    seen = {str(d).strip().lower()[:3] for d in days if str(d).strip()}
+    canon = [d for d in _CANONICAL_DAYS if d in seen]
+    if not canon:
+        return ""
+    if canon == ["mon", "tue", "wed", "thu", "fri"]:
+        return "Mon–Fri"
+    if canon == ["sat", "sun"]:
+        return "weekends"
+    return "/".join(_DAY_LABELS[d] for d in canon)
+
+
 def _fmt_med(med: Dict[str, Any]) -> str:
-    """`Name Dose` (dose omitted when blank)."""
+    """`Name Dose` (dose omitted when blank), plus a `(Mon–Fri)` schedule hint
+    when the med carries a `days` restriction — so the authoritative text the
+    model sees (get_data + prompt inject) reflects weekends-off, not plain daily."""
     name = str(med.get("name", "")).strip()
     dose = str(med.get("dose", "")).strip()
-    return f"{name} {dose}".strip()
+    base = f"{name} {dose}".strip()
+    hint = _fmt_days(med.get("days"))
+    return f"{base} ({hint})" if hint else base
 
 
 def render_medications_compact(data: Dict[str, Any] | None = None) -> str:
@@ -713,6 +848,10 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
     Unified handler for the update_data tool.
     Routes to the appropriate function based on action.
     """
+    # Normalize the two model-facing weekday inputs down to a single canonical
+    # `days` list once, so add/update never see skip_weekends or raw junk.
+    days = normalize_days(kwargs.get("days"), kwargs.get("skip_weekends"))
+
     action_handlers = {
         "add_medication": lambda: add_medication(
             name=name,
@@ -720,6 +859,7 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
             schedule=kwargs.get("schedule", "morning"),
             purpose=kwargs.get("purpose", ""),
             notes=kwargs.get("notes", ""),
+            days=days,
         ),
         "remove_medication": lambda: remove_medication(name),
         "update_medication": lambda: update_medication(
@@ -727,6 +867,8 @@ def handle_update_data(action: str, name: str, **kwargs) -> str:
             dose=kwargs.get("dose"),
             purpose=kwargs.get("purpose"),
             notes=kwargs.get("notes"),
+            schedule=kwargs.get("schedule"),
+            days=days,
         ),
         "remove_project": lambda: remove_project(name),
         "add_project": lambda: add_project(

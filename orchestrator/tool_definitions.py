@@ -123,7 +123,12 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_data",
-            "description": "Update the user's structured personal data (medications, projects). Use this when they ask to add, remove, or modify medications or project information.",
+            "description": (
+                "Update the user's structured personal data (medications, projects). Use this when they "
+                "ask to add, remove, or modify medications or project information. You can also set which "
+                "days of the week a medication is taken (`days`, or the `skip_weekends` shorthand) — use "
+                "this when they want a drug holiday, e.g. 'stop reminding me to take Vyvanse on weekends'."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -149,6 +154,18 @@ STATIC_TOOLS = [
                     },
                     "purpose": {"type": "string", "description": "What the medication is for"},
                     "notes": {"type": "string", "description": "Additional notes"},
+                    "days": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                        },
+                        "description": "Days this medication is taken. Omit = leave schedule unchanged; ['mon','tue','wed','thu','fri'] = weekdays only; [] (empty) = clear any restriction, take every day again.",
+                    },
+                    "skip_weekends": {
+                        "type": "boolean",
+                        "description": "Shorthand: take only Mon–Fri (drug holiday on weekends). Normalizes to days=[mon,tue,wed,thu,fri].",
+                    },
                     "status": {
                         "type": "string",
                         "enum": ["not_started", "in_progress", "blocked", "done"],

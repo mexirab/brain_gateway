@@ -158,3 +158,210 @@ def test_bad_projects_entry_does_not_blank_meds(monkeypatch, tmp_path: Path):
     block = data_manager.get_structured_facts_block()
     assert "Vyvanse 30mg" in block  # meds still present despite the bad project entry
     assert "RealProj" in block  # the valid dict project still renders
+
+
+# ---------------------------------------------------------------------------
+# update_medication — honesty (Defect B) + real schedule relocation
+# ---------------------------------------------------------------------------
+
+
+def test_update_medication_noop_is_honest_and_does_not_write(monkeypatch, tmp_path: Path):
+    """A found med with no changed field must report 'nothing to update' and
+    must NOT write — the old code wrote an unchanged dict and returned the
+    hollow 'Updated Vyvanse: .' which the model relayed as done."""
+    from orchestrator import data_manager
+
+    paths = _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    mtime_before = paths["meds_yaml"].stat().st_mtime_ns
+
+    with patch.object(data_manager, "save_medications", wraps=data_manager.save_medications) as spy:
+        msg = data_manager.update_medication("Vyvanse")  # no fields changed
+    assert "nothing to update" in msg.lower()
+    assert msg != "Updated Vyvanse: ."
+    spy.assert_not_called()  # no pointless write + audit entry
+    assert paths["meds_yaml"].stat().st_mtime_ns == mtime_before
+
+
+def test_update_medication_real_change_reports_field(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.update_medication("Vyvanse", dose="40mg")
+    assert msg == "Updated Vyvanse: dose=40mg."
+    assert data_manager.get_medications()["daily"]["morning"][0]["dose"] == "40mg"
+
+
+def test_update_medication_relocates_between_buckets(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.update_medication("Vyvanse", schedule="evening")
+    assert "schedule=evening" in msg
+    data = data_manager.get_medications()
+    assert [m["name"] for m in data["daily"]["morning"]] == []
+    assert [m["name"] for m in data["daily"]["evening"]] == ["Vyvanse"]
+
+
+def test_update_medication_same_schedule_is_noop(monkeypatch, tmp_path: Path):
+    """Requesting the schedule the med already sits in is not a change."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.update_medication("Vyvanse", schedule="morning")
+    assert "nothing to update" in msg.lower()
+
+
+def test_update_medication_not_found(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    assert "not found" in data_manager.update_medication("Nonexistent", dose="1mg").lower()
+
+
+def test_update_medication_bad_schedule_rejected(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    assert "Unknown schedule" in data_manager.update_medication("Vyvanse", schedule="lunchtime")
+
+
+# ---------------------------------------------------------------------------
+# days / skip_weekends — model-facing weekday scheduling (Defect A, write side)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_days_variants():
+    from orchestrator.data_manager import normalize_days
+
+    assert normalize_days(None, None) is None
+    assert normalize_days(None, True) == ["mon", "tue", "wed", "thu", "fri"]
+    assert normalize_days(None, False) is None
+    # explicit days win over skip_weekends, canonical order + de-dup + normalize
+    assert normalize_days(["sat", "SUN", "sun"], True) == ["sat", "sun"]
+    assert normalize_days(["Friday", "monday"], None) == ["mon", "fri"]
+    # unknown tokens dropped; all-unknown → None (not an empty list)
+    assert normalize_days(["bogus", "xyz"], None) is None
+    # non-iterable truthy input must not raise; falls through to skip_weekends/None
+    assert normalize_days(5, None) is None
+    assert normalize_days(True, None) is None
+    assert normalize_days("mon", None) is None  # bare string is not a valid days list
+    # all-junk days must NOT shadow a valid skip_weekends fallback
+    assert normalize_days(["bogus"], True) == ["mon", "tue", "wed", "thu", "fri"]
+
+
+def test_handle_update_data_skip_weekends_writes_days(monkeypatch, tmp_path: Path):
+    """End-to-end write path: 'stop reminding me on weekends' → the Vyvanse
+    entry gains days=[mon..fri]."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    msg = data_manager.handle_update_data("update_medication", "Vyvanse", skip_weekends=True)
+    assert "days=mon,tue,wed,thu,fri" in msg
+    assert data_manager.get_medications()["daily"]["morning"][0]["days"] == ["mon", "tue", "wed", "thu", "fri"]
+
+
+def test_normalize_days_clear_sentinel():
+    """Explicit empty list = CLEAR_DAYS sentinel; absent = None; all-unknown =
+    None (a typo must not be mistaken for a clear)."""
+    from orchestrator.data_manager import CLEAR_DAYS, normalize_days
+
+    assert normalize_days([], None) is CLEAR_DAYS
+    assert normalize_days(None, None) is None
+    assert normalize_days(["bogus"], None) is None  # typo, not a clear
+
+
+def test_handle_update_data_clear_days_restores_every_day(monkeypatch, tmp_path: Path):
+    """'Take Vyvanse every day again' (days=[]) must actually drop the restriction
+    — not silently keep the med suppressed on weekends (inverse silent-failure)."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    payload = {
+        "daily": {
+            "morning": [{"name": "Vyvanse", "dose": "30mg", "days": ["mon", "tue", "wed", "thu", "fri"]}],
+            "evening": [],
+        },
+        "weekly": [],
+        "as_needed": [],
+    }
+    assert data_manager.save_medications(payload) is True
+    msg = data_manager.handle_update_data("update_medication", "Vyvanse", days=[])
+    assert "every day" in msg.lower()
+    assert "days" not in data_manager.get_medications()["daily"]["morning"][0]
+
+
+def test_clear_days_on_unrestricted_med_is_honest_noop(monkeypatch, tmp_path: Path):
+    """Clearing a med that has no restriction is nothing to do — honest no-op."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True  # Vyvanse has no days
+    msg = data_manager.handle_update_data("update_medication", "Vyvanse", days=[])
+    assert "nothing to update" in msg.lower()
+
+
+def test_handle_add_medication_with_explicit_days(monkeypatch, tmp_path: Path):
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    data_manager.handle_update_data("add_medication", "Ritalin", dose="10mg", days=["mon", "wed", "fri"])
+    added = data_manager.get_medications()["daily"]["morning"][-1]
+    assert added["name"] == "Ritalin"
+    assert added["days"] == ["mon", "wed", "fri"]
+
+
+def test_add_medication_without_days_has_no_days_key(monkeypatch, tmp_path: Path):
+    """Backward compat: a plain add must not sprout an empty days field."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    assert data_manager.save_medications(_meds_payload()) is True
+    data_manager.handle_update_data("add_medication", "Zoloft", dose="50mg")
+    added = data_manager.get_medications()["daily"]["morning"][-1]
+    assert "days" not in added
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — schedule hint surfaces in the authoritative text (get_data + prompt)
+# ---------------------------------------------------------------------------
+
+
+def test_fmt_days_labels():
+    from orchestrator.data_manager import _fmt_days
+
+    assert _fmt_days(["mon", "tue", "wed", "thu", "fri"]) == "Mon–Fri"
+    assert _fmt_days(["sat", "sun"]) == "weekends"
+    assert _fmt_days(["mon", "wed", "fri"]) == "Mon/Wed/Fri"
+    assert _fmt_days(["SUN", "sat"]) == "weekends"  # order-independent + case
+    assert _fmt_days([]) == ""
+    assert _fmt_days(None) == ""
+    assert _fmt_days("friday") == ""  # non-list → no hint (fail safe)
+
+
+def test_get_data_reflects_weekends_off(monkeypatch, tmp_path: Path):
+    """The whole point: a weekends-off med must read as (Mon–Fri), not plain
+    daily, in the text the model answers 'when do I take X?' from."""
+    from orchestrator import data_manager
+
+    _point_paths_at_tmp(monkeypatch, tmp_path)
+    payload = {
+        "daily": {
+            "morning": [{"name": "Vyvanse", "dose": "30mg", "days": ["mon", "tue", "wed", "thu", "fri"]}],
+            "evening": [],
+        },
+        "weekly": [],
+        "as_needed": [],
+    }
+    assert data_manager.save_medications(payload) is True
+    out = data_manager.handle_get_data("medications")
+    assert "Vyvanse 30mg (Mon–Fri)" in out
+    # and the same hint rides the injected prompt block
+    assert "Vyvanse 30mg (Mon–Fri)" in data_manager.get_structured_facts_block()
