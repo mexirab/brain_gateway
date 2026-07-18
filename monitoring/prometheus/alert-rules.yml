@@ -413,6 +413,33 @@ groups:
         annotations:
           summary: "Jess off-box backup copy has been failing for 3 days"
           description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+
+      # Fires only once bgw_tool_call_source_total exists (it ships on the
+      # tool-call instrumentation branch); until then there is no series and this
+      # is silently inactive, which is the correct behaviour rather than an error.
+      #
+      # source="dropped" means the model emitted a <tool_call> marker but no call
+      # was parsed, so the agentic loop ended the turn early — the user watches
+      # the assistant announce it will do something and then just stop. It is
+      # user-visible breakage that produces no error anywhere else.
+      #
+      # Only "dropped" is alerted. "xml_fallback" is deliberately NOT: it is a
+      # recovered call, and if the underlying defect is common it would be
+      # permanently non-zero — a threshold alert on it would be a standing
+      # nuisance. That one is dashboard-only.
+      #
+      # > 0 over 6h with for: 10m, not a rate(): Helios is power-tiered and the
+      # box sees only ~18 model rounds/week, so any per-second rate is noise and
+      # a narrow window would flap resolved between sparse events. Any single
+      # occurrence is worth surfacing at this volume.
+      - alert: ToolCallsSilentlyDropped
+        expr: sum(increase(bgw_tool_call_source_total{source="dropped"}[6h])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model tool calls are being silently dropped (vLLM<0.20.0 qwen3 parser bug)"
+          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. This is the vLLM 0.19.1 qwen3 reasoning-parser defect fixed upstream in PR #35687 (shipped in 0.20.0). Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason. NOTE the upgrade is not a free action: open vLLM issue #46249 reports Qwen3.6-27B tool calls failing when MTP speculative decoding is enabled on 0.23.x, and vllm-primary.service runs --speculative-config mtp for roughly 2x throughput. Stage it, keep v0.19.1 pinned for rollback, and validate tool calls + streaming + MTP together."
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded

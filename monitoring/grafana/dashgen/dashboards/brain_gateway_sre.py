@@ -303,8 +303,35 @@ def build() -> dict:
             ],
             thresholds=GREEN_RED_BINARY,
         ),
+        # Lives in the LLM row, not Tools: the decision it informs is a vLLM
+        # serving upgrade, not tool health.
+        # source="none" is excluded — it is the ordinary-reply denominator and
+        # dwarfs everything else, which would flatten the interesting series to
+        # invisibility. increase(...[1h]) rather than a per-second rate because
+        # Helios is power-tiered (~18 model rounds/week); a rate() would read as
+        # a flat zero.
+        timeseries(
+            "Tool Call Delivery (native vs rescued vs dropped)",
+            [
+                (
+                    'sum by (source) (increase(bgw_tool_call_source_total{source!="none"}[1h]))',
+                    "{{source}}",
+                ),
+            ],
+            unit="short",
+            stack=True,
+            description=(
+                "How tool calls arrived from the model. 'dropped' is user-visible "
+                "breakage — a <tool_call> marker was present but nothing parsed, so "
+                "the agentic loop ended the turn early. It is the signal for the "
+                "vLLM<0.20.0 qwen3 reasoning-parser defect (fixed upstream in PR "
+                "#35687). 'xml_fallback' is a recovered call and is NOT expected to "
+                "fire for that defect. Low traffic: allow weeks before reading a "
+                "trend, and do not read an early zero as 'not happening'."
+            ),
+        ),
     ]
-    row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8])
+    row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Helios Power Management

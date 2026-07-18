@@ -25,7 +25,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|ToolCallsSilentlyDropped"
       receiver: "pushover-quiet"
 receivers:
   - name: "null"
