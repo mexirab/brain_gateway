@@ -59,6 +59,55 @@ TOOL_CALL_COUNT = Counter(
     ["tool"],
 )
 
+# How the model's tool calls actually reached us, per model round. This exists
+# to measure a KNOWN Qwen3.6 + vLLM defect, not for general curiosity.
+#
+# The bug: Qwen3.6 sometimes emits <tool_call> INSIDE an unclosed <think> block.
+# vLLM's qwen3 reasoning parser then classifies the whole span as reasoning and
+# drops the tool call — the API returns populated reasoning_content, an EMPTY
+# tool_calls array, and finish_reason="stop" instead of "tool_calls". The
+# agentic loop sees "I'll check the calendar" and then simply stops.
+# Fixed upstream by vLLM PR #35687 (merged 2026-04-24, first shipped in 0.20.0).
+# Helios runs vllm/vllm-openai:v0.19.1 (released 2026-04-18) — SIX DAYS too old.
+#
+# Labels (`source`):
+#   native       - vLLM returned structured tool_calls. The healthy path.
+#   dropped      - a <tool_call> marker was present (in content, or in the
+#                  reasoning channel) but no call was parsed. The turn ends early
+#                  and the user sees the assistant give up mid-task.
+#                  *** THIS is the defect signal — watch this label. ***
+#   xml_fallback - native tool_calls were empty but parse_xml_tool_calls() still
+#                  recovered a call from content. Do NOT expect this to fire for
+#                  the bug above, and do not wait for it before upgrading. Two
+#                  independent reasons it cannot rescue this defect:
+#                    1. The fallback is gated on non-empty `content`
+#                       (`if not tool_calls and content:`), but in this failure
+#                       the entire span went to the reasoning channel, so
+#                       `content` is empty and the fallback never runs.
+#                    2. parse_xml_tool_calls() does json.loads() on the tag body,
+#                       i.e. it expects <tool_call>{"name":...}</tool_call>.
+#                       Helios runs --tool-call-parser qwen3_coder, whose wire
+#                       format is <function=name><parameter=x>v</parameter>...
+#                       — not JSON. It would raise JSONDecodeError and recover
+#                       nothing.
+#                  The label is kept because it is a real (if rare) path for
+#                  other models/formats, and a nonzero value here would be
+#                  genuinely surprising and worth investigating.
+#   none         - no tool calls and no marker. Ordinary conversational reply,
+#                  the overwhelmingly common case. Tracked as the denominator so
+#                  the others are interpretable as a rate rather than a raw count.
+#
+# NOT every model round is counted, so do not expect this to reconcile against
+# bgw_llm_calls_total. Three rounds are deliberately excluded because no
+# classification is possible or meaningful: a stream that died mid-emission, a
+# call_model that raised, and the forced tools-free "summarize" round taken when
+# every tool call in a round is a repeat. All three have their own counters.
+TOOL_CALL_SOURCE = Counter(
+    "bgw_tool_call_source_total",
+    "How tool calls arrived from the model (native vs XML-fallback rescue vs silently dropped)",
+    ["source"],
+)
+
 TOOL_CALL_LATENCY = Histogram(
     "bgw_tool_call_duration_seconds",
     "Tool execution latency",
