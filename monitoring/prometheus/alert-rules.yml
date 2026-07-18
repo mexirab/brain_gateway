@@ -12,14 +12,36 @@ groups:
           summary: "Brain Gateway orchestrator is down"
           description: "The orchestrator has not responded to /metrics scrapes for 2 minutes."
 
+      # uranus is EXCLUDED deliberately. It has been unreachable since
+      # 2026-07-04 and is not in the runtime path, so including it would mean
+      # this alert pages every repeat_interval (4h) forever about a box everyone
+      # already knows is dead — and an alert that always fires is one nobody
+      # reads. Until this exclusion was added NodeDown was routed to the "null"
+      # receiver for exactly that reason, which meant a REAL node going down
+      # (jupiter, helios, saturn) notified nobody at all. Excluding the known-dead
+      # node is what makes paging on the rest safe.
+      # When uranus comes back: drop the node!= matcher. Do NOT instead re-point
+      # this at "null".
       - alert: NodeDown
-        expr: up{job="node-exporter"} == 0
+        expr: up{job="node-exporter", node!="uranus"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Node {{ $labels.node }} is down"
           description: "Node exporter on {{ $labels.node }} is unreachable for 3 minutes."
+
+      # Non-paging counterpart so the excluded node is still VISIBLE on the
+      # dashboard rather than silently dropped from monitoring entirely.
+      # Deliberately not in the alertmanager allow-list — Grafana-only.
+      - alert: UranusDown
+        expr: up{job="node-exporter", node="uranus"} == 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "uranus (test box) is unreachable"
+          description: "Known-dead since 2026-07-04 and excluded from NodeDown paging. This exists so the box does not vanish from monitoring; if it is genuinely back, remove the node!=\"uranus\" matcher on NodeDown and delete this rule."
 
       # -- Storage substrate ----------------------------------------------------
       # /mnt/logging is an EXTERNAL USB disk (WDC WD10EZEX, /dev/sde1) holding the
@@ -59,13 +81,12 @@ groups:
       # carrying node="jupiter" would satisfy absent() and silently disable this
       # alert. Pinning the job keeps that fail-open path closed.
       #
-      # /mnt/documents (paperless) and /mnt/media (immich et al) were knocked out
-      # by the same incident and have since been remounted by UUID, so they are
-      # now eligible for the same treatment — deliberately not added in this pass
-      # to keep the change to one rule. Extend the matcher to
-      # mountpoint=~"/mnt/(logging|documents|media)" when you want that coverage;
-      # note absent() over a regex fires only when ALL matching series vanish, so
-      # per-mount rules (or absent() per mountpoint) are needed to tell them apart.
+      # All three /mnt/* disks live in the SAME USB enclosure and dropped
+      # together on 2026-07-15, so each gets its own rule. They are deliberately
+      # NOT collapsed into one mountpoint=~"/mnt/(logging|documents|media)"
+      # matcher: absent() over a regex returns 1 only when EVERY matching series
+      # vanishes, so a single failed disk — the more likely failure — would be
+      # silently invisible while the alert sat green.
       - alert: LoggingMountMissing
         expr: >-
           absent(node_filesystem_size_bytes{job="node-exporter", node="jupiter", mountpoint="/mnt/logging"})
@@ -76,6 +97,28 @@ groups:
         annotations:
           summary: "Monitoring storage /mnt/logging is not mounted on Jupiter"
           description: "node-exporter reports no filesystem at /mnt/logging while the node is up. The USB disk backing Prometheus/Loki/Grafana has dropped. Prometheus will crashloop on its next restart and ALL alerting dies with it. Check `dmesg | grep -i usb` for a disconnect, confirm the disk is present (`lsblk -o NAME,TRAN,SIZE`), then: STOP the monitoring stack first (`docker compose -f monitoring/docker-compose.yml stop`) — containers started while the mount was missing hold FDs on the root-filesystem path underneath, and mounting over them leaves Prometheus writing to the shadowed directory while the disk sits idle. Then `mount /mnt/logging`, start the stack, and confirm `docker inspect prometheus --format '{{.RestartCount}}'` is 0."
+
+      - alert: DocumentsMountMissing
+        expr: >-
+          absent(node_filesystem_size_bytes{job="node-exporter", node="jupiter", mountpoint="/mnt/documents"})
+          and on() (up{job="node-exporter", node="jupiter"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Document storage /mnt/documents is not mounted on Jupiter"
+          description: "node-exporter reports no filesystem at /mnt/documents while the node is up. This disk backs Paperless-ngx — scanned documents, its media/originals, AND its Postgres data directory. Losing it mid-write is what left paperless-db throwing 500s for three weeks after the 2026-07-15 dropout. usb-storage-remount.service should have remounted it automatically within ~10s; if this alert is firing, that recovery did NOT work — check `systemctl status usb-storage-remount.service` and `dmesg | grep -i usb`. Then stop paperless (`docker compose -f /opt/paperless/docker-compose.yml stop`), `mount /mnt/documents`, and start it again so Postgres runs crash recovery against the real disk."
+
+      - alert: MediaMountMissing
+        expr: >-
+          absent(node_filesystem_size_bytes{job="node-exporter", node="jupiter", mountpoint="/mnt/media"})
+          and on() (up{job="node-exporter", node="jupiter"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Media storage /mnt/media is not mounted on Jupiter"
+          description: "node-exporter reports no filesystem at /mnt/media while the node is up. This disk holds the Immich photo library (~41GB) and its Postgres data directory, plus audiobooks/ebooks/podcasts. Immich Postgres logged 'could not open file global/pg_control: Input/output error' when this vanished on 2026-07-15. usb-storage-remount.service should have remounted it automatically; if this is firing, that recovery failed — check `systemctl status usb-storage-remount.service`. Then stop immich (`docker compose -f /opt/immich/docker-compose.yml stop`), `mount /mnt/media`, and start it so Postgres recovers cleanly."
 
       # Dashboard-only by design: when this fires Prometheus can't deliver
       # notifications at all, so routing it anywhere via alertmanager is

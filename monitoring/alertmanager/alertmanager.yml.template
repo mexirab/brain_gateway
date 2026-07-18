@@ -17,7 +17,7 @@ route:
     # TSDB and therefore every other alert in this file; it went unnoticed for
     # 3 days on 2026-07-15 precisely because nothing was watching the watcher.
     - matchers:
-        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|LoggingMountMissing"
+        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
