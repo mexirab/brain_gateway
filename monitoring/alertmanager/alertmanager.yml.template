@@ -9,8 +9,15 @@ route:
     # (nightly state + HA config backups) belong here — an unprotected backup is a
     # data-loss window, so it should page like OrchestratorDown, not sit silent on
     # the null receiver.
+    #
+    # NOTE: routing here is an alertname ALLOW-LIST — the `severity:` label on a
+    # rule is decorative and routes nothing. A new rule that is not named in one
+    # of these regexes falls through to receiver "null" and notifies NOBODY.
+    # LoggingMountMissing pages because losing /mnt/logging kills the Prometheus
+    # TSDB and therefore every other alert in this file; it went unnoticed for
+    # 3 days on 2026-07-15 precisely because nothing was watching the watcher.
     - matchers:
-        - alertname=~"OrchestratorDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale"
+        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
@@ -18,7 +25,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|ToolCallsSilentlyDropped"
       receiver: "pushover-quiet"
 receivers:
   - name: "null"

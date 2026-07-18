@@ -12,14 +12,113 @@ groups:
           summary: "Brain Gateway orchestrator is down"
           description: "The orchestrator has not responded to /metrics scrapes for 2 minutes."
 
+      # uranus is EXCLUDED deliberately. It has been unreachable since
+      # 2026-07-04 and is not in the runtime path, so including it would mean
+      # this alert pages every repeat_interval (4h) forever about a box everyone
+      # already knows is dead — and an alert that always fires is one nobody
+      # reads. Until this exclusion was added NodeDown was routed to the "null"
+      # receiver for exactly that reason, which meant a REAL node going down
+      # (jupiter, helios, saturn) notified nobody at all. Excluding the known-dead
+      # node is what makes paging on the rest safe.
+      # When uranus comes back: drop the node!= matcher. Do NOT instead re-point
+      # this at "null".
       - alert: NodeDown
-        expr: up{job="node-exporter"} == 0
+        expr: up{job="node-exporter", node!="uranus"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Node {{ $labels.node }} is down"
           description: "Node exporter on {{ $labels.node }} is unreachable for 3 minutes."
+
+      # Non-paging counterpart so the excluded node is still VISIBLE on the
+      # dashboard rather than silently dropped from monitoring entirely.
+      # Deliberately not in the alertmanager allow-list — Grafana-only.
+      - alert: UranusDown
+        expr: up{job="node-exporter", node="uranus"} == 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "uranus (test box) is unreachable"
+          description: "Known-dead since 2026-07-04 and excluded from NodeDown paging. This exists so the box does not vanish from monitoring; if it is genuinely back, remove the node!=\"uranus\" matcher on NodeDown and delete this rule."
+
+      # -- Storage substrate ----------------------------------------------------
+      # /mnt/logging is an EXTERNAL USB disk (WDC WD10EZEX, /dev/sde1) holding the
+      # Prometheus TSDB, Loki chunks, and Grafana state. On 2026-07-15 the USB hub
+      # dropped for 65s ("usb 4-1: USB disconnect"); the disks re-enumerated under
+      # new letters and nothing remounted. Prometheus then crashlooped on
+      # "permission denied: /prometheus/queries.active" — it was writing to the
+      # bare root-owned mountpoint showing through underneath — and monitoring was
+      # blind for 3 days before anyone noticed.
+      #
+      # absent() is the right detector: node-exporter stops publishing
+      # node_filesystem_* for a mountpoint entirely when it is not mounted, so a
+      # threshold on free bytes would never fire — the series just vanishes.
+      #
+      # LIMITATION, read before trusting this: this only fires in the window where
+      # the mount is gone but Prometheus is still running on its open file
+      # descriptors. Once Prometheus restarts it cannot start, and a dead
+      # Prometheus evaluates no rules — same circular problem as
+      # AlertmanagerUnreachable below. Closing that gap needs an EXTERNAL deadman
+      # (Alertmanager Watchdog -> healthchecks.io or similar), which does not
+      # exist yet. Treat this as "catches the common case", not "cannot miss".
+      # Sharper still: `for: 5m` restarts its timer on every Prometheus restart,
+      # so the real window is not "until Prometheus dies" but "until Prometheus
+      # first restarts" — after that the pending period can never complete.
+      #
+      # The `and on() up{...} == 1` guard is load-bearing: absent() returns 1 for
+      # ANY reason the series stops arriving, including a dead node or a failed
+      # scrape. Without it, a Jupiter reboot pages "the USB disk has dropped",
+      # which is false, and double-pages alongside NodeDown (which fires 2m
+      # earlier at for: 3m). Tradeoff being accepted knowingly: if the `node`
+      # label is ever renamed, the guard breaks too and this goes SILENT rather
+      # than paging forever. For a page, fail-silent beats fail-screaming — but
+      # it is still a blind spot that only an external deadman would catch.
+      #
+      # job="node-exporter" is not redundant: prometheus.yml.template scrapes
+      # netdata with honor_labels: true, so a colliding node_filesystem_* series
+      # carrying node="jupiter" would satisfy absent() and silently disable this
+      # alert. Pinning the job keeps that fail-open path closed.
+      #
+      # All three /mnt/* disks live in the SAME USB enclosure and dropped
+      # together on 2026-07-15, so each gets its own rule. They are deliberately
+      # NOT collapsed into one mountpoint=~"/mnt/(logging|documents|media)"
+      # matcher: absent() over a regex returns 1 only when EVERY matching series
+      # vanishes, so a single failed disk — the more likely failure — would be
+      # silently invisible while the alert sat green.
+      - alert: LoggingMountMissing
+        expr: >-
+          absent(node_filesystem_size_bytes{job="node-exporter", node="jupiter", mountpoint="/mnt/logging"})
+          and on() (up{job="node-exporter", node="jupiter"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Monitoring storage /mnt/logging is not mounted on Jupiter"
+          description: "node-exporter reports no filesystem at /mnt/logging while the node is up. The USB disk backing Prometheus/Loki/Grafana has dropped. Prometheus will crashloop on its next restart and ALL alerting dies with it. Check `dmesg | grep -i usb` for a disconnect, confirm the disk is present (`lsblk -o NAME,TRAN,SIZE`), then: STOP the monitoring stack first (`docker compose -f monitoring/docker-compose.yml stop`) — containers started while the mount was missing hold FDs on the root-filesystem path underneath, and mounting over them leaves Prometheus writing to the shadowed directory while the disk sits idle. Then `mount /mnt/logging`, start the stack, and confirm `docker inspect prometheus --format '{{.RestartCount}}'` is 0."
+
+      - alert: DocumentsMountMissing
+        expr: >-
+          absent(node_filesystem_size_bytes{job="node-exporter", node="jupiter", mountpoint="/mnt/documents"})
+          and on() (up{job="node-exporter", node="jupiter"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Document storage /mnt/documents is not mounted on Jupiter"
+          description: "node-exporter reports no filesystem at /mnt/documents while the node is up. This disk backs Paperless-ngx — scanned documents, its media/originals, AND its Postgres data directory. Losing it mid-write is what left paperless-db throwing 500s for three weeks after the 2026-07-15 dropout. usb-storage-remount.service should have remounted it automatically within ~10s; if this alert is firing, that recovery did NOT work — check `systemctl status usb-storage-remount.service` and `dmesg | grep -i usb`. Then stop paperless (`docker compose -f /opt/paperless/docker-compose.yml stop`), `mount /mnt/documents`, and start it again so Postgres runs crash recovery against the real disk."
+
+      - alert: MediaMountMissing
+        expr: >-
+          absent(node_filesystem_size_bytes{job="node-exporter", node="jupiter", mountpoint="/mnt/media"})
+          and on() (up{job="node-exporter", node="jupiter"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Media storage /mnt/media is not mounted on Jupiter"
+          description: "node-exporter reports no filesystem at /mnt/media while the node is up. This disk holds the Immich photo library (~41GB) and its Postgres data directory, plus audiobooks/ebooks/podcasts. Immich Postgres logged 'could not open file global/pg_control: Input/output error' when this vanished on 2026-07-15. usb-storage-remount.service should have remounted it automatically; if this is firing, that recovery failed — check `systemctl status usb-storage-remount.service`. Then stop immich (`docker compose -f /opt/immich/docker-compose.yml stop`), `mount /mnt/media`, and start it so Postgres recovers cleanly."
 
       # Dashboard-only by design: when this fires Prometheus can't deliver
       # notifications at all, so routing it anywhere via alertmanager is
@@ -314,6 +413,33 @@ groups:
         annotations:
           summary: "Jess off-box backup copy has been failing for 3 days"
           description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+
+      # Fires only once bgw_tool_call_source_total exists (it ships on the
+      # tool-call instrumentation branch); until then there is no series and this
+      # is silently inactive, which is the correct behaviour rather than an error.
+      #
+      # source="dropped" means the model emitted a <tool_call> marker but no call
+      # was parsed, so the agentic loop ended the turn early — the user watches
+      # the assistant announce it will do something and then just stop. It is
+      # user-visible breakage that produces no error anywhere else.
+      #
+      # Only "dropped" is alerted. "xml_fallback" is deliberately NOT: it is a
+      # recovered call, and if the underlying defect is common it would be
+      # permanently non-zero — a threshold alert on it would be a standing
+      # nuisance. That one is dashboard-only.
+      #
+      # > 0 over 6h with for: 10m, not a rate(): Helios is power-tiered and the
+      # box sees only ~18 model rounds/week, so any per-second rate is noise and
+      # a narrow window would flap resolved between sparse events. Any single
+      # occurrence is worth surfacing at this volume.
+      - alert: ToolCallsSilentlyDropped
+        expr: sum(increase(bgw_tool_call_source_total{source="dropped"}[6h])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model tool calls are being silently dropped (vLLM<0.20.0 qwen3 parser bug)"
+          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. This is the vLLM 0.19.1 qwen3 reasoning-parser defect fixed upstream in PR #35687 (shipped in 0.20.0). Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason. NOTE the upgrade is not a free action: open vLLM issue #46249 reports Qwen3.6-27B tool calls failing when MTP speculative decoding is enabled on 0.23.x, and vllm-primary.service runs --speculative-config mtp for roughly 2x throughput. Stage it, keep v0.19.1 pinned for rollback, and validate tool calls + streaming + MTP together."
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded
