@@ -716,7 +716,14 @@ async def run_unified_tool_loop(
         if not tool_calls:
             TOOL_ROUNDS.observe(round_num + 1)
             result = clean_response(content)
-            logger.info("[%s] Final response: %s...", label, result[:100])
+            # Length only, never the text. This used to log result[:100], which
+            # shipped the first 100 characters of every assistant reply to Loki —
+            # and medication names, dosages, medical detail and personal context
+            # all flow through these turns. Loki retains 30 days and is scraped by
+            # the self-audit job, so that was a standing copy of the user's
+            # conversation in a second system. The length still gives the
+            # empty-response signal that made this line useful for debugging.
+            logger.info("[%s] Final response: %d chars", label, len(result))
 
             # Safety net: if user mentioned meals/meds/water/movement but model
             # skipped selfcare_log, call it automatically so nudges stop.
