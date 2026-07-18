@@ -17,6 +17,7 @@ from orchestrator.metrics import (
     LLM_CALL_COUNT,
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
+    TOOL_CALL_SOURCE,
     TOOL_ROUNDS,
 )
 from orchestrator.shared import MAX_TOOL_ROUNDS
@@ -232,7 +233,7 @@ async def _stream_model_round(
     downgraded to "the stream ended here" so the caller can't double-send
     text by retrying. Returns:
         {"content", "tool_calls", "finish_reason", "emitted", "reasoning_len",
-         "error": Exception | None}
+         "reasoning_has_tool_marker", "error": Exception | None}
     """
     gate = StreamGate()
     parts: List[str] = []
@@ -240,6 +241,18 @@ async def _stream_model_round(
     finish_reason = None
     emitted = 0
     reasoning_len = 0
+    # Reasoning text is accumulated only to answer one yes/no question at the
+    # end: did a <tool_call> tag land in the reasoning channel? That is the
+    # fingerprint of the vLLM<0.20.0 qwen3 parser bug (see TOOL_CALL_SOURCE in
+    # metrics.py). We keep the joined string out of the return value on purpose
+    # — reasoning is model-internal content and this module's logs deliberately
+    # carry no content — so only the boolean escapes.
+    #
+    # It must be accumulated rather than tested per-delta: the tag routinely
+    # splits across SSE chunks ("<tool" / "_call>"), so a per-chunk membership
+    # test would miss most real occurrences — the exact silent-zero failure this
+    # instrumentation exists to avoid.
+    reasoning_parts: List[str] = []
     error: Exception | None = None
 
     try:
@@ -269,6 +282,7 @@ async def _stream_model_round(
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning:
                 reasoning_len += len(reasoning)
+                reasoning_parts.append(reasoning)
 
             content = delta.get("content")
             if content:
@@ -319,8 +333,19 @@ async def _stream_model_round(
         "finish_reason": finish_reason,
         "emitted": emitted,
         "reasoning_len": reasoning_len,
+        "reasoning_has_tool_marker": bool(_TOOL_CALL_MARKER_RE.search("".join(reasoning_parts))),
         "error": error,
     }
+
+
+# Detects an opening <tool_call> tag for the TOOL_CALL_SOURCE classification.
+# `\b` is load-bearing and matches the convention at _OPEN_RE above: it admits
+# `<tool_call>` and `<tool_call id="x">` while EXCLUDING `<tool_calls>` (plural),
+# which tests/test_real_streaming.py::test_clean_keeps_tool_calls_lookalike
+# pins as legitimate user-visible prose. Without it, the owner asking this
+# assistant about its own tool-call handling would log an ERROR and inflate the
+# "dropped" counter — and this codebase is a routine topic of conversation.
+_TOOL_CALL_MARKER_RE = re.compile(r"<tool_call\b")
 
 
 def parse_xml_tool_calls(content: str) -> List[Dict[str, Any]]:
@@ -549,8 +574,29 @@ async def run_unified_tool_loop(
                 logger.error("[%s] Stream died mid-answer — returning partial (%d chars)", label, sr["emitted"])
                 return clean_response(sr["content"])
             else:
+                # finish_reason is carried through so the TOOL_CALL_SOURCE
+                # classification below can log it — a dropped call shows up as
+                # finish_reason="stop" with an empty tool_calls array, and that
+                # pairing is the fingerprint of the vLLM<0.20.0 parser bug.
                 llm_resp = {
-                    "choices": [{"message": {"content": sr["content"], "tool_calls": sr["tool_calls"] or None}}]
+                    "choices": [
+                        {
+                            "message": {
+                                "content": sr["content"],
+                                "tool_calls": sr["tool_calls"] or None,
+                                # The streaming path never carries reasoning TEXT
+                                # (it is accumulated and discarded in
+                                # _stream_model_round). Without this boolean the
+                                # "dropped" classification below could never fire
+                                # on the streaming path — i.e. on the default,
+                                # primary interactive path — and the counter would
+                                # read a reassuring zero exactly where the bug is
+                                # most likely to be occurring.
+                                "_reasoning_has_tool_marker": sr["reasoning_has_tool_marker"],
+                            },
+                            "finish_reason": sr["finish_reason"],
+                        }
+                    ]
                 }
                 logger.info(
                     "[%s] LLM probe (stream): raw_len=%d reasoning_len=%d emitted=%d tool_calls=%d elapsed=%.2fs",
@@ -609,10 +655,62 @@ async def run_unified_tool_loop(
         message = choice.get("message", {})
         tool_calls = message.get("tool_calls") or []
         content = message.get("content") or ""
+        _had_native = bool(tool_calls)
 
         # Fallback: parse XML <tool_call> tags if no native tool_calls
         if not tool_calls and content:
             tool_calls = parse_xml_tool_calls(content)
+
+        # Classify how the call arrived — see TOOL_CALL_SOURCE in metrics.py for
+        # the vLLM 0.19.1 / PR #35687 defect this measures. Wrapped defensively:
+        # this is diagnostics, and it must never be able to break a chat turn.
+        try:
+            if _had_native:
+                TOOL_CALL_SOURCE.labels(source="native").inc()
+            elif tool_calls:
+                # Recovered by the XML fallback. NOTE: this is NOT the signal for
+                # the vLLM reasoning-parser bug — that failure empties `content`
+                # (so the fallback never runs) and emits qwen3_coder's non-JSON
+                # tag format (which parse_xml_tool_calls cannot decode). See the
+                # TOOL_CALL_SOURCE comment in metrics.py. Watch `dropped` instead.
+                # INFO rather than WARNING: jobs_self_audit.py scrapes 24h of
+                # warn/error from Loki into a nightly Pushover digest, and a
+                # recoverable, already-counted event does not belong in it.
+                TOOL_CALL_SOURCE.labels(source="xml_fallback").inc()
+                logger.info(
+                    "[%s] Tool call recovered via XML fallback (native tool_calls was empty, "
+                    "finish_reason=%s) — unexpected for qwen3_coder; worth investigating.",
+                    label,
+                    choice.get("finish_reason"),
+                )
+            else:
+                # No calls at all. If a marker is still present the model tried
+                # and nothing caught it — the turn ends early and the user just
+                # sees the assistant give up mid-task.
+                # Buffered path exposes reasoning text; the streaming path can
+                # only hand us the precomputed boolean (see the synthetic dict).
+                _marker = bool(
+                    _TOOL_CALL_MARKER_RE.search(content)
+                    or message.get("_reasoning_has_tool_marker")
+                    or _TOOL_CALL_MARKER_RE.search(message.get("reasoning_content") or "")
+                )
+                if _marker:
+                    TOOL_CALL_SOURCE.labels(source="dropped").inc()
+                    logger.error(
+                        "[%s] Tool call SILENTLY DROPPED: <tool_call> marker present but "
+                        "no call parsed (finish_reason=%s). The loop will end this turn "
+                        "early. This is the vLLM<0.20.0 qwen3 reasoning-parser bug.",
+                        label,
+                        choice.get("finish_reason"),
+                    )
+                else:
+                    TOOL_CALL_SOURCE.labels(source="none").inc()
+        except Exception:  # pragma: no cover - diagnostics must never break chat
+            # WARNING, not DEBUG: LOG_LEVEL defaults to INFO, so a DEBUG line here
+            # would be invisible and a broken counter would read as a flat zero —
+            # which is indistinguishable from "the bug never happens" and would be
+            # used to justify skipping the vLLM upgrade.
+            logger.warning("[%s] TOOL_CALL_SOURCE instrumentation failed", label, exc_info=True)
 
         # No tool calls — return the text response
         if not tool_calls:
