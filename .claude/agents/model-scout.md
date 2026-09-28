@@ -18,14 +18,14 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 
 | Node | GPU | VRAM | Current role |
 |------|-----|------|-------------|
-| Helios | RTX 5090 (GPU0) | 32 GB | Code agent — Qwen2.5-Coder-32B (port 8082) |
-| Helios | RTX PRO 5000 (GPU1) | 24 GB | **Primary unified model — Qwen3.5-27B (port 8080, always-on)**, plus TTS (Qwen3-TTS, port 8002) and STT (Whisper, port 8003) sharing GPU1 |
-| Saturn | RTX 3080 | 10 GB | Vision — Qwen2.5-VL-7B (port 8010) |
-| Saturn | RTX 3090 | 24 GB | Reserve / experimentation |
-| Uranus | RTX 5080 (GPU0) | 16 GB | ComfyUI / Conjure |
-| Uranus | RTX 5080 (GPU1) | 16 GB | ComfyUI / Conjure |
+| Helios | RTX 5090 (GPU0) | 32 GB | **Primary unified model + vision — Qwen3.8-27B NVFP4** (vLLM 0.27.1, port 8080, 131K ctx, fp8 KV, MTP, ~111 tok/s; uses ~30 GB — the whole card). Helios is power-tiered, not always-on. |
+| Helios | RTX PRO 5000 (GPU1) | 48 GB | Code agent — Qwen3-Coder-Next 80B/3B MoE Q4_K_XL (port 8082, experts in system RAM) + TTS (Qwen3-TTS-1.7B-Base, port 8002) |
+| Helios | CPU | — | STT — Parakeet TDT 0.6b v2 int8 ONNX (port 8003) |
+| Saturn | RTX 3080 | 10 GB | Idle — former vision host (Qwen3-VL-8B, port 8010), out of the runtime path since 2026-09-28 |
+| Saturn | RTX 3090 | 24 GB | Idle — former expert reasoning model (Qwen3-32B Q4_K_M, port 8084), deprecated 2026-09-28 |
+| Uranus | 2x RTX 5080 | 16 GB each | Test box, not in the runtime path |
 
-**Model history note:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. When scouting primary-slot replacements, verify tool-calling reliability explicitly (not just benchmark scores) before recommending.
+**Model history note:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. Primary since then: Lorbus/Qwen3.6-27B-int4-AutoRound (vLLM, 2026-04-26), Qwen3.8-27B NVFP4 (vLLM 0.27.1, 2026-09-28 — see `docs/internal/QWEN38_PREP_RESULTS.md` for the parser/KV/MTP compatibility findings). When scouting primary-slot replacements, verify tool-calling reliability explicitly (not just benchmark scores) before recommending.
 
 **Important:** These are the user's current GPUs but the product ships to other users too. Frame recommendations as "fits in X GB VRAM" so any user can match to their hardware.
 
@@ -60,11 +60,11 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 
 | Role | Current model | VRAM budget | Key requirements |
 |------|--------------|-------------|-----------------|
-| **Primary unified** (conversation + tools) | Qwen3.5-27B | 24 GB (must share GPU1 with TTS+STT on current hw) | Personality, empathy, ADHD-aware coaching, **reliable tool calling** (not hallucinated), valid JSON output, good long-context handling. Tool-calling reliability is non-negotiable — see history note. |
-| **Code agent** | Qwen2.5-Coder-32B | 32 GB | Code generation, refactoring, debugging, multi-file reasoning. Invoked for explicit coding tasks, not conversation. Prefer models with strong HumanEval / SWE-bench scores. |
-| **Vision** | Qwen2.5-VL-7B | 10 GB (RTX 3080) | Image understanding, OCR, scene description, follow-up Q&A. Real-time-ish (sub-10s). Must fit in 10 GB at Q4_K_M. |
-| **TTS** | Qwen3-TTS (custom voice clone) | shares GPU1 with primary model | Voice cloning quality, real-time factor <1.0, sentence pause injection. Must coexist with 24GB primary model on same GPU. |
-| **STT** | Whisper | shares GPU1 with primary + TTS | Accuracy, speed, streaming support. CPU-viable alternatives acceptable if they free GPU budget. |
+| **Primary unified** (conversation + tools) | Qwen3.8-27B NVFP4 | 32 GB (GPU0 to itself on current hw) | Personality, empathy, ADHD-aware coaching, **reliable tool calling** (not hallucinated), valid JSON output, good long-context handling. Tool-calling reliability is non-negotiable — see history note. |
+| **Code agent** | Qwen3-Coder-Next 80B/3B MoE | 48 GB GPU1 shared with TTS, experts in system RAM | Code generation, refactoring, debugging, multi-file reasoning. Invoked for explicit coding tasks, not conversation. Prefer models with strong HumanEval / SWE-bench scores. |
+| **Vision** | Qwen3.8-27B NVFP4 (the primary, natively multimodal) | shared with primary | Image understanding, OCR, scene description, follow-up Q&A. Real-time-ish (sub-10s; measured 2–5 s). A dedicated small VL model is only worth it if it frees Helios from waking for photos. |
+| **TTS** | Qwen3-TTS-1.7B-Base (custom voice clone) | ~5 GB, shares GPU1 with the code agent | Voice cloning quality, real-time factor <1.0, sentence pause injection. |
+| **STT** | Parakeet TDT 0.6b v2 (int8 ONNX, CPU) | none (CPU) | Accuracy, speed, streaming support. CPU-viable preferred (current engine is CPU); NeMo Parakeet v3 on GPU is the disabled alternative. |
 | **Embedding** | (see `EMBEDDING_MODEL` env var) | CPU or small GPU | Semantic quality for RAG/MemPalace, speed for 2-min ingest scheduler, CPU-friendly preferred. |
 
 ## Minimum viable hardware

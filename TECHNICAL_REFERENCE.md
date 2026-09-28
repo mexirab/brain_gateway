@@ -62,7 +62,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/stt/transcribe` | Proxy audio to Whisper STT (multipart, max 10 MB) |
+| POST | `/api/stt/transcribe` | Proxy audio to the HTTP STT server at `STT_URL` (multipart, max 10 MB) |
 | POST | `/api/tts/synthesize` | Synthesize text to WAV: `{text}` |
 | POST | `/api/announce` | Trigger TTS announcement via voice system |
 | GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS) |
@@ -146,6 +146,8 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 | POST | `/api/vision/analyze` | Analyze an image (multipart form or JSON with base64) |
 | GET | `/api/vision/status` | Vision model health and configuration |
 
+Live deployment: `VISION_MODEL_URL=http://10.0.0.195:8080/v1`, `VISION_MODEL_NAME=qwen3.8-27b-nvfp4` — the primary brain serves vision (since 2026-09-28; Saturn Qwen3-VL-8B :8010 is out of the runtime path). The service-registry vision probe hits `/v1/models`, which the brain serves. Vision therefore needs Helios awake.
+
 ### Ambient / System
 
 | Method | Path | Purpose |
@@ -190,7 +192,7 @@ Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bg
 | POST | `/api/meals/photo` | Upload meal photo → vision estimate: multipart `file` field; returns `{calories_estimate, description, confidence}` |
 | GET | `/api/meals/photo/{filename}` | Serve a stored meal photo |
 
-**Photo flow:** upload → Qwen3-VL-8B strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
+**Photo flow:** upload → vision model (`VISION_MODEL_URL`; live: the Qwen3.8 brain on Helios :8080 since 2026-09-28, was Qwen3-VL-8B on Saturn) strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
 
 ### Paperless Bridge (F-012)
 
@@ -507,7 +509,7 @@ Returns the full workout plan as text (model retains it in context for follow-up
 ```json
 {"question": "Why might my 2025 gaming spend have spiked in November?"}
 ```
-- `question` (string, required): A self-contained question. The expert (Qwen3-32B Thinking on Saturn 3090, port 8084) is stateless — pass all needed context in the question.
+- `question` (string, required): A self-contained question. The expert (formerly Qwen3-32B Thinking on Saturn 3090, port 8084 — deprecated/disabled on the live deployment since 2026-09-28, so the tool is not in the live tool list) is stateless — pass all needed context in the question.
 - One-shot, blocking. Latency 30-150s in practice; 180s timeout. The primary should warn the user before invoking.
 - llama.cpp `--jinja` mode separates `message.content` (final answer) from `message.reasoning_content` (the `<think>` trace); only the final content is returned.
 - Auto-disabled when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty — returns a short string explaining the disabled state instead of raising. Circuit breaker opens after `EXPERT_CIRCUIT_BREAKER_FAILURES` (default 3) consecutive failures, half-opens after `EXPERT_CIRCUIT_BREAKER_COOLDOWN_SECONDS` (default 120s).

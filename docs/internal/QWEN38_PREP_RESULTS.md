@@ -687,6 +687,36 @@ recreate the orchestrator. The Qwen3.6 weights and the v0.19.1 image are still o
    ONNX STT), the vllm-primary config, and the stale `JessToolCallsDropped` runbook.
 3. Merge this branch (not done: the handoff forbids merging without the owner).
 
+---
+
+## Follow-ups — 2026-09-28
+
+- **Vision via the brain: verified and repointed.** The real
+  `vision_handler.analyze_image` path was run in a throwaway container (image =
+  `main` code, `VISION_*` overridden, no data writes):
+  - A 1024×768 food photo was described correctly (5.5 s cold).
+  - A generated pharmacy label: every field was read correctly, including the
+    circle's colour (2.3 s).
+  - `meal_manager.estimate_from_photo` returned parseable JSON
+    (1000 kcal, medium confidence).
+  - Then, on the owner's request, Jupiter `.env` got
+    `VISION_MODEL_URL=http://10.0.0.195:8080/v1` and
+    `VISION_MODEL_NAME=qwen3.8-27b-nvfp4` (backup `.env.bak-vision-saturn`). The
+    service registry now reports `vision` healthy. Vision needs Helios awake, like chat.
+- **Expert model deprecated** (the owner's call). `.env` now has `EXPERT_ENABLED=false`
+  and a blank `EXPERT_MODEL_URL` (backup `.env.bak-expert`). `ask_expert` is gone
+  from the tool list (42 tools) and from the system prompt. `query_budget` analyze
+  mode now returns the aggregated data with `expert_error` set and a hint for the
+  brain to write the synthesis itself. Note: this `.env` change needed
+  `docker compose up -d --force-recreate orchestrator`; a plain `up -d` did not
+  recreate the container.
+- **Orchestrator running again** at the owner's request (no longer paused).
+  searxng / redis / frontend / monitoring are still stopped, so `web_search` is
+  unavailable.
+- **Docs pass done**: 17 files. See the CHANGELOG 2026-09-28 entry. The alert
+  touched is `ToolCallsSilentlyDropped`; earlier references in this doc to a
+  "`JessToolCallsDropped`" alert were wrong about the name.
+
 ## Sources
 
 - <https://github.com/MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090>

@@ -57,7 +57,7 @@ Calories-only. No protein/carb/fat breakdown in v1. Meal logging is independent 
 
 1. User uploads a photo to `POST /api/meals/photo` (multipart `file` field).
 2. Photo is saved to `MEAL_PHOTOS_DIR` with a uuid4 filename. Extension allowlist enforced: `jpg`, `jpeg`, `png`, `gif`, `webp`.
-3. Image is sent to Qwen3-VL-8B (Saturn, port 8010) with a strict-JSON prompt.
+3. Image is sent to the vision model at `VISION_MODEL_URL` with a strict-JSON prompt. Live deployment (since 2026-09-28): the Qwen3.8-27B NVFP4 brain on Helios (`http://10.0.0.195:8080/v1`, `VISION_MODEL_NAME=qwen3.8-27b-nvfp4`), verified at 2–5 s with parseable calorie JSON; it replaced Qwen3-VL-8B on Saturn (:8010). Photo estimation therefore needs Helios awake (power-tiered), same as chat.
 4. Response `{calories_estimate, description, confidence}` is returned to the caller.
 5. User confirms in the frontend UI before the meal is saved (or the tool passes `auto_log=true` to skip confirmation).
 
@@ -76,14 +76,14 @@ Calories-only. No protein/carb/fat breakdown in v1. Meal logging is independent 
 |----------|---------|---------|
 | `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Photo storage directory. Created on startup if absent. |
 
-Vision model config (shared with `analyze_image`): see `docs/ENV_VARS.md` → Vision section.
+Vision model config (shared with `analyze_image`): see `docs/ENV_VARS.md` → Vision section. Rollback to Saturn: restore the two `VISION_*` lines from Jupiter `.env.bak-vision-saturn`.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `orchestrator/workout_manager.py` | Adaptive plan generation, set logging, modify_workout, get_history, get_exercise_prs |
-| `orchestrator/meal_manager.py` | Meal CRUD, photo save, calorie estimation via Qwen3-VL-8B |
+| `orchestrator/meal_manager.py` | Meal CRUD, photo save, calorie estimation via the vision model (`VISION_*`) |
 | `orchestrator/exercises_seed.py` | Static exercise catalog, idempotent seed on startup |
 | `orchestrator/routes_workout.py` | Workout API routes |
 | `orchestrator/routes_meals.py` | Meal API routes (photo upload + serve included) |

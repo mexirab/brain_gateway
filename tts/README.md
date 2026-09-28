@@ -2,10 +2,10 @@
 
 FastAPI servers for Qwen3-TTS and Parakeet STT, running on Helios (10.0.0.195) as systemd services.
 
-**Deployment:**
-- Both services pinned to GPU1 (RTX PRO 5000 Blackwell, 48GB) alongside the primary Qwen3.5-27B LLM
-- Qwen3-TTS on port 8002 (`QWEN_TTS_DEVICE=cuda:1`)
-- Parakeet STT on port 8003 (`PARAKEET_DEVICE=cuda:0` with `CUDA_VISIBLE_DEVICES=1`) — replaced the old Whisper HTTP STT server on 2026-04-26 (same port, same OpenAI-compatible API). See `README_PARAKEET.md`.
+**Deployment (as of 2026-09-28):**
+- Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`) on port 8002, GPU1 (RTX PRO 5000 Blackwell, 48GB) next to the code agent. The unit sets `QWEN_TTS_DEVICE=cuda:0`; the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`. Without it TTS lands on GPU0 (RTX 5090), which the Qwen3.8 brain needs to itself.
+- STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU (deployed on Helios; source not yet committed to the repo).
+- `parakeet-stt.service` (NeMo, Parakeet v3, GPU1 via `CUDA_VISIBLE_DEVICES=1`) is the **disabled** GPU alternative on the same port/API — it replaced the old Whisper HTTP STT server on 2026-04-26. See `README_PARAKEET.md`.
 
 Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whisper` (:10300, still `wyoming-faster-whisper` — the HA voice-pipeline STT, independent of the HTTP STT server above) and `wyoming-jessica-tts` (:10301).
 
@@ -19,9 +19,8 @@ Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whis
 
 ## STT Features
 
-- **Whisper-based** speech recognition
-- **OpenAI-compatible API** (`/v1/audio/transcriptions`)
-- **Configurable model size** (tiny, base, small, medium, large)
+- **Parakeet TDT** speech recognition (English-only)
+- **OpenAI-compatible API** (`/v1/audio/transcriptions`, plus `/transcribe` and `/health`)
 
 ## Quick Start (Helios)
 
@@ -87,6 +86,14 @@ sudo systemctl enable qwen-tts parakeet-stt
 sudo systemctl start qwen-tts parakeet-stt
 ```
 
+On Helios, also pin TTS to GPU1 (the unit file alone puts it on GPU0):
+
+```bash
+sudo mkdir -p /etc/systemd/system/qwen-tts.service.d
+printf '[Service]\nEnvironment="CUDA_VISIBLE_DEVICES=1"\n' | sudo tee /etc/systemd/system/qwen-tts.service.d/gpu1.conf
+sudo systemctl daemon-reload && sudo systemctl restart qwen-tts
+```
+
 ## Configuration
 
 ### TTS Environment Variables
@@ -94,7 +101,7 @@ sudo systemctl start qwen-tts parakeet-stt
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QWEN_TTS_MODEL` | (required) | Model path (use Base for cloning) |
-| `QWEN_TTS_DEVICE` | `cuda:1` | GPU device (GPU1 RTX PRO 5000 Blackwell, shared with Qwen3.5-27B + Parakeet STT) |
+| `QWEN_TTS_DEVICE` | `cuda:0` | Device from the process's view; the physical GPU comes from `CUDA_VISIBLE_DEVICES` (GPU1 on Helios via drop-in) |
 | `QWEN_TTS_PORT` | `8002` | Server port |
 | `QWEN_TTS_DTYPE` | `bfloat16` | Model dtype |
 | `QWEN_TTS_FLASH_ATTN` | `false` | Use FlashAttention 2 (disabled by default) |
@@ -103,25 +110,27 @@ sudo systemctl start qwen-tts parakeet-stt
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WHISPER_MODEL` | `base` | Model size (tiny, base, small, medium, large) |
-| `WHISPER_DEVICE` | `cuda:1` | GPU device (GPU1 RTX PRO 5000 Blackwell, shared with Qwen3.5-27B + Qwen3-TTS) |
-| `WHISPER_PORT` | `8003` | Server port |
+| `PARAKEET_MODEL` | `nvidia/parakeet-tdt-0.6b-v3` | NeMo model (`stt_server_parakeet.py`) |
+| `PARAKEET_DEVICE` | `cuda:1` | Device; the unit sets `cuda:0` + `CUDA_VISIBLE_DEVICES=1` |
+| `PARAKEET_PORT` | `8003` | Server port |
+
+These apply to the disabled NeMo server. The live `stt-onnx` server's config lives with its (uncommitted) source on Helios.
 
 ## API Endpoints
 
 ### Health Check
 ```bash
-curl http://10.0.0.173:8002/health
+curl http://10.0.0.195:8002/health
 ```
 
 ### List Voices
 ```bash
-curl http://10.0.0.173:8002/voices
+curl http://10.0.0.195:8002/voices
 ```
 
 ### Text-to-Speech
 ```bash
-curl -X POST http://10.0.0.173:8002/tts \
+curl -X POST http://10.0.0.195:8002/tts \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Hey there, your morning meds are due.",
@@ -134,7 +143,7 @@ curl -X POST http://10.0.0.173:8002/tts \
 ### Voice Cloning (One-Time Setup)
 ```bash
 # Load a cloned voice (saves to voices.json automatically)
-curl -X POST http://10.0.0.173:8002/voices/load \
+curl -X POST http://10.0.0.195:8002/voices/load \
   -H "Content-Type: application/json" \
   -d '{
     "name": "myvoice",
@@ -146,7 +155,7 @@ curl -X POST http://10.0.0.173:8002/voices/load \
 
 ### Use Cloned Voice
 ```bash
-curl -X POST http://10.0.0.173:8002/tts \
+curl -X POST http://10.0.0.195:8002/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "Good morning!", "voice": "myvoice"}' \
   --output speech.wav
@@ -154,7 +163,7 @@ curl -X POST http://10.0.0.173:8002/tts \
 
 ### Voice Design
 ```bash
-curl -X POST http://10.0.0.173:8002/tts/design \
+curl -X POST http://10.0.0.195:8002/tts/design \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Good morning!",
@@ -165,7 +174,7 @@ curl -X POST http://10.0.0.173:8002/tts/design \
 
 ### OpenAI-Compatible TTS
 ```bash
-curl -X POST http://10.0.0.173:8002/v1/audio/speech \
+curl -X POST http://10.0.0.195:8002/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{"input": "Hello world!", "voice": "Olivia"}' \
   --output speech.wav
@@ -175,14 +184,14 @@ curl -X POST http://10.0.0.173:8002/v1/audio/speech \
 
 ### Transcribe Audio
 ```bash
-curl -X POST http://10.0.0.173:8003/v1/audio/transcriptions \
+curl -X POST http://10.0.0.195:8003/v1/audio/transcriptions \
   -F "file=@audio.wav" \
   -F "model=whisper-1"
 ```
 
 ### Health Check
 ```bash
-curl http://10.0.0.173:8003/health
+curl http://10.0.0.195:8003/health
 ```
 
 ## Available Voices
@@ -228,12 +237,12 @@ Configure Open WebUI to use TTS/STT in `docker-compose.yml`:
 environment:
   # TTS
   - AUDIO_TTS_ENGINE=openai
-  - AUDIO_TTS_OPENAI_API_BASE_URL=http://10.0.0.173:8002/v1
+  - AUDIO_TTS_OPENAI_API_BASE_URL=http://10.0.0.195:8002/v1
   - AUDIO_TTS_OPENAI_API_KEY=local
   - AUDIO_TTS_VOICE=default
   # STT
   - AUDIO_STT_ENGINE=openai
-  - AUDIO_STT_OPENAI_API_BASE_URL=http://10.0.0.173:8003/v1
+  - AUDIO_STT_OPENAI_API_BASE_URL=http://10.0.0.195:8003/v1
   - AUDIO_STT_OPENAI_API_KEY=local
   - AUDIO_STT_MODEL=whisper-1
 ```
@@ -259,18 +268,17 @@ Preset voices are faster on first use.
 ### Service Status
 ```bash
 # Check both services
-sudo systemctl status qwen-tts parakeet-stt
+sudo systemctl status qwen-tts stt-onnx
 
 # View logs
 journalctl -u qwen-tts -f
-journalctl -u parakeet-stt -f
+journalctl -u stt-onnx -f
 ```
 
 ## Hardware Requirements
 
 | Service | Model | VRAM | GPU |
 |---------|-------|------|-----|
-| TTS | Qwen3-TTS-1.7B-Base | ~4GB | cuda:0 |
-| STT | Whisper base | ~1GB | cuda:1 |
-
-Uranus (2x RTX 5080, 32GB total VRAM) handles both services easily with room to spare.
+| TTS | Qwen3-TTS-1.7B-Base | ~5GB | GPU1 (RTX PRO 5000) |
+| STT (live) | Parakeet TDT 0.6b v2, int8 ONNX | none (CPU) | — |
+| STT (disabled alternative) | Parakeet TDT 0.6b v3, NeMo | ~6.3GB | GPU1 |

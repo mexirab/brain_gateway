@@ -156,9 +156,9 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
-## Helios Primary Model (Lorbus/Qwen3.6-27B-int4-AutoRound via vLLM)
+## Helios Primary Model (RadixArk/Qwen3.8-27B-NVFP4 via vLLM)
 
-Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 (`vllm-primary.service` running `vllm/vllm-openai:v0.19.1` on GPU0 RTX 5090, since the 2026-04-26 Phase 3 cutover).
+Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 as `qwen3.8-27b-nvfp4` (`vllm-primary.service` running `vllm/vllm-openai:v0.27.1` on GPU0 RTX 5090, since the 2026-09-28 Qwen3.8 cutover; repo copy of the unit: `tts/vllm-primary.service`). Startup takes ~2m50s. The same endpoint also serves vision (`VISION_*`).
 
 ### Check via API
 ```bash
@@ -171,14 +171,17 @@ curl -s http://10.0.0.195:8080/v1/models
 ssh labadmin@10.0.0.195 "sudo systemctl status vllm-primary"
 ssh labadmin@10.0.0.195 "sudo systemctl restart vllm-primary"
 
-# Coder (Qwen3-Coder-Next 80B/3B MoE) on GPU1 since the Phase 3 cutover
+ssh labadmin@10.0.0.195 "journalctl -u vllm-primary --no-pager -n 100"
+
+# Coder (Qwen3-Coder-Next 80B/3B MoE) on GPU1
 ssh labadmin@10.0.0.195 "sudo systemctl status llama-server-coder"
 
-# Rollback to the previous Qwen3.5-27B (llama-server) primary, idempotent
-ssh labadmin@10.0.0.195 "/home/labadmin/vllm-trial/rollback_phase3.sh"
+# Rollback to the previous Qwen3.6 primary (then set MODEL_NAME/FALLBACK_MODEL_NAME back:
+# on Jupiter `cp .env.bak-qwen36 .env` and recreate the orchestrator)
+ssh labadmin@10.0.0.195 "sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak /etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload && sudo systemctl restart vllm-primary"
 ```
 
-`llama-server.service` (the previous Qwen3.5-27B primary) is disabled but the unit file is retained on disk as a historical reference.
+Garbled output: add `--enforce-eager` to the unit first (drops ~111 → ~36 tok/s). `llama-server.service` (the Qwen3.5-27B primary before 2026-04-26) is disabled but the unit file is retained on disk as a historical reference. Details: `docs/internal/HELIOS_INFRASTRUCTURE.md`.
 
 ---
 
@@ -194,8 +197,9 @@ curl -X POST http://10.0.0.195:8002/tts \
 
 ### Manage TTS/STT services on Helios
 ```bash
-# TTS and STT now run on Helios (RTX 5090), not Uranus.
-ssh labadmin@10.0.0.195 "sudo systemctl status qwen-tts"
+# TTS on Helios GPU1 (RTX PRO 5000, via drop-in qwen-tts.service.d/gpu1.conf);
+# STT is stt-onnx (Parakeet v2 int8 ONNX, CPU). parakeet-stt (NeMo, GPU) is disabled.
+ssh labadmin@10.0.0.195 "sudo systemctl status qwen-tts stt-onnx"
 ssh labadmin@10.0.0.195 "sudo systemctl restart qwen-tts"
 ssh labadmin@10.0.0.195 "journalctl -u qwen-tts --no-pager -n 50"
 ```

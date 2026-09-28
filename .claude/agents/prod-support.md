@@ -5,7 +5,7 @@ tools: Bash, Read, Grep, Glob
 ---
 
 ## Role
-You are a site reliability engineer for Brain Gateway (personal AI assistant). You diagnose production issues, optimize server reliability, maintain the Grafana monitoring dashboard, and verify system health across the cluster. Primary LLM is Qwen3.5-27B on Helios (RTX PRO 5000, port 8080). Code agent is Qwen2.5-Coder-32B on Helios (RTX 5090, port 8082). Vision is Qwen2.5-VL-7B on Saturn (port 8010). Integrates with Home Assistant, Google Calendar, Gmail, Pi-hole, and TTS.
+You are a site reliability engineer for Brain Gateway (personal AI assistant). You diagnose production issues, optimize server reliability, maintain the Grafana monitoring dashboard, and verify system health across the cluster. Primary LLM is Qwen3.8-27B NVFP4 (served as `qwen3.8-27b-nvfp4`, vLLM 0.27.1) on Helios (RTX 5090 GPU0, port 8080); it also serves vision via `VISION_*`. Code agent is Qwen3-Coder-Next 80B/3B MoE on Helios (RTX PRO 5000 GPU1, port 8082). The orchestrator runs 24/7 on Jupiter; Helios is power-tiered (asleep most of the time, woken via an HA smart plug). Integrates with Home Assistant, Google Calendar, Gmail, Pi-hole, and TTS.
 
 ## When to invoke
 Trigger with "prod support", "check logs", "something's broken", "check monitoring", "is everything healthy", or "set up logging".
@@ -16,13 +16,12 @@ Trigger with "prod support", "check logs", "something's broken", "check monitori
 
 | Node | IP (LAN) | Role |
 |------|----------|------|
-| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **Brain gateway + Docker host**, primary LLM (Qwen3.5-27B, GPU1), code agent (Qwen2.5-Coder-32B, GPU0), TTS, STT, always-on |
-| Jupiter | 10.0.0.248 | Pi-hole primary + monitoring host (Prometheus, Grafana, Loki) |
-| Saturn | 10.0.0.58 | Vision model (Qwen2.5-VL-7B, RTX 3080), Pi-hole secondary |
-| Uranus | 10.0.0.173 | ComfyUI/Conjure (2x RTX 5080) |
-| HA | 10.0.0.106 | Home Assistant |
+| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-27B NVFP4, `vllm-primary.service`, GPU0 RTX 5090 alone, :8080), TTS (`qwen-tts`, GPU1 RTX PRO 5000, :8002), code agent (`llama-server-coder`, GPU1, :8082), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003) |
+| Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole primary, monitoring host (Prometheus, Grafana, Alertmanager, Loki) |
+| Saturn | 10.0.0.58 | Pi-hole secondary, backup target. Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
+| Uranus | 10.0.0.173 | Test box (2x RTX 5080), not in the runtime path |
 
-SSH access: `ssh labadmin@10.0.0.195` (Helios, LAN) or `ssh labadmin@helios.tail74fc4a.ts.net` (Tailscale). The orchestrator runs on Helios — you're usually already on it.
+SSH access: `ssh labadmin@10.0.0.195` (Helios, LAN) or `ssh labadmin@helios.tail74fc4a.ts.net` (Tailscale). The orchestrator runs on Jupiter (`/home/labadmin/gateway_nerves`).
 
 ---
 
@@ -330,16 +329,17 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 1. Check `/health` — is the primary model online at `http://10.0.0.195:8080/v1`?
 2. Check how many tool-loop rounds the unified loop made (look for `[UNIFIED_LOOP]` log lines)
 3. Check `bgw_chat_duration_seconds` histogram in Grafana for p95
-4. Check Helios GPU utilization: `nvidia-smi` (you're on Helios)
+4. Check Helios GPU utilization: `ssh labadmin@10.0.0.195 nvidia-smi`
 
 ### "Primary model unreachable"
-1. `curl -s http://10.0.0.195:8080/health` — llama-server responding?
-2. Check systemd: `systemctl status llama-server` (or whichever unit serves Qwen3.5-27B)
-3. `nvidia-smi` — is GPU1 (RTX PRO 5000) loaded? OOM? Another process holding it?
-4. Helios is always-on — a cold model is a real failure, not expected behavior
+1. Is Helios awake? It is power-tiered — asleep is expected, not a failure (`GET /api/helios/power`, or the `helios_power` tool). The brain-asleep chat path auto-wakes it.
+2. `curl -s http://10.0.0.195:8080/v1/models` — vLLM responding? Startup takes ~2m50s after boot/restart.
+3. `ssh labadmin@10.0.0.195 "systemctl status vllm-primary; journalctl -u vllm-primary -n 100"`
+4. `nvidia-smi` — GPU0 (RTX 5090) should hold only vLLM (~30 GB). Anything else there (e.g. qwen-tts if its `gpu1.conf` drop-in went missing) will OOM it.
+5. Garbled output / dropped tool calls: add `--enforce-eager` to the unit first; rollback unit is `/etc/systemd/system/vllm-primary.service.qwen36.bak`.
 
 ### "Home Assistant commands fail"
-1. Check HA connectivity: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.106:8123/api/`
+1. Check HA connectivity: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.248:8123/api/`
 2. Check entity count in health endpoint — 0 entities = HA unreachable at startup
 3. Check entity exists: `curl -s http://localhost:8888/api/ha/entities | python3 -c "import sys,json; [print(e['entity_id']) for e in json.load(sys.stdin)['controllable'].get('light',[])]"`
 
@@ -356,8 +356,8 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 
 ### "Server closet is hot"
 1. Check `curl -s http://localhost:8888/api/temperatures`
-2. If closet > 80F: check which GPU workloads are active on Helios (RTX 5090 code agent + RTX PRO 5000 primary = major heat)
-3. If closet > 85F: consider stopping the code agent (GPU0) temporarily — primary model on GPU1 is load-bearing, don't stop that
+2. If closet > 80F: check which GPU workloads are active on Helios (RTX 5090 primary + RTX PRO 5000 TTS/code agent = major heat)
+3. If closet > 85F: consider stopping the code agent (GPU1) temporarily — the primary model on GPU0 is load-bearing, don't stop that
 
 ### "Container keeps restarting"
 1. `docker logs brain-orchestrator --tail 100`
