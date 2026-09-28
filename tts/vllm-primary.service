@@ -1,0 +1,60 @@
+# /etc/systemd/system/vllm-primary.service
+# Qwen3.8-27B NVFP4 brain on GPU0 (RTX 5090). Installed 2026-09-28, replacing
+# the Qwen3.6 unit (saved beside this file as vllm-primary.service.qwen36.bak).
+# Tested config: docs/internal/QWEN38_PREP_RESULTS.md (branch prep/qwen38-migration).
+# Rollback: cp vllm-primary.service.qwen36.bak vllm-primary.service &&
+#           systemctl daemon-reload && systemctl restart vllm-primary,
+#           then set MODEL_NAME/FALLBACK_MODEL_NAME back to qwen3.6-27b-int4.
+# If output ever looks garbled, add --enforce-eager first (drops ~111 -> ~36 tok/s).
+[Unit]
+Description=vLLM primary — Qwen3.8-27B NVFP4 (GPU0 RTX 5090, port 8080)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+# ~115 s engine init (torch.compile + CUDA graphs) plus the readiness loop.
+TimeoutStartSec=900
+
+ExecStartPre=-/usr/bin/docker rm -f vllm-primary
+
+ExecStart=/usr/bin/docker run --rm \
+  --name vllm-primary \
+  --gpus "device=0" \
+  --shm-size=16g \
+  --ipc=host \
+  --security-opt no-new-privileges:true \
+  -p 8080:8000 \
+  -v /home/labadmin/models/Qwen3.8-27B-NVFP4:/model:ro \
+  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  -e VLLM_USE_FLASHINFER_SAMPLER=0 \
+  vllm/vllm-openai:v0.27.1 \
+    --model /model \
+    --served-model-name qwen3.8-27b-nvfp4 \
+    --quantization auto \
+    --kv-cache-dtype fp8 \
+    --max-model-len 131072 \
+    --gpu-memory-utilization 0.93 \
+    --max-num-seqs 2 \
+    --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_xml \
+    --reasoning-parser qwen3 \
+    --default-chat-template-kwargs '{"reasoning_effort":"low"}' \
+    --enable-prefix-caching \
+    --skip-mm-profiling \
+    --host 0.0.0.0 --port 8000
+
+ExecStop=/usr/bin/docker stop -t 30 vllm-primary
+
+# Ready check: wait up to 10 min for /v1/models.
+ExecStartPost=/bin/bash -lc "for i in $(seq 1 600); do curl -fsS http://127.0.0.1:8080/v1/models >/dev/null && exit 0; sleep 1; done; exit 1"
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

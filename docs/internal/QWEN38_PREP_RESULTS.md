@@ -630,6 +630,63 @@ Helios `~/qwen38-trial/` (`run_gpu0.sh LEN UTIL [flags]` reproduces any row).
 3. Vision through the brain, then repoint `VISION_*`.
 4. Docs pass: CLAUDE.md drift (see above) plus the new TTS placement.
 
+---
+
+## CUTOVER — 2026-09-28 (owner-approved)
+
+**Qwen3.8-27B NVFP4 is now the live brain.**
+
+### Changes made
+- **Helios `vllm-primary.service` replaced** with the tested config (committed
+  as `tts/vllm-primary.service`: v0.27.1, port 8080, 131K, CUDA graphs, MTP-3,
+  `qwen3_xml`, `reasoning_effort: low`, readiness loop, `TimeoutStartSec=900`).
+  Startup takes ~2m50s. Old unit saved as
+  `/etc/systemd/system/vllm-primary.service.qwen36.bak`. (An older
+  `.pre-singlegpu` backup from 2026-07-24 also sits there.) Post-install smoke:
+  17/17, 111.6 tok/s.
+- **Jupiter `.env`**: `MODEL_NAME` and `FALLBACK_MODEL_NAME` changed
+  `qwen3.6-27b-int4` → `qwen3.8-27b-nvfp4`. Backup: `.env.bak-qwen36`
+  (gitignored). Nothing else in `.env` changed.
+- qwen-tts on GPU1 (drop-in from the earlier step) is unchanged.
+
+### Orchestrator acceptance session (live `brain-orchestrator`, image = `main` code)
+Started with `docker compose up -d --no-deps orchestrator`. Turns were chosen for
+zero real-world effect.
+
+| Turn | Path | Result |
+|---|---|---|
+| "Turn off the back porch light" (already off) | fast-path (not the model) | ok, no-op |
+| Rephrased office-lamp request (already off) | **model → `home_assistant`** `turn_off light.office_floor_lamp` | ok, no-op, lamp still off |
+| Set a stretch reminder, then cancel it in a follow-up | model → `set_reminder`, `check_system`, `cancel_reminder` | ok; the APScheduler job was really removed |
+| Evening meds / morning meds (streamed) | structured facts block | correct (Guanfacine; Vyvanse Mon–Fri, Naltrexone, Wellbutrin) |
+| Calendar tomorrow | model → `check_calendar` | ok (clear) |
+| Coffee preferences | model → `search_memory` ×2 | ok (honestly: nothing stored) |
+| Meds left tonight + calendar tomorrow | model → `selfcare_log{action:check}` + `check_calendar` | ok. `check` is read-only; no new selfcare row |
+| Plain chat, streamed + buffered | model | ok, TTFT 0.5–1.3 s |
+| HA-Assist voice turn (`You are 'Al'`) | model, voice path | ok |
+
+Metrics: `bgw_tool_call_source_total{source="native"}=7`, `{source="none"}=10`,
+**no `dropped`/`xml`**. No `bgw_chat_stream_outcome_total` degradations. No
+content leaks or empty replies. Service registry reported vision / searxng /
+expert unhealthy. That is expected: Saturn is down and searxng was not started.
+
+**The orchestrator was stopped again afterwards**, restoring the paused state it
+was in before this session. Restart it with `docker compose up -d --no-deps orchestrator`
+(or without `--no-deps` to bring back redis/searxng).
+
+### Rollback
+Helios: `sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak
+/etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload &&
+sudo systemctl restart vllm-primary`. Jupiter: `cp .env.bak-qwen36 .env`, then
+recreate the orchestrator. The Qwen3.6 weights and the v0.19.1 image are still on Helios.
+
+### Still open
+1. Vision through the brain → repoint `VISION_*` (the unit already omits
+   `--language-model-only`).
+2. Docs pass: CLAUDE.md model/service tables, the Helios GPU layout (TTS on GPU1,
+   ONNX STT), the vllm-primary config, and the stale `JessToolCallsDropped` runbook.
+3. Merge this branch (not done: the handoff forbids merging without the owner).
+
 ## Sources
 
 - <https://github.com/MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090>
