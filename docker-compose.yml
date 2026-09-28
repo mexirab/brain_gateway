@@ -356,7 +356,7 @@ services:
   # clear of them. A fresh single-box install sets COMPOSE_PROFILES=models to
   # bring the whole stack up in Docker. GPU pinning: vLLM → GPU0, TTS+STT → GPU1.
   vllm-primary:
-    image: vllm/vllm-openai:v0.19.1
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.19.1}
     container_name: vllm-primary
     restart: unless-stopped
     logging: *default-logging
@@ -372,6 +372,18 @@ services:
     shm_size: "16gb"
     volumes:
       - model-hf-cache:/root/.cache/huggingface
+      # Locally staged weights. A HuggingFace repo id in VLLM_MODEL is
+      # downloaded into the cache volume above; a path like
+      # `/models/Qwen3.8-27B-NVFP4` is read from here instead, which is how a
+      # hand-staged NVFP4 checkpoint gets served without a re-download.
+      - ${VLLM_MODELS_DIR:-./data/models}:/models:ro
+    environment:
+      # Both empty by default (vLLM's own defaults apply). The Qwen3.8 NVFP4
+      # single-5090 configs need PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      # (MTP-3 OOMs without it) and VLLM_USE_FLASHINFER_SAMPLER=0 (the sampler's
+      # JIT path wants nvcc, absent from the runtime image).
+      - PYTORCH_CUDA_ALLOC_CONF=${VLLM_CUDA_ALLOC_CONF:-}
+      - VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-}
     deploy:
       resources:
         reservations:
@@ -385,8 +397,18 @@ services:
     # - VLLM_EXTRA_ARGS: model-family-specific tuning, defaulted to the
     #   Lorbus 27B-AutoRound flags (MTP speculation, qwen3 reasoning,
     #   fp8 KV cache, etc.). install.sh's below-floor branch overrides this
-    #   to a blank string so 8B AWQ doesn't crash on `Unsupported speculative
-    #   method: 'mtp'` (the 8B model has no MTP weights).
+    #   to `--tool-call-parser hermes` so 8B AWQ doesn't crash on
+    #   `Unsupported speculative method: 'mtp'` (the 8B model has no MTP
+    #   weights) — any NON-EMPTY value replaces the whole default block.
+    #
+    # The individual knobs inside that default block are themselves
+    # env-overridable (VLLM_KV_CACHE_DTYPE, VLLM_MAX_NUM_SEQS,
+    # VLLM_TOOL_CALL_PARSER, VLLM_REASONING_PARSER, VLLM_SPECULATIVE_CONFIG,
+    # VLLM_MM_ARGS), so swapping the brain for a different model family is a
+    # few `.env` lines rather than one long re-typed string. Note the
+    # `${VAR:-default}` semantics: an EMPTY value falls back to the default,
+    # so to drop a flag entirely you must override VLLM_EXTRA_ARGS as a whole.
+    # See docs/ENV_VARS.md -> Model layer for the Qwen3.8 NVFP4 override set.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
@@ -399,7 +421,7 @@ services:
         --enable-prefix-caching
         --host 0.0.0.0
         --port 8000
-        ${VLLM_EXTRA_ARGS:---kv-cache-dtype fp8_e4m3 --max-num-seqs 2 --tool-call-parser qwen3_coder --reasoning-parser qwen3 --speculative-config '{"method":"mtp","num_speculative_tokens":3}' --language-model-only --skip-mm-profiling --performance-mode interactivity}
+        ${VLLM_EXTRA_ARGS:---kv-cache-dtype ${VLLM_KV_CACHE_DTYPE:-fp8_e4m3} --max-num-seqs ${VLLM_MAX_NUM_SEQS:-2} --tool-call-parser ${VLLM_TOOL_CALL_PARSER:-qwen3_coder} --reasoning-parser ${VLLM_REASONING_PARSER:-qwen3} --speculative-config '${VLLM_SPECULATIVE_CONFIG:-{"method":"mtp","num_speculative_tokens":3}}' ${VLLM_MM_ARGS:---language-model-only --skip-mm-profiling} --performance-mode interactivity}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

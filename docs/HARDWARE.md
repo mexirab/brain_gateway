@@ -40,11 +40,11 @@ Tiers are based on the **largest single GPU** the wizard finds (the default `doc
 | RTX 4090 | 24 GiB | 24 | Qwen3-14B-Instruct-AWQ | Same tier as 3090, faster decode |
 | RTX 5070 Ti | 16 GiB | below floor | Qwen3-8B-AWQ (auto) | Below tier-24 |
 | RTX 5080 | 16 GiB | below floor | Qwen3-8B-AWQ (auto) | Below tier-24 (boot-tested on Uranus) |
-| RTX 5090 | 32 GiB | 32 | Qwen3.6-27B-int4-AutoRound | **Recommended sweet spot**. Helios primary. |
+| RTX 5090 | 32 GiB | 32 | Qwen3.6-27B-int4-AutoRound | **Recommended sweet spot**. (Helios itself now runs Qwen3.8-27B NVFP4 — see below.) |
 | RTX A6000 | 48 GiB | 48 | Qwen3.6-27B-int4-AutoRound | Vision-capable; can run a second VL model |
 | RTX PRO 5000 Blackwell | 48 GiB | 48 | Qwen3.6-27B-int4-AutoRound | Same tier as A6000; lower decode bandwidth |
 
-**Driver floor:** NVIDIA driver **580+** for Blackwell (sm_100) cards and for vLLM 0.19+. Driver 570 surfaces "Error 804: forward compatibility was attempted on non supported HW" on Blackwell.
+**Driver floor:** NVIDIA driver **580+** for Blackwell (SM120) cards and for vLLM 0.19+. Driver 570 surfaces "Error 804: forward compatibility was attempted on non supported HW" on Blackwell.
 
 ---
 
@@ -58,11 +58,11 @@ The 24 GiB and 32 GiB tiers run the same stack — only the conversation model s
 | 32 | ~0.6–1.2 s | ~60–80 tok/s | ~60–120 s | 27B INT4 on 5090 (Helios reference) |
 | 48 | ~0.8–1.4 s | ~30–55 tok/s | ~90–180 s | 27B INT4 on PRO 5000 — lower bandwidth than 5090 |
 
-*Numbers are reference-deployment measurements on Helios, not formal benchmarks. The PRO 5000's lower decode throughput vs the 5090 was the reason Phase 3 kept vLLM on GPU0 instead of moving it to the bigger card — see [`docs/internal/VLLM_PHASE_3_PLAN.md`](internal/VLLM_PHASE_3_PLAN.md).*
+*Numbers are reference-deployment measurements on Helios, not formal benchmarks. The PRO 5000's lower decode throughput vs the 5090 was the reason Phase 3 kept vLLM on GPU0 instead of moving it to the bigger card — see [`docs/internal/VLLM_PHASE_3_PLAN.md`](internal/VLLM_PHASE_3_PLAN.md). Since 2026-09-28 Helios runs `RadixArk/Qwen3.8-27B-NVFP4` on the 5090 (vLLM 0.27.1, fp8 KV, MTP, CUDA graphs, 131K context) at ~111 tok/s decode, ~2m50s startup; that config is not a fresh-install default — see [`docs/internal/QWEN38_PREP_RESULTS.md`](internal/QWEN38_PREP_RESULTS.md).*
 
 **TTS (Qwen3-TTS):** ~0.4–1.0 s end-of-sentence latency, identical on any GPU that can hold it (~2 GiB VRAM).
 
-**STT (Parakeet TDT v3):** ~real-time × 10 on any RTX 30-series or newer (~6.3 GiB VRAM). Whisper-equivalent quality at far lower cost.
+**STT (Parakeet TDT v3):** ~real-time × 10 on any RTX 30-series or newer (~6.3 GiB VRAM). Whisper-equivalent quality at far lower cost. (The Helios reference deployment runs Parakeet TDT 0.6b v2 int8 on ONNX Runtime on CPU instead, freeing the VRAM.)
 
 ---
 

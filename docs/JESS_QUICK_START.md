@@ -211,7 +211,7 @@ Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-o
 | Say this | What happens |
 |----------|--------------|
 | "Log a 600-calorie lunch" | Calorie-only meal entry |
-| Upload a photo + "How many calories?" | Vision-model estimate (requires the optional Qwen3-VL-8B vision model) |
+| Upload a photo + "How many calories?" | Vision-model estimate (requires a configured vision model, `VISION_*`) |
 
 ---
 

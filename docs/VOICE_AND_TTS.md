@@ -16,7 +16,7 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
 
 **Current status:**
 - Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on Lorbus/Qwen3.6-27B-int4-AutoRound (vLLM, since 2026-04-26 Phase 3 cutover; was Qwen3.5-27B on llama.cpp). No Nemotron — that v6 hybrid path was removed.
+- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on RadixArk/Qwen3.8-27B-NVFP4 (vLLM 0.27.1, since 2026-09-28; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed.
 - TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
 - No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
 
@@ -38,7 +38,7 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 ## TTS Pacing
 
-Voice clone (personal reference on the live deployment; configurable elsewhere) runs through Qwen3-TTS on Helios (GPU1, port 8002). Two pacing controls:
+Voice clone (personal reference on the live deployment; configurable elsewhere) runs through Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002). The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Two pacing controls:
 
 1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
 2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery
@@ -54,20 +54,22 @@ TTS announcements support per-speaker targeting via `_announce_voice(text, speak
 
 Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry once after 2 minutes. If the retry also fails, the system falls back to a phone notification so the reminder is never silently lost.
 
-## HTTP STT Server (Parakeet, port 8003)
+## HTTP STT Server (port 8003)
 
 Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT used by Open WebUI's browser mic and any orchestrator-side transcription via `STT_URL=http://host.docker.internal:8003`.
 
-**Engine (since 2026-04-26):** NVIDIA Parakeet TDT v3 (`nvidia/parakeet-tdt-0.6b-v3`) via NeMo. Replaced Whisper medium on the same port with no API surface changes — endpoints `/health`, `/transcribe`, `/v1/audio/transcriptions` are preserved. English-only, ~10× faster than Whisper medium with lower WER per the wrapper docstring.
+**Live engine:** `stt-onnx.service` — NVIDIA Parakeet TDT 0.6b **v2**, int8, ONNX Runtime on **CPU**. Same port and same endpoints (`/health`, `/transcribe`, `/v1/audio/transcriptions`). Deployed on Helios; its source (`stt_server_onnx.py` + unit) is not yet committed to the repo.
 
-| Property | Value |
+**Disabled GPU alternative:** `parakeet-stt.service` — Parakeet TDT v3 (`nvidia/parakeet-tdt-0.6b-v3`) via NeMo on GPU1. It replaced Whisper medium on 2026-04-26 with no API change; English-only, ~10× faster than Whisper medium with lower WER per the wrapper docstring. Swap back with `systemctl disable --now stt-onnx && systemctl enable --now parakeet-stt` (they share port 8003 — never run both). Runbook: `tts/README_PARAKEET.md`.
+
+| Property (`parakeet-stt`, disabled) | Value |
 |----------|-------|
-| Service | `parakeet-stt.service` (systemd, `enable`d) |
+| Service | `parakeet-stt.service` (systemd, disabled) |
 | Wrapper | `tts/stt_server_parakeet.py` |
 | Unit file | `tts/parakeet-stt.service` |
 | Port | 8003 |
 | Model | `nvidia/parakeet-tdt-0.6b-v3` (`PARAKEET_MODEL`) |
-| Device | `cuda:0` from process POV (`PARAKEET_DEVICE`); pinned to physical GPU1 via `CUDA_VISIBLE_DEVICES=1` to avoid OOM against the code agent on GPU0 |
+| Device | `cuda:0` from process POV (`PARAKEET_DEVICE`); pinned to physical GPU1 via `CUDA_VISIBLE_DEVICES=1` (GPU0 belongs to the brain) |
 | VRAM | ~6.3 GB on GPU1 |
 | Audio normalization | ffmpeg → 16 kHz mono PCM WAV (handles webm/ogg/mp4/wav) |
 | Upload cap | 25 MB (matches OpenAI Whisper API) |
@@ -75,9 +77,9 @@ Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT u
 **Old service:** the Whisper HTTP STT server (`whisper-stt.service` + `tts/stt_server.py`) was stopped + `systemctl disable`d on 2026-04-26 and **removed from the repo on 2026-06-16** (restore from git history if ever needed). The Wyoming bridge layer (port 10300, used by HA voice pipeline) still uses `wyoming-faster-whisper` and is independent of this HTTP STT swap — it was **not** removed.
 
 ```bash
-# Restart Parakeet STT
-ssh labadmin@10.0.0.195 'sudo systemctl restart parakeet-stt'
+# Restart STT (live ONNX/CPU engine)
+ssh labadmin@10.0.0.195 'sudo systemctl restart stt-onnx'
 
 # Logs
-ssh labadmin@10.0.0.195 'journalctl -u parakeet-stt -f'
+ssh labadmin@10.0.0.195 'journalctl -u stt-onnx -f'
 ```

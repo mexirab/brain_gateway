@@ -98,7 +98,7 @@ Try to cause service degradation:
 What to look for:
 - Request body size limits?
 - Graceful error handling on malformed input?
-- Can you exhaust the primary model GPU queue (Qwen3.5-27B on RTX PRO 5000)?
+- Can you exhaust the primary model GPU queue (Qwen3.8-27B NVFP4 on the Helios RTX 5090, `--max-num-seqs 2`)?
 
 ### 7. Information Disclosure
 Try to extract internal details:

@@ -438,8 +438,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Model tool calls are being silently dropped (vLLM<0.20.0 qwen3 parser bug)"
-          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. This is the vLLM 0.19.1 qwen3 reasoning-parser defect fixed upstream in PR #35687 (shipped in 0.20.0). Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason. NOTE the upgrade is not a free action: open vLLM issue #46249 reports Qwen3.6-27B tool calls failing when MTP speculative decoding is enabled on 0.23.x, and vllm-primary.service runs --speculative-config mtp for roughly 2x throughput. Stage it, keep v0.19.1 pinned for rollback, and validate tool calls + streaming + MTP together."
+          summary: "Model tool calls are being silently dropped (Qwen3.8 on vLLM 0.27.1)"
+          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack: Qwen3.8-27B NVFP4 on vLLM 0.27.1 (vllm-primary.service on Helios), --tool-call-parser qwen3_xml, --reasoning-parser qwen3, MTP speculative decoding + CUDA graphs on; the 2026-09-28 acceptance session saw no drops. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then check `journalctl -u vllm-primary` on Helios. If output also looks garbled, first lever is adding --enforce-eager to the unit (~111 -> ~36 tok/s). Last resort: roll back to Qwen3.6 via /etc/systemd/system/vllm-primary.service.qwen36.bak + Jupiter .env.bak-qwen36 (see docs/internal/HELIOS_INFRASTRUCTURE.md)."
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded

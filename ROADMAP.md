@@ -11,6 +11,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - **v1.0.0 public release** shipped May 2026: one-command install, CLI setup wizard, containerized model layer, de-personalized codebase, MIT license. The 14-feature ADHD suite (F-001–F-014), vLLM migration, finance/workout/meals dashboards, and settings page are all done.
 - **July 2026 reliability push** (PRs #32–#43): reminder-delivery state machine fixed, code-agent shell hardened, nightly off-box backups to Saturn, June perf branches rebased in, HA migrated off the dead Pi onto Jupiter, monitoring/Homepage config folded into the repo, deploy race fixed, Grafana consolidated to one app dashboard.
 - **Durable task backlog** shipped July 2026 (PRs #44/#45/#46): `tasks` table + `backlog_manager` + voice tools (`add_task`, `what_now`, …) + `/tasks` page + dashboard TasksCard + brain-dump capture routing + `decompose_task` auto-linking + weekly Sunday review + Grafana row. The missing spine now exists.
+- **Qwen3.8 brain** shipped 2026-09-28: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1 (5090, 131K context, MTP, ~111 tok/s — 2× Qwen3.6), and it now serves vision too (Saturn Qwen3-VL-8B out of the runtime path). See CHANGELOG.
 
 The list below is ordered by tier, and within each tier roughly by priority.
 
@@ -22,7 +23,7 @@ The list below is ordered by tier, and within each tier roughly by priority.
 
 Shipped as `orchestrator/telegram_bot.py`: long-polling (no webhook / public ingress), locked to the allow-listed chat ID, inbound text through `/v1/chat/completions` (full Jess + tools from anywhere), reminders with inline **Done / Snooze** buttons handled with the F-011 state-machine semantics. Default-OFF — **setup still needed**: BotFather token + chat ID in `.env` (see `docs/ENV_VARS.md` → Telegram Bot).
 
-Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model on Saturn → same pipeline) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`); voice notes now also get a spoken "walkie-talkie" reply back (TTS on Helios → `sendVoice`, `TELEGRAM_VOICE_REPLY_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
+Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model → same pipeline; the Qwen3.8 brain on Helios since 2026-09-28, was Saturn) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`); voice notes now also get a spoken "walkie-talkie" reply back (TTS on Helios → `sendVoice`, `TELEGRAM_VOICE_REPLY_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
 
 ### 2. ~~Trust layer as a feature~~ ✅ BUILT (July 2026)
 
@@ -86,7 +87,7 @@ Paperless-ngx bridge (F-012) covers ingestion + OCR + tagging. The missing half 
 
 ### Vision & multimodal ⬜
 
-Qwen3-VL-8B already runs on Saturn (meal-photo calories use it). Extend: pantry photo → meal ideas, whiteboard/receipt photos → OCR → RAG, "what am I looking at?".
+Vision already works through the Qwen3.8 brain on Helios (meal-photo calories + `analyze_image` use it since 2026-09-28; was Qwen3-VL-8B on Saturn). Extend: pantry photo → meal ideas, whiteboard/receipt photos → OCR → RAG, "what am I looking at?".
 
 ### Frontend: public domain + polish ⬜
 
@@ -101,9 +102,9 @@ Qwen3-VL-8B already runs on Saturn (meal-photo calories use it). Extend: pantry 
 | ATOM Echo #2 (bedroom), #3 (kitchen) | Whole-house wake word |
 | Route voice replies to Google speakers | Replies still play on the ATOM Echo's tiny speaker (needs HA UI work) |
 
-### vLLM 256K context ⬜ (when worth it)
+### vLLM 262K context ⬜ (when worth it)
 
-Needs vLLM 0.19.2+ (KV-calc fix) and the primary moving GPU0 → GPU1 (the 5090 can't hold Lorbus + 256K KV in 32 GB). Revisit when a use case actually needs >150K context.
+Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context.
 
 ## Dropped / superseded
 

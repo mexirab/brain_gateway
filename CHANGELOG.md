@@ -4,6 +4,23 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Qwen3.8 brain cutover (2026-09-28)
+
+Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) still ship Qwen3.6.
+
+### Infrastructure
+
+- **Primary brain → `RadixArk/Qwen3.8-27B-NVFP4`** on `vllm/vllm-openai:v0.27.1` (GPU0 RTX 5090, port 8080, served name `qwen3.8-27b-nvfp4`), replacing Lorbus/Qwen3.6-27B-int4-AutoRound on v0.19.1. 131K context, fp8 KV, MTP speculative decoding (3 tokens, ~70% acceptance), CUDA graphs, `--max-num-seqs 2`, `qwen3_xml` tool parser, `reasoning_effort: low` default. ~111 tok/s decode (was ~52; the drifted Qwen3.6 unit ran 16K context, eager, no MTP). Deployed unit committed as `tts/vllm-primary.service`; orchestrator `MODEL_NAME`/`FALLBACK_MODEL_NAME` flipped. Acceptance session through the live orchestrator passed (`bgw_tool_call_source_total` only `native`/`none`). Rollback: `vllm-primary.service.qwen36.bak` on Helios + `.env.bak-qwen36` on Jupiter. Record: `docs/internal/QWEN38_PREP_RESULTS.md`.
+- **Vision now served by the brain.** `VISION_MODEL_URL`/`VISION_MODEL_NAME` repointed to Helios `:8080` / `qwen3.8-27b-nvfp4`; `analyze_image` and meal-photo estimation verified (2–5 s). Saturn Qwen3-VL-8B is out of the runtime path; vision now needs Helios awake. Rollback: `.env.bak-vision-saturn`.
+- **qwen-tts moved to GPU1** (RTX PRO 5000) via drop-in `qwen-tts.service.d/gpu1.conf`; it had silently been sharing the 5090. GPU0 now runs the brain alone.
+- **Expert model deprecated.** `EXPERT_ENABLED=false`, `EXPERT_MODEL_URL` blank (backup `.env.bak-expert`); `ask_expert` drops out of the live tool list and Saturn's Qwen3-32B (:8084) leaves the deployment. `query_budget` analyze mode now returns the aggregated data with `expert_error` set, and the brain synthesizes the answer itself. Code unchanged; the feature stays available behind `EXPERT_ENABLED`.
+
+### Docs
+
+- Model/service tables, Helios GPU layout, STT (live engine is `stt-onnx`: Parakeet v2 int8 ONNX on CPU; `parakeet-stt` disabled), and the `JessToolCallsDropped` runbook text updated for the new stack.
+
+---
+
 ## [Unreleased] — reliability, backups & the Home Assistant migration (2026-07-04)
 
 Maintainer-deployment work: a reliability/backup pass, the June-12 latency branches rebased in, and Home Assistant moved off a failed Raspberry Pi onto the always-on server.

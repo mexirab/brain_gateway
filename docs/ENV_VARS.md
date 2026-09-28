@@ -34,19 +34,31 @@ Write surface is **first-boot-only**: `POST /api/setup/env` and `DELETE /api/set
 
 ## Model layer (compose profile: `models`)
 
-The vLLM primary LLM, Qwen3-TTS, and Parakeet STT have compose stanzas (`vllm-primary`, `qwen-tts`, `parakeet-stt`) and Dockerfiles (`tts/Dockerfile`, `tts/Dockerfile.parakeet`), gated behind the `models` compose profile. **Status: authored and build-validated, not deployed.** On the live Helios box the model layer still runs as host systemd units (`vllm-primary.service`, `qwen-tts.service`, `parakeet-stt.service`); Helios's `.env` keeps `COMPOSE_PROFILES=advanced` (no `models`) so compose does not double-start the systemd-managed servers. The `models` profile exists for fresh single-box installs, which set `COMPOSE_PROFILES=models` (or `advanced,models`).
+The vLLM primary LLM, Qwen3-TTS, and Parakeet STT have compose stanzas (`vllm-primary`, `qwen-tts`, `parakeet-stt`) and Dockerfiles (`tts/Dockerfile`, `tts/Dockerfile.parakeet`), gated behind the `models` compose profile. **Status: authored and build-validated, not deployed.** On the live Helios box the model layer still runs as host systemd units (`vllm-primary.service`, `qwen-tts.service`, `stt-onnx.service`); Helios's `.env` keeps `COMPOSE_PROFILES=advanced` (no `models`) so compose does not double-start the systemd-managed servers. The `models` profile exists for fresh single-box installs, which set `COMPOSE_PROFILES=models` (or `advanced,models`).
 
 GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in the `model-hf-cache` named volume. The env vars below feed those stanzas only — they are inert unless `models` is in `COMPOSE_PROFILES`. When the model layer runs in compose, also repoint the orchestrator at the compose-internal service names: `MODEL_URL=http://vllm-primary:8000/v1`, `TTS_URL=http://qwen-tts:8002`, `STT_URL=http://parakeet-stt:8003`.
+
+An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.example` under the model-layer section (commented out; the compose default stays Qwen3.6). The same config is live on Helios as a host systemd unit since 2026-09-28 (`tts/vllm-primary.service`); reasoning, trials and acceptance results in `docs/internal/QWEN38_PREP_RESULTS.md`.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MODEL_BIND_ADDR` | `127.0.0.1` | Host interface the `vllm-primary` / `qwen-tts` / `parakeet-stt` published ports bind to. Loopback by default — the model APIs are unauthenticated and the orchestrator reaches them over the compose network. Set `0.0.0.0` for LAN access. |
-| `VLLM_MODEL` | `Lorbus/Qwen3.6-27B-int4-AutoRound` | HuggingFace repo id for the primary LLM. 24GB tier → `Qwen/Qwen3-14B-Instruct-AWQ`; 32/48GB tier → the default. |
+| `VLLM_MODEL` | `Lorbus/Qwen3.6-27B-int4-AutoRound` | HuggingFace repo id for the primary LLM, **or** an in-container path like `/models/Qwen3.8-27B-NVFP4` for weights staged by hand under `VLLM_MODELS_DIR`. 24GB tier → `Qwen/Qwen3-14B-Instruct-AWQ`; 32/48GB tier → the default. |
 | `VLLM_SERVED_NAME` | `qwen3.6-27b-int4` | `--served-model-name` exposed on the OpenAI-compatible API. Should match the orchestrator's `MODEL_NAME`. |
 | `VLLM_QUANTIZATION` | `auto_round` | vLLM `--quantization`. `auto_round` for the default AutoRound model; `awq` for AWQ models; `auto` to detect from the model config. |
 | `VLLM_MAX_MODEL_LEN` | `153600` | `--max-model-len` (context window). |
 | `VLLM_GPU_MEM_UTIL` | `0.93` | `--gpu-memory-utilization` fraction. |
-| `VLLM_EXTRA_ARGS` | _Lorbus-27B tuning string_ | Trailing vLLM flags spliced onto the `vllm serve` command in `docker-compose.yml`. Default carries the Lorbus-27B-specific tuning (`--kv-cache-dtype fp8_e4m3 --max-num-seqs 2 --tool-call-parser qwen3_coder --reasoning-parser qwen3 --speculative-config '{"method":"mtp","num_speculative_tokens":3}' --language-model-only --skip-mm-profiling --performance-mode interactivity`). `install.sh` overrides it to `--tool-call-parser hermes` when a below-floor GPU triggers the `Qwen/Qwen3-8B-AWQ` substitution — the 8B model has no MTP weights and crashes on the default speculative-config. Use a single line; `docker-compose` does NOT strip inline `# comments`. |
+| `VLLM_EXTRA_ARGS` | _Lorbus-27B tuning string_ | Trailing vLLM flags spliced onto the `vllm serve` command in `docker-compose.yml`. Default carries the Lorbus-27B-specific tuning (`--kv-cache-dtype fp8_e4m3 --max-num-seqs 2 --tool-call-parser qwen3_coder --reasoning-parser qwen3 --speculative-config '{"method":"mtp","num_speculative_tokens":3}' --language-model-only --skip-mm-profiling --performance-mode interactivity`), each piece individually overridable via the `VLLM_KV_CACHE_DTYPE` / `VLLM_MAX_NUM_SEQS` / `VLLM_TOOL_CALL_PARSER` / `VLLM_REASONING_PARSER` / `VLLM_SPECULATIVE_CONFIG` / `VLLM_MM_ARGS` vars above. Setting `VLLM_EXTRA_ARGS` itself to a **non-empty** value replaces the whole block and makes those six inert — which is how `install.sh` drops the MTP flags (`--tool-call-parser hermes`) when a below-floor GPU triggers the `Qwen/Qwen3-8B-AWQ` substitution; the 8B model has no MTP weights and crashes on the default speculative-config. Because compose uses `${VAR:-default}` semantics, an **empty** value falls back to the default rather than clearing it. Use a single line; `docker-compose` does NOT strip inline `# comments`. Single-quote any JSON value (`'{"reasoning_effort":"low"}'`) — the command runs under `/bin/sh -c`, which strips the outer quotes and keeps the inner ones. |
+| `VLLM_IMAGE_TAG` | `v0.19.1` | Tag for the `vllm/vllm-openai` image behind `vllm-primary`. Pinned rather than `latest` because the serve flags are version-sensitive — parser names, `--speculative-config` and `--kv-cache-dtype` values have all moved between releases. |
+| `VLLM_MODELS_DIR` | `./data/models` | Host directory bind-mounted read-only at `/models` inside `vllm-primary`. Lets a hand-staged checkpoint be served without a HuggingFace download; combine with `VLLM_MODEL=/models/<dirname>`. |
+| `VLLM_KV_CACHE_DTYPE` | `fp8_e4m3` | `--kv-cache-dtype`, spliced into the `VLLM_EXTRA_ARGS` default block. |
+| `VLLM_MAX_NUM_SEQS` | `2` | `--max-num-seqs` (concurrent sequences), same splice. Note the orchestrator is not a single caller: chat, `auto_learn`, and scheduled jobs can overlap, so `1` makes them queue behind each other against the 120s unified-loop timeout. |
+| `VLLM_TOOL_CALL_PARSER` | `qwen3_coder` | `--tool-call-parser`, same splice. `qwen3_coder` and `qwen3_xml` both decode the `<tool_call><function=…><parameter=…>` wire format Qwen3.6/3.8 emit; `hermes` is for the below-floor 8B AWQ substitution. |
+| `VLLM_REASONING_PARSER` | `qwen3` | `--reasoning-parser`, same splice. Routes `<think>` spans to `message.reasoning_content` so they never reach the user. |
+| `VLLM_SPECULATIVE_CONFIG` | `{"method":"mtp","num_speculative_tokens":3}` | `--speculative-config` JSON, same splice. Requires MTP weights in the checkpoint — an 8B AWQ model crashes on it. |
+| `VLLM_MM_ARGS` | `--language-model-only --skip-mm-profiling` | Multimodal flags, same splice. The default disables the vision tower to save VRAM. Set to `--skip-mm-profiling` alone to keep vision live on a multimodal checkpoint (e.g. Qwen3.8). |
+| `VLLM_CUDA_ALLOC_CONF` | (empty) | Passed to the container as `PYTORCH_CUDA_ALLOC_CONF`. Empty = PyTorch default. The Qwen3.8 NVFP4 + MTP-3 configs need `expandable_segments:True` or they OOM. |
+| `VLLM_USE_FLASHINFER_SAMPLER` | (empty) | Passed straight through as `VLLM_USE_FLASHINFER_SAMPLER`. Set `0` when the sampler's JIT path fails for want of `nvcc` in the runtime image. |
 | `JESS_VRAM_TIER` | (empty) | VRAM tier (`24` \| `32` \| `48`). Written by `scripts/detect_hardware.sh`, which analyzes the box's GPU(s) + RAM + driver and prints a full recommended model config — `VLLM_MODEL`, `VLLM_QUANTIZATION`, `VLLM_MAX_MODEL_LEN`, `VLLM_GPU_MEM_UTIL`. |
 | `QWEN_TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | HuggingFace repo id for the TTS model; downloads into `model-hf-cache` on first run. Preset-voice model — use a `*-Base` model instead if you need voice cloning. Set to `/models/local` to use a locally-mounted model (see `QWEN_TTS_MODEL_DIR`). |
 | `QWEN_TTS_MODEL_DIR` | (empty) | Optional host directory holding a pre-downloaded local TTS model, bind-mounted read-only into the `qwen-tts` container at `/models/local`. For models that aren't on HuggingFace (e.g. a gated cloning-capable `*-Base` model). When unset, an inert placeholder is mounted. |
@@ -61,9 +73,9 @@ GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in th
 |----------|---------|---------|
 | `MODEL_URL` | `http://vllm-primary:8000/v1` | Primary model endpoint. The portable default uses the compose-internal DNS name `vllm-primary` so a fresh `COMPOSE_PROFILES=models` install just works. Override to `http://<host>:<port>/v1` if vLLM runs off-host or as a host systemd unit (Helios deployment: `http://10.0.0.195:8080/v1`). |
 | `REAL_STREAMING_ENABLED` | `true`/`false` (default true). Real token streaming on `/v1/chat/completions`: gate-safe tokens relay through SSE while the unified tool loop runs (vLLM primary only — Anthropic/OpenAI fallbacks stay buffered, as do HA Assist and Telegram which request `stream=false`). Kill switch: `false` restores the old chunk-the-finished-string behavior — but it is read at process start, so flipping it needs a container restart (`docker compose up -d orchestrator`), not a hot toggle. Metrics: `bgw_chat_ttft_seconds` (TTFT) + `bgw_chat_stream_outcome_total{outcome}` (degradation; `died_mid_emission` = truncated answer, watched by the `ChatStreamTruncating` alert). |
-| `MODEL_NAME` | `qwen3.6-27b-int4` | Primary model name. Matches `VLLM_SERVED_NAME`. Was `Qwen3.5-27B` until the 2026-04-26 vLLM Phase 3 cutover. |
+| `MODEL_NAME` | `qwen3.6-27b-int4` | Primary model name. Matches `VLLM_SERVED_NAME`. Helios deployment: `qwen3.8-27b-nvfp4` since the 2026-09-28 Qwen3.8 cutover (was `qwen3.6-27b-int4` from 2026-04-26, `Qwen3.5-27B` before). |
 | `FALLBACK_MODEL_URL` | — | Fallback model endpoint (optional) |
-| `FALLBACK_MODEL_NAME` | — | Fallback model name (current production: `qwen3.6-27b-int4`; matches `MODEL_NAME` post Phase 3 cutover) |
+| `FALLBACK_MODEL_NAME` | — | Fallback model name (current production: `qwen3.8-27b-nvfp4`; matches `MODEL_NAME`) |
 | `EMBEDDING_MODEL` | — | Embedding model for RAG indexing |
 | `MODEL_SERVER_IP` | — | SSH target for remote model start/stop |
 | `MODEL_SSH_USER` | — | SSH user for model server |
@@ -72,7 +84,7 @@ GPU pinning: vLLM → GPU0, TTS + STT → GPU1. HF model downloads persist in th
 
 ## Expert reasoning model (`ask_expert` tool)
 
-One-shot blocking delegation to Qwen3-32B Thinking on Saturn 3090 (host port 8084 via the `expert-model` Docker container, image `ghcr.io/ggml-org/llama.cpp:server-cuda`). Used by `query_budget` analyze-mode synthesis and any future hard-reasoning task. Auto-disabled (handler returns a short "disabled" string) when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty.
+**Deprecated on the Helios deployment since 2026-09-28** (`EXPERT_ENABLED=false`, `EXPERT_MODEL_URL` blank; Jupiter backup `.env.bak-expert`) — the feature remains available for other installs. One-shot blocking delegation to Qwen3-32B Thinking (formerly on Saturn 3090, host port 8084 via the `expert-model` Docker container, image `ghcr.io/ggml-org/llama.cpp:server-cuda`). Used by `query_budget` analyze-mode synthesis and any future hard-reasoning task. Auto-disabled (handler returns a short "disabled" string) when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -177,8 +189,8 @@ These env vars are bootstrap defaults. Once the runtime YAML at `SELFCARE_SCHEDU
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VISION_ENABLED` | `false` | Enable/disable image analysis feature |
-| `VISION_MODEL_URL` | (empty) | Vision model endpoint, e.g. `http://vision.example.tld:8010/v1` (Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080 in this deployment). Required when `VISION_ENABLED=true`. |
-| `VISION_MODEL_NAME` | `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | Vision model identifier (matches llama.cpp `--model` filename) |
+| `VISION_MODEL_URL` | (empty) | Vision model endpoint, e.g. `http://vision.example.tld:8010/v1`. Helios deployment (since 2026-09-28): `http://10.0.0.195:8080/v1` — the multimodal Qwen3.8 primary brain serves vision, so vision needs Helios awake; previously Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080 (:8010; rollback lines in Jupiter `.env.bak-vision-saturn`). Required when `VISION_ENABLED=true`. |
+| `VISION_MODEL_NAME` | `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | Vision model identifier (the served model name; default matches the llama.cpp `--model` filename). Helios deployment: `qwen3.8-27b-nvfp4`. |
 | `VISION_MAX_IMAGE_SIZE` | `10485760` | Maximum image upload size in bytes (10 MB) |
 | `VISION_TIMEOUT` | `60` | Vision model request timeout in seconds |
 
