@@ -568,6 +568,68 @@ MTP), that TTS is on GPU1 (actual: GPU0), and that STT is NeMo `parakeet-stt`
 (actual: ONNX/CPU `stt-onnx`, Parakeet v2). The `qwen-tts.service` and
 `llama-server-coder.service` Description lines also name the wrong GPU.
 
+---
+
+## 5090 trial — 2026-09-28 (owner-approved maintenance window)
+
+**Result: Qwen3.8 on the 5090 runs clean tool calls at ~111 tok/s decode
+(2.1× today's Qwen3.6) with 131K context (8× today's 16K).** It is ready for
+the orchestrator acceptance session.
+
+### Live changes made (with owner approval)
+1. **qwen-tts moved to GPU1 (PRO 5000)** via a drop-in:
+   `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` →
+   `Environment="CUDA_VISIBLE_DEVICES=1"`. Healthy, same latency (1.71 s before,
+   1.66–1.78 s after, same test sentence, `jessica` voice). **This stays in
+   place.** GPU1 now holds coder 4.2 GB + TTS 5.0 GB.
+   Revert: delete the file, `daemon-reload`, `restart qwen-tts`.
+2. `vllm-primary` was stopped for the trial, then **restarted**. Qwen3.6 is
+   serving on 8080 again (17/17 smoke after restart). Nothing was cut over:
+   `.env` and `vllm-primary.service` are unchanged.
+
+### Results on GPU0 (RTX 5090), stock `vllm/vllm-openai:v0.27.1`, fp8 KV, MTP-3, max-num-seqs 2
+
+| Config | KV tokens | Smoke | Concurrent | Long ctx | Decode | MTP accept |
+|---|---|---|---|---|---|---|
+| 32K, `--enforce-eager` (the recipe) | 135,623 | 43/43 | 10/10 | ok @24K | **~36 tok/s** | 66% |
+| 32K, CUDA graphs | 132,892 | 69/69 | 10/10 | ok @24K | **110–116 tok/s** | 69% |
+| **131K, CUDA graphs (recommended)** | 197,283 | 30/30 | — | tool + recall ok @ 57K / 104K / 121K | **~111 tok/s** | — |
+| *Qwen3.6 live, for reference* | 7,840 | 30/30 | — | — | *52 tok/s* | off |
+
+- **Eager mode was the bottleneck, not bandwidth.** Eager on the 5090 was no
+  faster than eager on the PRO 5000 (~36 tok/s each).
+- **The recipe's "eager is mandatory" doesn't apply at `--max-num-seqs 2`.**
+  Graph capture took 0.11 GiB / 2 s. Startup is ~115 s (including ~48 s of
+  torch.compile) versus ~62 s eager.
+- **No corruption seen with CUDA graphs + MTP + fp8 KV**: 99 smoke checks plus the
+  concurrency, long-context and decode runs were all clean. The known corruption bugs
+  (#40880/#53180) are TurboQuant-KV-specific. Keep watching
+  `bgw_tool_calls_source_total{source="dropped"}` after cutover anyway; if output
+  ever garbles, re-adding `--enforce-eager` is the first lever.
+- Long-context recall: a fact planted mid-prompt was recalled at 57K/104K/121K.
+  Time to first token at 121K cold was 31.6 s (prefill), and ~2 s once
+  prefix-cached.
+- More context is available (197K tokens of KV at 131K) but untested. 131K
+  leaves headroom for 2 concurrent sequences.
+
+`.env.example` override set and `tts/vllm-primary-qwen38.service.draft` are
+updated to this config (131072, no `--enforce-eager`). Scripts and every log:
+Helios `~/qwen38-trial/` (`run_gpu0.sh LEN UTIL [flags]` reproduces any row).
+
+### Remaining steps (supersede all earlier lists)
+1. **Orchestrator acceptance session.** Start the Qwen3.8 config on GPU0 (port
+   8080 with the new served name), point the orchestrator's
+   `MODEL_NAME`/`FALLBACK_MODEL_NAME` at `qwen3.8-27b-nvfp4`, start
+   `brain-orchestrator`, and run real turns: HA, reminder, `get_data` meds,
+   calendar, `search_memory`, a voice turn and a Telegram turn. Watch
+   `bgw_tool_calls_source_total` and `bgw_chat_stream_outcome_total`.
+2. Replace `vllm-primary.service` with the draft (port 8080, keep the live unit's
+   `ExecStartPost` readiness loop; `TimeoutStartSec` ≥ 600 for the ~115 s startup
+   plus the loop). Keep the old unit file, the v0.19.1 image and the Qwen3.6 weights as
+   rollback.
+3. Vision through the brain, then repoint `VISION_*`.
+4. Docs pass: CLAUDE.md drift (see above) plus the new TTS placement.
+
 ## Sources
 
 - <https://github.com/MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090>
