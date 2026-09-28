@@ -240,9 +240,9 @@ Two semantics worth knowing, both now documented in the stanza comment and in
   is corrected: an empty value would fall back to the default (`${VAR:-…}`
   treats empty as unset), so blanking would *not* have worked.
 - To drop a flag entirely you must override `VLLM_EXTRA_ARGS` wholesale. Which
-  is why the Qwen3.8 recommendation below is a whole-string override: three of
-  its flags (`--enforce-eager`, `--linear-backend`,
-  `--default-chat-template-kwargs`) have no dedicated slot.
+  is why the Qwen3.8 recommendation below is a whole-string override: two of
+  its flags (`--enforce-eager`, `--default-chat-template-kwargs`) have no
+  dedicated slot.
 
 ### 3.2 `.env.example` + `docs/ENV_VARS.md`
 
@@ -262,7 +262,7 @@ VLLM_QUANTIZATION=auto
 VLLM_MAX_MODEL_LEN=32768
 VLLM_CUDA_ALLOC_CONF=expandable_segments:True
 VLLM_USE_FLASHINFER_SAMPLER=0
-VLLM_EXTRA_ARGS=--kv-cache-dtype fp8 --max-num-seqs 2 --tool-call-parser qwen3_xml --reasoning-parser qwen3 --speculative-config '{"method":"mtp","num_speculative_tokens":3}' --default-chat-template-kwargs '{"reasoning_effort":"low"}' --enforce-eager --linear-backend flashinfer_cutedsl --skip-mm-profiling
+VLLM_EXTRA_ARGS=--kv-cache-dtype fp8 --max-num-seqs 2 --tool-call-parser qwen3_xml --reasoning-parser qwen3 --speculative-config '{"method":"mtp","num_speculative_tokens":3}' --default-chat-template-kwargs '{"reasoning_effort":"low"}' --enforce-eager --skip-mm-profiling
 MODEL_NAME=qwen3.8-27b-nvfp4
 ```
 
@@ -398,6 +398,50 @@ the session scratchpad; nothing installed into a project env).
   `LOCAL_SINGLE_BOX_PLAN.md` and `DECISION_local_vs_cloud_brain.md` are also
   still untracked — left for the owner to commit, since the handoff only asked
   for this results doc to be committed.
+
+---
+
+## Verification pass — 2026-09-28
+
+A second session re-checked the 2026-09-26 work before anyone relies on it.
+Helios still unplugged; orchestrator still stopped; no containers touched; `.env`
+untouched.
+
+**Confirmed:**
+- **Weights: cryptographically verified.** All 22 files re-hashed; every LFS
+  file matches the sha256 in the HF manifest at revision
+  `319f741cce68d7914884900c138a1fbb70a42f30`, and every non-LFS file matches in
+  size. That revision is still the repo HEAD (nothing newer published).
+- **Audit line refs** (`unified_loop.py`, `llm_backend.py`,
+  `orchestrator.py:335-345`) still point at the cited code; no orchestrator code
+  differs between `main` and this branch.
+- **Compose render**, re-run: no-override render is still identical to `main`'s;
+  the Qwen3.8 override set renders the expected image, `/models` bind mount,
+  both env vars, and `vllm serve` argv.
+- **PR #40914 is still open** (last activity 2026-08-21: a report that it does
+  not apply cleanly to 0.27.1's cache layout, which makes the custom-build path
+  even less attractive). The fp8-KV conclusion in 3.4 stands.
+- The vLLM recipe's single-5090 command still matches 3.4 (`--enforce-eager`
+  mandatory, fp8 KV, 32K). The recipe itself sets no tool parser, no MTP, and no
+  `--max-num-seqs`. Those three come from this draft and are
+  **untested together on 0.27.1**. Remaining-steps item 5 covers exactly that.
+
+**Fixed (commit on this branch):**
+- **Removed `--linear-backend flashinfer_cutedsl`** from the `.env.example`
+  override set, the draft unit and this doc. It had no source: it is not in the
+  vLLM recipe, the MiaAI-Lab repo, or the RadixArk card. The option came from
+  vLLM PR #50572, **merged 2026-08-27**, after v0.27.1, so v0.27.1 would most
+  likely refuse to start on an unknown choice. It is also irrelevant here:
+  it only swaps the GEMM for *unquantized BF16* layers on **SM100**-family GPUs.
+  The RTX 5090 is SM120, and this checkpoint's big layers are NVFP4/FP8.
+
+**Deviation from the handoff, now stated explicitly:** the handoff asked for
+`--max-num-seqs 1`; the draft uses **2**. MiaAI-Lab's "MTP + concurrency
+crashes" note is specific to its `turboquant_4bit_nc` KV path, which this draft
+does not use. `2` also matches today's deployment. The orchestrator is not a
+single caller: chat, `auto_learn` and scheduled jobs overlap, so `1` queues them
+against the 120 s loop timeout. **If MTP + fp8 misbehaves under two sequences on
+the GPU, drop to 1 first** (one `.env` edit).
 
 ## Sources
 
