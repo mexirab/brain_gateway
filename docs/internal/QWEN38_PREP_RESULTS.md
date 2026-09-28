@@ -443,6 +443,48 @@ single caller: chat, `auto_learn` and scheduled jobs overlap, so `1` queues them
 against the 120 s loop timeout. **If MTP + fp8 misbehaves under two sequences on
 the GPU, drop to 1 first** (one `.env` edit).
 
+---
+
+## Helios live state — captured 2026-09-28 (Helios powered on)
+
+Read-only inspection over `ssh labadmin@10.0.0.195`. Nothing below was changed.
+Several findings contradict `CLAUDE.md` and assumptions made earlier in this doc.
+
+| | What CLAUDE.md / this doc assumed | What Helios actually runs |
+|---|---|---|
+| `vllm-primary` context | `--max-model-len 153600` | **`16384`**, `--gpu-memory-utilization 0.70`, `--enforce-eager` |
+| `vllm-primary` MTP | `--speculative-config mtp` on | **No `--speculative-config` at all** (MTP is off) |
+| `vllm-primary` KV | — | 1.04 GiB KV cache (vLLM log: "Maximum concurrency for 16,384 tokens per request: 1.24x") |
+| `qwen-tts` GPU | GPU1 (PRO 5000), per its own unit Description | **GPU0 (RTX 5090)**, 4.7 GB. The unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`, so it lands on the 5090 next to vLLM |
+| Code agent | CLAUDE.md table says GPU1; the unit Description says GPU0 | GPU1 (`CUDA_VISIBLE_DEVICES=1`), 4.2 GB + experts in RAM |
+| STT | `parakeet-stt.service` (NeMo, GPU1, v3) | **`stt-onnx.service` (ONNX/CPU, Parakeet v2, int8)** is enabled and running; `parakeet-stt` is disabled. The plan doc's "never deployed" is stale |
+| Driver / arch | — | 580.173.02; both cards compute capability 12.0 (SM120) |
+| Images on disk | — | `vllm/vllm-openai:v0.19.1` and `:latest` |
+
+GPU0 memory at capture: 27.9 / 32.6 GB used (vLLM 23.2 GB + TTS 4.7 GB).
+GPU1: 4.3 / 48.9 GB used (coder only).
+
+### What this changes
+
+1. **Section 3.4 correction: 32K is *not* a context regression.** Production
+   actually serves 16K with MTP off. So Qwen3.8 at 32K with MTP on would be 2×
+   the context plus speculative decoding. The plan doc's "32K is still 2×"
+   was right after all.
+2. **Plan deploy step 4 can't happen as written.** A trial next to the live unit
+   on GPU0 is impossible. Qwen3.8 NVFP4 needs essentially the whole 5090 (the
+   recipe says 31.4 GiB usable, `--enforce-eager` mandatory), and GPU0 already
+   holds vLLM + TTS. The draft unit's "port 8085 alongside" premise is wrong for
+   GPU0.
+3. **The GPU1 layout from the plan is not in place yet.** The TTS must move off
+   the 5090 (set `CUDA_VISIBLE_DEVICES=1` in `qwen-tts.service`) before Qwen3.8
+   can have GPU0 to itself. It is a one-line change, but it touches a live unit.
+4. **Non-disruptive trial option:** GPU1 (PRO 5000, 44 GB free, same SM120
+   arch) can host a Qwen3.8 correctness trial without touching anything
+   running. Throughput there is not representative (the 2026-04 bench put it at
+   28–79% of the 5090). But the migration's real risk is tool-call and parser
+   correctness under MTP, and that is architecture- and software-dependent,
+   not bandwidth-dependent.
+
 ## Sources
 
 - <https://github.com/MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090>
