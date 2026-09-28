@@ -7,7 +7,17 @@
 # to GPU0") plus tts/nemotron-vllm.service for the systemd scaffolding. Diff it
 # against the real /etc/systemd/system/vllm-primary.service before using it.
 #
-# Deliberately a SEPARATE unit on a SEPARATE port (8085, not 8080) so it can
+# UPDATE 2026-09-28 (Helios inspected): the "run alongside on GPU0" idea below
+# does NOT work. Qwen3.8 NVFP4 needs ~21 GiB for weights alone, and GPU0 already
+# holds Qwen3.6 (23 GiB) + qwen-tts (4.7 GiB). To use this unit on GPU0: move
+# qwen-tts to GPU1, `systemctl stop vllm-primary`, then start this one. The
+# serve flags themselves were validated with a docker-run trial on GPU1
+# (43/43 smoke + concurrency + ~24K-context tool calls OK; see
+# docs/internal/QWEN38_PREP_RESULTS.md). The live vllm-primary.service runs as
+# root (no User=) with an ExecStartPost /v1/models readiness loop. Consider
+# copying that loop here.
+#
+# Originally: a SEPARATE unit on a SEPARATE port (8085, not 8080) so it could
 # run alongside the existing Qwen3.6 unit during the acceptance test, per
 # docs/internal/LOCAL_SINGLE_BOX_PLAN.md "Deploy steps" step 4. Cut
 # MODEL_URL/MODEL_NAME over only after the tool-calling test passes; the old

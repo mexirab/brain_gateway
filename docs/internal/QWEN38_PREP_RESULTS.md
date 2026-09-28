@@ -485,6 +485,89 @@ GPU1: 4.3 / 48.9 GB used (coder only).
    correctness under MTP, and that is architecture- and software-dependent,
    not bandwidth-dependent.
 
+---
+
+## GPU trial — 2026-09-28 (Helios on, GPU1, nothing live touched)
+
+**Result: the drafted config works on stock vLLM v0.27.1, with no patch.
+Tool calling is clean with MTP on.**
+
+### Setup
+- Weights rsynced Jupiter → Helios `/home/labadmin/models/Qwen3.8-27B-NVFP4/`
+  (21,945,295,265 bytes, exact match with the sha256-verified copy).
+- `docker pull vllm/vllm-openai:v0.27.1`
+  (`sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967`).
+- One-off `docker run --rm` container `vllm-qwen38-trial` on **GPU1 (PRO 5000)**,
+  bound to `127.0.0.1:8085`, with exactly the draft's serve flags (minus the
+  removed `--linear-backend`) and `--gpu-memory-utilization 0.80`. GPU1 was
+  chosen because it runs nothing that had to stop (the coder kept running).
+  GPU0 would have required stopping production vLLM and moving TTS.
+  **Stopped afterwards**; Helios GPU state is back to what it was.
+- No systemd unit installed, no live service or container touched, no `.env`
+  change.
+
+### What vLLM reported
+- Quantization auto-detected as **`modelopt_mixed`** (`--quantization auto` works).
+- Weights **20.57 GiB**; 16.42 GiB KV (fp8) = **287,630 tokens**; init 62 s.
+- Only warnings: undocumented `min_frames`/`max_frames` transformers noise, the
+  "KV scale 1.0" fp8 note, and "num_speculative_tokens > 1 may lower acceptance".
+  No tracebacks.
+
+### Tests (scripts + logs on Helios at `~/qwen38-trial/`)
+`smoke.py` uses the orchestrator's real 45 `STATIC_TOOLS` schemas plus a stub
+`home_assistant` tool (~35K chars of tools). It checks what `unified_loop.py`
+depends on: structured `tool_calls` (index-keyed deltas when streaming), JSON-parseable
+args, the right tool and args, no `<think>`/`<tool_call>`/`<function=` markup in
+`content`, a tool-result follow-up turn, and the voice path
+(`enable_thinking: false`, `max_tokens: 1024`).
+
+| Check | Qwen3.6 (live, 5090, no MTP) | Qwen3.8 trial (PRO 5000, MTP-3) |
+|---|---|---|
+| Smoke (stream + buffered, 6 prompts, follow-up, voice) | 30/30 | **43/43** |
+| Avg reasoning chars per turn | 246 | 158 (`reasoning_effort: low` default) |
+| 2 simultaneous tool calls × 5 rounds (`max-num-seqs 2` + MTP) | — | **10/10** |
+| Tool call at ~16.8K / ~24.4K prompt tokens | — | **ok / ok** |
+| MTP acceptance | n/a | **73.4%** (3,218 / 4,383 draft tokens) |
+| Pure decode, ~850-token answer | 52.0 tok/s | 36.0 tok/s |
+
+The third long-context case (~31K prompt) returned HTTP 400. That was a test
+artifact: the prompt plus `max_tokens=4096` exceeded the 32,768 limit.
+
+**Not a speed verdict.** The decode numbers compare different cards (the PRO 5000
+has less bandwidth) and different configs. The real Qwen3.8-on-5090 speed is
+still unmeasured. The KV numbers say the 5090 has headroom: after ~21 GiB of weights,
+~8 GiB of fp8 KV at 0.93 utilisation is on the order of 140K tokens for this
+hybrid model. So `--max-model-len` well above 32K looks plausible once GPU0 is
+free. Also untested: CUDA graphs (no `--enforce-eager`), which may be the bigger
+speed lever.
+
+### Revised remaining steps (supersedes the list above)
+
+Done: step 1 (captured the live units), step 2 (weights on Helios), steps 3–5
+(the config boots and tool calls are clean with MTP on, streamed and buffered, and
+under concurrency). The rest, in order. **Each one changes the live box.**
+
+1. **Move qwen-tts to GPU1:** add `Environment="CUDA_VISIBLE_DEVICES=1"` to
+   `qwen-tts.service`, restart it, and confirm TTS still works. This is the plan's
+   intended layout anyway, and GPU1 has room for it next to the coder.
+2. **Maintenance window on GPU0:** `systemctl stop vllm-primary`, start the
+   Qwen3.8 config on GPU0 (port 8080 or 8085), and re-run
+   `~/qwen38-trial/smoke.py` + `stress.py` there. Then measure decode speed and
+   raise `--max-model-len` (try 65K, then 131K). Optionally try without
+   `--enforce-eager`.
+3. Orchestrator acceptance session (plan step 6) against the Qwen3.8 endpoint,
+   watching `bgw_tool_calls_source_total{source="dropped"}`.
+4. Cut over `.env` (`MODEL_NAME`/`FALLBACK_MODEL_NAME`) and replace
+   `vllm-primary.service`. Keep the Qwen3.6 unit, image and weights as rollback.
+5. Vision via the brain (drop `--language-model-only`, which the trial already did)
+   before repointing `VISION_*`.
+
+### Docs drift found (not fixed here; for the docs pass at cutover)
+`CLAUDE.md` says vllm-primary runs 153,600 context with MTP (actual: 16,384, no
+MTP), that TTS is on GPU1 (actual: GPU0), and that STT is NeMo `parakeet-stt`
+(actual: ONNX/CPU `stt-onnx`, Parakeet v2). The `qwen-tts.service` and
+`llama-server-coder.service` Description lines also name the wrong GPU.
+
 ## Sources
 
 - <https://github.com/MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090>
