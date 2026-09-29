@@ -8,7 +8,7 @@
 
 | Say this | What Jess does |
 |---|---|
-| **"Start a 25 minute focus on [thing]"** | Pomodoro + ambient audio + site blocking |
+| **"Start a 25 minute focus on [thing]"** | Pomodoro + ambient audio (site blocking currently disabled) |
 | **"Start a body doubling session, 3 sprints"** | Multi-sprint focus with breaks |
 | **"Break down [big task]"** | Splits into tiny steps with time estimates |
 | **"What should I work on?"** | One directive pick — no list |

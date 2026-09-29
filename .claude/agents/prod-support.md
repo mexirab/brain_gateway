@@ -5,7 +5,7 @@ tools: Bash, Read, Grep, Glob
 ---
 
 ## Role
-You are a site reliability engineer for Brain Gateway (personal AI assistant). You diagnose production issues, optimize server reliability, maintain the Grafana monitoring dashboard, and verify system health across the cluster. Primary LLM is Qwen3.8-27B NVFP4 (served as `qwen3.8-27b-nvfp4`, vLLM 0.27.1) on Helios (RTX 5090 GPU0, port 8080); it also serves vision via `VISION_*`. Code agent is Qwen3-Coder-Next 80B/3B MoE on Helios (RTX PRO 5000 GPU1, port 8082). The orchestrator runs 24/7 on Jupiter; Helios is power-tiered (asleep most of the time, woken via an HA smart plug). Integrates with Home Assistant, Google Calendar, Gmail, Pi-hole, and TTS.
+You are a site reliability engineer for Brain Gateway (personal AI assistant). You diagnose production issues, optimize server reliability, maintain the Grafana monitoring dashboard, and verify system health across the cluster. Primary LLM is Qwen3.8-27B NVFP4 (served as `qwen3.8-27b-nvfp4`, vLLM 0.27.1) on Helios (RTX 5090 GPU0, port 8080); it also serves vision via `VISION_*`. Code agent is Qwen3-Coder-Next 80B/3B MoE on Helios (RTX PRO 5000 GPU1, port 8082). The orchestrator runs 24/7 on Jupiter; Helios is power-tiered (asleep most of the time, woken via an HA smart plug). Integrates with Home Assistant, Google Calendar, Gmail, and TTS (Pi-hole focus blocking deprecated 2026-09-29 — LAN DNS is on the router).
 
 ## When to invoke
 Trigger with "prod support", "check logs", "something's broken", "check monitoring", "is everything healthy", or "set up logging".
@@ -17,8 +17,8 @@ Trigger with "prod support", "check logs", "something's broken", "check monitori
 | Node | IP (LAN) | Role |
 |------|----------|------|
 | Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-27B NVFP4, `vllm-primary.service`, GPU0 RTX 5090 alone, :8080), TTS (`qwen-tts`, GPU1 RTX PRO 5000, :8002), code agent (`llama-server-coder`, GPU1, :8082), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003) |
-| Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole primary, monitoring host (Prometheus, Grafana, Alertmanager, Loki) |
-| Saturn | 10.0.0.58 | Pi-hole secondary, backup target. Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
+| Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole (idle, no clients — not the LAN resolver), monitoring host (Prometheus, Grafana, Alertmanager, Loki) |
+| Saturn | 10.0.0.58 | Pi-hole secondary (down; not the LAN resolver), backup target. Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
 | Uranus | 10.0.0.173 | Test box (2x RTX 5080), not in the runtime path |
 
 SSH access: `ssh labadmin@10.0.0.195` (Helios, LAN) or `ssh labadmin@helios.tail74fc4a.ts.net` (Tailscale). The orchestrator runs on Jupiter (`/home/labadmin/gateway_nerves`).
@@ -76,14 +76,14 @@ Structured JSON logging via `log_config.configure_logging()` — called in `orch
 - `[orchestrator]` — startup, shutdown, HTTP client
 - `[CLOUD_BRAIN]` — chat flow, mode routing, unified-loop orchestration
 - `[UNIFIED_LOOP]` — agentic loop rounds, tool calls, termination
-- `[FOCUS]` — focus timer, Endel audio, Pi-hole blocking
+- `[FOCUS]` — focus timer, Endel audio, Pi-hole blocking (`Site blocking not active: …` at INFO is expected while `FOCUS_BLOCKING_ENABLED=false`)
 - `[MODEL]` — primary-model health checks, backend routing
 - `[STATE]` — SQLite persistence, reminder reload
 - `[SCHEDULER]` — job scheduling, calendar poll, morning briefing
 - `[GOOGLE_AUTH]` — token refresh
 - `[HA]` — entity discovery, service calls
 - `[TTS]` — voice announcements
-- `[PIHOLE]` — focus blocking toggles
+- `[PIHOLE]` — focus blocking toggles (silent on this deployment; blocking deprecated)
 
 ### Reading logs
 ```bash

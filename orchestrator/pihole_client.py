@@ -26,6 +26,17 @@ class PiHoleResult:
     details: Optional[Dict[str, Any]] = None
 
 
+def blocking_confirmed(result: PiHoleResult) -> bool:
+    """True only when at least one Pi-hole actually toggled focus-group domains.
+
+    ``PiHoleMultiClient`` also reports ``success`` for no-ops (blocking disabled
+    in config, no instances configured, an empty focus group, or every
+    per-domain update rejected). Callers that tell the user "sites are blocked"
+    must use this instead of ``result.success``.
+    """
+    return bool(result.success and (result.details or {}).get("domains_toggled", 0) > 0)
+
+
 class PiHoleClient:
     """
     Pi-hole v6 API client for a single instance.
@@ -234,6 +245,7 @@ class PiHoleMultiClient:
 
         succeeded = []
         failed = []
+        domains_toggled = 0
         for i, result in enumerate(results):
             name = self.clients[i].name
             if isinstance(result, Exception):
@@ -241,6 +253,7 @@ class PiHoleMultiClient:
                 logger.error("[PIHOLE:%s] Exception: %s", name, result)
             elif result.success:
                 succeeded.append(name)
+                domains_toggled += (result.details or {}).get("domains_toggled", 0)
             else:
                 failed.append(name)
 
@@ -251,13 +264,20 @@ class PiHoleMultiClient:
             if failed:
                 msg += f" (failed on {', '.join(failed)})"
             return PiHoleResult(
-                success=True, message=msg, details={"succeeded": succeeded, "failed": failed, "enabled": enabled}
+                success=True,
+                message=msg,
+                details={
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "enabled": enabled,
+                    "domains_toggled": domains_toggled,
+                },
             )
         else:
             return PiHoleResult(
                 success=False,
                 message=f"Focus blocking {action} failed on all instances: {', '.join(failed)}",
-                details={"succeeded": [], "failed": failed, "enabled": enabled},
+                details={"succeeded": [], "failed": failed, "enabled": enabled, "domains_toggled": 0},
             )
 
     async def is_available(self) -> bool:

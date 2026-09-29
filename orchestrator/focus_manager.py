@@ -20,7 +20,7 @@ from orchestrator.metrics import (
     FOCUS_SESSIONS_STOPPED_EARLY,
     PIHOLE_BLOCKING_TOGGLES,
 )
-from orchestrator.pihole_client import get_pihole_client
+from orchestrator.pihole_client import blocking_confirmed, get_pihole_client
 from orchestrator.reminder_manager import _announce_voice
 from orchestrator.shared import (
     ENDEL_API_URL,
@@ -235,10 +235,15 @@ async def tool_start_focus(
     if block_sites:
         pihole = get_pihole_client()
         result = await pihole.enable_focus_blocking()
-        if result.success:
+        # Only claim blocking when a Pi-hole actually toggled domains — the
+        # multi-client also returns success for no-ops, which must not be
+        # reported to the user as "Distracting sites are blocked."
+        if blocking_confirmed(result):
             blocking_enabled = True
             PIHOLE_BLOCKING_TOGGLES.labels(action="enable").inc()
             logger.info("[FOCUS] Enabled Pi-hole distraction blocking")
+        elif result.success:
+            logger.info("[FOCUS] Site blocking not active: %s", result.message)
         else:
             logger.warning(f"[FOCUS] Could not enable blocking: {result.message}")
 
@@ -506,8 +511,10 @@ async def tool_focus_sprint(action: str, duration_minutes: int = None) -> str:
         if current_focus_session.get("block_sites"):
             pihole = get_pihole_client()
             result = await pihole.enable_focus_blocking()
-            if result.success:
+            if blocking_confirmed(result):
                 PIHOLE_BLOCKING_TOGGLES.labels(action="enable").inc()
+            else:
+                logger.warning("[FOCUS] Could not re-enable blocking for sprint: %s", result.message)
 
         # Re-arm check-in job
         check_in_job_id = None

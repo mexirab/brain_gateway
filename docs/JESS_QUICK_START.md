@@ -46,14 +46,14 @@ If you prefer a web form for these, visit `/settings` in the dashboard — same 
 
 | Say this | What happens |
 |----------|--------------|
-| "Start a focus timer for 25 minutes on emails" | Pomodoro timer with ambient audio, optional site blocking, and check-ins |
+| "Start a focus timer for 25 minutes on emails" | Pomodoro timer with ambient audio and check-ins (site blocking currently disabled) |
 | "Start a body doubling session, 3 sprints" | Multi-sprint focus with breaks between each |
 | "Stop focus" / "I'm done" | Ends the timer early |
 | "Next sprint" / "Extend by 10 minutes" | Continue or add time during a session |
 | "Break down cleaning the kitchen" | Splits into micro-steps with time estimates |
 | "Done" / "Skip" / "Next step" | Advance through decomposed task steps |
 
-Pi-hole site blocking during focus is opt-in — connect a Pi-hole in `.env` (`PIHOLE_URLS`, `PIHOLE_PASSWORD`) to enable it.
+Site blocking during focus is currently disabled — Jess will only say sites are blocked if blocking actually took effect. (Installs whose devices use a Pi-hole as their only DNS can enable it: `FOCUS_BLOCKING_ENABLED=true` + `PIHOLE_URLS` + `PIHOLE_PASSWORD` in `.env`.)
 
 ---
 

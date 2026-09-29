@@ -4,6 +4,20 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — focus-mode site blocking deprecated (2026-09-29)
+
+Maintainer-deployment change; the Pi-hole blocking code stays in the product (compose default `FOCUS_BLOCKING_ENABLED=false`).
+
+### Deprecated
+
+- **Focus-mode Pi-hole site blocking (this deployment).** LAN DNS moved back to the router after recurring issues even with the 2026-08-18 Pi-hole redundancy setup, so LAN clients no longer resolve through Pi-hole; and the device that needed blocking (a managed work laptop) uses corporate DNS over its own path, which no home DNS filter can reach. Saturn's Pi-hole is down with Saturn, Jupiter's `pihole` container has no clients, `nebula-sync` stopped since July. `.env` keeps `FOCUS_BLOCKING_ENABLED=false`. Timers, sprints/body doubling, check-ins, ambient audio and breaks are unchanged. Re-enable steps: `docs/FOCUS_AND_PIHOLE.md`.
+
+### Fixed
+
+- **Focus mode no longer falsely claims "Distracting sites are blocked."** The Pi-hole multi-client reports success for no-ops (blocking disabled, no instances, empty focus group, every per-domain update rejected). New `pihole_client.blocking_confirmed(result)` — true only when `success` and the new aggregated `details["domains_toggled"] > 0` — gates the claim, `current_focus_session["block_sites"]`, and `bgw_pihole_blocking_toggles_total{action="enable"}` in `tool_start_focus` and the `tool_focus_sprint` re-enable path. No-op logs INFO `[FOCUS] Site blocking not active: …`; sprint re-enable failure logs WARNING. `start_focus` `block_sites` schema description now tells the model to claim blocking only if the tool result says so. Tests: `orchestrator/tests/test_focus_blocking_confirmation.py` (22).
+
+---
+
 ## [Unreleased] — Qwen3.8 brain cutover (2026-09-28)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) still ship Qwen3.6.

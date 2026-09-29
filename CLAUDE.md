@@ -41,8 +41,8 @@ Manual on-demand equivalent: `/review-change` (runs Phase 1 only; invoke `unit-t
 | Node | IP (LAN) | IP (Tailscale) | GPU | Role |
 |------|----------|----------------|-----|------|
 | Helios | 10.0.0.195 | helios.tail74fc4a.ts.net | RTX 5090 + RTX PRO 5000 | **GPU model layer** (LLM + TTS/STT + code agent). Primary LLM: RadixArk/Qwen3.8-27B-NVFP4 served by vLLM 0.27.1 (GPU0 RTX 5090 alone, port 8080, 131K ctx, MTP), vision (same brain, via `VISION_*`), TTS (GPU1 RTX PRO 5000), STT (ONNX on CPU), Code agent: Qwen3-Coder-Next 80B/3B MoE Q4_K_XL (GPU1 RTX PRO 5000 + system RAM via `-ot .ffn_.*_exps.=CPU`, port 8082). **Power-tiered: asleep most of the time, woken on demand via an HA-controlled smart plug** — NOT always-on; the orchestrator/frontend/HA run 24/7 on Jupiter instead. |
-| Jupiter | 10.0.0.248 | jupiter-amds.tail74fc4a.ts.net | - | **Always-on hub**: Orchestrator (`brain-orchestrator` :8888), Frontend (:3001), **Home Assistant** (docker, host-networked, :8123 — migrated here off the dead Pi on 2026-07-04), Monitoring host (Prometheus, Grafana, Alertmanager, Loki, Promtail, Blackbox exporter), Pi-hole primary, nebula-sync, Conjure API |
-| Saturn | 10.0.0.58 | saturn-3090.tail74fc4a.ts.net | RTX 3080 (10GB) + RTX 3090 (24GB) | Former vision model (Qwen3-VL-8B-Instruct Q4_K_M, RTX 3080, port 8010 — out of the runtime path since 2026-09-28; vision now uses the Helios brain), Expert reasoning model (Qwen3-32B Q4_K_M, RTX 3090, port 8084 via `expert-model` docker container — **deprecated 2026-09-28**, `EXPERT_ENABLED=false`, not part of the deployment), Pi-hole secondary, **off-box backup target** (orchestrator state + HA config) |
+| Jupiter | 10.0.0.248 | jupiter-amds.tail74fc4a.ts.net | - | **Always-on hub**: Orchestrator (`brain-orchestrator` :8888), Frontend (:3001), **Home Assistant** (docker, host-networked, :8123 — migrated here off the dead Pi on 2026-07-04), Monitoring host (Prometheus, Grafana, Alertmanager, Loki, Promtail, Blackbox exporter), Pi-hole (idle — no clients since LAN DNS moved to the router, late Sept 2026; nebula-sync stopped), Conjure API |
+| Saturn | 10.0.0.58 | saturn-3090.tail74fc4a.ts.net | RTX 3080 (10GB) + RTX 3090 (24GB) | Former vision model (Qwen3-VL-8B-Instruct Q4_K_M, RTX 3080, port 8010 — out of the runtime path since 2026-09-28; vision now uses the Helios brain), Expert reasoning model (Qwen3-32B Q4_K_M, RTX 3090, port 8084 via `expert-model` docker container — **deprecated 2026-09-28**, `EXPERT_ENABLED=false`, not part of the deployment), Pi-hole secondary (down with Saturn; no longer the LAN resolver), **off-box backup target** (orchestrator state + HA config) |
 | Uranus | 10.0.0.173 | uranus-5080s.tail74fc4a.ts.net | 2x RTX 5080 (16GB each) | Non-Helios **test box** (Ubuntu 24.04). **Currently unreachable** (as of 2026-07-04); not part of the runtime path. |
 | Pi (retired) | 10.0.0.106 | - | - | **Dead** — ran Home Assistant until its SD card failed 2026-07-04; HA was migrated to Jupiter. Safe to reimage. |
 | Callisto | 10.0.0.136 | - | - | Monitoring kiosk display (Pi 4) |
@@ -61,8 +61,8 @@ Services marked **[advanced]** require `COMPOSE_PROFILES=advanced` in `.env` and
 | Expert model (Qwen3-32B Q4_K_M) — **deprecated** | 8084 | http://10.0.0.58:8084/v1 (disabled since 2026-09-28: `EXPERT_ENABLED=false`, `EXPERT_MODEL_URL` blank) |
 | TTS (Qwen3-TTS) | 8002 | http://10.0.0.195:8002 |
 | STT (Parakeet TDT 0.6b v2, int8 ONNX on CPU) | 8003 | http://10.0.0.195:8003 |
-| Pi-hole (Jupiter primary) | 53/8053 | http://jupiter-amds.tail74fc4a.ts.net:8053/admin |
-| Pi-hole (Saturn secondary) | 53/8053 | http://saturn-3090.tail74fc4a.ts.net:8053/admin |
+| Pi-hole (Jupiter, idle — LAN DNS is on the router since late Sept 2026) | 53/8053 | http://jupiter-amds.tail74fc4a.ts.net:8053/admin |
+| Pi-hole (Saturn, down) | 53/8053 | http://saturn-3090.tail74fc4a.ts.net:8053/admin |
 | Grafana (Jupiter) | 3000 | http://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview |
 | Prometheus (Jupiter) | 9090 | http://jupiter-amds.tail74fc4a.ts.net:9090 |
 | Alertmanager (Jupiter) | 9093 | 127.0.0.1 only (unauthenticated API — loopback bind is the exposure control; in-network as `alertmanager:9093`) |
@@ -104,7 +104,7 @@ Tools marked **[advanced]** are gated behind `JESS_ADVANCED=true` (default false
 | set_reminder / cancel_reminder | Voice/phone reminders |
 | update_data | Update meds/projects YAML (source of truth for structured personal facts; write path). Meds carry an optional `days` list (`mon`..`sun`; absent = every day) or a `skip_weekends` shorthand for drug-holiday scheduling — honored by `_check_meds`/`evening_meds_status` and shown as a `(Mon–Fri)` hint in the meds block + a `/personal-facts` badge. `update_medication` relocates a med between schedule buckets and returns an honest "nothing to update" (no write) when nothing changed. |
 | get_data | Read meds/projects/profile from the YAML source of truth (`{kind}`). The authoritative READ path — the model answers meds/schedule questions from here, never from RAG/`search_memory`. Non-terminal. A compact meds+projects block is also injected into every system prompt via `data_manager.get_structured_facts_block`. |
-| start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio, Pi-hole blocking |
+| start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio. Pi-hole site blocking deprecated for this deployment (`FOCUS_BLOCKING_ENABLED=false`); only claimed when `pihole_client.blocking_confirmed()` |
 | focus_sprint | Continue next sprint, extend current, or end session with summary |
 | web_search | Search the web via SearXNG |
 | check_calendar / create_calendar_event | Google Calendar read/write |
@@ -150,7 +150,7 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 | `orchestrator/state_store.py` | SQLite persistence for reminders, focus, announcements, selfcare, shopping, chat, claude_code_turns, workouts, meals |
 | `orchestrator/mempalace.py` | MemPalace — the unified memory system (store, search, wing/room routing, wakeup context) |
 | `orchestrator/auto_learn.py` | Background fact extraction from conversations — encrypt, dedup, store in palace |
-| `orchestrator/focus_manager.py` | Pomodoro timer, ambient audio, Pi-hole blocking, body doubling sprints |
+| `orchestrator/focus_manager.py` | Pomodoro timer, ambient audio, body doubling sprints, optional Pi-hole blocking (deprecated here) |
 | `orchestrator/reminder_manager.py` | TTS announcements, reminders, DND gate, announcement history, phone notifications |
 | `orchestrator/brain_dump_manager.py` | Brain dump capture, categorization, dedup, routing to RAG or reminders |
 | `orchestrator/routine_manager.py` | Morning/evening routine scaffolding — step-by-step TTS guidance |
@@ -250,7 +250,7 @@ This is a **load-on-demand router**. Read the specific doc when the task touches
 |-----|------|
 | `docs/MEMPALACE.md` | memory system internals, write paths, MCP server, session mining |
 | `docs/CLAUDE_CODE_INTEGRATION.md` | the Stop hook, `check_claude_activity` tool, or code_agent activity injection |
-| `docs/FOCUS_AND_PIHOLE.md` | focus timer, Pomodoro flow, Pi-hole DNS blocking, Nebula Sync |
+| `docs/FOCUS_AND_PIHOLE.md` | focus timer, Pomodoro flow, Pi-hole blocking (deprecated for this deployment — status + re-enable steps), Nebula Sync (historical) |
 | `docs/VOICE_AND_TTS.md` | ATOM Echo voice assistant, TTS pacing, Wyoming bridges, STT config |
 | `docs/GOOGLE_INTEGRATIONS.md` | Calendar API, Gmail API, phone sync, travel-time alerts, OAuth2 setup |
 | `docs/FRONTEND.md` | dashboard pages, widgets, YNAB finance, API proxy pattern |

@@ -212,6 +212,17 @@ Morning briefing includes weather forecast from the National Weather Service API
 | `WEATHER_LAT` | (geocoded) | Latitude for weather forecast |
 | `WEATHER_LON` | (geocoded) | Longitude for weather forecast |
 
+## Focus site blocking (Pi-hole)
+
+**Deprecated for the maintainer deployment (2026-09-29)** — LAN DNS is on the router, so Pi-hole blocking can't reach clients; `.env` keeps `FOCUS_BLOCKING_ENABLED=false`. Still supported for installs whose clients resolve only through Pi-hole. See `docs/FOCUS_AND_PIHOLE.md`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FOCUS_BLOCKING_ENABLED` | `false` (config, compose and `.env.example` agree) | Master switch for focus-mode DNS blocking. Off → focus sessions run without blocking and never claim it. |
+| `PIHOLE_URLS` | (empty) | Comma-separated Pi-hole v6 API URLs; blocking is applied to all concurrently. Empty = no blocking. |
+| `PIHOLE_PASSWORD` | (empty) | Pi-hole admin password (API auth). |
+| `PIHOLE_FOCUS_GROUP` | `focus_blocklist` | Pi-hole group toggled by `start_focus`/`stop_focus`. An empty group is a no-op and is NOT reported as blocked. |
+
 ## Notifications
 
 | Variable | Default | Purpose |

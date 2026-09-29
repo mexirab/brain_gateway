@@ -354,8 +354,9 @@ daily:
 
 ### start_focus
 ```json
-{"duration_minutes": 30, "blocking": true}
+{"task": "writing", "duration": 30, "block_sites": true}
 ```
+- `block_sites` (bool, optional, default true): *requests* DNS blocking. The result only states sites are blocked when `pihole_client.blocking_confirmed(result)` is true (multi-client `success` AND aggregated `details["domains_toggled"] > 0`); no-ops (blocking disabled, no Pi-holes, empty group) are not claimed. Blocking is deprecated on the maintainer deployment (`FOCUS_BLOCKING_ENABLED=false`) — see `docs/FOCUS_AND_PIHOLE.md`.
 
 ### stop_focus
 ```json

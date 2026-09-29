@@ -15,7 +15,7 @@ After code changes pass linting as the final step in the post-implementation pip
 | File | Scope |
 |------|-------|
 | `CLAUDE.md` | Essential overview — cluster, services, architecture, tools, key files, commands, notes |
-| `docs/FOCUS_AND_PIHOLE.md` | Focus timer, Pi-hole DNS, Nebula Sync, blocking groups |
+| `docs/FOCUS_AND_PIHOLE.md` | Focus timer, Pi-hole blocking (deprecated for this deployment), Nebula Sync (historical), blocking groups |
 | `docs/VOICE_AND_TTS.md` | ATOM Echo voice assistant, TTS pacing, Wyoming bridges |
 | `docs/GOOGLE_INTEGRATIONS.md` | Calendar, Gmail, phone sync, travel-time, OAuth2 setup |
 | `docs/FRONTEND.md` | Dashboard pages, widgets, YNAB finance, API proxy, deploy |

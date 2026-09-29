@@ -280,7 +280,7 @@ STATIC_TOOLS = [
                     },
                     "block_sites": {
                         "type": "boolean",
-                        "description": "ALWAYS true unless user explicitly says 'without blocking' or 'no blocking'. Do not set to false unless explicitly requested.",
+                        "description": "Request DNS site blocking (default true; set false only if the user says 'without blocking' or 'no blocking'). Blocking may be unavailable — only tell the user sites are blocked if the tool result says so.",
                     },
                     "check_ins": {
                         "type": "boolean",
