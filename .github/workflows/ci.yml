@@ -12,12 +12,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # `src` must be set: ruff-action appends it to the command and defaults
+      # to the repo root, which (on ruff >=0.16) also format-checks Python
+      # blocks inside markdown docs. Version pinned so a ruff release can't
+      # break CI on an unrelated push; bump it deliberately.
       - uses: astral-sh/ruff-action@v3
         with:
-          args: check orchestrator/
+          version: "0.16.9"
+          args: check
+          src: orchestrator
       - uses: astral-sh/ruff-action@v3
         with:
-          args: format --check orchestrator/
+          version: "0.16.9"
+          args: format --check
+          src: orchestrator
 
   check-dashboards:
     name: Grafana Dashboards In Sync
