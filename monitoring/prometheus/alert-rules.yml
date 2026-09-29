@@ -199,8 +199,12 @@ groups:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
           description: "{{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
 
+      # Helios GPU0 (RTX 5090) is excluded: vLLM pre-allocates it at startup
+      # (--gpu-memory-utilization 0.93 → ~95.6% used, flat), so the ratio is
+      # permanently over the line and carries no signal. A brain problem shows
+      # up as the model endpoint going down, not as VRAM creep.
       - alert: HighVRAMUsage
-        expr: nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes > 0.95
+        expr: nvidia_smi_memory_used_bytes{uuid!="188c12a4-a819-3222-9f48-d47811befb6f"} / nvidia_smi_memory_total_bytes > 0.95
         for: 5m
         labels:
           severity: warning
