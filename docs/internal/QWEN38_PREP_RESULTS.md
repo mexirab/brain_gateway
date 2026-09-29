@@ -658,7 +658,7 @@ zero real-world effect.
 | "Turn off the back porch light" (already off) | fast-path (not the model) | ok, no-op |
 | Rephrased office-lamp request (already off) | **model → `home_assistant`** `turn_off light.office_floor_lamp` | ok, no-op, lamp still off |
 | Set a stretch reminder, then cancel it in a follow-up | model → `set_reminder`, `check_system`, `cancel_reminder` | ok; the APScheduler job was really removed |
-| Evening meds / morning meds (streamed) | structured facts block | correct (Guanfacine; Vyvanse Mon–Fri, Naltrexone, Wellbutrin) |
+| Evening meds / morning meds (streamed) | structured facts block | correct (matched the meds YAML, incl. a weekday-only med) |
 | Calendar tomorrow | model → `check_calendar` | ok (clear) |
 | Coffee preferences | model → `search_memory` ×2 | ok (honestly: nothing stored) |
 | Meds left tonight + calendar tomorrow | model → `selfcare_log{action:check}` + `check_calendar` | ok. `check` is read-only; no new selfcare row |
