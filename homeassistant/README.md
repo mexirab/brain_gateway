@@ -8,7 +8,7 @@ orchestrator's build/deploy never touches it.
 
 | File | What |
 |------|------|
-| `docker-compose.yml` | HA Container service. `network_mode: host` (Cast/mDNS), pinned to `2026.5.1`. |
+| `docker-compose.yml` | HA Container service. `network_mode: host` (Cast/mDNS), pinned to `2026.8.3` (bumped from `2026.5.1` on 2026-09-01; see the compose comment). |
 | `backup_ha.sh` | Nightly consistent backup → Saturn + Prometheus freshness metric. |
 
 Full runbook — migration history, run/upgrade, backup/restore, failover — is in

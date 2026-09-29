@@ -4,8 +4,9 @@
 # orchestrator's build/deploy. See docs/HA.md for the full runbook.
 #
 # network_mode: host is REQUIRED so Cast/mDNS can discover the Google/Nest
-# speakers on the 10.0.0.x subnet. Pinned to the version the Pi ran (2026.5.1)
-# so a migration doesn't also become an upgrade — bump deliberately later.
+# speakers on the 10.0.0.x subnet. Pinned deliberately; bumped 2026-09-01 from
+# 2026.5.1 (the version carried over from the Pi) to 2026.8.3, because the
+# Starling Home Hub HACS integration declares a 2026.8.2 minimum in hacs.json.
 #
 # The /config volume is external runtime state (~125 MB: .storage/, recorder DB,
 # custom_components) and lives OUTSIDE the repo at /home/labadmin/homeassistant/
@@ -13,7 +14,7 @@
 services:
   homeassistant:
     container_name: homeassistant
-    image: ghcr.io/home-assistant/home-assistant:2026.5.1
+    image: ghcr.io/home-assistant/home-assistant:2026.8.3
     volumes:
       - /home/labadmin/homeassistant/config:/config
       - /etc/localtime:/etc/localtime:ro
