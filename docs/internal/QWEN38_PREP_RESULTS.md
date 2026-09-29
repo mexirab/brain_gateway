@@ -717,6 +717,11 @@ recreate the orchestrator. The Qwen3.6 weights and the v0.19.1 image are still o
   touched is `ToolCallsSilentlyDropped`; earlier references in this doc to a
   "`JessToolCallsDropped`" alert were wrong about the name.
 
+- **Draft unit removed** (2026-09-29): `tts/vllm-primary-qwen38.service.draft`
+  was superseded by the deployed `tts/vllm-primary.service` and deleted. Earlier
+  sections of this doc still mention it by name as a record of what was done;
+  recover it from git history if needed.
+
 ## Sources
 
 - <https://github.com/MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090>
