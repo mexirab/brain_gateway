@@ -1,0 +1,20 @@
+[Unit]
+Description=Parakeet STT (ONNX/CPU) for Brain Gateway - port 8003
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=labadmin
+WorkingDirectory=/home/labadmin
+Environment="PATH=/home/labadmin/parakeet-env/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="CUDA_VISIBLE_DEVICES="
+Environment="STT_ONNX_MODEL=nemo-parakeet-tdt-0.6b-v2"
+Environment="STT_ONNX_QUANT=int8"
+Environment="PARAKEET_PORT=8003"
+ExecStart=/home/labadmin/parakeet-env/bin/python /home/labadmin/stt_server_onnx.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

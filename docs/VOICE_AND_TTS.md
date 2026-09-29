@@ -58,7 +58,7 @@ Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry o
 
 Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT used by Open WebUI's browser mic and any orchestrator-side transcription via `STT_URL=http://host.docker.internal:8003`.
 
-**Live engine:** `stt-onnx.service` — NVIDIA Parakeet TDT 0.6b **v2**, int8, ONNX Runtime on **CPU**. Same port and same endpoints (`/health`, `/transcribe`, `/v1/audio/transcriptions`). Deployed on Helios; its source (`stt_server_onnx.py` + unit) is not yet committed to the repo.
+**Live engine:** `stt-onnx.service` — NVIDIA Parakeet TDT 0.6b **v2**, int8, ONNX Runtime on **CPU**. Same port and same endpoints (`/health`, `/transcribe`, `/v1/audio/transcriptions`). Source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service` (deployed on Helios as `/home/labadmin/stt_server_onnx.py`).
 
 **Disabled GPU alternative:** `parakeet-stt.service` — Parakeet TDT v3 (`nvidia/parakeet-tdt-0.6b-v3`) via NeMo on GPU1. It replaced Whisper medium on 2026-04-26 with no API change; English-only, ~10× faster than Whisper medium with lower WER per the wrapper docstring. Swap back with `systemctl disable --now stt-onnx && systemctl enable --now parakeet-stt` (they share port 8003 — never run both). Runbook: `tts/README_PARAKEET.md`.
 

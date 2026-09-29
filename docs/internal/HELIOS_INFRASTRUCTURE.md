@@ -70,7 +70,7 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 |-----|------|------|---------|
 | GPU0 | RTX 5090 | 32 GB | vLLM primary only (`vllm-primary.service`, port 8080, `RadixArk/Qwen3.8-27B-NVFP4`, ~30 GB used) |
 | GPU1 | RTX PRO 5000 Blackwell | 48 GB | TTS (`qwen-tts.service`, port 8002, `Qwen3-TTS-1.7B-Base`, voice `jessica`), Coder (`llama-server-coder.service`, port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) |
-| CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; deployed on Helios, source not yet committed to the repo) |
+| CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`) |
 
 - **TTS on GPU1 via drop-in** `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28). Before that it silently ran on the 5090: the unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`, despite its Description saying GPU1. Revert: delete the file, `daemon-reload`, `restart qwen-tts`.
 - `llama-server-coder.service`'s Description says GPU0 — wrong; it runs on GPU1.

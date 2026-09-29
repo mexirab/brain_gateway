@@ -4,7 +4,7 @@ FastAPI servers for Qwen3-TTS and Parakeet STT, running on Helios (10.0.0.195) a
 
 **Deployment (as of 2026-09-28):**
 - Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`) on port 8002, GPU1 (RTX PRO 5000 Blackwell, 48GB) next to the code agent. The unit sets `QWEN_TTS_DEVICE=cuda:0`; the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`. Without it TTS lands on GPU0 (RTX 5090), which the Qwen3.8 brain needs to itself.
-- STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU (deployed on Helios; source not yet committed to the repo).
+- STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU (source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service`).
 - `parakeet-stt.service` (NeMo, Parakeet v3, GPU1 via `CUDA_VISIBLE_DEVICES=1`) is the **disabled** GPU alternative on the same port/API — it replaced the old Whisper HTTP STT server on 2026-04-26. See `README_PARAKEET.md`.
 
 Wyoming bridges in Docker on Helios wrap these for Home Assistant: `wyoming-whisper` (:10300, still `wyoming-faster-whisper` — the HA voice-pipeline STT, independent of the HTTP STT server above) and `wyoming-jessica-tts` (:10301).
@@ -114,7 +114,7 @@ sudo systemctl daemon-reload && sudo systemctl restart qwen-tts
 | `PARAKEET_DEVICE` | `cuda:1` | Device; the unit sets `cuda:0` + `CUDA_VISIBLE_DEVICES=1` |
 | `PARAKEET_PORT` | `8003` | Server port |
 
-These apply to the disabled NeMo server. The live `stt-onnx` server's config lives with its (uncommitted) source on Helios.
+These apply to the disabled NeMo server. The live `stt-onnx` server is configured via `STT_ONNX_MODEL` / `STT_ONNX_QUANT` / `PARAKEET_PORT` in `tts/stt-onnx.service`.
 
 ## API Endpoints
 
