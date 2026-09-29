@@ -4942,7 +4942,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
+        "w": 8,
         "x": 0,
         "y": 134
       },
@@ -5011,8 +5011,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 6,
+        "w": 8,
+        "x": 8,
         "y": 134
       },
       "id": 67
@@ -5108,96 +5108,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 12,
+        "w": 8,
+        "x": 16,
         "y": 134
       },
       "id": 68
-    },
-    {
-      "type": "timeseries",
-      "title": "Pi-hole Blocking Toggles",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "sum by (action) (rate(bgw_pihole_blocking_toggles_total[1h])) * 3600",
-          "legendFormat": "{{action}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 18,
-        "y": 134
-      },
-      "id": 69
     },
     {
       "type": "row",
@@ -5210,7 +5125,7 @@
         "x": 0,
         "y": 142
       },
-      "id": 70
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -5307,7 +5222,7 @@
         "x": 0,
         "y": 143
       },
-      "id": 71
+      "id": 70
     },
     {
       "type": "timeseries",
@@ -5392,7 +5307,7 @@
         "x": 8,
         "y": 143
       },
-      "id": 72
+      "id": 71
     },
     {
       "type": "timeseries",
@@ -5489,7 +5404,7 @@
         "x": 16,
         "y": 143
       },
-      "id": 73
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5574,7 +5489,7 @@
         "x": 0,
         "y": 151
       },
-      "id": 74
+      "id": 73
     },
     {
       "type": "timeseries",
@@ -5671,7 +5586,7 @@
         "x": 12,
         "y": 151
       },
-      "id": 75
+      "id": 74
     },
     {
       "type": "row",
@@ -5684,7 +5599,7 @@
         "x": 0,
         "y": 159
       },
-      "id": 76
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5769,7 +5684,7 @@
         "x": 0,
         "y": 160
       },
-      "id": 77
+      "id": 76
     },
     {
       "type": "timeseries",
@@ -5854,7 +5769,7 @@
         "x": 8,
         "y": 160
       },
-      "id": 78
+      "id": 77
     },
     {
       "type": "timeseries",
@@ -5951,7 +5866,7 @@
         "x": 16,
         "y": 160
       },
-      "id": 79
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -6036,7 +5951,7 @@
         "x": 0,
         "y": 168
       },
-      "id": 80
+      "id": 79
     },
     {
       "type": "timeseries",
@@ -6145,7 +6060,7 @@
         "x": 8,
         "y": 168
       },
-      "id": 81
+      "id": 80
     },
     {
       "type": "piechart",
@@ -6216,7 +6131,7 @@
         "x": 16,
         "y": 168
       },
-      "id": 82
+      "id": 81
     },
     {
       "type": "row",
@@ -6229,7 +6144,7 @@
         "x": 0,
         "y": 176
       },
-      "id": 83
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -6314,7 +6229,7 @@
         "x": 0,
         "y": 177
       },
-      "id": 84
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -6411,7 +6326,7 @@
         "x": 8,
         "y": 177
       },
-      "id": 85
+      "id": 84
     },
     {
       "type": "timeseries",
@@ -6508,7 +6423,7 @@
         "x": 16,
         "y": 177
       },
-      "id": 86
+      "id": 85
     },
     {
       "type": "row",
@@ -6521,7 +6436,7 @@
         "x": 0,
         "y": 185
       },
-      "id": 87
+      "id": 86
     },
     {
       "type": "timeseries",
@@ -6631,7 +6546,7 @@
         "x": 0,
         "y": 186
       },
-      "id": 88
+      "id": 87
     },
     {
       "type": "stat",
@@ -6698,7 +6613,7 @@
         "x": 6,
         "y": 186
       },
-      "id": 89
+      "id": 88
     },
     {
       "type": "stat",
@@ -6765,7 +6680,7 @@
         "x": 12,
         "y": 186
       },
-      "id": 90
+      "id": 89
     },
     {
       "type": "timeseries",
@@ -6862,7 +6777,7 @@
         "x": 18,
         "y": 186
       },
-      "id": 91
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6971,7 +6886,7 @@
         "x": 0,
         "y": 194
       },
-      "id": 92
+      "id": 91
     },
     {
       "type": "timeseries",
@@ -7084,7 +6999,7 @@
         "x": 8,
         "y": 194
       },
-      "id": 93
+      "id": 92
     },
     {
       "type": "timeseries",
@@ -7182,7 +7097,7 @@
         "x": 16,
         "y": 194
       },
-      "id": 94
+      "id": 93
     },
     {
       "type": "row",
@@ -7195,7 +7110,7 @@
         "x": 0,
         "y": 202
       },
-      "id": 95
+      "id": 94
     },
     {
       "type": "timeseries",
@@ -7280,7 +7195,7 @@
         "x": 0,
         "y": 203
       },
-      "id": 96
+      "id": 95
     },
     {
       "type": "timeseries",
@@ -7366,7 +7281,7 @@
         "x": 8,
         "y": 203
       },
-      "id": 97
+      "id": 96
     },
     {
       "type": "timeseries",
@@ -7452,7 +7367,7 @@
         "x": 16,
         "y": 203
       },
-      "id": 98
+      "id": 97
     },
     {
       "type": "row",
@@ -7465,7 +7380,7 @@
         "x": 0,
         "y": 211
       },
-      "id": 99
+      "id": 98
     },
     {
       "type": "stat",
@@ -7533,7 +7448,7 @@
         "x": 0,
         "y": 212
       },
-      "id": 100
+      "id": 99
     },
     {
       "type": "stat",
@@ -7601,7 +7516,7 @@
         "x": 6,
         "y": 212
       },
-      "id": 101
+      "id": 100
     },
     {
       "type": "timeseries",
@@ -7687,7 +7602,7 @@
         "x": 12,
         "y": 212
       },
-      "id": 102
+      "id": 101
     },
     {
       "type": "stat",
@@ -7755,7 +7670,7 @@
         "x": 18,
         "y": 212
       },
-      "id": 103
+      "id": 102
     },
     {
       "type": "row",
@@ -7768,7 +7683,7 @@
         "x": 0,
         "y": 220
       },
-      "id": 104
+      "id": 103
     },
     {
       "type": "stat",
@@ -7831,7 +7746,7 @@
         "x": 0,
         "y": 221
       },
-      "id": 105
+      "id": 104
     },
     {
       "type": "timeseries",
@@ -7917,7 +7832,7 @@
         "x": 8,
         "y": 221
       },
-      "id": 106
+      "id": 105
     },
     {
       "type": "stat",
@@ -7980,7 +7895,7 @@
         "x": 16,
         "y": 221
       },
-      "id": 107
+      "id": 106
     },
     {
       "type": "timeseries",
@@ -8070,7 +7985,7 @@
         "x": 0,
         "y": 229
       },
-      "id": 108
+      "id": 107
     },
     {
       "type": "stat",
@@ -8138,7 +8053,7 @@
         "x": 8,
         "y": 229
       },
-      "id": 109
+      "id": 108
     },
     {
       "type": "stat",
@@ -8206,7 +8121,7 @@
         "x": 16,
         "y": 229
       },
-      "id": 110
+      "id": 109
     },
     {
       "type": "row",
@@ -8219,7 +8134,7 @@
         "x": 0,
         "y": 237
       },
-      "id": 111
+      "id": 110
     },
     {
       "type": "logs",
@@ -8260,7 +8175,7 @@
         "x": 0,
         "y": 238
       },
-      "id": 112
+      "id": 111
     },
     {
       "type": "logs",
@@ -8301,7 +8216,7 @@
         "x": 12,
         "y": 238
       },
-      "id": 113
+      "id": 112
     }
   ]
 }

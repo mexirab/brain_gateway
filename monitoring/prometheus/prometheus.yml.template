@@ -48,11 +48,11 @@ scrape_configs:
   # ============================================
   - job_name: 'node-exporter'
     static_configs:
-      # Jupiter (Pi-hole primary + monitoring stack, no GPU)
+      # Jupiter (always-on hub: orchestrator, HA, monitoring stack; no GPU)
       - targets: ['${NODE_JUPITER_IP}:9100']
         labels:
           node: 'jupiter'
-          role: 'monitoring+pihole'
+          role: 'monitoring'
 
       # Helios (Gateway + primary LLM + TTS/STT + coder)
       - targets: ['${NODE_HELIOS_IP}:9100']
@@ -68,11 +68,11 @@ scrape_configs:
           role: 'comfyui'
           gpu: '2x-rtx5080'
 
-      # Saturn (Vision model + Pi-hole secondary)
+      # Saturn (off-box backup target; vision + Pi-hole retired 2026-09)
       - targets: ['${NODE_SATURN_IP}:9100']
         labels:
           node: 'saturn'
-          role: 'vision+pihole-secondary'
+          role: 'backup'
           gpu: 'rtx3080+rtx3090'
 
   # ============================================
@@ -144,12 +144,6 @@ scrape_configs:
         labels:
           service: 'llama-coder'
           node: 'helios'
-
-      # Vision model (Qwen2.5-VL-7B on Saturn)
-      - targets: ['http://${NODE_SATURN_IP}:8010/v1/models']
-        labels:
-          service: 'vision'
-          node: 'saturn'
 
       # Conjure API (PM2 on Jupiter)
       - targets: ['http://${NODE_JUPITER_IP}:5050/health']

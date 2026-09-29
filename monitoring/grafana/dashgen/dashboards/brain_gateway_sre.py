@@ -735,14 +735,8 @@ def build() -> dict:
             ],
             unit="m",
         ),
-        timeseries(
-            "Pi-hole Blocking Toggles",
-            [("sum by (action) (rate(bgw_pihole_blocking_toggles_total[1h])) * 3600", "{{action}}")],
-            unit="none",
-            stack=True,
-        ),
     ]
-    row, y = grid_row(focus_row, y, heights=[8, 8, 8, 8])
+    row, y = grid_row(focus_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Calendar + Gmail + Email→Cal
