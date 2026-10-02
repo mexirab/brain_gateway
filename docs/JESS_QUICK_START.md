@@ -270,7 +270,7 @@ These ship in the codebase but are gated behind `JESS_ADVANCED=true` in `.env`. 
 | `code_agent` | Delegate a coding task to a local Qwen3-Coder-Next 80B/3B MoE (needs significant VRAM) |
 | `ask_expert` | Delegate a hard reasoning task to a separate Qwen3-32B "expert" model (needs a second GPU box) |
 | `query_budget` | Query historical budget/spending data from CSV/Excel imports |
-| `finance_status` | YNAB integration: budget, spending, XP/levels |
+| `finance_status` | Current-period budget, spending, XP/levels, synced read-only from a self-hosted Actual Budget server (`ACTUAL_*` in `.env`; works in manual-entry mode without it) |
 
 Enable with `JESS_ADVANCED=true` in `.env` and re-create the orchestrator container.
 

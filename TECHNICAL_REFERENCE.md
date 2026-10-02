@@ -202,6 +202,20 @@ Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bg
 
 Responses are never cached. No local copy is persisted on Helios — Paperless owns the file once it returns a task id. Metrics: `bgw_paperless_upload_total{result,reason}` (labels: `result` ∈ `{ok, fail, skipped}`, `reason` ∈ `{ok, http_4xx, http_5xx, timeout, connect_error, other, disabled, missing_url, missing_token, file_too_large, file_missing}`), `bgw_paperless_upload_latency_seconds`.
 
+### Finance — Budget Sync (Actual Budget)
+
+Router: `finance_manager.router` (`/api/finance/*`). All bearer-gated; all return `{"ok": bool, ...}`. Failure codes: 400 not configured, 409 busy, 422 bad body, 502 upstream (Actual) failure. Replaced `/api/finance/ynab/*` (removed 2026-10-02). Read-only against Actual — nothing is ever committed back.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/finance/sync/status` | No network call. `{ok, provider:"actual", configured, connected, budget_name, last_synced_at, last_attempt_at, last_error, last_result, category_count, discretionary_count}`. `connected` = most recent attempt succeeded. |
+| POST | `/api/finance/sync` | Manual sync. Within 60 s of the last attempt returns the stored result with `cooldown:true` (502 if that attempt failed) instead of re-downloading. Success: `{ok, synced, inserted, updated, deleted, legacy_removed, skipped_inflows, window_start, fun_money_category, fun_money_balance}`. |
+| GET | `/api/finance/categories` | `{ok, budget_name, groups:[{group_name, categories:[{name, is_discretionary, budgeted, activity, balance}]}]}` for this month (income + hidden categories omitted). Served from the last snapshot for 15 min (syncs first when stale); a failure is negative-cached for 2 min. |
+| POST | `/api/finance/categories/mapping` | Body `CategoryMappingRequest` (`schemas.py`): `{mappings: {"<category>": bool}}` — `StrictBool` values (string `"false"` rejected), 1–1000 entries, names 1–200 chars. Re-flags every synced row and recomputes `discretionary_spent`. Returns `{ok, success, updated}`. |
+| POST | `/api/finance/sync/reset` | Deletes all `source='actual'` rows + `budget_sync_state`, clears the category caches; next sync re-imports. |
+
+**Sync semantics** (`finance_manager.apply_snapshot` / `actual_client.fetch_snapshot`): mirrors the last `ACTUAL_SYNC_MONTHS` months. Spending = outflows from on-budget accounts, split legs individually; all transfers (incl. categorized transfers to off-budget accounts) excluded; inflows skipped. Rows are upserted by `external_id`, rows gone upstream are deleted, legacy `source='ynab'` rows inside the window are replaced. `discretionary_spent` is recomputed from rows (manual entries count); current-month `discretionary_budget` = Fun Money balance + spent, so the health bar remaining equals Actual's category balance. One sync at a time (`asyncio.Lock`, callers get `busy`); the download runs on a dedicated single-worker executor with a 120 s timeout and refuses to start while a timed-out download is still running. Errors pass through `actual_client.safe_error()` (URL credentials stripped). Scheduler job `budget_sync` every `ACTUAL_SYNC_INTERVAL` min. Metrics: `bgw_budget_sync_total{result=ok|error|busy}`, `bgw_budget_sync_last_success_timestamp_seconds`; alert `BudgetSyncFailing`.
+
 ### Claude Code Integration
 
 | Method | Path | Purpose |
@@ -594,6 +608,17 @@ Append-only audit log written by `config_writer.log_config_change(panel, before,
 | `after` | TEXT | Redacted JSON snapshot of the new value. |
 | `changed_at` | TEXT | ISO 8601 timestamp. |
 
+## SQLite Schema (`finance.db`)
+
+Defined in `orchestrator/finance_manager.py::SCHEMA_SQL`; created by `setup_finance()` → `init_db()`, called unconditionally at startup. `_migrate_schema()` upgrades a YNAB-era DB in place (adds `external_id`, backfills `"ynab:<id>"`, copies the old category mappings). Budget-sync tables only:
+
+| Table / column | Notes |
+|----------------|-------|
+| `transactions.external_id` | `"<provider>:<id>"` for synced rows (`actual:<uuid>`; legacy `ynab:<id>`), NULL for manual. Unique index `idx_transactions_external_id`. |
+| `transactions.source` | `actual` \| `ynab` (legacy, outside the sync window) \| `manual`. |
+| `budget_sync_state` | Single row (`id = 1`): `provider`, `budget_name`, `last_synced_at`, `last_attempt_at`, `last_error` (≤500 chars, credential-stripped), `last_result` (JSON). |
+| `category_mapping` | `category_name` PK, `is_discretionary` 0/1. Unmapped categories count as non-discretionary. |
+
 ## Environment Variables
 
 See `.env.example` for full list. Key vars:
@@ -617,6 +642,7 @@ See `.env.example` for full list. Key vars:
 | WIND_DOWN_BEDTIME | HH:MM bedtime anchor (default: 22:30) |
 | WIND_DOWN_SCENE | Comma-separated HA scene ids for the lights rung (empty = skip) |
 | WIND_DOWN_SHORT_NIGHT_HOURS | Short-night threshold for the gentle morning briefing (default: 6.5) |
+| ACTUAL_* | Actual Budget sync (URL, password, budget file, interval, window, fun-money category) — see `docs/ENV_VARS.md` → Finance |
 
 ## External APIs
 
@@ -625,3 +651,4 @@ See `.env.example` for full list. Key vars:
 | Home Assistant | http://10.0.0.248:8123/api | Bearer token |
 | Google Calendar | https://www.googleapis.com/calendar/v3 | OAuth2 bearer token |
 | SearXNG | http://searxng:8080 (internal) | None |
+| Actual Budget (via `actualpy`, read-only) | http://host.docker.internal:5006 (Jupiter `actual-budget`) | Server password (`ACTUAL_PASSWORD`) |

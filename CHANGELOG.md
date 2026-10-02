@@ -4,6 +4,44 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Actual Budget replaces YNAB (2026-10-02)
+
+Branch `feat/actual-budget`. Finance (Financial Quest Board) now syncs read-only from a self-hosted Actual Budget server; the YNAB integration is removed.
+
+### Changed
+
+- **Budget sync: YNAB → Actual Budget.** New `orchestrator/actual_client.py` wraps `actualpy` (`>=0.22.4,<0.23`, replaces the unused `ynab` package): `fetch_snapshot()` downloads the budget into a temp dir, extracts on-budget non-transfer transactions in the window (split legs individually; all transfers — incl. categorized transfers to off-budget accounts — excluded, see module docstring) and this month's category budgeted/spent/balance, and never commits. Dedicated single-worker executor, 120 s timeout, refuses to start while a timed-out download is still running; startup sweeps stale `actual-sync-*` temp dirs; errors pass through `safe_error()` (URL credentials stripped). Verified end-to-end against a throwaway actual-server 26.9.0.
+- `finance_manager.py`: provider-neutral schema — `transactions.external_id` (`actual:<uuid>`, unique index), new `budget_sync_state` + `category_mapping` tables; `_migrate_schema()` upgrades a YNAB-era `finance.db` (`external_id` backfilled `ynab:<id>`, mappings copied). `apply_snapshot()` mirrors the last `ACTUAL_SYNC_MONTHS`: upsert, delete rows gone upstream, replace legacy `source='ynab'` rows inside the window, recompute `discretionary_spent` from rows (manual entries count), health-bar budget = Fun Money balance + spent. `sync_budget_transactions()` never raises; returns `busy` instead of queueing.
+- API: `GET /api/finance/sync/status`, `POST /api/finance/sync` (60 s cooldown), `GET /api/finance/categories` (15-min snapshot cache, 2-min negative cache), `POST /api/finance/categories/mapping` (Pydantic `CategoryMappingRequest`, `StrictBool`), `POST /api/finance/sync/reset`. All bearer-gated, all return `{ok, ...}`; 400 / 409 / 422 / 502. `/api/finance/ynab/*` removed.
+- Env: `ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD`, `ACTUAL_BUDGET_FILE`, `ACTUAL_ENCRYPTION_PASSWORD`, `ACTUAL_SYNC_INTERVAL` (30, min 5), `ACTUAL_SYNC_MONTHS` (3, 1–24), `ACTUAL_FUN_MONEY_CATEGORY` (`Fun Money`); `validate_actual_config` auto-disables on incomplete config. `YNAB_*` removed.
+- Scheduler job `budget_sync` (was `ynab_sync`), first run 30 s after start; weekly spending summary + mid-month warning registered only when the sync is configured.
+- `finance_status` reports "Actual Budget: connected / last sync FAILED (<ExceptionClass>; …) / not configured"; tool descriptions updated.
+- Dashboard: `finance-api.ts` / `finance-types.ts` (`BudgetSyncStatus`, `Transaction.source` `actual|ynab|manual`), quest board (Sync shown whenever configured, "Last sync failed" link), finance settings (Actual connection card, `last_error` alert, category mapping), transactions (Synced filter, Actual/YNAB badge), SystemDiagram label.
+
+### Fixed
+
+- **`setup_finance()` was never called** — `finance.db` had 0 tables and every `/api/finance/*` request 500'd. Now runs unconditionally at startup (after `progress_tracker.init_db()`).
+
+### Monitoring
+
+- Metrics `bgw_budget_sync_total{result=ok|error|busy}` (series pre-created), `bgw_budget_sync_last_success_timestamp_seconds`. Alert `BudgetSyncFailing` (warning → quiet Pushover; counter-based so it fires even if the sync never succeeded since restart; 6h window, `for: 30m`). Grafana row "Budget Sync (Actual)" in `brain_gateway_sre` (sync age, outcomes, `[ACTUAL]` logs).
+
+### Tests
+
+- `orchestrator/tests/test_actual_budget_sync.py` (30).
+
+### Known gaps / operator to-dos (not done)
+
+- **HIGH:** the Actual server's own data (`/opt/apps/actual/data`) is not backed up by anything (only a one-off `~/actual-backup-2026-09-25.tar.gz` on the same disk), and the existing off-box backups to Saturn are failing while Saturn is down. Actual is now the finance source of truth.
+- `actual-budget` runs unpinned `actualbudget/actual-server:latest` — pin to 26.9.0 and bump together with `actualpy`. The orchestrator effectively trusts the server (actualpy runs server-provided migration SQL locally).
+- Revoke the old YNAB access token; delete `YNAB_*` lines from the live `.env` (ignored, but stale secrets).
+
+### Docs
+
+- `CLAUDE.md` (Services, Tools, Key Files, Notes bullet), `docs/ENV_VARS.md` (new Finance section), `TECHNICAL_REFERENCE.md` (Finance API, `finance.db` schema, env + external API rows), `docs/FRONTEND.md`, `COMMANDS.md`, `docs/JESS_QUICK_START.md`, `docs/JESS_SELF_KNOWLEDGE.md`, `homepage/config/services.yaml` descriptions.
+
+---
+
 ## [Unreleased] — llama.cpp brain cutover (2026-10-02)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) still ship vLLM.

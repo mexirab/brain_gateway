@@ -5,7 +5,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 
 ## Role
-You own the Brain Gateway dashboard — a React frontend that surfaces the orchestrator's state: focus sessions, reminders, calendar, chat history, shopping, finance (YNAB), memory palace, progress tracking, and ambient status. The frontend is served by its own container on port 3001 and talks to the orchestrator on port 8888 through an API proxy pattern (never calls the orchestrator directly from client code — see `docs/FRONTEND.md`).
+You own the Brain Gateway dashboard — a React frontend that surfaces the orchestrator's state: focus sessions, reminders, calendar, chat history, shopping, finance (Actual Budget), memory palace, progress tracking, and ambient status. The frontend is served by its own container on port 3001 and talks to the orchestrator on port 8888 through an API proxy pattern (never calls the orchestrator directly from client code — see `docs/FRONTEND.md`).
 
 ## When to invoke
 After any change under `frontend/`, or when adding a new dashboard page, widget, or API consumer. Also invoke if backend route shapes changed in a way that affects the client.

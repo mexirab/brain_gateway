@@ -1086,6 +1086,41 @@ def build() -> dict:
     row, y = grid_row(wind_down_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Budget Sync
+    # Actual Budget read-only sync (replaced YNAB 2026-10). The
+    # BudgetSyncFailing alert (quiet Pushover) is counter-based so it also
+    # fires for a sync that has never succeeded since a restart; these panels
+    # are the forensic view.
+    r, y = row_divider("Budget Sync (Actual)", y)
+    panels.append(r)
+
+    budget_row = [
+        stat(
+            "Budget Sync Age",
+            "time() - (bgw_budget_sync_last_success_timestamp_seconds > 0)",
+            unit="s",
+            thresholds=[(None, "green"), (7200, "orange"), (21600, "red")],
+            description="Seconds since the last successful Actual Budget sync (every "
+            "ACTUAL_SYNC_INTERVAL, default 30 min). 'No data' means no success since "
+            "the orchestrator last started, or the sync is not configured — check "
+            "Budget Sync Outcomes and GET /api/finance/sync/status (last_error).",
+        ),
+        timeseries(
+            "Budget Sync Outcomes (/h)",
+            [("sum by (result) (increase(bgw_budget_sync_total[1h]))", "{{result}}")],
+            unit="none",
+            description="ok | error | busy per hour. 'busy' = a manual sync or the "
+            "settings page overlapped a running one (harmless); sustained 'error' "
+            "with no 'ok' triggers BudgetSyncFailing.",
+        ),
+        logs(
+            "Budget Sync Logs",
+            '{container="brain-orchestrator"} |= "[ACTUAL]"',
+        ),
+    ]
+    row, y = grid_row(budget_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Background Jobs
     r, y = row_divider("Background Jobs", y)
     panels.append(r)

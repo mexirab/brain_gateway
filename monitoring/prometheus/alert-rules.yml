@@ -349,6 +349,20 @@ groups:
         annotations:
           summary: "Evening briefing has not fired in over a day"
           description: "Last evening ritual was {{ $value | humanizeDuration }} ago - should run daily; orchestrator/scheduler may be down."
+      - alert: BudgetSyncFailing
+        # Counter-based, not the last-success gauge: the gauge is 0 until the
+        # first success after each restart, so a "gauge > 0" guard would never
+        # fire for a sync that has NEVER succeeded (wrong password after a
+        # deploy, an actual-server upgrade the pinned actualpy can't read).
+        # 6h = 12 missed 30-min syncs. Silent when the sync is unconfigured
+        # (no attempts at all). Quiet receiver: stale budget data isn't a page.
+        expr: (sum(increase(bgw_budget_sync_total{result="error"}[6h])) > 0) unless (sum(increase(bgw_budget_sync_total{result="ok"}[6h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Actual Budget sync has not succeeded in 6h"
+          description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
       - alert: WindDownNudgeStale
         # 25.5h, matching the dashboard panel's orange threshold: the largest
         # legitimate gap is 25h (the DST fall-back night) plus the 300s

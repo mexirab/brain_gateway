@@ -13,19 +13,10 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { financeApi } from '@/lib/finance-api';
+import type { BudgetSyncStatus } from '@/lib/finance-types';
 import { formatCurrency } from '@/lib/finance-utils';
 import { Card, Button } from '@/components/ui';
 
-interface YnabStatus {
-  configured: boolean;
-  connected: boolean;
-  budget_id: string | null;
-  budget_name: string | null;
-  last_synced_at: string | null;
-  server_knowledge: number | null;
-  category_count: number;
-  discretionary_count: number;
-}
 
 interface CategoryGroup {
   group_name: string;
@@ -39,7 +30,7 @@ interface CategoryGroup {
 }
 
 export default function SettingsPage() {
-  const [status, setStatus] = useState<YnabStatus | null>(null);
+  const [status, setStatus] = useState<BudgetSyncStatus | null>(null);
   const [groups, setGroups] = useState<CategoryGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -53,23 +44,33 @@ export default function SettingsPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const statusRes = await financeApi.getYnabStatus();
+      const statusRes = await financeApi.getSyncStatus();
       setStatus(statusRes);
 
-      if (statusRes.configured && statusRes.connected) {
-        const catRes = await financeApi.getYnabCategories();
-        setGroups(catRes.groups);
-        // Auto-expand groups that have discretionary categories
-        const expanded = new Set<string>();
-        for (const g of catRes.groups) {
-          if (g.categories.some((c) => c.is_discretionary)) {
-            expanded.add(g.group_name);
+      // Categories come from the last good sync (the backend syncs first if
+      // it has none cached), so load them whenever a budget is configured.
+      if (statusRes.configured) {
+        try {
+          const catRes = await financeApi.getBudgetCategories();
+          setGroups(catRes.groups);
+          // Auto-expand groups that have discretionary categories
+          const expanded = new Set<string>();
+          for (const g of catRes.groups) {
+            if (g.categories.some((c) => c.is_discretionary)) {
+              expanded.add(g.group_name);
+            }
           }
+          setExpandedGroups(expanded);
+        } catch (err) {
+          // A 502 here means the backend just attempted a sync and it failed;
+          // re-read status so the card shows that attempt's error, not the
+          // pre-sync state we loaded above.
+          console.error('Failed to load budget categories:', err);
+          setStatus(await financeApi.getSyncStatus());
         }
-        setExpandedGroups(expanded);
       }
     } catch (err) {
-      console.error('Failed to load YNAB status:', err);
+      console.error('Failed to load budget sync status:', err);
     } finally {
       setLoading(false);
     }
@@ -83,31 +84,39 @@ export default function SettingsPage() {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const result = await financeApi.triggerYnabSync();
+      const result = await financeApi.triggerSync();
       if (result.error) {
         setSyncResult(`Error: ${result.error}`);
       } else {
-        setSyncResult(`Synced ${result.synced} transactions`);
+        setSyncResult(
+          `Synced: ${result.inserted ?? 0} new, ${result.updated ?? 0} updated, ${result.deleted ?? 0} removed`,
+        );
       }
-      // Reload status
-      const statusRes = await financeApi.getYnabStatus();
-      setStatus(statusRes);
-    } catch {
-      setSyncResult('Sync failed');
+    } catch (err) {
+      // 409 = a sync is already running; anything else shows in the
+      // connection card's last_error line after the status reload below.
+      const msg = err instanceof Error ? err.message : '';
+      setSyncResult(msg.includes(' 409:') ? 'A sync is already running — try again shortly' : 'Sync failed');
     } finally {
+      // Reload status on failure too, so last_error reflects this attempt.
+      try {
+        setStatus(await financeApi.getSyncStatus());
+      } catch {
+        // status reload failed — keep the previous card
+      }
       setSyncing(false);
     }
   }
 
   async function handleResetSync() {
-    if (!confirm('This will delete all YNAB transactions and re-sync from scratch. Continue?')) {
+    if (!confirm('This will delete all synced Actual Budget transactions and re-import them on the next sync. Continue?')) {
       return;
     }
     setResetting(true);
     try {
-      await financeApi.resetYnabSync();
+      await financeApi.resetSync();
       setSyncResult('Sync reset. Click "Sync Now" to re-import.');
-      const statusRes = await financeApi.getYnabStatus();
+      const statusRes = await financeApi.getSyncStatus();
       setStatus(statusRes);
     } catch {
       setSyncResult('Reset failed');
@@ -136,11 +145,11 @@ export default function SettingsPage() {
       await financeApi.updateCategoryMapping(pendingChanges);
       setPendingChanges({});
       // Reload categories to reflect new state
-      const catRes = await financeApi.getYnabCategories();
+      const catRes = await financeApi.getBudgetCategories();
       setGroups(catRes.groups);
       setSyncResult('Category mappings saved. Budget recalculated.');
       // Reload status for updated counts
-      const statusRes = await financeApi.getYnabStatus();
+      const statusRes = await financeApi.getSyncStatus();
       setStatus(statusRes);
     } catch {
       setSyncResult('Failed to save mappings');
@@ -172,7 +181,7 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-content-primary">Settings</h1>
         <p className="text-sm text-content-muted mt-0.5">
-          YNAB integration and category mapping
+          Actual Budget sync and category mapping
         </p>
       </div>
 
@@ -180,15 +189,17 @@ export default function SettingsPage() {
       <Card>
         <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider mb-3 flex items-center gap-2">
           <Link2 size={14} />
-          YNAB Connection
+          Actual Budget Connection
         </h3>
 
         {!status?.configured ? (
           <div className="text-center py-4">
             <XCircle size={32} className="text-content-muted mx-auto mb-2" />
-            <p className="text-content-secondary text-sm">YNAB not configured</p>
+            <p className="text-content-secondary text-sm">Actual Budget not configured</p>
             <p className="text-content-muted text-xs mt-1">
-              Set <code className="bg-surface-raised px-1 rounded">YNAB_ACCESS_TOKEN</code> in your .env
+              Set <code className="bg-surface-raised px-1 rounded">ACTUAL_SERVER_URL</code>,{' '}
+              <code className="bg-surface-raised px-1 rounded">ACTUAL_PASSWORD</code> and{' '}
+              <code className="bg-surface-raised px-1 rounded">ACTUAL_BUDGET_FILE</code> in your .env
               file to enable auto-tracking
             </p>
           </div>
@@ -199,13 +210,21 @@ export default function SettingsPage() {
               <div className="flex items-center gap-2">
                 {status.connected ? (
                   <CheckCircle size={18} className="text-success" />
-                ) : (
+                ) : status.last_attempt_at ? (
                   <XCircle size={18} className="text-danger" />
+                ) : (
+                  <Loader2 size={18} className="text-content-muted" aria-hidden="true" />
                 )}
                 <span
-                  className={`text-sm font-medium ${status.connected ? 'text-success' : 'text-danger'}`}
+                  className={`text-sm font-medium ${
+                    status.connected
+                      ? 'text-success'
+                      : status.last_attempt_at
+                        ? 'text-danger'
+                        : 'text-content-muted'
+                  }`}
                 >
-                  {status.connected ? 'Connected' : 'Disconnected'}
+                  {status.connected ? 'Connected' : status.last_attempt_at ? 'Last sync failed' : 'Not synced yet'}
                 </span>
               </div>
               {status.budget_name && (
@@ -214,6 +233,12 @@ export default function SettingsPage() {
                 </span>
               )}
             </div>
+
+            {status.last_error && (
+              <p className="text-xs text-danger break-words" role="alert">
+                {status.last_error}
+              </p>
+            )}
 
             {/* Sync info */}
             <div className="flex items-center justify-between text-sm">
@@ -271,7 +296,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Category Mapping */}
-      {status?.configured && status?.connected && groups.length > 0 && (
+      {status?.configured && groups.length > 0 && (
         <Card>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider flex items-center gap-2">

@@ -992,3 +992,22 @@ SELFCARE_LOGGED = Counter(
     "Self-care actions logged.",
     ["action"],  # meal | medication | water | movement
 )
+
+# ---------------------------------------------------------------------------
+# Budget sync (Actual Budget, replaced YNAB 2026-10) — finance_manager.sync_budget_transactions
+# ---------------------------------------------------------------------------
+
+BUDGET_SYNC_TOTAL = Counter(
+    "bgw_budget_sync_total",
+    "Actual Budget sync attempts by outcome.",
+    ["result"],  # ok | error | busy
+)
+# Pre-create the series so increase()/unless in BudgetSyncFailing see 0, not
+# absent, before the first attempt of each label.
+for _r in ("ok", "error", "busy"):
+    BUDGET_SYNC_TOTAL.labels(result=_r)
+
+BUDGET_SYNC_LAST_SUCCESS = Gauge(
+    "bgw_budget_sync_last_success_timestamp_seconds",
+    "Unix time of the last successful Actual Budget sync (0 = none since process start).",
+)

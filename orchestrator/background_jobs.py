@@ -3,7 +3,7 @@ Background scheduler jobs — thin re-export facade.
 
 All implementations live in domain-specific modules:
 - jobs_calendar: calendar polling, morning + evening briefings, email polling, email-to-calendar
-- jobs_finance: YNAB sync, weekly spending summary, mid-month budget warning
+- jobs_finance: Actual Budget sync, weekly spending summary, mid-month budget warning
 - jobs_monitoring: temperature, ambient awareness, self-care, routines, progress
 - jobs_winddown: sleep wind-down ladder rungs (T-60 lights, T-30 nudge)
 """
@@ -22,7 +22,7 @@ from orchestrator.jobs_calendar import (  # noqa: F401
 )
 from orchestrator.jobs_finance import (  # noqa: F401
     midmonth_budget_warning,
-    sync_ynab_transactions,
+    sync_budget_transactions,
     weekly_spending_summary,
 )
 from orchestrator.jobs_monitoring import (  # noqa: F401
@@ -52,7 +52,7 @@ __all__ = [
     "poll_calendar",
     "process_emails_for_events",
     # Finance
-    "sync_ynab_transactions",
+    "sync_budget_transactions",
     "weekly_spending_summary",
     "midmonth_budget_warning",
     # Monitoring & routines

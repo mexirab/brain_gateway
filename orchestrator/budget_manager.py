@@ -3,7 +3,7 @@ Budget import + analysis for historical CSV/Excel data.
 
 Intentionally narrow: one-off imports of old YNAB/Mint/bank exports so Jess
 can answer questions about past spending without that data ever leaving the
-local stack. The live YNAB API integration (finance_manager.py) is separate
+local stack. The live Actual Budget sync (finance_manager.py) is separate
 and untouched.
 
 Flow:

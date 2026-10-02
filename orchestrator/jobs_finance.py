@@ -1,5 +1,5 @@
 """
-Background jobs: YNAB transaction sync, weekly spending summary,
+Background jobs: Actual Budget sync, weekly spending summary,
 mid-month budget warning.
 """
 
@@ -13,19 +13,19 @@ from orchestrator.shared import TIMEZONE, profile
 logger = logging.getLogger(__name__)
 
 
-async def sync_ynab_transactions():
-    """Background job: sync transactions from YNAB."""
-    from orchestrator.finance_manager import _is_ynab_configured, ynab_sync_transactions
+async def sync_budget_transactions():
+    """Background job: mirror recent spending from Actual Budget.
 
-    if not _is_ynab_configured():
+    finance_manager.sync_budget_transactions never raises and records its own
+    outcome (budget_sync_state row, bgw_budget_sync_total); this wrapper only
+    keeps the scheduler log quiet on no-op runs.
+    """
+    from orchestrator.finance_manager import _is_sync_configured
+    from orchestrator.finance_manager import sync_budget_transactions as _sync
+
+    if not _is_sync_configured():
         return
-
-    try:
-        result = await ynab_sync_transactions()
-        if result.get("synced", 0) > 0:
-            logger.info(f"[YNAB_POLL] Synced {result['synced']} transactions")
-    except Exception as e:
-        logger.error(f"[YNAB_POLL] Error: {e}")
+    await _sync()
 
 
 async def weekly_spending_summary():

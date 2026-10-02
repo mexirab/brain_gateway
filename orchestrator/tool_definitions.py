@@ -376,7 +376,7 @@ STATIC_TOOLS = [
         "function": {
             "name": "query_budget",
             "description": (
-                "Query imported historical budget data (CSV/Excel; separate from live YNAB in "
+                "Query imported historical budget data (CSV/Excel; separate from the live Actual Budget sync in "
                 "finance_status) for PAST spending: totals, categories, monthly trends, outliers. "
                 "Call list_datasets once if you don't know the dataset. For 'find patterns', "
                 "'what stood out', 'biggest X', 'why did I overspend', 'compare years': use "
@@ -525,7 +525,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "finance_status",
-            "description": "Check the user's Financial Quest Board status for the CURRENT period (live YNAB): budget remaining, XP/level, streak, side quests, spending summary. For past or imported spending history use query_budget instead.",
+            "description": "Check the user's Financial Quest Board status for the CURRENT period (synced from Actual Budget): budget remaining, XP/level, streak, side quests, spending summary. For past or imported spending history use query_budget instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1244,8 +1244,8 @@ _EXPERT_TOOL = {
 # from the unified loop when not exposed).
 ADVANCED_ONLY_TOOL_NAMES: frozenset[str] = frozenset(
     {
-        "query_budget",  # YNAB-specific; needs license check
-        "finance_status",  # YNAB-specific
+        "query_budget",  # owner-specific CSV/Excel budget imports
+        "finance_status",  # owner-specific Quest Board (Actual Budget sync)
         "check_claude_activity",  # owner-specific dev tooling
     }
 )

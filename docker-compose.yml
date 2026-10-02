@@ -190,11 +190,14 @@ services:
       - TRAVEL_TIME_BUFFER=${TRAVEL_TIME_BUFFER:-10}
       # Finance
       - FINANCE_DB_PATH=/app/data/finance.db
-      # YNAB integration (empty = disabled)
-      - YNAB_ACCESS_TOKEN=${YNAB_ACCESS_TOKEN:-}
-      - YNAB_BUDGET_ID=${YNAB_BUDGET_ID:-}
-      - YNAB_SYNC_INTERVAL=${YNAB_SYNC_INTERVAL:-30}
-      - YNAB_FUN_MONEY_CATEGORY=${YNAB_FUN_MONEY_CATEGORY:-Fun Money}
+      # Actual Budget sync (self-hosted; empty URL = disabled, manual mode)
+      - ACTUAL_SERVER_URL=${ACTUAL_SERVER_URL:-}
+      - ACTUAL_PASSWORD=${ACTUAL_PASSWORD:-}
+      - ACTUAL_BUDGET_FILE=${ACTUAL_BUDGET_FILE:-}
+      - ACTUAL_ENCRYPTION_PASSWORD=${ACTUAL_ENCRYPTION_PASSWORD:-}
+      - ACTUAL_SYNC_INTERVAL=${ACTUAL_SYNC_INTERVAL:-30}
+      - ACTUAL_SYNC_MONTHS=${ACTUAL_SYNC_MONTHS:-3}
+      - ACTUAL_FUN_MONEY_CATEGORY=${ACTUAL_FUN_MONEY_CATEGORY:-Fun Money}
       # Open WebUI deep link (for notification tap → chat)
       - WEBUI_URL=${WEBUI_URL:-}
       # API authentication

@@ -15,7 +15,7 @@ After any backend route is written, any API integration is added, or before any 
 ### Secret Management
 - No API keys, tokens, or secrets hardcoded anywhere in source files
 - .env is gitignored — verify .gitignore covers it
-- HA_TOKEN, Google OAuth tokens, YNAB tokens never appear in logs or error responses
+- HA_TOKEN, Google OAuth tokens, the Actual Budget password (`ACTUAL_PASSWORD` / `ACTUAL_ENCRYPTION_PASSWORD`) never appear in logs or error responses
 - user_profile.yaml (contains personal medical data) is gitignored
 - Google credentials directory is gitignored
 

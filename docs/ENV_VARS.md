@@ -273,6 +273,20 @@ A reusable host helper `~/plug.sh on|off|state|power` (HA-based) exists on Jupit
 |----------|---------|---------|
 | `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Directory for uploaded meal photos. Extension allowlist enforced at save: jpg, jpeg, png, gif, webp. Files named as uuid4. |
 
+## Finance — Actual Budget sync
+
+Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](https://actualbudget.org) server via `actualpy` (`orchestrator/actual_client.py`). Replaced the YNAB integration 2026-10-02; `YNAB_*` vars are removed and ignored if still in `.env`. `validate_actual_config` (`config.py`) auto-disables the sync (logs, never raises) when the URL is not `http(s)://` or `ACTUAL_PASSWORD` / `ACTUAL_BUDGET_FILE` is missing. Disabled = manual-entry mode: finance tables, dashboard pages and manual entries still work; the `budget_sync` job and the weekly-summary / mid-month-warning jobs are not registered. After adding these to `.env`: `docker compose up -d --force-recreate orchestrator` (compose interpolates them — `restart` is not enough).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ACTUAL_SERVER_URL` | (empty) | Actual server base URL. Empty = disabled. Same host as the orchestrator: `http://host.docker.internal:5006` (a container name won't resolve — `actual-budget` sits on the default bridge network). |
+| `ACTUAL_PASSWORD` | (empty) | Actual server password. Required when the URL is set. Single-quote it in `.env` if it contains `$`. |
+| `ACTUAL_BUDGET_FILE` | (empty) | Budget name as shown in Actual's file picker, or its sync id. Required when the URL is set. |
+| `ACTUAL_ENCRYPTION_PASSWORD` | (empty) | Only for end-to-end-encrypted budget files. |
+| `ACTUAL_SYNC_INTERVAL` | `30` | Minutes between `budget_sync` runs (first run ~30 s after startup). Clamped to ≥5. |
+| `ACTUAL_SYNC_MONTHS` | `3` | Months mirrored into `finance.db`, including the current one. Clamped to 1–24. Inside the window Actual is the source of truth (rows deleted upstream are deleted locally; legacy `source='ynab'` rows are replaced). |
+| `ACTUAL_FUN_MONEY_CATEGORY` | `Fun Money` | Category whose balance drives the Quest Board health bar. Case-insensitive substring match, spending categories only. |
+
 ## Training corpus drain
 
 | Variable | Default | Purpose |

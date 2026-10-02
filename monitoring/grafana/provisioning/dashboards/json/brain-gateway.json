@@ -7674,7 +7674,7 @@
     },
     {
       "type": "row",
-      "title": "Background Jobs",
+      "title": "Budget Sync (Actual)",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -7684,6 +7684,218 @@
         "y": 220
       },
       "id": 103
+    },
+    {
+      "type": "stat",
+      "title": "Budget Sync Age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time() - (bgw_budget_sync_last_success_timestamp_seconds > 0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 7200
+              },
+              {
+                "color": "red",
+                "value": 21600
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Seconds since the last successful Actual Budget sync (every ACTUAL_SYNC_INTERVAL, default 30 min). 'No data' means no success since the orchestrator last started, or the sync is not configured \u2014 check Budget Sync Outcomes and GET /api/finance/sync/status (last_error).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 221
+      },
+      "id": 104
+    },
+    {
+      "type": "timeseries",
+      "title": "Budget Sync Outcomes (/h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_budget_sync_total[1h]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "ok | error | busy per hour. 'busy' = a manual sync or the settings page overlapped a running one (harmless); sustained 'error' with no 'ok' triggers BudgetSyncFailing.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 221
+      },
+      "id": 105
+    },
+    {
+      "type": "logs",
+      "title": "Budget Sync Logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "P8E80F9AEF21F6940"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "P8E80F9AEF21F6940"
+          },
+          "editorMode": "code",
+          "expr": "{container=\"brain-orchestrator\"} |= \"[ACTUAL]\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 221
+      },
+      "id": 106
+    },
+    {
+      "type": "row",
+      "title": "Background Jobs",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 229
+      },
+      "id": 107
     },
     {
       "type": "stat",
@@ -7744,9 +7956,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 221
+        "y": 230
       },
-      "id": 104
+      "id": 108
     },
     {
       "type": "timeseries",
@@ -7830,9 +8042,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 221
+        "y": 230
       },
-      "id": 105
+      "id": 109
     },
     {
       "type": "stat",
@@ -7893,9 +8105,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 221
+        "y": 230
       },
-      "id": 106
+      "id": 110
     },
     {
       "type": "timeseries",
@@ -7983,9 +8195,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 229
+        "y": 238
       },
-      "id": 107
+      "id": 111
     },
     {
       "type": "stat",
@@ -8051,9 +8263,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 229
+        "y": 238
       },
-      "id": 108
+      "id": 112
     },
     {
       "type": "stat",
@@ -8119,9 +8331,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 229
+        "y": 238
       },
-      "id": 109
+      "id": 113
     },
     {
       "type": "row",
@@ -8132,9 +8344,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 237
+        "y": 246
       },
-      "id": 110
+      "id": 114
     },
     {
       "type": "logs",
@@ -8173,9 +8385,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 238
+        "y": 247
       },
-      "id": 111
+      "id": 115
     },
     {
       "type": "logs",
@@ -8214,9 +8426,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 238
+        "y": 247
       },
-      "id": 112
+      "id": 116
     }
   ]
 }

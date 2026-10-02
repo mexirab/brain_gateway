@@ -9,13 +9,26 @@ import type {
   Transaction,
   XPEvent,
   Windfall,
+  BudgetSyncStatus,
 } from './finance-types';
 
 const PROXY = '/api/proxy';
 
+/** Throw with the backend's `{error}` message when it sent one. */
+async function fail(res: Response): Promise<never> {
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    if (body && typeof body.error === 'string') detail = body.error;
+  } catch {
+    // non-JSON error body — keep statusText
+  }
+  throw new Error(`Finance API ${res.status}: ${detail}`);
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${PROXY}${path}`);
-  if (!res.ok) throw new Error(`Finance API ${res.status}: ${res.statusText}`);
+  if (!res.ok) await fail(res);
   return res.json();
 }
 
@@ -25,7 +38,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`Finance API ${res.status}: ${res.statusText}`);
+  if (!res.ok) await fail(res);
   return res.json();
 }
 
@@ -118,24 +131,20 @@ export const financeApi = {
       `/api/finance/xp-history${limit ? `?limit=${limit}` : ''}`,
     ),
 
-  // YNAB integration
-  getYnabStatus: () =>
+  // Budget sync (Actual Budget; replaced YNAB 2026-10)
+  getSyncStatus: () =>
+    get<BudgetSyncStatus>('/api/finance/sync/status'),
+  triggerSync: () =>
+    post<{
+      synced: number;
+      inserted?: number;
+      updated?: number;
+      deleted?: number;
+      error?: string;
+    }>('/api/finance/sync'),
+  getBudgetCategories: () =>
     get<{
-      configured: boolean;
-      connected: boolean;
-      budget_id: string | null;
-      budget_name: string | null;
-      last_synced_at: string | null;
-      server_knowledge: number | null;
-      category_count: number;
-      discretionary_count: number;
-    }>('/api/finance/ynab/status'),
-  triggerYnabSync: () =>
-    post<{ synced: number; server_knowledge?: number; error?: string }>(
-      '/api/finance/ynab/sync',
-    ),
-  getYnabCategories: () =>
-    get<{
+      budget_name?: string;
       groups: Array<{
         group_name: string;
         categories: Array<{
@@ -146,14 +155,14 @@ export const financeApi = {
           balance: number;
         }>;
       }>;
-    }>('/api/finance/ynab/categories'),
+    }>('/api/finance/categories'),
   updateCategoryMapping: (mappings: Record<string, boolean>) =>
     post<{ success: boolean; updated: number }>(
-      '/api/finance/ynab/categories/mapping',
+      '/api/finance/categories/mapping',
       { mappings },
     ),
-  resetYnabSync: () =>
-    post<{ success: boolean; message: string }>('/api/finance/ynab/reset-sync'),
+  resetSync: () =>
+    post<{ success: boolean; message: string }>('/api/finance/sync/reset'),
 
   // TTS announce
   announce: (text: string) =>

@@ -35,38 +35,45 @@ export default function QuestBoardPage() {
 
   const [syncing, setSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
-  const [ynabConnected, setYnabConnected] = useState(false);
+  const [syncConnected, setSyncConnected] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
-  const loadYnabStatus = useCallback(async () => {
+  const loadSyncStatus = useCallback(async () => {
     try {
-      const status = await financeApi.getYnabStatus();
-      setYnabConnected(status.connected);
+      const status = await financeApi.getSyncStatus();
+      // Show the Sync button whenever a budget is configured, even if the
+      // last attempt failed — retrying is exactly what the user wants then.
+      setSyncConnected(status.configured);
+      setSyncError(status.configured ? status.last_error : null);
       setLastSynced(status.last_synced_at);
     } catch {
-      // YNAB status check failed — not critical
+      // Sync status check failed — not critical
     }
   }, []);
 
   useEffect(() => {
-    loadYnabStatus();
-  }, [loadYnabStatus]);
+    loadSyncStatus();
+  }, [loadSyncStatus]);
 
   async function handleSync() {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const result = await financeApi.triggerYnabSync();
+      const result = await financeApi.triggerSync();
       if (result.error) {
         setSyncResult(`Error: ${result.error}`);
       } else {
-        setSyncResult(`+${result.synced} transactions`);
+        setSyncResult(`+${result.inserted ?? result.synced} new`);
         await refresh();
-        await loadYnabStatus();
       }
-    } catch {
-      setSyncResult('Sync failed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setSyncResult(msg.includes(' 409:') ? 'Sync already running' : 'Sync failed');
     } finally {
+      // Reload on failure too, so the "Last sync failed" line replaces the
+      // stale green "Last sync: …" once the toast clears.
+      await loadSyncStatus();
       setSyncing(false);
       setTimeout(() => setSyncResult(null), 4000);
     }
@@ -190,15 +197,15 @@ export default function QuestBoardPage() {
         </Link>
       )}
 
-      {/* YNAB Sync + Retirement side by side */}
+      {/* Budget sync + Retirement side by side */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* YNAB Sync Status + Recent Transactions */}
+        {/* Budget Sync Status + Recent Transactions */}
         <Card>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-content-primary uppercase tracking-wider">
               Spending Feed
             </h3>
-            {ynabConnected ? (
+            {syncConnected ? (
               <div className="flex items-center gap-2">
                 {syncResult && (
                   <span className={`text-xs ${syncResult.startsWith('Error') || syncResult.includes('failed') ? 'text-danger' : 'text-success'}`}>
@@ -209,7 +216,7 @@ export default function QuestBoardPage() {
                   onClick={handleSync}
                   disabled={syncing}
                   className="flex items-center gap-1 px-2 py-1 text-xs text-content-secondary hover:text-content-primary bg-surface-raised hover:bg-surface-overlay rounded-md transition-colors disabled:opacity-50"
-                  title="Sync from YNAB"
+                  title="Sync from Actual Budget"
                 >
                   {syncing ? (
                     <Loader2 size={12} className="animate-spin" />
@@ -222,13 +229,23 @@ export default function QuestBoardPage() {
             ) : (
               <Link href="/finance/settings" className="flex items-center gap-1 text-xs text-content-muted hover:text-content-secondary">
                 <CloudOff size={12} />
-                Connect YNAB
+                Connect Actual Budget
               </Link>
             )}
           </div>
 
           {/* Sync info */}
-          {ynabConnected && lastSynced && (
+          {syncConnected && syncError && (
+            <Link
+              href="/finance/settings"
+              title={syncError}
+              className="inline-flex items-center gap-1.5 mb-3 min-h-6 text-xs text-danger underline underline-offset-2 hover:text-content-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand rounded"
+            >
+              <CloudOff size={12} aria-hidden="true" />
+              Last sync failed — open Finance settings for details
+            </Link>
+          )}
+          {syncConnected && !syncError && lastSynced && (
             <div className="flex items-center gap-1.5 mb-3 text-xs text-content-muted">
               <CheckCircle size={10} className="text-success/60" />
               Last sync: {new Date(lastSynced).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
@@ -258,7 +275,7 @@ export default function QuestBoardPage() {
             </div>
           ) : (
             <p className="text-sm text-content-muted text-center py-4">
-              {ynabConnected ? 'No transactions yet — hit Sync' : 'Connect YNAB to auto-track spending'}
+              {syncConnected ? 'No transactions yet — hit Sync' : 'Connect Actual Budget to auto-track spending'}
             </p>
           )}
         </Card>
