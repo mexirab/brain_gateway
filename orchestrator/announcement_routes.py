@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -90,6 +91,9 @@ def _build_defaults() -> Dict[str, Any]:
     return {"routes": {cat: _legacy_fallback(cat) for cat in CATEGORIES}}
 
 
+_SPEAKER_ENTITY_RE = re.compile(r"media_player\.[a-z0-9_]+")
+
+
 def _validate_speaker_string(value: Any, field: str) -> str:
     """Empty string is allowed (means: use the legacy fallback)."""
     if value is None:
@@ -99,13 +103,10 @@ def _validate_speaker_string(value: Any, field: str) -> str:
     parts = [p.strip() for p in value.split(",")]
     cleaned = [p for p in parts if p]
     for p in cleaned:
-        # Light validation — full HA entity-id regex is `^[a-z0-9_]+\.[a-z0-9_]+$`
-        # but we don't want to reject valid quirks like double-underscore. Just
-        # gate the obvious garbage.
-        if "." not in p:
-            raise ValueError(f"{field} entry {p!r} must look like 'media_player.<name>'")
-        if any(c.isspace() for c in p):
-            raise ValueError(f"{field} entry {p!r} contains whitespace")
+        # Strict: speakers are interpolated into an HA API path at announce
+        # time (state pre-check), so only plain media_player entity ids pass.
+        if not _SPEAKER_ENTITY_RE.fullmatch(p):
+            raise ValueError(f"{field} entry {p!r} must look like 'media_player.<name>' (lowercase, digits, _)")
     return ",".join(cleaned)
 
 

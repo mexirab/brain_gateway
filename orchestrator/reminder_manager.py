@@ -256,24 +256,6 @@ async def _announce_voice(
         # =====================================================================
         headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
-        # Generate audio via backend
-        audio_bytes = await backend.synthesize(text)
-
-        # Save audio with UUID (file I/O off the event loop)
-        audio_id = str(uuid.uuid4())[:8]
-        audio_dir = "/tmp/brain_audio"
-        ext = backend.file_extension
-        audio_path = f"{audio_dir}/{audio_id}.{ext}"
-
-        def _write_audio() -> None:
-            os.makedirs(audio_dir, exist_ok=True)
-            with open(audio_path, "wb") as f:
-                f.write(audio_bytes)
-
-        await asyncio.to_thread(_write_audio)
-
-        audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
-
         # Build speaker list.
         # The caller may pass:
         #   - a single entity_id       -> wrapped as [entity_id]
@@ -284,7 +266,18 @@ async def _announce_voice(
         # env var when no per-category override is configured (preserving
         # pre-Speakers-panel behavior).
         def _split_speakers(value: str) -> list[str]:
-            return [s.strip() for s in value.split(",") if s.strip()]
+            out = []
+            for s in (p.strip() for p in value.split(",")):
+                if not s:
+                    continue
+                # Speaker strings are interpolated into an HA API path (state
+                # pre-check); httpx collapses `..`, so anything but a plain
+                # media_player entity id could steer the GET elsewhere.
+                if not _SPEAKER_ENTITY_RE.fullmatch(s):
+                    logger.warning(f"[ANNOUNCE] Ignoring invalid speaker entity {s[:80]!r}")
+                    continue
+                out.append(s)
+            return out
 
         if speaker and speaker.strip().lower() != "all":
             broadcast_speakers = _split_speakers(speaker)
@@ -334,6 +327,64 @@ async def _announce_voice(
             own_client = httpx.AsyncClient(timeout=30)
             client = own_client
         try:
+            # HA returns 200 for play_media on an `unavailable` Cast entity, so
+            # without this check a dead speaker logged as a delivered
+            # announcement. Skip dead targets; if ALL routed targets are dead
+            # (and the caller didn't name a speaker), fall back to the live
+            # reminder speakers rather than talking to nobody.
+            broadcast_speakers, unavailable = await _filter_live_speakers(client, headers, broadcast_speakers)
+            fell_back = False
+            # "manual" = /api/announce naming a speaker on purpose: report the
+            # failure rather than playing somewhere the caller didn't ask for.
+            # Routine/briefing speakers come from config, so they fall back.
+            if not broadcast_speakers and announcement_type != "manual":
+                from orchestrator.announcement_routes import route_for as _route_for
+
+                tried = {s for s, _ in unavailable}
+                candidates = [s for s in _split_speakers(_route_for("reminder") or REMINDER_SPEAKER) if s not in tried]
+                broadcast_speakers, more_dead = await _filter_live_speakers(client, headers, candidates)
+                unavailable.extend(more_dead)
+                if broadcast_speakers:
+                    fell_back = True
+                    _count_fallback(announcement_type)
+                    logger.warning(
+                        "[ANNOUNCE] All routed speakers unavailable for %s — falling back to %s",
+                        announcement_type,
+                        ",".join(broadcast_speakers),
+                    )
+            if not broadcast_speakers:
+                err = "All target speakers unavailable in HA: " + ", ".join(f"{s} ({st})" for s, st in unavailable)
+                logger.error("[ANNOUNCE] %s — %s announcement not played", err, announcement_type)
+                _record_announcement(
+                    text,
+                    announcement_type,
+                    unavailable[0][0] if unavailable else None,
+                    False,
+                    err,
+                    int((_time.time() - t0) * 1000),
+                )
+                return {"success": False, "error": err, "unavailable": [s for s, _ in unavailable]}
+
+            # Synthesize only once we know something can play it — a dead-only
+            # route used to burn a Helios TTS call on every retry/poll.
+            # Generate audio via backend
+            audio_bytes = await backend.synthesize(text)
+
+            # Save audio with UUID (file I/O off the event loop)
+            audio_id = str(uuid.uuid4())[:8]
+            audio_dir = "/tmp/brain_audio"
+            ext = backend.file_extension
+            audio_path = f"{audio_dir}/{audio_id}.{ext}"
+
+            def _write_audio() -> None:
+                os.makedirs(audio_dir, exist_ok=True)
+                with open(audio_path, "wb") as f:
+                    f.write(audio_bytes)
+
+            await asyncio.to_thread(_write_audio)
+
+            audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
+
             # Optional: bump-only volume floor for wake-time announcements.
             # Done before play_media so the speaker wakes from `off` already at
             # the right volume. Failures are logged and never block the play.
@@ -344,7 +395,7 @@ async def _announce_voice(
                 for try_speaker in broadcast_speakers:
                     try:
                         cur = await client.get(
-                            f"{HA_URL}/api/states/{try_speaker}",
+                            f"{HA_URL}/api/states/{quote(try_speaker, safe='')}",
                             headers=headers,
                         )
                         current_vol = None
@@ -380,7 +431,12 @@ async def _announce_voice(
         if succeeded:
             speaker_label = ",".join(succeeded)
             _record_announcement(text, announcement_type, speaker_label, True, None, latency_ms)
-            return {"success": True, "speaker": speaker_label}
+            out: Dict[str, Any] = {"success": True, "speaker": speaker_label}
+            if unavailable:
+                out["unavailable"] = [s for s, _ in unavailable]
+            if fell_back:
+                out["fallback"] = True
+            return out
 
         _record_announcement(
             text,
@@ -402,6 +458,100 @@ async def _announce_voice(
         logger.exception("Voice announcement failed (%s)", err_repr)
         _record_announcement(text, announcement_type, None, False, err_repr, latency_ms)
         return {"success": False, "error": err_repr}
+
+
+_DEAD_SPEAKER_STATES = {"unavailable", "missing"}
+_SPEAKER_ENTITY_RE = re.compile(r"media_player\.[a-z0-9_]+")
+
+
+def _known_speakers() -> set[str]:
+    """Every speaker the route config / legacy env vars can produce (metric label allow-list)."""
+    try:
+        from orchestrator.announcement_routes import CATEGORIES, route_for
+
+        known: set[str] = set()
+        for cat in (*CATEGORIES, "reminder"):
+            known.update(s.strip() for s in (route_for(cat) or "").split(",") if s.strip())
+        return known
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+async def _speaker_state(client: httpx.AsyncClient, headers: Dict[str, str], entity_id: str) -> Optional[str]:
+    """HA state of a media_player: its state string, "missing" on 404, None if unknowable.
+
+    None (HA hiccup, timeout) means "don't know" — the caller treats it as
+    live so a flaky state API never suppresses an announcement.
+    """
+    try:
+        resp = await client.get(f"{HA_URL}/api/states/{quote(entity_id, safe='')}", headers=headers, timeout=10)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[ANNOUNCE] state check failed for {entity_id}: {e}")
+        return None
+    if resp.status_code == 404:
+        return "missing"
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    state = data.get("state") if isinstance(data, dict) else None
+    return str(state) if state is not None else None
+
+
+async def _filter_live_speakers(
+    client: httpx.AsyncClient, headers: Dict[str, str], speakers: list[str]
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Split `speakers` into (live, [(dead_speaker, state)]) using HA entity state."""
+    if not speakers:
+        return [], []
+    states = await asyncio.gather(*[_speaker_state(client, headers, s) for s in speakers])
+    live: list[str] = []
+    dead: list[tuple[str, str]] = []
+    for spk, state in zip(speakers, states, strict=True):
+        if state in _DEAD_SPEAKER_STATES:
+            dead.append((spk, state))
+            logger.warning(f"[ANNOUNCE] Skipping {spk}: HA reports it {state}")
+            try:
+                from orchestrator.metrics import ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL
+
+                # Only configured speakers get their own series; an arbitrary
+                # caller-supplied entity can't grow the label set.
+                label = spk if spk in _known_speakers() else "other"
+                ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL.labels(speaker=label[:60]).inc()
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            live.append(spk)
+    return live, dead
+
+
+def seed_announcement_metrics() -> None:
+    """Startup: create the dead-speaker series at 0 for every configured speaker.
+
+    increase() can't see a counter's first increment from "absent", so without
+    this the first dead-speaker hit after each restart (e.g. one briefing a
+    day) would never trip AnnouncementSpeakerUnavailable.
+    """
+    try:
+        from orchestrator.metrics import ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL
+
+        for spk in _known_speakers():
+            if _SPEAKER_ENTITY_RE.fullmatch(spk):
+                ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL.labels(speaker=spk[:60])
+        ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL.labels(speaker="other")
+    except Exception:  # noqa: BLE001
+        logger.warning("[ANNOUNCE] Could not seed speaker metrics", exc_info=True)
+
+
+def _count_fallback(announcement_type: str) -> None:
+    try:
+        from orchestrator.metrics import ANNOUNCE_FALLBACK_TOTAL
+
+        ANNOUNCE_FALLBACK_TOTAL.labels(type=announcement_type).inc()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _record_announcement(

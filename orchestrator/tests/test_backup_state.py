@@ -74,6 +74,10 @@ def _run(tmp_path, data, creds, **extra_env):
         "JESS_DATA_DIR": str(data),
         "JESS_CREDENTIALS_DIR": str(creds),
         "JESS_BACKUP_DIR": str(tmp_path / "backups"),
+        # Pin chroma inside the temp data/ tree; otherwise the script reads
+        # CHROMA_HOST_PATH from the repo's real .env and archives the LIVE
+        # mempalace into the test's tmp dir.
+        "JESS_CHROMA_DIR": str(data / "chroma"),
         **extra_env,
     }
     return subprocess.run(

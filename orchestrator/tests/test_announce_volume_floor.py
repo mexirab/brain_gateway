@@ -91,16 +91,18 @@ async def test_min_volume_none_skips_states_and_volume_set(announce_env):
 
     HA_URL, SPEAKER = announce_env
 
-    # Only register play_media — if min_volume=None correctly skips the
-    # volume-floor branch, the GET /states + volume_set routes shouldn't be
-    # needed.  Any unexpected request to an unmocked URL would raise.
+    # min_volume=None skips the volume-floor branch: exactly one GET /states
+    # (the liveness pre-check) and no volume_set. volume_set isn't registered,
+    # so a stray POST would hit respx's unmocked-route error and fail the play.
     with respx.mock(base_url=HA_URL) as mock:
+        states = mock.get(f"/api/states/{SPEAKER}").mock(return_value=Response(200, json={"state": "idle"}))
         play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
         result = await _announce_voice("hello", announcement_type="test", min_volume=None)
 
     assert result["success"] is True
     assert play.called is True
+    assert states.call_count == 1, "only the liveness check should GET state when min_volume=None"
 
 
 @pytest.mark.asyncio
@@ -114,7 +116,7 @@ async def test_low_current_volume_triggers_bump(announce_env):
 
     def _states_handler(request: httpx.Request) -> Response:
         call_order.append("states")
-        return Response(200, json={"attributes": {"volume_level": 0.10}})
+        return Response(200, json={"state": "idle", "attributes": {"volume_level": 0.10}})
 
     def _vol_set_handler(request: httpx.Request) -> Response:
         call_order.append("volume_set")
@@ -153,7 +155,7 @@ async def test_already_loud_speaker_not_touched(announce_env):
     # regression where current=0.6 wrongly triggers a lower-the-volume call.
     with respx.mock(base_url=HA_URL) as mock:
         states = mock.get(f"/api/states/{SPEAKER}").mock(
-            return_value=Response(200, json={"attributes": {"volume_level": 0.6}})
+            return_value=Response(200, json={"state": "idle", "attributes": {"volume_level": 0.6}})
         )
         play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
@@ -173,7 +175,7 @@ async def test_current_volume_none_triggers_bump(announce_env):
 
     with respx.mock(base_url=HA_URL) as mock:
         # attributes present but no volume_level key (typical for off speakers).
-        mock.get(f"/api/states/{SPEAKER}").mock(return_value=Response(200, json={"attributes": {}}))
+        mock.get(f"/api/states/{SPEAKER}").mock(return_value=Response(200, json={"state": "off", "attributes": {}}))
         vol_set = mock.post("/api/services/media_player/volume_set").mock(return_value=Response(200, json={}))
         play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))
 
@@ -194,7 +196,9 @@ async def test_volume_set_500_does_not_block_play(announce_env, caplog):
     HA_URL, SPEAKER = announce_env
 
     with respx.mock(base_url=HA_URL) as mock, caplog.at_level(logging.WARNING, logger="orchestrator.reminder_manager"):
-        mock.get(f"/api/states/{SPEAKER}").mock(return_value=Response(200, json={"attributes": {"volume_level": 0.10}}))
+        mock.get(f"/api/states/{SPEAKER}").mock(
+            return_value=Response(200, json={"state": "idle", "attributes": {"volume_level": 0.10}})
+        )
         vol_set = mock.post("/api/services/media_player/volume_set").mock(
             return_value=Response(500, json={"error": "boom"})
         )
@@ -229,10 +233,10 @@ async def test_multi_speaker_bumps_each_then_plays_each(announce_env, monkeypatc
 
     with respx.mock(base_url=HA_URL) as mock:
         a_states = mock.get(f"/api/states/{SPK_A}").mock(
-            return_value=Response(200, json={"attributes": {"volume_level": 0.05}})
+            return_value=Response(200, json={"state": "idle", "attributes": {"volume_level": 0.05}})
         )
         b_states = mock.get(f"/api/states/{SPK_B}").mock(
-            return_value=Response(200, json={"attributes": {"volume_level": 0.10}})
+            return_value=Response(200, json={"state": "idle", "attributes": {"volume_level": 0.10}})
         )
         vol_set = mock.post("/api/services/media_player/volume_set").mock(return_value=Response(200, json={}))
         play = mock.post("/api/services/media_player/play_media").mock(return_value=Response(200, json={}))

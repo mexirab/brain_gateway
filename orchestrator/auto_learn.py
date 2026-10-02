@@ -71,7 +71,13 @@ def _get_cipher():
             key = Fernet.generate_key()
             os.makedirs(os.path.dirname(_KEY_FILE), exist_ok=True)
             with open(_KEY_FILE, "wb") as f:
+                os.fchmod(f.fileno(), 0o600)
                 f.write(key)
+                # Container runs as root; hand the key to the data dir's owner
+                # so the host backup (uid 1000) can read it.
+                from orchestrator.config_writer import match_parent_owner
+
+                match_parent_owner(f.fileno(), os.path.dirname(_KEY_FILE))
             os.chmod(_KEY_FILE, 0o600)
             logger.info("[AUTO_LEARN] Generated and saved encryption key to %s", _KEY_FILE)
 

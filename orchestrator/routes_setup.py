@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from orchestrator import setup_env
+from orchestrator.config_writer import match_parent_owner
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
+            match_parent_owner(f.fileno(), target.parent)
         os.replace(tmp_path, target)
     except Exception:
         with contextlib.suppress(OSError):
@@ -88,12 +90,16 @@ def _setup_state() -> Dict[str, Any]:
 
 
 def is_first_boot() -> bool:
-    """True if the setup wizard has not been completed. Used by the startup log.
+    """True if the setup wizard has not been completed.
 
-    A corrupt/unreadable setup_state.json degrades to True (treated as first
-    boot) — safe for an informational log line; the file self-heals on the
-    next POST /complete.
+    Gates the first-boot-only /api/setup/env write surface (via
+    `_ensure_first_boot`) and drives the startup log line.
     """
+    # Fail CLOSED when the file exists but can't be read: this gates the
+    # first-boot-only env write surface, so a corrupt/unreadable state file
+    # must not re-open it. Only a genuinely absent file means first boot.
+    if os.path.exists(_SETUP_STATE_PATH) and _read_json(_SETUP_STATE_PATH) is None:
+        return False
     return not bool(_setup_state().get("setup_completed"))
 
 

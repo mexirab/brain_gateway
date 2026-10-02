@@ -363,6 +363,22 @@ groups:
         annotations:
           summary: "Actual Budget sync has not succeeded in 6h"
           description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
+      - alert: AnnouncementSpeakerUnavailable
+        # HA 200s play_media on an `unavailable` Cast entity, so before
+        # 2026-10-02 a dead speaker logged as a delivered announcement and the
+        # bedroom briefing went silent for days unnoticed. _announce_voice now
+        # skips dead targets and counts them here (series pre-seeded at 0 at
+        # startup so the first hit counts). 24h window so it doesn't "resolve"
+        # overnight when nothing announces and re-fire every morning; one
+        # announcement to a dead speaker is enough. Physical fix (power-cycle /
+        # re-pair in Google Home), not something that self-heals.
+        expr: sum by (speaker) (increase(bgw_announcement_speaker_unavailable_total[24h])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Speaker {{ $labels.speaker }} is unavailable — announcements to it are not playing"
+          description: "Home Assistant reports {{ $labels.speaker }} unavailable, so Jess skipped it (and fell back to the reminder speakers if nothing else in the route was alive). Power-cycle the speaker; if it's a stereo pair that doesn't come back in HA, re-create the pair in Google Home."
       - alert: SelfAuditStale
         # Daily 07:00 job; 25.5h like the other daily heartbeats (DST + misfire
         # grace headroom). The gauge is re-seeded at startup from the persisted

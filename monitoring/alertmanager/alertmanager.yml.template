@@ -27,6 +27,13 @@ route:
     - matchers:
         - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|ToolCallsSilentlyDropped|BudgetSyncFailing|SelfAuditStale|SelfAuditFailing"
       receiver: "pushover-quiet"
+    # A dead speaker is a physical fix that stays broken for days; speakers
+    # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
+    # day is enough.
+    - matchers:
+        - alertname="AnnouncementSpeakerUnavailable"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
 receivers:
   - name: "null"
   - name: "pushover"

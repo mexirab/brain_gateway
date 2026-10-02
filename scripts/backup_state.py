@@ -12,7 +12,9 @@ is tiny (~15 MB) and has never had a backup:
   - data/app/auto_learn.key   the Fernet key that decrypts learned personal
                          facts — LOSE THIS AND THE ENCRYPTED MEMORIES ARE GONE
                          FOREVER, even though the ciphertext survives.
-  - data/chroma/         the RAG / mempalace vector store
+  - chroma               the LIVE RAG / mempalace vector store — wherever
+                         compose mounts it (CHROMA_HOST_PATH, e.g.
+                         ~/.local/share/chroma); data/chroma/ is only the default
   - data/app/ subdirs    self-audits, budget summaries, imports, meal photos,
                          paperless inbox, training corpus, documents
   - credentials/         the Google OAuth token + client secret
@@ -28,6 +30,8 @@ the container is down.
 Configuration (all optional; sensible defaults):
   JESS_DATA_DIR           default <repo>/data
   JESS_CREDENTIALS_DIR    default <repo>/credentials
+  JESS_CHROMA_DIR         default: CHROMA_HOST_PATH from <repo>/.env (what compose
+                          mounts at /chroma), else <repo>/data/chroma
   JESS_BACKUP_DIR         default <repo>/backups   (where archives are written)
   JESS_BACKUP_KEEP        default 30               (archives to retain locally)
   JESS_BACKUP_REMOTE      optional rsync target, e.g. user@saturn:/backups/jess
@@ -58,6 +62,31 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DATA_DIR = Path(os.environ.get("JESS_DATA_DIR", REPO_ROOT / "data"))
 CREDENTIALS_DIR = Path(os.environ.get("JESS_CREDENTIALS_DIR", REPO_ROOT / "credentials"))
+
+
+def _chroma_dir() -> Path:
+    """The live Chroma store: same resolution as compose's CHROMA_HOST_PATH.
+
+    Until 2026-10-02 this script only covered data/, while the live mempalace
+    was mounted from ~/.local/share/chroma — nightly archives carried a stale
+    April copy and none of the auto-learned facts. cron doesn't load .env, so
+    read the one key here (stdlib-only, no shell sourcing).
+    """
+    if os.environ.get("JESS_CHROMA_DIR"):
+        return Path(os.environ["JESS_CHROMA_DIR"]).expanduser()
+    try:
+        for line in (REPO_ROOT / ".env").read_text().splitlines():
+            if line.startswith("CHROMA_HOST_PATH="):
+                val = line.split("=", 1)[1].strip().strip("'\"")
+                if val:
+                    path = Path(os.path.expandvars(val)).expanduser()
+                    return path if path.is_absolute() else REPO_ROOT / path
+    except OSError:
+        pass
+    return REPO_ROOT / "data" / "chroma"
+
+
+CHROMA_DIR = _chroma_dir()
 BACKUP_DIR = Path(os.environ.get("JESS_BACKUP_DIR", REPO_ROOT / "backups"))
 KEEP = int(os.environ.get("JESS_BACKUP_KEEP", "30"))
 REMOTE = os.environ.get("JESS_BACKUP_REMOTE", "").strip()
@@ -250,6 +279,12 @@ def main() -> int:
             staging = Path(tmpdir)
             _stage_tree(DATA_DIR, staging, "data", result)
             _stage_tree(CREDENTIALS_DIR, staging, "credentials", result)
+            # Skip when it already sits under data/ (the default layout) —
+            # it was staged above.
+            if CHROMA_DIR.exists() and not CHROMA_DIR.resolve().is_relative_to(DATA_DIR.resolve()):
+                _stage_tree(CHROMA_DIR, staging, "chroma", result)
+            elif not CHROMA_DIR.exists():
+                _log(f"WARN chroma dir {CHROMA_DIR} not found — memory palace NOT in this backup")
 
             # A critical file existed but couldn't be captured (e.g. a
             # root-owned brain_state.db a host-user cron can't read). Failing

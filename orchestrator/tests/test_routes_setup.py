@@ -145,11 +145,13 @@ class TestIsFirstBoot:
         routes_setup._atomic_write_json(routes_setup._SETUP_STATE_PATH, {"setup_completed": False})
         assert routes_setup.is_first_boot() is True
 
-    def test_corrupt_state_degrades_to_first_boot(self, routes_setup):
-        """A corrupt setup_state.json degrades safely to first boot."""
+    def test_corrupt_state_fails_closed(self, routes_setup):
+        """A corrupt setup_state.json fails CLOSED (not first boot): it gates
+        the first-boot-only /api/setup/env write surface, which a corrupt
+        file must not re-open."""
         with open(routes_setup._SETUP_STATE_PATH, "w") as f:
             f.write("{garbage")
-        assert routes_setup.is_first_boot() is True
+        assert routes_setup.is_first_boot() is False
 
 
 # ---------------------------------------------------------------------------

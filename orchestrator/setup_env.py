@@ -47,6 +47,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from orchestrator.config_writer import match_parent_owner
+
 logger = logging.getLogger(__name__)
 
 # Path module-level so tests can monkeypatch.
@@ -215,7 +217,7 @@ def _atomic_write_overrides(values: Dict[str, str]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
     try:
-        os.chmod(tmp_path, _FILE_MODE)
+        os.fchmod(fd, _FILE_MODE)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(
                 "# setup_overrides.env — written by the first-boot setup wizard.\n"
@@ -225,6 +227,7 @@ def _atomic_write_overrides(values: Dict[str, str]) -> None:
                 f.write(f"{key}={_escape_value(values[key])}\n")
             f.flush()
             os.fsync(f.fileno())
+            match_parent_owner(f.fileno(), target.parent)
         os.replace(tmp_path, target)
         # `os.replace` preserves the dest's perms if it existed; for the new-file
         # case our chmod above on tmp_path carries over. Re-chmod to be sure.

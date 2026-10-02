@@ -32,6 +32,8 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from orchestrator.announcement_routes import _SPEAKER_ENTITY_RE
+
 logger = logging.getLogger(__name__)
 
 # These are the keys the settings page is allowed to set on a step.
@@ -129,8 +131,13 @@ def validate_routines(payload: Dict[str, Any]) -> Dict[str, Any]:
                             f"routine '{rid}' trigger.days entry {d!r} must be one of {sorted(VALID_DAYS)}"
                         )
 
-        if "speaker" in routine and not isinstance(routine["speaker"], str):
-            raise ValueError(f"routine '{rid}' speaker must be a string")
+        if "speaker" in routine:
+            if not isinstance(routine["speaker"], str):
+                raise ValueError(f"routine '{rid}' speaker must be a string")
+            # Same rule as the Speakers panel: interpolated into an HA API path.
+            for spk in (p.strip() for p in routine["speaker"].split(",")):
+                if spk and not _SPEAKER_ENTITY_RE.fullmatch(spk):
+                    raise ValueError(f"routine '{rid}' speaker {spk!r} must look like 'media_player.<name>'")
         if "nudge_delay_minutes" in routine:
             n = routine["nudge_delay_minutes"]
             if not isinstance(n, (int, float)) or n < 1 or n > 240:

@@ -49,10 +49,9 @@ docker compose up -d --build orchestrator
 # Tail orchestrator logs
 docker logs brain-orchestrator --tail 50 -f
 
-# Run the test suite (tests live in orchestrator/tests/, pytest runs inside the container)
-docker exec brain-orchestrator pip install pytest pytest-asyncio -q
-docker cp orchestrator/tests brain-orchestrator:/app/tests
-docker exec brain-orchestrator python -m pytest tests/ -v
+# Run the test suite (tests live in orchestrator/tests/; throwaway container from the orchestrator image)
+docker run --rm -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -w /app gateway_nerves-orchestrator \
+  sh -c "pip install -q pytest pytest-asyncio respx && python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q"
 
 # Rebuild the frontend
 docker compose up -d --build --force-recreate frontend

@@ -105,7 +105,9 @@ def test_validate_speaker_rejects_missing_dot():
 def test_validate_speaker_rejects_embedded_whitespace():
     from orchestrator.announcement_routes import _validate_speaker_string
 
-    with pytest.raises(ValueError, match="contains whitespace"):
+    # Strict entity regex (2026-10-02) replaced the separate whitespace check;
+    # the rejection itself is unchanged.
+    with pytest.raises(ValueError, match="must look like"):
         _validate_speaker_string("media player.office", "x")
 
 

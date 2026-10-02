@@ -839,6 +839,24 @@ TTS_ERRORS_TOTAL = Counter(
     ["error_type"],
 )
 
+# HA answers play_media with 200 even for an `unavailable` Cast entity, so a
+# dead speaker used to log as a successful announcement (the bedroom pair
+# went silent for days unnoticed, 2026-09/10). _announce_voice now checks
+# entity state first; each skipped target bumps this. Watched by
+# AnnouncementSpeakerUnavailable. speaker = entity id when it is a configured
+# route/env speaker, else "other" (bounded).
+ANNOUNCE_SPEAKER_UNAVAILABLE_TOTAL = Counter(
+    "bgw_announcement_speaker_unavailable_total",
+    "Announcement targets skipped because HA reports the speaker unavailable/missing",
+    ["speaker"],
+)
+
+ANNOUNCE_FALLBACK_TOTAL = Counter(
+    "bgw_announcement_fallback_total",
+    "Announcements re-routed to the reminder speakers because every routed speaker was dead",
+    ["type"],
+)
+
 PROGRESS_EVENTS_RECORDED = Counter(
     "bgw_progress_events_total",
     "Progress events recorded",

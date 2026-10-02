@@ -64,7 +64,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 |--------|------|---------|
 | POST | `/api/stt/transcribe` | Proxy audio to the HTTP STT server at `STT_URL` (multipart, max 10 MB) |
 | POST | `/api/tts/synthesize` | Synthesize text to WAV: `{text}` |
-| POST | `/api/announce` | Trigger TTS announcement via voice system |
+| POST | `/api/announce` | Trigger TTS announcement via voice system (`{text, speaker?}`, `announcement_type="manual"`). 200 `{ok:true, text, speaker}`; 200 `{ok:true, suppressed:true, reason}` under DND; **502** `{ok:false, error, unavailable:[...]}` when delivery fails (e.g. named speaker is `unavailable` in HA — manual announcements never fall back to another speaker). Speaker must match `media_player\.[a-z0-9_]+`. |
 | GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS) |
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
 | GET | `/api/announcements/stats` | Success rates, per-speaker breakdown, latency |
@@ -238,7 +238,7 @@ First-boot setup-wizard backend. Backed by `orchestrator/routes_setup.py`. All t
 | POST | `/api/setup/env/validate` | Body `{service, values}` — run a per-service live validator (HA `/api/`, Pushover `/users/validate.json`, ntfy publish ping, Paperless `/api/`) against the supplied creds via `httpx`. **NOT locked** — operator can re-check a stored token after setup. `values` is filtered to the allow-list before being passed to the validator (defence-in-depth against attacker-controlled URLs/headers). Returns `{ok: bool, detail: str}`. |
 | POST | `/api/setup/complete` | Mark the wizard done and persist the timestamp. Idempotent — a re-POST keeps the original `completed_at`. Returns `{ok: true, setup_completed: true, completed_at: str}`. |
 
-**State files.** `/app/data/setup_state.json` (`{setup_completed, completed_at}`) is written by `/api/setup/complete` via an atomic tmpfile + `os.replace` + fsync write (JSON sibling of `config_writer.atomic_write_yaml`). A corrupt/unreadable `setup_state.json` degrades to "first boot" (`is_first_boot()` → `True`) and self-heals on the next `/complete`.
+**State files.** `/app/data/setup_state.json` (`{setup_completed, completed_at}`) is written by `/api/setup/complete` via an atomic tmpfile + `os.replace` + fsync write (JSON sibling of `config_writer.atomic_write_yaml`). `is_first_boot()` fails CLOSED: only an absent `setup_state.json` means first boot; a present-but-corrupt/unreadable file returns `False`, so the first-boot-only `/api/setup/env` write surface stays locked (410). The file is fchown'd to the data dir's owner on write (`config_writer.match_parent_owner`) so the host backup can read it.
 
 **Hardware scan is host-produced.** The orchestrator container is CPU-only — it has no GPU access and cannot run `nvidia-smi`. `/api/setup/hardware` does NOT detect hardware live; it serves a cached `/app/data/hardware_scan.json` artifact written HOST-SIDE by `scripts/detect_hardware.sh --json <path>`. The operator runs `bash scripts/detect_hardware.sh --json data/app/hardware_scan.json` on the host before/during install.
 

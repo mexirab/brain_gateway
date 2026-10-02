@@ -514,6 +514,11 @@ async def _startup_logic():
     state_store.cleanup_old_announcements(keep_days=30)
     state_store.cleanup_old_selfcare(keep_days=90)
 
+    # Pre-create dead-speaker metric series (AnnouncementSpeakerUnavailable).
+    from orchestrator.reminder_manager import seed_announcement_metrics
+
+    seed_announcement_metrics()
+
     # First-boot setup wizard state (does not gate startup — informational)
     from orchestrator.routes_setup import is_first_boot
 

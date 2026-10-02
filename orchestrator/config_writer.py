@@ -44,6 +44,24 @@ def _redact(value: Any) -> Any:
     return value
 
 
+def match_parent_owner(fd: int, parent: str | Path) -> None:
+    """Give the open file `fd` the uid/gid of directory `parent` (no-op unless root).
+
+    The orchestrator container runs as root, so every mkstemp-based atomic
+    write lands as root:root 0600 in the /app/data bind mount — unreadable to
+    the host's nightly backup (scripts/backup_state.py runs as the data
+    dir's owner), which silently skipped these files. Called on the tmpfile
+    before os.replace so the final file never exists root-owned. fchown on the
+    fd, not chown on the path: the dir is writable by its owner, who could
+    swap the tmpfile for a symlink and have root chown the target.
+    """
+    if os.geteuid() != 0:
+        return
+    with contextlib.suppress(OSError):
+        st = os.stat(parent)
+        os.fchown(fd, st.st_uid, st.st_gid)
+
+
 def atomic_write_yaml(path: str | Path, data: Dict[str, Any]) -> None:
     """Write a YAML file atomically.
 
@@ -64,6 +82,7 @@ def atomic_write_yaml(path: str | Path, data: Dict[str, Any]) -> None:
             yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
             f.flush()
             os.fsync(f.fileno())
+            match_parent_owner(f.fileno(), target.parent)
         os.replace(tmp_path, target)
     except Exception:
         # Cleanup tmpfile on failure; original file unaffected

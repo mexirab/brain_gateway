@@ -800,6 +800,11 @@ async def announce_tts(body: AnnounceRequest):
         result = await _announce_voice(body.text, speaker=body.speaker, announcement_type="manual")
         if result.get("suppressed"):
             return {"ok": True, "suppressed": True, "reason": result.get("reason")}
+        if not result.get("success"):
+            return JSONResponse(
+                {"ok": False, "error": result.get("error"), "unavailable": result.get("unavailable", [])},
+                status_code=502,
+            )
         logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'}: {body.text[:80]}")
         return {"ok": True, "text": body.text, "speaker": body.speaker or "default"}
     except Exception as e:

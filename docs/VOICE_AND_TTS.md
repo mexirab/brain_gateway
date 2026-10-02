@@ -48,7 +48,22 @@ Voice clone (personal reference on the live deployment; configurable elsewhere) 
 ssh labadmin@10.0.0.195 'sudo systemctl restart qwen-tts'
 ```
 
-TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Reminders default to `REMINDER_SPEAKER` (may be comma-separated for multi-room broadcast). Morning briefing defaults to bedroom pair.
+TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Without an explicit `speaker=`, the target comes from the `/settings` Speakers panel (`announcement_routes.route_for(type)`), else the legacy `REMINDER_SPEAKER` / `MORNING_BRIEFING_SPEAKER` / `FOCUS_AUDIO_PLAYER` env vars (comma-separated = multi-room broadcast).
+
+### Speaker liveness (dead-speaker skip + fallback)
+
+HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speaker used to log as delivered. `_announce_voice` now checks each target's HA state BEFORE synthesizing TTS:
+
+| HA state result | Treated as |
+|-----------------|-----------|
+| `unavailable` or 404 | dead — skipped |
+| `unknown`, `off`, any other state, HA error/timeout | live — attempted |
+
+- If every routed speaker is dead, falls back to the live reminder-route speakers — for every `announcement_type` except `manual` (`/api/announce` naming a speaker), which fails honestly (HTTP 502).
+- Return dict may carry `unavailable` (dead targets) and `fallback` (speakers used instead).
+- Speaker ids must match `media_player\.[a-z0-9_]+` — enforced at announce time, in the Speakers panel validator (`announcement_routes._validate_speaker_string`), and on a routine's `speaker` (`routines_config`). The state GET URL-encodes the entity id.
+- Metrics: `bgw_announcement_speaker_unavailable_total{speaker}` (configured speakers, else `other`; pre-seeded at 0 by `seed_announcement_metrics` at startup) and `bgw_announcement_fallback_total{type}`. Alert `AnnouncementSpeakerUnavailable` — see `monitoring/README.md`.
+- Fix for a dead speaker is physical: power-cycle it; a stereo pair that doesn't return in HA needs re-pairing in Google Home.
 
 ## Reminder Voice Retry
 
