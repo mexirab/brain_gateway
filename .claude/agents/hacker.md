@@ -98,7 +98,7 @@ Try to cause service degradation:
 What to look for:
 - Request body size limits?
 - Graceful error handling on malformed input?
-- Can you exhaust the primary model GPU queue (Qwen3.8-27B NVFP4 on the Helios RTX 5090, `--max-num-seqs 2`)?
+- Can you exhaust the primary model GPU queue (Qwen3.8-27B TURBO Q6_K on llama.cpp on the Helios RTX 5090, `--parallel 1` — a single slot, so one long request stalls every other caller; `llamacpp:requests_deferred` shows it)?
 
 ### 7. Information Disclosure
 Try to extract internal details:

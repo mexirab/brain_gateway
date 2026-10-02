@@ -156,9 +156,9 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
-## Helios Primary Model (RadixArk/Qwen3.8-27B-NVFP4 via vLLM)
+## Helios Primary Model (Qwen3.8-27B TURBO Q6_K MTP via llama.cpp)
 
-Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 as `qwen3.8-27b-nvfp4` (`vllm-primary.service` running `vllm/vllm-openai:v0.27.1` on GPU0 RTX 5090, since the 2026-09-28 Qwen3.8 cutover; repo copy of the unit: `tts/vllm-primary.service`). Startup takes ~2m50s. The same endpoint also serves vision (`VISION_*`).
+Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 as `qwen3.8-27b-turbo-q6k` (`llama-server-primary.service` — llama.cpp build 11358 from `/home/labadmin/llama.cpp-mtp`, DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF, GPU0 RTX 5090, since the 2026-10-02 cutover; repo copy of the unit: `tts/llama-server-primary.service`, whose header comments are authoritative). Loads in ~4 s from page cache (~60 s cold). The same endpoint also serves vision (`VISION_*`) and exposes llama.cpp `/metrics`. Single slot (`--parallel 1`): background LLM jobs queue behind chat — watch `llamacpp:requests_deferred`.
 
 ### Check via API
 ```bash
@@ -168,20 +168,30 @@ curl -s http://10.0.0.195:8080/v1/models
 
 ### Manual start/stop (systemd on Helios, if needed)
 ```bash
-ssh labadmin@10.0.0.195 "sudo systemctl status vllm-primary"
-ssh labadmin@10.0.0.195 "sudo systemctl restart vllm-primary"
+ssh labadmin@10.0.0.195 "sudo systemctl status llama-server-primary"
+ssh labadmin@10.0.0.195 "sudo systemctl restart llama-server-primary"
 
-ssh labadmin@10.0.0.195 "journalctl -u vllm-primary --no-pager -n 100"
+ssh labadmin@10.0.0.195 "journalctl -u llama-server-primary --no-pager -n 100"
+
+# llama.cpp server metrics (queue depth, MTP acceptance, KV usage)
+curl -s http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing|kv_cache_usage_ratio)'
+
+# Sandbox score (expect ~3.1)
+ssh labadmin@10.0.0.195 "systemd-analyze security llama-server-primary"
 
 # Coder (Qwen3-Coder-Next 80B/3B MoE) on GPU1
 ssh labadmin@10.0.0.195 "sudo systemctl status llama-server-coder"
 
-# Rollback to the previous Qwen3.6 primary (then set MODEL_NAME/FALLBACK_MODEL_NAME back:
-# on Jupiter `cp .env.bak-qwen36 .env` and recreate the orchestrator)
-ssh labadmin@10.0.0.195 "sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak /etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload && sudo systemctl restart vllm-primary"
+# Rollback to the vLLM NVFP4 brain (2026-09-28 → 2026-10-02), then on Jupiter:
+#   cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator
+ssh labadmin@10.0.0.195 "sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary"
+
+# Older rollback (vLLM unit → Qwen3.6): on Helios
+#   sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak /etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload
+# then on Jupiter `cp .env.bak-qwen36 .env` and recreate the orchestrator.
 ```
 
-Garbled output: add `--enforce-eager` to the unit first (drops ~111 → ~36 tok/s). `llama-server.service` (the Qwen3.5-27B primary before 2026-04-26) is disabled but the unit file is retained on disk as a historical reference. Details: `docs/internal/HELIOS_INFRASTRUCTURE.md`.
+Garbled output / dropped tool calls: set `--spec-type none` in the unit first (disables MTP, ~45% slower). `--enforce-eager` was the vLLM-era lever and does nothing on llama.cpp. Never add `--verbose` or `--slot-save-path` (would log/persist prompt text). Sampling must keep temperature ≤ 1.0 and `repeat_penalty` 1.0 or MTP acceptance collapses. `vllm-primary.service` (rollback) and `llama-server.service` (the Qwen3.5-27B primary before 2026-04-26) are disabled but retained on disk. Details: `docs/internal/HELIOS_INFRASTRUCTURE.md`.
 
 ---
 

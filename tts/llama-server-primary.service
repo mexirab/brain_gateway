@@ -1,0 +1,104 @@
+# /etc/systemd/system/llama-server-primary.service
+# Primary brain on GPU0 (RTX 5090), port 8080 — DavidAU Qwen3.8-27B TURBO Fable
+# Cold-Fusion (Heretic/uncensored, NEO-CODER-MAX) Q6_K **MTP** GGUF on llama.cpp.
+# Installed 2026-10-02, replacing vllm-primary.service (Qwen3.8-27B NVFP4 on vLLM
+# 0.27.1; unit left on disk, disabled). Measured on the 5090 with these flags:
+# 106 prose / 122 code / 121 tool-call tok/s, draft acceptance 70–88 %, ~4 s load.
+#
+# Weights (sha256, verify after any re-download):
+#   ac011aabe685edbdf542e49351eb6c76c0e5531408f2507f2235ab10931e23a5  ...-MTP-Q6_K.gguf
+#   82e620db8cb83267e9775e5aad3e8d8aa5af7ace825e94c52d3d730eb35af88a  mmproj-F16.gguf
+#
+# Engine: /home/labadmin/llama.cpp-mtp (build 11358, 2026-10-02). The older
+# /home/labadmin/llama.cpp checkout (April 2026) is what llama-server-coder uses;
+# it cannot load Qwen3.8 GGUFs and has no --spec-type — do not point this unit at it.
+#
+# Rollback to vLLM NVFP4:
+#   systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary
+#   then on Jupiter: cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator
+#
+# Tunables: --spec-draft-n-max 2 (3 was ~equal on the PRO 5000; sweep on the 5090).
+# --parallel 1 keeps the MTP gain (it evaporates past ~4 slots); background LLM
+# callers (auto_learn, session_miner, task_decomposition, email→calendar, vision)
+# queue behind chat instead of running alongside it — watch llamacpp:requests_deferred.
+# Sampling: temperature must stay <= 1.0 and repeat_penalty 1.0 for MTP to help
+# (llama.cpp's wire name is repeat_penalty, not repetition_penalty).
+# If output garbles, first lever is --spec-type none (disable MTP), not --enforce-eager
+# (that was a vLLM flag). Never add --verbose or --slot-save-path: both would put
+# prompt text (medical facts, conversations) into the journal / on disk.
+#
+# Sandbox: runs as the nologin `llama` user (useradd -r -M -s /usr/sbin/nologin llama)
+# with read-only binds of the binary + weights and only the NVIDIA device nodes
+# (/dev/nvidia* are 0666; nvidia-persistenced creates them at boot). Do NOT add
+# MemoryDenyWriteExecute (CUDA JITs PTX into W+X pages) or PrivateDevices=yes
+# (hides /dev/nvidia*). Check with: systemd-analyze security llama-server-primary
+[Unit]
+Description=llama.cpp primary — Qwen3.8-27B TURBO Fable Q6_K MTP (GPU0 RTX 5090, port 8080)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+Conflicts=vllm-primary.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+# Model loads in ~4 s from page cache, ~60 s cold from NVMe. Must exceed the
+# readiness loop below (240 × ≥1 s) so a stuck load fails as "readiness check
+# failed", not as a systemd start timeout.
+TimeoutStartSec=360
+Environment=CUDA_VISIBLE_DEVICES=0
+
+User=llama
+Group=llama
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/labadmin/llama.cpp-mtp/build/bin /home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+# Host-firewall substitute (ufw is inactive on Helios): loopback, LAN, tailnet
+# CGNAT range, and the Docker bridge ranges for any on-box container client.
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12
+
+ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
+  -m /home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q6_K.gguf \
+  --mmproj /home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/mmproj-F16.gguf \
+  --alias qwen3.8-27b-turbo-q6k \
+  --host 0.0.0.0 --port 8080 \
+  --no-webui --no-slots --metrics \
+  -ngl 999 -fa on \
+  -c 131072 --cache-type-k q8_0 --cache-type-v q8_0 \
+  --parallel 1 \
+  --spec-type draft-mtp --spec-draft-n-max 2 \
+  --jinja --chat-template-kwargs '{"reasoning_effort":"low"}' \
+  --reasoning-format auto
+
+# Ready check: wait up to 4 min for /v1/models (503 while loading, 200 when ready —
+# the same path service_registry probes, so systemd-ready and orchestrator-healthy agree).
+ExecStartPost=/bin/bash -c "for i in {1..240}; do curl -fsS http://127.0.0.1:8080/v1/models >/dev/null && exit 0; sleep 1; done; exit 1"
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

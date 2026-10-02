@@ -18,14 +18,14 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 
 | Node | GPU | VRAM | Current role |
 |------|-----|------|-------------|
-| Helios | RTX 5090 (GPU0) | 32 GB | **Primary unified model + vision — Qwen3.8-27B NVFP4** (vLLM 0.27.1, port 8080, 131K ctx, fp8 KV, MTP, ~111 tok/s; uses ~30 GB — the whole card). Helios is power-tiered, not always-on. |
+| Helios | RTX 5090 (GPU0) | 32 GB | **Primary unified model + vision — DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF** (llama.cpp `llama-server-primary`, port 8080, 131K ctx, q8_0 KV, MTP draft-mtp, `--parallel 1`, 106–122 tok/s; uses ~30 GB — the whole card). The vLLM 0.27.1 NVFP4 unit is kept as rollback. Helios is power-tiered, not always-on. |
 | Helios | RTX PRO 5000 (GPU1) | 48 GB | Code agent — Qwen3-Coder-Next 80B/3B MoE Q4_K_XL (port 8082, experts in system RAM) + TTS (Qwen3-TTS-1.7B-Base, port 8002) |
 | Helios | CPU | — | STT — Parakeet TDT 0.6b v2 int8 ONNX (port 8003) |
 | Saturn | RTX 3080 | 10 GB | Idle — former vision host (Qwen3-VL-8B, port 8010), out of the runtime path since 2026-09-28 |
 | Saturn | RTX 3090 | 24 GB | Idle — former expert reasoning model (Qwen3-32B Q4_K_M, port 8084), deprecated 2026-09-28 |
 | Uranus | 2x RTX 5080 | 16 GB each | Test box, not in the runtime path |
 
-**Model history note:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. Primary since then: Lorbus/Qwen3.6-27B-int4-AutoRound (vLLM, 2026-04-26), Qwen3.8-27B NVFP4 (vLLM 0.27.1, 2026-09-28 — see `docs/internal/QWEN38_PREP_RESULTS.md` for the parser/KV/MTP compatibility findings). When scouting primary-slot replacements, verify tool-calling reliability explicitly (not just benchmark scores) before recommending.
+**Model history note:** Qwen3-VL-30B-A3B (Huihui abliterated) was trialed as primary in early April 2026 but hallucinated tool calls instead of executing them — reverted to Qwen3.5-27B. Primary since then: Lorbus/Qwen3.6-27B-int4-AutoRound (vLLM, 2026-04-26), Qwen3.8-27B NVFP4 (vLLM 0.27.1, 2026-09-28 → 2026-10-02 — see `docs/internal/QWEN38_PREP_RESULTS.md` for the parser/KV/MTP compatibility findings), DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (2026-10-02 — see `tts/llama-server-primary.service` header; candidates for this slot must ship an MTP draft head and load on llama.cpp ≥ build 11358). When scouting primary-slot replacements, verify tool-calling reliability explicitly (not just benchmark scores) before recommending.
 
 **Important:** These are the user's current GPUs but the product ships to other users too. Frame recommendations as "fits in X GB VRAM" so any user can match to their hardware.
 
@@ -60,9 +60,9 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 
 | Role | Current model | VRAM budget | Key requirements |
 |------|--------------|-------------|-----------------|
-| **Primary unified** (conversation + tools) | Qwen3.8-27B NVFP4 | 32 GB (GPU0 to itself on current hw) | Personality, empathy, ADHD-aware coaching, **reliable tool calling** (not hallucinated), valid JSON output, good long-context handling. Tool-calling reliability is non-negotiable — see history note. |
+| **Primary unified** (conversation + tools) | Qwen3.8-27B TURBO Q6_K MTP (llama.cpp) | 32 GB (GPU0 to itself on current hw) | Personality, empathy, ADHD-aware coaching, **reliable tool calling** (not hallucinated), valid JSON output, good long-context handling. Tool-calling reliability is non-negotiable — see history note. |
 | **Code agent** | Qwen3-Coder-Next 80B/3B MoE | 48 GB GPU1 shared with TTS, experts in system RAM | Code generation, refactoring, debugging, multi-file reasoning. Invoked for explicit coding tasks, not conversation. Prefer models with strong HumanEval / SWE-bench scores. |
-| **Vision** | Qwen3.8-27B NVFP4 (the primary, natively multimodal) | shared with primary | Image understanding, OCR, scene description, follow-up Q&A. Real-time-ish (sub-10s; measured 2–5 s). A dedicated small VL model is only worth it if it frees Helios from waking for photos. |
+| **Vision** | Qwen3.8-27B TURBO Q6_K + `mmproj-F16` (the primary, natively multimodal) | shared with primary | Image understanding, OCR, scene description, follow-up Q&A. Real-time-ish (sub-10s; measured 5.7 s on a 3024×4032 photo). A dedicated small VL model is only worth it if it frees Helios from waking for photos. |
 | **TTS** | Qwen3-TTS-1.7B-Base (custom voice clone) | ~5 GB, shares GPU1 with the code agent | Voice cloning quality, real-time factor <1.0, sentence pause injection. |
 | **STT** | Parakeet TDT 0.6b v2 (int8 ONNX, CPU) | none (CPU) | Accuracy, speed, streaming support. CPU-viable preferred (current engine is CPU); NeMo Parakeet v3 on GPU is the disabled alternative. |
 | **Embedding** | (see `EMBEDDING_MODEL` env var) | CPU or small GPU | Semantic quality for RAG/MemPalace, speed for 2-min ingest scheduler, CPU-friendly preferred. |

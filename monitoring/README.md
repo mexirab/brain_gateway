@@ -101,6 +101,9 @@ docker exec alertmanager amtool silence query    # active silences
 
 Configured in `prometheus/prometheus.yml.template`. After editing, render + reload (see Rendered Configs above) — or just merge to main and let CI do it.
 
+- **`llama-primary`** (added 2026-10-02): scrapes the primary brain's `llama-server --metrics` endpoint at `10.0.0.195:8080/metrics` every 30 s. Useful series: `llamacpp:requests_deferred` / `llamacpp:requests_processing` (the `--parallel 1` queue — the one failure mode the llama.cpp cutover introduced), the spec-decode draft/accepted counters (MTP acceptance), `llamacpp:prompt_tokens_cached_total`, `llamacpp:kv_cache_usage_ratio`. Helios is power-tiered and asleep most of the day, so this target is down by design most of the time — dashboard signal only, no target-down alert (same posture as the Helios node-exporter / gpu-exporter targets). No Grafana panel yet.
+- **Known gap:** `promtail-helios` has been down since 2026-07-24 and the repo copy of `promtail/promtail-helios.yml` has no systemd-journal scrape, so `journalctl -u llama-server-primary` is the only place the brain's logs exist. Self-audit (F-014) sees no Helios logs until that sidecar is restored with a journal job.
+
 ## Architecture
 
 ```

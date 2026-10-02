@@ -16,13 +16,13 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
 
 **Current status:**
 - Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on RadixArk/Qwen3.8-27B-NVFP4 (vLLM 0.27.1, since 2026-09-28; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed.
+- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF (llama.cpp `llama-server-primary`, since 2026-10-02; RadixArk/Qwen3.8-27B-NVFP4 on vLLM 0.27.1 2026-09-28 → 2026-10-02; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed.
 - TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
 - No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
 
 **Key components:**
 - **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
-- **Wake word manifest:** `hey_jess.json` lives in `/opt/gateway_mvp/models/`. Was served via an nginx `model-server` Docker container at `http://10.0.0.195:${SERVICE_MODEL_SERVER_PORT}/hey_jess.json` until 2026-04-26 when the unfinished service was removed (port 8080 collided with the primary LLM, then llama-server, now vllm-primary). Re-enable by uncommenting the wake-word block in `models/atom-echo-jess.yaml:171`, restoring the `model-server` entry in `docker-compose.yml` on a non-conflicting port, and reflashing via ESPHome.
+- **Wake word manifest:** `hey_jess.json` lives in `/opt/gateway_mvp/models/`. Was served via an nginx `model-server` Docker container at `http://10.0.0.195:${SERVICE_MODEL_SERVER_PORT}/hey_jess.json` until 2026-04-26 when the unfinished service was removed (port 8080 collided with the primary LLM, then llama-server, vllm-primary, now llama-server-primary). Re-enable by uncommenting the wake-word block in `models/atom-echo-jess.yaml:171`, restoring the `model-server` entry in `docker-compose.yml` on a non-conflicting port, and reflashing via ESPHome.
 - **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Helios)
 - **TTS bridge:** `wyoming-jessica-tts` (container/program-name retained for HA wiring back-compat) bridges Wyoming protocol -> HTTP TTS server on Helios. Default voice is configurable via `TTS_VOICE` env / `user_profile.yaml` `voice:` field; live deployment uses a personal reference clone (`voice: "jessica"`).
   - **Fresh install note:** the Wyoming bridge advertises a voice named `jessica` (wire ID, kept for back-compat); the compose default `--voice` is `default`. Either set `TTS_VOICE=jessica` in `.env` (matching the wire ID) AND `POST /voices/load` to register a `jessica` voice on your TTS server, OR change the advertised wire ID in `tts/wyoming_jessica_bridge.py` to match your registered voice name. Without alignment, HA TTS calls return HTTP 400 from the TTS server with no audio (silent on the HA side).

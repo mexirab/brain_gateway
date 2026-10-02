@@ -64,11 +64,11 @@ NVIDIA driver baseline: **580+ required for vLLM 0.19+ on Blackwell** (RTX PRO 5
 
 Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` installer) to `580.126.09` (`nvidia-driver-580-server-open` from Ubuntu noble-security). Method: surgical `.run` uninstall → unhold + purge PPA-held `libnvidia-*-570` packages → `apt install nvidia-driver-580-server-open`. DKMS rebuilt modules for kernel 6.8.0-60-generic.
 
-## Helios GPU Layout (post Qwen3.8 cutover, 2026-09-28)
+## Helios GPU Layout (post llama.cpp cutover, 2026-10-02)
 
 | GPU | Card | VRAM | Tenants |
 |-----|------|------|---------|
-| GPU0 | RTX 5090 | 32 GB | vLLM primary only (`vllm-primary.service`, port 8080, `RadixArk/Qwen3.8-27B-NVFP4`, ~30 GB used) |
+| GPU0 | RTX 5090 | 32 GB | llama.cpp primary only (`llama-server-primary.service`, port 8080, DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF + `mmproj-F16.gguf`, ~30 GB; peak 30.3 GB of 32.6 with a 3024×4032 vision request) |
 | GPU1 | RTX PRO 5000 Blackwell | 48 GB | TTS (`qwen-tts.service`, port 8002, `Qwen3-TTS-1.7B-Base`, voice `jessica`), Coder (`llama-server-coder.service`, port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) |
 | CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`) |
 
@@ -76,7 +76,35 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 - `llama-server-coder.service`'s Description says GPU0 — wrong; it runs on GPU1.
 - `parakeet-stt.service` (NeMo, GPU, v3) is disabled; it is the GPU alternative to `stt-onnx`, same port + API.
 
-### `vllm-primary.service` (repo copy: `tts/vllm-primary.service`)
+### `llama-server-primary.service` (repo copy: `tts/llama-server-primary.service`) — LIVE since 2026-10-02
+
+The unit's header comments are the authoritative record (weight sha256s, tunables, rollback, sandbox caveats). Summary:
+
+- **Model:** `DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`, Q6_K MTP quant (24 GB) + `mmproj-F16.gguf`, at `/home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/`. Alias `qwen3.8-27b-turbo-q6k` (= `MODEL_NAME`/`FALLBACK_MODEL_NAME`/`VISION_MODEL_NAME` in Jupiter `.env`).
+- **Engine:** llama.cpp `llama-server` build 11358 (2026-10-02) from `/home/labadmin/llama.cpp-mtp/build/bin`. The OLD `/home/labadmin/llama.cpp` checkout (April 2026, build 8932) is what `llama-server-coder.service` uses — it cannot load Qwen3.8 GGUFs and has no `--spec-type`. Two checkouts coexist on purpose; never point this unit at the old one.
+
+| Flag | Value | Why |
+|------|-------|-----|
+| `-c` | `131072` | Same context as the vLLM era |
+| `--cache-type-k/v` | `q8_0` | Weights + 131K KV fit the 5090 with headroom for the vision encoder |
+| `-fa on`, `-ngl 999` | | Full GPU offload |
+| `--parallel 1` | single slot | MTP gain evaporates past ~4 slots. Background LLM callers (auto_learn, session_miner, task_decomposition, email→calendar, vision) QUEUE behind interactive chat — watch `llamacpp:requests_deferred` |
+| `--spec-type draft-mtp --spec-draft-n-max 2` | MTP via the draft head inside the GGUF | Draft acceptance 70–88 %; 3 was ~equal on the PRO 5000, sweep on the 5090 |
+| `--jinja --chat-template-kwargs '{"reasoning_effort":"low"}'` | | Tool-call + reasoning parsing from the GGUF template |
+| `--reasoning-format auto` | | Thinking routed to `reasoning_content` |
+| `--no-webui --no-slots --metrics` | | `/metrics` scraped by Prometheus job `llama-primary` |
+
+Measured on the 5090: 106 prose / 122 code / 121 tool-call tok/s, ~2700 tok/s prompt processing, loads in ~4 s from page cache (~60 s cold from NVMe; `TimeoutStartSec=360`, readiness loop polls `/v1/models` for up to 240 s). vLLM NVFP4 was ~111 tok/s with a ~2m50s start. PRO 5000 trial before cutover: 65/88/90 tok/s with MTP vs 45 without.
+
+- **Sampling:** temperature ≤ 1.0 and `repeat_penalty` 1.0 (llama.cpp's wire name — not `repetition_penalty`) or MTP acceptance collapses.
+- **Garbled output / dropped tool calls:** first lever is `--spec-type none` (disables MTP, ~45% slower). `--enforce-eager` was a vLLM flag and means nothing here. Then `journalctl -u llama-server-primary`.
+- **Never add `--verbose` or `--slot-save-path`:** both put prompt text (medical facts, conversations) in the journal / on disk.
+- **`--api-key` NOT enabled:** `auto_learn.py`, `jobs_calendar.py`, `vision_handler.py`, `meal_manager.py` call `MODEL_URL` with bare httpx and have no api-key plumbing. Network exposure is bounded by the unit's `IPAddressAllow` instead.
+- **Sandbox:** runs as nologin `llama` (`useradd -r -M -s /usr/sbin/nologin llama`), `ProtectSystem=strict`, `ProtectHome=tmpfs` with read-only binds of the binary dir + weights dir, `PrivateTmp`, `DevicePolicy=closed` + `DeviceAllow` for `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` (0666 nodes created by `nvidia-persistenced` at boot), empty capability set, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (host-firewall substitute — ufw is inactive on Helios). `systemd-analyze security llama-server-primary` → 3.1. Do NOT add `MemoryDenyWriteExecute` (CUDA JITs PTX into W+X pages) or `PrivateDevices=yes` (hides `/dev/nvidia*`).
+- **Rollback to vLLM NVFP4:** on Helios `sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary`; on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator`. The two units carry `Conflicts=` so they cannot both hold port 8080.
+- **Logs:** journal only. `promtail-helios` has been down since 2026-07-24 and the repo promtail config has no journal scrape, so nothing from this unit reaches Loki (see `monitoring/README.md`; the F-014 self-audit therefore sees no Helios logs).
+
+### `vllm-primary.service` — ROLLBACK unit (repo copy: `tts/vllm-primary.service`; live 2026-09-28 → 2026-10-02, now disabled)
 
 `docker run vllm/vllm-openai:v0.27.1`, `--gpus device=0`, host port 8080 → 8000, weights bind-mounted read-only from `/home/labadmin/models/Qwen3.8-27B-NVFP4` (HF revision `319f741cce68d7914884900c138a1fbb70a42f30`, 20.4 GiB, hand-staged; copy also on Jupiter).
 
@@ -94,16 +122,18 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 
 Startup ~2m50s (torch.compile + CUDA graphs + the `ExecStartPost` `/v1/models` readiness loop; `TimeoutStartSec=900`).
 
-- **Garbled output:** add `--enforce-eager` first (drops to ~36 tok/s), then check `journalctl -u vllm-primary`.
-- **Rollback to Qwen3.6:** `sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak /etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload && sudo systemctl restart vllm-primary`; on Jupiter `cp .env.bak-qwen36 .env` and recreate the orchestrator. Qwen3.6 weights and the v0.19.1 image remain on Helios. (An older `vllm-primary.service.pre-singlegpu` backup from 2026-07-24 also sits there.)
+- **Garbled output (vLLM era):** add `--enforce-eager` first (drops to ~36 tok/s), then check `journalctl -u vllm-primary`.
+- **Rollback from the vLLM unit to Qwen3.6:** `sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak /etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload && sudo systemctl restart vllm-primary`; on Jupiter `cp .env.bak-qwen36 .env` and recreate the orchestrator. Qwen3.6 weights and the v0.19.1 image remain on Helios. (An older `vllm-primary.service.pre-singlegpu` backup from 2026-07-24 also sits there.)
 
 Full trial + acceptance record: `QWEN38_PREP_RESULTS.md` (same directory).
 
 ### History
 
+2026-09-28 → 2026-10-02: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1, GPU0 (`vllm-primary.service`, now the rollback unit above). Replaced by llama.cpp for ~equal decode speed (106–122 vs ~111 tok/s), a ~4 s warm start instead of ~2m50s, a systemd-sandboxed native process instead of a privileged `docker run`, and llama.cpp's `/metrics`.
+
 2026-04-26 → 2026-09-28: `Lorbus/Qwen3.6-27B-int4-AutoRound` on vLLM 0.19.1, GPU0 (Plan A — a bench showed it at only 28–79% of GPU0 throughput on the PRO 5000; see `VLLM_PHASE_3_PLAN.md` → Outcome). By 2026-09 the unit had drifted to 16,384 ctx, `--gpu-memory-utilization 0.70`, `--enforce-eager`, no MTP, and TTS was sharing the 5090.
 
-Disabled units kept on disk as historical reference: `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
+Disabled units kept on disk: `vllm-primary.service` (rollback target), `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM; uses the old `/home/labadmin/llama.cpp` checkout), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
 
 ## Performance Notes
 

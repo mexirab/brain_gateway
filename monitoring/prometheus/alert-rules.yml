@@ -199,12 +199,12 @@ groups:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
           description: "{{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
 
-      # Helios GPU0 (RTX 5090) is excluded: vLLM pre-allocates it at startup
-      # (--gpu-memory-utilization 0.93 → ~95.6% used, flat), so the ratio is
-      # permanently over the line and carries no signal. A brain problem shows
-      # up as the model endpoint going down, not as VRAM creep.
+      # Helios GPU0 (RTX 5090) is included again since 2026-10-02: the brain is
+      # llama.cpp (llama-server-primary.service), whose ~92% is real allocation
+      # (weights + 131K q8_0 KV), not a vLLM pre-allocation. Creep past 95%
+      # (e.g. vision encoder buffers on top of the static set) is a real signal.
       - alert: HighVRAMUsage
-        expr: nvidia_smi_memory_used_bytes{uuid!="188c12a4-a819-3222-9f48-d47811befb6f"} / nvidia_smi_memory_total_bytes > 0.95
+        expr: nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes > 0.95
         for: 5m
         labels:
           severity: warning
@@ -234,7 +234,7 @@ groups:
           severity: warning
         annotations:
           summary: "Chat streams are dying mid-answer — users get truncated replies"
-          description: "{{ $value | humanize }} stream(s) died after emitting in the last hour; the user received a silently truncated answer. Check vLLM health and the '[UNIFIED] Stream died mid-answer' lines in Loki."
+          description: "{{ $value | humanize }} stream(s) died after emitting in the last hour; the user received a silently truncated answer. Check `systemctl status llama-server-primary` / `journalctl -u llama-server-primary` on Helios and the '[UNIFIED] Stream died mid-answer' lines in Loki."
 
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
@@ -442,8 +442,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Model tool calls are being silently dropped (Qwen3.8 on vLLM 0.27.1)"
-          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack: Qwen3.8-27B NVFP4 on vLLM 0.27.1 (vllm-primary.service on Helios), --tool-call-parser qwen3_xml, --reasoning-parser qwen3, MTP speculative decoding + CUDA graphs on; the 2026-09-28 acceptance session saw no drops. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then check `journalctl -u vllm-primary` on Helios. If output also looks garbled, first lever is adding --enforce-eager to the unit (~111 -> ~36 tok/s). Last resort: roll back to Qwen3.6 via /etc/systemd/system/vllm-primary.service.qwen36.bak + Jupiter .env.bak-qwen36 (see docs/internal/HELIOS_INFRASTRUCTURE.md)."
+          summary: "Model tool calls are being silently dropped (Qwen3.8 TURBO Q6_K on llama.cpp)"
+          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-02): DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (llama-server-primary.service on Helios GPU0), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the cutover session saw no drops. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~45% slower). Rollback to the vLLM NVFP4 brain: on Helios `systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary`, on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator` (see tts/llama-server-primary.service header)."
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded

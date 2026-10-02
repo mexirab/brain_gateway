@@ -108,6 +108,23 @@ scrape_configs:
           node: 'jupiter'
 
   # ============================================
+  # PRIMARY LLM SERVER METRICS (llama-server --metrics, Helios GPU0)
+  # ============================================
+  # llamacpp:* counters: requests_deferred / requests_processing (the --parallel 1
+  # queue — the one failure mode the 2026-10-02 llama.cpp cutover introduced),
+  # spec-decode draft/accepted tokens (MTP acceptance), prompt_tokens_cached_total,
+  # kv_cache_usage_ratio. Helios is power-tiered and asleep most of the day, so
+  # this target is down most of the time by design — same posture as the Helios
+  # node-exporter/gpu-exporter targets: dashboard signal only, no target-down alert.
+  - job_name: 'llama-primary'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['${NODE_HELIOS_IP}:8080']
+        labels:
+          node: 'helios'
+          service: 'llama-primary'
+
+  # ============================================
   # HTTP HEALTH PROBES (Blackbox Exporter)
   # ============================================
   - job_name: 'blackbox-http'
@@ -133,13 +150,13 @@ scrape_configs:
           service: 'stt'
           node: 'helios'
 
-      # Primary LLM (llama-server on Helios GPU1)
+      # Primary LLM (llama-server-primary on Helios GPU0 RTX 5090)
       - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
         labels:
           service: 'llama-primary'
           node: 'helios'
 
-      # Code agent (llama-server on Helios GPU0)
+      # Code agent (llama-server-coder on Helios GPU1 RTX PRO 5000)
       - targets: ['http://${NODE_HELIOS_IP}:8082/v1/models']
         labels:
           service: 'llama-coder'

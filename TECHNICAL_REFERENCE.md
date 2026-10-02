@@ -146,7 +146,7 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 | POST | `/api/vision/analyze` | Analyze an image (multipart form or JSON with base64) |
 | GET | `/api/vision/status` | Vision model health and configuration |
 
-Live deployment: `VISION_MODEL_URL=http://10.0.0.195:8080/v1`, `VISION_MODEL_NAME=qwen3.8-27b-nvfp4` — the primary brain serves vision (since 2026-09-28; Saturn Qwen3-VL-8B :8010 is out of the runtime path). The service-registry vision probe hits `/v1/models`, which the brain serves. Vision therefore needs Helios awake.
+Live deployment: `VISION_MODEL_URL=http://10.0.0.195:8080/v1`, `VISION_MODEL_NAME=qwen3.8-27b-turbo-q6k` — the primary brain serves vision (llama.cpp `llama-server-primary` with `--mmproj` since 2026-10-02; the vLLM NVFP4 brain did the same 2026-09-28 → 2026-10-02; Saturn Qwen3-VL-8B :8010 is out of the runtime path). The brain has one slot (`--parallel 1`), so vision requests queue behind chat. The service-registry vision probe hits `/v1/models`, which the brain serves. Vision therefore needs Helios awake.
 
 ### Ambient / System
 
@@ -192,7 +192,7 @@ Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bg
 | POST | `/api/meals/photo` | Upload meal photo → vision estimate: multipart `file` field; returns `{calories_estimate, description, confidence}` |
 | GET | `/api/meals/photo/{filename}` | Serve a stored meal photo |
 
-**Photo flow:** upload → vision model (`VISION_MODEL_URL`; live: the Qwen3.8 brain on Helios :8080 since 2026-09-28, was Qwen3-VL-8B on Saturn) strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
+**Photo flow:** upload → vision model (`VISION_MODEL_URL`; live: the Qwen3.8 brain on Helios :8080 since 2026-09-28 — llama.cpp `qwen3.8-27b-turbo-q6k` since 2026-10-02; was Qwen3-VL-8B on Saturn) strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
 
 ### Paperless Bridge (F-012)
 

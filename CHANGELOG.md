@@ -4,6 +4,34 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — llama.cpp brain cutover (2026-10-02)
+
+Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) still ship vLLM.
+
+### Infrastructure
+
+- **Primary brain → `DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`** (Q6_K MTP quant, 24 GB, + `mmproj-F16.gguf`) on llama.cpp `llama-server` build 11358 (checkout `/home/labadmin/llama.cpp-mtp`), via the new sandboxed `llama-server-primary.service` (repo copy `tts/llama-server-primary.service`; header comments carry sha256s, tunables, rollback). GPU0 RTX 5090, port 8080, alias `qwen3.8-27b-turbo-q6k`. Flags: 131K ctx, q8_0 K/V, flash attention, `--parallel 1`, `--spec-type draft-mtp --spec-draft-n-max 2`, `--jinja` + `reasoning_effort: low`, `--reasoning-format auto`, `--metrics`. Measured: 106 prose / 122 code / 121 tool-call tok/s, draft acceptance 70–88 %, ~2700 tok/s prompt processing, ~4 s warm load (vs ~111 tok/s and ~2m50s on vLLM NVFP4). Replaces `vllm-primary.service` (vLLM 0.27.1, RadixArk NVFP4, live 2026-09-28 → 2026-10-02) — disabled on Helios, kept as the rollback unit (`tts/vllm-primary.service` stays in the repo). Jupiter `.env`: `MODEL_NAME`/`FALLBACK_MODEL_NAME`/`VISION_MODEL_NAME` → `qwen3.8-27b-turbo-q6k`, URLs unchanged; backup `.env.bak-qwen38-nvfp4`. Rollback: `systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary` on Helios, restore the `.env` backup on Jupiter.
+- **Unit sandbox:** nologin `llama` user, `ProtectSystem=strict`, `ProtectHome=tmpfs` + read-only binds of binary and weights, `DevicePolicy=closed` with explicit NVIDIA `DeviceAllow`, empty capability set, `IPAddressAllow` for loopback/LAN/tailnet/Docker ranges (ufw is inactive on Helios). `systemd-analyze security` 3.1. `MemoryDenyWriteExecute` and `PrivateDevices` deliberately omitted (break CUDA). `--api-key` not enabled — `auto_learn.py`, `jobs_calendar.py`, `vision_handler.py`, `meal_manager.py` have no api-key plumbing.
+- **Vision stays on the brain:** `analyze_image`, meal photos and Telegram photos verified on a 3024×4032 image (correct description, 5.7 s, VRAM peak 30.3 GB of 32.6).
+- **Single-slot consequence:** background LLM callers (auto_learn, session_miner, task_decomposition, email→calendar, vision) now queue behind interactive chat instead of running alongside it.
+- `orchestrator/config.py`: `model_start_cmd`/`model_stop_cmd` defaults now `sudo systemctl start|stop llama-server-primary` (were the disabled `llama-server` unit).
+
+### Monitoring
+
+- New Prometheus scrape job `llama-primary` → `10.0.0.195:8080/metrics` (`llamacpp:*`: `requests_deferred`, `requests_processing`, spec-decode draft/accepted, `prompt_tokens_cached_total`, `kv_cache_usage_ratio`). Target is down most of the day by design (Helios is power-tiered) — dashboard signal only, no target-down alert.
+- `HighVRAMUsage` no longer excludes GPU0 (llama.cpp's ~92% is real allocation, not a vLLM pre-allocation).
+- `ToolCallsSilentlyDropped` and `ChatStreamTruncating` runbook text now point at `journalctl -u llama-server-primary` and `--spec-type none` as the first lever (not `--enforce-eager`).
+
+### Known gaps (surfaced by review, not fixed)
+
+- `promtail-helios` has been down since 2026-07-24 (all Helios compose containers exited) and `monitoring/promtail/promtail-helios.yml` has no systemd-journal scrape job — host model-unit logs never reach Loki, so the F-014 self-audit sees no Helios logs. Earlier docs claiming journal scraping were wrong and are corrected.
+
+### Docs
+
+- `CLAUDE.md`, `COMMANDS.md`, `docs/ENV_VARS.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md`, `docs/VOICE_AND_TTS.md`, `docs/WORKOUTS_AND_MEALS.md`, `TECHNICAL_REFERENCE.md`, `ROADMAP.md`, `.env.example`, agent definitions updated. `docs/internal/QWEN38_PREP_RESULTS.md` and `LOCAL_SINGLE_BOX_PLAN.md` marked historical.
+
+---
+
 ## [Unreleased] — focus-mode site blocking deprecated (2026-09-29)
 
 Maintainer-deployment change; the Pi-hole blocking code stays in the product (compose default `FOCUS_BLOCKING_ENABLED=false`).

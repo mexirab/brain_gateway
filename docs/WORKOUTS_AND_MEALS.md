@@ -57,7 +57,7 @@ Calories-only. No protein/carb/fat breakdown in v1. Meal logging is independent 
 
 1. User uploads a photo to `POST /api/meals/photo` (multipart `file` field).
 2. Photo is saved to `MEAL_PHOTOS_DIR` with a uuid4 filename. Extension allowlist enforced: `jpg`, `jpeg`, `png`, `gif`, `webp`.
-3. Image is sent to the vision model at `VISION_MODEL_URL` with a strict-JSON prompt. Live deployment (since 2026-09-28): the Qwen3.8-27B NVFP4 brain on Helios (`http://10.0.0.195:8080/v1`, `VISION_MODEL_NAME=qwen3.8-27b-nvfp4`), verified at 2–5 s with parseable calorie JSON; it replaced Qwen3-VL-8B on Saturn (:8010). Photo estimation therefore needs Helios awake (power-tiered), same as chat.
+3. Image is sent to the vision model at `VISION_MODEL_URL` with a strict-JSON prompt. Live deployment: the primary brain on Helios (`http://10.0.0.195:8080/v1`; since 2026-10-02 the llama.cpp Qwen3.8-27B TURBO Q6_K GGUF + `mmproj-F16`, `VISION_MODEL_NAME=qwen3.8-27b-turbo-q6k`, verified on a 3024×4032 photo in 5.7 s; 2026-09-28 → 2026-10-02 the vLLM NVFP4 brain at 2–5 s). It replaced Qwen3-VL-8B on Saturn (:8010). The brain runs `--parallel 1`, so a photo estimate queues behind any in-flight chat turn. Photo estimation therefore needs Helios awake (power-tiered), same as chat.
 4. Response `{calories_estimate, description, confidence}` is returned to the caller.
 5. User confirms in the frontend UI before the meal is saved (or the tool passes `auto_log=true` to skip confirmation).
 

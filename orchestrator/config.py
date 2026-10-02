@@ -124,8 +124,10 @@ class Settings(BaseSettings):
     model_server_ip: str = ""
     model_ssh_user: str = ""
     model_ssh_key: str = "/root/.ssh/id_ed25519"
-    model_start_cmd: str = "sudo systemctl start llama-server"
-    model_stop_cmd: str = "sudo systemctl stop llama-server"
+    # Default to the live primary unit (llama-server-primary since 2026-10-02).
+    # The bare `llama-server` unit is the disabled April-2026 Qwen3.5 checkout.
+    model_start_cmd: str = "sudo systemctl start llama-server-primary"
+    model_stop_cmd: str = "sudo systemctl stop llama-server-primary"
 
     # -- Reminders / speakers (empty = skip TTS) ---------------------------------
     reminder_speaker: str = ""

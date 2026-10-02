@@ -12,6 +12,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - **July 2026 reliability push** (PRs #32–#43): reminder-delivery state machine fixed, code-agent shell hardened, nightly off-box backups to Saturn, June perf branches rebased in, HA migrated off the dead Pi onto Jupiter, monitoring/Homepage config folded into the repo, deploy race fixed, Grafana consolidated to one app dashboard.
 - **Durable task backlog** shipped July 2026 (PRs #44/#45/#46): `tasks` table + `backlog_manager` + voice tools (`add_task`, `what_now`, …) + `/tasks` page + dashboard TasksCard + brain-dump capture routing + `decompose_task` auto-linking + weekly Sunday review + Grafana row. The missing spine now exists.
 - **Qwen3.8 brain** shipped 2026-09-28: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1 (5090, 131K context, MTP, ~111 tok/s — 2× Qwen3.6), and it now serves vision too (Saturn Qwen3-VL-8B out of the runtime path). See CHANGELOG.
+- **llama.cpp brain** shipped 2026-10-02: DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (`llama-server-primary.service`, sandboxed, 131K ctx, MTP, 106–122 tok/s, ~4 s warm start, llama.cpp `/metrics` scraped) replaced the vLLM NVFP4 unit, which stays on disk as the rollback. See CHANGELOG.
 
 The list below is ordered by tier, and within each tier roughly by priority.
 
