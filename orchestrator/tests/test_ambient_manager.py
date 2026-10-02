@@ -467,3 +467,56 @@ async def test_google_all_day_events_excluded(reset_phone_cache, patched_now, pa
 
     assert status["events_remaining"] == 1
     assert status["next_event"]["title"] == "Real Meeting"
+
+
+# ---------------------------------------------------------------------------
+# set_ambient_led — shared.ha_client
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def led_ha(monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestrator import shared
+
+    client = SimpleNamespace(call_service=AsyncMock(return_value=SimpleNamespace(success=True, message="ok")))
+    monkeypatch.setattr(shared, "ha_client", client)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_set_ambient_led_calls_shared_ha_client(led_ha, monkeypatch):
+    from orchestrator import ambient_manager, shared
+
+    monkeypatch.setattr(shared, "AMBIENT_LED_ENTITY", "light.desk_led")
+    await ambient_manager.set_ambient_led("red")
+    led_ha.call_service.assert_awaited_once_with("light.desk_led", "turn_on", ambient_manager._LED_COLORS["red"])
+
+
+@pytest.mark.asyncio
+async def test_set_ambient_led_unknown_color_falls_back_to_green(led_ha, monkeypatch):
+    from orchestrator import ambient_manager, shared
+
+    monkeypatch.setattr(shared, "AMBIENT_LED_ENTITY", "light.desk_led")
+    await ambient_manager.set_ambient_led("chartreuse")
+    led_ha.call_service.assert_awaited_once_with("light.desk_led", "turn_on", ambient_manager._LED_COLORS["green"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity", ["", None])
+async def test_set_ambient_led_noop_when_entity_unset(led_ha, monkeypatch, entity):
+    from orchestrator import ambient_manager, shared
+
+    monkeypatch.setattr(shared, "AMBIENT_LED_ENTITY", entity)
+    await ambient_manager.set_ambient_led("red")
+    led_ha.call_service.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_ambient_led_swallows_ha_errors(led_ha, monkeypatch):
+    from orchestrator import ambient_manager, shared
+
+    monkeypatch.setattr(shared, "AMBIENT_LED_ENTITY", "light.desk_led")
+    led_ha.call_service.side_effect = RuntimeError("HA down")
+    await ambient_manager.set_ambient_led("red")  # must not raise

@@ -168,6 +168,8 @@ routines:
         skippable: true
 ```
 
+Optional per-step `ha_action` (`{entity_id, service, data}`) fires via `shared.ha_client` when the step is announced (`routine_manager._fire_step_ha_action`). **Skipped while DND is active** (`shared.DND_ACTIVE`, set by `sleep_mode`) so a routine can't turn lights on during quiet time. The example above is illustrative; the live `data/routines.yaml` has no `ha_action` steps.
+
 ### Tools
 
 ```json

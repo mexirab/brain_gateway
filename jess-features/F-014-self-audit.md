@@ -17,9 +17,9 @@ The *secondary* benefit — and the one the user explicitly asked to evaluate �
 
 ## What Jess Does
 
-Every day at 07:00 UTC (configurable), the orchestrator's APScheduler fires `run_self_audit` from `orchestrator/jobs_self_audit.py`. The job:
+Every day at 07:00 (configurable; `SELF_AUDIT_HOUR_UTC` is actually interpreted in the scheduler's local timezone despite its name), the orchestrator's APScheduler fires `run_self_audit` from `orchestrator/jobs_self_audit.py`. The job:
 
-1. **Queries Loki** (Jupiter, port 3100) for the last 24h of error/warn level logs from every service the Helios promtail sidecar ships — both Docker containers (orchestrator, frontend, searxng, etc.) and systemd units (llama-server, llama-server-coder, qwen-tts, brain-gateway). The promtail-helios config gains a `journal:` scrape stage in this feature so systemd units land in Loki alongside container logs.
+1. **Queries Loki** (Jupiter, port 3100) for the last 24h of error/warn level logs: `{service=~".+", level=~"error|warning|warn|critical|fatal"}` — every stream promtail ships (promtail normalizes to `warning`). As deployed this covers the orchestrator and the Jupiter stack; Helios logs appear only when `promtail-helios` is running (down since 2026-07-24), and its systemd units never do (the planned `journal:` scrape stage below was not implemented). An earlier `{host="helios"}` selector matched nothing once the Helios sidecar died. The "Loki alive" probe is a `query_range` for any line in the window (Loki rejects log selectors on instant `/query`).
 
 2. **Buckets** the entries into clusters by `(service, first 80 chars of message)` and keeps the top N most frequent. Crude but cheap and good enough — exact-prefix matching catches "ConnectionError to ChromaDB" as one cluster regardless of the trailing IP/port detail.
 
@@ -77,7 +77,7 @@ the model download. User kills it. No more restart loop.
 
 - NEW `jess-features/F-014-self-audit.md` (this file).
 - NEW `orchestrator/jobs_self_audit.py` — main implementation. Async, single-pass, never raises.
-- `orchestrator/orchestrator.py` — register the cron job at 07:00 UTC (configurable) plus a manual-trigger endpoint at `POST /api/self_audit/run` (bearer-gated).
+- `orchestrator/orchestrator.py` — register the cron job at 07:00 (configurable; scheduler-local time) plus a manual-trigger endpoint at `POST /api/self_audit/run` (bearer-gated).
 - `orchestrator/config.py` — new `SELF_AUDIT_*` settings + `self_audit_loki_url` + `model_validator` to disable cleanly if `SELF_AUDIT_ENABLED=true` but Loki URL is unset.
 - `orchestrator/metrics.py` — `bgw_self_audit_runs_total{result}`, `bgw_self_audit_clusters_total{service,severity}`, `bgw_self_audit_latency_seconds`.
 - `orchestrator/api_routes.py` — `POST /api/self_audit/run` bearer-protected manual trigger so the user can fire today's audit without waiting for tomorrow.
@@ -89,9 +89,9 @@ the model download. User kills it. No more restart loop.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `SELF_AUDIT_ENABLED` | `false` | Master kill switch |
-| `SELF_AUDIT_HOUR_UTC` | `7` | Hour-of-day in UTC for the daily run |
+| `SELF_AUDIT_HOUR_UTC` | `7` | Hour-of-day for the daily run (scheduler-local timezone despite the name) |
 | `SELF_AUDIT_LOOKBACK_HOURS` | `24` | Loki query range |
-| `SELF_AUDIT_LOKI_URL` | `http://jupiter-amds.tail74fc4a.ts.net:3100` | Loki base URL (no path) |
+| `SELF_AUDIT_LOKI_URL` | `http://10.0.0.248:3100` | Loki base URL (no path). Use an IP/LAN name — MagicDNS `*.ts.net` doesn't resolve inside the container |
 | `SELF_AUDIT_MAX_CLUSTERS` | `30` | Cap on clusters fed to Jess (prompt-size bound) |
 | `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Markdown report directory |
 | `SELF_AUDIT_PUSHOVER_PRIORITY_NORMAL` | `0` | Priority when no CRITICAL clusters |
@@ -116,7 +116,7 @@ the model download. User kills it. No more restart loop.
 
 - **Read-only design:** Jess can only emit text. The orchestrator never exec()s anything from her output.
 - **Destructive command filter:** the prompt explicitly forbids `rm`, `dd`, `mkfs`, `format`, `drop`, `truncate`. The implementation also greps the LLM output for those tokens and tags any cluster with one as `severity=LOW, action=REJECTED-AUTO` so it's visible but flagged.
-- **Loki URL** is on the trusted Tailscale network (jupiter-amds.tail74fc4a.ts.net). No auth on the query path is intentional and documented; if Tailscale ACLs ever loosen, this needs revisiting.
+- **Loki URL** is on the trusted LAN (`10.0.0.248:3100`). No auth on the query path is intentional and documented; if Tailscale ACLs ever loosen, this needs revisiting.
 - **systemd journal exposure to Promtail:** the journal mount is `:ro`. Promtail-helios already runs with `cap_drop: ALL` and `no-new-privileges`. Adding the journal mount widens its blast-radius slightly but doesn't grant new capabilities.
 - **Manual trigger endpoint** (`POST /api/self_audit/run`) is bearer-gated via the existing `BearerAuthMiddleware` — not added to `PUBLIC_PREFIXES`. Additionally, `run_self_audit()` re-checks `SELF_AUDIT_ENABLED` and `JESS_ADVANCED` at function entry, so the manual route honors the same productization gate as the cron registration in `orchestrator.py` (no bypass).
 

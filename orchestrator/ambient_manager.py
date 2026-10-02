@@ -255,12 +255,10 @@ async def set_ambient_led(color: str) -> None:
     color_data = _LED_COLORS.get(color, _LED_COLORS["green"])
 
     try:
-        from orchestrator.ha_integration import ha_client
-
-        result = await ha_client.call_service(entity_id, "turn_on", color_data)
+        result = await shared.ha_client.call_service(entity_id, "turn_on", color_data)
         if result.success:
             logger.debug(f"[AMBIENT] LED set to {color}")
         else:
             logger.warning(f"[AMBIENT] LED update failed: {result.message}")
     except Exception as e:
-        logger.warning(f"[AMBIENT] LED error: {e}")
+        logger.warning(f"[AMBIENT] LED error: {e}", exc_info=True)

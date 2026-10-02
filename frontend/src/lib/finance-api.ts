@@ -82,8 +82,8 @@ export const financeApi = {
       `/api/finance/transactions${month ? `?month=${month}` : ''}`,
     ),
   reclassifyTransaction: (transactionId: number, isDiscretionary: boolean) =>
-    post<{ ok: boolean }>('/api/finance/transactions/reclassify', {
-      transaction_id: transactionId,
+    post<{ success: boolean; id: number; is_discretionary: boolean }>('/api/finance/transactions/reclassify', {
+      id: transactionId,
       is_discretionary: isDiscretionary,
     }),
 

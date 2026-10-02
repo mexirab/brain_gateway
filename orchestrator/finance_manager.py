@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from orchestrator.schemas import CategoryMappingRequest
+from orchestrator.schemas import CategoryMappingRequest, ReclassifyTransactionRequest
 
 if TYPE_CHECKING:
     from orchestrator.actual_client import ActualSnapshot
@@ -112,6 +112,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     category TEXT,
     subcategory TEXT,
     is_discretionary INTEGER NOT NULL DEFAULT 1,
+    -- Set by the dashboard dot (reclassify). NULL = follow category_mapping;
+    -- 0/1 wins over the mapping on every sync and mapping change.
+    discretionary_override INTEGER,
     budget_period TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -231,7 +234,8 @@ def _migrate_schema(conn) -> None:
 
     Idempotent. On a fresh DB it only creates the unique index. On a legacy
     DB it adds ``transactions.external_id`` (backfilled as ``ynab:<id>`` so the
-    rows survive as history) and copies the old category mappings.
+    rows survive as history) and copies the old category mappings. Any DB
+    without ``transactions.discretionary_override`` gets it (NULL = no override).
     """
     cols = {r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()}
     if "external_id" not in cols:
@@ -242,6 +246,8 @@ def _migrate_schema(conn) -> None:
                 "WHERE ynab_transaction_id IS NOT NULL AND external_id IS NULL"
             )
             logger.info("[FINANCE] Migrated YNAB transaction ids to external_id")
+    if "discretionary_override" not in cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN discretionary_override INTEGER")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_external_id ON transactions(external_id)")
     has_old_map = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ynab_category_mapping'"
@@ -529,35 +535,53 @@ async def get_transactions(month: str = None, limit: int = 50):
 
 
 @router.post("/transactions/reclassify")
-async def reclassify_transaction(req: Request):
-    body = await req.json()
-    txn_id = body.get("id")
-    is_discretionary = body.get("is_discretionary")
+async def reclassify_transaction(body: ReclassifyTransactionRequest):
+    """Flip one transaction's discretionary flag from the dashboard dot.
 
-    if txn_id is None or is_discretionary is None:
-        return JSONResponse({"error": "id and is_discretionary required"}, status_code=400)
+    For synced rows the choice is stored as a per-transaction override so the
+    next budget sync (and any category-mapping change) keeps it. Flipping a
+    row back to what its category mapping says clears the override, so the
+    dot is its own undo. Manual rows are never re-derived and need none.
+    """
+    new_disc = 1 if body.is_discretionary else 0
 
-    with get_db() as conn:
-        txn = conn.execute("SELECT * FROM transactions WHERE id = ?", (txn_id,)).fetchone()
-        if not txn:
-            return JSONResponse({"error": "Transaction not found"}, status_code=404)
-
-        old_disc = bool(txn["is_discretionary"])
-        new_disc = bool(is_discretionary)
-
-        if old_disc != new_disc:
+    def _apply() -> bool:
+        with get_db() as conn:
+            txn = conn.execute(
+                "SELECT category, source, budget_period FROM transactions WHERE id = ?", (body.id,)
+            ).fetchone()
+            if not txn:
+                return False
+            override: int | None = None
+            if txn["source"] != "manual":
+                mapped = conn.execute(
+                    "SELECT is_discretionary FROM category_mapping WHERE category_name = ?", (txn["category"],)
+                ).fetchone()
+                if new_disc != (1 if mapped and mapped["is_discretionary"] else 0):
+                    override = new_disc
+            period = txn["budget_period"]
             conn.execute(
-                "UPDATE transactions SET is_discretionary = ? WHERE id = ?",
-                (1 if new_disc else 0, txn_id),
+                "UPDATE transactions SET is_discretionary = ?, discretionary_override = ? WHERE id = ?",
+                (new_disc, override, body.id),
             )
-            # Update budget period spending
-            delta = txn["amount"] if new_disc else -txn["amount"]
-            conn.execute(
-                "UPDATE budget_periods SET discretionary_spent = discretionary_spent + ? WHERE year_month = ?",
-                (delta, txn["budget_period"]),
-            )
+            _recalculate_periods(conn, [period])
+            # With a synced Fun Money balance, the current month's health bar
+            # is budget = balance + spent (see apply_snapshot), so remaining
+            # mirrors Actual. Re-derive budget the same way so remaining
+            # doesn't jump now and snap back on the next sync. Absolute, not a
+            # before/after delta: concurrent clicks must not compound.
+            balance = _synced_fun_money_balance(conn)
+            if period == _current_year_month() and balance is not None:
+                conn.execute(
+                    "UPDATE budget_periods SET discretionary_budget = ? + discretionary_spent WHERE year_month = ?",
+                    (balance, period),
+                )
+            return True
 
-    return {"success": True, "id": txn_id, "is_discretionary": new_disc}
+    if not await asyncio.to_thread(_apply):
+        return JSONResponse({"ok": False, "error": "Transaction not found"}, status_code=404)
+    logger.info("[FINANCE] Transaction %d reclassified (discretionary=%s)", body.id, bool(new_disc))
+    return {"ok": True, "success": True, "id": body.id, "is_discretionary": bool(new_disc)}
 
 
 # ---- Side Quests ----
@@ -869,6 +893,18 @@ def _recalculate_periods(conn: sqlite3.Connection, periods: Iterable[str | None]
         conn.execute("UPDATE budget_periods SET discretionary_spent = ? WHERE year_month = ?", (total, ym))
 
 
+def _synced_fun_money_balance(conn: sqlite3.Connection) -> float | None:
+    """Fun Money balance from the last successful sync, or None if it set none."""
+    row = conn.execute("SELECT last_result FROM budget_sync_state WHERE id = 1").fetchone()
+    if not row or not row["last_result"]:
+        return None
+    try:
+        balance = json.loads(row["last_result"]).get("fun_money_balance")
+        return float(balance) if balance is not None else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _record_sync_state(
     conn: sqlite3.Connection, *, ok: bool, budget_name: str | None, error: str | None, result: dict | None
 ) -> None:
@@ -972,7 +1008,8 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
             if ext in existing:
                 conn.execute(
                     """UPDATE transactions SET date=?, amount=?, name=?, merchant_name=?, category=?,
-                       subcategory=?, is_discretionary=?, budget_period=? WHERE external_id=?""",
+                       subcategory=?, is_discretionary=COALESCE(discretionary_override, ?), budget_period=?
+                       WHERE external_id=?""",
                     (*values, ext),
                 )
                 updated += 1
@@ -985,7 +1022,8 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
                        ON CONFLICT(external_id) DO UPDATE SET
                          date=excluded.date, amount=excluded.amount, name=excluded.name,
                          merchant_name=excluded.merchant_name, category=excluded.category,
-                         subcategory=excluded.subcategory, is_discretionary=excluded.is_discretionary,
+                         subcategory=excluded.subcategory,
+                         is_discretionary=COALESCE(transactions.discretionary_override, excluded.is_discretionary),
                          budget_period=excluded.budget_period
                        RETURNING (created_at < datetime('now', '-1 second')) AS pre_existing""",
                     (*values, ext, SYNC_PROVIDER),
@@ -1242,7 +1280,8 @@ async def update_category_mapping(body: CategoryMappingRequest) -> dict:
                        ON CONFLICT(category_name) DO UPDATE SET is_discretionary = excluded.is_discretionary""",
                     (cat_name, 1 if is_disc else 0),
                 )
-            # Re-flag every synced row from the new mapping, then recompute.
+            # Re-flag every synced row from the new mapping (per-transaction
+            # dashboard overrides win), then recompute.
             current = {
                 r["category_name"]: bool(r["is_discretionary"])
                 for r in conn.execute("SELECT category_name, is_discretionary FROM category_mapping").fetchall()
@@ -1253,7 +1292,7 @@ async def update_category_mapping(body: CategoryMappingRequest) -> dict:
             periods = set()
             for r in rows:
                 conn.execute(
-                    "UPDATE transactions SET is_discretionary = ? WHERE id = ?",
+                    "UPDATE transactions SET is_discretionary = COALESCE(discretionary_override, ?) WHERE id = ?",
                     (1 if current.get(r["category"], False) else 0, r["id"]),
                 )
                 periods.add(r["budget_period"])
@@ -1266,7 +1305,10 @@ async def update_category_mapping(body: CategoryMappingRequest) -> dict:
 
 @router.post("/sync/reset")
 async def reset_sync() -> dict:
-    """Delete all synced rows and sync state; the next sync re-imports."""
+    """Delete all synced rows and sync state; the next sync re-imports.
+
+    Per-transaction discretionary overrides (dashboard dot) go with the rows.
+    """
 
     def _reset() -> None:
         with get_db() as conn:

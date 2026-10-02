@@ -643,3 +643,78 @@ class TestRoutineMetrics:
             await rm._deliver_nudge()
         assert _counter_value(ROUTINE_AUTO_ENDED, routine="evening", step=step.id) == ended_before
         assert _counter_value(ROUTINE_AUTO_SKIPPED, routine="evening", step=step.id) == skipped_before
+
+
+# ---------------------------------------------------------------------------
+# _fire_step_ha_action — shared.ha_client + DND gate
+# ---------------------------------------------------------------------------
+
+
+# The autouse fixture above patches _fire_step_ha_action with an AsyncMock;
+# grab the real function at collection time so these tests exercise it.
+try:
+    from orchestrator.routine_manager import _fire_step_ha_action as _REAL_FIRE_STEP
+except Exception:  # deps unavailable — the autouse fixture skips anyway
+    _REAL_FIRE_STEP = None
+
+
+class TestFireStepHaAction:
+    @pytest.fixture
+    def ha(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from orchestrator import shared
+
+        client = SimpleNamespace(call_service=AsyncMock(return_value=SimpleNamespace(success=True, message="ok")))
+        monkeypatch.setattr(shared, "ha_client", client)
+        monkeypatch.setattr(shared, "DND_ACTIVE", False)
+        return client
+
+    def _step(self, ha_action):
+        from orchestrator.routine_manager import RoutineStep
+
+        return RoutineStep(id="lights", label="Lights on", ha_action=ha_action)
+
+    @pytest.mark.asyncio
+    async def test_calls_shared_ha_client_when_dnd_off(self, ha):
+        _fire_step_ha_action = _REAL_FIRE_STEP
+
+        await _fire_step_ha_action(
+            self._step({"entity_id": "light.kitchen", "service": "turn_on", "data": {"brightness": 50}})
+        )
+        ha.call_service.assert_awaited_once_with("light.kitchen", "turn_on", {"brightness": 50})
+
+    @pytest.mark.asyncio
+    async def test_data_defaults_to_empty_dict(self, ha):
+        _fire_step_ha_action = _REAL_FIRE_STEP
+
+        await _fire_step_ha_action(self._step({"entity_id": "light.kitchen", "service": "turn_on"}))
+        ha.call_service.assert_awaited_once_with("light.kitchen", "turn_on", {})
+
+    @pytest.mark.asyncio
+    async def test_skipped_under_dnd(self, ha, monkeypatch):
+        from orchestrator import shared
+
+        _fire_step_ha_action = _REAL_FIRE_STEP
+
+        monkeypatch.setattr(shared, "DND_ACTIVE", True)
+        await _fire_step_ha_action(self._step({"entity_id": "light.kitchen", "service": "turn_on"}))
+        ha.call_service.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "action",
+        [None, {}, {"entity_id": "light.kitchen"}, {"service": "turn_on"}, {"entity_id": "", "service": "turn_on"}],
+    )
+    @pytest.mark.asyncio
+    async def test_no_call_without_complete_action(self, ha, action):
+        _fire_step_ha_action = _REAL_FIRE_STEP
+
+        await _fire_step_ha_action(self._step(action))
+        ha.call_service.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ha_exception_is_swallowed(self, ha):
+        _fire_step_ha_action = _REAL_FIRE_STEP
+
+        ha.call_service.side_effect = RuntimeError("HA down")
+        await _fire_step_ha_action(self._step({"entity_id": "light.kitchen", "service": "turn_on"}))  # no raise

@@ -7,7 +7,7 @@ All API endpoints should use these models instead of raw dicts.
 from typing import Any, Optional
 
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, StrictBool, field_validator
+from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator
 
 # ---------------------------------------------------------------------------
 # Standard response envelope
@@ -211,3 +211,14 @@ class CategoryMappingRequest(BaseModel):
             if not name.strip() or len(name) > 200:
                 raise ValueError("category names must be 1-200 characters")
         return v
+
+
+class ReclassifyTransactionRequest(BaseModel):
+    """POST /api/finance/transactions/reclassify body.
+
+    Sets a per-transaction override that budget sync and category-mapping
+    changes leave alone. StrictBool for the same reason as above.
+    """
+
+    id: StrictInt = Field(ge=1, le=2**63 - 1)  # SQLite INTEGER range; larger → 422, not a bind OverflowError
+    is_discretionary: StrictBool

@@ -575,20 +575,23 @@ async def _fire_step_ha_action(step: RoutineStep) -> None:
     """Fire Home Assistant action for a step (e.g., turn on lights)."""
     if not step.ha_action:
         return
+    # Same rule as the wind-down dim rung: a scheduled routine can start while
+    # the user is still asleep under sleep_mode, and lights would wake them.
+    if shared.DND_ACTIVE:
+        logger.info("[ROUTINE] DND active — skipping HA action for step %s", step.id)
+        return
     try:
-        from orchestrator.ha_integration import ha_client
-
         entity_id = step.ha_action.get("entity_id", "")
         service = step.ha_action.get("service", "")
         data = step.ha_action.get("data", {})
         if entity_id and service:
-            result = await ha_client.call_service(entity_id, service, data)
+            result = await shared.ha_client.call_service(entity_id, service, data)
             if result.success:
                 logger.info(f"[ROUTINE] HA action: {service} on {entity_id}", extra={"component": "routine"})
             else:
                 logger.warning(f"[ROUTINE] HA action failed: {result.message}")
     except Exception as e:
-        logger.warning(f"[ROUTINE] HA action error: {e}")
+        logger.warning(f"[ROUTINE] HA action error: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

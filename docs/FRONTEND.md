@@ -39,7 +39,7 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 - Client: `lib/finance-api.ts` (`getSyncStatus`, `triggerSync`, `getBudgetCategories`, `updateCategoryMapping`, `resetSync`; errors surface the backend `{error}`), types in `lib/finance-types.ts` (`BudgetSyncStatus`; `Transaction.source` = `actual` | `ynab` (legacy) | `manual`).
 - Quest board: Sync button shown whenever the sync is configured (even after a failure); a failed last sync shows "Last sync failed" linking to Finance settings; 409 → "Sync already running".
 - Finance settings: Actual connection card, `last_error` alert, per-category discretionary mapping (grouped as in Actual, with budgeted/spent/balance).
-- Transactions: source filter All / Synced / Manual; synced rows badged Actual or YNAB (legacy history).
+- Transactions: source filter All / Synced / Manual; synced rows badged Actual or YNAB (legacy history). Discretionary dot toggles via `reclassifyTransaction` → `POST /api/finance/transactions/reclassify` (`{id, is_discretionary}`); on synced rows the choice is stored as a per-transaction override that sticks through syncs (clicking back to the category's mapping clears it); failures show an inline error.
 - Gamified: XP for under-budget months, levels, streaks, quest board. Health bar remaining = Actual's Fun Money category balance (`ACTUAL_FUN_MONEY_CATEGORY`).
 - SQLite persistence at `/app/data/finance.db`
 

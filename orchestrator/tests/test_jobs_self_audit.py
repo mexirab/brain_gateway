@@ -556,6 +556,21 @@ def _loki_alive_response(present: bool) -> dict:
     return {"status": "success", "data": {"resultType": "streams", "result": []}}
 
 
+def _loki_routes(alive: Response, errors: Response | None = None):
+    """respx side_effect for query_range keyed on the ``query`` param.
+
+    The error fetch carries a ``level=~`` matcher; the alive probe does not.
+    """
+
+    def _handler(request: httpx.Request) -> Response:
+        q = request.url.params.get("query", "")
+        if "level=~" in q:
+            return errors if errors is not None else Response(200, json=_loki_query_range_response([]))
+        return alive
+
+    return _handler
+
+
 def _entries_with_one_cluster(n: int = 3) -> list[dict]:
     """A single Loki stream with N values — bucketed to one cluster."""
     now_ns = int(datetime.now(UTC).timestamp() * 1e9)
@@ -642,10 +657,11 @@ class TestRunSelfAudit:
     async def test_loki_empty_and_probe_empty_returns_failed(self, audit_on, mock_pushover, mock_palace):
         from orchestrator.jobs_self_audit import run_self_audit
 
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
-            return_value=Response(200, json=_loki_query_range_response([]))
+        # Both the error fetch and the alive probe hit query_range; the probe
+        # is the second call (no level filter).
+        route = respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            side_effect=_loki_routes(alive=Response(200, json=_loki_alive_response(False)))
         )
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(return_value=Response(200, json=_loki_alive_response(False)))
 
         with patch(
             "orchestrator.orchestrator.call_model",
@@ -655,6 +671,7 @@ class TestRunSelfAudit:
 
         assert result["result"] == "failed"
         assert result["reason"] == "loki_probe_empty"
+        assert route.call_count == 2  # error fetch + alive probe
         assert cm.await_count == 0
         assert mock_pushover.await_count == 1
         assert "LOKI EMPTY" in mock_pushover.await_args.kwargs["title"]
@@ -664,10 +681,11 @@ class TestRunSelfAudit:
     async def test_loki_empty_with_probe_alive_returns_clean(self, audit_on, mock_pushover, mock_palace):
         from orchestrator.jobs_self_audit import run_self_audit
 
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
-            return_value=Response(200, json=_loki_query_range_response([]))
+        # Both the error fetch and the alive probe hit query_range; the probe
+        # is the second call (no level filter).
+        route = respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            side_effect=_loki_routes(alive=Response(200, json=_loki_alive_response(True)))
         )
-        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(return_value=Response(200, json=_loki_alive_response(True)))
 
         with patch(
             "orchestrator.orchestrator.call_model",
@@ -677,6 +695,7 @@ class TestRunSelfAudit:
 
         assert result["result"] == "ok"
         assert result["clusters"] == 0
+        assert route.call_count == 2  # error fetch + alive probe
         # No LLM call when there's nothing to diagnose.
         assert cm.await_count == 0
         assert mock_pushover.await_count == 1
@@ -743,3 +762,129 @@ class TestRunSelfAudit:
         assert "journalctl" in report
         # mempalace.store was called with the audit summary.
         assert mock_palace.store.await_count == 1
+
+
+# ===========================================================================
+# Loki query shape + _loki_alive probe (post-Helios-sidecar: keyed on service)
+# ===========================================================================
+
+
+class TestLokiQueries:
+    def test_error_query_uses_service_label_not_host(self):
+        from orchestrator.jobs_self_audit import _LOKI_ERROR_QUERY
+
+        assert 'host="helios"' not in _LOKI_ERROR_QUERY
+        assert 'service=~".+"' in _LOKI_ERROR_QUERY
+        # promtail normalizes to "warning" — must be matched.
+        assert "warning" in _LOKI_ERROR_QUERY.split("level=~")[1]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fetch_errors_sends_error_query(self):
+        from orchestrator.jobs_self_audit import _LOKI_ERROR_QUERY, _fetch_loki_errors
+
+        route = respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_query_range_response([]))
+        )
+        await _fetch_loki_errors(loki_url=_LOKI_URL, lookback_hours=24)
+        assert route.call_count == 1
+        assert route.calls.last.request.url.params["query"] == _LOKI_ERROR_QUERY
+
+
+class TestLokiAlive:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_uses_query_range_with_window(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        instant = respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(return_value=Response(400))
+        route = respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_alive_response(True))
+        )
+        assert await _loki_alive(_LOKI_URL, 24) is True
+        assert instant.call_count == 0
+        params = route.calls.last.request.url.params
+        assert params["query"] == '{service=~".+"}'
+        assert params["limit"] == "1"
+        span_h = (int(params["end"]) - int(params["start"])) / 1e9 / 3600
+        assert span_h == pytest.approx(24, abs=0.01)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_trailing_slash_on_url_is_tolerated(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_alive_response(True))
+        )
+        assert await _loki_alive(_LOKI_URL + "/", 24) is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_any_stream_counts_as_alive(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        body = {
+            "status": "success",
+            "data": {"resultType": "streams", "result": [{"stream": {"service": "x", "level": "info"}, "values": []}]},
+        }
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(return_value=Response(200, json=body))
+        assert await _loki_alive(_LOKI_URL, 24) is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_empty_result_is_not_alive(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_alive_response(False))
+        )
+        assert await _loki_alive(_LOKI_URL, 24) is False
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_http_400_is_not_alive(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(return_value=Response(400, text="parse error"))
+        assert await _loki_alive(_LOKI_URL, 24) is False
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_connect_error_is_not_alive(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(side_effect=httpx.ConnectError("refused"))
+        assert await _loki_alive(_LOKI_URL, 24) is False
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_json_body_is_not_alive(self):
+        from orchestrator.jobs_self_audit import _loki_alive
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(return_value=Response(200, text="<html>"))
+        assert await _loki_alive(_LOKI_URL, 24) is False
+
+
+class TestRunSelfAuditProbe400:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_400_with_empty_errors_returns_failed(self, audit_on, mock_pushover, mock_palace):
+        """Regression: the old probe hit /query with a log selector, which Loki 400s —
+        a 400 must surface as failed, never as a green "all clean"."""
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            side_effect=_loki_routes(alive=Response(400, text="bad request"))
+        )
+        with patch(
+            "orchestrator.orchestrator.call_model",
+            new=AsyncMock(return_value={"choices": [{"message": {"content": "x"}}]}),
+        ) as cm:
+            result = await run_self_audit()
+
+        assert result["result"] == "failed"
+        assert result["reason"] == "loki_probe_empty"
+        assert cm.await_count == 0
+        assert mock_pushover.await_count == 1
+        assert "All clean" not in mock_pushover.await_args.kwargs["message"]

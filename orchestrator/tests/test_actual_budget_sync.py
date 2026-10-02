@@ -576,3 +576,323 @@ async def test_reset_route_clears_synced_rows(fdb):
     assert not _q(fdb, "SELECT 1 FROM transactions WHERE source='actual'")
     assert _spent(fdb, dt.date.today().strftime("%Y-%m"))[0] == pytest.approx(0)
     assert finance_manager._status_sync()["last_synced_at"] is None
+
+
+# --------------------------------------------------------------------------- per-transaction discretionary override
+
+
+def _row(path, ext):
+    return _q(path, "SELECT * FROM transactions WHERE external_id = ?", (ext,))[0]
+
+
+async def _reclassify(path, ext, value):
+    tid = _row(path, ext)["id"]
+    req = finance_manager.ReclassifyTransactionRequest(id=tid, is_discretionary=value)
+    return await finance_manager.reclassify_transaction(req)
+
+
+def test_migration_adds_discretionary_override_idempotently(tmp_path, monkeypatch):
+    path = str(tmp_path / "pre_override.db")
+    conn = sqlite3.connect(path)
+    with conn:
+        conn.executescript(
+            """
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, external_id TEXT, date TEXT NOT NULL,
+                amount REAL NOT NULL, name TEXT NOT NULL, merchant_name TEXT, category TEXT, subcategory TEXT,
+                is_discretionary INTEGER NOT NULL DEFAULT 1, budget_period TEXT,
+                source TEXT NOT NULL DEFAULT 'manual', created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            INSERT INTO transactions (external_id, date, amount, name, budget_period, source)
+                VALUES ('actual:x', '2026-01-05', 12, 'Pre-override row', '2026-01', 'actual');
+            """
+        )
+    conn.close()
+    monkeypatch.setattr(finance_manager, "DB_PATH", path)
+    finance_manager.init_db()
+    cols = {r[1] for r in _q(path, "PRAGMA table_info(transactions)")}
+    assert "discretionary_override" in cols
+    finance_manager.init_db()  # second run must not try to re-add the column
+    assert _q(path, "SELECT discretionary_override FROM transactions")[0][0] is None
+
+
+@pytest.mark.asyncio
+async def test_reclassify_missing_id_is_404_ok_false(fdb):
+    import json as _json
+
+    r = await finance_manager.reclassify_transaction(
+        finance_manager.ReclassifyTransactionRequest(id=999, is_discretionary=True)
+    )
+    assert r.status_code == 404
+    assert _json.loads(r.body)["ok"] is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"id": 1, "is_discretionary": "false"},
+        {"id": 0, "is_discretionary": True},
+        {"id": 1},
+        {"is_discretionary": True},
+        {"id": "1", "is_discretionary": True},
+        {"id": 1.0, "is_discretionary": True},
+        {"id": 10**30, "is_discretionary": True},
+        {"id": 2**63, "is_discretionary": True},
+        {"id": -1, "is_discretionary": True},
+    ],
+)
+def test_reclassify_route_rejects_bad_bodies_with_422(fdb, body):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(finance_manager.router)
+    r = TestClient(app).post("/api/finance/transactions/reclassify", json=body)
+    assert r.status_code == 422
+
+
+def test_reclassify_route_happy_path_envelope(fdb):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    _map(fdb, Rent=False)
+    finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")]))
+    app = FastAPI()
+    app.include_router(finance_manager.router)
+    tid = _row(fdb, "actual:b")["id"]
+    r = TestClient(app).post("/api/finance/transactions/reclassify", json={"id": tid, "is_discretionary": True})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True and r.json()["is_discretionary"] is True
+
+
+@pytest.mark.asyncio
+async def test_reclassify_synced_row_sets_override_and_undo_clears_it(fdb):
+    _map(fdb, Rent=False)
+    finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")]))
+    ym = dt.date.today().strftime("%Y-%m")
+    assert _spent(fdb, ym)[0] == pytest.approx(0)
+
+    r = await _reclassify(fdb, "actual:b", True)
+    assert r["ok"] is True and r["is_discretionary"] is True
+    row = _row(fdb, "actual:b")
+    assert row["is_discretionary"] == 1 and row["discretionary_override"] == 1
+    assert _spent(fdb, ym)[0] == pytest.approx(50)
+
+    # Flipping back to what the mapping says is the undo: override cleared.
+    await _reclassify(fdb, "actual:b", False)
+    row = _row(fdb, "actual:b")
+    assert row["is_discretionary"] == 0 and row["discretionary_override"] is None
+    assert _spent(fdb, ym)[0] == pytest.approx(0)
+
+
+@pytest.mark.asyncio
+async def test_reclassify_unmapped_category_treated_as_non_discretionary(fdb):
+    # No mapping row at all -> mapping value is 0, so True is an override and False clears it.
+    finance_manager.apply_snapshot(_snap([_tx("u", "-8", category="Mystery")]))
+    await _reclassify(fdb, "actual:u", True)
+    assert _row(fdb, "actual:u")["discretionary_override"] == 1
+    await _reclassify(fdb, "actual:u", False)
+    assert _row(fdb, "actual:u")["discretionary_override"] is None
+
+
+@pytest.mark.asyncio
+async def test_reclassify_manual_row_never_gets_override(fdb):
+    _map(fdb, Dining_Out=True)
+    ym = dt.date.today().strftime("%Y-%m")
+    conn = sqlite3.connect(fdb)
+    with conn:
+        conn.execute(
+            "INSERT INTO transactions (date, amount, name, category, is_discretionary, budget_period, source)"
+            " VALUES (?, 20, 'Cash lunch', 'Dining Out', 1, ?, 'manual')",
+            (dt.date.today().isoformat(), ym),
+        )
+        tid = conn.execute("SELECT id FROM transactions WHERE name='Cash lunch'").fetchone()[0]
+    conn.close()
+    for value in (False, True, False):
+        await finance_manager.reclassify_transaction(
+            finance_manager.ReclassifyTransactionRequest(id=tid, is_discretionary=value)
+        )
+        row = _q(fdb, "SELECT is_discretionary, discretionary_override FROM transactions WHERE id=?", (tid,))[0]
+        assert row["is_discretionary"] == (1 if value else 0)
+        assert row["discretionary_override"] is None
+
+
+@pytest.mark.asyncio
+async def test_reclassify_current_month_keeps_remaining_with_synced_fun_money(fdb):
+    _map(fdb, Rent=False, Dining_Out=True)
+    finance_manager.apply_snapshot(
+        _snap([_tx("a", "-10"), _tx("b", "-50", category="Rent", group="Bills")], fun_balance="120.01")
+    )
+    ym = dt.date.today().strftime("%Y-%m")
+    spent0, budget0 = _spent(fdb, ym)
+    assert budget0 - spent0 == pytest.approx(120.01)
+
+    await _reclassify(fdb, "actual:b", True)
+    spent1, budget1 = _spent(fdb, ym)
+    assert spent1 == pytest.approx(spent0 + 50)
+    assert budget1 - spent1 == pytest.approx(120.01)  # remaining unchanged
+
+    await _reclassify(fdb, "actual:a", False)
+    spent2, budget2 = _spent(fdb, ym)
+    assert spent2 == pytest.approx(50)
+    assert budget2 - spent2 == pytest.approx(120.01)
+
+    # And the next sync agrees (no snap-back): remaining still mirrors Actual.
+    finance_manager.apply_snapshot(
+        _snap([_tx("a", "-10"), _tx("b", "-50", category="Rent", group="Bills")], fun_balance="120.01")
+    )
+    spent3, budget3 = _spent(fdb, ym)
+    assert spent3 == pytest.approx(50)
+    assert budget3 - spent3 == pytest.approx(120.01)
+
+
+@pytest.mark.asyncio
+async def test_reclassify_without_synced_fun_money_leaves_budget_untouched(fdb):
+    _map(fdb, Rent=False)
+    finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")], fun_balance=None))
+    ym = dt.date.today().strftime("%Y-%m")
+    spent0, budget0 = _spent(fdb, ym)
+    await _reclassify(fdb, "actual:b", True)
+    spent1, budget1 = _spent(fdb, ym)
+    assert spent1 == pytest.approx(spent0 + 50)
+    assert budget1 == pytest.approx(budget0)
+
+
+@pytest.mark.asyncio
+async def test_reclassify_past_month_leaves_budget_untouched_even_with_fun_money(fdb):
+    _map(fdb, Rent=False)
+    prev = _month(-1).replace(day=5)
+    finance_manager.apply_snapshot(_snap([_tx("p", "-40", date=prev, category="Rent", group="Bills")]))
+    pym = prev.strftime("%Y-%m")
+    spent0, budget0 = _spent(fdb, pym)
+    await _reclassify(fdb, "actual:p", True)
+    spent1, budget1 = _spent(fdb, pym)
+    assert spent1 == pytest.approx(spent0 + 40)
+    assert budget1 == pytest.approx(budget0)
+
+
+@pytest.mark.asyncio
+async def test_resync_update_path_keeps_override_and_others_follow_mapping(fdb):
+    _map(fdb, Dining_Out=True, Rent=False)
+    finance_manager.apply_snapshot(_snap([_tx("a", "-10"), _tx("b", "-50", category="Rent", group="Bills")]))
+    await _reclassify(fdb, "actual:a", False)  # override 0 against mapping True
+    assert _row(fdb, "actual:a")["discretionary_override"] == 0
+
+    _map(fdb, Rent=True)  # mapping changes upstream of the next sync
+    res = finance_manager.apply_snapshot(_snap([_tx("a", "-12"), _tx("b", "-50", category="Rent", group="Bills")]))
+    assert res["updated"] == 2 and res["inserted"] == 0
+    a, b = _row(fdb, "actual:a"), _row(fdb, "actual:b")
+    assert a["is_discretionary"] == 0 and a["discretionary_override"] == 0 and a["amount"] == 12
+    assert b["is_discretionary"] == 1 and b["discretionary_override"] is None
+    assert _spent(fdb, dt.date.today().strftime("%Y-%m"))[0] == pytest.approx(50)
+
+
+def test_resync_on_conflict_path_keeps_override(fdb):
+    """Rows re-dated from before the window take the INSERT ... ON CONFLICT path."""
+    _map(fdb, Rent=False)
+    old = _month(-6).replace(day=10)
+    conn = sqlite3.connect(fdb)
+    with conn:
+        for ext, override in (("actual:o", 1), ("actual:n", None)):
+            conn.execute(
+                "INSERT INTO transactions (external_id, date, amount, name, category, is_discretionary,"
+                " discretionary_override, budget_period, source, created_at)"
+                " VALUES (?, ?, 30, 'X', 'Rent', 1, ?, ?, 'actual', datetime('now','-1 day'))",
+                (ext, old.isoformat(), override, old.strftime("%Y-%m")),
+            )
+    conn.close()
+    res = finance_manager.apply_snapshot(
+        _snap([_tx("o", "-30", category="Rent", group="Bills"), _tx("n", "-30", category="Rent", group="Bills")])
+    )
+    assert res["updated"] == 2 and res["inserted"] == 0
+    o, n = _row(fdb, "actual:o"), _row(fdb, "actual:n")
+    assert o["is_discretionary"] == 1 and o["discretionary_override"] == 1
+    assert n["is_discretionary"] == 0 and n["discretionary_override"] is None
+    assert _spent(fdb, dt.date.today().strftime("%Y-%m"))[0] == pytest.approx(30)
+
+
+@pytest.mark.asyncio
+async def test_mapping_change_respects_override(fdb):
+    _map(fdb, Dining_Out=False)
+    finance_manager.apply_snapshot(_snap([_tx("a", "-10"), _tx("b", "-5")]))
+    await _reclassify(fdb, "actual:a", True)
+    ym = dt.date.today().strftime("%Y-%m")
+    assert _spent(fdb, ym)[0] == pytest.approx(10)
+
+    await finance_manager.update_category_mapping(
+        finance_manager.CategoryMappingRequest(mappings={"Dining Out": False})
+    )
+    assert _row(fdb, "actual:a")["is_discretionary"] == 1
+    assert _row(fdb, "actual:b")["is_discretionary"] == 0
+    assert _spent(fdb, ym)[0] == pytest.approx(10)
+
+    await finance_manager.update_category_mapping(finance_manager.CategoryMappingRequest(mappings={"Dining Out": True}))
+    assert _row(fdb, "actual:b")["is_discretionary"] == 1
+    assert _spent(fdb, ym)[0] == pytest.approx(15)
+
+
+@pytest.mark.parametrize(
+    "last_result, expected",
+    [
+        ("__no_row__", None),
+        (None, None),
+        ("", None),
+        ("{not json", None),
+        ("[1, 2]", None),
+        ('"a string"', None),
+        ('{"fun_money_balance": null}', None),
+        ('{"other": 1}', None),
+        ('{"fun_money_balance": "abc"}', None),
+        ('{"fun_money_balance": {"x": 1}}', None),
+        ('{"fun_money_balance": 0}', 0.0),
+        ('{"fun_money_balance": 120.01}', 120.01),
+        ('{"fun_money_balance": -15}', -15.0),
+    ],
+)
+def test_synced_fun_money_balance(fdb, last_result, expected):
+    with finance_manager.get_db() as conn:
+        if last_result != "__no_row__":
+            conn.execute("INSERT INTO budget_sync_state (id, last_result) VALUES (1, ?)", (last_result,))
+        got = finance_manager._synced_fun_money_balance(conn)
+    if expected is None:
+        assert got is None
+    else:
+        assert isinstance(got, float) and got == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_reclassify_repeated_flips_are_idempotent(fdb):
+    _map(fdb, Rent=False)
+    finance_manager.apply_snapshot(
+        _snap([_tx("a", "-10"), _tx("b", "-50", category="Rent", group="Bills")], fun_balance="120.01")
+    )
+    ym = dt.date.today().strftime("%Y-%m")
+    for _ in range(5):
+        await _reclassify(fdb, "actual:b", True)
+        spent, budget = _spent(fdb, ym)
+        assert spent == pytest.approx(50)
+        assert budget - spent == pytest.approx(120.01)
+
+
+@pytest.mark.asyncio
+async def test_reclassify_rederives_budget_absolutely_from_synced_balance(fdb):
+    """A drifted budget (e.g. from a past race) is corrected, not compounded."""
+    _map(fdb, Rent=False)
+    finance_manager.apply_snapshot(_snap([_tx("b", "-50", category="Rent", group="Bills")], fun_balance="120.01"))
+    ym = dt.date.today().strftime("%Y-%m")
+    conn = sqlite3.connect(fdb)
+    with conn:
+        conn.execute("UPDATE budget_periods SET discretionary_budget = 9999 WHERE year_month = ?", (ym,))
+    conn.close()
+    await _reclassify(fdb, "actual:b", True)
+    spent, budget = _spent(fdb, ym)
+    assert budget == pytest.approx(120.01 + 50)
+
+
+def test_reclassify_route_max_sqlite_id_is_404_not_500(fdb):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(finance_manager.router)
+    r = TestClient(app).post("/api/finance/transactions/reclassify", json={"id": 2**63 - 1, "is_discretionary": True})
+    assert r.status_code == 404 and r.json()["ok"] is False

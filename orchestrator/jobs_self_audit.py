@@ -1,8 +1,10 @@
 """
 Daily self-audit (F-014).
 
-Queries Loki for the last N hours of error/warn level logs across all
-Helios services (Docker containers + systemd units), buckets near-identical
+Queries Loki for the last N hours of error/warn level logs across every
+service promtail ships (keyed on the ``service`` label — the orchestrator and
+its neighbours on the always-on hub; Helios only when promtail-helios is up),
+buckets near-identical
 messages, asks Jess to diagnose each cluster, and pushes a one-line digest
 via Pushover. The full markdown report is persisted under
 ``SELF_AUDIT_OUTPUT_DIR`` so the user can review and discuss with Claude
@@ -54,6 +56,11 @@ logger = logging.getLogger(__name__)
 
 _BUCKET_PREFIX_LEN = 80
 _LOKI_LIMIT = 5000
+# Every promtail stream carries `service`; `host` only ever came from the
+# Helios sidecar, which is gone. Levels as normalized by promtail ("warning",
+# not "warn" — both kept since `=~` is fully anchored).
+_LOKI_STREAMS = 'service=~".+"'
+_LOKI_ERROR_QUERY = "{" + _LOKI_STREAMS + ', level=~"error|warning|warn|critical|fatal"}'
 
 # Concurrency guard — one audit at a time. Cron + manual-trigger share this.
 # Without it, a curl-loop on /api/self_audit/run can pin the Jess slot and
@@ -194,7 +201,7 @@ async def _fetch_loki_errors(
     """
     end = _now_utc()
     start = end - timedelta(hours=lookback_hours)
-    query = '{host="helios", level=~"error|warn|critical|fatal"}'
+    query = _LOKI_ERROR_QUERY
     url = loki_url.rstrip("/") + "/loki/api/v1/query_range"
     params = {
         "query": query,
@@ -248,15 +255,24 @@ async def _fetch_loki_errors(
     return out, True
 
 
-async def _loki_alive(loki_url: str, timeout_sec: int = 10) -> bool:
-    """Probe Loki with a query that should match in any healthy week.
+async def _loki_alive(loki_url: str, lookback_hours: int, timeout_sec: int = 10) -> bool:
+    """Probe Loki for ANY log line (any level) in the audit window.
 
     Used to distinguish "Loki returned 0 streams matching error filter"
-    (= genuine clean week) from "Loki itself is unreachable" (= false-clean
-    digest would lie to the user). See prod-support review concern #6.
+    (= genuine clean day) from "Loki itself is unreachable or ingesting
+    nothing" (= false-clean digest would lie to the user). See prod-support
+    review concern #6. Must be query_range: Loki rejects log selectors on the
+    instant /query endpoint with a 400.
     """
-    url = loki_url.rstrip("/") + "/loki/api/v1/query"
-    params = {"query": '{host="helios"}', "limit": "1"}
+    end = _now_utc()
+    start = end - timedelta(hours=lookback_hours)
+    url = loki_url.rstrip("/") + "/loki/api/v1/query_range"
+    params = {
+        "query": "{" + _LOKI_STREAMS + "}",
+        "start": str(int(start.timestamp() * 1e9)),
+        "end": str(int(end.timestamp() * 1e9)),
+        "limit": "1",
+    }
     try:
         async with httpx.AsyncClient(timeout=timeout_sec) as client:
             r = await client.get(url, params=params)
@@ -312,7 +328,7 @@ def _bucket_logs(entries: list[dict[str, Any]], max_clusters: int) -> list[dict[
 # --- Prompt construction ----------------------------------------------------
 
 
-_AUDIT_PROMPT = """You are a systems administrator running a daily 7am audit of a personal AI assistant deployment running on a single host (Helios) with multiple GPUs.
+_AUDIT_PROMPT = """You are a systems administrator running a daily 7am audit of a personal AI assistant deployment: an always-on hub (orchestrator, dashboard, monitoring, Home Assistant) plus a GPU box (Helios) that sleeps most of the day and runs the models.
 
 Below are the {n_clusters} most frequent error/warning clusters from Loki for the last {lookback_hours} hours, grouped by service.
 
@@ -617,9 +633,9 @@ async def _run_self_audit_locked() -> dict[str, Any]:
 
     if not entries:
         # Empty result with transport_ok=True: probe to confirm Loki returns
-        # any helios stream at all. If even the probe is empty, we can't trust
+        # any stream at all in the window. If even the probe is empty, we can't trust
         # the silence — promote to failed.
-        if not await _loki_alive(settings.self_audit_loki_url):
+        if not await _loki_alive(settings.self_audit_loki_url, settings.self_audit_lookback_hours):
             logger.error("[SELF_AUDIT] Loki probe empty — treating as unreachable")
             await _push_digest(
                 severity_counts={"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0},

@@ -23,6 +23,7 @@ function TransactionsContent() {
   const initialFilter = (searchParams.get('filter') as FilterType) || 'all';
   const { transactions, loading, error, refresh } = useFinance();
   const [reclassifying, setReclassifying] = useState<number | null>(null);
+  const [reclassifyError, setReclassifyError] = useState<{ id: number; message: string } | null>(null);
   const [filter, setFilter] = useState<FilterType>(initialFilter);
   const [sourceFilter, setSourceFilter] = useState<'all' | 'synced' | 'manual'>('all');
 
@@ -35,11 +36,16 @@ function TransactionsContent() {
 
   async function handleReclassify(txnId: number, currentDiscretionary: boolean) {
     setReclassifying(txnId);
+    setReclassifyError(null);
     try {
       await financeApi.reclassifyTransaction(txnId, !currentDiscretionary);
       await refresh();
     } catch (err) {
       console.error('Failed to reclassify:', err);
+      setReclassifyError({
+        id: txnId,
+        message: err instanceof Error ? err.message : 'Request failed',
+      });
     } finally {
       setReclassifying(null);
     }
@@ -197,6 +203,11 @@ function TransactionsContent() {
                     </span>
                   )}
                 </div>
+                {reclassifyError?.id === t.id && (
+                  <p className="text-xs text-danger mt-0.5" role="alert">
+                    Couldn&apos;t update: {reclassifyError.message}. Tap the dot to retry.
+                  </p>
+                )}
               </div>
 
               {/* Amount */}
@@ -229,7 +240,7 @@ function TransactionsContent() {
           <div className="w-2 h-2 rounded-full bg-surface-overlay" />
           Non-discretionary
         </div>
-        <span className="ml-auto">Click dot to reclassify</span>
+        <span className="ml-auto">Click dot to reclassify (sticks through syncs)</span>
       </div>
     </div>
   );
