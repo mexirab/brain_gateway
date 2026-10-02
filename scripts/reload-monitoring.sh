@@ -27,6 +27,19 @@ AM_URL="${AM_URL:-http://localhost:9093}"
 RULES_FILE="${PROJECT_DIR}/monitoring/prometheus/alert-rules.yml"
 AM_RENDER="${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml"
 
+# --- Render freshness -----------------------------------------------------
+# The content checks below compare live config against the RENDER, so a stale
+# render (generate-configs.sh failed or wasn't run after a template edit)
+# passes them while new routes never go live — bit us 2026-10-02 when a
+# SelfAudit* routing change sat unrendered and both alerts went to "null".
+for tmpl in monitoring/alertmanager/alertmanager.yml.template monitoring/prometheus/prometheus.yml.template; do
+    out="${PROJECT_DIR}/${tmpl%.template}"
+    if [[ ! -f "$out" || "${PROJECT_DIR}/${tmpl}" -nt "$out" ]]; then
+        echo "ERROR: ${tmpl%.template} is older than its template — run scripts/generate-configs.sh first" >&2
+        exit 1
+    fi
+done
+
 # --- Prometheus -----------------------------------------------------------
 echo "Reloading Prometheus at ${PROM_URL} ..."
 # --retry-all-errors covers the container still coming up after a compose

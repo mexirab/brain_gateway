@@ -8336,6 +8336,160 @@
       "id": 113
     },
     {
+      "type": "stat",
+      "title": "Self-Audit Heartbeat Age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time() - (bgw_self_audit_last_run_timestamp_seconds > 0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 91800
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Seconds since the daily self-audit last completed a run (ok, partial or failed). > 25.5h (orange) = SelfAuditStale. 'No data' = self-audit disabled (SELF_AUDIT_ENABLED / JESS_ADVANCED).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 246
+      },
+      "id": 114
+    },
+    {
+      "type": "timeseries",
+      "title": "Self-Audit Runs (by result, /day)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_self_audit_runs_total[1d]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "ok = logs read + diagnosed; partial = logs read, Helios asleep so no LLM diagnosis (healthy); failed = Loki unreachable/empty (2 in 2d with no ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 246
+      },
+      "id": 115
+    },
+    {
       "type": "row",
       "title": "Logs",
       "collapsed": false,
@@ -8344,9 +8498,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 246
+        "y": 254
       },
-      "id": 114
+      "id": 116
     },
     {
       "type": "logs",
@@ -8385,9 +8539,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 247
+        "y": 255
       },
-      "id": 115
+      "id": 117
     },
     {
       "type": "logs",
@@ -8426,9 +8580,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 247
+        "y": 255
       },
-      "id": 116
+      "id": 118
     }
   ]
 }

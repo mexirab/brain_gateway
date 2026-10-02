@@ -103,10 +103,23 @@ the model download. User kills it. No more restart loop.
 - `bgw_self_audit_runs_total{result}` — `result ∈ {ok, partial, failed, skipped}`. `partial` = Loki query succeeded but LLM call failed; report saved without diagnosis. `failed` = Loki unreachable, no report saved. `skipped` = feature disabled.
 - `bgw_self_audit_clusters_total{service, severity}` — counter incremented per cluster Jess returned. Lets Grafana show "what services break most often" over weeks.
 - `bgw_self_audit_latency_seconds` — histogram, full job runtime.
+- `bgw_self_audit_last_run_timestamp_seconds` — gauge, stamped after every completed run (`ok`/`partial`/`failed`; not `skipped`/`busy`). Persisted in brain_state `app_state` key `self_audit_last_run_ts` and re-seeded at startup from that real last-run time (never `now()` on a deploy, so restarts can't mask a dead job). On first enable with nothing persisted it stamps once, so a never-run job still ages into the alert.
+- `bgw_self_audit_runs_total{result}` labels are pre-initialized at 0 (so `increase()` sees the first failure).
+
+## Alerting
+
+Both in `monitoring/prometheus/alert-rules.yml` group `brain_gateway_deadmans`, routed to the non-paging `pushover-quiet` receiver:
+
+| Alert | Fires when |
+|-------|-----------|
+| `SelfAuditStale` | No completed run in 25.5h |
+| `SelfAuditFailing` | ≥2 `failed` runs in 2d with no `ok`/`partial` run (`partial` = Helios asleep, logs still read — counts as healthy) |
+
+Grafana (`brain_gateway_sre.py`, "Background Jobs" row): "Self-Audit Heartbeat Age" stat + "Self-Audit Runs (by result, /day)".
 
 ## Failure modes (graceful)
 
-- **Loki unreachable** → log error, skip job, increment `bgw_self_audit_runs_total{result="failed"}`. No Pushover sent (false-positive cost too high). Cron retries tomorrow.
+- **Loki unreachable** → log error, increment `bgw_self_audit_runs_total{result="failed"}`, push an explicit CRITICAL "audit failed" digest (never a green "all clean"). Cron retries tomorrow; `SelfAuditFailing` fires if it keeps failing.
 - **Loki returns nothing** → save a one-line "no errors in last 24h" report, push priority-0 digest. Distinguishable from failure.
 - **Jess unreachable / LLM timeout** → save raw cluster data to disk anyway, push a "audit captured, diagnosis unavailable" digest. `result="partial"`.
 - **Pushover disabled / fails** → write report to disk, log a warning, return success. The disk file is the source of truth; the push is best-effort.

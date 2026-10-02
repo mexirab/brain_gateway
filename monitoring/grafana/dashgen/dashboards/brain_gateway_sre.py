@@ -1210,6 +1210,34 @@ def build() -> dict:
     row, y = grid_row(scheduler_reliability_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # Daily self-audit (F-014). Silently dead from ~June to 2026-10-02 (wrong
+    # Loki label + broken probe) with nothing on any dashboard. Heartbeat is
+    # persisted in app_state and re-seeded from the real last-run time (first
+    # enable stamps once), so unlike the wind-down gauges it survives deploys.
+    self_audit_row = [
+        stat(
+            "Self-Audit Heartbeat Age",
+            "time() - (bgw_self_audit_last_run_timestamp_seconds > 0)",
+            unit="s",
+            thresholds=[(None, "green"), (91800, "orange")],
+            description="Seconds since the daily self-audit last completed a run "
+            "(ok, partial or failed). > 25.5h (orange) = SelfAuditStale. 'No data' = "
+            "self-audit disabled (SELF_AUDIT_ENABLED / JESS_ADVANCED).",
+        ),
+        timeseries(
+            "Self-Audit Runs (by result, /day)",
+            [("sum by (result) (increase(bgw_self_audit_runs_total[1d]))", "{{result}}")],
+            unit="none",
+            stack=True,
+            fill=40,
+            description="ok = logs read + diagnosed; partial = logs read, Helios asleep so no "
+            "LLM diagnosis (healthy); failed = Loki unreachable/empty (2 in 2d with no "
+            "ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis.",
+        ),
+    ]
+    row, y = grid_row(self_audit_row, y, heights=[8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Logs (with $request_id trace)
     r, y = row_divider("Logs", y)
     panels.append(r)

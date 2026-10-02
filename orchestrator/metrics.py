@@ -543,6 +543,21 @@ SELF_AUDIT_RUNS_TOTAL = Counter(
     ["result"],
 )
 
+# Pre-create every series at 0: increase() can't see a counter's first
+# increment from "absent", so SelfAuditFailing would miss the first failure
+# after each restart, and the series would vanish from Prometheus on restart.
+for _result in ("ok", "partial", "failed", "skipped", "busy"):
+    SELF_AUDIT_RUNS_TOTAL.labels(result=_result)
+
+# Dead-man's switch for the daily audit, watched by SelfAuditStale. Stamped on
+# every completed run (ok/partial/failed) and persisted in app_state, then
+# re-seeded at startup from the PERSISTED time — the real last run, not now()
+# — so a restart neither masks a dead job nor blanks the panel.
+SELF_AUDIT_LAST_RUN = Gauge(
+    "bgw_self_audit_last_run_timestamp_seconds",
+    "Unix timestamp the self-audit last completed a run (any result but skipped/busy)",
+)
+
 SELF_AUDIT_CLUSTERS_TOTAL = Counter(
     "bgw_self_audit_clusters_total",
     "Error clusters surfaced per audit, by severity",

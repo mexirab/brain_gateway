@@ -888,3 +888,236 @@ class TestRunSelfAuditProbe400:
         assert cm.await_count == 0
         assert mock_pushover.await_count == 1
         assert "All clean" not in mock_pushover.await_args.kwargs["message"]
+
+
+# ===========================================================================
+# SelfAuditStale dead-man's switch: pre-initialized run series, last-run
+# gauge stamping (_stamp_last_run) and startup seeding (seed_last_run_gauge)
+# ===========================================================================
+
+_SENTINEL_TS = -1.0  # a value no real stamp can produce
+
+
+def _last_run_gauge_value() -> float | None:
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value("bgw_self_audit_last_run_timestamp_seconds")
+
+
+@pytest.fixture
+def clean_last_run(monkeypatch):
+    """Real state_store on the conftest temp DB; key + gauge reset per test."""
+    import os
+
+    from orchestrator import jobs_self_audit, state_store
+    from orchestrator.metrics import SELF_AUDIT_LAST_RUN
+
+    # Never touch the live /app/data DB.
+    assert os.environ["STATE_DB_PATH"] == state_store.DB_PATH
+    assert not state_store.DB_PATH.startswith("/app/data")
+    state_store.init_db()
+    state_store.delete_app_state(jobs_self_audit.LAST_RUN_STATE_KEY)
+    SELF_AUDIT_LAST_RUN.set(_SENTINEL_TS)
+    yield state_store
+    state_store.delete_app_state(jobs_self_audit.LAST_RUN_STATE_KEY)
+    SELF_AUDIT_LAST_RUN.set(_SENTINEL_TS)
+
+
+class TestSelfAuditRunSeriesPreinitialized:
+    @pytest.mark.parametrize("result", ["ok", "partial", "failed", "skipped", "busy"])
+    def test_series_exists_at_import(self, result):
+        """Checked in a FRESH interpreter: in-process, earlier run tests would
+        already have incremented these labels and mask a missing pre-init."""
+        import os
+        import subprocess
+        import sys
+
+        code = (
+            "import orchestrator.metrics\n"
+            "from prometheus_client import REGISTRY\n"
+            f"print(REGISTRY.get_sample_value('bgw_self_audit_runs_total', {{'result': '{result}'}}))\n"
+        )
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=repo_root,
+            env={**os.environ, "PYTHONPATH": repo_root},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        assert proc.stdout.strip().splitlines()[-1] == "0.0", f"result={result} series not pre-created at 0"
+
+
+class TestLastRunStamp:
+    def _assert_stamped(self, state_store, before: float, after: float):
+        from orchestrator.jobs_self_audit import LAST_RUN_STATE_KEY
+
+        gauge = _last_run_gauge_value()
+        assert gauge is not None
+        assert before <= gauge <= after
+        raw = state_store.get_app_state(LAST_RUN_STATE_KEY)
+        assert raw is not None
+        assert float(raw) == pytest.approx(gauge)
+
+    def _assert_not_stamped(self, state_store):
+        from orchestrator.jobs_self_audit import LAST_RUN_STATE_KEY
+
+        assert _last_run_gauge_value() == _SENTINEL_TS
+        assert state_store.get_app_state(LAST_RUN_STATE_KEY) is None
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_ok_run_stamps(self, audit_on, mock_pushover, mock_palace, clean_last_run):
+        import time
+
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            side_effect=_loki_routes(alive=Response(200, json=_loki_alive_response(True)))
+        )
+        before = time.time()
+        with patch("orchestrator.orchestrator.call_model", new=AsyncMock(return_value=None)):
+            result = await run_self_audit()
+        after = time.time()
+
+        assert result["result"] == "ok"
+        self._assert_stamped(clean_last_run, before, after)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_partial_run_stamps(self, audit_on, mock_pushover, mock_palace, clean_last_run):
+        import time
+
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_query_range_response(_entries_with_one_cluster(3)))
+        )
+        before = time.time()
+        with patch("orchestrator.orchestrator.call_model", new=AsyncMock(return_value=None)):
+            result = await run_self_audit()
+        after = time.time()
+
+        assert result["result"] == "partial"
+        self._assert_stamped(clean_last_run, before, after)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_failed_run_stamps(self, audit_on, mock_pushover, mock_palace, clean_last_run):
+        import time
+
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(side_effect=httpx.ConnectError("dns fail"))
+        before = time.time()
+        with patch("orchestrator.orchestrator.call_model", new=AsyncMock(return_value=None)):
+            result = await run_self_audit()
+        after = time.time()
+
+        assert result["result"] == "failed"
+        self._assert_stamped(clean_last_run, before, after)
+
+    @pytest.mark.asyncio
+    async def test_skipped_run_does_not_stamp(self, audit_off, mock_pushover, clean_last_run):
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        result = await run_self_audit()
+
+        assert result["result"] == "skipped"
+        self._assert_not_stamped(clean_last_run)
+
+    @pytest.mark.asyncio
+    async def test_skipped_on_jess_advanced_false_does_not_stamp(self, audit_on, monkeypatch, clean_last_run):
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        monkeypatch.setattr(audit_on, "jess_advanced", False, raising=False)
+        result = await run_self_audit()
+
+        assert result["result"] == "skipped"
+        self._assert_not_stamped(clean_last_run)
+
+    @pytest.mark.asyncio
+    async def test_busy_run_does_not_stamp(self, audit_on, mock_pushover, clean_last_run):
+        from orchestrator import jobs_self_audit
+
+        await jobs_self_audit._AUDIT_LOCK.acquire()
+        try:
+            result = await jobs_self_audit.run_self_audit()
+        finally:
+            jobs_self_audit._AUDIT_LOCK.release()
+
+        assert result["result"] == "busy"
+        self._assert_not_stamped(clean_last_run)
+
+    @pytest.mark.asyncio
+    async def test_state_store_error_is_swallowed_and_result_returned(self, audit_on, monkeypatch, clean_last_run):
+        from orchestrator import jobs_self_audit, state_store
+
+        expected = {"result": "ok", "clusters": 0}
+        monkeypatch.setattr(jobs_self_audit, "_run_self_audit_locked", AsyncMock(return_value=expected))
+
+        def _boom(key, value):
+            raise RuntimeError("db locked")
+
+        monkeypatch.setattr(state_store, "set_app_state", _boom)
+
+        result = await jobs_self_audit.run_self_audit()
+
+        assert result == expected
+        # The in-memory gauge is still stamped even though persistence failed.
+        gauge = _last_run_gauge_value()
+        assert gauge is not None and gauge > 0
+
+
+class TestSeedLastRunGauge:
+    def test_restores_persisted_older_value_exactly(self, clean_last_run):
+        from orchestrator.jobs_self_audit import LAST_RUN_STATE_KEY, seed_last_run_gauge
+
+        old = 1_700_000_000.25  # well in the past — must NOT be replaced by now()
+        clean_last_run.set_app_state(LAST_RUN_STATE_KEY, str(old))
+
+        seed_last_run_gauge()
+
+        assert _last_run_gauge_value() == old
+        assert clean_last_run.get_app_state(LAST_RUN_STATE_KEY) == str(old)
+
+    def test_nothing_persisted_writes_once_and_second_seed_keeps_first(self, clean_last_run, monkeypatch):
+        from orchestrator import jobs_self_audit
+
+        monkeypatch.setattr(jobs_self_audit.time, "time", lambda: 1_800_000_000.0)
+        jobs_self_audit.seed_last_run_gauge()
+
+        assert _last_run_gauge_value() == 1_800_000_000.0
+        assert clean_last_run.get_app_state(jobs_self_audit.LAST_RUN_STATE_KEY) == "1800000000.0"
+
+        # A later restart must restore the first value, not re-stamp now().
+        monkeypatch.setattr(jobs_self_audit.time, "time", lambda: 1_900_000_000.0)
+        jobs_self_audit.seed_last_run_gauge()
+
+        assert _last_run_gauge_value() == 1_800_000_000.0
+        assert clean_last_run.get_app_state(jobs_self_audit.LAST_RUN_STATE_KEY) == "1800000000.0"
+
+    def test_malformed_persisted_value_does_not_raise(self, clean_last_run):
+        from orchestrator.jobs_self_audit import LAST_RUN_STATE_KEY, seed_last_run_gauge
+
+        clean_last_run.set_app_state(LAST_RUN_STATE_KEY, "not-a-float")
+
+        seed_last_run_gauge()  # must not raise
+
+        # Gauge left untouched rather than set to garbage.
+        assert _last_run_gauge_value() == _SENTINEL_TS
+
+    def test_state_store_error_does_not_raise(self, clean_last_run, monkeypatch):
+        from orchestrator import state_store
+        from orchestrator.jobs_self_audit import seed_last_run_gauge
+
+        def _boom(key):
+            raise RuntimeError("no such table: app_state")
+
+        monkeypatch.setattr(state_store, "get_app_state", _boom)
+
+        seed_last_run_gauge()  # must not raise
+
+        assert _last_run_gauge_value() == _SENTINEL_TS

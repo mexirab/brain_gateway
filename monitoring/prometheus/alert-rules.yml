@@ -363,6 +363,30 @@ groups:
         annotations:
           summary: "Actual Budget sync has not succeeded in 6h"
           description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
+      - alert: SelfAuditStale
+        # Daily 07:00 job; 25.5h like the other daily heartbeats (DST + misfire
+        # grace headroom). The gauge is re-seeded at startup from the persisted
+        # real last-run time (not now()), so deploys don't mask a dead job.
+        expr: time() - bgw_self_audit_last_run_timestamp_seconds > 91800 and bgw_self_audit_last_run_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Self-audit has not run in over a day"
+          description: "Last self-audit completed {{ $value | humanizeDuration }} ago - should run daily. Check SELF_AUDIT_ENABLED/JESS_ADVANCED and `docker logs brain-orchestrator | grep SELF_AUDIT`."
+      - alert: SelfAuditFailing
+        # Two failed runs (Loki unreachable/empty) in 2 days with no ok/partial
+        # run. One failure already pushes a CRITICAL digest; this catches the
+        # "digest ignored for months" case (dead since June until 2026-10-02).
+        # partial = Helios asleep, no LLM diagnosis — logs were still read, so
+        # it counts as working. 1.5 absorbs increase() extrapolation.
+        expr: (sum(increase(bgw_self_audit_runs_total{result="failed"}[2d])) >= 1.5) unless (sum(increase(bgw_self_audit_runs_total{result=~"ok|partial"}[2d])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Self-audit has failed repeatedly"
+          description: "The daily self-audit could not read Loki on its last runs, so it is blind. Check SELF_AUDIT_LOKI_URL (must be an IP — MagicDNS doesn't resolve in the container), that Loki is up, and that promtail is shipping logs."
       - alert: WindDownNudgeStale
         # 25.5h, matching the dashboard panel's orange threshold: the largest
         # legitimate gap is 25h (the DST fall-back night) plus the 300s

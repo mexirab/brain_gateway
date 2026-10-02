@@ -45,6 +45,7 @@ from orchestrator.jobs_training_corpus import SECRET_PATTERNS
 from orchestrator.metrics import (
     SELF_AUDIT_CLUSTERS_TOTAL,
     SELF_AUDIT_FORMAT_DRIFT_TOTAL,
+    SELF_AUDIT_LAST_RUN,
     SELF_AUDIT_LATENCY,
     SELF_AUDIT_RUNS_TOTAL,
 )
@@ -603,7 +604,44 @@ async def run_self_audit() -> dict[str, Any]:
         return {"result": "busy", "reason": "another audit is running"}
 
     async with _AUDIT_LOCK:
-        return await _run_self_audit_locked()
+        out = await _run_self_audit_locked()
+    await _stamp_last_run()
+    return out
+
+
+LAST_RUN_STATE_KEY = "self_audit_last_run_ts"
+
+
+async def _stamp_last_run() -> None:
+    """Record that an audit completed (any result) for SelfAuditStale."""
+    now = time.time()
+    SELF_AUDIT_LAST_RUN.set(now)
+    try:
+        from orchestrator import state_store
+
+        await asyncio.to_thread(state_store.set_app_state, LAST_RUN_STATE_KEY, str(now))
+    except Exception:
+        logger.warning("[SELF_AUDIT] Could not persist last-run time", exc_info=True)
+
+
+def seed_last_run_gauge() -> None:
+    """Startup: restore the gauge from the persisted last-run time.
+
+    With no stamp yet (first enable), persist the registration time ONCE so a
+    job that never completes its first run still ages into SelfAuditStale.
+    Later restarts restore the stored time and never re-stamp now(), so
+    deploys can't mask a dead job.
+    """
+    try:
+        from orchestrator import state_store
+
+        raw = state_store.get_app_state(LAST_RUN_STATE_KEY)
+        if not raw:
+            raw = str(time.time())
+            state_store.set_app_state(LAST_RUN_STATE_KEY, raw)
+        SELF_AUDIT_LAST_RUN.set(float(raw))
+    except Exception:
+        logger.warning("[SELF_AUDIT] Could not restore last-run time", exc_info=True)
 
 
 async def _run_self_audit_locked() -> dict[str, Any]:
