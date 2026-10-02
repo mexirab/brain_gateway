@@ -211,10 +211,20 @@ class Settings(BaseSettings):
 
     # -- Finance -----------------------------------------------------------------
     finance_db_path: str = "/app/data/finance.db"
-    ynab_access_token: str = ""
-    ynab_budget_id: str = ""
-    ynab_sync_interval: int = 30
-    ynab_fun_money_category: str = "Fun Money"
+    # Actual Budget (self-hosted, https://actualbudget.org) — replaced YNAB in
+    # 2026-10. Read-only sync via actualpy; empty URL = disabled (finance then
+    # runs in manual-entry mode). See orchestrator/actual_client.py.
+    actual_server_url: str = ""
+    actual_password: str = ""
+    # Budget name as shown in Actual's file picker, or its sync id.
+    actual_budget_file: str = ""
+    # Only needed for end-to-end-encrypted budget files.
+    actual_encryption_password: str = ""
+    actual_sync_interval: int = 30  # minutes
+    # Months mirrored into finance.db, including the current one.
+    actual_sync_months: int = 3
+    # Case-insensitive substring match ("Fun Money" matches "🎮 Fun Money").
+    actual_fun_money_category: str = "Fun Money"
 
     # -- Auto-learn (F-007) ------------------------------------------------------
     auto_learn_enabled: bool = True
@@ -580,6 +590,34 @@ class Settings(BaseSettings):
             object.__setattr__(self, "self_audit_max_clusters", 1)
         elif self.self_audit_max_clusters > 200:
             object.__setattr__(self, "self_audit_max_clusters", 200)
+        return self
+
+    @model_validator(mode="after")
+    def validate_actual_config(self) -> "Settings":
+        """Auto-disable the Actual Budget sync if config is incomplete.
+
+        A URL without credentials or a budget file would fail on every sync
+        (every ``actual_sync_interval`` minutes) — log once here instead and
+        clear the URL so ``actual_client.is_configured()`` reads False.
+        Also clamps the interval / window to sane minimums.
+        """
+        import logging
+
+        log = logging.getLogger(__name__)
+        if self.actual_server_url:
+            if not self.actual_server_url.startswith(("http://", "https://")):
+                log.error("[CONFIG] ACTUAL_SERVER_URL must start with http:// or https://; disabling Actual sync.")
+                object.__setattr__(self, "actual_server_url", "")
+            elif not self.actual_password or not self.actual_budget_file:
+                log.error(
+                    "[CONFIG] ACTUAL_SERVER_URL is set but ACTUAL_PASSWORD or ACTUAL_BUDGET_FILE "
+                    "is missing; disabling Actual Budget sync. Set both in .env to re-enable."
+                )
+                object.__setattr__(self, "actual_server_url", "")
+        if self.actual_sync_interval < 5:
+            object.__setattr__(self, "actual_sync_interval", 5)
+        if not 1 <= self.actual_sync_months <= 24:
+            object.__setattr__(self, "actual_sync_months", min(24, max(1, self.actual_sync_months)))
         return self
 
     @model_validator(mode="after")

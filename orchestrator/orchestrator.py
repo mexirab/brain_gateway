@@ -547,6 +547,13 @@ async def _startup_logic():
 
     progress_tracker.init_db()
 
+    # Finance DB (Quest Board tables) — unconditional: the dashboard finance
+    # pages, manual entries and finance_status need the tables even with no
+    # budget sync configured. Never raises (logs on failure).
+    from orchestrator.finance_manager import setup_finance
+
+    setup_finance()
+
     # Initialize LLM backends
     shared._http = _http  # ensure shared module has the http client too
     shared.init_backends(_http)
@@ -1102,27 +1109,28 @@ async def _startup_logic():
         )
         logger.info("[SCHEDULER] Helios power-state poll every 60s")
 
-    # Finance jobs (YNAB sync + spending announcements). Gated on the YNAB
-    # token: sync_ynab_transactions self-gates (silent no-op), but the weekly
-    # summary / mid-month warning read the seeded local finance DB and would
-    # announce meaningless "$0 of $1000" updates via TTS on an install that
-    # never set finance up.
-    from orchestrator.finance_manager import _is_ynab_configured
+    # Finance jobs (Actual Budget sync + spending announcements). Gated on the
+    # sync being configured: the weekly summary / mid-month warning read the
+    # local finance DB and would announce meaningless "$0 of $1000" updates via
+    # TTS on an install that never connected a budget.
+    from orchestrator.finance_manager import _is_sync_configured
 
-    if _is_ynab_configured():
+    if _is_sync_configured():
         from orchestrator.background_jobs import (
             midmonth_budget_warning,
-            sync_ynab_transactions,
+            sync_budget_transactions,
             weekly_spending_summary,
         )
 
         scheduler.add_job(
-            sync_ynab_transactions,
+            sync_budget_transactions,
             trigger="interval",
-            minutes=_cfg.ynab_sync_interval,
-            id="ynab_sync",
-            name="YNAB transaction sync",
+            minutes=_cfg.actual_sync_interval,
+            id="budget_sync",
+            name="Actual Budget sync",
             replace_existing=True,
+            # First run ~30 s after startup instead of a full interval later.
+            next_run_time=datetime.now(scheduler.timezone) + timedelta(seconds=30),
         )
         # "Sunday evening" per the job's docstring.
         scheduler.add_job(
@@ -1149,7 +1157,7 @@ async def _startup_logic():
             replace_existing=True,
         )
         logger.info(
-            f"[SCHEDULER] YNAB sync every {_cfg.ynab_sync_interval} min; "
+            f"[SCHEDULER] Actual Budget sync every {_cfg.actual_sync_interval} min; "
             "weekly spending summary Sun 18:00; mid-month budget warning on the 15th"
         )
 

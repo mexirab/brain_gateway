@@ -18,7 +18,7 @@ After code changes pass linting as the final step in the post-implementation pip
 | `docs/FOCUS_AND_PIHOLE.md` | Focus timer, Pi-hole blocking (deprecated for this deployment), Nebula Sync (historical), blocking groups |
 | `docs/VOICE_AND_TTS.md` | ATOM Echo voice assistant, TTS pacing, Wyoming bridges |
 | `docs/GOOGLE_INTEGRATIONS.md` | Calendar, Gmail, phone sync, travel-time, OAuth2 setup |
-| `docs/FRONTEND.md` | Dashboard pages, widgets, YNAB finance, API proxy, deploy |
+| `docs/FRONTEND.md` | Dashboard pages, widgets, finance (Actual Budget sync), API proxy, deploy |
 | `docs/MODE_ROUTER.md` | Intent classification modes, routing logic |
 | `docs/internal/HELIOS_INFRASTRUCTURE.md` | Helios-specific runbook (maintainer reference; do not add new general content here) |
 | `docs/JESS_QUICK_START.md` | One-page user guide: everything Jess can do |

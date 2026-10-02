@@ -32,7 +32,7 @@ class TransientError(BrainGatewayError):
 
 
 class ExternalServiceError(TransientError):
-    """Failure in an external service (HA, Calendar, Gmail, YNAB, etc.)."""
+    """Failure in an external service (HA, Calendar, Gmail, Actual Budget, etc.)."""
 
     def __init__(self, service: str, message: str = ""):
         self.service = service

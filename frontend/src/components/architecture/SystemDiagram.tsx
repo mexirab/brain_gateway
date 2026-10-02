@@ -72,7 +72,7 @@ const NODES: DiagramNode[] = [
   { id: 'email', label: 'Email', sub: 'Gmail', x: 404, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📧', group: 'tools' },
   { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 522, y: 425, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '🔍', group: 'tools', service: 'searxng' },
   { id: 'focus', label: 'Focus', sub: 'Pomodoro', x: 168, y: 480, w: 105, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🎯', group: 'tools' },
-  { id: 'finance', label: 'Finance', sub: 'YNAB', x: 286, y: 480, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
+  { id: 'finance', label: 'Finance', sub: 'Actual', x: 286, y: 480, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
 
   // Output layer
   { id: 'tts', label: 'Jessica TTS', sub: 'Voice Clone · Helios', x: 180, y: 565, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },

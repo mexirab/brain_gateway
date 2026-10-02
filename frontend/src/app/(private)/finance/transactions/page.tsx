@@ -24,7 +24,7 @@ function TransactionsContent() {
   const { transactions, loading, error, refresh } = useFinance();
   const [reclassifying, setReclassifying] = useState<number | null>(null);
   const [filter, setFilter] = useState<FilterType>(initialFilter);
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'ynab' | 'manual'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'synced' | 'manual'>('all');
 
   const yearMonth = currentYearMonth();
   const [, year, month] = yearMonth.match(/^(\d{4})-(\d{2})$/) || [];
@@ -48,7 +48,7 @@ function TransactionsContent() {
   const filtered = transactions.filter((t) => {
     if (filter === 'discretionary' && !t.is_discretionary) return false;
     if (filter === 'non-discretionary' && t.is_discretionary) return false;
-    if (sourceFilter === 'ynab' && t.source !== 'ynab') return false;
+    if (sourceFilter === 'synced' && t.source === 'manual') return false;
     if (sourceFilter === 'manual' && t.source !== 'manual') return false;
     return true;
   });
@@ -120,7 +120,7 @@ function TransactionsContent() {
         <div className="flex gap-1 bg-surface-base/50 rounded-lg p-0.5 border border-line-subtle">
           {([
             { label: 'All Sources', value: 'all' },
-            { label: 'YNAB', value: 'ynab' },
+            { label: 'Synced', value: 'synced' },
             { label: 'Manual', value: 'manual' },
           ] as const).map((opt) => (
             <button
@@ -149,7 +149,7 @@ function TransactionsContent() {
           <p className="text-content-secondary text-sm">No transactions</p>
           <p className="text-content-muted text-xs mt-1">
             {transactions.length === 0
-              ? 'Log expenses manually or sync from YNAB'
+              ? 'Log expenses manually or sync from Actual Budget'
               : 'No transactions match the current filter'}
           </p>
         </Card>
@@ -182,9 +182,9 @@ function TransactionsContent() {
                   <p className="text-sm text-content-primary truncate">
                     {t.name}
                   </p>
-                  {t.source === 'ynab' && (
+                  {t.source !== 'manual' && (
                     <span className="text-[10px] text-content-muted bg-surface-raised px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0">
-                      YNAB
+                      {t.source === 'actual' ? 'Actual' : 'YNAB'}
                     </span>
                   )}
                 </div>

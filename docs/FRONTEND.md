@@ -10,7 +10,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Dashboard | `/dashboard` | Private. Calendar, reminders, selfcare today, focus timer, system health, temperature monitoring, finance snapshot |
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
-| Finance | `/finance` | Private. Gamified budget tracker with YNAB sync, XP/levels, quest board |
+| Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
 | Workouts | `/workouts` | Private. Today's adaptive gym plan with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 | Settings | `/settings` | Private. Four-panel settings UI (Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders) with left-rail tab switcher. Each panel has a shared `SaveBar`; switching tabs while a panel is dirty triggers a confirm guard so unsaved edits aren't silently lost. Backed by `/api/config/*` via `lib/settings-api.ts` (typed client, mirrors `finance-api.ts` shape; goes through `/api/proxy` for bearer injection). |
@@ -33,10 +33,14 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 
 **Feature-flag nav gating.** The Workouts, Meals, and Finance nav links are conditional on runtime flags so disabled features don't leave dead 404 links. The server layout (`(private)/layout.tsx`) fetches `GET /api/config/features` via `getFeatureFlags()` in `lib/features.server.ts` (direct orchestrator call with the `API_TOKEN` bearer — not through `/api/proxy`, which needs the browser auth cookie a server component doesn't carry; fails open to "show all" if the orchestrator is unreachable). It filters the sidebar `NAV_ITEMS` with the pure `isNavItemEnabled(href, flags)` predicate (`lib/features.ts`) and passes the `flags` object to `<MobileNav>`, which filters both its `PRIMARY` and `MORE` lists with the same predicate. Mapping: `/workouts`→`workouts_enabled`, `/meals`→`meals_enabled`, `/finance`→`jess_advanced`. Hiding the link isn't a security boundary (the orchestrator routes 404 / are unmounted regardless) — it's UX. As defense for direct URL hits, each feature's route `layout.tsx` (`workouts/`, `meals/`, `finance/`) wraps its children in the async server component `<FeatureGate flag="..." label="...">` (`components/layout/FeatureGate.tsx`), which renders `<FeatureDisabled>` instead of the page when the flag is off. Finance's pre-existing client tabs/provider were moved to `finance/FinanceShell.tsx` so `finance/layout.tsx` could become the server gate. Flags are read with `next: { revalidate: 30 }`, so a flag flip surfaces within ~30s (or a dev-server restart) — they're env-var driven and only change on an orchestrator restart anyway.
 
-## Finance System (YNAB Integration)
+## Finance System (Actual Budget sync)
 
-- Syncs budget data from YNAB API (`YNAB_API_TOKEN` + `YNAB_BUDGET_ID` env vars)
-- Gamified: XP for under-budget months, levels, streaks, quest board
+- Read-only sync from the self-hosted Actual Budget server (`ACTUAL_*` env vars — `docs/ENV_VARS.md` → Finance; API — `TECHNICAL_REFERENCE.md` → Finance). Replaced YNAB 2026-10-02. Unconfigured = manual-entry mode (pages still work).
+- Client: `lib/finance-api.ts` (`getSyncStatus`, `triggerSync`, `getBudgetCategories`, `updateCategoryMapping`, `resetSync`; errors surface the backend `{error}`), types in `lib/finance-types.ts` (`BudgetSyncStatus`; `Transaction.source` = `actual` | `ynab` (legacy) | `manual`).
+- Quest board: Sync button shown whenever the sync is configured (even after a failure); a failed last sync shows "Last sync failed" linking to Finance settings; 409 → "Sync already running".
+- Finance settings: Actual connection card, `last_error` alert, per-category discretionary mapping (grouped as in Actual, with budgeted/spent/balance).
+- Transactions: source filter All / Synced / Manual; synced rows badged Actual or YNAB (legacy history).
+- Gamified: XP for under-budget months, levels, streaks, quest board. Health bar remaining = Actual's Fun Money category balance (`ACTUAL_FUN_MONEY_CATEGORY`).
 - SQLite persistence at `/app/data/finance.db`
 
 ## First-Boot Setup (no web wizard)

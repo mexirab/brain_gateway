@@ -879,7 +879,7 @@ def _finance_status_sync(include_details: bool) -> str:
     from orchestrator.finance_manager import (
         _ensure_budget_period,
         _get_level_info,
-        _is_ynab_configured,
+        _is_sync_configured,
         get_db,
     )
 
@@ -939,15 +939,22 @@ def _finance_status_sync(include_details: bool) -> str:
                     f"Retirement: ${config['retirement_current']:,.2f} (target age {config['retirement_target_age']})"
                 )
 
-                # YNAB status
-                if _is_ynab_configured():
-                    sync = conn.execute("SELECT last_synced_at FROM ynab_sync_state WHERE id = 1").fetchone()
-                    if sync and sync["last_synced_at"]:
-                        lines.append(f"YNAB: Connected, last synced {sync['last_synced_at']}")
+                # Budget sync status (Actual Budget)
+                if _is_sync_configured():
+                    sync = conn.execute(
+                        "SELECT last_synced_at, last_error FROM budget_sync_state WHERE id = 1"
+                    ).fetchone()
+                    if sync and sync["last_error"]:
+                        # Exception class only: the full text (URLs, server
+                        # responses) is for the dashboard, not the model.
+                        reason = sync["last_error"].split(":", 1)[0][:60]
+                        lines.append(f"Actual Budget: last sync FAILED ({reason}; details in Finance settings)")
+                    elif sync and sync["last_synced_at"]:
+                        lines.append(f"Actual Budget: connected, last synced {sync['last_synced_at']}")
                     else:
-                        lines.append("YNAB: Connected, not yet synced")
+                        lines.append("Actual Budget: configured, not yet synced")
                 else:
-                    lines.append("YNAB: Not configured")
+                    lines.append("Actual Budget: not configured (manual entries only)")
 
         return "\n".join(lines)
     except Exception as e:

@@ -16,7 +16,7 @@
     - Finance:
         icon: mdi-finance
         href: http://jupiter-amds.tail74fc4a.ts.net:3001/finance
-        description: YNAB budget + XP
+        description: Actual Budget + XP
     - Shopping:
         icon: mdi-cart
         href: http://jupiter-amds.tail74fc4a.ts.net:3001/shopping
@@ -51,7 +51,7 @@
         icon: paperless-ngx
     - Actual Budget:
         href: http://jupiter-amds.tail74fc4a.ts.net:5006
-        description: YNAB alternative (testing)
+        description: Budget (finance source of truth)
         icon: actual-budget
 
 - Chat / LLM:

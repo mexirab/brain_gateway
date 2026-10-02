@@ -156,6 +156,22 @@ curl -s http://localhost:8888/v1/chat/completions \
 
 ---
 
+## Finance (Actual Budget sync)
+
+```bash
+# After adding/changing ACTUAL_* in .env (compose interpolation — restart is not enough)
+docker compose up -d --force-recreate orchestrator
+
+# Sync status (configured / connected / last_error) and a manual sync (bearer-gated)
+curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status | jq .
+curl -s -X POST -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync | jq .
+
+# Sync logs
+docker logs brain-orchestrator 2>&1 | grep '\[ACTUAL\]' | tail -20
+```
+
+---
+
 ## Helios Primary Model (Qwen3.8-27B TURBO Q6_K MTP via llama.cpp)
 
 Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 as `qwen3.8-27b-turbo-q6k` (`llama-server-primary.service` — llama.cpp build 11358 from `/home/labadmin/llama.cpp-mtp`, DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF, GPU0 RTX 5090, since the 2026-10-02 cutover; repo copy of the unit: `tts/llama-server-primary.service`, whose header comments are authoritative). Loads in ~4 s from page cache (~60 s cold). The same endpoint also serves vision (`VISION_*`) and exposes llama.cpp `/metrics`. Single slot (`--parallel 1`): background LLM jobs queue behind chat — watch `llamacpp:requests_deferred`.

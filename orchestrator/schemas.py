@@ -7,7 +7,7 @@ All API endpoints should use these models instead of raw dicts.
 from typing import Any, Optional
 
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 # ---------------------------------------------------------------------------
 # Standard response envelope
@@ -188,3 +188,26 @@ class SelfAuditRunResponse(APIResponse):
     severity_counts: dict[str, int] = Field(default_factory=dict)
     report_path: Optional[str] = None
     reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Finance — budget category mapping (Actual Budget sync)
+# ---------------------------------------------------------------------------
+
+
+class CategoryMappingRequest(BaseModel):
+    """POST /api/finance/categories/mapping body.
+
+    StrictBool: the string "false" is truthy in Python, so a lax bool would
+    silently mark every category discretionary for a client sending strings.
+    """
+
+    mappings: dict[str, StrictBool] = Field(min_length=1, max_length=1000)
+
+    @field_validator("mappings")
+    @classmethod
+    def _names_bounded(cls, v: dict[str, bool]) -> dict[str, bool]:
+        for name in v:
+            if not name.strip() or len(name) > 200:
+                raise ValueError("category names must be 1-200 characters")
+        return v

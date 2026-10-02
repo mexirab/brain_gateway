@@ -74,7 +74,22 @@ export interface Transaction {
   merchant_name: string | null;
   category: string | null;
   is_discretionary: boolean;
-  source: 'ynab' | 'manual';
+  // 'actual' = synced from Actual Budget; 'ynab' = legacy rows from before 2026-10.
+  source: 'actual' | 'ynab' | 'manual';
+}
+
+export interface BudgetSyncStatus {
+  provider: 'actual';
+  configured: boolean;
+  /** True when the most recent sync attempt succeeded. */
+  connected: boolean;
+  budget_name: string | null;
+  last_synced_at: string | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  last_result: Record<string, unknown> | null;
+  category_count: number;
+  discretionary_count: number;
 }
 
 export interface Windfall {
