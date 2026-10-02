@@ -383,6 +383,12 @@ def _morning_patches(*, parked_entry, announce_result):
         ),
         "delete_state": patch("orchestrator.state_store.delete_app_state"),
         "outcomes": patch("orchestrator.state_store.get_recent_reminder_outcomes", return_value=[]),
+        # morning_briefing yields (asyncio.sleep(1)) before its routine-collision
+        # check; swap the module's asyncio ref so tests don't pay the real
+        # second, and pin the check to "no routine" so these stay about their
+        # own branch.
+        "yield": patch("orchestrator.jobs_calendar.asyncio", MagicMock(sleep=AsyncMock(return_value=None))),
+        "routine": patch("orchestrator.jobs_calendar._routine_active_or_imminent", return_value=False),
     }
 
 

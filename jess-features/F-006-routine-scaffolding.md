@@ -234,6 +234,17 @@ This prevents stuck evening/morning routines from nudging indefinitely when the 
 
 **Routine -> selfcare (reverse):** after `advance_step("done")` appends to `completed_steps`, it calls `selfcare_manager.mark_selfcare_from_routine_step(step)` synchronously. This uses `_infer_selfcare_action(step)` (same keyword map as above) to dispatch to `record_medication_logged` / `record_meal_logged` / `record_hydration_logged` / `record_movement_logged`, which suppress the corresponding nudge. Routine-sourced medication logging unconditionally sets the generic `last_med_confirmation["medication"]` key (routine labels like `'routine:meds'` can't be mapped to a morning/evening med window). Only fires on `"done"` — NOT on `"skip"` or auto-end `"stop"` (skipped meds shouldn't mark as taken). Wrapped in try/except with `logger.error(exc_info=True)`; never blocks advance.
 
+### Routine vs morning briefing
+
+Both default to 07:00. Cast `play_media` replaces whatever is playing, so the briefing used to cut off the routine's first step. Now `morning_briefing` yields 1s before its announce (lets a routine started in the same scheduler pass set its session), then `jobs_calendar._routine_active_or_imminent()` checks:
+
+- an active routine session (not paused, started < 3h ago), or
+- a routine trigger job (`routines_config._is_routine_trigger_job`, excludes `routine_nudge_*`) firing within 120s.
+
+If either holds, the spoken briefing is skipped, its text is mirrored to Telegram (`fire_system_message`; the missed-reminder recap is mirrored separately), and the parked item stays parked. Outcome counted as `bgw_morning_briefing_outcome_total{outcome="skipped_routine"}`. The evening briefing applies the same active-session gate.
+
+**Known gap:** with the default 07:00 morning routine, the briefing is effectively Telegram-only every day. The routine does NOT speak weather, today's events, the parked item, or the missed-reminder recap. The `include_calendar_summary` step flag is parsed but unused; only `_complete_routine` speaks a calendar summary (Google-only, ≤3 events) and only if all steps finish.
+
 ---
 
 ## Testing Checklist

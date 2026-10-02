@@ -29,6 +29,8 @@ Google Calendar read/write via OAuth2. Tools: `check_calendar`, `create_calendar
 - Calendar polling: every 5 min, announces events starting within 2 hours via TTS (with travel-time awareness for physical locations)
 - Tiered countdown alerts: configurable tier thresholds (default: 60/30/15/5 min before event). Selects the closest un-announced tier (smallest-to-largest), and auto-marks larger tiers as notified on catch-up so you never hear a stale "in about an hour" when an event is 28 min away. Custom tier values get generic message templates automatically.
 - Morning briefing: 7:00 AM on bedroom pair, announces today's events + pending reminders via TTS
+  - **Routine gate:** if a guided routine is active (not paused, < 3h old) or a routine trigger fires within 120s (checked after a 1s yield, to catch the same-slot 07:00 case), the spoken briefing is skipped and its text is mirrored to Telegram instead; the parked item stays parked. With the default 07:00 morning routine this means the briefing is Telegram-only daily — see `jess-features/F-006-routine-scaffolding.md` → Routine vs morning briefing.
+  - Metric: `bgw_morning_briefing_outcome_total{outcome=spoken|skipped_routine|suppressed|failed}` (pre-seeded at 0)
 
 **Config (env vars):**
 - `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 5, defensive parsing with fallback)

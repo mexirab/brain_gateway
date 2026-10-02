@@ -635,7 +635,7 @@ See `.env.example` for full list. Key vars:
 | GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |
 | GOOGLE_TOKEN_PATH | OAuth2 token JSON path |
 | CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 5) |
-| MORNING_BRIEFING_TIME | HH:MM for morning briefing (default: 07:30) |
+| MORNING_BRIEFING_TIME | HH:MM for morning briefing (default: 07:00 in config.py; .env.example sets 07:30) |
 | MORNING_BRIEFING_ENABLED | true/false (default: true) |
 | EVENING_BRIEFING_TIME | HH:MM for the evening shutdown ritual (default: 21:30) |
 | EVENING_BRIEFING_ENABLED | true/false (default: true) |

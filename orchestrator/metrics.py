@@ -205,6 +205,18 @@ MORNING_BRIEFING_LAST_RUN = Gauge(
     "Unix timestamp the morning briefing job last fired",
 )
 
+# Spoken vs skipped-for-routine vs suppressed (DND / live voice session) vs
+# failed. The morning routine shares the
+# 07:00 slot, so "skipped_routine" every day is expected — this exists so a
+# briefing that never actually speaks is visible rather than silent.
+MORNING_BRIEFING_OUTCOME_TOTAL = Counter(
+    "bgw_morning_briefing_outcome_total",
+    "Morning briefing outcomes",
+    ["outcome"],  # spoken | skipped_routine | suppressed | failed
+)
+for _outcome in ("spoken", "skipped_routine", "suppressed", "failed"):
+    MORNING_BRIEFING_OUTCOME_TOTAL.labels(outcome=_outcome)
+
 # Same dead-man's-switch for the evening shutdown ritual — watched by
 # EveningBriefingStale.
 EVENING_BRIEFING_LAST_RUN = Gauge(

@@ -5,6 +5,7 @@ email-to-calendar event extraction.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -25,6 +26,7 @@ from orchestrator.metrics import (
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
     EVENING_BRIEFING_LAST_RUN,
     MORNING_BRIEFING_LAST_RUN,
+    MORNING_BRIEFING_OUTCOME_TOTAL,
 )
 from orchestrator.reminder_manager import _announce_voice, list_pending_reminders
 from orchestrator.shared import TIMEZONE, profile
@@ -544,6 +546,7 @@ async def morning_briefing():
         except Exception as trust_err:
             logger.warning(f"[MORNING_BRIEFING] Missed-recap lookup failed: {trust_err}")
             undelivered = []
+        recap = None
         if undelivered:
             recap = build_missed_recap(undelivered)
             parts.append(recap)
@@ -557,6 +560,31 @@ async def morning_briefing():
                 fire_system_message(f"⚠️ Reminders that didn't reach you in the last day:\n{lines}")
             except Exception as tg_err:
                 logger.warning(f"[MORNING_BRIEFING] Telegram recap dispatch failed: {tg_err}")
+
+        # Don't talk over a guided routine (the morning routine also fires at
+        # 07:00): Cast play_media replaces whatever is playing, so the briefing
+        # used to cut off its first step ("Take your meds"). Same rule as
+        # evening_briefing, plus a routine due in the next couple of minutes.
+        # NOTE the routine does NOT speak weather/events/parked item/recap
+        # (include_calendar_summary is parsed but unused), so on skip days that
+        # content reaches the user only via the Telegram mirror below. The
+        # parked item stays parked (only a spoken announce clears it).
+        # Yield first: when both jobs fire in the same scheduler pass, the
+        # routine task may not have run yet (and APScheduler has already moved
+        # its next_run_time to tomorrow). On the phone-cache/no-weather path
+        # this function has no other await before here.
+        await asyncio.sleep(1)
+        if _routine_active_or_imminent():
+            logger.info("[MORNING_BRIEFING] Routine active/imminent — skipping announce, mirrored to Telegram")
+            MORNING_BRIEFING_OUTCOME_TOTAL.labels(outcome="skipped_routine").inc()
+            try:
+                from orchestrator.telegram_bot import fire_system_message
+
+                # The missed-reminder recap was already mirrored on its own above.
+                fire_system_message(f"☀️ {' '.join(p for p in parts if p is not recap)}")
+            except Exception as tg_err:
+                logger.warning(f"[MORNING_BRIEFING] Telegram dispatch failed: {tg_err}")
+            return
 
         # `min_volume` floors the speaker at MORNING_BRIEFING_MIN_VOLUME
         # before play_media — defeats the "speaker still at sleep-sound
@@ -575,10 +603,48 @@ async def morning_briefing():
         )
         if parked and result.get("success") and not result.get("suppressed"):
             state_store.delete_app_state("parked_item")
+        if not result.get("success"):
+            outcome = "failed"
+        elif result.get("suppressed"):
+            outcome = "suppressed"
+        else:
+            outcome = "spoken"
+        MORNING_BRIEFING_OUTCOME_TOTAL.labels(outcome=outcome).inc()
         logger.info(f"[MORNING_BRIEFING] Delivered: {len(briefing_events)} events, {len(pending)} reminders")
 
     except Exception as e:
         logger.error(f"[MORNING_BRIEFING] Error: {e}")
+
+
+def _routine_active_or_imminent(window_seconds: int = 120) -> bool:
+    """True if a live guided routine is running or a routine trigger fires within `window_seconds`.
+
+    Same-slot (07:00) case: the caller yields before calling this so the
+    routine task, created in the same scheduler pass, has set its session.
+    The imminent half covers a routine scheduled a minute or two later.
+    A paused or >3h-old session doesn't count — a routine paused last night
+    must not silence this morning. Never raises — a failed check means
+    "no routine", i.e. speak.
+    """
+    try:
+        from orchestrator import routine_manager
+        from orchestrator.routines_config import _is_routine_trigger_job
+
+        sess = routine_manager._active_session
+        if sess is not None and not sess.paused and (datetime.now() - sess.started_at).total_seconds() < 3 * 3600:
+            return True
+        now = datetime.now(ZoneInfo(TIMEZONE))
+        for job in shared.scheduler.get_jobs():
+            nrt = job.next_run_time
+            if (
+                _is_routine_trigger_job(job.id)
+                and nrt is not None
+                and 0 <= (nrt - now).total_seconds() <= window_seconds
+            ):
+                return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[MORNING_BRIEFING] Routine check failed: {e}")
+    return False
 
 
 async def get_tomorrow_events(tz, log_tag: str = "TOMORROW_EVENTS") -> tuple[list, str]:
