@@ -348,7 +348,16 @@ class CloudBrain:
         # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
         # send a system message with all entity states; keeping it causes Qwen's Jinja
         # template to fail ("System message must be at the beginning" / duplicate system).
-        messages = [m for m in messages if m.get("role") != "system"]
+        # Also strip client-supplied `tool` turns: the orchestrator is the only
+        # legitimate producer of tool results, and a forged one is believed by
+        # the model as its own verified output (2026-10-02 red-team finding).
+        # Assistant turns are kept (they are the client's own transcript) but
+        # ChatMessage has no tool_calls field, so forged native calls are
+        # already dropped by Pydantic.
+        _n_before = len(messages)
+        messages = [m for m in messages if m.get("role") not in ("system", "tool")]
+        if len(messages) != _n_before:
+            logger.info("[UNIFIED] Stripped %d client system/tool message(s)", _n_before - len(messages))
 
         # Real streaming: relay gate-safe tokens while the loop is still
         # running. Skipped for the literal first-ever chat so the one-time

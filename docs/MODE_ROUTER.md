@@ -14,6 +14,8 @@ Deterministic v1 intent classifier. Adapts Jess's system prompt based on what Na
 
 **Global tone constraint:** Never default to grounding techniques unless intensity is high or explicitly requested.
 
+**Prompt placement:** the selected mode block (`MODE_PROMPTS[mode]`) is rendered in the per-turn dynamic section of the system prompt — after `prompt_builder.DYNAMIC_CONTEXT_MARKER`, next to CURRENT DATE/TIME — never in the cache-stable static prefix. Switching modes therefore only invalidates the dynamic suffix of the llama.cpp prompt cache.
+
 **Routing logged in `_routing`:** `intent_mode`, `intent_intensity`, `intent_tags` — visible in API response for debugging.
 
 **Key file:** `orchestrator/mode_router.py`

@@ -23,7 +23,12 @@ def get_ha_tool_definition() -> Dict[str, Any]:
     entity_lines = []
     for domain in ["light", "switch", "fan", "climate", "cover", "scene", "lock", "media_player"]:
         entities = ha_client.get_entities_by_domain(domain)
-        for e in entities:
+        # Sorted: HA's /api/states order is not stable across HA restarts or
+        # entity re-registration, and this text is part of the tool schema the
+        # chat template renders ahead of the system prompt — i.e. part of the
+        # llama.cpp prompt-cache prefix. A reshuffle = a full ~10k-token
+        # re-prefill on every turn until the next TTL refresh.
+        for e in sorted(entities, key=lambda ent: ent.entity_id):
             entity_lines.append(f"  - {e.entity_id} ({e.friendly_name})")
 
     entity_list = "\n".join(entity_lines[:60]) if entity_lines else "  (entities loading...)"
@@ -45,8 +50,7 @@ SERVICES:
 - scene: turn_on
 - media_player: play_media (media_content_id: URL, media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
 
-COLORS: rgb_color as [R,G,B]. Blue=[0,0,255], Red=[255,0,0], Green=[0,255,0], Purple=[128,0,128], Yellow=[255,255,0], Orange=[255,165,0], Pink=[255,192,203], White=[255,255,255]
-BRIGHTNESS: 0-255 scale. 50%=128, 75%=191, 100%=255""",
+COLORS: rgb_color as [R,G,B]. BRIGHTNESS: 0-255 (50%=128).""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -124,10 +128,8 @@ STATIC_TOOLS = [
         "function": {
             "name": "update_data",
             "description": (
-                "Update the user's structured personal data (medications, projects). Use this when they "
-                "ask to add, remove, or modify medications or project information. You can also set which "
-                "days of the week a medication is taken (`days`, or the `skip_weekends` shorthand) — use "
-                "this when they want a drug holiday, e.g. 'stop reminding me to take Vyvanse on weekends'."
+                "Add, remove, or modify the user's medications or projects in the source-of-truth YAML. "
+                "`days` / `skip_weekends` restrict which weekdays a medication is taken (drug holidays)."
             ),
             "parameters": {
                 "type": "object",
@@ -160,11 +162,11 @@ STATIC_TOOLS = [
                             "type": "string",
                             "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
                         },
-                        "description": "Days this medication is taken. Omit = leave schedule unchanged; ['mon','tue','wed','thu','fri'] = weekdays only; [] (empty) = clear any restriction, take every day again.",
+                        "description": "Days the medication is taken. Omit = unchanged; [] = every day again.",
                     },
                     "skip_weekends": {
                         "type": "boolean",
-                        "description": "Shorthand: take only Mon–Fri (drug holiday on weekends). Normalizes to days=[mon,tue,wed,thu,fri].",
+                        "description": "Shorthand for days=[mon..fri].",
                     },
                     "status": {
                         "type": "string",
@@ -259,7 +261,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "start_focus",
-            "description": "Start a body doubling focus session with Pomodoro timer, ambient audio, check-ins, and distraction blocking. Supports multi-sprint sessions. Announces break time via voice when sprint ends.",
+            "description": "Start a focus / Pomodoro / body-doubling session: timer, ambient audio, check-ins, spoken break announcement. Use sprints > 1 for body doubling.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -280,7 +282,7 @@ STATIC_TOOLS = [
                     },
                     "block_sites": {
                         "type": "boolean",
-                        "description": "Request DNS site blocking (default true; set false only if the user says 'without blocking' or 'no blocking'). Blocking may be unavailable — only tell the user sites are blocked if the tool result says so.",
+                        "description": "Request site blocking (default true). Usually unavailable — only claim sites are blocked if the result says so.",
                     },
                     "check_ins": {
                         "type": "boolean",
@@ -374,18 +376,12 @@ STATIC_TOOLS = [
         "function": {
             "name": "query_budget",
             "description": (
-                "Query imported historical budget/spending data (CSV/Excel files the user "
-                "loaded with scripts/import_budget.py — separate from live YNAB via "
-                "finance_status). Use for questions about past spending: totals, category "
-                "breakdowns, monthly trends, outlier transactions. "
-                "Always call with question_type='list_datasets' first if you don't know "
-                "what datasets are available. "
-                "For ANY 'find patterns', 'what stood out', 'biggest X in period Y', "
-                "'why did I overspend', 'analyze', or 'compare years' question: use "
-                "question_type='analyze' — that single call gathers the data, hands it "
-                "to the expert reasoning model, and returns the synthesis. Do NOT try to "
-                "stitch together by_category/by_payee/by_month manually for synthesis "
-                "questions — use 'analyze' instead."
+                "Query imported historical budget data (CSV/Excel; separate from live YNAB in "
+                "finance_status) for PAST spending: totals, categories, monthly trends, outliers. "
+                "Call list_datasets once if you don't know the dataset. For 'find patterns', "
+                "'what stood out', 'biggest X', 'why did I overspend', 'compare years': use "
+                "question_type='analyze' — ONE call returns all the aggregated data. If the result has "
+                "an expert_synthesis field use it; otherwise write the synthesis yourself from `data`."
             ),
             "parameters": {
                 "type": "object",
@@ -403,17 +399,15 @@ STATIC_TOOLS = [
                             "list",
                         ],
                         "description": (
-                            "list_datasets: show available imports. "
-                            "analyze: ONE-call pattern finder — gathers totals + top categories + top payees + monthly breakdown + outliers (respecting filters) and internally delegates to the expert reasoning model. Returns {expert_synthesis, data}. Use this for 'find patterns', 'biggest X', 'what stood out', 'compare years' — the response from the expert model IS the answer; you don't need additional query_budget calls afterward. Pass analysis_question with the user's actual intent for a better synthesis. Slow (~50s — that's the expert thinking). "
-                            "total: sum + count over filters. "
-                            "by_category / by_payee / by_month: grouped aggregation (use these for narrow per-dimension facts like 'what category did I spend most on', not for synthesis). "
-                            "outliers: transactions > 2 std above mean outflow. "
-                            "list: recent raw transactions (use sparingly)."
+                            "list_datasets: available imports. "
+                            "analyze: one call returning totals + top categories + top payees + monthly breakdown + outliers (respecting filters) as data for you to synthesize — no follow-up calls needed. "
+                            "total: sum + count. by_category / by_payee / by_month: grouped aggregation for narrow facts. "
+                            "outliers: transactions > 2 std above mean outflow. list: recent raw transactions (sparingly)."
                         ),
                     },
                     "analysis_question": {
                         "type": "string",
-                        "description": "The user's actual question, in their words. Passed to the expert reasoning model along with the aggregated data. Only used when question_type='analyze'. Example: 'Find the biggest gaming purchases in 2025 and tell me if there's a pattern.'",
+                        "description": "The user's question in their words (analyze only); recorded with the result.",
                     },
                     "dataset": {
                         "type": "string",
@@ -531,7 +525,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "finance_status",
-            "description": "Check the user's Financial Quest Board status: budget remaining, XP/level, streak, side quests, and spending summary. Use when they ask about their finances, budget, spending, how much they have left, savings goals, or game progress.",
+            "description": "Check the user's Financial Quest Board status for the CURRENT period (live YNAB): budget remaining, XP/level, streak, side quests, spending summary. For past or imported spending history use query_budget instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -939,7 +933,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "document_vault",
-            "description": "Search, browse, create, or update documents in the user's vault. Use 'create' to make a new document (food inventory, personal lists, notes). Use 'search' to find documents, 'list' to browse by category, 'update' to add/replace notes on a document. When the user provides details about a document (VIN, account number, policy info), use 'update' to save those as notes. Documents are also findable via search_memory.",
+            "description": "The user's document vault: 'search' to find a document, 'list' to browse a category, 'create' a new text document (lists, inventories, notes), 'update' to save details (VIN, account, policy) as notes on an existing one. Notes are also searchable via search_memory.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -979,15 +973,9 @@ STATIC_TOOLS = [
         "function": {
             "name": "paperless_save",
             "description": (
-                "Send a file from the local Paperless inbox to Paperless-ngx "
-                "for OCR and auto-tagging. Use this for scanned receipts, "
-                "bills, tax documents, medical records, insurance papers — "
-                "anything that originated as PAPER or a PDF. Do NOT use this "
-                "for typed/pasted text notes (use document_vault for those). "
-                "The file must already exist in /app/data/paperless_inbox/ "
-                "(the user rsyncs/drops files there). Pass just the filename, "
-                "no path. Paperless will OCR, tag, and file it; searchable "
-                "afterwards via the Paperless web UI or mobile app."
+                "Send a file already dropped in the Paperless inbox folder to Paperless-ngx for OCR "
+                "and auto-tagging (scanned receipts, bills, tax/medical/insurance papers, PDFs). "
+                "Typed notes go to document_vault instead. Pass the bare filename, no path."
             ),
             "parameters": {
                 "type": "object",
@@ -1274,6 +1262,11 @@ MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
 # keeps the LLM from offering GPU-box power control on installs without it.
 HELIOS_TOOL_NAMES: frozenset[str] = frozenset({"helios_power"})
 
+# Paperless bridge (F-012) — hidden from the schema unless PAPERLESS_ENABLED
+# (config.py already forces it off when the URL/token are missing). No point
+# spending ~350 prompt tokens per turn advertising a tool that can only fail.
+PAPERLESS_TOOL_NAMES: frozenset[str] = frozenset({"paperless_save"})
+
 # Assembled tool-list cache. Rebuilt only when the HA tool cache refreshes
 # (every ~5 min) or a feature flag flips — get_all_tools/get_voice_tools are
 # called on every LLM round, including tool-continuation rounds. The cache key
@@ -1294,6 +1287,7 @@ def _refresh_tool_caches() -> None:
         shared.WORKOUTS_ENABLED,
         shared.MEALS_ENABLED,
         getattr(shared, "HELIOS_WAKE_ENABLED", False),
+        getattr(shared, "PAPERLESS_ENABLED", False),
     )
     if key != _tools_cache_key:
         static = STATIC_TOOLS
@@ -1305,6 +1299,8 @@ def _refresh_tool_caches() -> None:
             static = [t for t in static if t.get("function", {}).get("name") not in MEAL_TOOL_NAMES]
         if not getattr(shared, "HELIOS_WAKE_ENABLED", False):
             static = [t for t in static if t.get("function", {}).get("name") not in HELIOS_TOOL_NAMES]
+        if not getattr(shared, "PAPERLESS_ENABLED", False):
+            static = [t for t in static if t.get("function", {}).get("name") not in PAPERLESS_TOOL_NAMES]
         tools = [ha_tool] + static
         if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
             tools.append(_CODE_AGENT_TOOL)

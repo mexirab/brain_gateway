@@ -288,7 +288,7 @@ Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging. If `PAPERL
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PAPERLESS_ENABLED` | `false` | Enable the F-012 bridge (`paperless_save` tool + `POST /api/paperless/upload`). Forced off if `PAPERLESS_URL` is empty or `PAPERLESS_API_TOKEN` is too short. |
+| `PAPERLESS_ENABLED` | `false` | Enable the F-012 bridge (`paperless_save` tool + `POST /api/paperless/upload`). Forced off if `PAPERLESS_URL` is empty or `PAPERLESS_API_TOKEN` is too short. When off, `paperless_save` is also removed from the LLM tool schema (`PAPERLESS_TOOL_NAMES`, part of the tool-cache key) and the paperless line is dropped from the system prompt's tool guidance; the handler stays registered and self-gates. Exposed as `shared.PAPERLESS_ENABLED`. |
 | `PAPERLESS_URL` | (empty) | Paperless-ngx base URL (e.g. `http://paperless.example.tld:8777`). Required when enabled. |
 | `PAPERLESS_API_TOKEN` | (empty) | Paperless API token. Required when enabled; must be >= 8 characters. |
 | `PAPERLESS_INBOX_PATH` | `/app/data/paperless_inbox` | Container-side staging dir the `paperless_save` tool reads from. Host-side: `/opt/gateway_mvp/data/app/paperless_inbox/`, bind-mounted via the existing `/app/data` mount. Filename-only inputs — handler rejects `/`, `\`, `..`, absolute paths, null bytes, and symlink escape. |

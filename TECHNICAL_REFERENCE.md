@@ -302,11 +302,25 @@ All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orche
 
 ## Tool Result Cap
 
-The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (~1500 tokens), RAG injection (~1000 tokens), turn history, and several concurrent tool results within the 32K context window.
+The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (static prefix ~1.7k tokens + per-turn dynamic block 0.3–1k tokens including RAG injection; the tool schemas add ~33k chars on top, ~10k tokens total), turn history, and several concurrent tool results within the 131K context window.
+
+**Markup neutralization (2026-10-02):** before the cap, `_cap_tool_result()` runs `_neutralize_control_markup()` on the stringified result. `<tool_call>`, `<tool_response>`, `<think>`, `<function=…>`, `<parameter=…>` tags (open or close, any attributes) and `<|…|>` chat-template specials are rewritten with Unicode angle quotes (`‹tool_call›`) so the text stays readable but can no longer be parsed as a call, fool the `StreamGate`, or forge a chat turn at token level. Tool results are untrusted (web pages, email, calendar descriptions, document notes, OCR, auto-learned memory). Emits a `WARNING` with the tool name and increments `bgw_tool_result_markup_neutralized_total{tool}`.
 
 **Overflow behavior:** `_cap_tool_result()` truncates to 8000 chars and appends a model-facing footer: _"Work with the information above; do not call this tool again to retrieve the rest."_ A `WARNING` log is emitted with the tool name and both char counts.
 
 **Design implication:** Tools must not be designed around returning large blobs (full email threads, long document text, etc.). Summarize or paginate at the tool handler level — the cap is a safety net, not a substitute for well-scoped tool output.
+
+## Tool-Call Loop Guards
+
+Echo-injection defences in `unified_loop.py` (2026-10-02 security review: a `<tool_call>` block quoted from a web page was executed 82 times in one round):
+
+| Guard | Behavior | Metric |
+|-------|----------|--------|
+| `_xml_fallback_allowed(content, finish_reason)` | XML `<tool_call>` fallback parsing only when `finish_reason != "length"` and the prose outside tool-call/think blocks is ≤ `_XML_FALLBACK_MAX_PROSE_CHARS` (200). Otherwise the markup is treated as quoted content and logged at WARNING. | `bgw_tool_call_source_total{source="xml_rejected"}` |
+| `_filter_new_tool_calls()` | Drops calls already executed in earlier rounds, collapses identical `(name, args)` within a round, caps a round at `MAX_TOOL_CALLS_PER_ROUND = 5`. | `bgw_tool_calls_capped_total` |
+| `cloud_brain` message strip | Client-supplied `role: "system"` and `role: "tool"` messages are removed before the loop — the orchestrator is the only legitimate producer of tool results. Log: `[UNIFIED] Stripped N client system/tool message(s)`. | — |
+
+Known gaps (not fixed): no server-side confirmation gate for HA lock/alarm/cover services; announcement-ack inference still trusts the client transcript's assistant turns (API-token holders only); the `home_assistant` schema lists only the first 60 entities (sorted by entity_id) so scenes/media_players may be absent.
 
 ## Tool Schemas
 

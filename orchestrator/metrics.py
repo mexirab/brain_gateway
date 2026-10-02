@@ -104,8 +104,24 @@ TOOL_CALL_COUNT = Counter(
 # every tool call in a round is a repeat. All three have their own counters.
 TOOL_CALL_SOURCE = Counter(
     "bgw_tool_call_source_total",
-    "How tool calls arrived from the model (native vs XML-fallback rescue vs silently dropped)",
+    "How tool calls arrived from the model (native vs XML-fallback rescue vs silently dropped vs xml_rejected)",
     ["source"],
+)
+
+# Echo-injection defences (2026-10-02 security review): a tool result carried
+# <tool_call>/<think>/<|im_start|> markup that was neutralized before reaching
+# the model, and a model round that tried to dispatch more than
+# MAX_TOOL_CALLS_PER_ROUND calls. Either firing is a signal that untrusted
+# content is trying to drive the loop.
+TOOL_RESULT_MARKUP_NEUTRALIZED = Counter(
+    "bgw_tool_result_markup_neutralized_total",
+    "Tool results in which tool-call / chat-template control markup was neutralized",
+    ["tool"],
+)
+
+TOOL_CALLS_CAPPED = Counter(
+    "bgw_tool_calls_capped_total",
+    "Model rounds whose tool-call batch exceeded MAX_TOOL_CALLS_PER_ROUND and was truncated",
 )
 
 TOOL_CALL_LATENCY = Histogram(

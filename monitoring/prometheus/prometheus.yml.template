@@ -112,8 +112,9 @@ scrape_configs:
   # ============================================
   # llamacpp:* counters: requests_deferred / requests_processing (the --parallel 1
   # queue — the one failure mode the 2026-10-02 llama.cpp cutover introduced),
-  # spec-decode draft/accepted tokens (MTP acceptance), prompt_tokens_cached_total,
-  # kv_cache_usage_ratio. Helios is power-tiered and asleep most of the day, so
+  # spec-decode draft/accepted tokens (MTP acceptance), prompt_tokens_cached_total
+  # vs prompt_tokens_total (prompt-cache hit ratio; this build does NOT export
+  # kv_cache_usage_ratio). Helios is power-tiered and asleep most of the day, so
   # this target is down most of the time by design — same posture as the Helios
   # node-exporter/gpu-exporter targets: dashboard signal only, no target-down alert.
   - job_name: 'llama-primary'

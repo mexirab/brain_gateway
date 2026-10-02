@@ -395,6 +395,10 @@ PRESENCE_WELCOME_COOLDOWN = settings.presence_welcome_cooldown
 JESS_ADVANCED = settings.jess_advanced
 WORKOUTS_ENABLED = settings.workouts_enabled
 MEALS_ENABLED = settings.meals_enabled
+# Paperless bridge (F-012) — config.py auto-disables this when PAPERLESS_URL /
+# PAPERLESS_API_TOKEN are missing; tool_definitions hides paperless_save from
+# the LLM schema when it is off (the handler stays registered and self-gates).
+PAPERLESS_ENABLED = settings.paperless_enabled
 
 # ---------------------------------------------------------------------------
 # Code Agent (coding-focused model for self-troubleshooting)

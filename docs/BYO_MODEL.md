@@ -143,7 +143,8 @@ provider id for cloud).
 
 ### Context window — raise it for Ollama
 
-Jess's system prompt + ~30 tool schemas is **~9–13k tokens**. Ollama defaults to
+Jess's system prompt + ~40 tool schemas is **~10k tokens** (the tool schemas,
+dominated by the Home Assistant entity list, are most of it). Ollama defaults to
 a **4096-token** context and *silently truncates* anything longer — the tool
 schemas and even your message get cut off, so the model emits broken tool calls
 (it says "reminder set" but nothing is saved). Serve Ollama with a bigger window:

@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from orchestrator.metrics import (
     CHAT_STREAM_OUTCOME,
@@ -18,6 +18,8 @@ from orchestrator.metrics import (
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
     TOOL_CALL_SOURCE,
+    TOOL_CALLS_CAPPED,
+    TOOL_RESULT_MARKUP_NEUTRALIZED,
     TOOL_ROUNDS,
 )
 from orchestrator.shared import MAX_TOOL_ROUNDS
@@ -35,9 +37,38 @@ logger = logging.getLogger(__name__)
 MAX_TOOL_RESULT_CHARS = 8000
 
 
+# Control markup that must never reach the model from a tool result. Tool
+# results are untrusted (web pages, email bodies, calendar descriptions,
+# document notes, OCR'd files, auto-learned memories). A literal
+# ``<tool_call>{...}</tool_call>`` inside one is parsed by the XML fallback the
+# moment the model quotes it — the 2026-10-02 security review fired a Home
+# Assistant call 82 times in one round from a quoted web snippet. ``<think>``
+# fools the StreamGate, and ``<|im_start|>`` / ``<|im_end|>`` are tokenised as
+# chat-template specials by llama-server, i.e. a tool result could forge a
+# user turn at token level. Each is rewritten with Unicode angle quotes so the
+# text stays readable but is no longer markup.
+_CONTROL_MARKUP_RE = re.compile(
+    r"</?\s*(tool_call|tool_response|think|function|parameter)\b[^>]*>|<\|[^|<>]{1,32}\|>",
+    re.IGNORECASE,
+)
+
+
+def _neutralize_control_markup(s: str) -> str:
+    """Rewrite chat-template / tool-call markup in untrusted text as plain text."""
+    if "<" not in s:
+        return s
+    return _CONTROL_MARKUP_RE.sub(lambda m: "‹" + m.group(0)[1:-1] + "›", s)
+
+
 def _cap_tool_result(result: Any, tool_name: str) -> str:
-    """Stringify and hard-cap a tool result so it can't poison the context."""
+    """Stringify, neutralize control markup, and hard-cap a tool result so it
+    can't poison the context or be parsed back as a tool call."""
     s = str(result) if result is not None else ""
+    cleaned = _neutralize_control_markup(s)
+    if cleaned != s:
+        logger.warning("[UNIFIED] Neutralized control markup in %s result", tool_name)
+        TOOL_RESULT_MARKUP_NEUTRALIZED.labels(tool=tool_name).inc()
+        s = cleaned
     if len(s) <= MAX_TOOL_RESULT_CHARS:
         return s
     truncated = s[:MAX_TOOL_RESULT_CHARS]
@@ -348,10 +379,82 @@ async def _stream_model_round(
 _TOOL_CALL_MARKER_RE = re.compile(r"<tool_call\b")
 
 
+# Max tool calls honoured from a single model round. A legitimate turn needs
+# two or three (e.g. check_calendar + check_email + search_memory); dozens
+# means the model is echoing something, not deciding.
+MAX_TOOL_CALLS_PER_ROUND = 5
+
+# How much non-tool-call text a reply may carry before the XML fallback refuses
+# to treat its <tool_call> blocks as calls. Qwen's template allows "optional
+# reasoning ... BEFORE the function call", so a short lead-in is fine; a
+# paragraph of prose with a tool-call block inside it is quoted content.
+_XML_FALLBACK_MAX_PROSE_CHARS = 200
+
+_XML_TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _xml_fallback_allowed(content: str, finish_reason: Optional[str]) -> bool:
+    """Decide whether <tool_call> markup in ``content`` is a real call.
+
+    True only when the model stopped cleanly (not ``length`` — a truncated
+    reply is an echo loop, not a decision) and the text outside the tool-call
+    and think blocks is at most a short lead-in. Anything else is prose that
+    happens to contain markup (a quoted snippet, a pasted log) and must not
+    execute.
+    """
+    if finish_reason == "length":
+        return False
+    if "<tool_call>" not in content:
+        return False
+    prose = _XML_TOOL_CALL_BLOCK_RE.sub("", content)
+    prose = _THINK_BLOCK_RE.sub("", prose).strip()
+    return len(prose) <= _XML_FALLBACK_MAX_PROSE_CHARS
+
+
+def _filter_new_tool_calls(tool_calls: List[Dict[str, Any]], executed_calls: set, label: str) -> List[Dict[str, Any]]:
+    """Drop calls already executed in earlier rounds, collapse identical
+    (name, args) repeats within this round, and cap the batch at
+    MAX_TOOL_CALLS_PER_ROUND. ``executed_calls`` is NOT mutated here — the
+    caller records a call only once it is actually dispatched."""
+    new_tool_calls: List[Dict[str, Any]] = []
+    seen_this_round: set = set()
+    for tool_call in tool_calls:
+        function = tool_call.get("function", {})
+        tool_name = function.get("name", "")
+        args_str = function.get("arguments", "{}")
+        try:
+            arguments = json.loads(args_str)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[%s] Malformed arguments for %s: %s", label, tool_name, str(args_str)[:100])
+            arguments = {}
+        call_key = (tool_name, json.dumps(arguments, sort_keys=True))
+        if call_key in executed_calls:
+            logger.info("[%s] Skipping repeat tool call: %s", label, tool_name)
+            continue
+        if call_key in seen_this_round:
+            logger.info("[%s] Collapsing duplicate %s call within round", label, tool_name)
+            continue
+        if len(new_tool_calls) >= MAX_TOOL_CALLS_PER_ROUND:
+            logger.warning(
+                "[%s] Tool-call batch capped at %d; dropping %s and any further calls this round",
+                label,
+                MAX_TOOL_CALLS_PER_ROUND,
+                tool_name,
+            )
+            TOOL_CALLS_CAPPED.inc()
+            break
+        seen_this_round.add(call_key)
+        new_tool_calls.append(tool_call)
+    return new_tool_calls
+
+
 def parse_xml_tool_calls(content: str) -> List[Dict[str, Any]]:
     """Parse <tool_call> XML tags from model content (fallback for older models).
 
-    Returns tool_calls in OpenAI-compatible format.
+    Returns tool_calls in OpenAI-compatible format. Callers must gate this with
+    ``_xml_fallback_allowed`` — see the 2026-10-02 echo-injection note above
+    ``_neutralize_control_markup``.
     """
     tool_calls = []
     # Greedy match between tags to handle nested JSON objects like {"arguments": {"key": "val"}}
@@ -657,9 +760,24 @@ async def run_unified_tool_loop(
         content = message.get("content") or ""
         _had_native = bool(tool_calls)
 
-        # Fallback: parse XML <tool_call> tags if no native tool_calls
+        # Fallback: parse XML <tool_call> tags if no native tool_calls.
+        # Gated: the fallback is a legacy path (llama.cpp --jinja and vLLM both
+        # return native tool_calls), and parsing tags out of ordinary prose is
+        # how quoted untrusted content became real tool calls. Only honour it
+        # when the reply is essentially *just* tool-call blocks and the model
+        # finished cleanly (a length-truncated echo of a snippet is not a call).
         if not tool_calls and content:
-            tool_calls = parse_xml_tool_calls(content)
+            if _xml_fallback_allowed(content, choice.get("finish_reason")):
+                tool_calls = parse_xml_tool_calls(content)
+            elif "<tool_call>" in content:
+                TOOL_CALL_SOURCE.labels(source="xml_rejected").inc()
+                logger.warning(
+                    "[%s] Ignoring <tool_call> markup embedded in prose (finish_reason=%s, %d chars) — "
+                    "treated as quoted content, not a call",
+                    label,
+                    choice.get("finish_reason"),
+                    len(content),
+                )
 
         # Classify how the call arrived — see TOOL_CALL_SOURCE in metrics.py for
         # the vLLM 0.19.1 / PR #35687 defect this measures. Wrapped defensively:
@@ -739,22 +857,9 @@ async def run_unified_tool_loop(
 
             return await _finalize(result, already_streamed=streamed_this_round)
 
-        # Filter out duplicate calls (already executed in a previous round)
-        new_tool_calls = []
-        for tool_call in tool_calls:
-            function = tool_call.get("function", {})
-            tool_name = function.get("name", "")
-            args_str = function.get("arguments", "{}")
-            try:
-                arguments = json.loads(args_str)
-            except json.JSONDecodeError:
-                logger.warning("[%s] Malformed arguments for %s: %s", label, tool_name, args_str[:100])
-                arguments = {}
-            call_key = (tool_name, json.dumps(arguments, sort_keys=True))
-            if call_key in executed_calls:
-                logger.info("[%s] Skipping repeat tool call: %s", label, tool_name)
-            else:
-                new_tool_calls.append(tool_call)
+        # Filter out duplicate calls (already executed in a previous round OR
+        # repeated within this round) and cap the batch size.
+        new_tool_calls = _filter_new_tool_calls(tool_calls, executed_calls, label)
 
         # All calls are repeats — force a final response
         if not new_tool_calls:

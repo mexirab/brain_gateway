@@ -16,7 +16,7 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
 
 **Current status:**
 - Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF (llama.cpp `llama-server-primary`, since 2026-10-02; RadixArk/Qwen3.8-27B-NVFP4 on vLLM 0.27.1 2026-09-28 → 2026-10-02; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed.
+- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF (llama.cpp `llama-server-primary`, since 2026-10-02; RadixArk/Qwen3.8-27B-NVFP4 on vLLM 0.27.1 2026-09-28 → 2026-10-02; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed. **Known gap (2026-10-02):** the HA Conversation Agent is still configured with `http://10.0.0.195:8888` (Helios), but the orchestrator has lived on Jupiter (`http://10.0.0.248:8888`) since the HA migration — ATOM Echo voice turns currently fail at the conversation step until the agent's base URL is repointed in the HA UI (Settings → Voice assistants → the Jess conversation agent).
 - TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
 - No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
 
