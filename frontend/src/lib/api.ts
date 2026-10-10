@@ -22,6 +22,8 @@ import type {
   WorkoutHistorySession,
   GenerateWorkoutResponse,
   ExerciseCatalogEntry,
+  WorkoutLocationsResponse,
+  WorkoutProgram,
   WorkoutSet,
   Meal,
   MealsToday,
@@ -185,10 +187,19 @@ export const api = {
     fetcher<{ days: number; sessions: WorkoutHistorySession[] }>(
       `/api/workouts/history?days=${days}`,
     ),
-  generateWorkout: () =>
-    fetcher<GenerateWorkoutResponse>('/api/workouts/generate', { method: 'POST' }),
-  workoutExercises: () =>
-    fetcher<ExerciseCatalogEntry[]>('/api/workouts/exercises'),
+  generateWorkout: (locationId?: number | null) =>
+    fetcher<GenerateWorkoutResponse>('/api/workouts/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // Explicit null = no location (whole catalog); omitted = backend's last-used default.
+      body: JSON.stringify(locationId === undefined ? {} : { location_id: locationId }),
+    }),
+  workoutExercises: (locationId?: number | null) =>
+    fetcher<ExerciseCatalogEntry[]>(
+      locationId ? `/api/workouts/exercises?location_id=${locationId}` : '/api/workouts/exercises',
+    ),
+  workoutLocations: () => fetcher<WorkoutLocationsResponse>('/api/workouts/locations'),
+  workoutProgram: () => fetcher<{ program: WorkoutProgram | null }>('/api/workouts/program'),
   logSet: (body: {
     exercise: string;
     weight_lbs: number;
@@ -209,7 +220,11 @@ export const api = {
     workoutId: number,
     body: { remove_exercises?: string[]; add_exercises?: string[] },
   ) =>
-    fetcher<{ ok: boolean }>(`/api/workouts/${workoutId}`, {
+    fetcher<{
+      ok: boolean;
+      added_exercises?: string[];
+      skipped_exercises?: Array<{ name: string; reason: string; alternatives?: string[] }>;
+    }>(`/api/workouts/${workoutId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

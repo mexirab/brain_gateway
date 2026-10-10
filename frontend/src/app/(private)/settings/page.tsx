@@ -1,18 +1,26 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
-import { User, Heart, Moon, Repeat, Sunrise, Volume2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell } from 'lucide-react';
 import IdentityPanel from '@/components/settings/IdentityPanel';
 import SelfcarePanel from '@/components/settings/SelfcarePanel';
 import QuietHoursPanel from '@/components/settings/QuietHoursPanel';
 import RecurringRemindersPanel from '@/components/settings/RecurringRemindersPanel';
 import RoutinesPanel from '@/components/settings/RoutinesPanel';
 import SpeakersPanel from '@/components/settings/SpeakersPanel';
+import WorkoutsPanel from '@/components/settings/WorkoutsPanel';
 import type { LucideIcon } from 'lucide-react';
 
-// Exported so each panel imports the same union — adding a 7th panel
+// Exported so each panel imports the same union — adding another panel
 // is a single-file change here, not a hand-edit across every component.
-export type PanelKey = 'identity' | 'selfcare' | 'quiet' | 'routines' | 'speakers' | 'recurring';
+export type PanelKey =
+  | 'identity'
+  | 'selfcare'
+  | 'quiet'
+  | 'routines'
+  | 'speakers'
+  | 'recurring'
+  | 'workouts';
 
 interface Tab {
   key: PanelKey;
@@ -28,6 +36,7 @@ const TABS: Tab[] = [
   { key: 'routines', label: 'Routines', icon: Sunrise, description: 'Morning + evening step-by-step flows' },
   { key: 'speakers', label: 'Speakers', icon: Volume2, description: 'Per-category speaker routing' },
   { key: 'recurring', label: 'Recurring Reminders', icon: Repeat, description: 'Schedules + cron rules' },
+  { key: 'workouts', label: 'Workouts', icon: Dumbbell, description: 'Program + gym equipment' },
 ];
 
 // Each panel calls `registerDirty(panelKey, isDirty)` in an effect so the
@@ -46,7 +55,20 @@ export default function SettingsPage() {
     routines: false,
     speakers: false,
     recurring: false,
+    workouts: false,
   });
+  // Hide the Workouts tab when the feature is off. Fail-open (show it) if the
+  // flags can't be read — the panel itself handles the disabled 404.
+  // null = not known yet: render the tab only once resolved so the rail
+  // doesn't shift when it disappears.
+  const [workoutsEnabled, setWorkoutsEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    fetch('/api/proxy/api/config/features')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((f) => setWorkoutsEnabled(!(f && f.workouts_enabled === false)))
+      .catch(() => setWorkoutsEnabled(true));
+  }, []);
+  const tabs = TABS.filter((t) => t.key !== 'workouts' || workoutsEnabled === true);
 
   const registerDirty = useCallback<DirtyRegister>((panel, dirty) => {
     dirtyRef.current[panel] = dirty;
@@ -79,7 +101,7 @@ export default function SettingsPage() {
       <div className="grid md:grid-cols-[220px_1fr] gap-6">
         {/* Tab rail */}
         <nav aria-label="Settings sections" className="space-y-1">
-          {TABS.map(({ key, label, icon: Icon, description }) => {
+          {tabs.map(({ key, label, icon: Icon, description }) => {
             const isActive = key === active;
             return (
               <button
@@ -111,6 +133,7 @@ export default function SettingsPage() {
           {active === 'routines' && <RoutinesPanel registerDirty={registerDirty} />}
           {active === 'speakers' && <SpeakersPanel registerDirty={registerDirty} />}
           {active === 'recurring' && <RecurringRemindersPanel registerDirty={registerDirty} />}
+          {active === 'workouts' && <WorkoutsPanel registerDirty={registerDirty} />}
         </section>
       </div>
     </div>

@@ -168,17 +168,34 @@ Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bg
 
 ### Workouts
 
+Mounted only when `WORKOUTS_ENABLED=true` (otherwise 404). Errors: `{"ok": false, "error": "..."}` — 404 for `location not found` / `no active program`, 400 for validation failures. Detail: `docs/WORKOUTS_AND_MEALS.md`.
+
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/workouts/today` | Today's workout plan + logged sets |
-| POST | `/api/workouts/generate` | Generate today's plan (idempotent — returns existing plan if one exists) |
-| GET | `/api/workouts/history` | Past workout sessions |
-| GET | `/api/workouts/exercises` | Full exercise catalog (52 entries) |
-| POST | `/api/workouts/sets` | Log a set: `{workout_id, exercise_id, set_number, weight_lbs, reps}` |
-| PATCH | `/api/workouts/{id}` | Modify workout (swap/remove exercise) |
+| GET | `/api/workouts/today` | Today's workout plan + logged sets (incl. `location_id`, `location` name, `is_deload`, `exercises[].note` — the progression note) |
+| POST | `/api/workouts/generate` | Generate today's plan. Body (optional): `{location_id?}` — see below |
+| GET | `/api/workouts/history` | Past workout sessions (`days` 1–365, default 14) |
+| GET | `/api/workouts/exercises` | Exercise catalog (~72). Query: `movement_pattern?`, `equipment?`, `location_id?` (keeps only exercises whose `requires` ⊆ the location's equipment; unknown id → 404) |
+| GET | `/api/workouts/program` | `{program: {...} \| null}` |
+| PUT | `/api/workouts/program` | Set the program: `{goal, days_per_week, session_minutes, deload_every_weeks?}` → `{ok, program}`. `deload_every_weeks`: `0` (off) or 3–12; omitted/`null` keeps the current value (default 6 for a new program); bool / non-integer float → 400 |
+| DELETE | `/api/workouts/program` | Clear the active program → `{ok: true}` (404 if none) |
+| GET | `/api/workouts/locations` | `{locations: [...], equipment_vocabulary: [12 tokens], templates: {name: [tokens]}}` — most recently used first |
+| POST | `/api/workouts/locations` | Create: `{name, template? \| equipment?, limits?}` → 201 `{ok, location}` |
+| PATCH | `/api/workouts/locations/{id}` | Update any of `{name, equipment, add_equipment, remove_equipment, limits}` → `{ok, location}` |
+| DELETE | `/api/workouts/locations/{id}` | Delete → `{ok, removed: "<name>"}`. Past workouts keep the dangling `location_id` |
+| POST | `/api/workouts/sets` | Log a set: `{exercise, weight_lbs, reps, rpe?, set_id?, workout_id?}` |
+| PATCH | `/api/workouts/{id}` | Modify workout: `{remove_exercises?: [name], add_exercises?: [name]}` → `{ok, workout_id, removed_sets, added_exercises, skipped_exercises: [{name, reason, alternatives?}], removal_held}` |
 | DELETE | `/api/workouts/{id}` | Delete a workout |
 | POST | `/api/workouts/{id}/end` | End a workout session |
 | DELETE | `/api/workouts/sets/{id}` | Delete a logged set |
+
+**`POST /api/workouts/generate`:** `location_id` must be an integer or null (else 400). Omitted → the only location, else the last-used one, else none (whole catalog, no load caps). Explicit `null` → no location (whole catalog). Idempotent per day: if today's workout exists it returns `{ok, workout_id, workout_type, reasoning, exercises: [], already_exists: true, location_mismatch}` (`location_mismatch` = a `location_id` was sent and differs from today's plan). New plan → `{ok, workout_id, workout_type, reasoning, exercises: [{name, primary_muscle, muscle_groups, equipment, is_compound, sets: [{set_number, target_reps, target_weight_lbs}], progression, note?}], location: {id, name} | null, program_day: {index, of, label} | null, deload: bool, notes: [str]}`. `progression` ∈ `new|up|reps|hold|stall_deload|comeback|capped|deload_week` (rules: `docs/WORKOUTS_AND_MEALS.md` → Progression). Failure (unknown location, nothing fits the gear) → 400.
+
+**Program object:** `{id, goal: "strength"|"muscle"|"general", days_per_week: 2–6, session_minutes: 20–120, deload_every_weeks: 0|3–12, active, created_at, split: [day labels], next_day_index, next_day_label, exercises_per_session, deload: {enabled, is_deload, sessions_until_deload: int|null}}` (returned by GET and PUT).
+
+**Location object:** `{id, name (≤60 chars, unique case-insensitive), equipment: [tokens], limits: {dumbbell_max_lbs?, dumbbell_step_lbs?, kettlebell_weights_lbs?: [lb]}, last_used_at, created_at, updated_at}`. Equipment tokens: `barbell, squat_rack, bench, trap_bar, dumbbells, kettlebell, cable, machines, leg_press, pull_up_bar, dip_station, ab_wheel` (unknown token → 400). Templates: `commercial_gym` (all 12), `home_basic` (`dumbbells`, `kettlebell`), `empty`; default `commercial_gym`, ignored when `equipment` is given. Limits: `dumbbell_max_lbs` 1–300, `dumbbell_step_lbs` 0.5–50, `kettlebell_weights_lbs` ≤12 weights each 1–300; a limits patch merges onto existing limits, `null`/`""`/`[]` clears a key, unknown keys → 400. Max 20 locations. Program + location writes are audited to `config_changes` (panel `workouts`).
+
+Metrics: `bgw_workout_generated_total{result}` (`ok|no_exercises|bad_location|ask_location`), `bgw_workout_progression_total{progression}` (one per planned exercise).
 
 ### Meals
 
@@ -492,18 +509,34 @@ daily:
 
 ### generate_workout
 ```json
-{}
+{"location": "home"}
 ```
-Returns the full workout plan as text (model retains it in context for follow-up questions like "swap squats for leg press"). Model should NOT read the plan aloud — user is at the gym.
+- `location` (string, optional): where they're training, as said. Resolved by `workout_setup.find_location` — exact (case/punctuation-insensitive) match, else a unique containment match ("downtown" → "Downtown Gym", "at home" → "Home").
+- No `location` + exactly 1 location → uses it. No `location` + ≥2 locations → returns "Not generated yet — ask the user where they're training today: … (last time: X)" and counts `ask_location`; the model asks once and calls again. No locations → whole catalog.
+- Unknown location → "Not generated" text listing known locations (or offering `workout_setup` add_location when none exist).
+- Follows the active weekly program if set, else the adaptive no-program logic (`docs/WORKOUTS_AND_MEALS.md`).
 
-**Adaptive logic:**
-- < 1 session in last 4 days → `full_body`
-- 1 session in last 3 days → `full_body_complement` (skewed toward undertrained muscles)
-- 2+ sessions in last 4 days → `push` / `pull` / `legs` split, chosen to complement recency
+Returns the plan as text (location, program day "Label (n of N)", reasoning incl. deload week, one line per exercise with sets×reps @ weight and its progression note, e.g. "+5 lb from last time") so the model keeps it in context for follow-ups. Model should NOT read the plan aloud — user is at the gym.
+
+### workout_setup
+```json
+{"action": "set_program", "goal": "muscle", "days_per_week": 4, "session_minutes": 45}
+```
+```json
+{"action": "update_location", "name": "Home", "add_equipment": ["pull_up_bar"], "limits": {"dumbbell_max_lbs": 50}}
+```
+- `action` (required): `get` | `set_program` | `clear_program` | `add_location` | `update_location` | `remove_location`.
+- `get` → JSON `{program: {goal, days_per_week, session_minutes, deload_every_weeks, next_is_deload, split, next_day} | null, locations: [{name, equipment, limits}], equipment_vocabulary, templates}`. The schema tells the model to call `get` first to learn equipment names.
+- `set_program`: `goal` `strength|muscle|general` (default `general`), `days_per_week` 2–6, `session_minutes` 20–120, optional `deload_every_weeks` (0 = off, 3–12; omit to keep). Reply text states the deload cadence ("Deload week every N weeks." / "No scheduled deload weeks.").
+- `add_location`: `name`, `template` `commercial_gym|home_basic|empty` (default `commercial_gym`), optional `limits`. (Explicit equipment lists are a dashboard-only option.)
+- `update_location`: `name` (fuzzy-resolved like `generate_workout`), optional `new_name`, `add_equipment`, `remove_equipment`, `limits` (`dumbbell_max_lbs`, `dumbbell_step_lbs`, `kettlebell_weights_lbs`; `null` clears one).
+- `remove_location`: `name` must match exactly (case/punctuation-insensitive) — no fuzzy match, so a near-name never deletes the wrong place.
+- Validation and limits are shared with the REST routes (`orchestrator/workout_setup.py`); errors return `{"ok": false, "error": ...}` JSON (location misses add `known_locations`). Writes are audited (`config_changes`, panel `workouts`, `changed_by=jess`).
+- Gated with the other workout tools (`WORKOUT_TOOL_NAMES`, `WORKOUTS_ENABLED`).
 
 ### log_set
 ```json
-{"workout_id": 1, "exercise_id": 7, "set_number": 1, "weight_lbs": 135.0, "reps": 8}
+{"exercise": "Goblet Squat", "weight_lbs": 35.0, "reps": 10, "rpe": 8}
 ```
 - All weights in lbs.
 - Side effect: after persisting the set, calls `selfcare_manager.record_movement_logged(f"set:{exercise_name}")`, which resets both `last_movement_nudge` and `sitting_since` (prevents sitting-timer nudges while at the gym). Wrapped in try/except; never blocks the set write.
@@ -515,9 +548,11 @@ Returns the full workout plan as text (model retains it in context for follow-up
 
 ### modify_workout
 ```json
-{"workout_id": 1, "action": "swap", "exercise_id": 7, "replacement_exercise_id": 12}
+{"workout_id": 1, "remove_exercises": ["Back Squat"], "add_exercises": ["Leg Press"]}
 ```
-- `action`: `swap` or `remove`
+- Only planned (uncompleted) sets are removed. Adds are validated BEFORE anything is removed: names not in the catalog, already in today's plan (duplicates), or needing gear the workout's location lacks are returned in `skipped_exercises` (`{name, reason, alternatives?}` — up to 2 same-pattern exercises the location supports).
+- `removal_held: true` when adds were requested, none fit, and removals were requested — the removal is not applied (a failed swap must not just delete the original).
+- Added exercises get the active program's rep scheme (if the workout belongs to it) and the location's load caps.
 
 ### log_meal
 ```json
@@ -604,10 +639,23 @@ Append-only audit log written by `config_writer.log_config_change(panel, before,
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | INTEGER PRIMARY KEY | Auto-increment. |
-| `panel` | TEXT NOT NULL | One of `identity`, `selfcare`, `quiet_hours`, `recurring_reminders`. |
+| `panel` | TEXT NOT NULL | e.g. `identity`, `selfcare`, `quiet_hours`, `recurring_reminders`, `workouts` (program/location writes from routes and the `workout_setup` tool). |
 | `before` | TEXT | Redacted JSON snapshot of the prior value. |
 | `after` | TEXT | Redacted JSON snapshot of the new value. |
 | `changed_at` | TEXT | ISO 8601 timestamp. |
+
+### Workout program builder tables
+
+Created by `SCHEMA_SQL`; `init_db()` adds the new columns to pre-existing DBs (one `[STATE] Migrated <table>: added <col>` log line each).
+
+| Table / column | Notes |
+|----------------|-------|
+| `workout_locations` | `id`, `name` (UNIQUE, `COLLATE NOCASE`), `equipment` (JSON list of tokens), `limits` (JSON object), `last_used_at` (stamped on generate; drives the default location), `created_at`, `updated_at`. |
+| `workout_programs` | `id`, `goal`, `days_per_week`, `session_minutes`, `deload_every_weeks` (INTEGER NOT NULL DEFAULT 6; 0 = off), `active` (0/1), `created_at`. One active row; replaced programs stay as inactive history. Goal/minutes/deload changes update the active row in place. |
+| `exercises.requires` | JSON list of equipment tokens the exercise needs (default `[]`). Written only by the startup seed (upsert). |
+| `workouts.location_id` / `program_id` / `program_day` | Nullable. Set on generate. `program_day` is the index into the split; the next day is computed from the newest workout in the program with ≥1 completed set. `location_id` may dangle after a location is deleted. |
+| `workouts.is_deload` | INTEGER NOT NULL DEFAULT 0. 1 = program deload session; excluded from progression history, counted for comeback timing and as the training-block boundary. |
+| `workout_sets.notes` (set 1) | Holds the exercise's progression note for the planned session. |
 
 ## SQLite Schema (`finance.db`)
 

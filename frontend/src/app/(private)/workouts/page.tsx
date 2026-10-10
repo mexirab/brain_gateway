@@ -11,6 +11,8 @@ import type {
   WorkoutHistorySession,
   WorkoutSet,
   ExerciseCatalogEntry,
+  WorkoutLocation,
+  WorkoutProgram,
 } from '@/lib/types';
 
 type SetInputs = Record<number, { weight: string; reps: string }>;
@@ -29,6 +31,10 @@ export default function WorkoutsPage() {
   const [inputs, setInputs] = useState<SetInputs>({});
   const [addPickerOpen, setAddPickerOpen] = useState(false);
   const [addSelection, setAddSelection] = useState('');
+  const [locations, setLocations] = useState<WorkoutLocation[]>([]);
+  const [program, setProgram] = useState<WorkoutProgram | null>(null);
+  // '' = no location chosen (whole catalog). Defaults to the most recently used.
+  const [locationId, setLocationId] = useState<string>('');
 
   const fetchAll = useCallback(async () => {
     try {
@@ -67,27 +73,57 @@ export default function WorkoutsPage() {
     fetchAll();
   }, [fetchAll]);
 
+  // Program + locations are optional extras — a failure here must not break
+  // logging sets, so it only warns.
+  const loadSetup = useCallback(() => {
+    Promise.all([api.workoutLocations(), api.workoutProgram()])
+      .then(([locs, prog]) => {
+        setLocations(locs.locations);
+        setProgram(prog.program);
+        // List is most-recently-used first. Only preselect when that means
+        // something (the only location, or one you've used) — otherwise an
+        // alphabetical first entry would silently pick the wrong gear.
+        const first = locs.locations[0];
+        if (first && (locs.locations.length === 1 || first.last_used_at)) {
+          setLocationId((cur) => cur || String(first.id));
+        }
+      })
+      .catch((e) => console.warn('Workout program/locations load failed', e));
+  }, []);
+
+  useEffect(() => {
+    loadSetup();
+  }, [loadSetup]);
+
+  // The add-exercise picker only offers what today's location supports.
+  const todayLocationId = isActiveWorkout(today) ? today.location_id : null;
   useEffect(() => {
     api
-      .workoutExercises()
+      .workoutExercises(todayLocationId)
       .then(setCatalog)
       .catch((e) => {
         console.warn('Exercise catalog load failed', e);
       });
-  }, []);
+  }, [todayLocationId]);
 
   const handleGenerate = async () => {
     setGenerating(true);
     setError(null);
     try {
-      const res = await api.generateWorkout();
+      const res = await api.generateWorkout(locationId ? Number(locationId) : null);
       if (!res.ok) {
         setError(res.error || 'Failed to generate workout');
       } else {
+        if (res.location_mismatch) {
+          setError('Today’s workout is already planned for another location — delete it to plan a new one here.');
+        }
         await fetchAll();
       }
     } catch (e) {
       setError(friendlyError(e, 'Couldn’t generate a workout.'));
+      // The picked location may have been deleted elsewhere — refresh the list.
+      setLocationId('');
+      loadSetup();
     } finally {
       setGenerating(false);
     }
@@ -175,6 +211,12 @@ export default function WorkoutsPage() {
         setError(`Could not add ${addSelection}`);
         return;
       }
+      const skipped = res.skipped_exercises?.[0];
+      if (skipped) {
+        const alts = skipped.alternatives?.length ? ` Try ${skipped.alternatives.join(' or ')}.` : '';
+        setError(`${skipped.name} wasn’t added: ${skipped.reason}.${alts}`);
+        return;
+      }
       setAddSelection('');
       setAddPickerOpen(false);
       await fetchAll();
@@ -219,6 +261,30 @@ export default function WorkoutsPage() {
       {!loading && !isActiveWorkout(today) && (
         <Card padding="none" className="p-8 text-center space-y-4">
           <p className="text-content-muted">No workout today yet.</p>
+          {program && (
+            <p className="text-sm text-content-secondary">
+              Next in your program: <span className="text-content-primary">{program.next_day_label}</span>{' '}
+              ({program.split.join(' / ')})
+              {program.deload?.is_deload && ' · deload week, lighter on purpose'}
+            </p>
+          )}
+          {locations.length > 0 && (
+            <label className="flex items-center justify-center gap-2 text-sm text-content-secondary">
+              Where are you training?
+              <select
+                value={locationId}
+                onChange={(e) => setLocationId(e.target.value)}
+                className="input w-auto text-sm"
+              >
+                <option value="">Not sure (full gym)</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <Button
             variant="primary"
             onClick={handleGenerate}
@@ -237,6 +303,8 @@ export default function WorkoutsPage() {
             <div>
               <div className="text-xs uppercase tracking-wider text-content-muted">
                 {today.workout_type.replace(/_/g, ' ')}
+                {today.location && <span className="normal-case tracking-normal"> · at {today.location}</span>}
+                {today.is_deload && <span className="normal-case tracking-normal"> · deload week</span>}
               </div>
               {today.reasoning && (
                 <p className="text-sm text-content-secondary mt-1">{today.reasoning}</p>
@@ -273,7 +341,10 @@ export default function WorkoutsPage() {
               className="border border-line-subtle rounded-lg p-4 space-y-3"
             >
               <div className="flex items-center justify-between gap-2">
-                <h3 className="font-semibold text-content-primary">{ex.name}</h3>
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-content-primary">{ex.name}</h3>
+                  {ex.note && <p className="text-xs text-content-muted mt-0.5">{ex.note}</p>}
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-content-muted uppercase tracking-wide">
                     {ex.muscle_groups.slice(0, 3).join(' · ')}

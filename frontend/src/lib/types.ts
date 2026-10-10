@@ -318,6 +318,8 @@ export interface WorkoutSet {
 export interface WorkoutExerciseGroup {
   name: string;
   muscle_groups: string[];
+  /** Why today's target is what it is ("+5 lb from last time"), from the planner. */
+  note: string | null;
   sets: WorkoutSet[];
 }
 
@@ -330,6 +332,9 @@ export interface WorkoutToday {
   has_workout: true;
   workout_id: number;
   workout_type: string;
+  location_id: number | null;
+  location: string | null;
+  is_deload: boolean;
   reasoning: string | null;
   started_at: string;
   ended_at: string | null;
@@ -357,12 +362,20 @@ export interface GenerateWorkoutResponse {
   workout_id?: number;
   workout_type?: string;
   reasoning?: string;
+  location?: { id: number; name: string } | null;
+  program_day?: { index: number; of: number; label: string } | null;
+  deload?: boolean;
+  notes?: string[];
+  already_exists?: boolean;
+  location_mismatch?: boolean;
   exercises?: Array<{
     name: string;
     primary_muscle: string;
     muscle_groups: string[];
     equipment: string | null;
     is_compound: boolean;
+    progression?: string;
+    note?: string;
     sets: Array<{
       set_number: number;
       target_reps: number | null;
@@ -379,6 +392,46 @@ export interface ExerciseCatalogEntry {
   equipment: string;
   is_compound: boolean;
   movement_pattern: string;
+  requires: string[];
+}
+
+// ---------- Workout program builder ----------
+export interface WorkoutLocationLimits {
+  dumbbell_max_lbs?: number;
+  dumbbell_step_lbs?: number;
+  kettlebell_weights_lbs?: number[];
+}
+
+export interface WorkoutLocation {
+  id: number;
+  name: string;
+  equipment: string[];
+  limits: WorkoutLocationLimits;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkoutLocationsResponse {
+  locations: WorkoutLocation[];
+  equipment_vocabulary: string[];
+  templates: Record<string, string[]>;
+}
+
+export type WorkoutGoal = 'strength' | 'muscle' | 'general';
+
+export interface WorkoutProgram {
+  id: number;
+  goal: WorkoutGoal;
+  days_per_week: number;
+  session_minutes: number;
+  split: string[];
+  next_day_index: number;
+  next_day_label: string;
+  exercises_per_session: number;
+  /** 0 = no scheduled deload weeks. */
+  deload_every_weeks: number;
+  deload?: { enabled: boolean; is_deload: boolean; sessions_until_deload: number | null };
 }
 
 // ---------- Meals ----------

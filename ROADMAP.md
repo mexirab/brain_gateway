@@ -64,6 +64,21 @@ Finance XP, routine streaks, and workout consistency are three silos. One cross-
 
 The mode router already classifies per-utterance intensity (panic/shame/spiral). Log it — encrypted, like `auto_learn` — and correlate weekly with meds adherence, sleep, and streaks for patterns.
 
+### 10. Workout program builder — phases 1–2 ✅ BUILT (2026-10-10)
+
+Shipped (behind `WORKOUTS_ENABLED`): weekly program (goal + days/week + session length → fixed split, skipped days come back), per-location equipment (templates, dumbbell/kettlebell limits, load caps), equipment-aware picker with pattern fallbacks, "where are you training?" voice flow, `workout_setup` tool + Settings → Workouts panel. See `docs/WORKOUTS_AND_MEALS.md`.
+
+Phase 2 ✅ BUILT (2026-10-10, same branch): progression + deloads — per-exercise progressive overload from logged history (weight up / hold / stall deload / comeback, rep progression for bodyweight + capped gear), sticky program-day lifts per training block, deload weeks every N trained weeks (default 6, configurable/off).
+
+Later phases ⬜:
+- Rest timer
+- Supersets
+- Workout calorie estimate
+- e1RM trends
+- Body measurements
+- Gym auto-detect from HA zones (pick the location without asking)
+- Grafana Workouts row (generation + progression metrics)
+
 ## Tier 4 — Improvements & debt (not features)
 
 | Item | Why | Status |

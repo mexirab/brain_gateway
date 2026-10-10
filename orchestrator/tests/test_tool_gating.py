@@ -105,7 +105,7 @@ def test_tool_count_delta_is_exactly_five(monkeypatch):
 # WORKOUT_TOOL_NAMES / MEAL_TOOL_NAMES.
 # ---------------------------------------------------------------------------
 
-WORKOUT_TOOLS = {"generate_workout", "log_set", "workout_status", "modify_workout"}
+WORKOUT_TOOLS = {"generate_workout", "log_set", "workout_status", "modify_workout", "workout_setup"}
 
 
 def test_workouts_off_hides_all_workout_tools(monkeypatch):

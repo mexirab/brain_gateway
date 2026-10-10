@@ -1056,3 +1056,24 @@ BUDGET_SYNC_LAST_SUCCESS = Gauge(
     "bgw_budget_sync_last_success_timestamp_seconds",
     "Unix time of the last successful Actual Budget sync (0 = none since process start).",
 )
+
+# ---------------------------------------------------------------------------
+# Workout program builder — workout_manager.generate_workout + the tool handler
+# ---------------------------------------------------------------------------
+
+WORKOUT_GENERATED = Counter(
+    "bgw_workout_generated_total",
+    "Workout generation attempts by outcome.",
+    # ok | no_exercises (location gear too thin) | bad_location | ask_location (tool asked where)
+    ["result"],
+)
+for _r in ("ok", "no_exercises", "bad_location", "ask_location"):
+    WORKOUT_GENERATED.labels(result=_r)
+
+WORKOUT_PROGRESSION = Counter(
+    "bgw_workout_progression_total",
+    "Planned exercise targets by progression decision (see workout_manager._plan_target).",
+    ["progression"],
+)
+for _p in ("new", "up", "reps", "hold", "stall_deload", "comeback", "capped", "deload_week"):
+    WORKOUT_PROGRESSION.labels(progression=_p)

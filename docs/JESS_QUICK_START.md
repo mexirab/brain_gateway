@@ -199,10 +199,22 @@ Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-o
 
 | Say this | What happens |
 |----------|--------------|
-| "Generate today's workout" | Adaptive plan: full-body or split based on what you did recently |
+| "Give me a workout" | Today's plan — follows your weekly program if set, else full-body or split based on recent training. With 2+ locations set up, Jess asks where you're training |
+| "Workout at home" / "I'm at the big gym, give me a workout" | Plan using only that location's equipment (dumbbells capped at your max, kettlebells snapped to the ones you own) |
+| "Set me up on 4 days a week, 45-minute sessions" | Saves a weekly program (strength / muscle / general; 2–6 days, 20–120 min) |
+| "Deload every 8 weeks" / "Turn off deload weeks" | Changes how often you get a lighter recovery week (default every 6 weeks of training; 3–12, or off) |
+| "Add my home gym — just dumbbells and a kettlebell" | Adds a workout location from a template |
+| "My home gym has a pull-up bar now" | Adds equipment to a location |
+| "My dumbbells go up to 50" / "I have a 25 and a 35 pound kettlebell" | Sets that location's weight limits |
 | "I did 3 sets of bench press at 135 for 10 reps" | Logs the sets, updates PR tracking |
 | "Show me today's workout" | Reads back the plan + what you've logged |
-| "Swap out the deadlifts" | Modifies today's plan in place |
+| "Swap out the deadlifts" | Modifies today's plan in place — if the replacement needs gear this location lacks, Jess keeps the original and suggests alternatives |
+
+**How weights go up:** Jess looks at what you actually logged for each exercise. Finish every set at the planned weight and reps → a bit heavier next time (+5 lb, +10 lb on big leg lifts). Miss a set → same weight again. Miss twice at the same weight → about 10% lighter to build back up. Away from a lift for 3+ weeks → you restart around 90%. Bodyweight moves, and gear that can't go heavier (home dumbbells, your heaviest kettlebell), add a rep instead. Each exercise shows a short note like "+5 lb from last time".
+
+With a program, each day keeps the same exercises until the next deload week so you can progress on them; after the deload they rotate. A deload week has fewer sets and lighter weights — on purpose.
+
+Program + locations are also editable in the dashboard under **Settings → Workouts**.
 
 ---
 

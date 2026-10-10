@@ -151,7 +151,28 @@ CREATE TABLE IF NOT EXISTS exercises (
     secondary_muscles TEXT NOT NULL DEFAULT '[]',
     equipment TEXT NOT NULL DEFAULT 'barbell',
     is_compound INTEGER NOT NULL DEFAULT 1,
-    movement_pattern TEXT NOT NULL DEFAULT 'other'
+    movement_pattern TEXT NOT NULL DEFAULT 'other',
+    requires TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS workout_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    equipment TEXT NOT NULL DEFAULT '[]',
+    limits TEXT NOT NULL DEFAULT '{}',
+    last_used_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workout_programs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal TEXT NOT NULL DEFAULT 'general',
+    days_per_week INTEGER NOT NULL,
+    session_minutes INTEGER NOT NULL,
+    deload_every_weeks INTEGER NOT NULL DEFAULT 6,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS workouts (
@@ -316,13 +337,28 @@ def init_db():
             if col_name not in existing_rem:
                 conn.execute(f"ALTER TABLE reminders ADD COLUMN {col_name} {col_def}")
                 logger.info(f"[STATE] Migrated reminders: added {col_name}")
+        # Program builder migration: catalog equipment needs + workout
+        # location/program links on DBs created before the program builder.
+        _workout_migrations = [
+            ("exercises", "requires", "TEXT NOT NULL DEFAULT '[]'"),
+            ("workouts", "location_id", "INTEGER"),
+            ("workouts", "program_id", "INTEGER"),
+            ("workouts", "program_day", "INTEGER"),
+            ("workouts", "is_deload", "INTEGER NOT NULL DEFAULT 0"),
+            ("workout_programs", "deload_every_weeks", "INTEGER NOT NULL DEFAULT 6"),
+        ]
+        for table, col_name, col_def in _workout_migrations:
+            cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+                logger.info(f"[STATE] Migrated {table}: added {col_name}")
     # Seed exercises catalog (idempotent)
     try:
         from orchestrator.exercises_seed import EXERCISES
 
         seeded = seed_exercises(EXERCISES)
         if seeded:
-            logger.info(f"[STATE] Seeded {seeded} exercises into catalog")
+            logger.info(f"[STATE] Exercise catalog: {seeded} rows inserted or updated from the seed")
     except Exception as e:
         logger.warning(f"[STATE] Exercise seed failed: {e}")
     logger.info(f"[STATE] Database initialized at {DB_PATH}")
@@ -1272,17 +1308,36 @@ def cleanup_old_claude_code_turns(days: int = 7) -> int:
 
 
 def seed_exercises(exercises: List[Dict[str, Any]]) -> int:
-    """Insert exercises that don't already exist. Returns count inserted."""
+    """Upsert catalog exercises. Returns count of rows inserted or changed.
+
+    Upsert (not insert-or-ignore) so catalog fixes — e.g. a corrected
+    `requires` list — reach existing DBs. Nothing edits catalog rows at
+    runtime, so the seed is the only writer. The WHERE clause skips no-op
+    updates so an unchanged catalog reports 0.
+    """
     import json as _json
+
+    from orchestrator.exercises_seed import exercise_requires
 
     with get_db() as conn:
         before = conn.total_changes
-        # name is the PRIMARY KEY — INSERT OR IGNORE replaces the previous
-        # one-SELECT-per-exercise existence check
         conn.executemany(
-            """INSERT OR IGNORE INTO exercises
-               (name, primary_muscle, secondary_muscles, equipment, is_compound, movement_pattern)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO exercises
+               (name, primary_muscle, secondary_muscles, equipment, is_compound, movement_pattern, requires)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+                   primary_muscle = excluded.primary_muscle,
+                   secondary_muscles = excluded.secondary_muscles,
+                   equipment = excluded.equipment,
+                   is_compound = excluded.is_compound,
+                   movement_pattern = excluded.movement_pattern,
+                   requires = excluded.requires
+               WHERE primary_muscle IS NOT excluded.primary_muscle
+                  OR secondary_muscles IS NOT excluded.secondary_muscles
+                  OR equipment IS NOT excluded.equipment
+                  OR is_compound IS NOT excluded.is_compound
+                  OR movement_pattern IS NOT excluded.movement_pattern
+                  OR requires IS NOT excluded.requires""",
             [
                 (
                     ex["name"],
@@ -1291,6 +1346,7 @@ def seed_exercises(exercises: List[Dict[str, Any]]) -> int:
                     ex.get("equipment", "barbell"),
                     1 if ex.get("is_compound", True) else 0,
                     ex.get("movement_pattern", "other"),
+                    _json.dumps(exercise_requires(ex)),
                 )
                 for ex in exercises
             ],
@@ -1298,13 +1354,28 @@ def seed_exercises(exercises: List[Dict[str, Any]]) -> int:
         return conn.total_changes - before
 
 
+def _deserialize_exercise(d: Dict[str, Any]) -> Dict[str, Any]:
+    import json as _json
+
+    for key in ("secondary_muscles", "requires"):
+        try:
+            d[key] = _json.loads(d.get(key) or "[]")
+        except (ValueError, TypeError):
+            d[key] = []
+    d["is_compound"] = bool(d["is_compound"])
+    return d
+
+
 def get_exercises(
     movement_pattern: Optional[str] = None,
     equipment: Optional[str] = None,
+    available_equipment: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Get exercises from the catalog, optionally filtered."""
-    import json as _json
+    """Get exercises from the catalog, optionally filtered.
 
+    `available_equipment` keeps only exercises whose `requires` is a subset of
+    it (a workout location's gear). None means no equipment filter.
+    """
     query = "SELECT * FROM exercises WHERE 1=1"
     params: list = []
     if movement_pattern:
@@ -1313,35 +1384,295 @@ def get_exercises(
     if equipment:
         query += " AND equipment = ?"
         params.append(equipment)
+    query += " ORDER BY name"
     with get_db() as conn:
         rows = conn.execute(query, params).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["secondary_muscles"] = _json.loads(d["secondary_muscles"] or "[]")
-        except (ValueError, TypeError):
-            d["secondary_muscles"] = []
-        d["is_compound"] = bool(d["is_compound"])
-        out.append(d)
+    out = [_deserialize_exercise(dict(r)) for r in rows]
+    if available_equipment is not None:
+        out = [ex for ex in out if set(ex["requires"]) <= available_equipment]
     return out
 
 
 def get_exercise(name: str) -> Optional[Dict[str, Any]]:
     """Get a single exercise by name."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM exercises WHERE name = ?", (name,)).fetchone()
+    return _deserialize_exercise(dict(row)) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Workout locations + programs (program builder)
+# ---------------------------------------------------------------------------
+
+
+def _deserialize_location(d: Dict[str, Any]) -> Dict[str, Any]:
+    import json as _json
+
+    try:
+        d["equipment"] = _json.loads(d.get("equipment") or "[]")
+    except (ValueError, TypeError):
+        d["equipment"] = []
+    try:
+        d["limits"] = _json.loads(d.get("limits") or "{}")
+    except (ValueError, TypeError):
+        d["limits"] = {}
+    return d
+
+
+def list_workout_locations() -> List[Dict[str, Any]]:
+    """All workout locations, most recently used first (never-used last, by name)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM workout_locations ORDER BY last_used_at IS NULL, last_used_at DESC, name"
+        ).fetchall()
+    return [_deserialize_location(dict(r)) for r in rows]
+
+
+def get_workout_location(location_id: int) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM workout_locations WHERE id = ?", (location_id,)).fetchone()
+    return _deserialize_location(dict(row)) if row else None
+
+
+def create_workout_location(name: str, equipment: List[str], limits: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert a location. Raises sqlite3.IntegrityError on a duplicate name (case-insensitive)."""
+    import json as _json
+
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO workout_locations (name, equipment, limits, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, _json.dumps(equipment), _json.dumps(limits), now, now),
+        )
+        row = conn.execute("SELECT * FROM workout_locations WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _deserialize_location(dict(row))
+
+
+def update_workout_location(
+    location_id: int,
+    name: Optional[str] = None,
+    equipment: Optional[List[str]] = None,
+    limits: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Update the given fields. Returns the row, or None if not found."""
+    import json as _json
+
+    sets: List[str] = []
+    params: list = []
+    if name is not None:
+        sets.append("name = ?")
+        params.append(name)
+    if equipment is not None:
+        sets.append("equipment = ?")
+        params.append(_json.dumps(equipment))
+    if limits is not None:
+        sets.append("limits = ?")
+        params.append(_json.dumps(limits))
+    sets.append("updated_at = ?")
+    params.append(datetime.now().isoformat())
+    params.append(location_id)
+    with get_db() as conn:
+        cursor = conn.execute(f"UPDATE workout_locations SET {', '.join(sets)} WHERE id = ?", params)
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute("SELECT * FROM workout_locations WHERE id = ?", (location_id,)).fetchone()
+    return _deserialize_location(dict(row))
+
+
+def touch_workout_location(location_id: int) -> None:
+    """Stamp last_used_at (drives 'last used' suggestions)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE workout_locations SET last_used_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), location_id),
+        )
+
+
+def delete_workout_location(location_id: int) -> bool:
+    """Delete a location. Past workouts keep their (now dangling) location_id; readers tolerate it."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM workout_locations WHERE id = ?", (location_id,))
+        return cursor.rowcount > 0
+
+
+def get_active_program() -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM workout_programs WHERE active = 1 ORDER BY id DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+def set_active_program(
+    goal: str, days_per_week: int, session_minutes: int, deload_every_weeks: int = 6
+) -> Dict[str, Any]:
+    """Replace the active program (old rows are kept, inactive, for history)."""
+    with get_db() as conn:
+        conn.execute("UPDATE workout_programs SET active = 0 WHERE active = 1")
+        cursor = conn.execute(
+            """INSERT INTO workout_programs
+               (goal, days_per_week, session_minutes, deload_every_weeks, active, created_at)
+               VALUES (?, ?, ?, ?, 1, ?)""",
+            (goal, days_per_week, session_minutes, deload_every_weeks, datetime.now().isoformat()),
+        )
+        row = conn.execute("SELECT * FROM workout_programs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def update_active_program(
+    program_id: int, goal: str, session_minutes: int, deload_every_weeks: int = 6
+) -> Dict[str, Any]:
+    """Change goal/session length/deload cadence in place — keeps the id so the split position survives."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE workout_programs SET goal = ?, session_minutes = ?, deload_every_weeks = ? WHERE id = ?",
+            (goal, session_minutes, deload_every_weeks, program_id),
+        )
+        row = conn.execute("SELECT * FROM workout_programs WHERE id = ?", (program_id,)).fetchone()
+    return dict(row)
+
+
+def clear_active_program() -> bool:
+    with get_db() as conn:
+        cursor = conn.execute("UPDATE workout_programs SET active = 0 WHERE active = 1")
+        return cursor.rowcount > 0
+
+
+def last_trained_program_day(program_id: int) -> Optional[int]:
+    """program_day of the newest workout in this program with >=1 completed set.
+
+    Generated-but-untouched days don't count, so a skipped day is offered again.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT w.program_day FROM workouts w
+               WHERE w.program_id = ? AND w.program_day IS NOT NULL
+                 AND EXISTS (SELECT 1 FROM workout_sets s WHERE s.workout_id = w.id AND s.completed = 1)
+               ORDER BY w.started_at DESC LIMIT 1""",
+            (program_id,),
+        ).fetchone()
+    return row["program_day"] if row else None
+
+
+def count_trained_program_sessions(program_id: int) -> int:
+    """Workouts in this program with >=1 completed set (deload sessions included)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS n FROM workouts w
+               WHERE w.program_id = ?
+                 AND EXISTS (SELECT 1 FROM workout_sets s WHERE s.workout_id = w.id AND s.completed = 1)""",
+            (program_id,),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def set_workout_context(
+    workout_id: int,
+    location_id: Optional[int],
+    program_id: Optional[int],
+    program_day: Optional[int],
+    is_deload: bool = False,
+) -> None:
+    """Attach location/program info to a freshly created workout."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE workouts SET location_id = ?, program_id = ?, program_day = ?, is_deload = ? WHERE id = ?",
+            (location_id, program_id, program_day, 1 if is_deload else 0, workout_id),
+        )
+
+
+def last_deload_started_at(program_id: int) -> Optional[str]:
+    """started_at of the newest trained deload workout in this program (the block boundary)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT MAX(w.started_at) AS ts FROM workouts w
+               WHERE w.program_id = ? AND w.is_deload = 1
+                 AND EXISTS (SELECT 1 FROM workout_sets s WHERE s.workout_id = w.id AND s.completed = 1)""",
+            (program_id,),
+        ).fetchone()
+    return row["ts"] if row else None
+
+
+def last_program_day_exercises(
+    program_id: int, program_day: int, location_id: Optional[int], since: Optional[str] = None
+) -> List[str]:
+    """Exercises planned on the newest trained, non-deload workout for this program day.
+
+    Prefers a workout at the same location, then any location. `since` limits
+    it to workouts started after that timestamp (the current training block).
+    Names come back in plan order.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT w.id FROM workouts w
+               WHERE w.program_id = ? AND w.program_day = ? AND COALESCE(w.is_deload, 0) = 0
+                 AND (? IS NULL OR w.started_at > ?)
+                 AND EXISTS (SELECT 1 FROM workout_sets s WHERE s.workout_id = w.id AND s.completed = 1)
+               ORDER BY (w.location_id IS ?) DESC, w.started_at DESC, w.id DESC LIMIT 1""",
+            (program_id, program_day, since, since, location_id),
+        ).fetchone()
+        if not row:
+            return []
+        names = conn.execute(
+            """SELECT exercise_name FROM workout_sets WHERE workout_id = ?
+               GROUP BY exercise_name ORDER BY MIN(id)""",
+            (row["id"],),
+        ).fetchall()
+    return [r["exercise_name"] for r in names]
+
+
+def last_exercise_completed_at(exercise_name: str, exclude_workout_id: Optional[int] = None) -> Optional[str]:
+    """started_at of the newest workout (deload ones included) with a completed set of this exercise."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT MAX(w.started_at) AS ts FROM workouts w
+               WHERE w.id != ? AND EXISTS (SELECT 1 FROM workout_sets s
+                   WHERE s.workout_id = w.id AND s.exercise_name = ? AND s.completed = 1)""",
+            (exclude_workout_id if exclude_workout_id is not None else -1, exercise_name),
+        ).fetchone()
+    return row["ts"] if row else None
+
+
+def get_exercise_sessions(
+    exercise_name: str, exclude_workout_id: Optional[int] = None, limit: int = 6
+) -> List[Dict[str, Any]]:
+    """Recent non-deload workouts with >=1 completed set of this exercise, newest first.
+
+    Each entry: {workout_id, started_at, location_limits, sets: [{weight_lbs, reps, rpe, target_reps,
+    target_weight_lbs, completed}]} — every row of that exercise in the workout,
+    planned and completed, so callers can tell a skipped planned set from a hit.
+    """
     import json as _json
 
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM exercises WHERE name = ?", (name,)).fetchone()
-    if not row:
-        return None
-    d = dict(row)
-    try:
-        d["secondary_muscles"] = _json.loads(d["secondary_muscles"] or "[]")
-    except (ValueError, TypeError):
-        d["secondary_muscles"] = []
-    d["is_compound"] = bool(d["is_compound"])
-    return d
+        workouts = conn.execute(
+            """SELECT w.id, w.started_at, l.limits AS location_limits FROM workouts w
+               LEFT JOIN workout_locations l ON l.id = w.location_id
+               WHERE COALESCE(w.is_deload, 0) = 0 AND w.id != ?
+                 AND EXISTS (SELECT 1 FROM workout_sets s
+                             WHERE s.workout_id = w.id AND s.exercise_name = ? AND s.completed = 1)
+               ORDER BY w.started_at DESC, w.id DESC LIMIT ?""",
+            (exclude_workout_id if exclude_workout_id is not None else -1, exercise_name, limit),
+        ).fetchall()
+        out = []
+        for w in workouts:
+            rows = conn.execute(
+                """SELECT weight_lbs, reps, rpe, target_reps, target_weight_lbs, completed
+                   FROM workout_sets WHERE workout_id = ? AND exercise_name = ? ORDER BY set_number, id""",
+                (w["id"], exercise_name),
+            ).fetchall()
+            try:
+                location_limits = _json.loads(w["location_limits"]) if w["location_limits"] else {}
+            except (ValueError, TypeError):
+                location_limits = {}
+            out.append(
+                {
+                    "workout_id": w["id"],
+                    "started_at": w["started_at"],
+                    "location_limits": location_limits if isinstance(location_limits, dict) else {},
+                    "sets": [{**dict(r), "completed": bool(r["completed"])} for r in rows],
+                }
+            )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1371,6 +1702,7 @@ def add_planned_set(
     set_number: int,
     target_reps: Optional[int],
     target_weight_lbs: Optional[float],
+    notes: Optional[str] = None,
 ) -> int:
     """Add a planned (uncompleted) set to a workout."""
     import json as _json
@@ -1378,8 +1710,8 @@ def add_planned_set(
     with get_db() as conn:
         cursor = conn.execute(
             """INSERT INTO workout_sets
-               (workout_id, exercise_name, muscle_groups, set_number, target_reps, target_weight_lbs)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (workout_id, exercise_name, muscle_groups, set_number, target_reps, target_weight_lbs, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 workout_id,
                 exercise_name,
@@ -1387,6 +1719,7 @@ def add_planned_set(
                 set_number,
                 target_reps,
                 target_weight_lbs,
+                notes,
             ),
         )
         return cursor.lastrowid

@@ -8,10 +8,12 @@ from typing import Optional
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from orchestrator import state_store
+from orchestrator import state_store, workout_setup
+from orchestrator.exercises_seed import EQUIPMENT_TOKENS, LOCATION_TEMPLATES
 from orchestrator.workout_manager import (
     generate_workout,
     get_history,
+    get_program_overview,
     get_status,
     log_set,
     modify_workout,
@@ -49,14 +51,31 @@ async def workouts_today() -> JSONResponse:
     return JSONResponse(status)
 
 
-@router.post("/api/workouts/generate")
-async def workouts_generate() -> JSONResponse:
-    """Generate today's workout via the adaptive planner.
+def _default_location_id() -> Optional[int]:
+    """Last-used location, or the only one; None when there's nothing to go on."""
+    locations = state_store.list_workout_locations()
+    if len(locations) == 1:
+        return locations[0]["id"]
+    if locations and locations[0].get("last_used_at"):
+        return locations[0]["id"]
+    return None
 
-    Idempotent for the day: if a workout already exists for today it is
-    returned instead of creating a duplicate row. Concurrent calls cannot
-    spam the DB.
+
+@router.post("/api/workouts/generate")
+async def workouts_generate(req: Request) -> JSONResponse:
+    """Generate today's workout via the planner. Body (optional): {location_id}.
+
+    Without location_id, uses the last-used (or only) location; an explicit
+    null means no location (whole catalog). Idempotent for
+    the day: if a workout already exists for today it is returned instead of
+    creating a duplicate row. Concurrent calls cannot spam the DB.
     """
+    body = await _safe_json(req)
+    raw_loc = body.get("location_id")
+    try:
+        location_id = int(raw_loc) if raw_loc not in (None, "") else None
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "location_id must be an integer"}, status_code=400)
     existing = await asyncio.to_thread(state_store.get_todays_workout)
     if existing:
         return JSONResponse(
@@ -67,9 +86,15 @@ async def workouts_generate() -> JSONResponse:
                 "reasoning": existing.get("reasoning"),
                 "exercises": [],
                 "already_exists": True,
+                # The dashboard picked a different place than today's plan uses.
+                "location_mismatch": location_id is not None and location_id != existing.get("location_id"),
             }
         )
-    result = await asyncio.to_thread(generate_workout)
+    # Omitted → only/last-used location. An explicit null ("Not sure (full
+    # gym)" on the dashboard) means no location: the whole catalog.
+    if "location_id" not in body:
+        location_id = await asyncio.to_thread(_default_location_id)
+    result = await asyncio.to_thread(generate_workout, location_id)
     if not result.get("ok"):
         return JSONResponse(result, status_code=400)
     return JSONResponse(result)
@@ -85,9 +110,103 @@ async def workouts_history(days: int = Query(14, ge=1, le=365)) -> JSONResponse:
 async def workouts_exercises(
     movement_pattern: Optional[str] = None,
     equipment: Optional[str] = None,
+    location_id: Optional[int] = None,
 ) -> JSONResponse:
-    rows = await asyncio.to_thread(state_store.get_exercises, movement_pattern, equipment)
+    available = None
+    if location_id is not None:
+        loc = await asyncio.to_thread(state_store.get_workout_location, location_id)
+        if not loc:
+            return JSONResponse({"ok": False, "error": "location not found"}, status_code=404)
+        available = set(loc["equipment"])
+    rows = await asyncio.to_thread(state_store.get_exercises, movement_pattern, equipment, available)
     return JSONResponse(rows)
+
+
+# --- Program builder: weekly program + workout locations -------------------
+# Registered BEFORE the /api/workouts/{workout_id} routes — those would
+# otherwise capture "program"/"locations" and 422 on the int conversion.
+
+
+def _setup_response(result: dict, ok_status: int = 200) -> JSONResponse:
+    if result.get("ok"):
+        return JSONResponse(result, status_code=ok_status)
+    status = 404 if result.get("error") in ("location not found", "no active program") else 400
+    return JSONResponse(result, status_code=status)
+
+
+@router.get("/api/workouts/program")
+async def workouts_program_get() -> JSONResponse:
+    overview = await asyncio.to_thread(get_program_overview)
+    return JSONResponse({"program": overview["program"]})
+
+
+@router.put("/api/workouts/program")
+async def workouts_program_put(req: Request) -> JSONResponse:
+    """Body: {goal, days_per_week, session_minutes, deload_every_weeks?}. Replaces the active program."""
+    body = await _safe_json(req)
+    result = await asyncio.to_thread(
+        workout_setup.set_program,
+        body.get("goal"),
+        body.get("days_per_week"),
+        body.get("session_minutes"),
+        deload_every_weeks=body.get("deload_every_weeks"),
+    )
+    if not result.get("ok"):
+        return _setup_response(result)
+    overview = await asyncio.to_thread(get_program_overview)
+    return JSONResponse({"ok": True, "program": overview["program"]})
+
+
+@router.delete("/api/workouts/program")
+async def workouts_program_delete() -> JSONResponse:
+    return _setup_response(await asyncio.to_thread(workout_setup.clear_program))
+
+
+@router.get("/api/workouts/locations")
+async def workouts_locations_list() -> JSONResponse:
+    locations = await asyncio.to_thread(state_store.list_workout_locations)
+    return JSONResponse(
+        {
+            "locations": locations,
+            "equipment_vocabulary": list(EQUIPMENT_TOKENS),
+            "templates": LOCATION_TEMPLATES,
+        }
+    )
+
+
+@router.post("/api/workouts/locations")
+async def workouts_locations_create(req: Request) -> JSONResponse:
+    """Body: {name, template? | equipment?, limits?}."""
+    body = await _safe_json(req)
+    result = await asyncio.to_thread(
+        workout_setup.add_location,
+        body.get("name"),
+        body.get("template") or "commercial_gym",
+        body.get("equipment"),
+        body.get("limits"),
+    )
+    return _setup_response(result, ok_status=201)
+
+
+@router.patch("/api/workouts/locations/{location_id}")
+async def workouts_locations_update(location_id: int, req: Request) -> JSONResponse:
+    """Body: any of {name, equipment, add_equipment, remove_equipment, limits}."""
+    body = await _safe_json(req)
+    result = await asyncio.to_thread(
+        workout_setup.update_location,
+        location_id,
+        body.get("name"),
+        body.get("equipment"),
+        body.get("add_equipment"),
+        body.get("remove_equipment"),
+        body.get("limits"),
+    )
+    return _setup_response(result)
+
+
+@router.delete("/api/workouts/locations/{location_id}")
+async def workouts_locations_delete(location_id: int) -> JSONResponse:
+    return _setup_response(await asyncio.to_thread(workout_setup.remove_location, location_id))
 
 
 @router.post("/api/workouts/sets")

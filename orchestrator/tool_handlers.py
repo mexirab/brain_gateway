@@ -1830,32 +1830,189 @@ with contextlib.suppress(ImportError):
 # ---------------------------------------------------------------------------
 
 
+def _location_names(locations: list) -> str:
+    return ", ".join(loc["name"] for loc in locations)
+
+
 @register_tool("generate_workout")
 async def _reg_generate_workout(arguments: dict) -> str:
     if not shared.WORKOUTS_ENABLED:
         return "Workout tracking isn't enabled on this install."
     import asyncio
 
+    from orchestrator import state_store
     from orchestrator.workout_manager import generate_workout
+    from orchestrator.workout_setup import find_location
 
-    result = await asyncio.to_thread(generate_workout)
+    location_arg = str(arguments.get("location") or "").strip()[:100]
+    location_id = None
+    if location_arg:
+        match, locations = await asyncio.to_thread(find_location, location_arg)
+        if not match:
+            if not locations:
+                return (
+                    "Not generated: no workout locations are set up yet, so there's no way to know what "
+                    f"equipment '{location_arg}' has. Offer to add it with workout_setup "
+                    "(action=add_location, template=commercial_gym or home_basic), then generate."
+                )
+            return (
+                f"Not generated: unknown location '{location_arg}'. Known locations: "
+                f"{_location_names(locations)}. Ask which one they mean, or offer to add it with workout_setup."
+            )
+        location_id = match["id"]
+    else:
+        locations = await asyncio.to_thread(state_store.list_workout_locations)
+        if len(locations) == 1:
+            location_id = locations[0]["id"]
+        elif len(locations) > 1:
+            # list_workout_locations is most-recently-used first
+            last = locations[0]["name"] if locations[0].get("last_used_at") else None
+            from orchestrator.metrics import WORKOUT_GENERATED
+
+            WORKOUT_GENERATED.labels(result="ask_location").inc()
+            return (
+                "Not generated yet — ask the user where they're training today: "
+                f"{_location_names(locations)}"
+                + (f" (last time: {last})" if last else "")
+                + ". Then call generate_workout again with location set."
+            )
+
+    result = await asyncio.to_thread(generate_workout, location_id)
     if not result.get("ok"):
         return json.dumps(result)
     # Build a compact plan description for the model's context
     lines = [
         f"Workout ready (id={result['workout_id']}, type={result['workout_type']}).",
-        f"Why: {result['reasoning']}",
-        "Plan:",
     ]
+    if result.get("location"):
+        lines.append(f"Location: {result['location']['name']}")
+    if result.get("program_day"):
+        pd = result["program_day"]
+        lines.append(f"Program day: {pd['label']} ({pd['index'] + 1} of {pd['of']})")
+    lines += [f"Why: {result['reasoning']}", "Plan:"]
     for ex in result.get("exercises", []):
         sets = ex["sets"]
         first = sets[0]
         target_reps = first.get("target_reps")
         target_w = first.get("target_weight_lbs")
-        weight_txt = f"{target_w:.0f} lb" if target_w else "user weight"
-        lines.append(f"  - {ex['name']} ({ex['primary_muscle']}): {len(sets)}x{target_reps} @ {weight_txt}")
+        weight_txt = f"{target_w:g} lb" if target_w else "user weight"
+        note = f" — {ex['note']}" if ex.get("note") else ""
+        lines.append(f"  - {ex['name']} ({ex['primary_muscle']}): {len(sets)}x{target_reps} @ {weight_txt}{note}")
     lines.append("(Saved to the dashboard. User asked at the gym — do not read this aloud.)")
     return "\n".join(lines)
+
+
+@register_tool("workout_setup")
+async def _reg_workout_setup(arguments: dict) -> str:
+    if not shared.WORKOUTS_ENABLED:
+        return "Workout tracking isn't enabled on this install."
+    import asyncio
+
+    from orchestrator import workout_setup
+    from orchestrator.exercises_seed import EQUIPMENT_TOKENS, LOCATION_TEMPLATES
+    from orchestrator.workout_manager import get_program_overview
+
+    action = str(arguments.get("action") or "get")
+
+    if action == "get":
+        overview = await asyncio.to_thread(get_program_overview)
+        program = overview["program"]
+        return json.dumps(
+            {
+                "program": (
+                    {
+                        "goal": program["goal"],
+                        "days_per_week": program["days_per_week"],
+                        "session_minutes": program["session_minutes"],
+                        "split": program["split"],
+                        "next_day": program["next_day_label"],
+                        "deload_every_weeks": program["deload_every_weeks"],
+                        "next_is_deload": program["deload"]["is_deload"],
+                    }
+                    if program
+                    else None
+                ),
+                "locations": [
+                    {"name": loc["name"], "equipment": loc["equipment"], "limits": loc["limits"]}
+                    for loc in overview["locations"]
+                ],
+                "equipment_vocabulary": list(EQUIPMENT_TOKENS),
+                "templates": list(LOCATION_TEMPLATES),
+            }
+        )
+
+    if action == "set_program":
+        result = await asyncio.to_thread(
+            workout_setup.set_program,
+            arguments.get("goal") or "general",
+            arguments.get("days_per_week"),
+            arguments.get("session_minutes"),
+            deload_every_weeks=arguments.get("deload_every_weeks"),
+            changed_by="jess",
+        )
+        if not result["ok"]:
+            return json.dumps(result)
+        overview = await asyncio.to_thread(get_program_overview)
+        p = overview["program"]
+        return (
+            f"Program saved: {p['goal']}, {p['days_per_week']} days/week, {p['session_minutes']} min "
+            f"(~{p['exercises_per_session']} exercises). Split: {' / '.join(p['split'])}. Next: {p['next_day_label']}. "
+            + (
+                f"Deload week every {p['deload_every_weeks']} weeks."
+                if p["deload_every_weeks"]
+                else "No scheduled deload weeks."
+            )
+        )
+
+    if action == "clear_program":
+        result = await asyncio.to_thread(workout_setup.clear_program, "jess")
+        return "Program cleared — back to the adaptive day-by-day planner." if result["ok"] else json.dumps(result)
+
+    if action == "add_location":
+        result = await asyncio.to_thread(
+            workout_setup.add_location,
+            arguments.get("name"),
+            arguments.get("template") or "commercial_gym",
+            None,
+            arguments.get("limits"),
+            "jess",
+        )
+        if not result["ok"]:
+            return json.dumps(result)
+        loc = result["location"]
+        return f"Location added: {loc['name']} — equipment: {', '.join(loc['equipment']) or 'none (bodyweight only)'}."
+
+    if action in ("update_location", "remove_location"):
+        # Removal needs the exact name; a fuzzy match must never delete the wrong place.
+        match, locations = await asyncio.to_thread(
+            workout_setup.find_location, str(arguments.get("name") or ""), action == "remove_location"
+        )
+        if not match:
+            return json.dumps(
+                {"ok": False, "error": "location not found", "known_locations": [loc["name"] for loc in locations]}
+            )
+        if action == "remove_location":
+            result = await asyncio.to_thread(workout_setup.remove_location, match["id"], "jess")
+            return f"Removed location {result['removed']}." if result["ok"] else json.dumps(result)
+        result = await asyncio.to_thread(
+            workout_setup.update_location,
+            match["id"],
+            arguments.get("new_name"),
+            None,
+            arguments.get("add_equipment"),
+            arguments.get("remove_equipment"),
+            arguments.get("limits"),
+            "jess",
+        )
+        if not result["ok"]:
+            return json.dumps(result)
+        loc = result["location"]
+        return (
+            f"Updated {loc['name']} — equipment: {', '.join(loc['equipment']) or 'none'}; "
+            f"limits: {json.dumps(loc['limits']) if loc['limits'] else 'none'}."
+        )
+
+    return json.dumps({"ok": False, "error": f"unknown action '{action[:40]}'"})
 
 
 @register_tool("log_set")

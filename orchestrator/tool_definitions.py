@@ -1033,15 +1033,77 @@ STATIC_TOOLS = [
         "function": {
             "name": "generate_workout",
             "description": (
-                "Generate today's gym workout. The generator looks at the last week of training "
-                "and picks a full-body session by default, complementing whatever muscles were "
-                "trained recently. Writes the plan to the dashboard. Use this when the user says "
-                "'give me a workout', 'what should I do at the gym', 'plan a workout', etc. "
-                "The user is usually AT THE GYM when they ask — DO NOT read the full plan aloud. "
-                "Reply briefly ('Workout's ready on your dashboard') and keep the details in context "
-                "so you can answer follow-up questions about it."
+                "Generate today's gym workout and write it to the dashboard. Follows the user's weekly "
+                "program if one is set (workout_setup), otherwise picks a full-body session that complements "
+                "recent training. Only uses equipment the chosen location has. Use for 'give me a workout', "
+                "'what should I do at the gym', 'workout at home', etc. Pass `location` when the user says "
+                "where they are; if they didn't and the result says to ask, ask once and call again. "
+                "The user is usually AT THE GYM — DO NOT read the full plan aloud. Reply briefly "
+                "('Workout's ready on your dashboard') and keep the details in context for follow-ups."
             ),
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "Where they're training, as they said it (e.g. 'home', 'the downtown gym').",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "workout_setup",
+            "description": (
+                "View or change the user's weekly training program and their workout locations "
+                "(each gym/home and the equipment it has). Use for 'set me up on 4 days a week', "
+                "'my sessions are 45 minutes', 'add my work gym', 'my home gym has a pull-up bar now', "
+                "'my dumbbells go up to 50'. Call action=get first to see equipment names. Only change "
+                "things the user asked for."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "get",
+                            "set_program",
+                            "clear_program",
+                            "add_location",
+                            "update_location",
+                            "remove_location",
+                        ],
+                    },
+                    "goal": {
+                        "type": "string",
+                        "enum": ["strength", "muscle", "general"],
+                        "description": "set_program: training goal (default general).",
+                    },
+                    "days_per_week": {"type": "integer", "description": "set_program: 2-6."},
+                    "session_minutes": {"type": "integer", "description": "set_program: 20-120."},
+                    "deload_every_weeks": {
+                        "type": "integer",
+                        "description": "set_program: a lighter deload week every N trained weeks (3-12, 0 = off). Omit to keep the current setting.",
+                    },
+                    "name": {"type": "string", "description": "Location name (add/update/remove)."},
+                    "new_name": {"type": "string", "description": "update_location: rename to this."},
+                    "template": {
+                        "type": "string",
+                        "enum": ["commercial_gym", "home_basic", "empty"],
+                        "description": "add_location: starting equipment (commercial_gym = everything; home_basic = dumbbells + kettlebell).",
+                    },
+                    "add_equipment": {"type": "array", "items": {"type": "string"}},
+                    "remove_equipment": {"type": "array", "items": {"type": "string"}},
+                    "limits": {
+                        "type": "object",
+                        "description": "Gear limits in lb: dumbbell_max_lbs, dumbbell_step_lbs, kettlebell_weights_lbs (list). null clears one.",
+                    },
+                },
+                "required": ["action"],
+            },
         },
     },
     {
@@ -1111,7 +1173,8 @@ STATIC_TOOLS = [
                 "Swap, add, or remove exercises from the user's current workout. Use when they "
                 "say things like 'swap squats for leg press' (remove Back Squat + add Leg Press), "
                 "'drop the deadlifts, knee's bothering me', or 'add some biceps work'. "
-                "Only affects planned (uncompleted) sets."
+                "Only affects planned (uncompleted) sets. Exercises the workout's location can't support "
+                "come back in skipped_exercises with alternatives — offer those."
             ),
             "parameters": {
                 "type": "object",
@@ -1254,7 +1317,9 @@ ADVANCED_ONLY_TOOL_NAMES: frozenset[str] = frozenset(
 # config flag is on (default OFF in the shippable build). See config.py
 # `workouts_enabled` / `meals_enabled`. Core selfcare_log is NOT here — meal /
 # movement self-care tracking stays available regardless.
-WORKOUT_TOOL_NAMES: frozenset[str] = frozenset({"generate_workout", "log_set", "workout_status", "modify_workout"})
+WORKOUT_TOOL_NAMES: frozenset[str] = frozenset(
+    {"generate_workout", "workout_setup", "log_set", "workout_status", "modify_workout"}
+)
 MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
 
 # Helios wake-on-demand (PT-C) — only exposed when HELIOS_WAKE_ENABLED. The

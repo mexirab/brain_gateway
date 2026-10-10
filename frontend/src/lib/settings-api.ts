@@ -1,6 +1,13 @@
 // Settings page API client — `/api/config/*`
 // All calls route through /api/proxy/[...path] for bearer auth (proxy injects)
 
+import type {
+  WorkoutGoal,
+  WorkoutLocation,
+  WorkoutLocationsResponse,
+  WorkoutProgram,
+} from './types';
+
 const PROXY = '/api/proxy';
 
 /** Error from a `/api/config/*` call. Carries the HTTP `status` and a cleaned,
@@ -28,6 +35,8 @@ async function fail(res: Response): Promise<never> {
     // FastAPI HTTPException → {"detail": "message"}. Only a string detail is
     // safe to show; 422 returns an array of validation objects — skip those.
     if (parsed && typeof parsed.detail === 'string') detail = parsed.detail;
+    // Workout setup routes return {"ok": false, "error": "message"}.
+    else if (parsed && typeof parsed.error === 'string') detail = parsed.error;
   } catch {
     /* body wasn't JSON */
   }
@@ -55,6 +64,16 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) await fail(res);
+  return res.json();
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${PROXY}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
   if (!res.ok) await fail(res);
   return res.json();
@@ -227,6 +246,18 @@ export interface PersonalFacts {
   profile: Identity;
 }
 
+export type LocationTemplate = 'commercial_gym' | 'home_basic' | 'empty';
+
+export interface WorkoutLocationPatch {
+  name?: string;
+  equipment?: string[];
+  limits?: {
+    dumbbell_max_lbs?: number | null;
+    dumbbell_step_lbs?: number | null;
+    kettlebell_weights_lbs?: number[] | null;
+  };
+}
+
 // ----- API -----
 
 export const settingsApi = {
@@ -271,4 +302,22 @@ export const settingsApi = {
     del<{ ok: boolean; id: string }>(
       `/api/config/recurring_reminders/${id}`,
     ),
+
+  // Workouts: weekly program + locations (routes live under /api/workouts)
+  getWorkoutProgram: () => get<{ program: WorkoutProgram | null }>('/api/workouts/program'),
+  setWorkoutProgram: (p: {
+    goal: WorkoutGoal;
+    days_per_week: number;
+    session_minutes: number;
+    deload_every_weeks: number;
+  }) =>
+    put<{ ok: boolean; program: WorkoutProgram }>('/api/workouts/program', p),
+  clearWorkoutProgram: () => del<{ ok: boolean }>('/api/workouts/program'),
+  listWorkoutLocations: () => get<WorkoutLocationsResponse>('/api/workouts/locations'),
+  createWorkoutLocation: (name: string, template: LocationTemplate) =>
+    post<{ ok: boolean; location: WorkoutLocation }>('/api/workouts/locations', { name, template }),
+  updateWorkoutLocation: (id: number, changes: WorkoutLocationPatch) =>
+    patch<{ ok: boolean; location: WorkoutLocation }>(`/api/workouts/locations/${id}`, changes),
+  deleteWorkoutLocation: (id: number) =>
+    del<{ ok: boolean; removed: string }>(`/api/workouts/locations/${id}`),
 };

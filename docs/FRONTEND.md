@@ -11,7 +11,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
-| Workouts | `/workouts` | Private. Today's adaptive gym plan with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
+| Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 | Settings | `/settings` | Private. Four-panel settings UI (Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders) with left-rail tab switcher. Each panel has a shared `SaveBar`; switching tabs while a panel is dirty triggers a confirm guard so unsaved edits aren't silently lost. Backed by `/api/config/*` via `lib/settings-api.ts` (typed client, mirrors `finance-api.ts` shape; goes through `/api/proxy` for bearer injection). |
 
@@ -70,14 +70,15 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/dashboard/AnnouncementHistoryCard.tsx` — TTS announcement history with type color-coding and stats
 - `frontend/src/components/dashboard/SelfcareTodayCard.tsx` — Today's selfcare log (medication/meal/water/movement) with last-seen timestamps and expandable entry rows
 - `frontend/src/components/layout/MobileNav.tsx` — Mobile bottom nav (4 tabs + More sheet); used by `(private)/layout.tsx`
-- `frontend/src/app/(private)/workouts/page.tsx` — Workout page: today's plan, inline set logging, history
+- `frontend/src/app/(private)/workouts/page.tsx` — Workout page: location picker, program line, today's plan, inline set logging, history
 - `frontend/src/app/(private)/meals/page.tsx` — Meals page: calorie log, photo-estimate upload, 7-day bar chart
 - `frontend/src/app/(private)/settings/page.tsx` — Settings page: left-rail tab switcher with dirty-state guard on tab switch
 - `frontend/src/components/settings/IdentityPanel.tsx` — Identity & Tone panel; also exports the shared `SaveBar` consumed by the other three panels
 - `frontend/src/components/settings/SelfcarePanel.tsx` — Selfcare nudge cadence (categories, intervals, active hours)
 - `frontend/src/components/settings/QuietHoursPanel.tsx` — Quiet hours start/end + day-of-week filter
 - `frontend/src/components/settings/RecurringRemindersPanel.tsx` — CRUD UI for cron-based recurring reminder rules
-- `frontend/src/lib/settings-api.ts` — Typed client for `/api/config/*`; routed through `/api/proxy` for bearer injection
+- `frontend/src/components/settings/WorkoutsPanel.tsx` — Workouts panel: weekly program (incl. "Lighter deload week" cadence select + deload status in the summary) + workout locations (equipment, dumbbell/kettlebell limits). Uses `/api/workouts/*`; tab hidden when `workouts_enabled` is false (fails open). See `docs/WORKOUTS_AND_MEALS.md`
+- `frontend/src/lib/settings-api.ts` — Typed client for `/api/config/*` (+ `/api/workouts/{program,locations}` for the Workouts panel); routed through `/api/proxy` for bearer injection
 - `frontend/src/lib/selfcare-categories.ts` — Shared selfcare-category constants (consumed by `SelfcarePanel`)
 
 ## API Proxy Notes
