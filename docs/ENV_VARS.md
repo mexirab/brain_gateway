@@ -272,6 +272,7 @@ A reusable host helper `~/plug.sh on|off|state|power` (HA-based) exists on Jupit
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Directory for uploaded meal photos. Extension allowlist enforced at save: jpg, jpeg, png, gif, webp. Files named as uuid4. |
+| `EXERCISE_LIBRARY_PATH` | `/app/data/exercise_library` | Exercise how-to library (photos + steps), filled by `docker exec brain-orchestrator python -m orchestrator.exercise_library fetch`. Empty/missing = feature dark. See `docs/WORKOUTS_AND_MEALS.md` → Exercise how-to library. |
 
 ## Finance — Actual Budget sync
 

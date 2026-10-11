@@ -16,7 +16,10 @@ HuggingFace model cache, which re-downloads on demand). The genuinely
 
 Until `scripts/backup_state.py` landed, none of this was backed up — a single
 disk failure would have been total and permanent. `hf_cache/`,
-`embedding_finetune/`, and prior `app-backup-*/` dirs are deliberately excluded.
+`embedding_finetune/`, and prior `app-backup-*/` dirs are deliberately excluded,
+as are `exercise_library/` (+ its `.new`/`.old` fetch siblings) — ~100 MB of
+public-domain photos; re-fetch with
+`docker exec brain-orchestrator python -m orchestrator.exercise_library fetch`.
 
 ## What the backup does
 

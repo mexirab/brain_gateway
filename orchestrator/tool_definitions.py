@@ -1146,19 +1146,24 @@ STATIC_TOOLS = [
             "name": "workout_status",
             "description": (
                 "Check the user's current workout plan or recent training history. "
-                "Use 'today' to see what's planned and what's done, 'history' for recent sessions."
+                "Use 'today' to see what's planned and what's done, 'history' for recent sessions, "
+                "'how_to' for how to perform an exercise ('how do I do a renegade row?')."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["today", "history"],
-                        "description": "today = current plan + progress; history = recent sessions summary",
+                        "enum": ["today", "history", "how_to"],
+                        "description": "today = current plan + progress; history = recent sessions summary; how_to = step-by-step form cues",
                     },
                     "days": {
                         "type": "integer",
                         "description": "For history action: how many days back (default 7).",
+                    },
+                    "exercise": {
+                        "type": "string",
+                        "description": "For how_to action: the exercise name.",
                     },
                 },
                 "required": ["action"],

@@ -11,7 +11,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
-| Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
+| Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; exercise names open a how-to modal with photos + steps; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 | Settings | `/settings` | Private. Four-panel settings UI (Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders) with left-rail tab switcher. Each panel has a shared `SaveBar`; switching tabs while a panel is dirty triggers a confirm guard so unsaved edits aren't silently lost. Backed by `/api/config/*` via `lib/settings-api.ts` (typed client, mirrors `finance-api.ts` shape; goes through `/api/proxy` for bearer injection). |
 
@@ -71,6 +71,7 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/dashboard/SelfcareTodayCard.tsx` — Today's selfcare log (medication/meal/water/movement) with last-seen timestamps and expandable entry rows
 - `frontend/src/components/layout/MobileNav.tsx` — Mobile bottom nav (4 tabs + More sheet); used by `(private)/layout.tsx`
 - `frontend/src/app/(private)/workouts/page.tsx` — Workout page: location picker, program line, today's plan, inline set logging, history
+- `frontend/src/components/workouts/ExerciseInfoModal.tsx` — Exercise how-to modal: 1 s photo flip (pause/play; paused under `prefers-reduced-motion`), steps, muscles, video link, retry on error. See `docs/WORKOUTS_AND_MEALS.md`
 - `frontend/src/app/(private)/meals/page.tsx` — Meals page: calorie log, photo-estimate upload, 7-day bar chart
 - `frontend/src/app/(private)/settings/page.tsx` — Settings page: left-rail tab switcher with dirty-state guard on tab switch
 - `frontend/src/components/settings/IdentityPanel.tsx` — Identity & Tone panel; also exports the shared `SaveBar` consumed by the other three panels
@@ -84,3 +85,7 @@ docker compose up -d --build --force-recreate frontend
 ## API Proxy Notes
 
 The proxy `route.ts` now handles `PATCH` in addition to `GET/POST/PUT/DELETE`. Required by both workouts (modify plan) and meals (edit entry) endpoints.
+
+Binary responses forward the upstream `Cache-Control` only when it is `private`/`no-store` and not `public` (cookie-authed proxy — never let a shared cache store it). Used by the versioned exercise photos.
+
+Shared `components/ui/Modal.tsx` panel is capped at `max-h-[calc(100dvh-2rem)]` with `overflow-y-auto` so tall modals scroll on phones.

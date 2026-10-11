@@ -6,9 +6,9 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
-from orchestrator import state_store, workout_setup
+from orchestrator import exercise_library, state_store, workout_setup
 from orchestrator.exercises_seed import EQUIPMENT_TOKENS, LOCATION_TEMPLATES
 from orchestrator.workout_manager import (
     generate_workout,
@@ -120,6 +120,24 @@ async def workouts_exercises(
         available = set(loc["equipment"])
     rows = await asyncio.to_thread(state_store.get_exercises, movement_pattern, equipment, available)
     return JSONResponse(rows)
+
+
+@router.get("/api/workouts/exercise-info")
+async def workouts_exercise_info(name: str = Query(..., min_length=1, max_length=_MAX_NAME_LEN)) -> JSONResponse:
+    """How-to for one exercise: steps + photo frame URLs, or a video-search link."""
+    if not name.strip():
+        return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+    info = await asyncio.to_thread(exercise_library.get_info, name)
+    return JSONResponse({"ok": True, **info})
+
+
+@router.get("/api/workouts/exercise-library/{lib_id}/{frame}.jpg", response_model=None)
+async def workouts_exercise_photo(lib_id: str, frame: int) -> FileResponse | JSONResponse:
+    path = await asyncio.to_thread(exercise_library.image_file, lib_id, frame)
+    if path is None:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    # Pinned upstream commit → frames never change under a given URL.
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=604800"})
 
 
 # --- Program builder: weekly program + workout locations -------------------

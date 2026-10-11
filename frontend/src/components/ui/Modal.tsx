@@ -117,7 +117,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`card w-full ${SIZES[size]} p-6 shadow-2xl focus:outline-none`}
+        className={`card w-full ${SIZES[size]} max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl focus:outline-none`}
       >
         <div className="mb-5 flex items-center justify-between gap-4">
           <h2 id={titleId} className="text-lg font-bold text-content-primary">

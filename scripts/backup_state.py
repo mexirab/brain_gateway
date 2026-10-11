@@ -17,6 +17,7 @@ is tiny (~15 MB) and has never had a backup:
                          ~/.local/share/chroma); data/chroma/ is only the default
   - data/app/ subdirs    self-audits, budget summaries, imports, meal photos,
                          paperless inbox, training corpus, documents
+                         (NOT exercise_library/ — reconstructable, see EXCLUDE_DIRS)
   - credentials/         the Google OAuth token + client secret
 
 This script is deliberately standalone and stdlib-only: it snapshots the live
@@ -95,7 +96,9 @@ METRICS_PATH = os.environ.get("JESS_BACKUP_METRICS_PATH", "").strip()
 # Subtrees under data/ that are large and reconstructable — never worth backing
 # up. hf_cache re-downloads from HuggingFace; app-backup-* are prior one-off
 # backups (don't back up backups); backups/ is our own output if nested.
-EXCLUDE_DIRS = {"hf_cache", "backups"}
+# exercise_library (+ its fetch staging/.old siblings) is ~100 MB of public
+# photos — re-fetch with `python -m orchestrator.exercise_library fetch`.
+EXCLUDE_DIRS = {"hf_cache", "backups", "exercise_library", "exercise_library.new", "exercise_library.old"}
 EXCLUDE_DIR_PREFIXES = ("app-backup-",)
 
 # SQLite sidecar files: never copy these raw. The .backup() snapshot already

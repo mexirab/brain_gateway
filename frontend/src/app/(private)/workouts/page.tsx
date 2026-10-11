@@ -1,10 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Dumbbell, Sparkles, Check, Trash2, History, Plus, X } from 'lucide-react';
+import { Dumbbell, Sparkles, Check, Trash2, History, Plus, X, Info } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button, Card, Skeleton } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
+import { ExerciseInfoModal } from '@/components/workouts/ExerciseInfoModal';
 import type {
   WorkoutTodayResponse,
   WorkoutToday,
@@ -35,6 +36,7 @@ export default function WorkoutsPage() {
   const [program, setProgram] = useState<WorkoutProgram | null>(null);
   // '' = no location chosen (whole catalog). Defaults to the most recently used.
   const [locationId, setLocationId] = useState<string>('');
+  const [howTo, setHowTo] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -342,7 +344,18 @@ export default function WorkoutsPage() {
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <h3 className="font-semibold text-content-primary">{ex.name}</h3>
+                  <h3 className="font-semibold text-content-primary">
+                    <button
+                      type="button"
+                      onClick={() => setHowTo(ex.name)}
+                      className="inline-flex items-center gap-1.5 text-left py-1 -my-1 rounded underline decoration-dotted decoration-content-muted underline-offset-4 hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+                      title="How to do this exercise"
+                    >
+                      {ex.name}
+                      <Info size={14} className="text-content-muted shrink-0" aria-hidden />
+                      <span className="sr-only">: how to</span>
+                    </button>
+                  </h3>
                   {ex.note && <p className="text-xs text-content-muted mt-0.5">{ex.note}</p>}
                 </div>
                 <div className="flex items-center gap-2">
@@ -556,6 +569,8 @@ export default function WorkoutsPage() {
           ))}
         </div>
       )}
+
+      <ExerciseInfoModal name={howTo} onClose={() => setHowTo(null)} />
     </div>
   );
 }

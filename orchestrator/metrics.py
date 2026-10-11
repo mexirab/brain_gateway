@@ -1077,3 +1077,12 @@ WORKOUT_PROGRESSION = Counter(
 )
 for _p in ("new", "up", "reps", "hold", "stall_deload", "comeback", "capped", "deload_week"):
     WORKOUT_PROGRESSION.labels(progression=_p)
+
+EXERCISE_INFO_LOOKUPS = Counter(
+    "bgw_exercise_info_lookups_total",
+    "Exercise how-to lookups (exercise_library.get_info) by outcome.",
+    # found | not_found (no faithful library match → video link) | library_missing (not fetched yet)
+    ["result"],
+)
+for _r in ("found", "not_found", "library_missing"):
+    EXERCISE_INFO_LOOKUPS.labels(result=_r)

@@ -2062,6 +2062,36 @@ async def _reg_workout_status(arguments: dict) -> str:
     from orchestrator.workout_manager import get_history, get_status
 
     action = arguments.get("action", "today")
+    if action == "how_to":
+        from orchestrator.exercise_library import get_info
+
+        exercise = str(arguments.get("exercise") or "").strip()[:200]
+        if not exercise:
+            return "exercise is required for how_to."
+        info = await asyncio.to_thread(get_info, exercise)
+        if not info["found"]:
+            return json.dumps(
+                {
+                    "exercise": exercise,
+                    "steps": None,
+                    "video_url": info["video_url"],
+                    "note": (
+                        "No stored form guide for this exercise"
+                        + ("" if info["library_available"] else " (the photo library isn't downloaded yet)")
+                        + ". Say so and offer the video link — don't improvise form cues."
+                    ),
+                }
+            )
+        return json.dumps(
+            {
+                "exercise": exercise,
+                "reference": info["match"],
+                # Keep well under the 8000-char tool-result cap.
+                "steps": [s[:500] for s in info["instructions"][:8]],
+                "muscles": info["primary_muscles"],
+                "note": "Photos are on the Workouts page — tap the exercise name.",
+            }
+        )
     if action == "history":
         days = int(arguments.get("days") or 7)
         history = await asyncio.to_thread(get_history, days)

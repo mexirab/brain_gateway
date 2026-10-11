@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Gating spans tool schemas, tool handlers, API routers, and dashboard nav.
     workouts_enabled: bool = False
     meals_enabled: bool = False
+    # Exercise how-to library (photos + steps), filled by
+    # `python -m orchestrator.exercise_library fetch`. Empty dir = feature dark.
+    exercise_library_path: str = "/app/data/exercise_library"
 
     # -- Primary LLM -------------------------------------------------------------
     # backend selects the wire protocol: "openai_compatible" (vLLM / Ollama /

@@ -145,6 +145,7 @@ Rolling back to `main` with the new columns present is safe (verified).
 - `generate_workout` (`location` optional) returns the full plan text (location, program day, reasoning incl. deload week, per-exercise sets×reps @ weight + progression note) so the model keeps it in context for follow-ups. The description tells the model NOT to read the plan aloud — the user is at the gym.
 - `workout_setup` — view/change the program and locations (`get`, `set_program`, `clear_program`, `add_location`, `update_location`, `remove_location`). `set_program` takes optional `deload_every_weeks`; its reply states the cadence; `get` includes `deload_every_weeks` + `next_is_deload`. Schema: `TECHNICAL_REFERENCE.md` → workout_setup.
 - `modify_workout` — validates adds BEFORE removing: catalog misses, duplicates already in today's plan, and exercises needing gear the workout's location lacks come back in `skipped_exercises` (`reason` + up to 2 same-pattern `alternatives`). If adds were requested and none fit, the removal is held (`removal_held: true`) — a failed swap never just deletes the original. Added exercises use the program's rep scheme, progression, the location's load caps, and the deload rules if today is a deload session.
+- `workout_status` — actions `today`, `history` (`days`), `how_to` (`exercise`): up to 8 steps (≤500 chars each) + primary muscles from the how-to library; no guide → `steps: null` + `video_url` + a note telling the model to say so and not improvise form cues.
 
 `orchestrator/workout_setup.py` holds all validation + CRUD for programs and locations, shared by the REST routes and the tool. Every write is audited via `config_writer.log_config_change` (panel `workouts`; `changed_by` `user` or `jess`).
 
@@ -162,7 +163,26 @@ Rolling back to `main` with the new columns present is safe (verified).
 
 Column detail: `TECHNICAL_REFERENCE.md` → Workout program builder tables. All weights are stored and returned in **lbs**.
 
+### Exercise how-to library (2026-10-11)
+
+Start/end photos + numbered steps per exercise, from [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (The Unlicense — public domain), pinned to commit `f00c92c7` (`exercise_library.SOURCE_SHA`). **Not in the repo** — download onto the data volume:
+
+```bash
+docker exec brain-orchestrator python -m orchestrator.exercise_library fetch          # ~100 MB, 876 exercises, 1746 JPEGs, ~30 s
+docker exec brain-orchestrator python -m orchestrator.exercise_library fetch --force  # re-download
+docker exec brain-orchestrator python -m orchestrator.exercise_library check          # seed-catalog coverage
+```
+
+- Layout under `EXERCISE_LIBRARY_PATH`: `library.json` (trimmed entries), `meta.json` (`source_sha`, `fetched_at`, `count`), `images/<id>/<n>.jpg`.
+- Coverage: 66/72 seed exercises have photos; the other 6 are deliberately mapped to `None` and get a YouTube-search link instead.
+- Lookup: hand-checked `_ALIASES` (seed name → library id; `None` = no faithful match), then exact normalized-name match (a future catalog addition named like a library entry gets photos automatically). No fuzzy matching — a wrong-movement photo is worse than none.
+- Fetch safety: streamed with size caps (20 MB JSON, 3 MB/photo), JPEG magic check, no redirects, staged in `exercise_library.new` then swapped in via `os.replace` (previous library moved to `.old`, restored if the swap fails, deleted after success). Network/JSON error or >5% failed photos → existing library untouched, exit 1. Smaller partial failure → installed, exit 1.
+- Runtime loader is mtime-cached; missing library = feature dark (`library_available: false`); corrupt file = feature dark, logged once.
+- Excluded from `scripts/backup_state.py` (reconstructable) — see `docs/BACKUP.md`.
+
 ### Metrics
+
+`bgw_exercise_info_lookups_total{result}` — `found` | `not_found` (no faithful match → video link) | `library_missing` (not fetched). Labels pre-initialized.
 
 `bgw_workout_generated_total{result}` — `ok` | `no_exercises` (location gear too thin / empty catalog) | `bad_location` (unknown `location_id`) | `ask_location` (tool asked where). Labels pre-initialized at 0.
 
@@ -175,6 +195,7 @@ Column detail: `TECHNICAL_REFERENCE.md` → Workout program builder tables. All 
 - **No workout yet:** "Next in your program: <day> (split)" line when a program is set (adds ", deload week, lighter on purpose" when the next session is a deload); a "Where are you training?" picker when locations exist (preselects the only or last-used location; "Not sure (full gym)" sends `location_id: null`, which plans from the whole catalog — omitting `location_id` is what falls back to the only/last-used location). Generate shows a message on `location_mismatch`.
 - Today's header shows "· at <location>" and "· deload week" on deload sessions.
 - Each exercise shows its progression note under the name.
+- Exercise names are buttons (dotted underline + info icon) opening `components/workouts/ExerciseInfoModal.tsx` (`GET /api/workouts/exercise-info`): photos flip every 1 s (pause/play; starts paused under `prefers-reduced-motion`), numbered steps, "Works:" muscles, "Watch a video" link; error state with retry.
 - Add-exercise picker lists only exercises today's location supports (`GET /api/workouts/exercises?location_id=`); a skipped add shows the reason + alternatives.
 - Delete today's in-progress workout (trash icon next to "End session"); remove an exercise (X on its header → `PATCH /api/workouts/{id}` `remove_exercises`); delete past workouts from history.
 
@@ -184,7 +205,7 @@ The `modify_workout` / `workout_setup` tools are the voice/chat path to the same
 
 ### Known limits
 
-- No Grafana Workouts panels yet (metrics exist, no dashboard row).
+- No Grafana Workouts panels yet (metrics exist, incl. `bgw_exercise_info_lookups_total`; dashgen has no Workouts row).
 - Planned-set inserts are one commit per set (pre-existing).
 
 ## Meal Logging
@@ -215,6 +236,7 @@ Calories-only. No protein/carb/fat breakdown in v1. Meal logging is independent 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Photo storage directory. Created on startup if absent. |
+| `EXERCISE_LIBRARY_PATH` | `/app/data/exercise_library` | Exercise how-to library (filled by `python -m orchestrator.exercise_library fetch`). Empty dir = feature dark. |
 
 Vision model config (shared with `analyze_image`): see `docs/ENV_VARS.md` → Vision section. Rollback to Saturn: restore the two `VISION_*` lines from Jupiter `.env.bak-vision-saturn`.
 
@@ -226,14 +248,17 @@ Vision model config (shared with `analyze_image`): see `docs/ENV_VARS.md` → Vi
 | `orchestrator/workout_setup.py` | Program + location validation and CRUD shared by routes and the `workout_setup` tool; audited (panel `workouts`) |
 | `orchestrator/meal_manager.py` | Meal CRUD, photo save, calorie estimation via the vision model (`VISION_*`) |
 | `orchestrator/exercises_seed.py` | ~72-entry catalog (upserted at startup), `EQUIPMENT_TOKENS`, `LOCATION_TEMPLATES`, `FALLBACK_VARIANTS`, `exercise_requires()` |
-| `orchestrator/routes_workout.py` | Workout API routes (incl. `/api/workouts/program`, `/api/workouts/locations`) |
+| `orchestrator/exercise_library.py` | How-to library: pinned free-exercise-db fetch CLI (`fetch`/`check`), `_ALIASES`, `get_info()`, `image_file()` |
+| `orchestrator/routes_workout.py` | Workout API routes (incl. `/api/workouts/program`, `/api/workouts/locations`, `/api/workouts/exercise-info`, `/api/workouts/exercise-library/…`) |
 | `orchestrator/routes_meals.py` | Meal API routes (photo upload + serve included) |
 | `orchestrator/tests/test_workout_manager.py` | Workout manager unit tests |
 | `orchestrator/tests/test_meal_manager.py` | Meal manager unit tests |
 | `orchestrator/tests/test_state_store_workouts.py` | state_store workout/meal table tests (incl. locations, programs, seed upsert, migrations) |
 | `orchestrator/tests/test_workout_setup.py` | workout_setup validation, CRUD, name resolution, audit + `generate_workout`/`workout_setup` tool handlers |
+| `orchestrator/tests/test_exercise_library.py` | How-to library: lookup, fetch safety, routes, `workout_status how_to` (93 cases) |
 | `orchestrator/tests/test_routes_workout_program.py` | Program/location routes + generate `location_id` handling |
 | `frontend/src/app/(private)/workouts/page.tsx` | Workouts dashboard page (location picker, program line) |
+| `frontend/src/components/workouts/ExerciseInfoModal.tsx` | Exercise how-to modal (photo flip, steps, muscles, video link) |
 | `frontend/src/components/settings/WorkoutsPanel.tsx` | Settings → Workouts panel (program + locations) |
 | `frontend/src/app/(private)/meals/page.tsx` | Meals dashboard page |
 

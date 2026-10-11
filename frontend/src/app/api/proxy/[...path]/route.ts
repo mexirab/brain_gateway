@@ -16,10 +16,15 @@ function isBinaryResponse(res: Response): boolean {
 }
 
 function binaryResponse(res: Response, ct: string): Response {
-  return new Response(res.body, {
-    status: res.status,
-    headers: { 'Content-Type': ct },
-  });
+  const headers: Record<string, string> = { 'Content-Type': ct };
+  // Pass through upstream caching (versioned exercise photos), but only
+  // browser-private directives: this is a cookie-authed proxy, never let a
+  // shared cache in front of the dashboard store it.
+  const cache = res.headers.get('cache-control');
+  if (cache && /\b(private|no-store)\b/i.test(cache) && !/\bpublic\b/i.test(cache)) {
+    headers['Cache-Control'] = cache;
+  }
+  return new Response(res.body, { status: res.status, headers });
 }
 
 export async function GET(

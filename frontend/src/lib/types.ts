@@ -385,6 +385,20 @@ export interface GenerateWorkoutResponse {
   error?: string;
 }
 
+export interface ExerciseInfo {
+  ok: boolean;
+  name: string;
+  library_available: boolean;
+  found: boolean;
+  video_url: string;
+  match?: string;
+  instructions?: string[];
+  primary_muscles?: string[];
+  equipment?: string;
+  /** Orchestrator paths; prefix with /api/proxy to load through the dashboard. */
+  frames?: string[];
+}
+
 export interface ExerciseCatalogEntry {
   name: string;
   primary_muscle: string;

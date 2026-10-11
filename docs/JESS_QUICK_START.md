@@ -208,6 +208,7 @@ Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-o
 | "My dumbbells go up to 50" / "I have a 25 and a 35 pound kettlebell" | Sets that location's weight limits |
 | "I did 3 sets of bench press at 135 for 10 reps" | Logs the sets, updates PR tracking |
 | "Show me today's workout" | Reads back the plan + what you've logged |
+| "How do I do a goblet squat?" | Step-by-step form cues (or a video link if there's no stored guide). On the dashboard, tap an exercise name for photos + steps |
 | "Swap out the deadlifts" | Modifies today's plan in place — if the replacement needs gear this location lacks, Jess keeps the original and suggests alternatives |
 
 **How weights go up:** Jess looks at what you actually logged for each exercise. Finish every set at the planned weight and reps → a bit heavier next time (+5 lb, +10 lb on big leg lifts). Miss a set → same weight again. Miss twice at the same weight → about 10% lighter to build back up. Away from a lift for 3+ weeks → you restart around 90%. Bodyweight moves, and gear that can't go heavier (home dumbbells, your heaviest kettlebell), add a rep instead. Each exercise shows a short note like "+5 lb from last time".

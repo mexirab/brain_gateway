@@ -188,6 +188,8 @@ Mounted only when `WORKOUTS_ENABLED=true` (otherwise 404). Errors: `{"ok": false
 | DELETE | `/api/workouts/{id}` | Delete a workout |
 | POST | `/api/workouts/{id}/end` | End a workout session |
 | DELETE | `/api/workouts/sets/{id}` | Delete a logged set |
+| GET | `/api/workouts/exercise-info?name=` | How-to for one exercise → `{ok: true, name, library_available, found, video_url, match?, instructions?, primary_muscles?, equipment?, frames?}`. `frames` = `/api/workouts/exercise-library/<id>/<n>.jpg?v=<sha7>`. 400 whitespace-only name; 422 empty or >200 chars |
+| GET | `/api/workouts/exercise-library/{lib_id}/{frame}.jpg` | Library photo → `image/jpeg`, `Cache-Control: private, max-age=604800` (URLs are versioned by the pinned source commit). Unknown id/frame → 404 JSON |
 
 **`POST /api/workouts/generate`:** `location_id` must be an integer or null (else 400). Omitted → the only location, else the last-used one, else none (whole catalog, no load caps). Explicit `null` → no location (whole catalog). Idempotent per day: if today's workout exists it returns `{ok, workout_id, workout_type, reasoning, exercises: [], already_exists: true, location_mismatch}` (`location_mismatch` = a `location_id` was sent and differs from today's plan). New plan → `{ok, workout_id, workout_type, reasoning, exercises: [{name, primary_muscle, muscle_groups, equipment, is_compound, sets: [{set_number, target_reps, target_weight_lbs}], progression, note?}], location: {id, name} | null, program_day: {index, of, label} | null, deload: bool, notes: [str]}`. `progression` ∈ `new|up|reps|hold|stall_deload|comeback|capped|deload_week` (rules: `docs/WORKOUTS_AND_MEALS.md` → Progression). Failure (unknown location, nothing fits the gear) → 400.
 
@@ -195,7 +197,7 @@ Mounted only when `WORKOUTS_ENABLED=true` (otherwise 404). Errors: `{"ok": false
 
 **Location object:** `{id, name (≤60 chars, unique case-insensitive), equipment: [tokens], limits: {dumbbell_max_lbs?, dumbbell_step_lbs?, kettlebell_weights_lbs?: [lb]}, last_used_at, created_at, updated_at}`. Equipment tokens: `barbell, squat_rack, bench, trap_bar, dumbbells, kettlebell, cable, machines, leg_press, pull_up_bar, dip_station, ab_wheel` (unknown token → 400). Templates: `commercial_gym` (all 12), `home_basic` (`dumbbells`, `kettlebell`), `empty`; default `commercial_gym`, ignored when `equipment` is given. Limits: `dumbbell_max_lbs` 1–300, `dumbbell_step_lbs` 0.5–50, `kettlebell_weights_lbs` ≤12 weights each 1–300; a limits patch merges onto existing limits, `null`/`""`/`[]` clears a key, unknown keys → 400. Max 20 locations. Program + location writes are audited to `config_changes` (panel `workouts`).
 
-Metrics: `bgw_workout_generated_total{result}` (`ok|no_exercises|bad_location|ask_location`), `bgw_workout_progression_total{progression}` (one per planned exercise).
+Metrics: `bgw_workout_generated_total{result}` (`ok|no_exercises|bad_location|ask_location`), `bgw_workout_progression_total{progression}` (one per planned exercise), `bgw_exercise_info_lookups_total{result}` (`found|not_found|library_missing`).
 
 ### Meals
 
@@ -543,8 +545,10 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 
 ### workout_status
 ```json
-{}
+{"action": "today|history|how_to", "days": 7, "exercise": "Goblet Squat"}
 ```
+- `action` required. `days` for `history` (default 7); `exercise` for `how_to`.
+- `how_to` → `{exercise, reference, steps: [≤8, ≤500 chars each], muscles, note}`; no guide → `{exercise, steps: null, video_url, note}` (note tells the model not to improvise form cues). Source: `docs/WORKOUTS_AND_MEALS.md` → Exercise how-to library.
 
 ### modify_workout
 ```json

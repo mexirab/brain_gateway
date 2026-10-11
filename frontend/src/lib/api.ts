@@ -22,6 +22,7 @@ import type {
   WorkoutHistorySession,
   GenerateWorkoutResponse,
   ExerciseCatalogEntry,
+  ExerciseInfo,
   WorkoutLocationsResponse,
   WorkoutProgram,
   WorkoutSet,
@@ -194,6 +195,8 @@ export const api = {
       // Explicit null = no location (whole catalog); omitted = backend's last-used default.
       body: JSON.stringify(locationId === undefined ? {} : { location_id: locationId }),
     }),
+  exerciseInfo: (name: string) =>
+    fetcher<ExerciseInfo>(`/api/workouts/exercise-info?name=${encodeURIComponent(name)}`),
   workoutExercises: (locationId?: number | null) =>
     fetcher<ExerciseCatalogEntry[]>(
       locationId ? `/api/workouts/exercises?location_id=${locationId}` : '/api/workouts/exercises',
