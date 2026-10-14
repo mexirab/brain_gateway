@@ -796,6 +796,7 @@ async def run_unified_tool_loop(
         # Classify how the call arrived — see TOOL_CALL_SOURCE in metrics.py for
         # the vLLM 0.19.1 / PR #35687 defect this measures. Wrapped defensively:
         # this is diagnostics, and it must never be able to break a chat turn.
+        _dropped_call = False
         try:
             if _had_native:
                 TOOL_CALL_SOURCE.labels(source="native").inc()
@@ -827,6 +828,7 @@ async def run_unified_tool_loop(
                     or _TOOL_CALL_MARKER_RE.search(message.get("reasoning_content") or "")
                 )
                 if _marker:
+                    _dropped_call = True
                     TOOL_CALL_SOURCE.labels(source="dropped").inc()
                     logger.error(
                         "[%s] Tool call SILENTLY DROPPED: <tool_call> marker present but "
@@ -860,6 +862,7 @@ async def run_unified_tool_loop(
             not tool_calls
             and not clean_response(content).strip()
             and "<tool_call>" not in content
+            and not _dropped_call  # a lost tool call is its own fault + alert, not an EOS-only reply
             and not empty_retry_done
         ):
             empty_retry_done = True
