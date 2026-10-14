@@ -134,7 +134,7 @@ async def check_in_after_interrupt() -> None:
         f"You were working on {desc}. "
         f"Want to jump back in? I can start a focus session."
     )
-    logger.info("[CONTEXT] Check-in: '%s'", desc[:60])
+    logger.info("[CONTEXT] Check-in (%d chars)", len(desc))
     await _announce_voice(message, announcement_type="interrupt")
 
 

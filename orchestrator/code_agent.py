@@ -530,7 +530,7 @@ async def _run_code_agent_loop(
         # No tool calls — return final response
         if not tool_calls:
             result = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-            logger.info("[CODE_AGENT] Final response (%d rounds): %s...", round_num + 1, result[:100])
+            logger.info("[CODE_AGENT] Final response (%d rounds, %d chars)", round_num + 1, len(result))
             return result
 
         # Execute tools
@@ -623,7 +623,7 @@ async def handle_code_agent(arguments: dict) -> str:
         )
 
     mode = "read-write" if apply_changes else "read-only"
-    logger.info("[CODE_AGENT] Starting %s task: %s", mode, task[:100])
+    logger.info("[CODE_AGENT] Starting %s task (%d chars)", mode, len(task))
 
     result = await _run_code_agent_loop(task, apply_changes)
 

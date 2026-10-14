@@ -90,7 +90,7 @@ async def _route_to_backlog(item: CapturedItem) -> str:
     if task is None:
         return await _route_to_rag(item)
     item.routed_to = "backlog"
-    logger.info("[BRAIN_DUMP] Routed to backlog (%s): %s", prio, item.raw_text[:60])
+    logger.info("[BRAIN_DUMP] Routed to backlog (%s, %d chars)", prio, len(item.raw_text))
     return "added to your task list"
 
 

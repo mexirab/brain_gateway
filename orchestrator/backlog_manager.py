@@ -78,7 +78,7 @@ def create(
     state_store.add_task(task_id, text, priority=prio, source=source, notes=notes, due_date=due_date)
     TASKS_CREATED.labels(source=source).inc()
     _sync_open_gauge()
-    logger.info("[BACKLOG] Added task %s (%s): %s", task_id, prio, text[:60])
+    logger.info("[BACKLOG] Added task %s (%s, %d chars)", task_id, prio, len(text))
     return state_store.get_task(task_id)
 
 

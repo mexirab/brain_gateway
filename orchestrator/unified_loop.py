@@ -427,7 +427,7 @@ def _filter_new_tool_calls(tool_calls: List[Dict[str, Any]], executed_calls: set
         try:
             arguments = json.loads(args_str)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("[%s] Malformed arguments for %s: %s", label, tool_name, str(args_str)[:100])
+            logger.warning("[%s] Malformed arguments for %s (%d chars)", label, tool_name, len(str(args_str)))
             arguments = {}
         call_key = (tool_name, json.dumps(arguments, sort_keys=True))
         if call_key in executed_calls:

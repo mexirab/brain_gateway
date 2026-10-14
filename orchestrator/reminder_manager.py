@@ -167,7 +167,7 @@ def add_reminder(reminder_id: str, text: str, trigger_time: datetime, target: st
         "created": datetime.now().isoformat(),
         "status": "pending",
     }
-    logger.info(f"Added reminder {reminder_id}: '{text}' at {trigger_time}")
+    logger.info(f"Added reminder {reminder_id} ({len(text)} chars) at {trigger_time}")
     return reminder
 
 
@@ -232,7 +232,7 @@ async def _announce_voice(
 
     # Do Not Disturb — suppress all announcements when user said goodnight
     if shared.DND_ACTIVE:
-        logger.info(f"[DND] Suppressed announcement ({announcement_type}): {text[:60]}")
+        logger.info(f"[DND] Suppressed announcement ({announcement_type}, {len(text)} chars)")
         return {"success": True, "suppressed": True, "reason": "dnd_active"}
 
     # Mid-conversation guard — if the user is in an active voice session with
@@ -673,7 +673,7 @@ async def _send_notification(text: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
     if successes:
-        logger.info(f"Sent notification to {len(successes)} phone(s): {text[:50]}...")
+        logger.info(f"Sent notification to {len(successes)} phone(s) ({len(text)} chars)")
     if errors:
         logger.warning(f"Notification failed for: {errors}")
 

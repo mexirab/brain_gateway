@@ -113,7 +113,7 @@ Return format:
             raise ValueError(f"Expected list, got {type(raw_steps).__name__}")
     except json.JSONDecodeError:
         TASK_DECOMP_ERRORS.inc()
-        logger.warning("[TASK_DECOMP] Failed to parse model response as JSON: %s", content[:200])
+        logger.warning("[TASK_DECOMP] Failed to parse model response as JSON (%d chars)", len(content))
         # Fallback: create a single step from the task
         raw_steps = [{"description": task_text, "est_minutes": 30}]
     except Exception as e:

@@ -83,7 +83,7 @@ class SearXNGClient:
         if time_range:
             params["time_range"] = time_range
 
-        logger.info(f"[WEB_SEARCH] Querying SearXNG: '{query}' (category={category}, time_range={time_range})")
+        logger.info(f"[WEB_SEARCH] Querying SearXNG ({len(query)} chars, category={category}, time_range={time_range})")
 
         try:
             if self._http:

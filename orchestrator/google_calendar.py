@@ -226,7 +226,7 @@ class GoogleCalendarClient:
         if location:
             event_body["location"] = location
 
-        logger.info(f"[CALENDAR] Creating event: {title} at {start}")
+        logger.info(f"[CALENDAR] Creating event ({len(title)}-char title) at {start}")
 
         try:
             data = await self._post(f"/calendars/{calendar_id}/events", event_body)

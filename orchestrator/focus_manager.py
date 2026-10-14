@@ -385,7 +385,7 @@ async def tool_stop_focus() -> str:
         except Exception as e:
             logger.warning(f"[FOCUS] Progress tracking failed: {e}")
 
-    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'", extra={"component": "focus"})
+    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min", extra={"component": "focus"})
 
     if sprint_count > 0:
         return f"Focus session stopped. You worked on '{task}' for {elapsed:.0f} minutes this sprint, {total} minutes total across {sprint_count} completed sprints. Good work!"
@@ -599,7 +599,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         except Exception as e:
             logger.warning(f"[FOCUS] Progress tracking failed: {e}")
 
-        logger.info(f"[FOCUS] All {sprints_planned} sprints complete for '{task}'", extra={"component": "focus"})
+        logger.info(f"[FOCUS] All {sprints_planned} sprints complete", extra={"component": "focus"})
         return
 
     # Announce break
@@ -631,7 +631,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         except Exception as e:
             logger.warning(f"[FOCUS] Progress tracking failed: {e}")
 
-        logger.info(f"[FOCUS] Break announced for '{task}'", extra={"component": "focus"})
+        logger.info("[FOCUS] Break announced", extra={"component": "focus"})
     else:
         # Multi-sprint break: session stays active, timer cleared
         current_focus_session["job_id"] = None

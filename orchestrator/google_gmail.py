@@ -180,7 +180,7 @@ class GoogleGmailClient:
                 error="Gmail not configured. Run google_setup.py first.",
             )
 
-        logger.info(f"[GMAIL] Listing messages: query='{query}', max={max_results}")
+        logger.info(f"[GMAIL] Listing messages: query {len(query or '')} chars, max={max_results}")
 
         try:
             params = {"maxResults": str(max_results)}

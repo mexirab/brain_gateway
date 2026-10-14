@@ -171,9 +171,9 @@ async def _tg_call(
         )
         body = resp.json() if resp.content else {}
         if resp.status_code != 200 or not body.get("ok", False):
-            desc = str(body.get("description", ""))[:200]
-            logger.warning(f"[TELEGRAM] {method} -> {resp.status_code}: {desc}")
-            return {"ok": False, "status_code": resp.status_code, "description": desc}
+            api_desc = str(body.get("description", ""))[:200]  # Telegram's own error text
+            logger.warning(f"[TELEGRAM] {method} -> {resp.status_code}: {api_desc}")
+            return {"ok": False, "status_code": resp.status_code, "description": api_desc}
         return body
     except Exception as e:
         logger.warning(f"[TELEGRAM] {method} failed: {type(e).__name__}: {_redact(str(e))}")

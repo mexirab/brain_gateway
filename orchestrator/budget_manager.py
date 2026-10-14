@@ -304,7 +304,7 @@ async def import_file(
         for k, v in column_overrides.items():
             if v:
                 detected[k] = v
-    logger.info(f"[BUDGET] Import '{name}' columns detected: {detected}")
+    logger.info(f"[BUDGET] Import columns detected: {detected}")
 
     rows = _normalize_rows(
         df,

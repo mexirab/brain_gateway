@@ -118,7 +118,7 @@ async def handle_ask_expert(arguments: dict) -> str:
         EXPERT_CALL_COUNT.labels(result="error").inc()
         return "Expert call failed: `question` is required and must be non-empty."
 
-    logger.info("[expert] ask_expert invoked (%d chars): %s", len(question), question[:120])
+    logger.info("[expert] ask_expert invoked (%d chars)", len(question))
     t0 = time.time()
 
     try:
@@ -150,7 +150,7 @@ async def handle_ask_expert(arguments: dict) -> str:
     except (KeyError, IndexError, TypeError):
         EXPERT_CALL_COUNT.labels(result="error").inc()
         _record_failure()
-        logger.error("[expert] malformed response: %r", resp)
+        logger.error("[expert] malformed response (%s, %d chars)", type(resp).__name__, len(str(resp)))
         return f"{_UNREACHABLE_MSG} (malformed response)"
 
     # llama.cpp --jinja separates these cleanly; no <think> stripping needed.

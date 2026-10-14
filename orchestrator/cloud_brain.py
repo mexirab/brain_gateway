@@ -320,7 +320,7 @@ class CloudBrain:
                 return self._brain_asleep_response(stream, routing_info)
 
         # Run unified tool loop
-        logger.info("[UNIFIED] Processing: %s...", user_text[:100])
+        logger.info("[UNIFIED] Processing user message (%d chars)", len(user_text))
         routing_info["mode"] = "unified"
         REQUEST_COUNT.labels(mode="unified").inc()
         model_url = self._model_url

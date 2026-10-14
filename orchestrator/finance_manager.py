@@ -614,7 +614,7 @@ async def create_side_quest(req: Request):
         )
         quest_id = cursor.lastrowid
 
-    logger.info(f"[FINANCE] Side quest created: {name} (${target}, ${monthly_carve}/mo)")
+    logger.info("[FINANCE] Side quest created")
     return {"success": True, "id": quest_id, "name": name}
 
 

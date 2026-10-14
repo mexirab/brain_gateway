@@ -198,13 +198,13 @@ async def try_fast_path(text: str, ha_client) -> FastPathResult:
     """
     # 1. Pre-filter
     if not is_fast_path_eligible(text):
-        logger.debug(f"[FAST-PATH] Not eligible: {text[:60]}")
+        logger.debug(f"[FAST-PATH] Not eligible ({len(text)} chars)")
         return FastPathResult(handled=False)
 
     # 2. Try regex parse (reuses ha_integration patterns)
     parsed = ha_client.parse_command(text)
     if not parsed:
-        logger.debug(f"[FAST-PATH] No regex match: {text[:60]}")
+        logger.debug(f"[FAST-PATH] No regex match ({len(text)} chars)")
         return FastPathResult(handled=False)
 
     logger.info(f"[FAST-PATH] Matched: action={parsed.action}, target='{parsed.target_text}', value={parsed.value}")

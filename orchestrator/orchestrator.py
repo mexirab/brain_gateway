@@ -431,7 +431,7 @@ async def chat_completions(req: Request):
                 user_text = sys_content.split(marker, 1)[1].strip()
         if not user_text:
             user_text = "Hello"
-        logger.info("[CHAT] Voice user query: %s", user_text[:200])
+        logger.info("[CHAT] Voice user query (%d chars)", len(user_text))
         # Replace messages: drop HA system/history, keep just the latest user query
         body["messages"] = [{"role": "user", "content": user_text}]
     elif shared.consume_voice_flag():

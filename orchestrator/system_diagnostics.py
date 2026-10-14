@@ -36,7 +36,7 @@ async def check_system(query: str) -> str:
     try:
         return await handler()
     except Exception as e:
-        logger.error(f"[DIAGNOSTICS] Error in check_system({query}): {e}")
+        logger.error(f"[DIAGNOSTICS] Error in check_system ({len(query or '')}-char query): {e}")
         return f"Could not check {query}: internal error."
 
 

@@ -110,7 +110,7 @@ async def upload_document(
                 for _ in chunks
             ]
             shared.collection.add(documents=chunks, embeddings=embeddings, metadatas=metadatas, ids=ids)
-            logger.info(f"[DOCVAULT] Indexed {len(chunks)} chunks for '{title}'")
+            logger.info(f"[DOCVAULT] Indexed {len(chunks)} chunks")
     except Exception as e:
         logger.warning(f"[DOCVAULT] RAG indexing failed: {e}")
 
@@ -135,7 +135,7 @@ async def upload_document(
         }
     )
 
-    logger.info(f"[DOCVAULT] Uploaded '{title}' ({category}, {len(file_bytes)} bytes, {len(extracted)} chars text)")
+    logger.info(f"[DOCVAULT] Uploaded ({category}, {len(file_bytes)} bytes, {len(extracted)} chars text)")
     doc.pop("extracted_text", None)
     return JSONResponse(doc)
 

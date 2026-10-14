@@ -143,7 +143,7 @@ def record_meal_logged(label: str = "a meal") -> None:
     _state.last_meal_reported = datetime.now()
     save_selfcare_log("meal", label)
     SELFCARE_LOGGED.labels(action="meal").inc()
-    logger.info(f"[SELFCARE] Meal logged: {label}", extra={"component": "selfcare"})
+    logger.info("[SELFCARE] Meal logged", extra={"component": "selfcare"})
 
 
 def record_medication_logged(label: str = "medication") -> None:
@@ -164,7 +164,7 @@ def record_medication_logged(label: str = "medication") -> None:
     _expand_med_confirmation(label, now)
     save_selfcare_log("medication", label)
     SELFCARE_LOGGED.labels(action="medication").inc()
-    logger.info(f"[SELFCARE] Med logged: {label}", extra={"component": "selfcare"})
+    logger.info("[SELFCARE] Med logged", extra={"component": "selfcare"})
 
 
 def record_hydration_logged(label: str = "water") -> None:
@@ -259,7 +259,7 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
         save_selfcare_log("medication", med_name)
         SELFCARE_LOGGED.labels(action="medication").inc()
         next_sched = _get_next_med_schedule(med_name)
-        logger.info(f"[SELFCARE] Med logged: {med_name}", extra={"component": "selfcare"})
+        logger.info("[SELFCARE] Med logged", extra={"component": "selfcare"})
         result = f"Logged. Next dose is {next_sched}." if next_sched else f"Logged — {med_name} taken."
 
     elif action == "water":
@@ -379,7 +379,7 @@ async def _dispatch_nudge(kind: str, nudge: str) -> None:
         fire_selfcare_nudge(kind, nudge)
     except Exception as tg_err:
         logger.warning(f"[SELFCARE] Telegram nudge dispatch failed: {tg_err}")
-    logger.info(f"[SELFCARE] Nudge ({kind}): {nudge[:60]}", extra={"component": "selfcare"})
+    logger.info(f"[SELFCARE] Nudge ({kind}, {len(nudge)} chars)", extra={"component": "selfcare"})
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +439,7 @@ def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
     if not days:
         return True
     if not isinstance(days, (list, tuple)):
-        logger.warning(f"[SELFCARE] med {med.get('name')!r} has non-list days={days!r}; treating as every day")
+        logger.warning(f"[SELFCARE] a med has non-list days={days!r}; treating as every day")
         return True
     # Intersect with the canonical set so junk tokens are DROPPED, not enforced.
     # Critical: a hand-edited `days: [M-F]` / `[weekdays]` normalizes to {} here and
