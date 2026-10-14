@@ -69,7 +69,7 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 
 The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs a secure context for the mic — the dashboard is served over HTTPS via Tailscale Serve, tailnet-only).
 
-**Flow:** streamed reply → `lib/speech-text.ts` (strip code blocks, inline code, URLs, link targets, markdown, tables, emoji, lone surrogates; split into sentences as they complete; merge <12-char fragments; cap 600 chars, then "The rest is on screen.") → `lib/speech-queue.ts` (per-sentence `POST /api/tts/synthesize` while still streaming, ≤2 in flight per tab, ordered playback) → `hooks/useTTSPlayback.ts`.
+**Flow:** streamed reply → `lib/speech-text.ts` (strip code blocks, inline code, URLs, link targets, markdown, tables, emoji, lone surrogates; split into sentences as they complete; merge <12-char fragments; `splitLong()` cuts any segment over 400 chars — after a comma/semicolon/em dash past a third of the window, else at a space, else a hard cut that never splits a surrogate pair — so each request stays under the backend cap; spoken budget `SPEECH_MAX_CHARS` = 1200 chars (same as Telegram `TELEGRAM_VOICE_REPLY_MAX_CHARS`), then "The rest is on screen.") → `lib/speech-queue.ts` (per-segment `POST /api/tts/synthesize` while still streaming, ≤2 in flight per tab, ordered playback) → `hooks/useTTSPlayback.ts`.
 
 **iOS autoplay:** WebKit rejects `play()` that runs seconds after the tap (`NotAllowedError` — the old hook swallowed it, so no audio on iPhone). The hook keeps ONE `HTMLAudioElement`, unlocks it by playing a tiny silent WAV synchronously inside the send/mic/speaker-toggle/replay tap, and reuses it for every clip.
 
@@ -92,7 +92,7 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 
 **Backend:** `POST /api/tts/synthesize` (`orchestrator/routes_vision.py`) — caps 1000 chars / 2000 UTF-8 bytes, status contract in `TECHNICAL_REFERENCE.md` → Voice. Success pre-pads ~150 ms WAV silence (`TTS_SILENCE_PAD_MS`, same as `/v1/audio/speech`) and calls `shared.mark_voice_activity()`, so `reminder_manager`'s voice-session gate holds house-speaker announcements while the browser speaks (reminders: speakers only, at most ~10 min; phone push is immediate — see Reminder Voice Retry).
 
-**Metrics:** `bgw_dashboard_tts_total{result}` (`ok|unreachable|timeout|upstream_error|not_configured|bad_request|too_long`, pre-initialized). `bgw_voice_tts_seconds` observes SUCCESSFUL synth only, fed by `/v1/audio/speech` and `/api/tts/synthesize` (one sample per sentence). Grafana TTS Synthesis row (`brain_gateway_sre.py`): "Dashboard TTS Outcomes" (replaced "TTS Call Rate"), "TTS Sentences (24h)" (was "TTS Calls (24h)").
+**Metrics:** `bgw_dashboard_tts_total{result}` (`ok|unreachable|timeout|upstream_error|not_configured|bad_request|too_long`, pre-initialized). `bgw_voice_tts_seconds` observes SUCCESSFUL synth only, fed by `/v1/audio/speech` and `/api/tts/synthesize` (one sample per segment; buckets extend to 15 s and 20 s). Grafana TTS Synthesis row (`brain_gateway_sre.py`): "Dashboard TTS Outcomes" (replaced "TTS Call Rate"), "TTS Sentences (24h)" (was "TTS Calls (24h)"); TTS latency panel thresholds 3 s yellow / 6 s red (per-clip median is ~2–3 s live).
 
 **Tests:** `orchestrator/tests/test_tts_synthesize_route.py`, `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
 
@@ -140,6 +140,7 @@ Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers a
 - Safari normally keeps the mic permission for the page, but some setups may re-prompt each turn; dismissing the prompt ends the call.
 - Energy VAD can't tell the user from other people: anything transcribed is sent as the user's message. Steady TV-like noise is discarded; conversation in the room is not.
 - Interrupt waits for the text stream to finish before listening again.
+- A full-budget (1200-char) reply runs ~75–90 s of speech; Interrupt is a tap, not barge-in. Voice turns are normally short (the orchestrator adds a conciseness hint for voice).
 - The OWUI-only `/v1/audio/transcriptions` route still returns an unhandled 500 on STT failure.
 
 ## Reminder Voice Retry

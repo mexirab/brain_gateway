@@ -82,7 +82,7 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/lib/stt.ts` — `/api/stt/transcribe` client + `pickRecorderMime` (webm/opus → webm → mp4); used by call mode and `hooks/useVoiceRecorder.ts`
 - `frontend/src/components/chat/VoiceCallBar.tsx` — Replaces the chat input during a call: phase label, Interrupt, End
 - `frontend/src/hooks/useTTSPlayback.ts` — One persistent `HTMLAudioElement` unlocked by a silent WAV inside the user tap (iOS Safari autoplay); statuses `idle|loading|speaking|blocked|asleep|interrupted|error`; 30 s per-request timeout
-- `frontend/src/lib/speech-text.ts` — Markdown/code/URL/emoji stripping, streamed sentence splitting, 600-char spoken cap ("The rest is on screen.")
+- `frontend/src/lib/speech-text.ts` — Markdown/code/URL/emoji stripping, streamed sentence splitting, `splitLong()` 400-char per-request segments, 1200-char spoken budget `SPEECH_MAX_CHARS` ("The rest is on screen.")
 - `frontend/src/lib/speech-queue.ts` — Per-sentence synth during streaming, ordered playback, ≤2 synth requests in flight per tab
 - Tests: `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`, `frontend/src/lib/vad.test.ts`, `frontend/src/lib/audio-session.test.ts` (vitest)
 - `frontend/src/app/(private)/workouts/page.tsx` — Workout page: location picker, program line, today's plan, inline set logging, history
