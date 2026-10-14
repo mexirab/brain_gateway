@@ -52,6 +52,18 @@ const MIC_CONSTRAINTS: MediaStreamConstraints = {
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
 
+/**
+ * Safari 16.4+ Audio Session API: pin the session type explicitly instead of
+ * relying on WebKit to leave play-and-record once capture stops (older iOS
+ * kept the degraded "phone call" routing). No-op elsewhere.
+ */
+function setAudioSessionType(type: 'playback' | 'play-and-record'): void {
+  try {
+    const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = type;
+  } catch { /* unsupported value / browser */ }
+}
+
 interface Recording {
   rec: MediaRecorder;
   chunks: Blob[];
@@ -129,6 +141,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     streamRef.current = null;
     sourceRef.current?.disconnect();
     sourceRef.current = null;
+    setAudioSessionType('playback');
   }, []);
 
   const end = useCallback(() => {
@@ -156,26 +169,61 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     setError(message);
   }, [end]);
 
+  /**
+   * Make sure the AudioContext is running before analysing. WebKit can leave
+   * resume() pending for as long as an iOS interruption lasts (call, Siri,
+   * alarm), so the wait is bounded; if it is still down the call ends with a
+   * message instead of sitting on "Listening" reading silence.
+   */
+  const ensureRunning = useCallback(async (gen: number): Promise<boolean> => {
+    const ctx = ctxRef.current;
+    if (!ctx) return false;
+    if (ctx.state !== 'running') {
+      await Promise.race([
+        ctx.resume().catch(() => {}),
+        new Promise((r) => setTimeout(r, INTERRUPT_GRACE_MS)),
+      ]);
+    }
+    if (gen !== genRef.current) return false;
+    if (ctx.state !== 'running') {
+      fail('The call was paused by your phone — tap the call button to start again.');
+      return false;
+    }
+    return true;
+  }, [fail]);
+
   /** Open the mic and feed the analyser. False (and the call ended) on failure. */
   const acquireMic = useCallback(async (gen: number, failMessage: string): Promise<boolean> => {
     const ctx = ctxRef.current;
     const analyser = analyserRef.current;
     if (!ctx || !analyser) return false;
     let stream: MediaStream;
+    setAudioSessionType('play-and-record');
     try {
       stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
-    } catch {
+    } catch (err) {
+      // NotAllowedError (permission), NotReadableError (another app has the
+      // mic), NotFoundError… — keep the name for on-device debugging.
+      console.warn('[call] getUserMedia failed:', err instanceof Error ? err.name : err);
       if (gen === genRef.current) fail(failMessage);
       return false;
     }
     if (gen !== genRef.current) { stream.getTracks().forEach((t) => t.stop()); return false; }
+    let source: MediaStreamAudioSourceNode;
+    try {
+      source = ctx.createMediaStreamSource(stream);
+      source.connect(analyser);
+    } catch (err) {
+      console.warn('[call] mic source setup failed:', err instanceof Error ? err.name : err);
+      stream.getTracks().forEach((t) => t.stop());
+      fail(failMessage);
+      return false;
+    }
     streamRef.current = stream;
+    sourceRef.current = source;
     stream.getAudioTracks().forEach((t) => {
       t.onended = () => { if (gen === genRef.current) fail('The microphone was disconnected, so the call ended.'); };
     });
-    const source = ctx.createMediaStreamSource(stream);
-    source.connect(analyser);
-    sourceRef.current = source;
     return true;
   }, [fail]);
 
@@ -200,12 +248,15 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       setPhase('listening'); // label now; the mic is analysed after the delay
       setTimeout(async () => {
         if (gen !== genRef.current) return;
+        // onstatechange is ignored while the mic is released, so an iOS
+        // interruption during the reply is caught here — before the mic is
+        // re-opened, so it is never held while waiting on a stuck context.
+        if (!(await ensureRunning(gen))) return;
         if (!streamRef.current) {
           const ok = await acquireMic(gen, 'Couldn’t get the microphone back — tap the call button to start again.');
           if (!ok || gen !== genRef.current) return;
         }
-        await ctxRef.current?.resume().catch(() => {});
-        if (gen === genRef.current) listen();
+        listen();
       }, delayMs);
     };
 
@@ -287,7 +338,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
         void finishRecording(old, false);
       }
     }, TICK_MS);
-  }, [acquireMic, fail, finishRecording, newRecording, releaseMic]);
+  }, [acquireMic, ensureRunning, fail, finishRecording, newRecording, releaseMic]);
 
   const start = useCallback(() => {
     if (ctxRef.current) return;
@@ -338,6 +389,9 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
 
     void (async () => {
       if (!(await acquireMic(gen, 'Microphone access was denied.'))) return;
+      // An interruption during the permission prompt is ignored by
+      // onstatechange (no stream yet) — check before the first listen.
+      if (!(await ensureRunning(gen))) return;
       try {
         const wl = (navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<WakeLockSentinelLike> } }).wakeLock;
         if (wl) {
@@ -348,7 +402,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       } catch { /* screen may lock; the call ends when the page is hidden */ }
       if (gen === genRef.current) listen();
     })();
-  }, [acquireMic, fail, listen]);
+  }, [acquireMic, ensureRunning, fail, listen]);
 
   // iOS suspends a hidden page (and its mic) — end cleanly instead of hanging.
   useEffect(() => {
