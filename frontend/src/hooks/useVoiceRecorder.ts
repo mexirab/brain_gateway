@@ -44,12 +44,14 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       const name = err instanceof Error ? err.name : '';
-      console.warn('[mic] getUserMedia failed:', name || err);
+      console.warn('[mic] start failed:', name || err);
       setError(
-        name === 'NotAllowedError' ? 'Microphone access is blocked — allow it for this site in Safari settings, then reload.'
-          : name === 'NotFoundError' ? 'No microphone found.'
-            : name === 'NotReadableError' ? 'The microphone is busy in another app.'
-              : 'Couldn’t start the microphone — try reloading the page.',
+        !navigator.mediaDevices?.getUserMedia ? 'The microphone needs the secure (https://) dashboard address.'
+          : name === 'NotAllowedError' ? 'Microphone access is blocked — allow it for this site in your browser settings, then reload.'
+            : name === 'NotFoundError' ? 'No microphone found.'
+              : name === 'NotReadableError' ? 'The microphone is busy in another app.'
+                : name === 'NotSupportedError' ? 'Recording isn’t supported in this browser.'
+                  : 'Couldn’t start the microphone — try reloading the page.',
       );
     }
   }, []);
