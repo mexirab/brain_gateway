@@ -92,6 +92,7 @@ async def get_features():
         {
             "workouts_enabled": settings.workouts_enabled,
             "meals_enabled": settings.meals_enabled,
+            "pantry_enabled": settings.pantry_enabled,
             "jess_advanced": settings.jess_advanced,
         }
     )

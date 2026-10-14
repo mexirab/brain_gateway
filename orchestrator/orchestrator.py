@@ -153,10 +153,15 @@ _LARGE_UPLOAD_PATHS = {
     "/api/stt/transcribe",
     "/api/vision/analyze",
     "/api/meals/photo",
+    "/api/pantry/scan",
     "/api/paperless/upload",
     "/v1/chat/completions",
     "/chat/completions",
 }
+
+
+# Upload routes that refuse chunked (length-less) bodies.
+_LENGTH_REQUIRED_PATHS = {"/api/pantry/scan"}
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -164,6 +169,10 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
+        # A chunked body has no Content-Length and would skip the cap entirely.
+        # Enforced for the pantry upload (other routes predate this check).
+        if not content_length and request.method == "POST" and request.url.path in _LENGTH_REQUIRED_PATHS:
+            return JSONResponse({"error": "Content-Length required"}, status_code=411)
         if content_length:
             path = request.url.path
             limit = MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE
@@ -513,6 +522,18 @@ async def _startup_logic():
     state_store.clear_stale_notifications(older_than_hours=48)
     state_store.cleanup_old_announcements(keep_days=30)
     state_store.cleanup_old_selfcare(keep_days=90)
+
+    # Pantry (F-015): a scan mid-vision when the process died can't resume —
+    # flip it to failed so the review page offers Retry instead of spinning.
+    if shared.PANTRY_ENABLED:
+        try:
+            from orchestrator.pantry_manager import recover_interrupted_scans
+
+            n = recover_interrupted_scans()
+            if n:
+                logger.warning("[PANTRY] Marked %d interrupted scan(s) failed (retry from /pantry)", n)
+        except Exception as e:
+            logger.error("[PANTRY] Scan recovery failed: %s", e, exc_info=True)
 
     # Pre-create dead-speaker metric series (AnnouncementSpeakerUnavailable).
     from orchestrator.reminder_manager import seed_announcement_metrics
@@ -1098,6 +1119,22 @@ async def _startup_logic():
         replace_existing=True,
     )
     logger.info(f"[SCHEDULER] Recurring reminder expansion every {EXPANSION_WINDOW_MINUTES}m")
+
+    # Pantry (F-015): daily cleanup of review photos left by failed/abandoned
+    # scans — they are photos of the inside of the home.
+    if shared.PANTRY_ENABLED:
+        from orchestrator.pantry_manager import sweep_stale_scans
+
+        scheduler.add_job(
+            sweep_stale_scans,
+            trigger="cron",
+            hour=4,
+            minute=20,
+            id="pantry_sweep",
+            name="Pantry stale-scan photo sweep",
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Pantry stale-scan sweep daily at 04:20")
 
     # Helios wake-on-demand (PT-C): keep bgw_helios_plug_watts / bgw_helios_running
     # fresh so dashboards + alerts can trust them. Without this the gauges only

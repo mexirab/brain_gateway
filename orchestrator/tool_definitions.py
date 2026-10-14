@@ -1238,6 +1238,54 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "pantry",
+            "description": (
+                "Kitchen inventory (fridge/freezer/pantry). view = what's on hand; add = bought/restocked; "
+                'use = used some ("used 2 eggs", "used some feta"); out = finished/ran out (also adds it to '
+                "the grocery list unless add_to_shopping=false); set = correct an amount; search = is X in stock; "
+                "remove = delete a wrong entry. Amounts are coarse: count for countable things, otherwise "
+                "full/half/low/out. Photo stock-takes happen on the /pantry page, not here."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["view", "add", "use", "out", "set", "search", "remove"],
+                    },
+                    "item": {"type": "string", "description": "Item name, e.g. 'eggs', 'olive oil'."},
+                    "count": {"type": "number", "description": "How many (add/use/set on countable items)."},
+                    "level": {"type": "string", "enum": ["full", "half", "low", "out"]},
+                    "location": {"type": "string", "enum": ["fridge", "freezer", "pantry"]},
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "produce",
+                            "dairy",
+                            "protein",
+                            "grain",
+                            "legume",
+                            "canned",
+                            "condiment",
+                            "spice",
+                            "frozen",
+                            "snack",
+                            "beverage",
+                            "bakery",
+                            "prepared",
+                            "other",
+                        ],
+                        "description": "add only; best guess.",
+                    },
+                    "add_to_shopping": {"type": "boolean", "description": "out only; default true."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 # Code agent tool — added dynamically when enabled
@@ -1326,6 +1374,8 @@ WORKOUT_TOOL_NAMES: frozenset[str] = frozenset(
     {"generate_workout", "workout_setup", "log_set", "workout_status", "modify_workout"}
 )
 MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
+# Pantry & meal prep (F-015) — PANTRY_ENABLED.
+PANTRY_TOOL_NAMES: frozenset[str] = frozenset({"pantry"})
 
 # Helios wake-on-demand (PT-C) — only exposed when HELIOS_WAKE_ENABLED. The
 # handler stays registered regardless (it self-gates), but hiding the schema
@@ -1356,6 +1406,7 @@ def _refresh_tool_caches() -> None:
         shared.JESS_ADVANCED,
         shared.WORKOUTS_ENABLED,
         shared.MEALS_ENABLED,
+        getattr(shared, "PANTRY_ENABLED", False),
         getattr(shared, "HELIOS_WAKE_ENABLED", False),
         getattr(shared, "PAPERLESS_ENABLED", False),
     )
@@ -1367,6 +1418,8 @@ def _refresh_tool_caches() -> None:
             static = [t for t in static if t.get("function", {}).get("name") not in WORKOUT_TOOL_NAMES]
         if not shared.MEALS_ENABLED:
             static = [t for t in static if t.get("function", {}).get("name") not in MEAL_TOOL_NAMES]
+        if not getattr(shared, "PANTRY_ENABLED", False):
+            static = [t for t in static if t.get("function", {}).get("name") not in PANTRY_TOOL_NAMES]
         if not getattr(shared, "HELIOS_WAKE_ENABLED", False):
             static = [t for t in static if t.get("function", {}).get("name") not in HELIOS_TOOL_NAMES]
         if not getattr(shared, "PAPERLESS_ENABLED", False):

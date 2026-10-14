@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Settings, ListTodo, Pill } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Refrigerator, Settings, ListTodo, Pill } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
 import { SWRProvider } from '@/components/providers/SWRProvider';
 import { getFeatureFlags } from '@/lib/features.server';
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: '/announcements', label: 'Announcements', icon: Volume2 },
   { href: '/workouts', label: 'Workouts', icon: Dumbbell },
   { href: '/meals', label: 'Meals', icon: UtensilsCrossed },
+  { href: '/pantry', label: 'Pantry', icon: Refrigerator },
   { href: '/shopping', label: 'Shopping', icon: ShoppingCart },
   { href: '/documents', label: 'Documents', icon: FileText },
   { href: '/finance', label: 'Finance', icon: Coins },

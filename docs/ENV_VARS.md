@@ -274,6 +274,18 @@ A reusable host helper `~/plug.sh on|off|state|power` (HA-based) exists on Jupit
 | `MEAL_PHOTOS_DIR` | `/app/data/meal_photos` | Directory for uploaded meal photos. Extension allowlist enforced at save: jpg, jpeg, png, gif, webp. Files named as uuid4. |
 | `EXERCISE_LIBRARY_PATH` | `/app/data/exercise_library` | Exercise how-to library (photos + steps), filled by `docker exec brain-orchestrator python -m orchestrator.exercise_library fetch`. Empty/missing = feature dark. See `docs/WORKOUTS_AND_MEALS.md` → Exercise how-to library. |
 
+## Pantry (F-015)
+
+See `docs/PANTRY.md`. Validated by `config.py` `validate_pantry_config` (logs, never raises).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PANTRY_ENABLED` | `false` | Master gate: `pantry` tool schema, `/api/pantry/*` router, `pantry_sweep` job, startup scan recovery, `/pantry` nav (`pantry_enabled` in `/api/config/features`). |
+| `PANTRY_PHOTOS_DIR` | `/app/data/pantry_photos` | Stock-take photo staging. Deleted on commit/discard + daily sweep; excluded from backups. |
+| `PANTRY_MAX_UPLOAD_MB` | `15` | Per-photo cap. Outside 1–50 → reset to 15. Effective cap is also bounded by `VISION_MAX_IMAGE_SIZE`. |
+| `PANTRY_BARCODE_LOOKUP_ENABLED` | `false` | Barcode → product name via Open Food Facts (only the digits leave the network). |
+| `PANTRY_OFF_URL` | `https://world.openfoodfacts.org` | Open Food Facts base URL. Non-http(s) value auto-disables barcode lookup. |
+
 ## Finance — Actual Budget sync
 
 Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](https://actualbudget.org) server via `actualpy` (`orchestrator/actual_client.py`). Replaced the YNAB integration 2026-10-02; `YNAB_*` vars are removed and ignored if still in `.env`. `validate_actual_config` (`config.py`) auto-disables the sync (logs, never raises) when the URL is not `http(s)://` or `ACTUAL_PASSWORD` / `ACTUAL_BUDGET_FILE` is missing. Disabled = manual-entry mode: finance tables, dashboard pages and manual entries still work; the `budget_sync` job and the weekly-summary / mid-month-warning jobs are not registered. After adding these to `.env`: `docker compose up -d --force-recreate orchestrator` (compose interpolates them — `restart` is not enough).

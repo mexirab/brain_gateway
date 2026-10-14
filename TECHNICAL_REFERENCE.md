@@ -213,6 +213,30 @@ Metrics: `bgw_workout_generated_total{result}` (`ok|no_exercises|bad_location|as
 
 **Photo flow:** upload → vision model (`VISION_MODEL_URL`; live: the Qwen3.8 brain on Helios :8080 since 2026-09-28 — llama.cpp `qwen3.8-27b-turbo-q6k` since 2026-10-02; was Qwen3-VL-8B on Saturn) strict-JSON prompt → return estimate → user confirms in UI before save (or pass `auto_log=true` in POST body to skip confirmation). Extension allowlist: `jpg`, `jpeg`, `png`, `gif`, `webp`. Files saved as uuid4 names under `MEAL_PHOTOS_DIR`.
 
+### Pantry (F-015)
+
+Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `{"ok": false, "error": "..."}`. Detail: `docs/PANTRY.md`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/pantry/items` | `{items, count}`. Query: `status` (`active` default \| `probably_gone` \| `gone` \| `all`), `location` (`fridge\|freezer\|pantry`) |
+| POST | `/api/pantry/items` | Add: `{name, category?, location?, track_mode?, qty?, level?, shelf_life_days?, barcode?}` → 201 new, 200 when merged into an existing item (`merged: true`) |
+| PATCH | `/api/pantry/items/{id}` | Update any of `name, category, location, track_mode, qty, level, status, shelf_life_days` |
+| DELETE | `/api/pantry/items/{id}` | Delete (ledger keeps a `remove` event) |
+| POST | `/api/pantry/items/{id}/use` | "Used some": `{count?}` — count −N (default 1), level steps down one, staple unchanged |
+| POST | `/api/pantry/items/{id}/out` | Mark out (does NOT touch the shopping list — the chat tool does) |
+| GET | `/api/pantry/events` | Ledger. Query: `item_id?`, `limit` 1–500 (default 50) |
+| POST | `/api/pantry/scan` | Multipart `files` (1–8, JPEG/PNG/WebP magic bytes) + `kind` (`fridge\|freezer\|pantry`) → 202 `{ok, scan_id, status:"queued"}`. 400 bad kind/count/empty, 409 `VISION_ENABLED=false`, 411 no `Content-Length`, 413 photo over cap, 415 bad format, 429 already 3 open scans |
+| GET | `/api/pantry/scans` | Recent scans. Query: `status?` (`queued\|processing\|pending_review\|failed\|committed\|discarded`), `limit` 1–50 |
+| GET | `/api/pantry/scan/{id}` | `{id, kind, status, photo_count, photos_available, proposed: {items, warnings} \| null, error, created_at, committed_at}` — no filesystem paths. Poll while `queued`/`processing` |
+| GET | `/api/pantry/scan/{id}/photo/{index}` | Scan photo (`Cache-Control: private, no-store`); 404 after commit/discard |
+| POST | `/api/pantry/scan/{id}/commit` | `{items: [{include?, match_id?, name, category?, location?, track_mode?, qty?, level?}]}` (≤200). Matched lines SET the item, others add → `{ok, added, updated, skipped}`. 409 unless `pending_review` |
+| POST | `/api/pantry/scan/{id}/discard` | Discard + delete photos. 409 unless `pending_review`/`failed` (or stuck >10 min) |
+| POST | `/api/pantry/scan/{id}/retry` | Re-queue a `failed` scan → 202. 409 otherwise |
+| GET | `/api/pantry/barcode/{code}` | Open Food Facts lookup (cached) → `{ok, name, category, ...}`. 400 not 8–14 digits, 409 lookup disabled, 404 unknown product, 502 upstream error |
+
+Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`.
+
 ### Paperless Bridge (F-012)
 
 | Method | Path | Purpose |
@@ -296,7 +320,7 @@ All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orche
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET    | `/api/config/features` | Returns `{workouts_enabled, meals_enabled, jess_advanced}` (read live from `config.settings`). Read-only — no PUT. Consumed by the dashboard server layout + `MobileNav` to hide nav links for features whose routes aren't mounted (`/api/workouts/*`, `/api/meals/*`) or are gated behind `JESS_ADVANCED` (Finance), and by the `/workouts`, `/meals`, `/finance` route layouts to render a "feature not enabled" gate on direct hits. |
+| GET    | `/api/config/features` | Returns `{workouts_enabled, meals_enabled, pantry_enabled, jess_advanced}` (read live from `config.settings`). Read-only — no PUT. Consumed by the dashboard server layout + `MobileNav` to hide nav links for features whose routes aren't mounted (`/api/workouts/*`, `/api/meals/*`, `/api/pantry/*`) or are gated behind `JESS_ADVANCED` (Finance), and by the `/workouts`, `/meals`, `/pantry`, `/finance` route layouts to render a "feature not enabled" gate on direct hits. |
 | GET    | `/api/config/identity` | Returns `{assistant_name, user_name, adhd_mode, tone_preference, timezone}`. Reads the merged base + overrides view of the user profile. |
 | PUT    | `/api/config/identity` | Partial update of the same shape. Writes to `USER_PROFILE_OVERRIDES_PATH` only (base is `:ro`). Calls `reload_profile()` to mutate the singleton in place. |
 | GET    | `/api/config/selfcare` | Returns `{categories: {medication: {...}, meal: {...}, water: {...}, movement: {...}}}`. |
@@ -601,6 +625,14 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 - `action` (enum, required): `wake | sleep | status`. `wake` = power Helios on (HA `switch.turn_on`, debounced), `sleep` = power off (HA `switch.turn_off`, a hard cut), `status` = report inferred running/asleep from switch state + power draw.
 - Only exposed to the LLM when `HELIOS_WAKE_ENABLED=true` (filtered via `HELIOS_TOOL_NAMES` in `get_all_tools()`); the handler stays registered and self-gates. Routes through `orchestrator/helios_power.py` — same dicts as `POST /api/helios/{wake,sleep}` + `GET /api/helios/power`.
 
+### pantry
+```json
+{"action": "out", "item": "olive oil"}
+```
+- `action` (enum, required): `view | add | use | out | set | search | remove`. Other fields: `item`, `count` (number), `level` (`full|half|low|out`), `location` (`fridge|freezer|pantry`), `category` (add only: `produce|dairy|protein|grain|legume|canned|condiment|spice|frozen|snack|beverage|bakery|prepared|other`), `add_to_shopping` (out only, default true).
+- `out` also adds the item to the `grocery` shopping list (dedup) unless `add_to_shopping=false`. `set` needs `count`, `level`, or `location`. `remove` requires the exact item name.
+- Only exposed when `PANTRY_ENABLED=true` (`PANTRY_TOOL_NAMES`); handler self-gates. Photo stock-takes are a dashboard flow, not a tool.
+
 ## ChromaDB Schema
 
 **Chunk ID:** `chunk::{path}::{section}::{index}::{hash[:12]}`
@@ -660,6 +692,17 @@ Created by `SCHEMA_SQL`; `init_db()` adds the new columns to pre-existing DBs (o
 | `workouts.location_id` / `program_id` / `program_day` | Nullable. Set on generate. `program_day` is the index into the split; the next day is computed from the newest workout in the program with ≥1 completed set. `location_id` may dangle after a location is deleted. |
 | `workouts.is_deload` | INTEGER NOT NULL DEFAULT 0. 1 = program deload session; excluded from progression history, counted for comeback timing and as the training-block boundary. |
 | `workout_sets.notes` (set 1) | Holds the exercise's progression note for the planned session. |
+
+### Pantry tables (F-015)
+
+Created unconditionally by `SCHEMA_SQL`. Timestamps ISO 8601 local.
+
+| Table | Columns / notes |
+|-------|-----------------|
+| `pantry_items` | `id`, `name`, `category`, `location` (`fridge\|freezer\|pantry`), `track_mode` (`count\|level\|staple`), `qty` (count mode), `level` (`full\|half\|low\|out`), `status` (`active\|probably_gone\|gone`), `shelf_life_days` (NULL = keeps), `acquired_at`, `last_confirmed_at`, `barcode`, `source` (`manual\|chat\|scan\|barcode`), `created_at`, `updated_at`. Index on `status` |
+| `pantry_events` | Append-only ledger: `id`, `item_id`, `kind` (`add\|consume\|adjust\|remove`), `source`, `before_json`, `after_json`, `ref_type`/`ref_id` (e.g. scan), `note`, `at`. Index on `(item_id, at)` |
+| `pantry_scans` | `id`, `kind`, `photo_paths` (JSON list under `PANTRY_PHOTOS_DIR`), `image_sha256`, `status` (`queued\|processing\|pending_review\|committing\|committed\|discarded\|failed`), `proposed_json`, `error`, `created_at`, `committed_at`. Index on `status` |
+| `barcode_cache` | `barcode` PK, `name`, `category`, `payload_json`, `fetched_at`. Misses are cached too (re-tried after 7 days) |
 
 ## SQLite Schema (`finance.db`)
 

@@ -131,12 +131,13 @@ def test_get_features_without_bearer_returns_401(client):
 
 
 def test_get_features_reflects_settings(client, monkeypatch):
-    """GET /api/config/features returns the three runtime flags read live from
+    """GET /api/config/features returns the runtime flags read live from
     config.settings — the dashboard nav uses these to hide disabled features."""
     from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "workouts_enabled", True)
     monkeypatch.setattr(settings, "meals_enabled", False)
+    monkeypatch.setattr(settings, "pantry_enabled", True)
     monkeypatch.setattr(settings, "jess_advanced", True)
 
     r = client.get("/api/config/features", headers=AUTH)
@@ -144,6 +145,7 @@ def test_get_features_reflects_settings(client, monkeypatch):
     assert r.json() == {
         "workouts_enabled": True,
         "meals_enabled": False,
+        "pantry_enabled": True,
         "jess_advanced": True,
     }
 

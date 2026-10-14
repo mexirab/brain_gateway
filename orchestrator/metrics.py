@@ -1086,3 +1086,46 @@ EXERCISE_INFO_LOOKUPS = Counter(
 )
 for _r in ("found", "not_found", "library_missing"):
     EXERCISE_INFO_LOOKUPS.labels(result=_r)
+
+# ---------------------------------------------------------------------------
+# Pantry & meal prep (F-015) — pantry_manager
+# ---------------------------------------------------------------------------
+
+PANTRY_SCAN = Counter(
+    "bgw_pantry_scan_total",
+    "Pantry photo scans by kind and outcome.",
+    # kind: fridge | pantry | freezer
+    # result: proposed (ready for review) | empty (nothing recognised) | failed
+    #         (vision error / brain asleep) | committed | discarded
+    ["kind", "result"],
+)
+for _k in ("fridge", "pantry", "freezer"):
+    for _r in ("proposed", "empty", "failed", "committed", "discarded"):
+        PANTRY_SCAN.labels(kind=_k, result=_r)
+
+PANTRY_SCAN_LATENCY = Histogram(
+    "bgw_pantry_scan_latency_seconds",
+    "Wall time to turn one scan's photos into a review proposal (sequential vision calls).",
+    # result: proposed | empty | failed — so fast failures don't drag p50 down
+    ["kind", "result"],
+    buckets=(5, 10, 20, 40, 60, 120, 240, 480),
+)
+
+PANTRY_EVENTS = Counter(
+    "bgw_pantry_events_total",
+    "Pantry inventory ledger writes by kind and source.",
+    # kind: add | consume | adjust | remove ; source: manual | chat | scan | barcode
+    ["kind", "source"],
+)
+for _k in ("add", "consume", "adjust", "remove"):
+    for _s in ("manual", "chat", "scan", "barcode"):
+        PANTRY_EVENTS.labels(kind=_k, source=_s)
+
+BARCODE_LOOKUP = Counter(
+    "bgw_barcode_lookup_total",
+    "Barcode → product lookups (Open Food Facts) by outcome.",
+    # hit (fetched) | cache | miss (unknown product) | error | disabled | invalid
+    ["result"],
+)
+for _r in ("hit", "cache", "miss", "error", "disabled", "invalid"):
+    BARCODE_LOOKUP.labels(result=_r)

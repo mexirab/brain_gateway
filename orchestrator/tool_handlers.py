@@ -2157,6 +2157,126 @@ async def _reg_log_meal(arguments: dict) -> str:
     return f"Logged {meal['meal_type']}: {meal['description']}{cal_txt}."
 
 
+# ---------------------------------------------------------------------------
+# Pantry (F-015)
+# ---------------------------------------------------------------------------
+
+
+def _pantry_add_to_grocery(name: str) -> bool:
+    """Add to the grocery list unless an unchecked entry already matches."""
+    from orchestrator import state_store
+
+    existing = state_store.get_shopping_list("grocery")
+    if any(str(i.get("item", "")).strip().casefold() == name.casefold() for i in existing):
+        return False
+    state_store.add_shopping_item(name, "grocery")
+    return True
+
+
+def _handle_pantry(arguments: dict) -> str:
+    from orchestrator import pantry_manager as pm
+
+    action = str(arguments.get("action") or "view").lower()
+    item_name = arguments.get("item")
+
+    if action == "view":
+        return pm.inventory_summary(arguments.get("location"))
+
+    if action == "search":
+        hits = pm.search_items(item_name)
+        if not hits:
+            return f"Nothing matching '{pm._clean_name(item_name)}' is in the pantry inventory."
+        return "In the inventory: " + ", ".join(
+            f"{pm.describe(i)} [{i['location']}{', maybe gone' if i['status'] == 'probably_gone' else ''}]"
+            for i in hits
+        )
+
+    if not pm._clean_name(item_name):
+        return f"item is required for '{action}'."
+
+    if action == "add":
+        res = pm.add_item(
+            item_name,
+            category=arguments.get("category"),
+            location=arguments.get("location"),
+            qty=arguments.get("count"),
+            level=arguments.get("level"),
+            source="chat",
+        )
+        if not res.get("ok"):
+            return res.get("error", "Couldn't add that.")
+        verb = "Restocked" if res.get("merged") else "Added"
+        return f"{verb}: {pm.describe(res['item'])} in the {res['item']['location']}."
+
+    found = pm.resolve_item(item_name)
+    if found.get("ambiguous"):
+        names = ", ".join(f"{i['name']} ({i['location']})" for i in found["ambiguous"])
+        return f"More than one match for '{pm._clean_name(item_name)}': {names}. Ask which one."
+
+    if found.get("missing"):
+        clean = pm._clean_name(item_name)
+        if action == "out" and arguments.get("add_to_shopping", True) is not False:
+            added = _pantry_add_to_grocery(clean)
+            return f"'{clean}' isn't in the pantry inventory. " + (
+                "Added it to the grocery list." if added else "It's already on the grocery list."
+            )
+        return f"'{clean}' isn't in the pantry inventory."
+
+    item = found["item"]
+    if action == "use":
+        res = pm.consume_item(item["id"], arguments.get("count"), source="chat")
+        if not res.get("ok"):
+            return res.get("error", "Couldn't update that.")
+        after = res["item"]
+        if after["track_mode"] == "staple":
+            return f"{after['name']} is a staple (tracked as have/out) — still marked as have."
+        tail = " Say it's out when it's finished." if res.get("was_low") else ""
+        return f"Updated: {pm.describe(after)}.{tail}"
+
+    if action == "out":
+        res = pm.mark_out(item["id"], source="chat")
+        if not res.get("ok"):
+            return res.get("error", "Couldn't update that.")
+        msg = f"Marked {item['name']} as out."
+        if arguments.get("add_to_shopping", True) is not False:
+            added = _pantry_add_to_grocery(item["name"])
+            msg += " Added it to the grocery list." if added else " It's already on the grocery list."
+        return msg
+
+    if action == "set":
+        fields: dict = {}
+        if arguments.get("count") is not None:
+            fields["qty"] = arguments["count"]
+        if arguments.get("level"):
+            fields["level"] = arguments["level"]
+        if arguments.get("location"):
+            fields["location"] = arguments["location"]
+        if not fields:
+            return "set needs a count, level, or location."
+        res = pm.update_item(item["id"], fields, source="chat")
+        if not res.get("ok"):
+            return res.get("error", "Couldn't update that.")
+        return f"Set: {pm.describe(res['item'])} in the {res['item']['location']}."
+
+    if action == "remove":
+        # Deleting is the one action a fuzzy match must not guess at.
+        if pm._norm(item["name"]) != pm._norm(pm._clean_name(item_name)):
+            return f"Did you mean {item['name']} ({item['location']})? Confirm the exact name to remove it."
+        res = pm.delete_item(item["id"], source="chat")
+        if not res.get("ok"):
+            return res.get("error", "Couldn't remove that.")
+        return f"Removed {item['name']} from the pantry inventory."
+
+    return f"Unknown pantry action '{action}'. Use view, add, use, out, set, search, or remove."
+
+
+@register_tool("pantry")
+async def _reg_pantry(arguments: dict) -> str:
+    if not shared.PANTRY_ENABLED:
+        return "The pantry isn't enabled on this install."
+    return await asyncio.to_thread(_handle_pantry, arguments)
+
+
 # NOTE: A previous version of this file shipped 4 configure_* chat tools
 # (configure_home_assistant, configure_ntfy, configure_pushover,
 # configure_paperless) that let Jess walk users through wiring up

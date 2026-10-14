@@ -123,7 +123,7 @@ export function Modal({
           <h2 id={titleId} className="text-lg font-bold text-content-primary">
             {title}
           </h2>
-          <Button icon variant="ghost" size="sm" onClick={onClose} aria-label="Close dialog">
+          <Button type="button" icon variant="ghost" size="sm" onClick={onClose} aria-label="Close dialog">
             <X size={20} />
           </Button>
         </div>

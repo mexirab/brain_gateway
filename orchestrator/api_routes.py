@@ -6,6 +6,7 @@ Domain-specific routes are split into separate modules and included as sub-route
 - routes_chat: /api/chat/*
 - routes_documents: /api/documents/*
 - routes_shopping: /api/shopping/*
+- routes_pantry: /api/pantry/* (only when PANTRY_ENABLED)
 - routes_vision: /api/vision/*, /api/stt/*, /api/tts/*
 """
 
@@ -38,6 +39,7 @@ from orchestrator.routes_chat import router as chat_router
 from orchestrator.routes_documents import router as documents_router
 from orchestrator.routes_meals import router as meals_router
 from orchestrator.routes_palace import router as palace_router
+from orchestrator.routes_pantry import router as pantry_router
 from orchestrator.routes_paperless import router as paperless_router
 from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_tasks import router as tasks_router
@@ -111,6 +113,8 @@ if shared.WORKOUTS_ENABLED:
     router.include_router(workout_router)
 if shared.MEALS_ENABLED:
     router.include_router(meals_router)
+if shared.PANTRY_ENABLED:
+    router.include_router(pantry_router)
 router.include_router(paperless_router)
 
 

@@ -11,6 +11,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@zxing/browser": "0.1.5",
+    "@zxing/library": "0.21.3",
     "lucide-react": "^0.460.0",
     "next": "^14.2.0",
     "react": "^18.3.0",

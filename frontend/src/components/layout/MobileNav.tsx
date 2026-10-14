@@ -9,6 +9,7 @@ import {
   ListTodo,
   Dumbbell,
   UtensilsCrossed,
+  Refrigerator,
   MoreHorizontal,
   ShoppingCart,
   FileText,
@@ -39,6 +40,7 @@ const PRIMARY: NavItem[] = [
 ];
 
 const MORE: NavItem[] = [
+  { href: '/pantry', label: 'Pantry', icon: Refrigerator },
   { href: '/shopping', label: 'Shopping', icon: ShoppingCart },
   { href: '/documents', label: 'Documents', icon: FileText },
   { href: '/finance', label: 'Finance', icon: Coins },

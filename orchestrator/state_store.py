@@ -290,6 +290,65 @@ CREATE TABLE IF NOT EXISTS app_state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Pantry & meal prep (F-015). Created unconditionally (cheap, empty) so
+-- flipping PANTRY_ENABLED never needs a migration.
+CREATE TABLE IF NOT EXISTS pantry_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    location TEXT NOT NULL DEFAULT 'pantry',
+    track_mode TEXT NOT NULL DEFAULT 'level',
+    qty REAL,
+    level TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    shelf_life_days INTEGER,
+    acquired_at TEXT,
+    last_confirmed_at TEXT NOT NULL,
+    barcode TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pantry_items_status ON pantry_items(status);
+
+CREATE TABLE IF NOT EXISTS pantry_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER,
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    ref_type TEXT,
+    ref_id INTEGER,
+    note TEXT,
+    at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pantry_events_item ON pantry_events(item_id, at);
+
+CREATE TABLE IF NOT EXISTS pantry_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    photo_paths TEXT NOT NULL,
+    image_sha256 TEXT,
+    status TEXT NOT NULL,
+    proposed_json TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    committed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pantry_scans_status ON pantry_scans(status);
+
+CREATE TABLE IF NOT EXISTS barcode_cache (
+    barcode TEXT PRIMARY KEY,
+    name TEXT,
+    category TEXT,
+    payload_json TEXT,
+    fetched_at TEXT NOT NULL
+);
 """
 
 

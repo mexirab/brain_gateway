@@ -108,6 +108,7 @@ async def analyze_image(
     image_data: str,
     prompt: str = "Describe this image in detail.",
     http_client: Optional[httpx.AsyncClient] = None,
+    thinking: bool = True,
 ) -> str:
     """Send an image to the vision model for analysis.
 
@@ -115,6 +116,10 @@ async def analyze_image(
         image_data: Base64 image data or data URI (data:image/jpeg;base64,...).
         prompt: Text prompt to guide the analysis.
         http_client: Optional httpx client (falls back to shared._http).
+        thinking: False disables the model's reasoning pass via
+            chat_template_kwargs. Use it for structured extraction (JSON lists):
+            on a busy photo the Qwen3.8 brain can spend the whole max_tokens
+            budget reasoning and return empty content (seen on pantry scans).
 
     Returns:
         Text description/analysis from the vision model.
@@ -177,6 +182,8 @@ async def analyze_image(
         "max_tokens": 2048,
         "temperature": 0.3,
     }
+    if not thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     t0 = time.time()
     try:

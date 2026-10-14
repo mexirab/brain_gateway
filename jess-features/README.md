@@ -24,6 +24,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-012 | [Paperless-ngx Bridge](./F-012-paperless-bridge.md) | P2 | Ready | Done |
 | F-013 | [Pushover Push Bridge](./F-013-pushover-bridge.md) | P1 | Ready | Done |
 | F-014 | [Daily Self-Audit](./F-014-self-audit.md) | P2 | Ready | Done |
+| F-015 | [Pantry & Meal Prep](./F-015-pantry-meal-prep.md) | P1 | Ready | Phase 1 done (inventory); 2–4 not started |
 
 ## Build Order
 
@@ -60,6 +61,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-012 Paperless-ngx Bridge | Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging; no hard deps on other features — depends only on Paperless-ngx running. `document_vault` stays the home for typed/pasted text notes. |
 | F-013 Pushover Push Bridge | Parallel iOS push channel alongside F-011 ntfy (Pushover has native APNs, ntfy-upstream was unreliable on iOS). Depends on F-011 — reuses its HMAC-signed ack/snooze callback routes. Independent on/off flag; runs alongside ntfy or standalone. Blocks: none. |
 | F-014 Daily Self-Audit | Daily 7am UTC Loki scan + Jess diagnosis + Pushover digest + markdown report. Read-only by design (Jess emits text only). Depends on F-013 (uses Pushover as digest channel). Blocks: none. |
+| F-015 Pantry & Meal Prep | Photo/receipt/barcode inventory, diet-profile weekly plans (batch + fresh), layered consumption tracking with decay + weekly reconcile. Uses vision, shopping_list, log_meal, push Done buttons. Default-OFF (`PANTRY_ENABLED`). |
 
 ## Dependency Graph
 

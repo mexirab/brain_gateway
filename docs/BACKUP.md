@@ -6,7 +6,7 @@ HuggingFace model cache, which re-downloads on demand). The genuinely
 
 | Path | What | Reconstructable? |
 |------|------|------------------|
-| `data/app/brain_state.db` | reminders, focus, routines, selfcare, workouts, meals, chat history | ❌ no |
+| `data/app/brain_state.db` | reminders, focus, routines, selfcare, workouts, meals, pantry inventory, chat history | ❌ no |
 | `data/app/progress.db` | streaks, XP, event history | ❌ no |
 | `data/app/finance.db` | budget/finance state | ❌ no |
 | `data/app/auto_learn.key` | **Fernet key that decrypts learned personal facts** | ❌ **no — losing it bricks every encrypted memory, even though the ciphertext survives** |
@@ -20,6 +20,9 @@ disk failure would have been total and permanent. `hf_cache/`,
 as are `exercise_library/` (+ its `.new`/`.old` fetch siblings) — ~100 MB of
 public-domain photos; re-fetch with
 `docker exec brain-orchestrator python -m orchestrator.exercise_library fetch`.
+`pantry_photos/` is also excluded: transient stock-take photos of the inside of
+the home, deleted on commit/discard and by the daily `pantry_sweep` — never
+worth keeping in 30 rotated archives on two machines (see `docs/PANTRY.md`).
 
 ## What the backup does
 

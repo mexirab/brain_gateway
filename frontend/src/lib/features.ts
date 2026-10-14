@@ -7,6 +7,7 @@
 export interface FeatureFlags {
   workouts_enabled: boolean;
   meals_enabled: boolean;
+  pantry_enabled: boolean;
   jess_advanced: boolean;
 }
 
@@ -16,6 +17,7 @@ export interface FeatureFlags {
 export const ALL_FEATURES_ENABLED: FeatureFlags = {
   workouts_enabled: true,
   meals_enabled: true,
+  pantry_enabled: true,
   jess_advanced: true,
 };
 
@@ -24,6 +26,7 @@ export const ALL_FEATURES_ENABLED: FeatureFlags = {
 const NAV_REQUIRES: Record<string, keyof FeatureFlags> = {
   '/workouts': 'workouts_enabled',
   '/meals': 'meals_enabled',
+  '/pantry': 'pantry_enabled',
   '/finance': 'jess_advanced',
 };
 

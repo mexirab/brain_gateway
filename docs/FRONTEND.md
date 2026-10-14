@@ -13,6 +13,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
 | Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; exercise names open a how-to modal with photos + steps; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
+| Pantry | `/pantry` | Private, gated on `pantry_enabled`. Tabs "What I have" (inventory by location, use/out/edit, "Still have these?" tray, add form with barcode scan) and "Photo stock-take" (1–8 shelf photos → poll → review checklist → commit). `?tab=scan` deep-links. See `docs/PANTRY.md` |
 | Settings | `/settings` | Private. Four-panel settings UI (Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders) with left-rail tab switcher. Each panel has a shared `SaveBar`; switching tabs while a panel is dirty triggers a confirm guard so unsaved edits aren't silently lost. Backed by `/api/config/*` via `lib/settings-api.ts` (typed client, mirrors `finance-api.ts` shape; goes through `/api/proxy` for bearer injection). |
 
 ## Dashboard Widgets
@@ -29,9 +30,9 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 
 ## Mobile Navigation
 
-Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, Chat, Meals, Workouts — plus a "More" button that opens a sheet with the rest (Shopping, Documents, Finance, Announcements, Home, Settings, Architecture, Sign Out). Active page is signaled by both color and a top brand bar so it's readable at kiosk distance. Sheet closes on Escape, backdrop click, X button, or route change; body scroll is locked while open. Honors iOS safe-area; active links use `aria-current="page"`; sheet is `role="dialog"` with `aria-modal="true"`. Sidebar (md+) lists the same set. Implemented in `frontend/src/components/layout/MobileNav.tsx` (client component), mounted from `frontend/src/app/(private)/layout.tsx`.
+Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, Chat, Meals, Workouts — plus a "More" button that opens a sheet with the rest (Pantry, Shopping, Documents, Finance, Announcements, Home, Settings, Architecture, Sign Out). Active page is signaled by both color and a top brand bar so it's readable at kiosk distance. Sheet closes on Escape, backdrop click, X button, or route change; body scroll is locked while open. Honors iOS safe-area; active links use `aria-current="page"`; sheet is `role="dialog"` with `aria-modal="true"`. Sidebar (md+) lists the same set. Implemented in `frontend/src/components/layout/MobileNav.tsx` (client component), mounted from `frontend/src/app/(private)/layout.tsx`.
 
-**Feature-flag nav gating.** The Workouts, Meals, and Finance nav links are conditional on runtime flags so disabled features don't leave dead 404 links. The server layout (`(private)/layout.tsx`) fetches `GET /api/config/features` via `getFeatureFlags()` in `lib/features.server.ts` (direct orchestrator call with the `API_TOKEN` bearer — not through `/api/proxy`, which needs the browser auth cookie a server component doesn't carry; fails open to "show all" if the orchestrator is unreachable). It filters the sidebar `NAV_ITEMS` with the pure `isNavItemEnabled(href, flags)` predicate (`lib/features.ts`) and passes the `flags` object to `<MobileNav>`, which filters both its `PRIMARY` and `MORE` lists with the same predicate. Mapping: `/workouts`→`workouts_enabled`, `/meals`→`meals_enabled`, `/finance`→`jess_advanced`. Hiding the link isn't a security boundary (the orchestrator routes 404 / are unmounted regardless) — it's UX. As defense for direct URL hits, each feature's route `layout.tsx` (`workouts/`, `meals/`, `finance/`) wraps its children in the async server component `<FeatureGate flag="..." label="...">` (`components/layout/FeatureGate.tsx`), which renders `<FeatureDisabled>` instead of the page when the flag is off. Finance's pre-existing client tabs/provider were moved to `finance/FinanceShell.tsx` so `finance/layout.tsx` could become the server gate. Flags are read with `next: { revalidate: 30 }`, so a flag flip surfaces within ~30s (or a dev-server restart) — they're env-var driven and only change on an orchestrator restart anyway.
+**Feature-flag nav gating.** The Workouts, Meals, Pantry, and Finance nav links are conditional on runtime flags so disabled features don't leave dead 404 links. The server layout (`(private)/layout.tsx`) fetches `GET /api/config/features` via `getFeatureFlags()` in `lib/features.server.ts` (direct orchestrator call with the `API_TOKEN` bearer — not through `/api/proxy`, which needs the browser auth cookie a server component doesn't carry; fails open to "show all" if the orchestrator is unreachable). It filters the sidebar `NAV_ITEMS` with the pure `isNavItemEnabled(href, flags)` predicate (`lib/features.ts`) and passes the `flags` object to `<MobileNav>`, which filters both its `PRIMARY` and `MORE` lists with the same predicate. Mapping: `/workouts`→`workouts_enabled`, `/meals`→`meals_enabled`, `/pantry`→`pantry_enabled`, `/finance`→`jess_advanced`. Hiding the link isn't a security boundary (the orchestrator routes 404 / are unmounted regardless) — it's UX. As defense for direct URL hits, each feature's route `layout.tsx` (`workouts/`, `meals/`, `pantry/`, `finance/`) wraps its children in the async server component `<FeatureGate flag="..." label="...">` (`components/layout/FeatureGate.tsx`), which renders `<FeatureDisabled>` instead of the page when the flag is off. Finance's pre-existing client tabs/provider were moved to `finance/FinanceShell.tsx` so `finance/layout.tsx` could become the server gate. Flags are read with `next: { revalidate: 30 }`, so a flag flip surfaces within ~30s (or a dev-server restart) — they're env-var driven and only change on an orchestrator restart anyway.
 
 ## Finance System (Actual Budget sync)
 
@@ -73,6 +74,8 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/app/(private)/workouts/page.tsx` — Workout page: location picker, program line, today's plan, inline set logging, history
 - `frontend/src/components/workouts/ExerciseInfoModal.tsx` — Exercise how-to modal: 1 s photo flip (pause/play; paused under `prefers-reduced-motion`), steps, muscles, video link, retry on error. See `docs/WORKOUTS_AND_MEALS.md`
 - `frontend/src/app/(private)/meals/page.tsx` — Meals page: calorie log, photo-estimate upload, 7-day bar chart
+- `frontend/src/app/(private)/pantry/page.tsx` + `components/pantry/*` — Pantry page (`InventoryTab`, `ScanTab`, `AddItemForm`, `BarcodeScanner`); client `lib/pantry-api.ts`
+- `frontend/src/lib/image-resize.ts` — `resizeImage`/`resizeAll`: downscale photos to ≤2048 px JPEG before upload (strips EXIF incl. GPS; converts HEIC in Safari). Throws on undecodable input — callers must not fall back to the original
 - `frontend/src/app/(private)/settings/page.tsx` — Settings page: left-rail tab switcher with dirty-state guard on tab switch
 - `frontend/src/components/settings/IdentityPanel.tsx` — Identity & Tone panel; also exports the shared `SaveBar` consumed by the other three panels
 - `frontend/src/components/settings/SelfcarePanel.tsx` — Selfcare nudge cadence (categories, intervals, active hours)
@@ -81,6 +84,16 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/settings/WorkoutsPanel.tsx` — Workouts panel: weekly program (incl. "Lighter deload week" cadence select + deload status in the summary) + workout locations (equipment, dumbbell/kettlebell limits). Uses `/api/workouts/*`; tab hidden when `workouts_enabled` is false (fails open). See `docs/WORKOUTS_AND_MEALS.md`
 - `frontend/src/lib/settings-api.ts` — Typed client for `/api/config/*` (+ `/api/workouts/{program,locations}` for the Workouts panel); routed through `/api/proxy` for bearer injection
 - `frontend/src/lib/selfcare-categories.ts` — Shared selfcare-category constants (consumed by `SelfcarePanel`)
+
+## HTTPS (camera / microphone)
+
+Browser camera and microphone APIs (`getUserMedia`) only work in a secure context (HTTPS or `localhost`). The dashboard is served over HTTPS on the tailnet via Tailscale Serve, run on the dashboard host:
+
+```bash
+tailscale serve --bg --https=443 http://localhost:3001   # → https://<host>.<tailnet>.ts.net
+```
+
+Over plain `http://<lan-ip>:3001` the pantry barcode scanner falls back to decoding a photo of the barcode or typed digits. Barcode decode: `@zxing/browser` 0.1.5 + `@zxing/library` 0.21.3 (pinned; iOS Safari has no `BarcodeDetector`).
 
 ## API Proxy Notes
 

@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # Gating spans tool schemas, tool handlers, API routers, and dashboard nav.
     workouts_enabled: bool = False
     meals_enabled: bool = False
+    # Pantry & meal prep (F-015). Inventory from fridge/pantry photos, barcode
+    # lookups, chat updates. Default OFF like workouts/meals.
+    pantry_enabled: bool = False
+    pantry_photos_dir: str = "/app/data/pantry_photos"
+    pantry_max_upload_mb: int = 15  # per photo
+    # Barcode → product name via Open Food Facts. Only the barcode digits leave
+    # the network; results are cached in barcode_cache. Separate opt-in.
+    pantry_barcode_lookup_enabled: bool = False
+    pantry_off_url: str = "https://world.openfoodfacts.org"
     # Exercise how-to library (photos + steps), filled by
     # `python -m orchestrator.exercise_library fetch`. Empty dir = feature dark.
     exercise_library_path: str = "/app/data/exercise_library"
@@ -621,6 +630,23 @@ class Settings(BaseSettings):
             object.__setattr__(self, "actual_sync_interval", 5)
         if not 1 <= self.actual_sync_months <= 24:
             object.__setattr__(self, "actual_sync_months", min(24, max(1, self.actual_sync_months)))
+        return self
+
+    @model_validator(mode="after")
+    def validate_pantry_config(self) -> "Settings":
+        """Clamp the pantry upload cap and disable barcode lookup on a bad URL.
+
+        Logs, never raises — optional-feature config must not take down startup.
+        """
+        import logging
+
+        log = logging.getLogger(__name__)
+        if not 1 <= self.pantry_max_upload_mb <= 50:
+            log.error("[CONFIG] PANTRY_MAX_UPLOAD_MB=%s out of range 1-50; using 15", self.pantry_max_upload_mb)
+            object.__setattr__(self, "pantry_max_upload_mb", 15)
+        if self.pantry_barcode_lookup_enabled and not self.pantry_off_url.startswith(("https://", "http://")):
+            log.error("[CONFIG] PANTRY_OFF_URL must be an http(s) URL; disabling barcode lookup")
+            object.__setattr__(self, "pantry_barcode_lookup_enabled", False)
         return self
 
     @model_validator(mode="after")
