@@ -100,6 +100,40 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 - ElevenLabs/OpenAI TTS backends: auto-spoken replies are sent to that provider.
 - iOS behaviour verified only in Chromium with an injected iOS-like per-element `play()` policy, not yet on a real iPhone.
 
+## Hands-free call mode
+
+Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers aloud, she listens again. Builds on Dashboard chat voice replies above.
+
+**Start:** the AudioLines button next to the mic — one tap creates the `AudioContext` inside the tap (iOS), opens the mic with `echoCancellation`/`noiseSuppression`/`autoGainControl`, and takes a screen wake lock. `components/chat/VoiceCallBar.tsx` replaces the input while in a call (phase label, Interrupt, End; focus moves to End, and back to the call button afterwards).
+
+**VAD (`lib/vad.ts`, `EnergyVad`):**
+
+| Parameter | Value |
+|-----------|-------|
+| Calibration | 400 ms of room noise, then adaptive noise floor |
+| Speech threshold | `max(0.01, floor × 3)` |
+| Speech confirm | 200 ms above threshold |
+| Utterance end | 1.8 s of silence |
+| Cap | 90 s → `speech-timeout`: treated as steady noise (TV): discarded in the browser, never transcribed, its level becomes the new floor |
+
+**Loop (`hooks/useVoiceCall.ts`):** `MediaRecorder` runs while listening, restarted gaplessly every 3 s of idle (≤ ~3 s lead-in rides along with an utterance) → speech end → `POST /api/stt/transcribe` via `lib/stt.ts` → sent to chat as a voice message (reply always spoken) → waits for the spoken reply to finish (`SpeechQueue.begin()`/`beginReply()` return a completion promise) → 350 ms → listening again. Mic is not analysed while Jess answers (no barge-in); Interrupt stops her speech, listening resumes once the reply stream finishes. Empty transcripts back off 1/2/4/5 s.
+
+**Call ends on:** End; page hidden; 5 min with nothing said; STT 503 ("Jess can't hear right now — Helios (speech recognition) is asleep"); 3 consecutive STT failures (single failures are skipped); iOS `AudioContext` interruption not recovering within 1.5 s; mic track ended.
+
+**Recorder MIME (`lib/stt.ts` `pickRecorderMime`, shared with the mic button's `useVoiceRecorder.ts`):** webm/opus → webm → mp4 (older Safari).
+
+**Backend:** `POST /api/stt/transcribe` (`orchestrator/routes_vision.py`) — status contract in `TECHNICAL_REFERENCE.md` → Voice. Voice activity (`shared.mark_voice_activity()` + next-chat voice flag) is marked only for a non-empty transcript, so a noise false-trigger doesn't hold announcements. Forwarded upload filename/content-type are pinned to an allowlist.
+
+**Metrics:** `bgw_dashboard_stt_total{result}` (`ok|empty|unreachable|timeout|upstream_error|too_large|not_configured`, pre-initialized; counts mic button + call utterances). Grafana TTS Synthesis row: "Dashboard STT Outcomes" next to "Dashboard TTS Outcomes".
+
+**Tests:** `orchestrator/tests/test_stt_transcribe_route.py`, `frontend/src/lib/vad.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
+
+**Known limits:**
+- Verified only in Chromium with an injected WAV microphone through the real VAD/MediaRecorder/STT path — not yet on a real iPhone. Open: playback loudness/routing with the mic open, AirPods (HFP), WebKit analyser behaviour, interruption recovery.
+- Energy VAD can't tell the user from other people: anything transcribed is sent as the user's message. Steady TV-like noise is discarded; conversation in the room is not.
+- Interrupt waits for the text stream to finish before listening again.
+- The OWUI-only `/v1/audio/transcriptions` route still returns an unhandled 500 on STT failure.
+
 ## Reminder Voice Retry
 
 Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry once after 2 minutes. If the retry also fails, the system falls back to a phone notification so the reminder is never silently lost.
