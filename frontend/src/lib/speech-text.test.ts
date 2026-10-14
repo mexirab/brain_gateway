@@ -117,6 +117,14 @@ describe('speech budget and long sentences', () => {
     expect(splitLong('short')).toEqual(['short']);
   });
 
+  it('keeps an em dash with the first clip, hard-cuts unspaced text, guards max', () => {
+    const parts = splitLong('alpha beta gamma delta — epsilon zeta eta theta', 26);
+    expect(parts[0]).toBe('alpha beta gamma delta —');
+    expect(parts[1].startsWith('—')).toBe(false);
+    expect(splitLong('x'.repeat(900)).map((p) => p.length)).toEqual([400, 400, 100]);
+    expect(splitLong('some text', 0)).toEqual(['some text']);
+  });
+
   it('a hard cut never splits a surrogate pair', () => {
     const parts = splitLong('a' + '\u{20000}'.repeat(550));
     for (const p of parts) expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(p)).toBe(false);

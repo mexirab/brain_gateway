@@ -143,10 +143,13 @@ export class SpeechSegmenter {
 export function splitLong(text: string, max: number = SPEECH_MAX_SEGMENT_CHARS): string[] {
   const out: string[] = [];
   let rest = text.trim();
+  if (max < 1) return rest ? [rest] : [];
   while (rest.length > max) {
     const window = rest.slice(0, max);
-    const punct = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(' — '));
-    let cut = punct > max / 3 ? punct + 1 : window.lastIndexOf(' ') > 0 ? window.lastIndexOf(' ') : max;
+    const dash = window.lastIndexOf(' — ');
+    // Cut AFTER the comma/semicolon/dash so the punctuation stays with the first clip.
+    const punctEnd = Math.max(window.lastIndexOf(', ') + 1, window.lastIndexOf('; ') + 1, dash >= 0 ? dash + 2 : 0);
+    let cut = punctEnd > max / 3 ? punctEnd : window.lastIndexOf(' ') > 0 ? window.lastIndexOf(' ') : max;
     // Hard cut: never split a surrogate pair (the server 400s lone surrogates).
     if (cut === max && /[\uD800-\uDBFF]/.test(rest[cut - 1])) cut -= 1;
     out.push(rest.slice(0, cut).trim());
