@@ -159,7 +159,7 @@ class TestRetrySemantics:
         mock_phone.assert_called_once()  # phone went out on attempt 0
         job = clean_scheduler.get_job("reminder_r1_retry")
         assert job is not None
-        assert job.kwargs == {"attempt": 1, "late": False, "voice_done": False, "phone_done": True}
+        assert job.kwargs == {"attempt": 1, "late": False, "voice_done": False, "phone_done": True, "voice_deferrals": 0}
 
     @pytest.mark.asyncio
     async def test_retry_does_not_repush_phone(self, tmp_db, clean_scheduler, push_channels_off):
