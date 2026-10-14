@@ -332,7 +332,7 @@ LATENCY_THRESHOLDS_S = [(None, "green"), (1, "yellow"), (5, "orange"), (15, "red
 VOICE_LATENCY_THRESHOLDS_S = [(None, "green"), (13, "yellow"), (17, "orange"), (22, "red")]
 # TTS synthesis is fast (<1s typical for a single sentence). Warn past 1.5s,
 # red past 3s where the silence pre-roll can't mask user-perceived delay.
-VOICE_TTS_THRESHOLDS_S = [(None, "green"), (1.5, "yellow"), (3, "red")]
+VOICE_TTS_THRESHOLDS_S = [(None, "green"), (3, "yellow"), (6, "red")]  # per sentence clip (<=400 chars)
 # Expert agent is thinking-mode Qwen3-32B on Saturn; 30-150s is "normal" for
 # hard reasoning. Green up to 60s, yellow past 90s, red past the 180s timeout.
 EXPERT_LATENCY_THRESHOLDS_S = [(None, "green"), (60, "yellow"), (90, "orange"), (180, "red")]

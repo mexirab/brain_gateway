@@ -1560,11 +1560,11 @@
               },
               {
                 "color": "yellow",
-                "value": 1.5
+                "value": 3
               },
               {
                 "color": "red",
-                "value": 3
+                "value": 6
               }
             ]
           },
@@ -1827,11 +1827,11 @@
               },
               {
                 "color": "yellow",
-                "value": 1.5
+                "value": 3
               },
               {
                 "color": "red",
-                "value": 3
+                "value": 6
               }
             ]
           },

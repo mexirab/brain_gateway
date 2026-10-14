@@ -5,8 +5,17 @@
  * Pure (no DOM / React) so it is unit-testable; used by useTTSPlayback.
  */
 
-/** Total characters spoken per reply before "the rest is on screen". */
-export const SPEECH_MAX_CHARS = 600;
+/**
+ * Total characters spoken per reply before "the rest is on screen". Same as
+ * Telegram's voice replies (TELEGRAM_VOICE_REPLY_MAX_CHARS default 1200).
+ */
+export const SPEECH_MAX_CHARS = 1200;
+
+/**
+ * Longest single TTS request. /api/tts/synthesize rejects > 1000 chars, and a
+ * shorter clip starts playing sooner, so run-on sentences are split.
+ */
+export const SPEECH_MAX_SEGMENT_CHARS = 400;
 export const SPEECH_TRUNCATED_TAIL = 'The rest is on screen.';
 
 // Segments shorter than this are held and merged with the next one, so a
@@ -112,7 +121,7 @@ export class SpeechSegmenter {
     const room = this.maxChars - this.spoken;
     if (text.length <= room) {
       this.spoken += text.length;
-      return [text];
+      return splitLong(text);
     }
     // Over budget: speak what fits (cut at a word boundary), then the tail.
     this.exhausted = true;
@@ -123,11 +132,31 @@ export class SpeechSegmenter {
       const head = sentenceEnd > MIN_SEGMENT_CHARS
         ? cut.slice(0, sentenceEnd).trim()
         : cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).trim() + '…';
-      out.push(head);
+      out.push(...splitLong(head));
     }
     out.push(SPEECH_TRUNCATED_TAIL);
     return out;
   }
+}
+
+/** Split text longer than `max` at the last comma/semicolon/dash, else space. */
+export function splitLong(text: string, max: number = SPEECH_MAX_SEGMENT_CHARS): string[] {
+  const out: string[] = [];
+  let rest = text.trim();
+  if (max < 1) return rest ? [rest] : [];
+  while (rest.length > max) {
+    const window = rest.slice(0, max);
+    const dash = window.lastIndexOf(' — ');
+    // Cut AFTER the comma/semicolon/dash so the punctuation stays with the first clip.
+    const punctEnd = Math.max(window.lastIndexOf(', ') + 1, window.lastIndexOf('; ') + 1, dash >= 0 ? dash + 2 : 0);
+    let cut = punctEnd > max / 3 ? punctEnd : window.lastIndexOf(' ') > 0 ? window.lastIndexOf(' ') : max;
+    // Hard cut: never split a surrogate pair (the server 400s lone surrogates).
+    if (cut === max && /[\uD800-\uDBFF]/.test(rest[cut - 1])) cut -= 1;
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) out.push(rest);
+  return out;
 }
 
 /** Whole-text convenience (replay / tap-to-play): all segments at once. */
