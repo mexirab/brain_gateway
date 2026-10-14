@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   cleanForSpeech, SpeechSegmenter, segmentForSpeech, SPEECH_TRUNCATED_TAIL,
+  SPEECH_MAX_CHARS, SPEECH_MAX_SEGMENT_CHARS, splitLong,
 } from './speech-text';
 
 describe('cleanForSpeech', () => {
@@ -86,5 +87,33 @@ describe('cleanForSpeech emoji', () => {
 
   it('drops lone surrogates (cannot be UTF-8 encoded for the TTS request)', () => {
     expect(cleanForSpeech('half \ud83d pair \udc4d here')).toBe('half pair here');
+  });
+});
+
+
+describe('speech budget and long sentences', () => {
+  it('speaks up to 1200 characters by default (same as Telegram)', () => {
+    expect(SPEECH_MAX_CHARS).toBe(1200);
+    const sentence = 'This is a fairly ordinary sentence of moderate length. ';
+    const out = segmentForSpeech(sentence.repeat(40));
+    const spoken = out.slice(0, -1).reduce((n, s) => n + s.length, 0);
+    expect(spoken).toBeGreaterThan(1000);
+    expect(spoken).toBeLessThanOrEqual(1201);
+    expect(out.at(-1)).toBe(SPEECH_TRUNCATED_TAIL);
+  });
+
+  it('never emits a segment longer than the per-request limit', () => {
+    const runOn = Array.from({ length: 120 }, (_, i) => `clause number ${i}, and then`).join(' ') + '.';
+    const out = segmentForSpeech(runOn);
+    expect(out.length).toBeGreaterThan(2);
+    for (const seg of out) expect(seg.length).toBeLessThanOrEqual(SPEECH_MAX_SEGMENT_CHARS + 1);
+  });
+
+  it('splitLong prefers punctuation, then spaces, and keeps every word', () => {
+    const text = 'alpha beta, gamma delta epsilon zeta eta theta iota';
+    const parts = splitLong(text, 20);
+    expect(parts[0]).toBe('alpha beta,');
+    expect(parts.join(' ').split(/\s+/)).toEqual(text.split(/\s+/));
+    expect(splitLong('short')).toEqual(['short']);
   });
 });
