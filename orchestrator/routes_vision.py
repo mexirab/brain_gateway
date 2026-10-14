@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from orchestrator import shared
-from orchestrator.metrics import DASHBOARD_TTS_TOTAL, VOICE_TTS_LATENCY
+from orchestrator.metrics import DASHBOARD_STT_TOTAL, DASHBOARD_TTS_TOTAL, VOICE_TTS_LATENCY
 
 logger = logging.getLogger(__name__)
 
@@ -143,22 +143,51 @@ STT_URL = os.environ.get("STT_URL", "")
 MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB
 
 
+def _stt_error(result: str, error: str, status_code: int) -> JSONResponse:
+    DASHBOARD_STT_TOTAL.labels(result=result).inc()
+    return JSONResponse({"ok": False, "error": error}, status_code=status_code)
+
+
 @router.post("/api/stt/transcribe")
-async def stt_transcribe(file: UploadFile = File(...)):
-    """Proxy audio to STT service for transcription."""
+async def stt_transcribe(file: UploadFile = File(...)) -> Response:
+    """Proxy dashboard audio (mic button / hands-free call) to STT.
+
+    Status codes the frontend relies on: 413 too large, 503 STT unreachable
+    (Helios asleep — call mode ends with "Jess can't hear right now"), 504 STT
+    timed out, 502 STT error / unusable response.
+    """
     audio_data = await file.read()
     if len(audio_data) > MAX_AUDIO_UPLOAD:
-        return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
+        return _stt_error("too_large", "Audio file too large (max 10 MB)", 413)
     shared._last_voice_at = time.time()
     shared.mark_voice_activity()
-    r = await shared._http.post(
-        f"{STT_URL}/v1/audio/transcriptions",
-        files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
-        data={"model": "whisper-1"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = await shared._http.post(
+            f"{STT_URL}/v1/audio/transcriptions",
+            files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
+            data={"model": "whisper-1"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except httpx.HTTPStatusError as e:
+        logger.warning("[STT] transcribe -> HTTP %s", e.response.status_code)
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+        logger.warning("[STT] transcribe timed out: %s", type(e).__name__)
+        return _stt_error("timeout", "Transcription timed out", 504)
+    except httpx.RequestError as e:
+        # Connect refused / unreachable: Helios is power-tiered and usually asleep.
+        logger.warning("[STT] transcribe unreachable: %s", type(e).__name__)
+        return _stt_error("unreachable", "Speech recognition unavailable", 503)
+    except Exception:
+        logger.exception("[STT] transcribe failed unexpectedly")
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    if not isinstance(data, dict):
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    text = data.get("text")
+    DASHBOARD_STT_TOTAL.labels(result="ok" if isinstance(text, str) and text.strip() else "empty").inc()
+    return JSONResponse(data)
 
 
 @router.post("/v1/audio/transcriptions")

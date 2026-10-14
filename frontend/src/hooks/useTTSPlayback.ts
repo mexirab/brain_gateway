@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { SpeechQueue, TTSUnavailableError, type SpeechPlayer, type SpeechState } from '@/lib/speech-queue';
+import {
+  SpeechQueue, TTSUnavailableError, type SpeechPlayer, type SpeechState, type SpeechStatus,
+} from '@/lib/speech-queue';
 import { SpeechSegmenter, segmentForSpeech } from '@/lib/speech-text';
 
 const PROXY = '/api/proxy';
@@ -134,8 +136,11 @@ export interface UseTTSPlaybackReturn {
   isSpeaking: boolean;
   /** Call synchronously from every tap/keypress that may lead to speech. */
   unlock: () => void;
-  /** Streaming reply: begin → pushText(chunk)* → endReply. */
-  beginReply: (key: string) => void;
+  /**
+   * Streaming reply: begin → pushText(chunk)* → endReply. The promise
+   * resolves when the reply has finished speaking, failed, or was stopped.
+   */
+  beginReply: (key: string) => Promise<SpeechStatus>;
   pushText: (chunk: string) => void;
   endReply: () => void;
   /** Speak a finished message (replay / tap to play). Call from a tap. */
@@ -184,7 +189,7 @@ export default function useTTSPlayback(): UseTTSPlaybackReturn {
 
   const beginReply = useCallback((key: string) => {
     segmenterRef.current = new SpeechSegmenter();
-    getQueue().begin(key);
+    return getQueue().begin(key);
   }, [getQueue]);
 
   const pushText = useCallback((chunk: string) => {

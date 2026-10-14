@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-
-const PROXY = '/api/proxy';
+import { pickRecorderMime, transcribe } from '@/lib/stt';
 
 interface UseVoiceRecorderReturn {
   isRecording: boolean;
@@ -26,11 +25,8 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      // Prefer webm/opus — Whisper accepts it natively
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const { mimeType } = pickRecorderMime();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
 
@@ -68,16 +64,7 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
     // Send to STT
     setIsTranscribing(true);
     try {
-      const form = new FormData();
-      form.append('file', blob, 'recording.webm');
-
-      const res = await fetch(`${PROXY}/api/stt/transcribe`, {
-        method: 'POST',
-        body: form,
-      });
-      if (!res.ok) throw new Error(`STT ${res.status}`);
-      const data = await res.json();
-      return data.text || null;
+      return (await transcribe(blob)) || null;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transcription failed');
       return null;
