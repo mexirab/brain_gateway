@@ -298,7 +298,7 @@ def _normalize_message(line: str) -> str:
         except json.JSONDecodeError:
             pass
     s = re.sub(r"[0-9a-f]{8,}", "<id>", s)
-    s = re.sub(r"\d{2,}", "<n>", s)
+    s = re.sub(r"\d+", "<n>", s)  # lengths like "7-char" and "12-char" share a cluster
     return s[:_BUCKET_PREFIX_LEN].strip()
 
 

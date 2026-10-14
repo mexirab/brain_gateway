@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from orchestrator import shared
+from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
     TASK_DECOMP_ERRORS,
     TASK_DECOMP_STEPS_COMPLETED,
@@ -111,9 +112,16 @@ Return format:
         raw_steps = json.loads(content)
         if not isinstance(raw_steps, list):
             raise ValueError(f"Expected list, got {type(raw_steps).__name__}")
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
         TASK_DECOMP_ERRORS.inc()
-        logger.warning("[TASK_DECOMP] Failed to parse model response as JSON (%d chars)", len(content))
+        # log-safe: e.msg is the JSON parser's error text (e.g. "Expecting value"), not content
+        logger.warning(
+            "[TASK_DECOMP] Failed to parse model response as JSON (%d chars, %s, %s at col %d)",
+            len(content),
+            content_shape(content),
+            e.msg,
+            e.colno,
+        )
         # Fallback: create a single step from the task
         raw_steps = [{"description": task_text, "est_minutes": 30}]
     except Exception as e:

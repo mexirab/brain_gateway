@@ -71,6 +71,25 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+def content_shape(text: Any) -> str:
+    """Coarse, content-free description of model output for diagnostics:
+    what it *looks like*, never what it says (safe to log)."""
+    if not isinstance(text, str):
+        return type(text).__name__
+    t = text.lstrip()
+    if not t:
+        return "empty"
+    if t.startswith("```"):
+        return "code-fence"
+    if t.startswith("<think>"):
+        return "think-block"
+    if t.startswith("<tool_call>"):
+        return "tool-call-block"
+    if t[0] in "{[":
+        return "json-like"
+    return "text"
+
+
 class StripQueryStringFilter(logging.Filter):
     """Uvicorn access lines: drop the query string. Search endpoints carry the
     user's search text there (?search=, ?query=), and access lines go to Loki."""

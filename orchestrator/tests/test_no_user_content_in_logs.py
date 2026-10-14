@@ -79,7 +79,10 @@ SENSITIVE_SUFFIXES = ("_text", "_query", "_title", "_message", "_content", "_des
 # not user content; `self.<attr>` is the object's own config (instance names).
 ATTR_EXEMPT = {"message"}
 
-SAFE_WRAPPERS = {"len", "type", "bool", "id", "sorted", "isinstance"}
+# Attribute reads that are identifiers/numbers no matter which object they are on.
+SAFE_ATTRS = {"id", "status_code", "colno", "lineno", "pos"}
+
+SAFE_WRAPPERS = {"len", "type", "bool", "id", "sorted", "isinstance", "content_shape"}
 PRAGMA = "log-safe:"
 
 
@@ -106,6 +109,8 @@ def _violations(node: ast.AST) -> list[str]:
             and _is_sensitive_name(n.args[0].value)
         ):
             found.append(f".get({n.args[0].value!r})")
+        if isinstance(n, ast.Attribute) and n.attr in SAFE_ATTRS:
+            return  # msg.id, resp.status_code: identifiers, whatever the object
         if isinstance(n, ast.Name) and _is_sensitive_name(n.id):
             found.append(n.id)
         elif (
@@ -188,6 +193,7 @@ def test_guard_allows_lengths_and_keys():
     assert _first_call_violations('logger.info("q: %d", len(query))') == []
     assert _first_call_violations('logger.info("keys %s", sorted(data.keys()))') == []
     assert _first_call_violations('logger.info("id %s", reminder_id)') == []
+    assert _first_call_violations('logger.info("msg %s", msg.id)') == []
 
 
 def test_access_log_query_string_stripped():
@@ -218,3 +224,13 @@ def test_configure_logging_attaches_access_filter_once():
     configure_logging("INFO")
     filters = [f for f in logging.getLogger("uvicorn.access").filters if isinstance(f, StripQueryStringFilter)]
     assert len(filters) == 1
+
+
+def test_content_shape_never_returns_content():
+    from orchestrator.log_config import content_shape
+
+    secret = "take two of the blue pills"
+    for sample in (secret, "```json\n" + secret, "<think>" + secret, "{" + secret, "  ", None, 5):
+        assert secret not in content_shape(sample)
+    assert content_shape("```x") == "code-fence"
+    assert content_shape("[1,2") == "json-like"

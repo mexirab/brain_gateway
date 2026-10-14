@@ -12,6 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
     CHAT_STREAM_OUTCOME,
     EMPTY_REPLY_TOTAL,
@@ -426,8 +427,15 @@ def _filter_new_tool_calls(tool_calls: List[Dict[str, Any]], executed_calls: set
         args_str = function.get("arguments", "{}")
         try:
             arguments = json.loads(args_str)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("[%s] Malformed arguments for %s (%d chars)", label, tool_name, len(str(args_str)))
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(
+                "[%s] Malformed arguments for %s (%d chars, %s, %s)",
+                label,
+                tool_name,
+                len(str(args_str)),
+                content_shape(args_str),
+                getattr(e, "msg", type(e).__name__),
+            )
             arguments = {}
         call_key = (tool_name, json.dumps(arguments, sort_keys=True))
         if call_key in executed_calls:

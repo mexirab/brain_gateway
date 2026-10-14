@@ -211,12 +211,12 @@ async def poll_calendar():
                             state_store.mark_notified(f"cal:{event.id}:leave_now")
                             CALENDAR_POLL_EVENTS_FOUND.inc()
                             logger.info(
-                                f"[CALENDAR_POLL] LEAVE NOW ({len(event.title)}-char title, {drive_min} min drive)",
+                                f"[CALENDAR_POLL] LEAVE NOW (event {event.id}, {drive_min} min drive)",
                                 extra={"component": "calendar"},
                             )
                         else:
                             logger.error(
-                                f"[CALENDAR_POLL] TTS FAILED for event: {result.get('error')} — will retry next poll",
+                                f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
                                 extra={"component": "calendar"},
                             )
                         continue
@@ -232,12 +232,12 @@ async def poll_calendar():
                             state_store.mark_notified(travel_key)
                             CALENDAR_POLL_EVENTS_FOUND.inc()
                             logger.info(
-                                f"[CALENDAR_POLL] Leave in {leave_by_min} min ({len(event.title)}-char title, {drive_min} min drive)",
+                                f"[CALENDAR_POLL] Leave in {leave_by_min} min (event {event.id}, {drive_min} min drive)",
                                 extra={"component": "calendar"},
                             )
                         else:
                             logger.error(
-                                f"[CALENDAR_POLL] TTS FAILED for event: {result.get('error')} — will retry next poll",
+                                f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
                                 extra={"component": "calendar"},
                             )
                         continue
@@ -246,7 +246,9 @@ async def poll_calendar():
             if tiered:
                 # Smart suppression: skip if focus session is related to this event
                 if _is_focus_related(event):
-                    logger.debug("[CALENDAR_POLL] Suppressed nudge for an event — related focus session active")
+                    logger.debug(
+                        f"[CALENDAR_POLL] Suppressed nudge for event {event.id} — related focus session active"
+                    )
                     continue
 
                 # Find the best matching tier: the largest tier that we've
@@ -283,12 +285,12 @@ async def poll_calendar():
                                     state_store.mark_notified(f"cal:{event.id}:{t}")
                             CALENDAR_POLL_EVENTS_FOUND.inc()
                             logger.info(
-                                f"[CALENDAR_POLL] Tier {best_tier}min ({len(event.title)}-char title, actual: {minutes}min away)",
+                                f"[CALENDAR_POLL] Tier {best_tier}min (event {event.id}, actual: {minutes}min away)",
                                 extra={"component": "calendar"},
                             )
                         else:
                             logger.error(
-                                f"[CALENDAR_POLL] TTS FAILED for event: {result.get('error')} — will retry next poll",
+                                f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
                                 extra={"component": "calendar"},
                             )
 
@@ -316,10 +318,12 @@ async def poll_calendar():
                 if result.get("success"):
                     state_store.mark_notified(cal_key)
                     CALENDAR_POLL_EVENTS_FOUND.inc()
-                    logger.info(f"[CALENDAR_POLL] Announced event at {time_str}", extra={"component": "calendar"})
+                    logger.info(
+                        f"[CALENDAR_POLL] Announced event {event.id} at {time_str}", extra={"component": "calendar"}
+                    )
                 else:
                     logger.error(
-                        f"[CALENDAR_POLL] TTS FAILED for event: {result.get('error')} — will retry next poll",
+                        f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
                         extra={"component": "calendar"},
                     )
 
@@ -980,7 +984,7 @@ async def process_emails_for_events():
 
                 # Check for duplicates: look for a title match on that day
                 if _event_exists(day_events, created_keys, title, ev_start):
-                    logger.info("[EMAIL_TO_CAL] Already on calendar")
+                    logger.info(f"[EMAIL_TO_CAL] Already on calendar (message {msg.id})")
                     continue
 
                 # Create the event
@@ -1004,9 +1008,12 @@ async def process_emails_for_events():
                     created_count += 1
                     created_keys.append((title.lower(), ev_start.date()))
                     EMAIL_TO_CALENDAR_EVENTS_CREATED.inc()
-                    logger.info(f"[EMAIL_TO_CAL] Created event at {start_time}", extra={"component": "email_to_cal"})
+                    logger.info(
+                        f"[EMAIL_TO_CAL] Created event at {start_time} from message {msg.id}",
+                        extra={"component": "email_to_cal"},
+                    )
                 else:
-                    logger.warning(f"[EMAIL_TO_CAL] Failed to create event: {result.error}")
+                    logger.warning(f"[EMAIL_TO_CAL] Failed to create event from message {msg.id}: {result.error}")
 
         # Clean up old notification tracking entries (>48h)
         state_store.clear_stale_notifications(older_than_hours=48)
