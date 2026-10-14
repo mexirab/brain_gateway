@@ -99,6 +99,7 @@ If you connect Google Calendar or Gmail via the wizard:
 
 - **STT (Parakeet TDT v3) runs locally.** Your voice audio is processed on the box and never transmitted.
 - **TTS (Qwen3-TTS) runs locally.** Generated speech is synthesized on the box.
+  - If you switch the TTS backend to ElevenLabs or OpenAI, every spoken reply (house announcements, Telegram voice replies, dashboard chat voice replies) is sent to that provider as text.
 - **Wake-word ("Hey Jess" or your configured trigger) runs locally** on the voice puck (microWakeWord on ATOM Echo).
 - The optional wake-word capture mode (`data/wakeword/`, gitignored) saves raw audio fragments to disk for retraining. **This is opt-in via env var and off by default.**
 

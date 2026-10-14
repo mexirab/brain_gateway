@@ -63,7 +63,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/stt/transcribe` | Proxy audio to the HTTP STT server at `STT_URL` (multipart, max 10 MB) |
-| POST | `/api/tts/synthesize` | Synthesize text to WAV: `{text}` |
+| POST | `/api/tts/synthesize` | Dashboard chat voice replies (one call per sentence). Body `{text}`. 200 audio (media type = TTS backend `audio_format`, ~150 ms WAV silence pre-pad via `TTS_SILENCE_PAD_MS`, `Cache-Control: no-store`; calls `shared.mark_voice_activity()` so house-speaker announcements defer +2 min while the browser speaks). Errors `{ok:false, error}`: **400** invalid JSON / non-object / missing, blank or non-string `text` / not UTF-8 encodable (lone surrogate); **413** > 1000 chars (`TTS_SYNTH_MAX_CHARS`) or > 2000 UTF-8 bytes (`TTS_SYNTH_MAX_BYTES`); **503** TTS unreachable (connect failure — Helios asleep) or not configured; **504** TTS read/write/pool timeout; **502** TTS HTTP error or unexpected exception. Metric `bgw_dashboard_tts_total{result}`. See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies. |
 | POST | `/api/announce` | Trigger TTS announcement via voice system (`{text, speaker?}`, `announcement_type="manual"`). 200 `{ok:true, text, speaker}`; 200 `{ok:true, suppressed:true, reason}` under DND; **502** `{ok:false, error, unavailable:[...]}` when delivery fails (e.g. named speaker is `unavailable` in HA — manual announcements never fall back to another speaker). Speaker must match `media_player\.[a-z0-9_]+`. |
 | GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS) |
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |

@@ -65,6 +65,41 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 - Metrics: `bgw_announcement_speaker_unavailable_total{speaker}` (configured speakers, else `other`; pre-seeded at 0 by `seed_announcement_metrics` at startup) and `bgw_announcement_fallback_total{type}`. Alert `AnnouncementSpeakerUnavailable` — see `monitoring/README.md`.
 - Fix for a dead speaker is physical: power-cycle it; a stereo pair that doesn't return in HA needs re-pairing in Google Home.
 
+## Dashboard chat voice replies
+
+The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs a secure context for the mic — the dashboard is served over HTTPS via Tailscale Serve, tailnet-only).
+
+**Flow:** streamed reply → `lib/speech-text.ts` (strip code blocks, inline code, URLs, link targets, markdown, tables, emoji, lone surrogates; split into sentences as they complete; merge <12-char fragments; cap 600 chars, then "The rest is on screen.") → `lib/speech-queue.ts` (per-sentence `POST /api/tts/synthesize` while still streaming, ≤2 in flight per tab, ordered playback) → `hooks/useTTSPlayback.ts`.
+
+**iOS autoplay:** WebKit rejects `play()` that runs seconds after the tap (`NotAllowedError` — the old hook swallowed it, so no audio on iPhone). The hook keeps ONE `HTMLAudioElement`, unlocks it by playing a tiny silent WAV synchronously inside the send/mic/speaker-toggle/replay tap, and reuses it for every clip.
+
+**When it speaks:**
+- Mic-sent message → always spoken reply (walkie-talkie), even with the speaker toggle off.
+- Typed message → follows the speaker toggle (localStorage `tts_enabled`, per device, default off).
+
+**Controls:** header Stop pill while speaking; starting a recording stops playback (mic stays enabled while Jess speaks); replay button on finished assistant bubbles (not error bubbles); 44px touch targets; always-mounted sr-only aria-live region announces failures.
+
+| Status | Trigger | UI |
+|--------|---------|----|
+| `blocked` | `NotAllowedError` | "Tap to play" |
+| `asleep` | HTTP 503 (TTS unreachable — Helios asleep) | "Jess's voice is asleep — tap to retry" |
+| `interrupted` | iOS paused the element (screen lock, call, Siri) | "Voice paused — tap to replay" |
+| `error` | other failure, 30 s client timeout | error text |
+
+**Backend:** `POST /api/tts/synthesize` (`orchestrator/routes_vision.py`) — caps 1000 chars / 2000 UTF-8 bytes, status contract in `TECHNICAL_REFERENCE.md` → Voice. Success pre-pads ~150 ms WAV silence (`TTS_SILENCE_PAD_MS`, same as `/v1/audio/speech`) and calls `shared.mark_voice_activity()`, so `reminder_manager`'s voice-session gate holds house-speaker announcements (retry +2 min) while the browser speaks.
+
+**Metrics:** `bgw_dashboard_tts_total{result}` (`ok|unreachable|timeout|upstream_error|not_configured|bad_request|too_long`, pre-initialized). `bgw_voice_tts_seconds` observes SUCCESSFUL synth only, fed by `/v1/audio/speech` and `/api/tts/synthesize` (one sample per sentence). Grafana TTS Synthesis row (`brain_gateway_sre.py`): "Dashboard TTS Outcomes" (replaced "TTS Call Rate"), "TTS Sentences (24h)" (was "TTS Calls (24h)").
+
+**Tests:** `orchestrator/tests/test_tts_synthesize_route.py`, `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
+
+**Known limits:**
+- Stop / 503 cancels only the browser fetch — the orchestrator + TTS server still finish up to 2 in-flight sentences.
+- TTS server has 2 worker threads: a speaking tab can delay an announcement or Telegram voice reply by ~one sentence.
+- 500 emoji (2000 bytes) still pass the server caps (the client strips emoji anyway).
+- Helios asleep: the first sentence waits for the connect failure (typically a few seconds) before "voice is asleep".
+- ElevenLabs/OpenAI TTS backends: auto-spoken replies are sent to that provider.
+- iOS behaviour verified only in Chromium with an injected iOS-like per-element `play()` policy, not yet on a real iPhone.
+
 ## Reminder Voice Retry
 
 Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry once after 2 minutes. If the retry also fails, the system falls back to a phone notification so the reminder is never silently lost.
