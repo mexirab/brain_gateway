@@ -120,9 +120,17 @@ def fake_ask(replies, calls=None):
     """Async _ask stand-in yielding the given replies in order (str or Exception)."""
     it = iter(replies)
 
-    async def _ask(prompt, max_tokens, thinking, purpose):
+    async def _ask(prompt, max_tokens, thinking, purpose, wait_for_idle=True):
         if calls is not None:
-            calls.append({"prompt": prompt, "max_tokens": max_tokens, "thinking": thinking, "purpose": purpose})
+            calls.append(
+                {
+                    "prompt": prompt,
+                    "max_tokens": max_tokens,
+                    "thinking": thinking,
+                    "purpose": purpose,
+                    "wait_for_idle": wait_for_idle,
+                }
+            )
         r = next(it)
         if isinstance(r, BaseException):
             raise r
@@ -840,6 +848,8 @@ class TestSwap:
         assert len(rids) == 1 and old_rid not in rids
         assert res["plan"]["recipes"][str(rids.pop())]["name"] == "Farro salad"
         assert "batch-prep" in calls[0]["prompt"] and "Barley stew" in calls[0]["prompt"]
+        # A swap runs inside a chat turn: it must never wait for chat to go idle.
+        assert calls[0]["wait_for_idle"] is False
         dinners = _entries(mp, pid, "dinner")
         assert all(e["recipe_id"] != old_rid for e in dinners)
 
@@ -1079,3 +1089,47 @@ async def test_brain_ready(mp, monkeypatch):
     monkeypatch.setattr(shared, "_http", Client(httpx.ConnectError("x")))
     assert await mp.brain_ready() is False
     await asyncio.sleep(0)
+
+
+# ---------------------------------------------------------------------------
+# _ask idle-wait (HA Assist / Telegram non-streaming turns count themselves in
+# ACTIVE_REQUESTS — a swap called from inside one must not wait on itself)
+# ---------------------------------------------------------------------------
+
+
+class TestAskIdleWait:
+    @pytest.fixture
+    def fake_orchestrator(self, monkeypatch):
+        import sys
+        import types
+
+        calls = []
+
+        async def call_model(url, model, messages, timeout, extra_body):
+            calls.append(extra_body)
+            return {"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}], "usage": {}}
+
+        mod = types.ModuleType("orchestrator.orchestrator")
+        mod.call_model = call_model
+        monkeypatch.setitem(sys.modules, "orchestrator.orchestrator", mod)
+        return calls
+
+    async def test_wait_for_idle_false_skips_the_wait(self, mp, monkeypatch, fake_orchestrator):
+        waited = []
+
+        async def wait():
+            waited.append(1)
+
+        monkeypatch.setattr(mp, "_wait_for_idle_chat", wait)
+        await mp._ask("p", 100, False, "meal_plan_swap", wait_for_idle=False)
+        assert waited == [] and len(fake_orchestrator) == 1
+
+    async def test_default_still_waits(self, mp, monkeypatch, fake_orchestrator):
+        waited = []
+
+        async def wait():
+            waited.append(1)
+
+        monkeypatch.setattr(mp, "_wait_for_idle_chat", wait)
+        await mp._ask("p", 100, True, "meal_plan")
+        assert waited == [1]

@@ -465,11 +465,21 @@ def build_prompt(settings: Dict[str, Any], start: date, inventory: List[Dict[str
 # ---------------------------------------------------------------------------
 
 
-async def _ask(prompt: str, max_tokens: int, thinking: bool, purpose: str) -> Tuple[Optional[str], str, int]:
-    """One planner call → (content, finish_reason, completion_tokens)."""
+async def _ask(
+    prompt: str, max_tokens: int, thinking: bool, purpose: str, wait_for_idle: bool = True
+) -> Tuple[Optional[str], str, int]:
+    """One planner call → (content, finish_reason, completion_tokens).
+
+    ``wait_for_idle=False`` for calls made from inside a chat turn (swap via
+    the meal_plan tool / dashboard): that turn is itself counted in
+    ACTIVE_REQUESTS on non-streaming paths (HA Assist, Telegram), so waiting
+    for "idle" would wait on itself for the full CHAT_IDLE_WAIT_S. A tool runs
+    between the turn's model rounds, when the slot is free anyway.
+    """
     from orchestrator.orchestrator import call_model
 
-    await _wait_for_idle_chat()
+    if wait_for_idle:
+        await _wait_for_idle_chat()
     extra: Dict[str, Any] = {"max_tokens": max_tokens, "temperature": 0.7}
     if not thinking:
         extra["chat_template_kwargs"] = {"enable_thinking": False}
@@ -1139,7 +1149,7 @@ async def _swap_entry(entry_id: int) -> Dict[str, Any]:
     recipe = None
     for _ in range(2):
         try:
-            text, _finish, _tokens = await _ask(prompt, SWAP_MAX_TOKENS, False, "meal_plan_swap")
+            text, _finish, _tokens = await _ask(prompt, SWAP_MAX_TOKENS, False, "meal_plan_swap", wait_for_idle=False)
         except httpx.HTTPError as ex:
             logger.warning("[MEALPLAN] Swap for entry %s failed: %s", entry_id, type(ex).__name__)
             MEAL_PLAN_SWAP.labels(result="llm_error").inc()

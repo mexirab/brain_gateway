@@ -94,7 +94,7 @@ def make_draft(mp, start=None, status="draft"):
 def fake_ask(replies):
     it = iter(replies)
 
-    async def _ask(prompt, max_tokens, thinking, purpose):
+    async def _ask(prompt, max_tokens, thinking, purpose, wait_for_idle=True):
         return next(it), "stop", 10
 
     return _ask

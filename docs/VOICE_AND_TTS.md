@@ -185,3 +185,14 @@ ssh labadmin@10.0.0.195 'sudo systemctl restart stt-onnx'
 # Logs
 ssh labadmin@10.0.0.195 'journalctl -u stt-onnx -f'
 ```
+
+## Voice tool subset
+
+Voice turns (the dashboard chat mic, HA Assist / ATOM Echo) get a reduced tool list, `tool_definitions.VOICE_TOOL_NAMES`, because every tool schema is prefilled on each turn and voice is latency-sensitive. `prompt_builder` also drops the tool-guidance block on voice, so on voice the model routes by the schema descriptions alone. The voice list is filtered from the already-gated full list, so feature flags still apply. `tests/test_voice_tools.py` pins this down, and also catches a typo in the name list.
+
+What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss).
+
+Notes for the pantry tools on voice:
+- The `pantry` description itself carries the hints the dropped guidance used to give: summarise `view` when speaking, and `out` already adds to the grocery list (don't also call `shopping_list`).
+- HA Assist sends only the latest utterance, so a two-step "accept the plan?" → "yes" can't work there. Say "accept the meal plan" in one go, or accept on the dashboard.
+- `meal_plan swap` never waits for chat to go idle (`meal_planner._ask(..., wait_for_idle=False)`). On non-streaming turns (HA Assist, Telegram) the turn that called the tool is itself counted as active, so waiting would stall the swap for the full 60 s idle timeout.

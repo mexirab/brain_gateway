@@ -118,6 +118,7 @@ Routes: `GET/PUT /api/pantry/diet`, `GET /api/pantry/plan`, `POST /api/pantry/pl
 - `recipes` rows are never pruned.
 - Swapping or replacing a plan does not remove grocery items added earlier.
 - Reminders use the generic `reminder` speaker route (voice + phone); no dedicated category.
+- `pantry` and `meal_plan` are also offered on voice turns (dashboard mic, HA Assist) — see docs/VOICE_AND_TTS.md → Voice tool subset. Swaps skip the planner's wait-for-idle (a swap runs inside the chat turn that asked for it).
 - Avoid and interaction checks are keyword-based.
 
 ## Config

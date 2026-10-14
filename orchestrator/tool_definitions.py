@@ -1243,9 +1243,10 @@ STATIC_TOOLS = [
         "function": {
             "name": "pantry",
             "description": (
-                "Kitchen inventory (fridge/freezer/pantry). view = what's on hand; add = bought/restocked; "
-                'use = used some ("used 2 eggs", "used some feta"); out = finished/ran out (also adds it to '
-                "the grocery list unless add_to_shopping=false); set = correct an amount; search = is X in stock; "
+                "Kitchen inventory (fridge/freezer/pantry). view = what's on hand (when speaking, summarise — "
+                'don\'t read the whole list); add = bought/restocked; use = used some ("used 2 eggs", "used some '
+                "feta\"); out = finished/ran out (also adds it to the grocery list itself — don't also call "
+                "shopping_list; add_to_shopping=false skips that); set = correct an amount; search = is X in stock; "
                 "remove = delete a wrong entry. Amounts are coarse: count for countable things, otherwise "
                 "full/half/low/out. Photo stock-takes happen on the /pantry page, not here."
             ),
@@ -1505,6 +1506,12 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
         "what_now",
         "complete_task",
         "drop_task",
+        # Pantry (F-015): "do we have ground turkey?", "we're out of milk",
+        # "what's for dinner?" are natural spoken requests (the dashboard mic
+        # and HA Assist both take this path). ~2.2k chars of schema; both
+        # stay hidden unless PANTRY_ENABLED (filtered from the full list).
+        "pantry",
+        "meal_plan",
     }
 )
 
