@@ -127,8 +127,27 @@ def build() -> dict:
             description="Streams that died after emitting → user saw a silently truncated "
             "reply. Watched by the ChatStreamTruncating alert.",
         ),
+        timeseries(
+            "Empty Model Replies (/min)",
+            [("sum by (outcome) (rate(bgw_llm_empty_reply_total[5m])) * 60", "{{outcome}}")],
+            unit="none",
+            description="Rounds where the brain returned no text and no tool call. retried = "
+            "re-asked once with thinking on; recovered = the retry answered; still_empty = "
+            "the user got a blank. A sustained retried rate (>5% of voice turns) means the "
+            "voice no-think fast path no longer pays off.",
+        ),
+        stat(
+            "Blank Replies (still_empty, 24h)",
+            'sum(increase(bgw_llm_empty_reply_total{outcome="still_empty"}[24h])) or vector(0)',
+            unit="none",
+            thresholds=[(None, "green"), (1, "orange")],
+            description="Turns where the user got no answer even after the retry. Watched by "
+            "the EmptyRepliesReachingUsers alert.",
+        ),
     ]
-    row, y = grid_row(streaming_flow, y, heights=[8, 8, 8])
+    row, y = grid_row(streaming_flow[:3], y, heights=[8, 8, 8])
+    panels.extend(row)
+    row, y = grid_row(streaming_flow[3:], y, heights=[8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Mode Router

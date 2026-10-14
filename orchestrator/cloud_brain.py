@@ -102,9 +102,13 @@ def _is_empty_assistant(m: dict) -> bool:
     if isinstance(content, str):
         return not content.strip()
     if isinstance(content, list):
-        return not any(
-            (p.get("type") != "text") or (p.get("text") or "").strip() for p in content if isinstance(p, dict)
-        )
+        for p in content:
+            if not isinstance(p, dict) or p.get("type") != "text":
+                return False  # image or unknown part: keep the turn
+            t = p.get("text")
+            if not isinstance(t, str) or t.strip():
+                return False  # odd/non-string text is kept, never crashes
+        return True
     return False
 
 

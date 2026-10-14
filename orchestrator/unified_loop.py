@@ -640,14 +640,25 @@ async def run_unified_tool_loop(
         }
         logger.info("[%s] Voice mode: max_tokens=1024, thinking=off", label)
     empty_retry_done = False
+    retry_text_only = False  # the retry follows tool execution: words only, no new actions
 
     # Build allowlist of valid tool names from the tools passed in
     valid_tool_names = {t["function"]["name"] for t in tools if "function" in t}
 
     executed_calls = set()
 
-    for round_num in range(max_rounds):
-        logger.info("[%s] Round %d/%d", label, round_num + 1, max_rounds)
+    # Iteration budget, separate from max_rounds: the empty-reply retry adds a
+    # round instead of consuming one (an empty LAST round must not fall into
+    # the "Hit max tool rounds" apology). NOTE: the terminal-tool line below
+    # reassigns max_rounds, which never shortened the old range()-based loop;
+    # that (pre-existing) behaviour is deliberately preserved here.
+    round_limit = max_rounds
+    round_num = -1
+    while True:
+        round_num += 1
+        if round_num >= round_limit:
+            break
+        logger.info("[%s] Round %d/%d", label, round_num + 1, round_limit)
 
         _llm_t0 = time.time()
         llm_resp = None
@@ -833,26 +844,55 @@ async def run_unified_tool_loop(
             # used to justify skipping the vLLM upgrade.
             logger.warning("[%s] TOOL_CALL_SOURCE instrumentation failed", label, exc_info=True)
 
-        # No tool calls and no raw output at all: the model ended its turn
-        # immediately. Nothing reached the client, so one retry is safe — with
-        # thinking enabled, the robust path on Qwen3.8. (Raw, not cleaned: a
-        # rejected/truncated <tool_call> echo is not "empty" and isn't retried.)
-        if not tool_calls and not content.strip() and not empty_retry_done:
+        # A retry that follows tool execution exists to get the WORDS out; it
+        # must not start new actions (security review: a near-duplicate
+        # reminder/HA call could otherwise run).
+        if retry_text_only and tool_calls:
+            logger.info("[%s] Ignoring %d tool call(s) in the post-tool empty-reply retry", label, len(tool_calls))
+            tool_calls = []
+
+        # No tool calls and nothing visible: the model ended its turn
+        # immediately (or only echoed the <think></think> prefill). Nothing
+        # visible reached the client, so one retry is safe — with thinking
+        # enabled, the robust path on Qwen3.8. A rejected/truncated <tool_call>
+        # echo is not "empty" and isn't retried.
+        if (
+            not tool_calls
+            and not clean_response(content).strip()
+            and "<tool_call>" not in content
+            and not empty_retry_done
+        ):
             empty_retry_done = True
+            retry_text_only = bool(executed_calls)
+            round_limit += 1  # the retry gets its own round
             EMPTY_REPLY_TOTAL.labels(outcome="retried").inc()
-            logger.warning(
-                "[%s] Empty reply (finish_reason=%s) — retrying once with thinking", label, choice.get("finish_reason")
-            )
-            if voice_extra and "chat_template_kwargs" in voice_extra:
+            dropped_no_think = bool(voice_extra and "chat_template_kwargs" in voice_extra)
+            if dropped_no_think:
                 voice_extra = {k: v for k, v in voice_extra.items() if k != "chat_template_kwargs"}
+            # INFO: counted, and normally recovered — the self-audit digest
+            # (warnings+) should only see the case where the user got nothing.
+            logger.info(
+                "[%s] Empty reply (finish_reason=%s) — retrying once%s%s",
+                label,
+                choice.get("finish_reason"),
+                " with thinking" if dropped_no_think else "",
+                " (text only)" if retry_text_only else "",
+            )
             continue
 
         # No tool calls — return the text response
+        # Rounds the turn really used (the empty-reply retry doesn't count).
+        effective_round = round_num - (1 if empty_retry_done else 0)
         if not tool_calls:
-            TOOL_ROUNDS.observe(round_num + 1)
+            TOOL_ROUNDS.observe(effective_round + 1)
             result = clean_response(content)
             if not result.strip():
                 EMPTY_REPLY_TOTAL.labels(outcome="still_empty").inc()
+                logger.warning(
+                    "[%s] Empty reply after thinking retry — user got no answer (finish_reason=%s)",
+                    label,
+                    choice.get("finish_reason"),
+                )
             elif empty_retry_done:
                 EMPTY_REPLY_TOTAL.labels(outcome="recovered").inc()
             # Length only, never the text. This used to log result[:100], which
@@ -866,7 +906,7 @@ async def run_unified_tool_loop(
 
             # Safety net: if user mentioned meals/meds/water/movement but model
             # skipped selfcare_log, call it automatically so nudges stop.
-            if "selfcare_log" in valid_tool_names and round_num == 0:
+            if "selfcare_log" in valid_tool_names and effective_round == 0:
                 user_text = _last_user_text(messages)
                 auto_action = _detect_selfcare_action(user_text)
                 if auto_action:
