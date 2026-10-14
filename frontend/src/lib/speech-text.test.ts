@@ -116,4 +116,9 @@ describe('speech budget and long sentences', () => {
     expect(parts.join(' ').split(/\s+/)).toEqual(text.split(/\s+/));
     expect(splitLong('short')).toEqual(['short']);
   });
+
+  it('a hard cut never splits a surrogate pair', () => {
+    const parts = splitLong('a' + '\u{20000}'.repeat(550));
+    for (const p of parts) expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(p)).toBe(false);
+  });
 });

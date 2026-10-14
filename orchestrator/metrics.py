@@ -975,7 +975,7 @@ VOICE_TTS_LATENCY = Histogram(
     "bgw_voice_tts_seconds",
     "Successful TTS synthesis latency (/v1/audio/speech proxy + dashboard "
     "/api/tts/synthesize, one call per sentence). Excludes browser playback.",
-    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
+    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0],
 )
 
 EMPTY_REPLY_TOTAL = Counter(

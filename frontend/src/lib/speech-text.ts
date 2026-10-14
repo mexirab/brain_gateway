@@ -146,7 +146,9 @@ export function splitLong(text: string, max: number = SPEECH_MAX_SEGMENT_CHARS):
   while (rest.length > max) {
     const window = rest.slice(0, max);
     const punct = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(' — '));
-    const cut = punct > max / 3 ? punct + 1 : window.lastIndexOf(' ') > 0 ? window.lastIndexOf(' ') : max;
+    let cut = punct > max / 3 ? punct + 1 : window.lastIndexOf(' ') > 0 ? window.lastIndexOf(' ') : max;
+    // Hard cut: never split a surrogate pair (the server 400s lone surrogates).
+    if (cut === max && /[\uD800-\uDBFF]/.test(rest[cut - 1])) cut -= 1;
     out.push(rest.slice(0, cut).trim());
     rest = rest.slice(cut).trim();
   }

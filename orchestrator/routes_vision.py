@@ -309,7 +309,7 @@ async def openai_audio_speech(request: Request):
 
 
 # The dashboard chat speaks replies one sentence at a time and caps the spoken
-# portion client-side (~600 chars), so a single request never needs more than
+# portion client-side (1200 chars, split into <=400-char segments), so a single request never needs more than
 # this. The caps keep one bearer-authed call from pinning the single-GPU TTS
 # server: chars bound ordinary text, UTF-8 bytes bound emoji/CJK-heavy input
 # (1000 emoji passed a chars-only cap and held the GPU ~20 s).
