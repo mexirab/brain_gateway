@@ -201,6 +201,11 @@ export default function ChatPage() {
   }, [annHistory]);
 
   const handleSend = async (text: string, source: SendSource) => {
+    // Snapshot the history BEFORE adding this turn: messagesRef is synced by
+    // an effect, and after the await below it can already contain the new
+    // user message + empty placeholder (first message of a new chat) — which
+    // sent the question twice with a blank assistant turn between them.
+    const prior = messagesRef.current;
     const userMsg: DisplayMessage = { uid: nextUid(), role: 'user', content: text };
     const assistantMsg: DisplayMessage = { uid: nextUid(), role: 'assistant', content: '' };
 
@@ -242,8 +247,10 @@ export default function ChatPage() {
     api.saveMessage(convId, 'user', text).catch(() => {});
 
     // Use ref to avoid stale closure — messages may change between click and here
+    // Skip blank and error bubbles: an empty assistant turn in the history
+    // made the brain reply with nothing again (the server drops them too).
     const chatHistory: ChatMessage[] = [
-      ...messagesRef.current.map((m) => ({
+      ...prior.filter((m) => !m.error && m.content.trim()).map((m) => ({
         role: m.role,
         content: m.announcement
           ? `[Jess announced - ${m.announcement.announcement_type}]: ${m.content}`
@@ -279,6 +286,22 @@ export default function ChatPage() {
         // Persist assistant response
         if (finalContent.trim()) {
           api.saveMessage(convId, 'assistant', finalContent, routing).catch(() => {});
+        } else {
+          // No text came back: say so instead of leaving a blank bubble —
+          // out loud too when the reply was going to be spoken (hands-free
+          // users aren't looking at the screen).
+          const noReply = 'Sorry — I didn’t get a reply just now. Please try again.';
+          if (speakReply) pushText(noReply);
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              ...updated[updated.length - 1],
+              error: true,
+              routing: undefined,
+              content: noReply,
+            };
+            return updated;
+          });
         }
         if (speakReply) endReply();
         // Refresh conversation list (updated_at changed)

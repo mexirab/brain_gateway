@@ -380,6 +380,18 @@ Echo-injection defences in `unified_loop.py` (2026-10-02 security review: a `<to
 
 Known gaps (not fixed): no server-side confirmation gate for HA lock/alarm/cover services; announcement-ack inference still trusts the client transcript's assistant turns (API-token holders only); the `home_assistant` schema lists only the first 60 entities (sorted by entity_id) so scenes/media_players may be absent.
 
+## Empty-Reply Handling
+
+Fix for blank replies (2026-10-14): llama-server sometimes generated a single EOS token, mostly in voice mode (`enable_thinking: false`) when the history held an empty assistant turn.
+
+| Layer | Behavior |
+|-------|----------|
+| `cloud_brain._is_empty_assistant` | Empty assistant turns in client history (`/v1/chat/completions`, every client) are dropped before the loop. Log: `Dropped N empty assistant message(s)`. |
+| `unified_loop.run_unified_tool_loop` | A round with no tool call and no visible text (think-only counts as empty; a `<tool_call>` echo does not) is retried once, with thinking re-enabled in voice mode. The retry gets its own round (`round_limit += 1`); if tools already ran this turn the retry is text-only (its tool calls are ignored). `TOOL_ROUNDS` and the selfcare safety net use the effective round (retry not counted). Logs: retry INFO, `[UNIFIED] Empty reply after thinking retry` WARNING. |
+| Metric / alert | `bgw_llm_empty_reply_total{outcome=retried\|recovered\|still_empty}`; Grafana "Empty Model Replies (/min)" + "Blank Replies (still_empty, 24h)" (Request Flow row, `brain_gateway_sre.py`); `EmptyRepliesReachingUsers` (`still_empty` in 1h → quiet Pushover). |
+
+Known gap (pre-existing, behaviour preserved): the terminal-tool `max_rounds = round_num + 2` reassignment never shortens the loop.
+
 ## Tool Schemas
 
 ### home_assistant
