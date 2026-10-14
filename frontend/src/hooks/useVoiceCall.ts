@@ -42,6 +42,13 @@ const EMPTY_BACKOFF_MAX_MS = 5_000;
 const IDLE_CALL_END_MS = 5 * 60_000;
 // How long iOS gets to resume an interrupted AudioContext (call/Siri/alarm).
 const INTERRUPT_GRACE_MS = 1_500;
+// While the mic is open iOS runs the whole audio session in "phone call"
+// mode (voice processing): Jess's reply sounds like a walkie-talkie, with
+// static/pops. So the mic is released as soon as an utterance is recorded and
+// re-acquired after her reply — she then plays through the normal media path.
+const MIC_CONSTRAINTS: MediaStreamConstraints = {
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+};
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
 
@@ -76,6 +83,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
   const genRef = useRef(0);
   const ctxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const recordingRef = useRef<Recording | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -115,6 +123,14 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     });
   }, []);
 
+  /** Close the mic (iOS leaves "phone call" audio mode once nothing captures). */
+  const releaseMic = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+    streamRef.current = null;
+    sourceRef.current?.disconnect();
+    sourceRef.current = null;
+  }, []);
+
   const end = useCallback(() => {
     genRef.current += 1;
     stopTimer();
@@ -122,8 +138,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     abortRef.current = null;
     void finishRecording(recordingRef.current, false);
     recordingRef.current = null;
-    streamRef.current?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
-    streamRef.current = null;
+    releaseMic();
     analyserRef.current = null;
     const ctx = ctxRef.current;
     ctxRef.current = null;
@@ -134,12 +149,35 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     wakeLockRef.current?.release().catch(() => {});
     wakeLockRef.current = null;
     setPhase('off');
-  }, [finishRecording]);
+  }, [finishRecording, releaseMic]);
 
   const fail = useCallback((message: string) => {
     end();
     setError(message);
   }, [end]);
+
+  /** Open the mic and feed the analyser. False (and the call ended) on failure. */
+  const acquireMic = useCallback(async (gen: number, failMessage: string): Promise<boolean> => {
+    const ctx = ctxRef.current;
+    const analyser = analyserRef.current;
+    if (!ctx || !analyser) return false;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+    } catch {
+      if (gen === genRef.current) fail(failMessage);
+      return false;
+    }
+    if (gen !== genRef.current) { stream.getTracks().forEach((t) => t.stop()); return false; }
+    streamRef.current = stream;
+    stream.getAudioTracks().forEach((t) => {
+      t.onended = () => { if (gen === genRef.current) fail('The microphone was disconnected, so the call ended.'); };
+    });
+    const source = ctx.createMediaStreamSource(stream);
+    source.connect(analyser);
+    sourceRef.current = source;
+    return true;
+  }, [fail]);
 
   const listen = useCallback(() => {
     const gen = genRef.current;
@@ -157,16 +195,27 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     const buf = new Float32Array(analyser.fftSize);
     let idleSince = performance.now();
 
+    /** Re-open the mic if it was released, then listen again after `delayMs`. */
     const relisten = (delayMs: number) => {
       setPhase('listening'); // label now; the mic is analysed after the delay
-      setTimeout(() => { if (gen === genRef.current) listen(); }, delayMs);
+      setTimeout(async () => {
+        if (gen !== genRef.current) return;
+        if (!streamRef.current) {
+          const ok = await acquireMic(gen, 'Couldn’t get the microphone back — tap the call button to start again.');
+          if (!ok || gen !== genRef.current) return;
+        }
+        await ctxRef.current?.resume().catch(() => {});
+        if (gen === genRef.current) listen();
+      }, delayMs);
     };
 
     const finishUtterance = async () => {
       const blob = await finishRecording(recordingRef.current, true);
       recordingRef.current = null;
       if (gen !== genRef.current) return;
-      if (!blob || blob.size === 0) { listen(); return; }
+      // Recording done: let go of the mic before Jess speaks (see MIC_CONSTRAINTS).
+      releaseMic();
+      if (!blob || blob.size === 0) { relisten(0); return; }
       setPhase('transcribing');
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -180,7 +229,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
         } else if (++sttFailuresRef.current >= MAX_CONSECUTIVE_STT_FAILURES) {
           fail('Speech recognition keeps failing, so the call ended.');
         } else {
-          listen(); // skip this snippet, keep the call going
+          relisten(0); // skip this snippet, keep the call going
         }
         return;
       }
@@ -238,7 +287,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
         void finishRecording(old, false);
       }
     }, TICK_MS);
-  }, [fail, finishRecording, newRecording]);
+  }, [acquireMic, fail, finishRecording, newRecording, releaseMic]);
 
   const start = useCallback(() => {
     if (ctxRef.current) return;
@@ -265,6 +314,9 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     // "Listening" forever. Try to resume; if it stays down, end visibly.
     ctx.onstatechange = () => {
       if (gen !== genRef.current || ctx.state === 'running' || ctx.state === 'closed') return;
+      // Mic released while Jess answers: the session switch may bounce the
+      // context; relisten() resumes it before analysing again.
+      if (!streamRef.current) return;
       ctx.resume().catch(() => {});
       setTimeout(() => {
         if (gen === genRef.current && ctx.state !== 'running') {
@@ -273,31 +325,19 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       }, INTERRUPT_GRACE_MS);
     };
 
+    // The analyser outlives each mic stream (re-acquired every turn).
+    // WebKit may not pull nodes with no path to the destination; a muted
+    // gain keeps the analyser fed without playing the mic back.
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    analyser.connect(mute);
+    mute.connect(ctx.destination);
+    analyserRef.current = analyser;
+
     void (async () => {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-      } catch {
-        if (gen === genRef.current) fail('Microphone access was denied.');
-        return;
-      }
-      if (gen !== genRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
-      streamRef.current = stream;
-      stream.getAudioTracks().forEach((t) => {
-        t.onended = () => { if (gen === genRef.current) fail('The microphone was disconnected, so the call ended.'); };
-      });
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      // WebKit may not pull nodes with no path to the destination; a muted
-      // gain keeps the analyser fed without playing the mic back.
-      const mute = ctx.createGain();
-      mute.gain.value = 0;
-      ctx.createMediaStreamSource(stream).connect(analyser);
-      analyser.connect(mute);
-      mute.connect(ctx.destination);
-      analyserRef.current = analyser;
+      if (!(await acquireMic(gen, 'Microphone access was denied.'))) return;
       try {
         const wl = (navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<WakeLockSentinelLike> } }).wakeLock;
         if (wl) {
@@ -308,7 +348,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       } catch { /* screen may lock; the call ends when the page is hidden */ }
       if (gen === genRef.current) listen();
     })();
-  }, [fail, listen]);
+  }, [acquireMic, fail, listen]);
 
   // iOS suspends a hidden page (and its mic) — end cleanly instead of hanging.
   useEffect(() => {
