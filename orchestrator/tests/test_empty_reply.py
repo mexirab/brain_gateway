@@ -447,3 +447,4 @@ async def test_dropped_tool_call_is_not_retried():
     assert call_model.call_count == 1
     assert result == ""
     assert _delta(before)["retried"] == 0
+    assert _delta(before)["still_empty"] == 0  # covered by the dropped metric/alert instead

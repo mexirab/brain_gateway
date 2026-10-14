@@ -889,7 +889,9 @@ async def run_unified_tool_loop(
         if not tool_calls:
             TOOL_ROUNDS.observe(effective_round + 1)
             result = clean_response(content)
-            if not result.strip():
+            # A dropped tool call is counted/alerted by TOOL_CALL_SOURCE{dropped}
+            # (ToolCallsSilentlyDropped) — don't double-signal it as a blank reply.
+            if not result.strip() and not _dropped_call:
                 EMPTY_REPLY_TOTAL.labels(outcome="still_empty").inc()
                 logger.warning(
                     "[%s] Empty reply after thinking retry — user got no answer (finish_reason=%s)",
