@@ -5,7 +5,10 @@ import type { NextRequest } from 'next/server';
 // shows live infra status via the authenticated `/api/services` + `/health`
 // proxy, so it must not be exposed to anonymous users. It lives under the
 // `(private)` route group to match.
-const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals', '/pantry'];
+// Exported for middleware.test.ts, which asserts every `(private)` route is
+// listed here and in `config.matcher` (Next needs the matcher to be a static
+// literal, so it can't be derived from this array).
+export const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals', '/pantry', '/personal-facts'];
 const COOKIE_NAME = 'brain_token';
 
 export function middleware(request: NextRequest) {
@@ -30,5 +33,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/chat/:path*', '/tasks/:path*', '/home/:path*', '/finance/:path*', '/announcements/:path*', '/shopping/:path*', '/documents/:path*', '/architecture/:path*', '/settings/:path*', '/workouts/:path*', '/meals/:path*', '/pantry/:path*'],
+  matcher: ['/dashboard/:path*', '/chat/:path*', '/tasks/:path*', '/home/:path*', '/finance/:path*', '/announcements/:path*', '/shopping/:path*', '/documents/:path*', '/architecture/:path*', '/settings/:path*', '/workouts/:path*', '/meals/:path*', '/pantry/:path*', '/personal-facts/:path*'],
 };

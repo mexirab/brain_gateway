@@ -1,0 +1,86 @@
+// @vitest-environment node
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { NextRequest } from 'next/server';
+import { PROTECTED_PATHS, config, middleware } from './middleware';
+
+// Every top-level route under app/(private)/ renders the private shell. Next
+// requires `config.matcher` to be a static literal, so it can't be generated
+// from the filesystem — this test is the guard that keeps a new page from
+// shipping unauthenticated (as /personal-facts once did).
+//
+// Nested route groups like `(private)/(admin)/audit` contribute `/audit`, so
+// recurse into them. `_private` folders, intercepting routes (`(.)foo`) and
+// parallel-route slots (`@modal`) aren't standalone URLs. A top-level dynamic
+// segment (`[id]`) would surface as `/[id]` and fail on purpose: a prefix list
+// can't protect it, so that needs a design change, not a list entry.
+function topLevelRoutes(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith('_') && !d.name.startsWith('@'))
+    .flatMap((d) => {
+      if (d.name.startsWith('(.')) return [];
+      if (d.name.startsWith('(')) return topLevelRoutes(join(dir, d.name));
+      return [`/${d.name}`];
+    });
+}
+
+const privateRoutes = topLevelRoutes(fileURLToPath(new URL('./app/(private)', import.meta.url)));
+const validToken = process.env.DASHBOARD_TOKEN || 'changeme';
+
+function request(path: string, token?: string): NextRequest {
+  const req = new NextRequest(`http://localhost:3001${path}`);
+  if (token !== undefined) req.cookies.set('brain_token', token);
+  return req;
+}
+
+function expectLoginRedirect(res: Response, path: string) {
+  expect(res.status).toBe(307);
+  const location = new URL(res.headers.get('location') ?? '');
+  expect(location.pathname).toBe('/login');
+  expect(location.searchParams.get('redirect')).toBe(path);
+}
+
+describe('middleware route protection', () => {
+  it('finds the private routes', () => {
+    expect(privateRoutes.length).toBeGreaterThan(0);
+  });
+
+  it('keeps config.matcher in sync with PROTECTED_PATHS', () => {
+    // A path in PROTECTED_PATHS but not the matcher never reaches middleware().
+    expect([...config.matcher].sort()).toEqual(PROTECTED_PATHS.map((p) => `${p}/:path*`).sort());
+  });
+
+  it.each(privateRoutes)('%s is in PROTECTED_PATHS', (route) => {
+    expect(PROTECTED_PATHS).toContain(route);
+  });
+
+  it.each(privateRoutes)('%s has a matcher entry', (route) => {
+    expect(config.matcher).toContain(`${route}/:path*`);
+  });
+
+  it.each(privateRoutes)('%s redirects an anonymous request to /login', (route) => {
+    expectLoginRedirect(middleware(request(route)), route);
+  });
+
+  it('redirects a wrong token to /login', () => {
+    expectLoginRedirect(middleware(request('/personal-facts', `${validToken}x`)), '/personal-facts');
+  });
+
+  it('protects nested pages and keeps the full path in redirect', () => {
+    expectLoginRedirect(middleware(request('/finance/transactions')), '/finance/transactions');
+  });
+
+  it('lets a request with the valid token through', () => {
+    const res = middleware(request('/personal-facts', validToken));
+    expect(res.headers.get('x-middleware-next')).toBe('1');
+    expect(res.headers.get('location')).toBeNull();
+  });
+
+  it('leaves public routes alone', () => {
+    for (const path of ['/', '/login', '/design-system']) {
+      expect(middleware(request(path)).headers.get('x-middleware-next')).toBe('1');
+    }
+  });
+});
