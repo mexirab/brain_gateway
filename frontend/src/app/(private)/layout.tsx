@@ -31,7 +31,7 @@ export default async function PrivateLayout({
   const navItems = NAV_ITEMS.filter(({ href }) => isNavItemEnabled(href, flags));
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen supports-[height:100dvh]:min-h-dvh flex">
       {/* Sidebar — hidden on mobile, shown on md+ */}
       <aside className="hidden md:flex flex-col w-56 bg-surface-raised border-r border-line-subtle p-4">
         <Link href="/" className="text-lg font-bold text-brand-500 mb-8">
@@ -63,8 +63,9 @@ export default async function PrivateLayout({
       {/* Mobile bottom nav (5 primary tabs + More sheet) */}
       <MobileNav flags={flags} />
 
-      {/* Main content */}
-      <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">
+      {/* Main content — mobile pb clears the fixed MobileNav. If you change
+          this padding, update .page-viewport in globals.css to match. */}
+      <main className="flex-1 p-6 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-6 overflow-auto">
         <SWRProvider>{children}</SWRProvider>
       </main>
     </div>
