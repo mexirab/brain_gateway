@@ -505,6 +505,14 @@ MAX_REMINDER_DELIVERY_ATTEMPTS = 2
 # quickly). Suppression does NOT consume an attempt — it isn't a failure.
 SUPPRESSED_RESCHEDULE_MINUTES = {"dnd_active": 30, "voice_session_active": 2}
 
+# An active voice session (the user talking to Jess in the dashboard / HA
+# Assist) only holds back the SPEAKER part of a reminder — the phone push goes
+# out immediately — and only this many times (x 2 min ~= 10 min). After that:
+# if the push already went out the speakers are skipped, otherwise the
+# announcement plays anyway. Before this, a long voice chat deferred every
+# channel indefinitely (medication reminders included).
+MAX_VOICE_SESSION_DEFERRALS = 5
+
 # Past-due reminders older than this at startup are marked 'missed' instead
 # of late-delivered — announcing a two-day-old reminder does more harm than
 # good, but it must not stay 'pending' forever either.
@@ -517,6 +525,7 @@ async def deliver_reminder_job(
     late: bool = False,
     voice_done: bool = False,
     phone_done: bool = False,
+    voice_deferrals: int = 0,
 ):
     """Called by APScheduler at the scheduled time to deliver a reminder.
 
@@ -550,7 +559,9 @@ async def deliver_reminder_job(
     else:
         spoken_text = f"Hey {profile.user_name}! Quick reminder: {text}"
 
-    def _reschedule(minutes: float, next_attempt: int, v_done: bool, p_done: bool, why: str) -> bool:
+    def _reschedule(
+        minutes: float, next_attempt: int, v_done: bool, p_done: bool, why: str, deferrals: int = voice_deferrals
+    ) -> bool:
         """Re-arm this job in `minutes`. Returns False if scheduling failed."""
         run_at = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=minutes)
         try:
@@ -564,6 +575,7 @@ async def deliver_reminder_job(
                     "late": late,
                     "voice_done": v_done,
                     "phone_done": p_done,
+                    "voice_deferrals": deferrals,
                 },
                 # Same id the ack callback cancels, so a Done tap kills any
                 # pending redelivery regardless of why it was scheduled.
@@ -586,23 +598,47 @@ async def deliver_reminder_job(
     phone_needed = target in ["phone", "both"]
 
     voice_ok = voice_done
+    speakers_deferred = False
     if voice_needed and not voice_done:
         result = await _announce_voice(spoken_text, announcement_type="reminder")
-        if result.get("suppressed"):
-            # DND or an active voice session — NOT a delivery. The old code
-            # treated success=True as delivered and consumed the reminder;
-            # now it defers the whole delivery (phone included: a 3am DND
-            # push would defeat the point of saying goodnight).
-            reason = result.get("reason", "dnd_active")
+        reason = result.get("reason", "dnd_active") if result.get("suppressed") else None
+        if reason == "voice_session_active":
+            if voice_deferrals < MAX_VOICE_SESSION_DEFERRALS:
+                # Don't talk over the conversation, but don't hold the push.
+                speakers_deferred = True
+            elif phone_done:
+                logger.info(
+                    f"[REMINDER] {reminder_id} voice session still active after "
+                    f"{voice_deferrals} deferrals — push already delivered, skipping speakers",
+                    extra={"component": "reminder"},
+                )
+                voice_ok = True
+            else:
+                result = await _announce_voice(spoken_text, announcement_type="reminder", ignore_voice_session=True)
+                reason = result.get("reason", "dnd_active") if result.get("suppressed") else None
+        if reason == "dnd_active" and voice_deferrals > 0 and phone_done:
+            # The push already went out while the user was in a voice session
+            # and they have since said goodnight: don't replay the reminder on
+            # the speakers hours later when DND lifts.
+            logger.info(
+                f"[REMINDER] {reminder_id} DND began after the push was delivered — skipping speakers",
+                extra={"component": "reminder"},
+            )
+            voice_ok = True
+        elif reason is not None and not speakers_deferred and not voice_ok:
+            # DND — NOT a delivery. Defers the whole delivery (phone
+            # included: a 3am DND push would defeat the point of saying
+            # goodnight). Suppression does not consume an attempt.
             delay = SUPPRESSED_RESCHEDULE_MINUTES.get(reason, 30)
             _reschedule(delay, attempt, voice_done, phone_done, f"suppressed ({reason})")
             return
-        voice_ok = result.get("success", False)
-        if not voice_ok:
-            logger.error(
-                f"[REMINDER] TTS FAILED for {reminder_id}: {result.get('error')}",
-                extra={"component": "reminder"},
-            )
+        if not speakers_deferred and not voice_ok:
+            voice_ok = result.get("success", False)
+            if not voice_ok:
+                logger.error(
+                    f"[REMINDER] TTS FAILED for {reminder_id}: {result.get('error')}",
+                    extra={"component": "reminder"},
+                )
 
     phone_ok = phone_done
     if phone_needed and not phone_done:
@@ -699,6 +735,23 @@ async def deliver_reminder_job(
                 f"[REMINDER] Phone delivery FAILED for {reminder_id}: {notif.get('error') or notif.get('errors')}",
                 extra={"component": "reminder"},
             )
+
+    if speakers_deferred:
+        if _reschedule(
+            SUPPRESSED_RESCHEDULE_MINUTES["voice_session_active"],
+            attempt,
+            False,
+            phone_ok,
+            f"speakers deferred (voice_session_active {voice_deferrals + 1}/{MAX_VOICE_SESSION_DEFERRALS})",
+            deferrals=voice_deferrals + 1,
+        ):
+            return
+        # Couldn't re-arm: don't strand the reminder 'pending' with no job.
+        if phone_ok:
+            voice_ok = True  # the push reached the user; drop the speaker part
+        else:
+            result = await _announce_voice(spoken_text, announcement_type="reminder", ignore_voice_session=True)
+            voice_ok = bool(result.get("success")) and not result.get("suppressed")
 
     voice_satisfied = voice_ok or not voice_needed
     phone_satisfied = phone_ok or not phone_needed

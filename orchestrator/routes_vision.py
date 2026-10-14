@@ -6,11 +6,12 @@ import os
 import time
 import wave
 
+import httpx
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from orchestrator import shared
-from orchestrator.metrics import VOICE_TTS_LATENCY
+from orchestrator.metrics import DASHBOARD_STT_TOTAL, DASHBOARD_TTS_TOTAL, VOICE_TTS_LATENCY
 
 logger = logging.getLogger(__name__)
 
@@ -142,22 +143,80 @@ STT_URL = os.environ.get("STT_URL", "")
 MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB
 
 
+# Only these reach the STT server as the upload's type — the client's own
+# filename/content-type are not forwarded verbatim (hacker review: httpx
+# doesn't sanitise a forwarded content-type).
+_STT_UPLOAD_TYPES = {
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/mp4": "m4a",
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "video/webm": "webm",
+    "video/mp4": "m4a",
+}
+
+
+def _stt_error(result: str, error: str, status_code: int) -> JSONResponse:
+    DASHBOARD_STT_TOTAL.labels(result=result).inc()
+    return JSONResponse({"ok": False, "error": error}, status_code=status_code)
+
+
 @router.post("/api/stt/transcribe")
-async def stt_transcribe(file: UploadFile = File(...)):
-    """Proxy audio to STT service for transcription."""
+async def stt_transcribe(file: UploadFile = File(...)) -> Response:
+    """Proxy dashboard audio (mic button / hands-free call) to STT.
+
+    Status codes the frontend relies on: 413 too large, 503 STT unreachable
+    (Helios asleep — call mode ends with "Jess can't hear right now"), 504 STT
+    timed out, 502 STT error / unusable response.
+    """
     audio_data = await file.read()
     if len(audio_data) > MAX_AUDIO_UPLOAD:
-        return JSONResponse({"error": "Audio file too large (max 10 MB)"}, status_code=413)
+        return _stt_error("too_large", "Audio file too large (max 10 MB)", 413)
+    if not STT_URL:
+        return _stt_error("not_configured", "Speech recognition not configured", 503)
+    base_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    upload_type = base_type if base_type in _STT_UPLOAD_TYPES else "application/octet-stream"
+    upload_name = f"audio.{_STT_UPLOAD_TYPES.get(base_type, 'webm')}"
+    try:
+        r = await shared._http.post(
+            f"{STT_URL}/v1/audio/transcriptions",
+            files={"file": (upload_name, audio_data, upload_type)},
+            data={"model": "whisper-1"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except httpx.HTTPStatusError as e:
+        logger.warning("[STT] transcribe -> HTTP %s", e.response.status_code)
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+        logger.warning("[STT] transcribe timed out: %s", type(e).__name__)
+        return _stt_error("timeout", "Transcription timed out", 504)
+    except httpx.RequestError as e:
+        # Connect refused / unreachable: Helios is power-tiered and usually asleep.
+        logger.warning("[STT] transcribe unreachable: %s", type(e).__name__)
+        return _stt_error("unreachable", "Speech recognition unavailable", 503)
+    except ValueError:
+        logger.warning("[STT] transcribe returned a non-JSON body")
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    except Exception:
+        logger.exception("[STT] transcribe failed unexpectedly")
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    if not isinstance(data, dict):
+        logger.warning("[STT] transcribe returned %s, expected an object", type(data).__name__)
+        return _stt_error("upstream_error", "Transcription failed", 502)
+    text = data.get("text")
+    if not (isinstance(text, str) and text.strip()):
+        # Nothing heard (noise false-trigger) — not voice activity: must not
+        # hold announcements or tag the next typed chat as a voice turn.
+        DASHBOARD_STT_TOTAL.labels(result="empty").inc()
+        return JSONResponse(data)
     shared._last_voice_at = time.time()
     shared.mark_voice_activity()
-    r = await shared._http.post(
-        f"{STT_URL}/v1/audio/transcriptions",
-        files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
-        data={"model": "whisper-1"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+    DASHBOARD_STT_TOTAL.labels(result="ok").inc()
+    return JSONResponse(data)
 
 
 @router.post("/v1/audio/transcriptions")
@@ -249,15 +308,77 @@ async def openai_audio_speech(request: Request):
     return Response(content=audio, media_type=content_type)
 
 
+# The dashboard chat speaks replies one sentence at a time and caps the spoken
+# portion client-side (~600 chars), so a single request never needs more than
+# this. The caps keep one bearer-authed call from pinning the single-GPU TTS
+# server: chars bound ordinary text, UTF-8 bytes bound emoji/CJK-heavy input
+# (1000 emoji passed a chars-only cap and held the GPU ~20 s).
+TTS_SYNTH_MAX_CHARS = 1000
+TTS_SYNTH_MAX_BYTES = 2000
+
+
+def _tts_error(result: str, error: str, status_code: int) -> JSONResponse:
+    DASHBOARD_TTS_TOTAL.labels(result=result).inc()
+    return JSONResponse({"ok": False, "error": error}, status_code=status_code)
+
+
 @router.post("/api/tts/synthesize")
-async def tts_synthesize(request: Request):
-    """Synthesize text to speech and return WAV audio."""
-    body = await request.json()
-    text = body.get("text", "")
-    if not text:
-        return JSONResponse({"error": "No text provided"}, status_code=400)
+async def tts_synthesize(request: Request) -> Response:
+    """Synthesize text to speech for the dashboard chat (one sentence per call).
+
+    Status codes the frontend relies on: 400 bad/empty/unencodable text, 413
+    over the caps, 503 TTS unreachable or not configured (shown as "Jess's
+    voice is asleep"), 504 TTS timed out, 502 TTS answered with an error.
+    Validation is manual (not a Pydantic model) to keep that 400/413 contract.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return _tts_error("bad_request", "Invalid JSON", 400)
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return _tts_error("bad_request", "No text provided", 400)
+    text = text.strip()
+    try:
+        encoded_len = len(text.encode("utf-8"))
+    except UnicodeEncodeError:  # lone surrogates — httpx can't send them
+        return _tts_error("bad_request", "Text is not valid UTF-8", 400)
+    if len(text) > TTS_SYNTH_MAX_CHARS or encoded_len > TTS_SYNTH_MAX_BYTES:
+        return _tts_error("too_long", f"Text too long (max {TTS_SYNTH_MAX_CHARS} chars)", 413)
     backend = shared.tts_backend
     if not backend:
-        return JSONResponse({"error": "TTS not available"}, status_code=503)
-    audio_bytes = await backend.synthesize(text)
-    return Response(content=audio_bytes, media_type="audio/wav")
+        return _tts_error("not_configured", "TTS not available", 503)
+
+    _t0 = time.time()
+    try:
+        audio_bytes = await backend.synthesize(text)
+    except httpx.HTTPStatusError as e:
+        logger.warning("[TTS] synthesize -> HTTP %s", e.response.status_code)
+        return _tts_error("upstream_error", "TTS failed", 502)
+    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+        # Connected but no answer in time: TTS is awake but stuck/busy — not "asleep".
+        logger.warning("[TTS] synthesize timed out: %s", type(e).__name__)
+        return _tts_error("timeout", "TTS timed out", 504)
+    except httpx.RequestError as e:
+        # Connect refused / unreachable: Helios is power-tiered and usually asleep.
+        logger.warning("[TTS] synthesize unreachable: %s", type(e).__name__)
+        return _tts_error("unreachable", "TTS unavailable", 503)
+    except Exception:
+        logger.exception("[TTS] synthesize failed unexpectedly")
+        return _tts_error("upstream_error", "TTS failed", 502)
+    VOICE_TTS_LATENCY.observe(time.time() - _t0)  # success only — failures are in the counter
+    DASHBOARD_TTS_TOTAL.labels(result="ok").inc()
+    # Spoken output is playing in the browser: hold off house-speaker
+    # announcements (reminder_manager checks is_voice_session_active) so two
+    # Jesses don't talk over each other. Suppressed reminders retry in +2 min.
+    shared.mark_voice_activity()
+
+    media_type = backend.audio_format
+    if media_type == "audio/wav":
+        # Same first-phoneme stutter fix as /v1/audio/speech; matters more here
+        # because the chat plays one short clip per sentence.
+        try:
+            audio_bytes = _prepend_silence_wav(audio_bytes, TTS_SILENCE_PAD_MS)
+        except Exception as e:
+            logger.warning("[TTS] silence pre-pad failed (%s) — returning raw audio", e)
+    return Response(content=audio_bytes, media_type=media_type, headers={"Cache-Control": "no-store"})

@@ -201,9 +201,14 @@ async def _announce_voice(
     speaker: str | None = None,
     announcement_type: str = "unknown",
     min_volume: float | None = None,
+    ignore_voice_session: bool = False,
 ) -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
+
+    ignore_voice_session: bypass the mid-conversation guard (DND still
+    applies) — used once a reminder has been deferred for a voice session
+    as long as deliver_reminder_job allows.
 
     Generates full audio, saves to disk, serves via HTTP, and plays on an HA media_player.
 
@@ -237,7 +242,7 @@ async def _announce_voice(
     # crosstalk — and (b) piles onto Qwen3-TTS, which is already handling
     # per-sentence synthesis for the live reply and will time out under
     # contention. VOICE_SESSION_WINDOW_SEC defaults to 60s.
-    if shared.is_voice_session_active():
+    if not ignore_voice_session and shared.is_voice_session_active():
         logger.info(
             "[VOICE-ACTIVE] Suppressed announcement (%s): %s",
             announcement_type,

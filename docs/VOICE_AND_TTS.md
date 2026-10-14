@@ -65,9 +65,87 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 - Metrics: `bgw_announcement_speaker_unavailable_total{speaker}` (configured speakers, else `other`; pre-seeded at 0 by `seed_announcement_metrics` at startup) and `bgw_announcement_fallback_total{type}`. Alert `AnnouncementSpeakerUnavailable` — see `monitoring/README.md`.
 - Fix for a dead speaker is physical: power-cycle it; a stereo pair that doesn't return in HA needs re-pairing in Google Home.
 
+## Dashboard chat voice replies
+
+The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs a secure context for the mic — the dashboard is served over HTTPS via Tailscale Serve, tailnet-only).
+
+**Flow:** streamed reply → `lib/speech-text.ts` (strip code blocks, inline code, URLs, link targets, markdown, tables, emoji, lone surrogates; split into sentences as they complete; merge <12-char fragments; cap 600 chars, then "The rest is on screen.") → `lib/speech-queue.ts` (per-sentence `POST /api/tts/synthesize` while still streaming, ≤2 in flight per tab, ordered playback) → `hooks/useTTSPlayback.ts`.
+
+**iOS autoplay:** WebKit rejects `play()` that runs seconds after the tap (`NotAllowedError` — the old hook swallowed it, so no audio on iPhone). The hook keeps ONE `HTMLAudioElement`, unlocks it by playing a tiny silent WAV synchronously inside the send/mic/speaker-toggle/replay tap, and reuses it for every clip.
+
+**When it speaks:**
+- Mic-sent message → always spoken reply (walkie-talkie), even with the speaker toggle off.
+- Typed message → follows the speaker toggle (localStorage `tts_enabled`, per device, default off).
+
+**Controls:** header Stop pill while speaking; starting a recording stops playback (mic stays enabled while Jess speaks); replay button on finished assistant bubbles (not error bubbles); 44px touch targets; always-mounted sr-only aria-live region announces failures.
+
+| Status | Trigger | UI |
+|--------|---------|----|
+| `blocked` | `NotAllowedError` | "Tap to play" |
+| `asleep` | HTTP 503 (TTS unreachable — Helios asleep) | "Jess's voice is asleep — tap to retry" |
+| `interrupted` | iOS paused the element (screen lock, call, Siri) | "Voice paused — tap to replay" |
+| `error` | other failure, 30 s client timeout | error text |
+
+**Backend:** `POST /api/tts/synthesize` (`orchestrator/routes_vision.py`) — caps 1000 chars / 2000 UTF-8 bytes, status contract in `TECHNICAL_REFERENCE.md` → Voice. Success pre-pads ~150 ms WAV silence (`TTS_SILENCE_PAD_MS`, same as `/v1/audio/speech`) and calls `shared.mark_voice_activity()`, so `reminder_manager`'s voice-session gate holds house-speaker announcements while the browser speaks (reminders: speakers only, at most ~10 min; phone push is immediate — see Reminder Voice Retry).
+
+**Metrics:** `bgw_dashboard_tts_total{result}` (`ok|unreachable|timeout|upstream_error|not_configured|bad_request|too_long`, pre-initialized). `bgw_voice_tts_seconds` observes SUCCESSFUL synth only, fed by `/v1/audio/speech` and `/api/tts/synthesize` (one sample per sentence). Grafana TTS Synthesis row (`brain_gateway_sre.py`): "Dashboard TTS Outcomes" (replaced "TTS Call Rate"), "TTS Sentences (24h)" (was "TTS Calls (24h)").
+
+**Tests:** `orchestrator/tests/test_tts_synthesize_route.py`, `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
+
+**Known limits:**
+- Stop / 503 cancels only the browser fetch — the orchestrator + TTS server still finish up to 2 in-flight sentences.
+- TTS server has 2 worker threads: a speaking tab can delay an announcement or Telegram voice reply by ~one sentence.
+- 500 emoji (2000 bytes) still pass the server caps (the client strips emoji anyway).
+- Helios asleep: the first sentence waits for the connect failure (typically a few seconds) before "voice is asleep".
+- ElevenLabs/OpenAI TTS backends: auto-spoken replies are sent to that provider.
+- iOS behaviour verified only in Chromium with an injected iOS-like per-element `play()` policy, not yet on a real iPhone.
+
+## Hands-free call mode
+
+Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers aloud, she listens again. Builds on Dashboard chat voice replies above.
+
+**Start:** the AudioLines button next to the mic — one tap creates the `AudioContext` inside the tap (iOS), opens the mic with `echoCancellation`/`noiseSuppression`/`autoGainControl`, and takes a screen wake lock. `components/chat/VoiceCallBar.tsx` replaces the input while in a call (phase label, Interrupt, End; focus moves to End, and back to the call button afterwards).
+
+**VAD (`lib/vad.ts`, `EnergyVad`):**
+
+| Parameter | Value |
+|-----------|-------|
+| Calibration | 400 ms of room noise, then adaptive noise floor |
+| Speech threshold | `max(0.01, floor × 3)` |
+| Speech confirm | 200 ms above threshold |
+| Utterance end | 1.8 s of silence |
+| Cap | 90 s → `speech-timeout`: treated as steady noise (TV): discarded in the browser, never transcribed, its level becomes the new floor |
+
+**Loop (`hooks/useVoiceCall.ts`):** `MediaRecorder` runs while listening, restarted gaplessly every 3 s of idle (≤ ~3 s lead-in rides along with an utterance) → speech end → `POST /api/stt/transcribe` via `lib/stt.ts` → sent to chat as a voice message (reply always spoken) → waits for the spoken reply to finish (`SpeechQueue.begin()`/`beginReply()` return a completion promise) → 350 ms → listening again. Mic is not analysed while Jess answers (no barge-in); Interrupt stops her speech, listening resumes once the reply stream finishes. Empty transcripts back off 1/2/4/5 s.
+
+**Call ends on:** End; page hidden; 5 min with nothing said; STT 503 ("Jess can't hear right now — Helios (speech recognition) is asleep"); 3 consecutive STT failures (single failures are skipped); iOS `AudioContext` interruption not recovering within 1.5 s; mic track ended.
+
+**Recorder MIME (`lib/stt.ts` `pickRecorderMime`, shared with the mic button's `useVoiceRecorder.ts`):** webm/opus → webm → mp4 (older Safari).
+
+**Backend:** `POST /api/stt/transcribe` (`orchestrator/routes_vision.py`) — status contract in `TECHNICAL_REFERENCE.md` → Voice. Voice activity (`shared.mark_voice_activity()` + next-chat voice flag) is marked only for a non-empty transcript, so a noise false-trigger doesn't hold announcements. Forwarded upload filename/content-type are pinned to an allowlist.
+
+**Metrics:** `bgw_dashboard_stt_total{result}` (`ok|empty|unreachable|timeout|upstream_error|too_large|not_configured`, pre-initialized; counts mic button + call utterances). Grafana TTS Synthesis row: "Dashboard STT Outcomes" next to "Dashboard TTS Outcomes".
+
+**Tests:** `orchestrator/tests/test_stt_transcribe_route.py`, `frontend/src/lib/vad.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
+
+**Known limits:**
+- Verified only in Chromium with an injected WAV microphone through the real VAD/MediaRecorder/STT path — not yet on a real iPhone. Open: playback loudness/routing with the mic open, AirPods (HFP), WebKit analyser behaviour, interruption recovery.
+- Energy VAD can't tell the user from other people: anything transcribed is sent as the user's message. Steady TV-like noise is discarded; conversation in the room is not.
+- Interrupt waits for the text stream to finish before listening again.
+- The OWUI-only `/v1/audio/transcriptions` route still returns an unhandled 500 on STT failure.
+
 ## Reminder Voice Retry
 
 Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry once after 2 minutes. If the retry also fails, the system falls back to a phone notification so the reminder is never silently lost.
+
+**Suppression (`tool_handlers.deliver_reminder_job`):**
+
+| Gate | Effect |
+|------|--------|
+| Voice session active (`shared.is_voice_session_active()`, 60 s window refreshed by dashboard STT + each `/api/tts/synthesize` sentence) | Phone channels (HA Companion, ntfy, Pushover, Telegram) delivered in the same run; only the speaker part re-armed +2 min, max `MAX_VOICE_SESSION_DEFERRALS` = 5 (~10 min, kwarg `voice_deferrals`). After the cap: speakers skipped if the push went out, else announced via `_announce_voice(..., ignore_voice_session=True)` (DND still applies). |
+| DND active | Whole delivery (phone included) deferred 30 min. If DND starts after a voice-session push already went out, the speaker part is skipped, not replayed when DND lifts. |
+
+A failed re-arm does not strand the reminder `pending`: speakers are dropped if the push went out, else announced immediately. Tests: `orchestrator/tests/test_reminder_delivery.py`.
 
 ## HTTP STT Server (port 8003)
 

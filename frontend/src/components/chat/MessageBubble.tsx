@@ -1,7 +1,8 @@
 'use client';
 
-import { User, Bot, Bell } from 'lucide-react';
+import { User, Bot, Bell, Volume2, Play, MoonStar, AlertCircle } from 'lucide-react';
 import type { RoutingInfo, AnnouncementEntry } from '@/lib/types';
+import type { SpeechStatus } from '@/lib/speech-queue';
 import RoutingBadge from './RoutingBadge';
 
 const ANNOUNCEMENT_STYLES: Record<string, { border: string; bg: string }> = {
@@ -25,7 +26,22 @@ interface MessageBubbleProps {
   routing?: RoutingInfo;
   announcement?: AnnouncementEntry;
   isStreaming?: boolean;
+  /** Speech status for THIS message (undefined when it isn't the one speaking). */
+  speechStatus?: SpeechStatus;
+  /** Speak this message. Must be wired to a tap (iOS audio unlock). */
+  onSpeak?: () => void;
 }
+
+// `label` is the tap target once the reply has finished; `streaming` is the
+// non-interactive text shown while it is still arriving (nothing to tap yet).
+const SPEECH_NOTICE: Partial<Record<SpeechStatus, { icon: typeof Play; label: string; streaming: string }>> = {
+  blocked: { icon: Play, label: 'Tap to play', streaming: 'Voice blocked — play it when the reply finishes' },
+  asleep: { icon: MoonStar, label: 'Jess’s voice is asleep — tap to retry', streaming: 'Jess’s voice is asleep' },
+  interrupted: { icon: Play, label: 'Voice paused — tap to replay', streaming: 'Voice paused' },
+  error: { icon: AlertCircle, label: 'Couldn’t play voice — tap to retry', streaming: 'Couldn’t play voice' },
+};
+
+const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50';
 
 export default function MessageBubble({
   role,
@@ -33,8 +49,13 @@ export default function MessageBubble({
   routing,
   announcement,
   isStreaming,
+  speechStatus,
+  onSpeak,
 }: MessageBubbleProps) {
   const isUser = role === 'user';
+  const notice = speechStatus ? SPEECH_NOTICE[speechStatus] : undefined;
+  const busy = speechStatus === 'loading' || speechStatus === 'speaking';
+  const canSpeak = !isUser && !isStreaming && !!onSpeak && content.trim().length > 0;
   const isAnnouncement = !!announcement;
   const annStyle = isAnnouncement
     ? ANNOUNCEMENT_STYLES[announcement.announcement_type] ?? DEFAULT_STYLE
@@ -76,6 +97,33 @@ export default function MessageBubble({
             {announcement.announcement_type}
           </span>
         )}
+        {notice && !isUser && isStreaming && (
+          <span className="flex items-center gap-1.5 px-1 text-xs text-content-muted">
+            <notice.icon size={14} aria-hidden />
+            {notice.streaming}
+          </span>
+        )}
+        {canSpeak && (notice ? (
+          <button
+            onClick={onSpeak}
+            className={`flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-xs bg-surface-overlay/40 text-content-secondary hover:text-content-primary transition-colors ${FOCUS_RING}`}
+          >
+            <notice.icon size={14} aria-hidden />
+            {notice.label}
+          </button>
+        ) : (
+          <button
+            onClick={onSpeak}
+            disabled={busy}
+            aria-label={busy ? 'Speaking' : 'Play this message aloud'}
+            title={busy ? 'Speaking…' : 'Play aloud'}
+            className={`-my-1.5 -ml-1.5 inline-flex items-center justify-center min-h-11 min-w-11 rounded-lg transition-colors ${FOCUS_RING} ${
+              busy ? 'text-brand animate-pulse' : 'text-content-muted hover:text-content-primary'
+            }`}
+          >
+            <Volume2 size={14} aria-hidden />
+          </button>
+        ))}
         {routing && <RoutingBadge routing={routing} />}
       </div>
 

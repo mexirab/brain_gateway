@@ -2,25 +2,42 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import useSWR from 'swr';
-import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, Square } from 'lucide-react';
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
 import { friendlyError } from '@/lib/errors';
 import type { ChatMessage, RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
 import MessageBubble from '@/components/chat/MessageBubble';
-import ChatInput from '@/components/chat/ChatInput';
+import ChatInput, { type SendSource } from '@/components/chat/ChatInput';
 import ChatSidebar from '@/components/chat/ChatSidebar';
 import useTTSPlayback from '@/hooks/useTTSPlayback';
+import useVoiceCall from '@/hooks/useVoiceCall';
+import VoiceCallBar from '@/components/chat/VoiceCallBar';
 
 interface DisplayMessage {
+  /** Client-side id: React key + which bubble a speech status belongs to. */
+  uid: string;
   role: 'user' | 'assistant';
   content: string;
   routing?: RoutingInfo;
   announcement?: AnnouncementEntry;
   saved?: boolean; // already persisted to DB
+  error?: boolean; // friendlyError placeholder — not worth speaking
 }
 
+// Screen-reader text for the always-mounted live region (a region mounted
+// together with its text is often not announced).
+const SPEECH_ANNOUNCE: Record<string, string> = {
+  blocked: 'Voice reply blocked by the browser. Use Tap to play.',
+  asleep: 'Jess’s voice is asleep.',
+  interrupted: 'Voice reply paused.',
+  error: 'Couldn’t play the voice reply.',
+};
+
 const SIDEBAR_PREF_KEY = 'chat:sidebar-open';
+
+let uidCounter = 0;
+const nextUid = () => `m${++uidCounter}`;
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -34,8 +51,13 @@ export default function ChatPage() {
   const initRef = useRef(false);
   const streamingRef = useRef(false);
   const activeConvIdRef = useRef<string | null>(null);
-  const { isSpeaking, ttsEnabled, setTtsEnabled, speak } = useTTSPlayback();
+  const {
+    ttsEnabled, setTtsEnabled, speech, isSpeaking, unlock,
+    beginReply, pushText, endReply, speakText, stop: stopSpeech,
+  } = useTTSPlayback();
   const ttsEnabledRef = useRef(false);
+  // Set after useVoiceCall below; lets earlier callbacks end a call.
+  const callEndRef = useRef<() => void>(() => {});
   const messagesRef = useRef<DisplayMessage[]>([]);
 
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
@@ -90,7 +112,10 @@ export default function ChatPage() {
   const loadConversation = useCallback(async (convId: string) => {
     try {
       const { messages: saved } = await api.getConversationMessages(convId);
+      stopSpeech();
+      callEndRef.current();
       const display: DisplayMessage[] = saved.map((m) => ({
+        uid: nextUid(),
         role: m.role as 'user' | 'assistant',
         content: m.content,
         routing: m.routing ? JSON.parse(m.routing) : undefined,
@@ -102,13 +127,15 @@ export default function ChatPage() {
       setMessages(display);
       setActiveConvId(convId);
     } catch { /* ignore */ }
-  }, []);
+  }, [stopSpeech]);
 
   // Create new conversation
   const createNewChat = useCallback(async () => {
+    stopSpeech();
+    callEndRef.current();
     setMessages([]);
     setActiveConvId(null);
-  }, []);
+  }, [stopSpeech]);
 
   // Delete conversation
   const handleDelete = useCallback(async (convId: string) => {
@@ -155,6 +182,7 @@ export default function ChatPage() {
 
     if (newAnnouncements.length > 0) {
       const newMsgs: DisplayMessage[] = newAnnouncements.map((a) => ({
+        uid: nextUid(),
         role: 'assistant' as const,
         content: a.text,
         announcement: a,
@@ -172,16 +200,43 @@ export default function ChatPage() {
     }
   }, [annHistory]);
 
-  const handleSend = async (text: string) => {
-    const userMsg: DisplayMessage = { role: 'user', content: text };
-    const assistantMsg: DisplayMessage = { role: 'assistant', content: '' };
+  const handleSend = async (text: string, source: SendSource) => {
+    const userMsg: DisplayMessage = { uid: nextUid(), role: 'user', content: text };
+    const assistantMsg: DisplayMessage = { uid: nextUid(), role: 'assistant', content: '' };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setStreaming(true);
     streamingRef.current = true;
 
-    // Ensure conversation exists
-    const convId = await ensureConversation(text);
+    // Walkie-talkie: a spoken question always gets a spoken answer; typed
+    // messages follow the speaker toggle. Speech starts per sentence while
+    // the reply is still streaming.
+    const speakReply = source === 'voice' || ttsEnabledRef.current;
+    // Resolves when the spoken reply has finished (or was stopped) — call
+    // mode waits on it before listening again.
+    const speechDone = speakReply ? beginReply(assistantMsg.uid) : undefined;
+    if (!speakReply) stopSpeech();
+
+    // Ensure conversation exists. If that fails, finish the turn visibly
+    // (otherwise `streaming` stays true and the input is dead).
+    let convId: string;
+    try {
+      convId = await ensureConversation(text);
+    } catch (err) {
+      setStreaming(false);
+      streamingRef.current = false;
+      if (speakReply) endReply();
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          error: true,
+          content: friendlyError(err, 'Sorry — I couldn’t start the conversation just now. Please try again.'),
+        };
+        return updated;
+      });
+      return;
+    }
 
     // Persist user message
     api.saveMessage(convId, 'user', text).catch(() => {});
@@ -203,6 +258,7 @@ export default function ChatPage() {
       chatHistory,
       (chunk) => {
         finalContent += chunk;
+        if (speakReply) pushText(chunk);
         setMessages((prev) => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
@@ -224,27 +280,39 @@ export default function ChatPage() {
         if (finalContent.trim()) {
           api.saveMessage(convId, 'assistant', finalContent, routing).catch(() => {});
         }
-        // Auto-play TTS
-        if (ttsEnabledRef.current && finalContent.trim()) {
-          speak(finalContent);
-        }
+        if (speakReply) endReply();
         // Refresh conversation list (updated_at changed)
         api.listConversations().then(setConversations).catch(() => {});
       },
       (error) => {
         setStreaming(false);
         streamingRef.current = false;
+        if (speakReply) endReply(); // speak whatever arrived before the error
         setMessages((prev) => {
           const updated = [...prev];
           updated[updated.length - 1] = {
             ...updated[updated.length - 1],
+            error: true,
             content: friendlyError(error, 'Sorry — I couldn’t reach the model just now. Please try again.'),
           };
           return updated;
         });
       },
     );
+    await speechDone;
   };
+
+  // Hands-free call: each finished utterance is sent like a mic message and
+  // the call waits for the spoken reply before listening again.
+  useEffect(() => { callEndRef.current = call.end; });
+  const handleSendRef = useRef(handleSend);
+  useEffect(() => { handleSendRef.current = handleSend; });
+  const call = useVoiceCall(useCallback((text: string) => handleSendRef.current(text, 'voice'), []));
+  const { end: callEnd } = call;
+  const endCall = useCallback(() => { callEnd(); stopSpeech(); }, [callEnd, stopSpeech]);
+  // Return focus to the call button when a call ends (the bar unmounts).
+  const wasInCallRef = useRef(false);
+  useEffect(() => { wasInCallRef.current = call.active; }, [call.active]);
 
   return (
     <div className="page-viewport flex">
@@ -283,17 +351,35 @@ export default function ChatPage() {
               </span>
             </h1>
           </div>
-          <button
-            onClick={() => setTtsEnabled(!ttsEnabled)}
-            className={`p-2 rounded-lg transition-colors shrink-0 ${
-              ttsEnabled
-                ? 'bg-brand/20 text-brand'
-                : 'bg-surface-overlay/30 text-content-muted hover:text-content-primary'
-            }`}
-            title={ttsEnabled ? 'Disable voice responses' : 'Enable voice responses'}
-          >
-            {ttsEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {isSpeaking && (
+              <button
+                onClick={stopSpeech}
+                className="flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-brand/20 text-brand text-sm transition-colors hover:bg-brand/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+                aria-label="Stop speaking"
+              >
+                <Square size={14} className="fill-current" aria-hidden />
+                Stop
+              </button>
+            )}
+            <button
+              onClick={() => {
+                const next = !ttsEnabled;
+                if (next) unlock(); else stopSpeech();
+                setTtsEnabled(next);
+              }}
+              aria-pressed={ttsEnabled}
+              aria-label={ttsEnabled ? 'Disable voice responses' : 'Enable voice responses'}
+              className={`p-2 rounded-lg transition-colors shrink-0 ${
+                ttsEnabled
+                  ? 'bg-brand/20 text-brand'
+                  : 'bg-surface-overlay/30 text-content-muted hover:text-content-primary'
+              }`}
+              title={ttsEnabled ? 'Disable voice responses' : 'Enable voice responses'}
+            >
+              {ttsEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
@@ -312,19 +398,52 @@ export default function ChatPage() {
 
           {messages.map((msg, i) => (
             <MessageBubble
-              key={i}
+              key={msg.uid}
               role={msg.role}
               content={msg.content}
               routing={msg.routing}
               announcement={msg.announcement}
               isStreaming={streaming && i === messages.length - 1 && msg.role === 'assistant'}
+              speechStatus={speech.key === msg.uid ? speech.status : undefined}
+              onSpeak={msg.error ? undefined : () => { unlock(); speakText(msg.uid, msg.content); }}
             />
           ))}
         </div>
 
+        <span className="sr-only" role="status" aria-live="polite">
+          {SPEECH_ANNOUNCE[speech.status] ?? ''}
+        </span>
+
         {/* Input */}
         <div className="px-4 pb-4">
-          <ChatInput onSend={handleSend} disabled={streaming || isSpeaking} />
+          {call.error && !call.active && (
+            <div className="flex items-center justify-between gap-2 mb-2 px-3 py-2 rounded-lg bg-surface-overlay/40 text-xs text-content-secondary" role="alert">
+              <span>{call.error}</span>
+              <button
+                onClick={call.clearError}
+                className="min-h-11 px-2 text-content-muted hover:text-content-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 rounded"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+          {call.active ? (
+            <VoiceCallBar
+              phase={call.phase}
+              speaking={isSpeaking}
+              onInterrupt={stopSpeech}
+              onEnd={endCall}
+            />
+          ) : (
+            <ChatInput
+              onSend={handleSend}
+              disabled={streaming}
+              onUserGesture={unlock}
+              onRecordStart={stopSpeech}
+              onStartCall={() => { stopSpeech(); call.start(); }}
+              focusCallButton={wasInCallRef.current}
+            />
+          )}
         </div>
       </div>
     </div>
