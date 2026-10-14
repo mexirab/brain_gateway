@@ -425,6 +425,7 @@ async def award_xp(req: Request):
     }
 
     if leveled_up:
+        # log-safe: game level title from the built-in level table
         logger.info(f"[FINANCE] Level up! {state['level']} → {new_level} ({level_info['title']})")
 
     return result
@@ -614,7 +615,7 @@ async def create_side_quest(req: Request):
         )
         quest_id = cursor.lastrowid
 
-    logger.info(f"[FINANCE] Side quest created: {name} (${target}, ${monthly_carve}/mo)")
+    logger.info("[FINANCE] Side quest created")
     return {"success": True, "id": quest_id, "name": name}
 
 
@@ -644,7 +645,7 @@ async def update_side_quest(quest_id: int, req: Request):
             )
 
             if completed:
-                logger.info(f"[FINANCE] Side quest completed: {quest['name']}")
+                logger.info(f"[FINANCE] Side quest {quest_id} completed")
 
             return {
                 "success": True,
@@ -675,7 +676,7 @@ async def abandon_side_quest(quest_id: int):
 
         conn.execute("UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,))
 
-    logger.info(f"[FINANCE] Side quest abandoned: {quest['name']}")
+    logger.info(f"[FINANCE] Side quest {quest_id} abandoned")
     return {"success": True, "id": quest_id, "name": quest["name"]}
 
 
@@ -724,7 +725,7 @@ async def contribute_to_quest(quest_id: int, req: Request):
         updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
 
     if completed:
-        logger.info(f"[FINANCE] Side quest completed via contribution: {quest['name']}")
+        logger.info(f"[FINANCE] Side quest {quest_id} completed via contribution")
 
     return {**updated, "completed": completed}
 
@@ -743,7 +744,7 @@ async def complete_quest(quest_id: int):
         )
         updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
 
-    logger.info(f"[FINANCE] Side quest force-completed: {quest['name']}")
+    logger.info(f"[FINANCE] Side quest {quest_id} force-completed")
     return updated
 
 
@@ -758,7 +759,7 @@ async def abandon_quest_post(quest_id: int):
         conn.execute("UPDATE side_quests SET status = 'abandoned' WHERE id = ?", (quest_id,))
         updated = dict(conn.execute("SELECT * FROM side_quests WHERE id = ?", (quest_id,)).fetchone())
 
-    logger.info(f"[FINANCE] Side quest abandoned: {quest['name']}")
+    logger.info(f"[FINANCE] Side quest {quest_id} abandoned")
     return updated
 
 
@@ -1104,6 +1105,7 @@ async def sync_budget_transactions() -> dict:
             return {"synced": 0, "busy": True, "error": str(e)}
         except Exception as e:  # noqa: BLE001 — record, never raise into the scheduler
             msg = actual_client.safe_error(e)
+            # log-safe: sync error passed through safe_error() (no budget content)
             logger.error("[ACTUAL] Sync failed fetching budget: %s", msg)
             BUDGET_SYNC_TOTAL.labels(result="error").inc()
             _category_fail = (time.monotonic(), msg)
@@ -1124,8 +1126,7 @@ async def sync_budget_transactions() -> dict:
         BUDGET_SYNC_TOTAL.labels(result="ok").inc()
         BUDGET_SYNC_LAST_SUCCESS.set(time.time())
         logger.info(
-            "[ACTUAL] Synced '%s' in %.1fs: +%d new, %d updated, %d removed, %d inflows skipped%s%s",
-            snapshot.budget_name,
+            "[ACTUAL] Synced budget in %.1fs: +%d new, %d updated, %d removed, %d inflows skipped%s%s",
             time.monotonic() - t0,
             result["inserted"],
             result["updated"],

@@ -131,6 +131,7 @@ async def deliver_via_pushover(reminder_id: str, text: str, priority: Optional[i
                 request_id = resp.json().get("request", "")
             except Exception:
                 request_id = ""
+            # log-safe: Pushover's request id
             logger.info(
                 f"[PUSHOVER] Pushed reminder {reminder_id} ({len(text)} chars, "
                 f"prio={push_prio}) request={request_id[:40]}"

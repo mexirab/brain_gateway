@@ -38,7 +38,9 @@ def extract_text(file_path: str) -> str:
             logger.warning(f"[DOCVAULT] Unsupported extension for text extraction: {ext}")
             return ""
     except Exception as e:
-        logger.warning(f"[DOCVAULT] Text extraction failed for {file_path}: {e}")
+        logger.warning(
+            f"[DOCVAULT] Text extraction failed ({Path(str(file_path)).suffix or 'no ext'}): {type(e).__name__}"
+        )
         return ""
 
 

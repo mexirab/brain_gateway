@@ -207,8 +207,8 @@ def log_meal(
         source=source,
     )
     logger.info(
-        "[MEAL] Logged: %s (%s, %s kcal)",
-        description[:60],
+        "[MEAL] Logged (%d chars, %s, %s kcal)",
+        len(description),
         mt,
         calories if calories is not None else "?",
     )

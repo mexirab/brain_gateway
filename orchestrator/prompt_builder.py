@@ -79,7 +79,7 @@ def _rag_context_sync(query: str, wing: str = "", room: str = "") -> str:
     query = query.lower()
 
     if not query:
-        logger.warning(f"[RAG] Empty query after normalization (original: '{original_query}')")
+        logger.warning(f"[RAG] Empty query after normalization (original {len(original_query or '')} chars)")
         return ""
 
     # Soft-fail: unknown wing → drop the filter rather than returning zero
@@ -96,8 +96,10 @@ def _rag_context_sync(query: str, wing: str = "", room: str = "") -> str:
             pass  # palace unavailable — fall through and pass to ChromaDB
 
     filter_desc = f", wing={wing}, room={room}" if wing or room else ""
+    # log-safe: memory wing/room filter names
     logger.info(
-        f"[RAG] Searching for: '{query}' (original: '{original_query}'{filter_desc})", extra={"component": "rag"}
+        f"[RAG] Searching ({len(query)} chars, original {len(original_query or '')} chars{filter_desc})",
+        extra={"component": "rag"},
     )
 
     try:

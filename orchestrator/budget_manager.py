@@ -304,7 +304,7 @@ async def import_file(
         for k, v in column_overrides.items():
             if v:
                 detected[k] = v
-    logger.info(f"[BUDGET] Import '{name}' columns detected: {detected}")
+    logger.info(f"[BUDGET] Import columns detected: {detected}")
 
     rows = _normalize_rows(
         df,
@@ -363,7 +363,7 @@ async def import_file(
     state_store.save_budget_import(meta)
     mode = "appended" if append else "imported"
     logger.info(
-        f"[BUDGET] {mode.capitalize()} '{name}': "
+        f"[BUDGET] {mode.capitalize()}: "
         f"{insert_stats['inserted']} new rows, {insert_stats['skipped_duplicates']} duplicates skipped "
         f"(dataset total now {len(all_rows)}, {dates[0]}..{dates[-1]}, "
         f"outflow={total_outflow:.2f}, inflow={total_inflow:.2f})"

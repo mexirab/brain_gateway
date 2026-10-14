@@ -273,7 +273,9 @@ class MemPalace:
             )
 
         PALACE_SEARCH_LATENCY.observe(time.time() - t0)
-        logger.info("[PALACE] Search '%s' returned %d results (%.2fs)", query[:50], len(memories), time.time() - t0)
+        logger.info(
+            "[PALACE] Search (%d chars) returned %d results (%.2fs)", len(query), len(memories), time.time() - t0
+        )
         return memories
 
     # ------------------------------------------------------------------

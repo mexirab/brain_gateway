@@ -39,6 +39,7 @@ After any module is written or significantly modified. Trigger with `/review`.
 - SQL queries use parameterized statements (state_store.py uses `?` placeholders)
 - File path operations validate against traversal (`os.path.abspath` + `startswith` check)
 - HA tokens, Google OAuth tokens never logged
+- No user/personal content in log calls (message text, queries, reminder/calendar/med/meal/task text, tool args) — log lengths/ids/categories/keys. Enforced by `orchestrator/tests/test_no_user_content_in_logs.py`; audited exceptions need `# log-safe: <reason>`
 - User input from chat messages is not used in shell commands or file paths
 
 ### Performance

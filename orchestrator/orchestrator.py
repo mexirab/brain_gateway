@@ -390,6 +390,7 @@ async def chat_completions(req: Request):
     raw_msgs = body.get("messages", [])
     if not isinstance(raw_msgs, list):
         return JSONResponse({"error": "messages must be an array"}, status_code=400)
+    # log-safe: roles and lengths only
     logger.info(
         "[CHAT] Incoming %d messages: %s",
         len(raw_msgs),
@@ -431,7 +432,7 @@ async def chat_completions(req: Request):
                 user_text = sys_content.split(marker, 1)[1].strip()
         if not user_text:
             user_text = "Hello"
-        logger.info("[CHAT] Voice user query: %s", user_text[:200])
+        logger.info("[CHAT] Voice user query (%d chars)", len(user_text))
         # Replace messages: drop HA system/history, keep just the latest user query
         body["messages"] = [{"role": "user", "content": user_text}]
     elif shared.consume_voice_flag():
@@ -653,7 +654,7 @@ async def _startup_logic():
         end_time = saved_focus["started"] + timedelta(minutes=saved_focus["duration"])
         if end_time <= datetime.now():
             # Session expired while we were down — clean up blocking
-            logger.info("[FOCUS] Found expired focus session '%s' — cleaning up", saved_focus["task"])
+            logger.info("[FOCUS] Found expired focus session — cleaning up")
             if saved_focus.get("block_sites"):
                 pihole = get_pihole_client()
                 result = await pihole.disable_focus_blocking()
@@ -678,8 +679,7 @@ async def _startup_logic():
                 replace_existing=True,
             )
             logger.info(
-                "[FOCUS] Restored active focus session '%s' (%.0f min remaining, break at %s)",
-                saved_focus["task"],
+                "[FOCUS] Restored active focus session (%.0f min remaining, break at %s)",
                 remaining,
                 end_time.strftime("%H:%M"),
             )

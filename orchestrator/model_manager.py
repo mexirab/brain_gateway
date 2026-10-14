@@ -39,6 +39,7 @@ _SHELL_METACHARACTERS = set(";|&$`\n><()")
 def _validate_ssh_cmd(cmd: str, label: str) -> bool:
     """Validate SSH command against allowed prefixes and reject shell injection."""
     if not any(cmd.startswith(prefix) for prefix in _ALLOWED_CMD_PREFIXES):
+        # log-safe: operator-configured start/stop command
         logger.error(
             "[MODEL] Rejected %s command '%s' — must start with one of: %s",
             label,
@@ -49,6 +50,7 @@ def _validate_ssh_cmd(cmd: str, label: str) -> bool:
 
     # Reject commands containing shell metacharacters (prevents chaining attacks)
     if any(c in _SHELL_METACHARACTERS for c in cmd):
+        # log-safe: operator-configured start/stop command
         logger.error(
             "[MODEL] Rejected %s command '%s' — contains shell metacharacters",
             label,

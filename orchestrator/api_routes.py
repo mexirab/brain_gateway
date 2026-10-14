@@ -809,7 +809,7 @@ async def announce_tts(body: AnnounceRequest):
                 {"ok": False, "error": result.get("error"), "unavailable": result.get("unavailable", [])},
                 status_code=502,
             )
-        logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'}: {body.text[:80]}")
+        logger.info(f"[ANNOUNCE] TTS on {body.speaker or 'default'} ({len(body.text)} chars)")
         return {"ok": True, "text": body.text, "speaker": body.speaker or "default"}
     except Exception as e:
         logger.error(f"[ANNOUNCE] Failed: {e}")

@@ -151,7 +151,7 @@ async def deliver_check_in():
         else:
             message = "Still in the zone? Keep going — you're doing great."
 
-        logger.info(f"[FOCUS] Check-in: task='{task_desc}'", extra={"component": "focus"})
+        logger.info("[FOCUS] Check-in", extra={"component": "focus"})
         await _announce_voice(message, announcement_type="focus")
     except Exception as e:
         logger.error(f"[FOCUS] Check-in delivery failed: {e}", extra={"component": "focus"})
@@ -308,7 +308,7 @@ async def tool_start_focus(
     FOCUS_SESSIONS_STARTED.labels(soundscape=effective_audio).inc()
     FOCUS_ACTIVE.set(1)
     logger.info(
-        f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}",
+        f"[FOCUS] Started {duration}min focus, break at {end_time.strftime('%H:%M')}",
         extra={"component": "focus"},
     )
 
@@ -385,7 +385,7 @@ async def tool_stop_focus() -> str:
         except Exception as e:
             logger.warning(f"[FOCUS] Progress tracking failed: {e}")
 
-    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min on '{task}'", extra={"component": "focus"})
+    logger.info(f"[FOCUS] Stopped early after {elapsed:.0f}min", extra={"component": "focus"})
 
     if sprint_count > 0:
         return f"Focus session stopped. You worked on '{task}' for {elapsed:.0f} minutes this sprint, {total} minutes total across {sprint_count} completed sprints. Good work!"
@@ -599,7 +599,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         except Exception as e:
             logger.warning(f"[FOCUS] Progress tracking failed: {e}")
 
-        logger.info(f"[FOCUS] All {sprints_planned} sprints complete for '{task}'", extra={"component": "focus"})
+        logger.info(f"[FOCUS] All {sprints_planned} sprints complete", extra={"component": "focus"})
         return
 
     # Announce break
@@ -631,13 +631,13 @@ async def deliver_focus_break(task: str, break_duration: int):
         except Exception as e:
             logger.warning(f"[FOCUS] Progress tracking failed: {e}")
 
-        logger.info(f"[FOCUS] Break announced for '{task}'", extra={"component": "focus"})
+        logger.info("[FOCUS] Break announced", extra={"component": "focus"})
     else:
         # Multi-sprint break: session stays active, timer cleared
         current_focus_session["job_id"] = None
         state_store.save_focus_session(current_focus_session)
         logger.info(
-            f"[FOCUS] Sprint {sprint_count}/{sprints_planned} break for '{task}'",
+            f"[FOCUS] Sprint {sprint_count}/{sprints_planned} break",
             extra={"component": "focus"},
         )
 

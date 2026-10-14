@@ -42,6 +42,7 @@ def register_tool(name: str):
 
     def decorator(func: Callable) -> Callable:
         if name in _registry:
+            # log-safe: tool name
             logger.warning("[TOOL_REGISTRY] Overwriting existing handler for '%s'", name)
         _registry[name] = func
         return func
@@ -62,7 +63,11 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     TOOL_CALL_COUNT.labels(tool=tool_name).inc()
     _t0 = time.time()
     logger.info("[TOOL] Executing: %s", tool_name, extra={"component": "tool", "tool_name": tool_name})
-    logger.debug("[TOOL] %s args: %s", tool_name, arguments)
+    logger.debug(
+        "[TOOL] %s arg keys: %s",
+        tool_name,
+        sorted(arguments) if isinstance(arguments, dict) else type(arguments).__name__,
+    )
 
     from orchestrator.exceptions import ExternalServiceError, TransientError
 

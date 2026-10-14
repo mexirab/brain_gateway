@@ -55,7 +55,7 @@ async def record_context(
         focus_session_id=focus_session_id,
     )
     _context_stack.append(bookmark)
-    logger.debug("[CONTEXT] Recorded: '%s'", description[:60])
+    logger.debug("[CONTEXT] Recorded (%d chars)", len(description))
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ async def bookmark_context(description: Optional[str] = None) -> Dict[str, Any]:
         id=_checkin_job_id,
         replace_existing=True,
     )
-    logger.info("[CONTEXT] Bookmarked: '%s', check-in in %dm", effective_desc, delay)
+    logger.info("[CONTEXT] Bookmarked (%d chars), check-in in %dm", len(effective_desc), delay)
 
     return {"description": effective_desc, "checkin_delay": delay}
 
@@ -134,7 +134,7 @@ async def check_in_after_interrupt() -> None:
         f"You were working on {desc}. "
         f"Want to jump back in? I can start a focus session."
     )
-    logger.info("[CONTEXT] Check-in: '%s'", desc[:60])
+    logger.info("[CONTEXT] Check-in (%d chars)", len(desc))
     await _announce_voice(message, announcement_type="interrupt")
 
 

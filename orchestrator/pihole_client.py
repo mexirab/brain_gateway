@@ -82,6 +82,7 @@ class PiHoleClient:
                     logger.info("[PIHOLE:%s] Authentication successful", self.name)
                     return True
                 else:
+                    # log-safe: Pi-hole instance name / its API auth response
                     logger.error("[PIHOLE:%s] Unexpected auth response: %s", self.name, data)
                     return False
 
@@ -250,6 +251,7 @@ class PiHoleMultiClient:
             name = self.clients[i].name
             if isinstance(result, Exception):
                 failed.append(name)
+                # log-safe: Pi-hole instance name / its API auth response
                 logger.error("[PIHOLE:%s] Exception: %s", name, result)
             elif result.success:
                 succeeded.append(name)
@@ -322,6 +324,7 @@ def get_pihole_client() -> PiHoleMultiClient:
             )
         )
 
+    # log-safe: Pi-hole instance name / its API auth response
     logger.info("[PIHOLE] Initialized %d instance(s): %s", len(clients), ", ".join(c.name for c in clients))
     _pihole_multi_client = PiHoleMultiClient(clients=clients, enabled=enabled)
     return _pihole_multi_client

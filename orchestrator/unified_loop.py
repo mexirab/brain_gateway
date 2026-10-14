@@ -12,6 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
     CHAT_STREAM_OUTCOME,
     EMPTY_REPLY_TOTAL,
@@ -426,8 +427,15 @@ def _filter_new_tool_calls(tool_calls: List[Dict[str, Any]], executed_calls: set
         args_str = function.get("arguments", "{}")
         try:
             arguments = json.loads(args_str)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("[%s] Malformed arguments for %s: %s", label, tool_name, str(args_str)[:100])
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(
+                "[%s] Malformed arguments for %s (%d chars, %s, %s)",
+                label,
+                tool_name,
+                len(str(args_str)),
+                content_shape(args_str),
+                getattr(e, "msg", type(e).__name__),
+            )
             arguments = {}
         call_key = (tool_name, json.dumps(arguments, sort_keys=True))
         if call_key in executed_calls:
@@ -988,6 +996,7 @@ async def run_unified_tool_loop(
 
             # Validate tool name against allowlist (prevents hallucinated/injected tools)
             if tool_name not in valid_tool_names:
+                # log-safe: model-emitted tool name (not user text)
                 logger.warning("[%s] Rejected unknown tool call: %s", label, tool_name[:50])
                 parsed_calls.append((call_id, tool_name, None))
                 continue

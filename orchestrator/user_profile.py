@@ -239,7 +239,7 @@ def load_profile() -> UserProfile:
     # Env var overrides (highest priority)
     _apply_env_overrides(profile)
 
-    logger.info(f"[PROFILE] User: {profile.user_name}, Assistant: {profile.assistant_name}")
+    logger.info("[PROFILE] Loaded (user name set: %s)", bool(profile.user_name))
     return profile
 
 

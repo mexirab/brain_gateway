@@ -71,6 +71,37 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+def content_shape(text: Any) -> str:
+    """Coarse, content-free description of model output for diagnostics:
+    what it *looks like*, never what it says (safe to log)."""
+    if not isinstance(text, str):
+        return type(text).__name__
+    t = text.lstrip()
+    if not t:
+        return "empty"
+    if t.startswith("```"):
+        return "code-fence"
+    if t.startswith("<think>"):
+        return "think-block"
+    if t.startswith("<tool_call>"):
+        return "tool-call-block"
+    if t[0] in "{[":
+        return "json-like"
+    return "text"
+
+
+class StripQueryStringFilter(logging.Filter):
+    """Uvicorn access lines: drop the query string. Search endpoints carry the
+    user's search text there (?search=, ?query=), and access lines go to Loki."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        # uvicorn.access args: (client_addr, method, full_path, http_version, status_code)
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "?" in args[2]:
+            record.args = args[:2] + (args[2].split("?", 1)[0] + "?…",) + args[3:]
+        return True
+
+
 def configure_logging(level: str = "INFO"):
     """Replace the root logger's handler with JSON formatter."""
     handler = logging.StreamHandler()
@@ -80,3 +111,7 @@ def configure_logging(level: str = "INFO"):
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, StripQueryStringFilter) for f in access.filters):
+        access.addFilter(StripQueryStringFilter())

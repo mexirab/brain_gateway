@@ -167,7 +167,7 @@ def add_reminder(reminder_id: str, text: str, trigger_time: datetime, target: st
         "created": datetime.now().isoformat(),
         "status": "pending",
     }
-    logger.info(f"Added reminder {reminder_id}: '{text}' at {trigger_time}")
+    logger.info(f"Added reminder {reminder_id} ({len(text)} chars) at {trigger_time}")
     return reminder
 
 
@@ -232,7 +232,7 @@ async def _announce_voice(
 
     # Do Not Disturb — suppress all announcements when user said goodnight
     if shared.DND_ACTIVE:
-        logger.info(f"[DND] Suppressed announcement ({announcement_type}): {text[:60]}")
+        logger.info(f"[DND] Suppressed announcement ({announcement_type}, {len(text)} chars)")
         return {"success": True, "suppressed": True, "reason": "dnd_active"}
 
     # Mid-conversation guard — if the user is in an active voice session with
@@ -244,9 +244,9 @@ async def _announce_voice(
     # contention. VOICE_SESSION_WINDOW_SEC defaults to 60s.
     if not ignore_voice_session and shared.is_voice_session_active():
         logger.info(
-            "[VOICE-ACTIVE] Suppressed announcement (%s): %s",
+            "[VOICE-ACTIVE] Suppressed announcement (%s, %d chars)",
             announcement_type,
-            text[:60],
+            len(text),
         )
         return {"success": True, "suppressed": True, "reason": "voice_session_active"}
 
@@ -279,6 +279,7 @@ async def _announce_voice(
                 # pre-check); httpx collapses `..`, so anything but a plain
                 # media_player entity id could steer the GET elsewhere.
                 if not _SPEAKER_ENTITY_RE.fullmatch(s):
+                    # log-safe: configured speaker entity id
                     logger.warning(f"[ANNOUNCE] Ignoring invalid speaker entity {s[:80]!r}")
                     continue
                 out.append(s)
@@ -673,7 +674,7 @@ async def _send_notification(text: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
     if successes:
-        logger.info(f"Sent notification to {len(successes)} phone(s): {text[:50]}...")
+        logger.info(f"Sent notification to {len(successes)} phone(s) ({len(text)} chars)")
     if errors:
         logger.warning(f"Notification failed for: {errors}")
 
@@ -805,6 +806,7 @@ async def deliver_via_ntfy(reminder_id: str, text: str, priority: Optional[int] 
             logger.info(f"[NTFY] Pushed reminder {reminder_id} ({len(text)} chars, prio={push_prio})")
             NTFY_PUSH_TOTAL.labels(result="ok", kind="reminder").inc()
             return {"success": True, "latency_ms": int(latency * 1000)}
+        # log-safe: ntfy server's own error body
         logger.warning(f"[NTFY] Push returned {resp.status_code}: {resp.text[:200]}")
         NTFY_PUSH_TOTAL.labels(result="fail", kind="reminder").inc()
         return {"success": False, "status_code": resp.status_code, "body": resp.text[:200]}

@@ -146,7 +146,7 @@ async def upload_file(
                 task_id = body_json.get("task_id") or body_json.get("id") or resp.text[:60]
             else:
                 task_id = resp.text[:60]
-            logger.info(f"[PAPERLESS] Uploaded {filename} ({len(content)} bytes) task={str(task_id)[:60]}")
+            logger.info(f"[PAPERLESS] Uploaded ({len(content)} bytes) task={task_id}")
             PAPERLESS_UPLOAD_TOTAL.labels(result="ok", reason="ok").inc()
             return {
                 "success": True,
@@ -157,7 +157,7 @@ async def upload_file(
         # Non-2xx: log sanitized body (no token, no file content)
         body_snippet = _sanitize_body(resp.text)
         reason = "http_4xx" if 400 <= resp.status_code < 500 else "http_5xx"
-        logger.warning(f"[PAPERLESS] Upload {filename} returned {resp.status_code}: {body_snippet}")
+        logger.warning(f"[PAPERLESS] Upload returned {resp.status_code}: {body_snippet}")
         PAPERLESS_UPLOAD_TOTAL.labels(result="fail", reason=reason).inc()
         return {
             "success": False,
@@ -166,13 +166,13 @@ async def upload_file(
         }
     except httpx.TimeoutException as e:
         PAPERLESS_UPLOAD_TOTAL.labels(result="fail", reason="timeout").inc()
-        logger.error(f"[PAPERLESS] Upload {filename} timed out: {e}")
+        logger.error(f"[PAPERLESS] Upload timed out: {e}")
         return {"success": False, "error": f"TimeoutException: {e}"}
     except httpx.ConnectError as e:
         PAPERLESS_UPLOAD_TOTAL.labels(result="fail", reason="connect_error").inc()
-        logger.error(f"[PAPERLESS] Upload {filename} connect failed: {e}")
+        logger.error(f"[PAPERLESS] Upload connect failed: {e}")
         return {"success": False, "error": f"ConnectError: {e}"}
     except Exception as e:
         PAPERLESS_UPLOAD_TOTAL.labels(result="fail", reason="other").inc()
-        logger.error(f"[PAPERLESS] Upload {filename} failed: {type(e).__name__}: {e}")
+        logger.error(f"[PAPERLESS] Upload failed: {type(e).__name__}: {e}")
         return {"success": False, "error": f"{type(e).__name__}: {e}"}

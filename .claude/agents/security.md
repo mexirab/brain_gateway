@@ -61,7 +61,8 @@ After any backend route is written, any API integration is added, or before any 
 - Docker containers don't expose unnecessary ports
 
 ### Data Protection
-- RAG collection contains personal medical/psychological data — access should be logged
+- RAG collection contains personal medical/psychological data — log access (ids/counts), never the content or query text
+- Logs carry no personal content (Loki 30d retention + self-audit sends WARNING+ to the LLM/Pushover): guard `orchestrator/tests/test_no_user_content_in_logs.py`; flag any new `# log-safe:` pragma whose reason doesn't hold up
 - Focus session data, reminder content, calendar events are stored in SQLite on Docker volume
 - Google OAuth tokens are stored in mounted credentials directory
 - No PII in Prometheus metrics labels

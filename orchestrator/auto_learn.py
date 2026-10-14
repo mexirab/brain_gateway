@@ -347,6 +347,7 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
             continue
         if _contains_sensitive_data(fact_text):
             AUTO_LEARN_SENSITIVE_FILTERED.inc()
+            # log-safe: logs the fact category enum, not the fact
             logger.info("[AUTO_LEARN] Filtered sensitive data from extraction (category: %s)", fact.get("category"))
             continue
         # Also check source_quote for sensitive data

@@ -69,7 +69,7 @@ curl -s -X POST http://localhost:8888/v1/chat/completions \
 - **ERROR**: LLM failures, HA unreachable, DB errors, unhandled exceptions — investigate immediately
 - **WARN**: Slow responses (>10s chat, >5s tool), Helios health check fail, Google token refresh, rate limit approaches
 - **INFO**: Normal request lifecycle, startup/shutdown, tool execution, scheduler events
-- **DEBUG**: Full LLM prompts/responses, RAG query details — dev only, never production
+- **DEBUG**: extra lifecycle detail (round counts, arg keys, lengths) — dev only. Content rules below apply at every level, DEBUG included
 
 ### Log format
 Structured JSON logging via `log_config.configure_logging()` — called in `orchestrator.py` at startup. All modules use `logging.getLogger(__name__)`. Log output is JSON lines with fields: `ts`, `level`, `logger`, `msg`, `request_id`, plus optional extras (`component`, `tool_name`, `latency_ms`). Key log prefixes:
@@ -152,10 +152,27 @@ curl -sG 'http://10.0.0.248:3100/loki/api/v1/query_range' \
 - TTS announcements: target speaker, success/fail
 
 ## What to NEVER Log
-- Full RAG document content (log query + result count only)
-- API keys, HA tokens, Google OAuth tokens
-- Full conversation history (log message count only)
-- User profile YAML content
+
+Loki keeps 30 days and the nightly self-audit (F-014) feeds WARNING+ lines to the LLM and a Pushover digest — anything logged is effectively copied twice. At **any** level, DEBUG included:
+
+- Secrets: API keys, HA tokens, Google OAuth tokens, calendar `htmlLink`s
+- User/personal content:
+  - chat/voice message text, conversation history, raw model output
+  - search/memory/RAG/web/Gmail queries, RAG document bodies, email subjects
+  - reminder/announcement/nudge text, bookmark descriptions
+  - calendar titles/locations, travel destinations, raw phone-calendar events
+  - medication names, meal descriptions
+  - focus/brain-dump/backlog/decomposition/code-agent task text
+  - document titles, Paperless file names
+  - finance side-quest/budget names
+  - HA call `data` values, tool args (log the dict keys)
+  - the user's name, user profile YAML content
+  - mode-router distress tags (mental-state data — log a count)
+- Query strings on HTTP access logs (`log_config.StripQueryStringFilter` on `uvicorn.access` drops them — they carried `?search=`/`?query=` text)
+
+**Log instead:** `len()`, ids (`reminder_id`, Google event id, Gmail message id, `quest_id`, task id), categories, counts, dict keys. For unparseable model output, log the parser error + `log_config.content_shape(text)` (content-free: code-fence / think-block / tool-call-block / json-like / text).
+
+**Guard:** `orchestrator/tests/test_no_user_content_in_logs.py` AST-scans every logger call (positional + keyword args, `getLogger()` chains, `self.logger`) and fails on sensitive names/suffixes, sensitive dict keys / `.get()` keys, or any slice. Audited non-personal exceptions (upstream error bodies, config values, tool/instance names) need an inline `# log-safe: <reason>` comment on or directly above the call.
 
 ---
 
@@ -305,7 +322,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 1. Use `logger = logging.getLogger(__name__)` at module top
 2. Use a consistent prefix: `logger.info(f"[MODULE_NAME] message")`
 3. Log at appropriate level (see log levels above)
-4. Never log secrets, full conversation content, or RAG document bodies
+4. Never log secrets or user content — see "What to NEVER Log"; the guard test enforces it, `# log-safe: <reason>` for audited exceptions
 
 ---
 

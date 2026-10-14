@@ -83,6 +83,7 @@ async def get_travel_time(
         data = resp.json()
 
         if data.get("status") != "OK":
+            # log-safe: Google Maps API status/error text
             logger.warning(f"[TRAVEL] API returned {data.get('status')}: {data.get('error_message', '')}")
             return None
 
@@ -106,7 +107,7 @@ async def get_travel_time(
             for k in keys[:50]:
                 _travel_cache.pop(k, None)
 
-        logger.info(f"[TRAVEL] {destination}: {info.duration_in_traffic_minutes} min (traffic), {info.distance_text}")
+        logger.info(f"[TRAVEL] {info.duration_in_traffic_minutes} min (traffic)")
         return info
 
     except Exception as e:
