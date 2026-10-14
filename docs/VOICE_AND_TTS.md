@@ -77,6 +77,10 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 - Mic-sent message → always spoken reply (walkie-talkie), even with the speaker toggle off.
 - Typed message → follows the speaker toggle (localStorage `tts_enabled`, per device, default off).
 
+**Voice mode (backend):** voice turns run the unified loop with `max_tokens` 1024 and `chat_template_kwargs {"enable_thinking": false}` — first spoken word ~0.16 s vs ~0.77 s with the server default `reasoning_effort=low`. Caveat: the Qwen3.8 template then pre-fills an empty `<think></think>` and the model can end its turn at once (7/8 when the history held an empty assistant turn; 0/48 with clean history). Mitigations: `cloud_brain` drops empty assistant turns from history, and an empty round is retried once with thinking on. Detail: `TECHNICAL_REFERENCE.md` → Empty-Reply Handling.
+
+**Empty replies (client):** the chat page snapshots history before adding the new turn (the first message of a new chat used to go out twice with a blank assistant turn between) and never sends blank or error bubbles as history. A reply that is still empty shows — and in voice/call mode speaks — "Sorry — I didn't get a reply just now. Please try again."
+
 **Controls:** header Stop pill while speaking; starting a recording stops playback (mic stays enabled while Jess speaks); replay button on finished assistant bubbles (not error bubbles); 44px touch targets; always-mounted sr-only aria-live region announces failures.
 
 | Status | Trigger | UI |
