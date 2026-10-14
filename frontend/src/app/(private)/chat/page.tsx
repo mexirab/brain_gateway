@@ -247,7 +247,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="chat-viewport flex">
+    <div className="page-viewport flex">
       {/* Conversation sidebar — collapsible. Hidden on mobile, toggleable on md+. */}
       {sidebarReady && sidebarOpen && (
         <div className="hidden md:block">

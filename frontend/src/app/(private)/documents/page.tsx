@@ -58,7 +58,7 @@ export default function DocumentsPage() {
   };
 
   return (
-    <div className="h-full flex flex-col" style={{ height: 'calc(100vh - 3rem)' }}>
+    <div className="page-viewport flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold flex items-center gap-2">
