@@ -431,3 +431,20 @@ async def test_cloud_brain_keeps_tool_call_and_nonempty_assistant_turns(caplog):
 
     assert loop_mock.call_args.kwargs["messages"] == client_messages
     assert "Dropped" not in caplog.text
+
+
+async def test_dropped_tool_call_is_not_retried():
+    """A tool-call marker that reached only the reasoning (no parsed call, no
+    content) is the 'dropped' fault with its own metric/alert — not an
+    EOS-only reply — so it must not be retried (CI caught a double count)."""
+    reply = _reply("")
+    reply["choices"][0]["message"]["reasoning_content"] = "<tool_call>"
+    call_model = AsyncMock(side_effect=[reply, _reply("never reached")])
+    before = _snapshot()
+
+    result = await _run(call_model, AsyncMock())
+
+    assert call_model.call_count == 1
+    assert result == ""
+    assert _delta(before)["retried"] == 0
+    assert _delta(before)["still_empty"] == 0  # covered by the dropped metric/alert instead

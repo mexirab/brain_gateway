@@ -796,6 +796,7 @@ async def run_unified_tool_loop(
         # Classify how the call arrived — see TOOL_CALL_SOURCE in metrics.py for
         # the vLLM 0.19.1 / PR #35687 defect this measures. Wrapped defensively:
         # this is diagnostics, and it must never be able to break a chat turn.
+        _dropped_call = False
         try:
             if _had_native:
                 TOOL_CALL_SOURCE.labels(source="native").inc()
@@ -827,6 +828,7 @@ async def run_unified_tool_loop(
                     or _TOOL_CALL_MARKER_RE.search(message.get("reasoning_content") or "")
                 )
                 if _marker:
+                    _dropped_call = True
                     TOOL_CALL_SOURCE.labels(source="dropped").inc()
                     logger.error(
                         "[%s] Tool call SILENTLY DROPPED: <tool_call> marker present but "
@@ -860,6 +862,7 @@ async def run_unified_tool_loop(
             not tool_calls
             and not clean_response(content).strip()
             and "<tool_call>" not in content
+            and not _dropped_call  # a lost tool call is its own fault + alert, not an EOS-only reply
             and not empty_retry_done
         ):
             empty_retry_done = True
@@ -886,7 +889,9 @@ async def run_unified_tool_loop(
         if not tool_calls:
             TOOL_ROUNDS.observe(effective_round + 1)
             result = clean_response(content)
-            if not result.strip():
+            # A dropped tool call is counted/alerted by TOOL_CALL_SOURCE{dropped}
+            # (ToolCallsSilentlyDropped) — don't double-signal it as a blank reply.
+            if not result.strip() and not _dropped_call:
                 EMPTY_REPLY_TOTAL.labels(outcome="still_empty").inc()
                 logger.warning(
                     "[%s] Empty reply after thinking retry — user got no answer (finish_reason=%s)",
