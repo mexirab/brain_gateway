@@ -978,6 +978,16 @@ VOICE_TTS_LATENCY = Histogram(
     buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
 )
 
+EMPTY_REPLY_TOTAL = Counter(
+    "bgw_llm_empty_reply_total",
+    "Unified-loop rounds where the model returned no text and no tool call",
+    # outcome: retried (first empty round, retried once with thinking on) |
+    #          recovered (the retry produced text) | still_empty (blank reply returned)
+    ["outcome"],
+)
+for _r in ("retried", "recovered", "still_empty"):
+    EMPTY_REPLY_TOTAL.labels(outcome=_r)
+
 DASHBOARD_TTS_TOTAL = Counter(
     "bgw_dashboard_tts_total",
     "Dashboard chat /api/tts/synthesize outcomes (one call per spoken sentence)",

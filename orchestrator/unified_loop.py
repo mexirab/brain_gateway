@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from orchestrator.metrics import (
     CHAT_STREAM_OUTCOME,
+    EMPTY_REPLY_TOTAL,
     LLM_CALL_COUNT,
     LLM_CALL_ERRORS,
     LLM_CALL_LATENCY,
@@ -623,13 +624,14 @@ async def run_unified_tool_loop(
         return text
 
     # Voice mode: reduce max_tokens for shorter responses (faster TTS) and
-    # disable Qwen3 thinking. With vLLM's reasoning parser, thinking gets
-    # extracted into a separate `reasoning` field — and on voice prompts
-    # Qwen3.6 emits ~700-2000 tokens of reasoning before producing any
-    # `content`, so a 1024 cap was being entirely consumed by reasoning,
-    # leaving raw_len=0 (empty replies). Disabling thinking via chat-template
-    # kwargs returns a direct answer; tool calls still fire (verified
-    # 2026-04-26 against Qwen3.6-27B).
+    # disable thinking. Added for Qwen3.6 on vLLM (2026-04), whose default
+    # thinking ate the whole 1024-token budget; on the Qwen3.8 brain it still
+    # pays: first spoken word ~0.16 s vs ~0.77 s with reasoning_effort=low.
+    # Caveat (2026-10-14): with thinking off the Qwen3.8 template pre-fills an
+    # empty <think></think> and the model sometimes ends its turn at once —
+    # 7/8 times when the history held an empty assistant turn. cloud_brain
+    # drops those turns, and an empty round is retried once WITH thinking
+    # (see EMPTY_REPLY_TOTAL below), so the fast path never leaves a blank reply.
     voice_extra = None
     if is_voice:
         voice_extra = {
@@ -637,6 +639,7 @@ async def run_unified_tool_loop(
             "chat_template_kwargs": {"enable_thinking": False},
         }
         logger.info("[%s] Voice mode: max_tokens=1024, thinking=off", label)
+    empty_retry_done = False
 
     # Build allowlist of valid tool names from the tools passed in
     valid_tool_names = {t["function"]["name"] for t in tools if "function" in t}
@@ -830,10 +833,28 @@ async def run_unified_tool_loop(
             # used to justify skipping the vLLM upgrade.
             logger.warning("[%s] TOOL_CALL_SOURCE instrumentation failed", label, exc_info=True)
 
+        # No tool calls and no raw output at all: the model ended its turn
+        # immediately. Nothing reached the client, so one retry is safe — with
+        # thinking enabled, the robust path on Qwen3.8. (Raw, not cleaned: a
+        # rejected/truncated <tool_call> echo is not "empty" and isn't retried.)
+        if not tool_calls and not content.strip() and not empty_retry_done:
+            empty_retry_done = True
+            EMPTY_REPLY_TOTAL.labels(outcome="retried").inc()
+            logger.warning(
+                "[%s] Empty reply (finish_reason=%s) — retrying once with thinking", label, choice.get("finish_reason")
+            )
+            if voice_extra and "chat_template_kwargs" in voice_extra:
+                voice_extra = {k: v for k, v in voice_extra.items() if k != "chat_template_kwargs"}
+            continue
+
         # No tool calls — return the text response
         if not tool_calls:
             TOOL_ROUNDS.observe(round_num + 1)
             result = clean_response(content)
+            if not result.strip():
+                EMPTY_REPLY_TOTAL.labels(outcome="still_empty").inc()
+            elif empty_retry_done:
+                EMPTY_REPLY_TOTAL.labels(outcome="recovered").inc()
             # Length only, never the text. This used to log result[:100], which
             # shipped the first 100 characters of every assistant reply to Loki —
             # and medication names, dosages, medical detail and personal context

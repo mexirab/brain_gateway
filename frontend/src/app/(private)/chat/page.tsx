@@ -242,8 +242,10 @@ export default function ChatPage() {
     api.saveMessage(convId, 'user', text).catch(() => {});
 
     // Use ref to avoid stale closure — messages may change between click and here
+    // Skip blank and error bubbles: an empty assistant turn in the history
+    // made the brain reply with nothing again (the server drops them too).
     const chatHistory: ChatMessage[] = [
-      ...messagesRef.current.map((m) => ({
+      ...messagesRef.current.filter((m) => !m.error && m.content.trim()).map((m) => ({
         role: m.role,
         content: m.announcement
           ? `[Jess announced - ${m.announcement.announcement_type}]: ${m.content}`
@@ -279,6 +281,17 @@ export default function ChatPage() {
         // Persist assistant response
         if (finalContent.trim()) {
           api.saveMessage(convId, 'assistant', finalContent, routing).catch(() => {});
+        } else {
+          // No text came back: say so instead of leaving a blank bubble.
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              ...updated[updated.length - 1],
+              error: true,
+              content: 'Jess didn’t reply — please try again.',
+            };
+            return updated;
+          });
         }
         if (speakReply) endReply();
         // Refresh conversation list (updated_at changed)

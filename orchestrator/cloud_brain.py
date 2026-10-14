@@ -92,6 +92,22 @@ def _maybe_prepend_welcome(text: str, *, is_voice: bool = False) -> str:
     return prepend + text
 
 
+def _is_empty_assistant(m: dict) -> bool:
+    """An assistant history turn with no text (and no tool calls)."""
+    if m.get("role") != "assistant" or m.get("tool_calls"):
+        return False
+    content = m.get("content")
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return not content.strip()
+    if isinstance(content, list):
+        return not any(
+            (p.get("type") != "text") or (p.get("text") or "").strip() for p in content if isinstance(p, dict)
+        )
+    return False
+
+
 class CloudBrain:
     """
     Stateless LLM orchestration for the v7 unified architecture.
@@ -358,6 +374,15 @@ class CloudBrain:
         messages = [m for m in messages if m.get("role") not in ("system", "tool")]
         if len(messages) != _n_before:
             logger.info("[UNIFIED] Stripped %d client system/tool message(s)", _n_before - len(messages))
+
+        # Drop empty assistant turns (a failed reply the client kept as a blank
+        # bubble). One empty assistant message in the history made the Qwen3.8
+        # brain answer with nothing 7/8 times — so a single empty reply
+        # snowballed into a silent conversation (2026-10-14).
+        _n_before = len(messages)
+        messages = [m for m in messages if not _is_empty_assistant(m)]
+        if len(messages) != _n_before:
+            logger.info("[UNIFIED] Dropped %d empty assistant message(s) from history", _n_before - len(messages))
 
         # Real streaming: relay gate-safe tokens while the loop is still
         # running. Skipped for the literal first-ever chat so the one-time
