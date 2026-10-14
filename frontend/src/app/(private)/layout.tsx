@@ -64,7 +64,7 @@ export default async function PrivateLayout({
       <MobileNav flags={flags} />
 
       {/* Main content */}
-      <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">
+      <main className="flex-1 p-6 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-6 overflow-auto">
         <SWRProvider>{children}</SWRProvider>
       </main>
     </div>

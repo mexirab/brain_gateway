@@ -63,6 +63,23 @@ body {
 }
 
 @layer components {
+  /* ---- Full-height chat ---------------------------------------------------
+     The chat page fills the viewport so its input row stays pinned. Height =
+     dynamic viewport (dvh tracks iOS Safari's collapsing toolbar; vh is the
+     fallback) minus <main>'s vertical padding from (private)/layout.tsx:
+     mobile pt-6 (1.5rem) + pb-20 (5rem, clears the fixed ~57px MobileNav) +
+     the home-indicator safe-area inset; md+ (no bottom nav) p-6 → 3rem. */
+  .chat-viewport {
+    height: calc(100vh - 6.5rem - env(safe-area-inset-bottom, 0px));
+    height: calc(100dvh - 6.5rem - env(safe-area-inset-bottom, 0px));
+  }
+  @media (min-width: 768px) {
+    .chat-viewport {
+      height: calc(100vh - 3rem);
+      height: calc(100dvh - 3rem);
+    }
+  }
+
   /* ---- Surfaces / cards -------------------------------------------------- */
   /* `.glass` is kept (used in ~57 places) but re-tuned to the token system, so
      existing cards become more coherent for free. `.card` is the going-forward
