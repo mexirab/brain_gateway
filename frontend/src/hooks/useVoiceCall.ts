@@ -27,6 +27,9 @@ const TICK_MS = 50;
 const IDLE_RESTART_MS = 20_000;
 // Let the tail of Jess's audio die down before analysing the mic again.
 const RELISTEN_DELAY_MS = 350;
+// One undecodable snippet (e.g. a tiny false trigger) shouldn't end the call;
+// repeated failures mean something is actually wrong.
+const MAX_CONSECUTIVE_STT_FAILURES = 3;
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
 
@@ -63,6 +66,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
   const abortRef = useRef<AbortController | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const vadRef = useRef<EnergyVad | null>(null);
+  const sttFailuresRef = useRef(0);
 
   const stopTimer = () => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -140,12 +144,17 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
         text = await transcribe(blob, ctrl.signal);
       } catch (err) {
         if (gen !== genRef.current) return;
-        fail(err instanceof STTUnavailableError
-          ? 'Jess can’t hear right now — Helios (speech recognition) is asleep.'
-          : 'Couldn’t transcribe that, so the call ended.');
+        if (err instanceof STTUnavailableError) {
+          fail('Jess can’t hear right now — Helios (speech recognition) is asleep.');
+        } else if (++sttFailuresRef.current >= MAX_CONSECUTIVE_STT_FAILURES) {
+          fail('Speech recognition keeps failing, so the call ended.');
+        } else {
+          listen(); // skip this snippet, keep the call going
+        }
         return;
       }
       if (gen !== genRef.current) return;
+      sttFailuresRef.current = 0;
       if (!text) { listen(); return; } // cough / noise: nothing heard
       setPhase('responding');
       try {
@@ -188,6 +197,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     ctx.resume().catch(() => {});
     ctxRef.current = ctx;
     vadRef.current = new EnergyVad();
+    sttFailuresRef.current = 0;
     setPhase('starting');
 
     void (async () => {
