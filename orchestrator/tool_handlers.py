@@ -616,7 +616,16 @@ async def deliver_reminder_job(
             else:
                 result = await _announce_voice(spoken_text, announcement_type="reminder", ignore_voice_session=True)
                 reason = result.get("reason", "dnd_active") if result.get("suppressed") else None
-        if reason is not None and not speakers_deferred and not voice_ok:
+        if reason == "dnd_active" and voice_deferrals > 0 and phone_done:
+            # The push already went out while the user was in a voice session
+            # and they have since said goodnight: don't replay the reminder on
+            # the speakers hours later when DND lifts.
+            logger.info(
+                f"[REMINDER] {reminder_id} DND began after the push was delivered — skipping speakers",
+                extra={"component": "reminder"},
+            )
+            voice_ok = True
+        elif reason is not None and not speakers_deferred and not voice_ok:
             # DND — NOT a delivery. Defers the whole delivery (phone
             # included: a 3am DND push would defeat the point of saying
             # goodnight). Suppression does not consume an attempt.
@@ -728,15 +737,21 @@ async def deliver_reminder_job(
             )
 
     if speakers_deferred:
-        _reschedule(
+        if _reschedule(
             SUPPRESSED_RESCHEDULE_MINUTES["voice_session_active"],
             attempt,
             False,
             phone_ok,
             f"speakers deferred (voice_session_active {voice_deferrals + 1}/{MAX_VOICE_SESSION_DEFERRALS})",
             deferrals=voice_deferrals + 1,
-        )
-        return
+        ):
+            return
+        # Couldn't re-arm: don't strand the reminder 'pending' with no job.
+        if phone_ok:
+            voice_ok = True  # the push reached the user; drop the speaker part
+        else:
+            result = await _announce_voice(spoken_text, announcement_type="reminder", ignore_voice_session=True)
+            voice_ok = bool(result.get("success")) and not result.get("suppressed")
 
     voice_satisfied = voice_ok or not voice_needed
     phone_satisfied = phone_ok or not phone_needed

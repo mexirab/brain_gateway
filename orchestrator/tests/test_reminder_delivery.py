@@ -159,7 +159,13 @@ class TestRetrySemantics:
         mock_phone.assert_called_once()  # phone went out on attempt 0
         job = clean_scheduler.get_job("reminder_r1_retry")
         assert job is not None
-        assert job.kwargs == {"attempt": 1, "late": False, "voice_done": False, "phone_done": True, "voice_deferrals": 0}
+        assert job.kwargs == {
+            "attempt": 1,
+            "late": False,
+            "voice_done": False,
+            "phone_done": True,
+            "voice_deferrals": 0,
+        }
 
     @pytest.mark.asyncio
     async def test_retry_does_not_repush_phone(self, tmp_db, clean_scheduler, push_channels_off):
@@ -308,3 +314,215 @@ class TestLateNightGuard:
         mock_voice.assert_not_called()
         mock_phone.assert_called_once()
         assert _status("r1") == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Voice session defers only the speakers, capped (dd6b593)
+# ---------------------------------------------------------------------------
+
+VOICE_SUPPRESSED_SESSION = {"success": True, "suppressed": True, "reason": "voice_session_active"}
+
+
+class TestVoiceSessionDeferral:
+    @pytest.mark.asyncio
+    async def test_first_deferral_sends_push_now_and_retries_speakers_only(
+        self, tmp_db, clean_scheduler, push_channels_off
+    ):
+        from zoneinfo import ZoneInfo
+
+        from orchestrator import shared, tool_handlers
+
+        _mk_reminder("r1", target="both")
+        with (
+            patch.object(tool_handlers, "_announce_voice", AsyncMock(return_value=VOICE_SUPPRESSED_SESSION)),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1", attempt=1)
+
+        mock_phone.assert_called_once()  # push not held back by the voice session
+        assert _status("r1") == "pending"
+        job = clean_scheduler.get_job("reminder_r1_retry")
+        assert job is not None
+        assert job.kwargs == {
+            "attempt": 1,  # deferral does not consume an attempt
+            "late": False,
+            "voice_done": False,
+            "phone_done": True,
+            "voice_deferrals": 1,
+        }
+        delta = (job.trigger.run_date - datetime.now(ZoneInfo(shared.TIMEZONE))).total_seconds()
+        assert 90 <= delta <= 130
+
+    @pytest.mark.asyncio
+    async def test_deferral_counter_increments_and_phone_not_resent(self, tmp_db, clean_scheduler, push_channels_off):
+        from orchestrator import tool_handlers
+
+        _mk_reminder("r1", target="both")
+        with (
+            patch.object(tool_handlers, "_announce_voice", AsyncMock(return_value=VOICE_SUPPRESSED_SESSION)),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1", phone_done=True, voice_deferrals=2)
+
+        mock_phone.assert_not_called()
+        job = clean_scheduler.get_job("reminder_r1_retry")
+        assert job is not None
+        assert job.kwargs["voice_deferrals"] == 3
+        assert job.kwargs["phone_done"] is True
+
+    @pytest.mark.asyncio
+    async def test_cap_reached_with_push_done_skips_speakers_and_completes(
+        self, tmp_db, clean_scheduler, push_channels_off
+    ):
+        from orchestrator import tool_handlers
+
+        _mk_reminder("r1", target="both")
+        with (
+            patch.object(
+                tool_handlers, "_announce_voice", AsyncMock(return_value=VOICE_SUPPRESSED_SESSION)
+            ) as mock_voice,
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job(
+                "r1", phone_done=True, voice_deferrals=tool_handlers.MAX_VOICE_SESSION_DEFERRALS
+            )
+
+        mock_voice.assert_called_once()  # no ignore_voice_session retry
+        assert mock_voice.call_args.kwargs.get("ignore_voice_session", False) is False
+        mock_phone.assert_not_called()
+        assert clean_scheduler.get_job("reminder_r1_retry") is None
+        assert _status("r1") == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cap_reached_voice_only_announces_anyway(self, tmp_db, clean_scheduler, push_channels_off):
+        from orchestrator import tool_handlers
+
+        _mk_reminder("r1", target="voice")
+        mock_voice = AsyncMock(side_effect=[VOICE_SUPPRESSED_SESSION, VOICE_OK])
+        with (
+            patch.object(tool_handlers, "_announce_voice", mock_voice),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1", voice_deferrals=tool_handlers.MAX_VOICE_SESSION_DEFERRALS)
+
+        assert mock_voice.call_count == 2
+        assert mock_voice.call_args_list[1].kwargs.get("ignore_voice_session") is True
+        mock_phone.assert_not_called()
+        assert clean_scheduler.get_job("reminder_r1_retry") is None
+        assert _status("r1") == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cap_reached_forced_announce_hits_dnd_defers_whole_delivery(
+        self, tmp_db, clean_scheduler, push_channels_off
+    ):
+        """DND still applies to the forced announce: 30-min deferral, deferrals unchanged."""
+        from orchestrator import tool_handlers
+
+        cap = tool_handlers.MAX_VOICE_SESSION_DEFERRALS
+        _mk_reminder("r1", target="both")
+        mock_voice = AsyncMock(side_effect=[VOICE_SUPPRESSED_SESSION, VOICE_SUPPRESSED_DND])
+        with (
+            patch.object(tool_handlers, "_announce_voice", mock_voice),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1", voice_deferrals=cap)
+
+        mock_phone.assert_not_called()
+        assert _status("r1") == "pending"
+        job = clean_scheduler.get_job("reminder_r1_retry")
+        assert job is not None
+        assert job.kwargs["voice_deferrals"] == cap
+
+    @pytest.mark.asyncio
+    async def test_dnd_unchanged_defers_30_min_without_push(self, tmp_db, clean_scheduler, push_channels_off):
+        from zoneinfo import ZoneInfo
+
+        from orchestrator import shared, tool_handlers
+
+        _mk_reminder("r1", target="both")
+        with (
+            patch.object(tool_handlers, "_announce_voice", AsyncMock(return_value=VOICE_SUPPRESSED_DND)),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1", voice_deferrals=2)
+
+        mock_phone.assert_not_called()
+        assert _status("r1") == "pending"
+        job = clean_scheduler.get_job("reminder_r1_retry")
+        assert job is not None
+        assert job.kwargs["voice_deferrals"] == 2
+        assert job.kwargs["phone_done"] is False
+        delta = (job.trigger.run_date - datetime.now(ZoneInfo(shared.TIMEZONE))).total_seconds()
+        assert 29 * 60 <= delta <= 31 * 60
+
+    @pytest.mark.asyncio
+    async def test_dnd_after_push_during_voice_session_skips_speakers(self, tmp_db, clean_scheduler, push_channels_off):
+        # Push went out during a voice-session deferral, then the user said
+        # goodnight: the speakers must not replay it when DND lifts.
+        from orchestrator import tool_handlers
+
+        _mk_reminder("r1", target="both")
+        with (
+            patch.object(tool_handlers, "_announce_voice", AsyncMock(return_value=VOICE_SUPPRESSED_DND)),
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1", voice_deferrals=1, phone_done=True)
+
+        mock_phone.assert_not_called()
+        assert clean_scheduler.get_job("reminder_r1_retry") is None
+        assert _status("r1") == "completed"
+
+    @pytest.mark.asyncio
+    async def test_phone_target_ignores_voice_session(self, tmp_db, clean_scheduler, push_channels_off, monkeypatch):
+        from orchestrator import shared, tool_handlers
+
+        monkeypatch.setattr(shared, "is_voice_session_active", lambda: True)
+        _mk_reminder("r1", target="phone")
+        with (
+            patch.object(
+                tool_handlers, "_announce_voice", AsyncMock(return_value=VOICE_SUPPRESSED_SESSION)
+            ) as mock_voice,
+            patch.object(tool_handlers, "_send_notification", AsyncMock(return_value=PHONE_OK)) as mock_phone,
+        ):
+            await tool_handlers.deliver_reminder_job("r1")
+
+        mock_voice.assert_not_called()
+        mock_phone.assert_called_once()
+        assert clean_scheduler.get_job("reminder_r1_retry") is None
+        assert _status("r1") == "completed"
+
+
+class TestAnnounceVoiceGuardOrdering:
+    @pytest.mark.asyncio
+    async def test_voice_session_suppresses_by_default(self, monkeypatch):
+        from orchestrator import reminder_manager, shared
+
+        monkeypatch.setattr(shared, "DND_ACTIVE", False)
+        monkeypatch.setattr(shared, "is_voice_session_active", lambda: True)
+        result = await reminder_manager._announce_voice("generic test reminder", announcement_type="reminder")
+        assert result == {"success": True, "suppressed": True, "reason": "voice_session_active"}
+
+    @pytest.mark.asyncio
+    async def test_ignore_voice_session_bypasses_guard(self, monkeypatch):
+        from orchestrator import reminder_manager, shared
+
+        monkeypatch.setattr(shared, "DND_ACTIVE", False)
+        monkeypatch.setattr(shared, "is_voice_session_active", lambda: True)
+        monkeypatch.setattr(shared, "tts_backend", None)  # stop right after the guards
+        monkeypatch.setattr(reminder_manager, "_record_announcement", lambda *a, **k: None)
+        result = await reminder_manager._announce_voice(
+            "generic test reminder", announcement_type="reminder", ignore_voice_session=True
+        )
+        assert not result.get("suppressed")
+        assert result == {"success": False, "error": "TTS backend not initialized"}
+
+    @pytest.mark.asyncio
+    async def test_ignore_voice_session_still_respects_dnd(self, monkeypatch):
+        from orchestrator import reminder_manager, shared
+
+        monkeypatch.setattr(shared, "DND_ACTIVE", True)
+        monkeypatch.setattr(shared, "is_voice_session_active", lambda: True)
+        result = await reminder_manager._announce_voice(
+            "generic test reminder", announcement_type="reminder", ignore_voice_session=True
+        )
+        assert result == {"success": True, "suppressed": True, "reason": "dnd_active"}
