@@ -129,7 +129,9 @@ async def calendar_today():
                     }
                 )
             except (ValueError, TypeError) as exc:
-                logger.warning(f"[CALENDAR] Skipping phone event: {exc} — raw: {ev}")
+                logger.warning(
+                    f"[CALENDAR] Skipping phone event: {type(exc).__name__} (fields: {sorted(ev) if isinstance(ev, dict) else type(ev).__name__})"
+                )
                 continue
     else:
         # Source 2: Google Calendar API (fallback)
@@ -197,11 +199,9 @@ async def sync_phone_calendar(req: Request):
         if not raw_body:
             return JSONResponse({"error": "empty body"}, status_code=400)
 
-        # Log raw body (truncated) so we can diagnose malformed iOS Shortcut payloads.
-        # Escape CR/LF so attacker-controlled payload can't forge log lines.
-        preview = raw_body[:2000].decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n")
+        # Log only the size: the body holds calendar titles, locations and notes.
         truncated = " [truncated]" if len(raw_body) > 2000 else ""
-        logger.debug(f"[PHONE_SYNC] Raw body ({len(raw_body)} bytes){truncated}: {preview}")
+        logger.debug(f"[PHONE_SYNC] Raw body ({len(raw_body)} bytes){truncated}")
 
         body = await req.json()
 

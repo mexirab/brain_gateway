@@ -752,6 +752,7 @@ def _add_exercise_sets(
     target = _plan_target(ex, goal, limits, deload=deload, exclude_workout_id=workout_id)
     WORKOUT_PROGRESSION.labels(progression=target["progression"]).inc()
     if target["progression"] in ("stall_deload", "comeback"):
+        # log-safe: exercise name from the built-in catalogue
         logger.info("[WORKOUT] %s: %s → %s lb", ex["name"], target["progression"], target["weight"])
     muscle_groups = [ex["primary_muscle"]] + ex.get("secondary_muscles", [])
     sets_planned = []

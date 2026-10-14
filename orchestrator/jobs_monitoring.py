@@ -162,7 +162,7 @@ async def trigger_routine(routine_id: str):
             return
         logger.info(f"[ROUTINE] Scheduled trigger: {routine_id}")
         result = await start_routine(routine_id, triggered_by="scheduled")
-        logger.info(f"[ROUTINE] Started: {result[:80]}")
+        logger.info(f"[ROUTINE] Started {routine_id} ({len(result)} chars)")
     except Exception as e:
         logger.error(f"[ROUTINE] Scheduled trigger failed for '{routine_id}': {e}")
 

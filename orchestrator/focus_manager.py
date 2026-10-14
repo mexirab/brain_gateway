@@ -151,7 +151,7 @@ async def deliver_check_in():
         else:
             message = "Still in the zone? Keep going — you're doing great."
 
-        logger.info(f"[FOCUS] Check-in: task='{task_desc}'", extra={"component": "focus"})
+        logger.info("[FOCUS] Check-in", extra={"component": "focus"})
         await _announce_voice(message, announcement_type="focus")
     except Exception as e:
         logger.error(f"[FOCUS] Check-in delivery failed: {e}", extra={"component": "focus"})
@@ -308,7 +308,7 @@ async def tool_start_focus(
     FOCUS_SESSIONS_STARTED.labels(soundscape=effective_audio).inc()
     FOCUS_ACTIVE.set(1)
     logger.info(
-        f"[FOCUS] Started {duration}min focus on '{task}', break at {end_time.strftime('%H:%M')}",
+        f"[FOCUS] Started {duration}min focus, break at {end_time.strftime('%H:%M')}",
         extra={"component": "focus"},
     )
 
@@ -637,7 +637,7 @@ async def deliver_focus_break(task: str, break_duration: int):
         current_focus_session["job_id"] = None
         state_store.save_focus_session(current_focus_session)
         logger.info(
-            f"[FOCUS] Sprint {sprint_count}/{sprints_planned} break for '{task}'",
+            f"[FOCUS] Sprint {sprint_count}/{sprints_planned} break",
             extra={"component": "focus"},
         )
 

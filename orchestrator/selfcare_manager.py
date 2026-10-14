@@ -174,7 +174,7 @@ def record_hydration_logged(label: str = "water") -> None:
     _state.last_hydration_nudge = datetime.now()
     save_selfcare_log("water", label)
     SELFCARE_LOGGED.labels(action="water").inc()
-    logger.info(f"[SELFCARE] Hydration logged: {label}", extra={"component": "selfcare"})
+    logger.info(f"[SELFCARE] Hydration logged ({label.split(':', 1)[0]})", extra={"component": "selfcare"})
 
 
 def record_movement_logged(label: str = "movement") -> None:
@@ -191,7 +191,7 @@ def record_movement_logged(label: str = "movement") -> None:
     _state.sitting_since = now
     save_selfcare_log("movement", label)
     SELFCARE_LOGGED.labels(action="movement").inc()
-    logger.info(f"[SELFCARE] Movement logged: {label}", extra={"component": "selfcare"})
+    logger.info(f"[SELFCARE] Movement logged ({label.split(':', 1)[0]})", extra={"component": "selfcare"})
 
 
 def mark_selfcare_from_routine_step(step) -> None:
@@ -449,9 +449,7 @@ def _med_allowed_today(med: dict, now_tz: datetime) -> bool:
     # enforcement split (silent med drop) this whole change exists to kill.
     allowed = {str(d).strip().lower()[:3] for d in days if str(d).strip()} & set(_WEEKDAY_ABBRS)
     if not allowed:
-        logger.warning(
-            f"[SELFCARE] med {med.get('name')!r} has no recognizable weekday in days={days!r}; treating as every day"
-        )
+        logger.warning(f"[SELFCARE] a med has no recognizable weekday in days={days!r}; treating as every day")
         return True
     # Index-based, not strftime("%a"): a non-English LC_TIME would make "%a"
     # return e.g. "sam"/"дом" and NEVER match the canonical mon..sun set, silently

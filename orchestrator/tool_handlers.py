@@ -139,7 +139,8 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
         return "Missing entity_id or service"
 
     logger.info(
-        f"[HA] Calling {service} on {entity_id} with data: {data}", extra={"component": "ha", "entity_id": entity_id}
+        f"[HA] Calling {service} on {entity_id} with data keys: {sorted(data or {})}",
+        extra={"component": "ha", "entity_id": entity_id},
     )
     result = await ha_client.call_service(entity_id, service, data or {})
 
@@ -157,6 +158,7 @@ async def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
         return "No query provided"
 
     filter_desc = f" (wing={wing}, room={room})" if wing or room else ""
+    # log-safe: memory wing/room filter names
     logger.info(f"[MEMORY] Searching ({len(query)} chars){filter_desc}")
     context = await rag_context(query, wing=wing, room=room)
 
@@ -793,7 +795,7 @@ async def deliver_reminder_job(
         await asyncio.to_thread(mark_reminder_failed, reminder_id)
         logger.error(
             f"[REMINDER] {reminder_id} FAILED on every channel after "
-            f"{MAX_REMINDER_DELIVERY_ATTEMPTS} attempts — marked failed: {text[:80]}",
+            f"{MAX_REMINDER_DELIVERY_ATTEMPTS} attempts — marked failed",
             extra={"component": "reminder"},
         )
 
@@ -868,7 +870,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
     if target not in ["voice", "phone", "both"]:
         target = "both"
 
-    logger.info(f"[REMINDER] Setting reminder: '{reminder_text}' at '{time_str}' via {target}")
+    logger.info(f"[REMINDER] Setting reminder ({len(reminder_text)} chars) at '{time_str}' via {target}")
 
     trigger_time, error = parse_time_expression(time_str)
     if error:
@@ -882,7 +884,7 @@ async def tool_set_reminder(reminder_text: str, time_str: str, target: str = "bo
             try:
                 created = datetime.fromisoformat(existing.get("created_at", ""))
                 if (now - created).total_seconds() < DEDUP_WINDOW_SECONDS:
-                    logger.warning(f"[REMINDER] Duplicate rejected: '{reminder_text}' (existing {existing.get('id')})")
+                    logger.warning(f"[REMINDER] Duplicate rejected (existing {existing.get('id')})")
                     return f"You already have a reminder for '{reminder_text}' - I won't create a duplicate."
             except (ValueError, TypeError):
                 pass

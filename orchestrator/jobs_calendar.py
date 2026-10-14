@@ -945,7 +945,8 @@ async def process_emails_for_events():
                 )
                 raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
             except Exception as e:
-                logger.warning(f"[EMAIL_TO_CAL] LLM call failed for '{msg.subject}': {e}")
+                # log-safe: Gmail message id + exception, not the subject
+                logger.warning(f"[EMAIL_TO_CAL] LLM call failed for message {msg.id}: {type(e).__name__}: {e}")
                 continue
 
             # Parse JSON from response

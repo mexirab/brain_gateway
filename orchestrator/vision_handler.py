@@ -212,6 +212,7 @@ async def analyze_image(
 
     except httpx.HTTPStatusError as e:
         VISION_REQUEST_COUNT.labels(status="error").inc()
+        # log-safe: vision server's own error body
         logger.error("[VISION] HTTP error %d: %s", e.response.status_code, (e.response.text or "")[:200])
         return "[Vision model returned an error. Please try again.]"
 

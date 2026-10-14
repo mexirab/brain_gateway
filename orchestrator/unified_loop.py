@@ -988,6 +988,7 @@ async def run_unified_tool_loop(
 
             # Validate tool name against allowlist (prevents hallucinated/injected tools)
             if tool_name not in valid_tool_names:
+                # log-safe: model-emitted tool name (not user text)
                 logger.warning("[%s] Rejected unknown tool call: %s", label, tool_name[:50])
                 parsed_calls.append((call_id, tool_name, None))
                 continue

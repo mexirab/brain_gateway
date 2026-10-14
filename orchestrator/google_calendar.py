@@ -231,8 +231,7 @@ class GoogleCalendarClient:
         try:
             data = await self._post(f"/calendars/{calendar_id}/events", event_body)
             event = self._parse_event(data)
-            link = data.get("htmlLink", "")
-            logger.info(f"[CALENDAR] Created event: {event.id} — {link}")
+            logger.info(f"[CALENDAR] Created event: {event.id}")
             return CalendarResponse(success=True, events=[event])
 
         except httpx.HTTPStatusError as e:

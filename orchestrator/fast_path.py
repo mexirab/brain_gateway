@@ -207,6 +207,7 @@ async def try_fast_path(text: str, ha_client) -> FastPathResult:
         logger.debug(f"[FAST-PATH] No regex match ({len(text)} chars)")
         return FastPathResult(handled=False)
 
+    # log-safe: device phrase from a quick command (e.g. "kitchen light")
     logger.info(f"[FAST-PATH] Matched: action={parsed.action}, target='{parsed.target_text}', value={parsed.value}")
 
     # 3. Execute via HA (handles entity matching, compound commands, API call)

@@ -393,6 +393,7 @@ def run_drain(
             TRAINING_CORPUS_RECORDS.labels(source=rec.source).inc()
 
     total = sum(counts.values())
+    # log-safe: output file name (YYYY-MM.jsonl)
     logger.info(
         "[training_corpus] drain complete: %d new records (owui=%d state_store=%d cc=%d) → %s",
         total,

@@ -231,7 +231,9 @@ class CloudBrain:
         routing_info["intent_intensity"] = intent.intensity
         routing_info["intent_tags"] = intent.tags
         MODE_ROUTE_COUNT.labels(mode=intent.mode, intensity=intent.intensity).inc()
-        logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%s", intent.mode, intent.intensity, intent.tags)
+        # Tags are the matched phrases from the user's message (e.g. distress terms) —
+        # mental-state data: never logged, only how many matched.
+        logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%d", intent.mode, intent.intensity, len(intent.tags))
 
         # Fast-path: simple device commands
         if ha_client:

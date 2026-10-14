@@ -1,10 +1,19 @@
 """Guard: personal content must never reach the logs (Loki keeps 30 days and the
-nightly self-audit scrapes warnings). Log lengths, ids or categories instead.
+nightly self-audit sends warnings to an LLM and a Pushover digest). Log
+lengths, ids or categories instead.
 
-Static check over the orchestrator package: any `logger.<level>(...)` call whose
-arguments reference one of the user-content variable names below — other than
-as `len(...)` — fails. Medication names, dosages, messages, search queries,
-reminder text and calendar titles all flow through these names.
+Static check over the orchestrator package. A logging call fails when any of
+its arguments (positional or keyword) contains, outside len()/type()/bool():
+
+* a name or attribute that usually carries user content (SENSITIVE), or whose
+  name ends in one of SENSITIVE_SUFFIXES;
+* a dict lookup with such a key, e.g. ``quest["name"]``;
+* a slice such as ``x[:80]`` — truncating before logging is the classic sign
+  of logging content.
+
+Audited exceptions (e.g. an upstream server's own error body) carry a
+``# log-safe: <reason>`` comment on the call or the line above it, so every
+exception is a conscious, reviewable decision.
 """
 
 import ast
@@ -13,41 +22,105 @@ import pathlib
 PKG = pathlib.Path(__file__).resolve().parent.parent
 
 LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
+LOGGER_NAMES = {"logger", "log", "_logger", "_log", "logging"}
 
-# Variable / attribute names that carry user-written or personal content.
 SENSITIVE = {
+    # messages / speech
     "user_text",
     "user_message",
+    "user_msg",
     "question",
-    "query",
-    "full_query",
-    "original_query",
-    "title",
-    "nudge",
-    "med_name",
-    "raw_text",
-    "desc",
     "transcript",
     "utterance",
     "reply",
     "answer",
+    "text",
+    "content",
+    "message",
+    "msg",
+    "prompt",
+    # searches
+    "query",
+    "full_query",
+    "original_query",
+    # personal records
+    "title",
+    "subject",
+    "summary",
+    "description",
+    "desc",
+    "notes",
+    "note",
+    "detail",
+    "name",
+    "med_name",
+    "nudge",
+    "raw_text",
+    "task",
+    "task_text",
+    "reminder_text",
+    "tags",
+    "destination",
+    "ev",
+    "preview",
+    "arguments",
+    "target_text",
+    "quest",
+    "fact",
+    "facts",
+    "snippet",
+    "caption",
+    "filename",
+    "data",
 }
+SENSITIVE_SUFFIXES = ("_text", "_query", "_title", "_message", "_content", "_desc")
 
-# Calls that reduce content to something non-identifying.
-SAFE_WRAPPERS = {"len", "type", "bool", "id"}
+# `<result>.message` is a service/integration status string (HA, Pi-hole),
+# not user content; `self.<attr>` is the object's own config (instance names).
+ATTR_EXEMPT = {"message"}
+
+SAFE_WRAPPERS = {"len", "type", "bool", "id", "sorted", "isinstance"}
+PRAGMA = "log-safe:"
 
 
-def _sensitive_refs(node: ast.AST) -> list[str]:
-    """Sensitive names used in `node`, ignoring anything inside len()/type()/…"""
+def _is_sensitive_name(name: str) -> bool:
+    return name in SENSITIVE or name.endswith(SENSITIVE_SUFFIXES)
+
+
+def _violations(node: ast.AST) -> list[str]:
+    """What in `node` would put content in a log line (ignoring len() etc.)."""
     found: list[str] = []
 
     def visit(n: ast.AST) -> None:
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in SAFE_WRAPPERS:
             return
-        if isinstance(n, ast.Name) and n.id in SENSITIVE:
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "keys":
+            return  # dict keys (e.g. sorted(data.keys())) are field names, not content
+        if (
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "get"
+            and n.args
+            and isinstance(n.args[0], ast.Constant)
+            and isinstance(n.args[0].value, str)
+            and _is_sensitive_name(n.args[0].value)
+        ):
+            found.append(f".get({n.args[0].value!r})")
+        if isinstance(n, ast.Name) and _is_sensitive_name(n.id):
             found.append(n.id)
-        elif isinstance(n, ast.Attribute) and n.attr in SENSITIVE:
+        elif (
+            isinstance(n, ast.Attribute)
+            and _is_sensitive_name(n.attr)
+            and n.attr not in ATTR_EXEMPT
+            and not (isinstance(n.value, ast.Name) and n.value.id == "self")
+        ):
             found.append(n.attr)
+        elif isinstance(n, ast.Subscript):
+            sl = n.slice
+            if isinstance(sl, ast.Slice):
+                found.append("slice[:]")
+            elif isinstance(sl, ast.Constant) and isinstance(sl.value, str) and _is_sensitive_name(sl.value):
+                found.append(f"[{sl.value!r}]")
         for child in ast.iter_child_nodes(n):
             visit(child)
 
@@ -55,35 +128,93 @@ def _sensitive_refs(node: ast.AST) -> list[str]:
     return found
 
 
+def _is_log_call(node: ast.AST) -> bool:
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return False
+    if node.func.attr not in LOG_METHODS:
+        return False
+    recv = node.func.value
+    if isinstance(recv, ast.Name):
+        return recv.id in LOGGER_NAMES
+    if isinstance(recv, ast.Call) and isinstance(recv.func, ast.Attribute) and recv.func.attr == "getLogger":
+        return True  # logging.getLogger(__name__).info(...)
+    return isinstance(recv, ast.Attribute) and recv.attr in LOGGER_NAMES  # self.logger
+
+
 def _offending_log_calls() -> list[str]:
     hits = []
     for path in sorted(PKG.rglob("*.py")):
         if "tests" in path.parts:
             continue
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in LOG_METHODS
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in {"logger", "log", "_logger"}
-            ):
+        source = path.read_text()
+        lines = source.splitlines()
+        for node in ast.walk(ast.parse(source, filename=str(path))):
+            if not _is_log_call(node):
                 continue
-            refs = [r for arg in node.args for r in _sensitive_refs(arg)]
+            start, end = node.lineno, getattr(node, "end_lineno", node.lineno)
+            window = lines[max(start - 2, 0) : end]
+            if any(PRAGMA in line for line in window):
+                continue
+            args = list(node.args) + [kw.value for kw in node.keywords if kw.arg not in ("exc_info", "stack_info")]
+            refs = [r for a in args for r in _violations(a)]
             if refs:
-                hits.append(f"{path.relative_to(PKG.parent)}:{node.lineno} logs {sorted(set(refs))}")
+                hits.append(f"{path.relative_to(PKG.parent)}:{start} logs {sorted(set(refs))}")
     return hits
 
 
 def test_no_user_content_in_log_calls():
     hits = _offending_log_calls()
-    assert not hits, "Log lengths/ids instead of user content:\n" + "\n".join(hits)
+    assert not hits, (
+        "Log lengths/ids/categories instead of user content (or mark an audited, "
+        "non-personal exception with '# log-safe: <reason>'):\n" + "\n".join(hits)
+    )
 
 
-def test_guard_catches_a_violation():
-    tree = ast.parse('logger.info("q: %s", query[:50])')
-    call = tree.body[0].value
-    assert _sensitive_refs(call.args[1]) == ["query"]
-    ok = ast.parse('logger.info("q: %d", len(query))').body[0].value
-    assert _sensitive_refs(ok.args[1]) == []
+def _first_call_violations(src: str) -> list[str]:
+    call = ast.parse(src).body[0].value
+    return [r for a in list(call.args) + [k.value for k in call.keywords] for r in _violations(a)]
+
+
+def test_guard_flags_content():
+    assert _first_call_violations('logger.info("q: %s", query)') == ["query"]
+    assert _first_call_violations('logger.info("q: %s", body[:50])') == ["slice[:]"]
+    assert _first_call_violations('logger.info("q: %s", rec["name"])') == ["['name']"]
+    assert _first_call_violations('logger.info(f"set {reminder_text}")') == ["reminder_text"]
+    assert _first_call_violations('logger.info("x", extra={"t": user_text})') == ["user_text"]
+    assert _first_call_violations('logger.info("m %s", med.get("name"))') == [".get('name')"]
+
+
+def test_guard_allows_lengths_and_keys():
+    assert _first_call_violations('logger.info("q: %d", len(query))') == []
+    assert _first_call_violations('logger.info("keys %s", sorted(data.keys()))') == []
+    assert _first_call_violations('logger.info("id %s", reminder_id)') == []
+
+
+def test_access_log_query_string_stripped():
+    import logging
+
+    from orchestrator.log_config import StripQueryStringFilter
+
+    rec = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("10.0.0.1:5000", "GET", "/api/documents?search=private+words", "1.1", 200),
+        None,
+    )
+    assert StripQueryStringFilter().filter(rec) is True
+    assert "private" not in rec.getMessage()
+    assert "/api/documents?…" in rec.getMessage()
+
+
+def test_configure_logging_attaches_access_filter_once():
+    import logging
+
+    from orchestrator.log_config import StripQueryStringFilter, configure_logging
+
+    configure_logging("INFO")
+    configure_logging("INFO")
+    filters = [f for f in logging.getLogger("uvicorn.access").filters if isinstance(f, StripQueryStringFilter)]
+    assert len(filters) == 1

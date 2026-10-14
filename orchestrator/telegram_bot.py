@@ -172,6 +172,7 @@ async def _tg_call(
         body = resp.json() if resp.content else {}
         if resp.status_code != 200 or not body.get("ok", False):
             api_desc = str(body.get("description", ""))[:200]  # Telegram's own error text
+            # log-safe: Telegram API / our own route's error body, not the user's message
             logger.warning(f"[TELEGRAM] {method} -> {resp.status_code}: {api_desc}")
             return {"ok": False, "status_code": resp.status_code, "description": api_desc}
         return body
@@ -365,6 +366,7 @@ async def _ask_jess(chat_id: str, text: str) -> str:
                 json={"messages": messages, "stream": False},
             )
         if resp.status_code != 200:
+            # log-safe: Telegram API / our own route's error body, not the user's message
             logger.error(f"[TELEGRAM] Chat route returned {resp.status_code}: {resp.text[:200]}")
             return "Something went wrong on my end — the gateway answered with an error. Try again in a minute."
         data = resp.json()
@@ -450,6 +452,7 @@ async def _transcribe(client: httpx.AsyncClient, audio: bytes, mime_type: str) -
             timeout=60.0,
         )
         if resp.status_code != 200:
+            # log-safe: Telegram API / our own route's error body, not the user's message
             logger.warning("[TELEGRAM] STT -> %s: %s", resp.status_code, str(resp.text)[:200])
             return None
         return (resp.json().get("text") or "").strip()
@@ -486,6 +489,7 @@ async def _synthesize_speech(client: httpx.AsyncClient, text: str) -> Optional[b
             timeout=60.0,
         )
         if resp.status_code != 200:
+            # log-safe: Telegram API / our own route's error body, not the user's message
             logger.warning("[TELEGRAM] TTS -> %s: %s", resp.status_code, str(resp.text)[:200])
             return None
         audio = resp.content
@@ -507,6 +511,7 @@ async def _send_voice_reply(client: httpx.AsyncClient, chat_id: str, audio: byte
         )
         body = resp.json() if resp.content else {}
         if resp.status_code != 200 or not body.get("ok", False):
+            # log-safe: Telegram API / our own route's error body, not the user's message
             logger.warning("[TELEGRAM] sendVoice -> %s: %s", resp.status_code, str(body.get("description", ""))[:200])
             return False
         return True
@@ -1063,6 +1068,7 @@ async def _poll_once(client: httpx.AsyncClient, offset: int) -> tuple:
         logger.error("[TELEGRAM] getUpdates conflict (409) — another poller is running; sleeping 60s")
         return offset, 60.0
     if resp.status_code != 200 or not body.get("ok", False):
+        # log-safe: Telegram API / our own route's error body, not the user's message
         logger.warning(f"[TELEGRAM] getUpdates -> {resp.status_code}: {str(body.get('description', ''))[:200]}")
         return offset, -1.0
 

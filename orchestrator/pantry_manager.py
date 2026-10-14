@@ -921,7 +921,10 @@ async def _fail_scan(scan_id: int, kind: str, msg: str, unreachable: bool) -> No
     await asyncio.to_thread(_transition, scan_id, ("processing",), "failed", error=msg[:500])
     PANTRY_SCAN.labels(kind=kind, result="failed").inc()
     logger.warning(
-        "[PANTRY] Scan %s failed (%s): %s", scan_id, "unreachable" if unreachable else "unreadable", msg[:200]
+        "[PANTRY] Scan %s failed (%s, %d-char detail)",
+        scan_id,
+        "unreachable" if unreachable else "unreadable",
+        len(msg),
     )
 
 
@@ -1211,6 +1214,7 @@ def sweep_stale_scans() -> Dict[str, int]:
                     os.remove(path)
                     orphans += 1
             except OSError as e:
+                # log-safe: uuid photo file name
                 logger.warning("[PANTRY] Sweep could not remove %s: %s", name, e)
     if discarded or orphans:
         logger.info("[PANTRY] Sweep: discarded %d stale scan(s), removed %d orphan photo(s)", discarded, orphans)
