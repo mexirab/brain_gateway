@@ -116,9 +116,11 @@ Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers a
 | Utterance end | 1.8 s of silence |
 | Cap | 90 s → `speech-timeout`: treated as steady noise (TV): discarded in the browser, never transcribed, its level becomes the new floor |
 
-**Loop (`hooks/useVoiceCall.ts`):** `MediaRecorder` runs while listening, restarted gaplessly every 3 s of idle (≤ ~3 s lead-in rides along with an utterance) → speech end → `POST /api/stt/transcribe` via `lib/stt.ts` → sent to chat as a voice message (reply always spoken) → waits for the spoken reply to finish (`SpeechQueue.begin()`/`beginReply()` return a completion promise) → 350 ms → listening again. Mic is not analysed while Jess answers (no barge-in); Interrupt stops her speech, listening resumes once the reply stream finishes. Empty transcripts back off 1/2/4/5 s.
+**Loop (`hooks/useVoiceCall.ts`):** `MediaRecorder` runs while listening, restarted gaplessly every 3 s of idle (≤ ~3 s lead-in rides along with an utterance) → speech end → **mic released** (tracks stopped, source disconnected) → `POST /api/stt/transcribe` via `lib/stt.ts` → sent to chat as a voice message (reply always spoken) → waits for the spoken reply to finish (`SpeechQueue.begin()`/`beginReply()` return a completion promise) → 350 ms → `ensureRunning()` (AudioContext resume, bounded 1.5 s wait) → **mic re-acquired** (new `getUserMedia` into the call-lifetime analyser; VAD calibration kept) → listening again. No barge-in; Interrupt stops her speech, listening resumes once the reply stream finishes.
 
-**Call ends on:** End; page hidden; 5 min with nothing said; STT 503 ("Jess can't hear right now — Helios (speech recognition) is asleep"); 3 consecutive STT failures (single failures are skipped); iOS `AudioContext` interruption not recovering within 1.5 s; mic track ended.
+**Mic released during replies:** while capture is open iOS runs the audio session in voice-processing ("phone call") mode, which made call-mode replies sound crackly/walkie-talkie (mic-button replies were clear). So the mic is open only while listening; the iOS mic indicator turning off during Jess's reply is expected, not a dropped call. Safari 16.4+: `navigator.audioSession.type` = `playback` while released, `play-and-record` before capture. Empty transcripts back off 1/2/4/5 s.
+
+**Call ends on:** End; page hidden; 5 min with nothing said; STT 503 ("Jess can't hear right now — Helios (speech recognition) is asleep"); 3 consecutive STT failures (single failures are skipped); iOS `AudioContext` interruption not recovering within 1.5 s — checked after the first acquire and before each re-acquire ("The call was paused by your phone — tap the call button to start again."); mic can't be re-acquired after a reply ("Couldn't get the microphone back — tap the call button to start again."); mic track ended.
 
 **Recorder MIME (`lib/stt.ts` `pickRecorderMime`, shared with the mic button's `useVoiceRecorder.ts`):** webm/opus → webm → mp4 (older Safari).
 
@@ -129,7 +131,9 @@ Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers a
 **Tests:** `orchestrator/tests/test_stt_transcribe_route.py`, `frontend/src/lib/vad.test.ts`, `frontend/src/lib/speech-queue.test.ts`.
 
 **Known limits:**
-- Verified only in Chromium with an injected WAV microphone through the real VAD/MediaRecorder/STT path — not yet on a real iPhone. Open: playback loudness/routing with the mic open, AirPods (HFP), WebKit analyser behaviour, interruption recovery.
+- Verified only in Chromium with an injected WAV microphone through the real VAD/MediaRecorder/STT path — not yet on a real iPhone. Open: AirPods (HFP), WebKit analyser behaviour, interruption recovery. Reply playback quality with the mic released between turns is the fix for the iPhone static report — not yet confirmed on the iPhone.
+- Re-acquiring the mic each turn adds `getUserMedia` start-up (~0.1–0.8 s on iOS) before listening; a very quick answer can lose its first syllable.
+- Safari normally keeps the mic permission for the page, but some setups may re-prompt each turn; dismissing the prompt ends the call.
 - Energy VAD can't tell the user from other people: anything transcribed is sent as the user's message. Steady TV-like noise is discarded; conversation in the room is not.
 - Interrupt waits for the text stream to finish before listening again.
 - The OWUI-only `/v1/audio/transcriptions` route still returns an unhandled 500 on STT failure.
