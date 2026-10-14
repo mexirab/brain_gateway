@@ -7,12 +7,15 @@
  * status the UI can act on instead of failing silently:
  *   asleep  — TTS endpoint answered 503 (Helios powered down)
  *   blocked — the browser refused play() (iOS autoplay: NotAllowedError)
+ *   interrupted — the OS paused playback (screen lock, call, Siri, Control
+ *                 Center); the player rejects with a MediaInterrupted error
  *   error   — anything else
  *
  * Pure TypeScript with injected synth/player so it is unit-testable.
  */
 
-export type SpeechStatus = 'idle' | 'loading' | 'speaking' | 'blocked' | 'asleep' | 'error';
+export type SpeechStatus =
+  | 'idle' | 'loading' | 'speaking' | 'blocked' | 'asleep' | 'interrupted' | 'error';
 
 export interface SpeechState {
   status: SpeechStatus;
@@ -148,8 +151,10 @@ export class SpeechQueue {
         await this.player.play(audio);
       } catch (err) {
         if (!live()) return;
-        const blocked = err instanceof Error && err.name === 'NotAllowedError';
-        return finish(blocked ? 'blocked' : 'error');
+        const name = err instanceof Error ? err.name : '';
+        return finish(
+          name === 'NotAllowedError' ? 'blocked' : name === 'MediaInterrupted' ? 'interrupted' : 'error',
+        );
       }
       if (!live()) return;
       s.played = i + 1;

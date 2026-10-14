@@ -20,7 +20,17 @@ interface DisplayMessage {
   routing?: RoutingInfo;
   announcement?: AnnouncementEntry;
   saved?: boolean; // already persisted to DB
+  error?: boolean; // friendlyError placeholder — not worth speaking
 }
+
+// Screen-reader text for the always-mounted live region (a region mounted
+// together with its text is often not announced).
+const SPEECH_ANNOUNCE: Record<string, string> = {
+  blocked: 'Voice reply blocked by the browser. Use Tap to play.',
+  asleep: 'Jess’s voice is asleep.',
+  interrupted: 'Voice reply paused.',
+  error: 'Couldn’t play the voice reply.',
+};
 
 const SIDEBAR_PREF_KEY = 'chat:sidebar-open';
 
@@ -256,6 +266,7 @@ export default function ChatPage() {
           const updated = [...prev];
           updated[updated.length - 1] = {
             ...updated[updated.length - 1],
+            error: true,
             content: friendlyError(error, 'Sorry — I couldn’t reach the model just now. Please try again.'),
           };
           return updated;
@@ -305,7 +316,7 @@ export default function ChatPage() {
             {isSpeaking && (
               <button
                 onClick={stopSpeech}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand/20 text-brand text-sm transition-colors hover:bg-brand/30"
+                className="flex items-center gap-1.5 min-h-11 px-3 rounded-lg bg-brand/20 text-brand text-sm transition-colors hover:bg-brand/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
                 aria-label="Stop speaking"
               >
                 <Square size={14} className="fill-current" aria-hidden />
@@ -355,10 +366,14 @@ export default function ChatPage() {
               announcement={msg.announcement}
               isStreaming={streaming && i === messages.length - 1 && msg.role === 'assistant'}
               speechStatus={speech.key === msg.uid ? speech.status : undefined}
-              onSpeak={() => { unlock(); speakText(msg.uid, msg.content); }}
+              onSpeak={msg.error ? undefined : () => { unlock(); speakText(msg.uid, msg.content); }}
             />
           ))}
         </div>
+
+        <span className="sr-only" role="status" aria-live="polite">
+          {SPEECH_ANNOUNCE[speech.status] ?? ''}
+        </span>
 
         {/* Input */}
         <div className="px-4 pb-4">

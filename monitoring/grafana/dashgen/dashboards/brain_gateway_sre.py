@@ -208,10 +208,11 @@ def build() -> dict:
 
     # -------------------------------------------------------- TTS Synthesis
     tts_desc = (
-        "TTS round-trip at the orchestrator's /v1/audio/speech proxy (the hop "
-        "between OWUI and Qwen3-TTS on port 8002). Excludes browser playback. "
-        "The proxy also prepends ~150ms of silence so the first-word stutter "
-        "from cold prosody state doesn't reach the user — see TTS_SILENCE_PAD_MS."
+        "Successful TTS round-trips to Qwen3-TTS on Helios :8002, from the "
+        "dashboard chat's /api/tts/synthesize (one call per spoken sentence) and "
+        "the /v1/audio/speech proxy (OWUI, stopped). Failures are NOT in this "
+        "histogram — see Dashboard TTS Outcomes. Excludes browser playback. Both "
+        "paths prepend ~150ms of silence against first-word stutter (TTS_SILENCE_PAD_MS)."
     )
     tts_row = [
         timeseries(
@@ -235,9 +236,14 @@ def build() -> dict:
             description=tts_desc,
         ),
         timeseries(
-            "TTS Call Rate",
-            [("sum(rate(bgw_voice_tts_seconds_count[5m])) * 60", "tts calls/min")],
+            "Dashboard TTS Outcomes",
+            [("sum by (result) (rate(bgw_dashboard_tts_total[5m])) * 60", "{{result}}")],
             unit="none",
+            description=(
+                "Per-sentence /api/tts/synthesize results per minute. unreachable = "
+                "Helios asleep (chat shows 'Jess's voice is asleep'); timeout = TTS "
+                "awake but stuck; upstream_error = TTS returned an error."
+            ),
         ),
         stat(
             "TTS Mean (5m)",
@@ -247,7 +253,7 @@ def build() -> dict:
             thresholds=VOICE_TTS_THRESHOLDS_S,
         ),
         stat(
-            "TTS Calls (24h)",
+            "TTS Sentences (24h)",
             "sum(increase(bgw_voice_tts_seconds_count[24h]))",
             unit="none",
         ),

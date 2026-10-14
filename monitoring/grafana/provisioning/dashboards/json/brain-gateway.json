@@ -1458,7 +1458,7 @@
           "sort": "desc"
         }
       },
-      "description": "TTS round-trip at the orchestrator's /v1/audio/speech proxy (the hop between OWUI and Qwen3-TTS on port 8002). Excludes browser playback. The proxy also prepends ~150ms of silence so the first-word stutter from cold prosody state doesn't reach the user \u2014 see TTS_SILENCE_PAD_MS.",
+      "description": "Successful TTS round-trips to Qwen3-TTS on Helios :8002, from the dashboard chat's /api/tts/synthesize (one call per spoken sentence) and the /v1/audio/speech proxy (OWUI, stopped). Failures are NOT in this histogram \u2014 see Dashboard TTS Outcomes. Excludes browser playback. Both paths prepend ~150ms of silence against first-word stutter (TTS_SILENCE_PAD_MS).",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -1469,7 +1469,7 @@
     },
     {
       "type": "timeseries",
-      "title": "TTS Call Rate",
+      "title": "Dashboard TTS Outcomes",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"
@@ -1481,8 +1481,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(bgw_voice_tts_seconds_count[5m])) * 60",
-          "legendFormat": "tts calls/min",
+          "expr": "sum by (result) (rate(bgw_dashboard_tts_total[5m])) * 60",
+          "legendFormat": "{{result}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -1544,6 +1544,7 @@
           "sort": "desc"
         }
       },
+      "description": "Per-sentence /api/tts/synthesize results per minute. unreachable = Helios asleep (chat shows 'Jess's voice is asleep'); timeout = TTS awake but stuck; upstream_error = TTS returned an error.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -1625,7 +1626,7 @@
     },
     {
       "type": "stat",
-      "title": "TTS Calls (24h)",
+      "title": "TTS Sentences (24h)",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"

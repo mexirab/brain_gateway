@@ -30,6 +30,8 @@ export function cleanForSpeech(raw: string): string {
   t = t.replace(/(\*\*|__|~~)(.+?)\1/g, '$2'); // bold / strike
   t = t.replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=[^\w*]|$)/g, '$1$2'); // italics
   t = t.replace(/[*_~#]{2,}/g, ' '); // leftover emphasis runs
+  t = t.replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\u{FE0F}\u{200D}\p{Emoji_Modifier}]*/gu, ' '); // emoji
+  t = t.replace(/\p{Cs}/gu, ''); // lone surrogates — not valid UTF-8, server 400s them
   t = t.replace(/\s+/g, ' ').trim();
   t = t.replace(/\s+([,.!?;:])/g, '$1').replace(/(,\s*){2,}/g, ', ');
   return t.replace(/^[,\s]+|[,\s]+$/g, '');

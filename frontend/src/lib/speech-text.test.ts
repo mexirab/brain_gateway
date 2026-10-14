@@ -78,3 +78,13 @@ describe('SpeechSegmenter', () => {
     expect(segmentForSpeech('```\ncode\n```')).toEqual([]);
   });
 });
+
+describe('cleanForSpeech emoji', () => {
+  it('drops emoji, including ZWJ sequences and skin tones', () => {
+    expect(cleanForSpeech('Nice work 🎉👍🏽 see you 👩‍💻 soon ✅')).toBe('Nice work see you soon');
+  });
+
+  it('drops lone surrogates (cannot be UTF-8 encoded for the TTS request)', () => {
+    expect(cleanForSpeech('half \ud83d pair \udc4d here')).toBe('half pair here');
+  });
+});

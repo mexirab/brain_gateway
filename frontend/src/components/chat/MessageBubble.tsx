@@ -32,11 +32,16 @@ interface MessageBubbleProps {
   onSpeak?: () => void;
 }
 
-const SPEECH_NOTICE: Partial<Record<SpeechStatus, { icon: typeof Play; label: string }>> = {
-  blocked: { icon: Play, label: 'Tap to play' },
-  asleep: { icon: MoonStar, label: 'Jess’s voice is asleep — tap to retry' },
-  error: { icon: AlertCircle, label: 'Couldn’t play voice — tap to retry' },
+// `label` is the tap target once the reply has finished; `streaming` is the
+// non-interactive text shown while it is still arriving (nothing to tap yet).
+const SPEECH_NOTICE: Partial<Record<SpeechStatus, { icon: typeof Play; label: string; streaming: string }>> = {
+  blocked: { icon: Play, label: 'Tap to play', streaming: 'Voice blocked — play it when the reply finishes' },
+  asleep: { icon: MoonStar, label: 'Jess’s voice is asleep — tap to retry', streaming: 'Jess’s voice is asleep' },
+  interrupted: { icon: Play, label: 'Voice paused — tap to replay', streaming: 'Voice paused' },
+  error: { icon: AlertCircle, label: 'Couldn’t play voice — tap to retry', streaming: 'Couldn’t play voice' },
 };
+
+const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50';
 
 export default function MessageBubble({
   role,
@@ -93,15 +98,15 @@ export default function MessageBubble({
           </span>
         )}
         {notice && !isUser && isStreaming && (
-          <span className="flex items-center gap-1.5 px-1 text-xs text-content-muted" role="status">
+          <span className="flex items-center gap-1.5 px-1 text-xs text-content-muted">
             <notice.icon size={14} aria-hidden />
-            {notice.label.replace(/ — tap to retry$/, '')}
+            {notice.streaming}
           </span>
         )}
         {canSpeak && (notice ? (
           <button
             onClick={onSpeak}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs bg-surface-overlay/40 text-content-secondary hover:text-content-primary transition-colors"
+            className={`flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-xs bg-surface-overlay/40 text-content-secondary hover:text-content-primary transition-colors ${FOCUS_RING}`}
           >
             <notice.icon size={14} aria-hidden />
             {notice.label}
@@ -112,7 +117,7 @@ export default function MessageBubble({
             disabled={busy}
             aria-label={busy ? 'Speaking' : 'Play this message aloud'}
             title={busy ? 'Speaking…' : 'Play aloud'}
-            className={`p-1.5 rounded-lg transition-colors ${
+            className={`-my-1.5 -ml-1.5 inline-flex items-center justify-center min-h-11 min-w-11 rounded-lg transition-colors ${FOCUS_RING} ${
               busy ? 'text-brand animate-pulse' : 'text-content-muted hover:text-content-primary'
             }`}
           >

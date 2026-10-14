@@ -973,9 +973,20 @@ VOICE_PIPELINE_LATENCY = Histogram(
 # separate from the orchestrator LLM slice.
 VOICE_TTS_LATENCY = Histogram(
     "bgw_voice_tts_seconds",
-    "TTS synthesis latency (/v1/audio/speech proxy + dashboard /api/tts/synthesize). Excludes browser playback.",
+    "Successful TTS synthesis latency (/v1/audio/speech proxy + dashboard "
+    "/api/tts/synthesize, one call per sentence). Excludes browser playback.",
     buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
 )
+
+DASHBOARD_TTS_TOTAL = Counter(
+    "bgw_dashboard_tts_total",
+    "Dashboard chat /api/tts/synthesize outcomes (one call per spoken sentence)",
+    # result: ok | unreachable (503 — Helios asleep) | timeout (504) |
+    #         upstream_error (502) | not_configured | bad_request | too_long
+    ["result"],
+)
+for _r in ("ok", "unreachable", "timeout", "upstream_error", "not_configured", "bad_request", "too_long"):
+    DASHBOARD_TTS_TOTAL.labels(result=_r)
 
 # -- Recurring reminders (settings page) -------------------------------------
 RECURRING_REMINDERS_EXPANDED = Counter(

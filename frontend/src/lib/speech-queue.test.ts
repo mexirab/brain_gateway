@@ -87,6 +87,15 @@ describe('SpeechQueue', () => {
     expect(states.at(-1)).toEqual({ status: 'blocked', key: 'm2' });
   });
 
+  it('reports interrupted when the OS pauses playback', async () => {
+    const paused = Object.assign(new Error('paused'), { name: 'MediaInterrupted' });
+    const states: SpeechState[] = [];
+    const q = new SpeechQueue(async () => blob('x'), controllablePlayer(paused).player, (s) => states.push(s));
+    q.begin('m4'); q.push(['hello there']);
+    await tick(); await tick(); await tick();
+    expect(states.at(-1)).toEqual({ status: 'interrupted', key: 'm4' });
+  });
+
   it('stop() aborts in-flight synth, silences the player and goes idle', async () => {
     const signals: AbortSignal[] = [];
     const p = controllablePlayer();

@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from orchestrator import shared
-from orchestrator.metrics import VOICE_TTS_LATENCY
+from orchestrator.metrics import DASHBOARD_TTS_TOTAL, VOICE_TTS_LATENCY
 
 logger = logging.getLogger(__name__)
 
@@ -252,44 +252,68 @@ async def openai_audio_speech(request: Request):
 
 # The dashboard chat speaks replies one sentence at a time and caps the spoken
 # portion client-side (~600 chars), so a single request never needs more than
-# this. The cap keeps one bearer-authed call from pinning the single-GPU TTS
-# server for minutes.
+# this. The caps keep one bearer-authed call from pinning the single-GPU TTS
+# server: chars bound ordinary text, UTF-8 bytes bound emoji/CJK-heavy input
+# (1000 emoji passed a chars-only cap and held the GPU ~20 s).
 TTS_SYNTH_MAX_CHARS = 1000
+TTS_SYNTH_MAX_BYTES = 2000
+
+
+def _tts_error(result: str, error: str, status_code: int) -> JSONResponse:
+    DASHBOARD_TTS_TOTAL.labels(result=result).inc()
+    return JSONResponse({"ok": False, "error": error}, status_code=status_code)
 
 
 @router.post("/api/tts/synthesize")
-async def tts_synthesize(request: Request):
-    """Synthesize text to speech for the dashboard chat.
+async def tts_synthesize(request: Request) -> Response:
+    """Synthesize text to speech for the dashboard chat (one sentence per call).
 
-    Status codes the frontend relies on: 400 bad/empty text, 413 over
-    TTS_SYNTH_MAX_CHARS, 503 TTS unreachable (Helios asleep / not configured —
-    shown as "Jess's voice is asleep"), 502 TTS server answered with an error.
+    Status codes the frontend relies on: 400 bad/empty/unencodable text, 413
+    over the caps, 503 TTS unreachable or not configured (shown as "Jess's
+    voice is asleep"), 504 TTS timed out, 502 TTS answered with an error.
+    Validation is manual (not a Pydantic model) to keep that 400/413 contract.
     """
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+        return _tts_error("bad_request", "Invalid JSON", 400)
     text = body.get("text") if isinstance(body, dict) else None
     if not isinstance(text, str) or not text.strip():
-        return JSONResponse({"error": "No text provided"}, status_code=400)
-    if len(text) > TTS_SYNTH_MAX_CHARS:
-        return JSONResponse({"error": f"Text too long (max {TTS_SYNTH_MAX_CHARS} chars)"}, status_code=413)
+        return _tts_error("bad_request", "No text provided", 400)
+    text = text.strip()
+    try:
+        encoded_len = len(text.encode("utf-8"))
+    except UnicodeEncodeError:  # lone surrogates — httpx can't send them
+        return _tts_error("bad_request", "Text is not valid UTF-8", 400)
+    if len(text) > TTS_SYNTH_MAX_CHARS or encoded_len > TTS_SYNTH_MAX_BYTES:
+        return _tts_error("too_long", f"Text too long (max {TTS_SYNTH_MAX_CHARS} chars)", 413)
     backend = shared.tts_backend
     if not backend:
-        return JSONResponse({"error": "TTS not available"}, status_code=503)
+        return _tts_error("not_configured", "TTS not available", 503)
 
     _t0 = time.time()
     try:
         audio_bytes = await backend.synthesize(text)
     except httpx.HTTPStatusError as e:
         logger.warning("[TTS] synthesize -> HTTP %s", e.response.status_code)
-        return JSONResponse({"error": "TTS failed"}, status_code=502)
-    except (httpx.TransportError, OSError) as e:
-        # Connect refused / timeout: Helios is power-tiered and usually asleep.
+        return _tts_error("upstream_error", "TTS failed", 502)
+    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+        # Connected but no answer in time: TTS is awake but stuck/busy — not "asleep".
+        logger.warning("[TTS] synthesize timed out: %s", type(e).__name__)
+        return _tts_error("timeout", "TTS timed out", 504)
+    except httpx.RequestError as e:
+        # Connect refused / unreachable: Helios is power-tiered and usually asleep.
         logger.warning("[TTS] synthesize unreachable: %s", type(e).__name__)
-        return JSONResponse({"error": "TTS unavailable"}, status_code=503)
-    finally:
-        VOICE_TTS_LATENCY.observe(time.time() - _t0)
+        return _tts_error("unreachable", "TTS unavailable", 503)
+    except Exception:
+        logger.exception("[TTS] synthesize failed unexpectedly")
+        return _tts_error("upstream_error", "TTS failed", 502)
+    VOICE_TTS_LATENCY.observe(time.time() - _t0)  # success only — failures are in the counter
+    DASHBOARD_TTS_TOTAL.labels(result="ok").inc()
+    # Spoken output is playing in the browser: hold off house-speaker
+    # announcements (reminder_manager checks is_voice_session_active) so two
+    # Jesses don't talk over each other. Suppressed reminders retry in +2 min.
+    shared.mark_voice_activity()
 
     media_type = backend.audio_format
     if media_type == "audio/wav":

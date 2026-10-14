@@ -6,6 +6,9 @@ import { SpeechSegmenter, segmentForSpeech } from '@/lib/speech-text';
 
 const PROXY = '/api/proxy';
 const LS_KEY = 'tts_enabled';
+// Per-sentence synth normally takes 0.5–3 s; a hung TTS (e.g. Helios mid-boot)
+// must not leave the UI on "loading" forever.
+const SYNTH_TIMEOUT_MS = 30_000;
 
 /**
  * 0.05 s of 8 kHz mono silence as a WAV data URI. Playing it inside a tap is
@@ -28,17 +31,27 @@ const SILENT_WAV = (() => {
 })();
 
 async function synthesize(text: string, signal: AbortSignal): Promise<Blob> {
-  const res = await fetch(`${PROXY}/api/tts/synthesize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-    signal,
-  });
-  if (res.status === 503) throw new TTSUnavailableError();
-  if (!res.ok) throw new Error(`TTS ${res.status}`);
-  const ct = res.headers.get('content-type') || '';
-  if (!ct.startsWith('audio/')) throw new Error(`TTS unexpected ${ct}`);
-  return res.blob();
+  // Manual timeout + chaining (AbortSignal.any needs Safari 17.4+).
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(onAbort, SYNTH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${PROXY}/api/tts/synthesize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: ctrl.signal,
+    });
+    if (res.status === 503) throw new TTSUnavailableError();
+    if (!res.ok) throw new Error(`TTS ${res.status}`);
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.startsWith('audio/')) throw new Error(`TTS unexpected ${ct}`);
+    return await res.blob();
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /** One long-lived <audio> element, reused for every clip (see SILENT_WAV). */
@@ -62,6 +75,7 @@ class ElementPlayer implements SpeechPlayer {
     if (!el.paused) return; // already playing → already unlocked
     el.onended = null;
     el.onerror = null;
+    el.onpause = null;
     el.src = SILENT_WAV;
     el.play().catch(() => { /* superseded by a real clip, or not a gesture */ });
   }
@@ -74,6 +88,14 @@ class ElementPlayer implements SpeechPlayer {
       this.rejectPending = reject;
       el.onended = () => { this.rejectPending = null; resolve(); };
       el.onerror = () => { this.rejectPending = null; reject(new Error('audio decode/playback error')); };
+      // iOS pauses the element itself on screen lock / call / Siri / Control
+      // Center. Without this the clip promise would never settle. A natural
+      // end also fires 'pause' (just before 'ended'), hence the ended guard.
+      el.onpause = () => {
+        if (el.ended) return;
+        this.rejectPending = null;
+        reject(Object.assign(new Error('playback paused by the system'), { name: 'MediaInterrupted' }));
+      };
       el.src = this.url!;
       el.play().catch((err: unknown) => {
         this.rejectPending = null;
@@ -86,6 +108,7 @@ class ElementPlayer implements SpeechPlayer {
     if (this.el) {
       this.el.onended = null;
       this.el.onerror = null;
+      this.el.onpause = null;
       this.el.pause();
     }
     const reject = this.rejectPending;
