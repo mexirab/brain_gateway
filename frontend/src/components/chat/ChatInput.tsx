@@ -31,7 +31,7 @@ export default function ChatInput({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { isRecording, isTranscribing, startRecording, stopRecording } = useVoiceRecorder();
+  const { isRecording, isTranscribing, startRecording, stopRecording, error: micError } = useVoiceRecorder();
 
   const handleSubmit = () => {
     const trimmed = text.trim();
@@ -75,6 +75,7 @@ export default function ChatInput({
   const micDisabled = disabled || isTranscribing;
 
   return (
+    <div>
     <div className="flex items-end gap-2">
       <textarea
         ref={textareaRef}
@@ -124,6 +125,10 @@ export default function ChatInput({
       >
         <Send size={18} />
       </button>
+    </div>
+    {micError && !isRecording && (
+      <p role="alert" className="mt-1.5 px-1 text-xs text-danger">{micError}</p>
+    )}
     </div>
   );
 }

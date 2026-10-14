@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { EnergyVad, rmsOf } from '@/lib/vad';
 import { pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
+import { setAudioSessionType } from '@/lib/audio-session';
 
 /**
  * Hands-free "call mode": one tap opens the mic for the whole call; the page
@@ -51,18 +52,6 @@ const MIC_CONSTRAINTS: MediaStreamConstraints = {
 };
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
-
-/**
- * Safari 16.4+ Audio Session API: pin the session type explicitly instead of
- * relying on WebKit to leave play-and-record once capture stops (older iOS
- * kept the degraded "phone call" routing). No-op elsewhere.
- */
-function setAudioSessionType(type: 'playback' | 'play-and-record'): void {
-  try {
-    const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
-    if (session) session.type = type;
-  } catch { /* unsupported value / browser */ }
-}
 
 interface Recording {
   rec: MediaRecorder;
@@ -161,6 +150,9 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     }
     wakeLockRef.current?.release().catch(() => {});
     wakeLockRef.current = null;
+    // releaseMic() left the session on 'playback', which blocks capture on
+    // iOS — hand it back or the plain mic button can't record afterwards.
+    setAudioSessionType('auto');
     setPhase('off');
   }, [finishRecording, releaseMic]);
 

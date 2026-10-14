@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import { pickRecorderMime, transcribe } from '@/lib/stt';
+import { pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
+import { setAudioSessionType } from '@/lib/audio-session';
 
 interface UseVoiceRecorderReturn {
   isRecording: boolean;
@@ -22,6 +23,8 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
   const startRecording = useCallback(async () => {
     setError(null);
     try {
+      // Never inherit a 'playback' session (iOS would refuse to capture).
+      setAudioSessionType('auto');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
@@ -40,7 +43,14 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
       // Release mic if acquired before the error (e.g. MediaRecorder constructor throws)
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
-      setError(err instanceof Error ? err.message : 'Microphone access denied');
+      const name = err instanceof Error ? err.name : '';
+      console.warn('[mic] getUserMedia failed:', name || err);
+      setError(
+        name === 'NotAllowedError' ? 'Microphone access is blocked — allow it for this site in Safari settings, then reload.'
+          : name === 'NotFoundError' ? 'No microphone found.'
+            : name === 'NotReadableError' ? 'The microphone is busy in another app.'
+              : 'Couldn’t start the microphone — try reloading the page.',
+      );
     }
   }, []);
 
@@ -66,7 +76,9 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
     try {
       return (await transcribe(blob)) || null;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Transcription failed');
+      setError(err instanceof STTUnavailableError
+        ? 'Jess can’t hear right now — Helios (speech recognition) is asleep.'
+        : 'Couldn’t transcribe that — please try again.');
       return null;
     } finally {
       setIsTranscribing(false);
