@@ -1202,7 +1202,7 @@ def build() -> dict:
         timeseries(
             "Pantry Scans & Swaps (/d)",
             [
-                ("sum by (result) (increase(bgw_pantry_scan_total[1d]))", "scan {{result}}"),
+                ("sum by (kind, result) (increase(bgw_pantry_scan_total[1d]))", "{{kind}} {{result}}"),
                 ("sum by (result) (increase(bgw_meal_plan_swap_total[1d]))", "swap {{result}}"),
             ],
             unit="none",
@@ -1213,7 +1213,27 @@ def build() -> dict:
             '{container="brain-orchestrator"} |~ "\\\\[(PANTRY|MEALPLAN)\\\\]"',
         ),
     ]
-    row, y = grid_row(pantry_row, y, heights=[8, 8, 8, 8, 8])
+    pantry_row += [
+        timeseries(
+            "Receipt Lines (/7d)",
+            [("sum by (result) (increase(bgw_pantry_receipt_lines_total[7d]))", "{{result}}")],
+            unit="none",
+            description="How receipt lines were matched: matched_alias (a correction Jess remembered — "
+            "should grow over time), matched_inventory, new, non_food.",
+        ),
+        timeseries(
+            "Scan Latency p95 by Kind",
+            [
+                (
+                    "histogram_quantile(0.95, sum by (le, kind) (rate(bgw_pantry_scan_latency_seconds_bucket[1d])))",
+                    "{{kind}}",
+                )
+            ],
+            unit="s",
+            description="Photo stock-takes and receipts, end to end (all photos of a scan, one at a time).",
+        ),
+    ]
+    row, y = grid_row(pantry_row, y, heights=[8, 8, 8, 8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Background Jobs

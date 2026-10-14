@@ -8218,7 +8218,7 @@
       "description": "ok | retry_ok (first reply unusable, retry worked) | invalid | llm_error | asleep (Helios off) | error (bug \u2014 check logs) | interrupted.",
       "gridPos": {
         "h": 8,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 242
       },
@@ -8328,8 +8328,8 @@
       "description": "Whole-plan generation (thinking on, waits for chat to go idle first) and single-meal swaps. Long plans hold the one model slot.",
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 3,
         "y": 242
       },
       "id": 112
@@ -8426,8 +8426,8 @@
       "description": "Requests waiting for / using the single primary slot. 'deferred' > 0 means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 6,
         "y": 242
       },
       "id": 113
@@ -8446,8 +8446,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (result) (increase(bgw_pantry_scan_total[1d]))",
-          "legendFormat": "scan {{result}}",
+          "expr": "sum by (kind, result) (increase(bgw_pantry_scan_total[1d]))",
+          "legendFormat": "{{kind}} {{result}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -8524,8 +8524,8 @@
       "description": "Photo stock-takes (proposed/empty/failed/committed/discarded) and meal swaps.",
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 9,
         "y": 242
       },
       "id": 114
@@ -8565,11 +8565,183 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 3,
+        "x": 12,
         "y": 242
       },
       "id": 115
+    },
+    {
+      "type": "timeseries",
+      "title": "Receipt Lines (/7d)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_pantry_receipt_lines_total[7d]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "How receipt lines were matched: matched_alias (a correction Jess remembered \u2014 should grow over time), matched_inventory, new, non_food.",
+      "gridPos": {
+        "h": 8,
+        "w": 3,
+        "x": 15,
+        "y": 242
+      },
+      "id": 116
+    },
+    {
+      "type": "timeseries",
+      "title": "Scan Latency p95 by Kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(bgw_pantry_scan_latency_seconds_bucket[1d])))",
+          "legendFormat": "{{kind}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Photo stock-takes and receipts, end to end (all photos of a scan, one at a time).",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 242
+      },
+      "id": 117
     },
     {
       "type": "row",
@@ -8582,7 +8754,7 @@
         "x": 0,
         "y": 250
       },
-      "id": 116
+      "id": 118
     },
     {
       "type": "stat",
@@ -8645,7 +8817,7 @@
         "x": 0,
         "y": 251
       },
-      "id": 117
+      "id": 119
     },
     {
       "type": "timeseries",
@@ -8731,7 +8903,7 @@
         "x": 8,
         "y": 251
       },
-      "id": 118
+      "id": 120
     },
     {
       "type": "stat",
@@ -8794,7 +8966,7 @@
         "x": 16,
         "y": 251
       },
-      "id": 119
+      "id": 121
     },
     {
       "type": "timeseries",
@@ -8884,7 +9056,7 @@
         "x": 0,
         "y": 259
       },
-      "id": 120
+      "id": 122
     },
     {
       "type": "stat",
@@ -8952,7 +9124,7 @@
         "x": 8,
         "y": 259
       },
-      "id": 121
+      "id": 123
     },
     {
       "type": "stat",
@@ -9020,7 +9192,7 @@
         "x": 16,
         "y": 259
       },
-      "id": 122
+      "id": 124
     },
     {
       "type": "stat",
@@ -9088,7 +9260,7 @@
         "x": 0,
         "y": 267
       },
-      "id": 123
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -9174,7 +9346,7 @@
         "x": 12,
         "y": 267
       },
-      "id": 124
+      "id": 126
     },
     {
       "type": "row",
@@ -9187,7 +9359,7 @@
         "x": 0,
         "y": 275
       },
-      "id": 125
+      "id": 127
     },
     {
       "type": "logs",
@@ -9228,7 +9400,7 @@
         "x": 0,
         "y": 276
       },
-      "id": 126
+      "id": 128
     },
     {
       "type": "logs",
@@ -9269,7 +9441,7 @@
         "x": 12,
         "y": 276
       },
-      "id": 127
+      "id": 129
     }
   ]
 }

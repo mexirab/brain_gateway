@@ -43,16 +43,26 @@ export interface PantryItem {
   is_out: boolean;
 }
 
+export type ScanKind = PantryLocation | 'receipt';
+
 export interface ScanLine {
   key: number;
   name: string;
+  /** Receipt scans: the text as printed ("KS ORG BBY SPIN"). */
+  raw?: string;
+  /** Receipt scans: how the line was matched — a learned correction, the inventory, or the model's guess. */
+  matched_by?: 'alias' | 'inventory' | 'model';
+  /** Receipt scans: false for bags, toiletries, cleaning… (start unticked). */
+  food?: boolean;
+  /** Receipt scans: unchecked grocery-list entries this line will tick off. */
+  ticks?: string[];
   category: Category;
   location: PantryLocation;
   track_mode: TrackMode;
   qty: number | null;
   level: Level | null;
   confidence: 'high' | 'medium' | 'low';
-  action: 'add' | 'update';
+  action: 'add' | 'update' | 'restock';
   match_id: number | null;
   match_name: string | null;
   include: boolean;
@@ -60,13 +70,31 @@ export interface ScanLine {
 
 export type ScanStatus = 'queued' | 'processing' | 'pending_review' | 'failed' | 'committed' | 'discarded';
 
+export interface CommitResult {
+  ok: boolean;
+  added: number;
+  updated: number;
+  skipped: number;
+  /** Receipt commits only. */
+  aliases_learned?: number;
+  grocery_checked?: number;
+}
+
+export interface ReceiptMeta {
+  store: string | null;
+  date: string | null;
+  total: number | null;
+  items_sold: number | null;
+  duplicate_of: number | null;
+}
+
 export interface PantryScan {
   id: number;
-  kind: PantryLocation;
+  kind: ScanKind;
   status: ScanStatus;
   photo_count: number;
   photos_available: boolean;
-  proposed: { items: ScanLine[]; warnings: string[] } | null;
+  proposed: { items: ScanLine[]; warnings: string[]; receipt?: ReceiptMeta } | null;
   error: string | null;
   created_at: string;
 }
@@ -97,19 +125,22 @@ export interface NewItem {
 export class PantryApiError extends Error {
   status: number;
   detail: string;
-  constructor(status: number, detail: string) {
+  /** The parsed error body, for structured fields like `duplicate_of`. */
+  body: Record<string, unknown>;
+  constructor(status: number, detail: string, body: Record<string, unknown> = {}) {
     super(`Pantry API ${status}: ${detail || 'request failed'}`);
     this.name = 'PantryApiError';
     this.status = status;
     this.detail = detail;
+    this.body = body;
   }
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${PROXY}${path}`, init);
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}) as { error?: unknown });
-    throw new PantryApiError(res.status, typeof body?.error === 'string' ? body.error : '');
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new PantryApiError(res.status, typeof body?.error === 'string' ? body.error : '', body ?? {});
   }
   return res.json();
 }
@@ -137,17 +168,15 @@ export const pantryApi = {
   scans: (status = '') =>
     call<{ scans: PantryScan[] }>(`/api/pantry/scans${status ? `?status=${status}` : ''}`).then((r) => r.scans),
   scan: (id: number) => call<PantryScan>(`/api/pantry/scan/${id}`),
-  createScan: (kind: PantryLocation, files: Blob[]) => {
+  createScan: (kind: ScanKind, files: Blob[], force = false) => {
     const form = new FormData();
     form.append('kind', kind);
+    if (force) form.append('force', 'true');
     files.forEach((f, i) => form.append('files', f, `photo-${i}.jpg`));
     return call<{ ok: boolean; scan_id: number }>('/api/pantry/scan', { method: 'POST', body: form });
   },
   commitScan: (id: number, items: ScanLine[]) =>
-    call<{ ok: boolean; added: number; updated: number; skipped: number }>(
-      `/api/pantry/scan/${id}/commit`,
-      json('POST', { items }),
-    ),
+    call<CommitResult>(`/api/pantry/scan/${id}/commit`, json('POST', { items })),
   discardScan: (id: number) => call<{ ok: boolean }>(`/api/pantry/scan/${id}/discard`, json('POST')),
   retryScan: (id: number) => call<{ ok: boolean }>(`/api/pantry/scan/${id}/retry`, json('POST')),
   scanPhotoUrl: (id: number, index: number) => `${PROXY}/api/pantry/scan/${id}/photo/${index}`,

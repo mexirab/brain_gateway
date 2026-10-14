@@ -12,7 +12,7 @@ from typing import List
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from orchestrator import diet_profiles, meal_planner, shared
+from orchestrator import diet_profiles, meal_planner, receipt_scanner, shared
 from orchestrator import pantry_manager as pm
 
 logger = logging.getLogger(__name__)
@@ -124,9 +124,14 @@ async def pantry_events(item_id: int | None = Query(None, ge=1, lt=_MAX_ID), lim
 async def pantry_scan_create(
     files: List[UploadFile] = File(...),
     kind: str = Form("fridge"),
+    force: str = Form("false"),
 ) -> JSONResponse:
-    """Upload 1-8 shelf photos. Returns immediately with a scan id; vision runs
-    in the background (one photo at a time). Poll GET /scan/{id}."""
+    """Upload 1-8 shelf photos — or the photos of one shop receipt
+    (kind=receipt). Returns immediately with a scan id; vision runs in the
+    background (one photo at a time). Poll GET /scan/{id}.
+
+    A receipt photo identical to one already scanned is refused with 409
+    (``duplicate_of``) unless ``force=true``."""
     if kind not in pm.SCAN_KINDS:
         return JSONResponse({"ok": False, "error": f"kind must be one of {', '.join(pm.SCAN_KINDS)}"}, status_code=400)
     if not files:
@@ -147,6 +152,7 @@ async def pantry_scan_create(
     # would upload fine and then fail in the background.
     cap = min(shared.PANTRY_MAX_UPLOAD_MB * 1024 * 1024, shared.VISION_MAX_IMAGE_SIZE)
     saved: List[str] = []
+    hashes: List[str] = []
     for f in files:
         data = await f.read(cap + 1)
         if not data:
@@ -162,8 +168,26 @@ async def pantry_scan_create(
             pm._delete_photos(saved)
             return JSONResponse(res, status_code=415)
         saved.append(res["path"])
+        hashes.append(res["sha256"])
 
-    scan = await asyncio.to_thread(pm.create_scan, kind, saved)
+    if kind == pm.RECEIPT_KIND and force.lower() != "true":
+        for h in hashes:
+            dup = await asyncio.to_thread(receipt_scanner.photo_already_scanned, h)
+            if dup:
+                pm._delete_photos(saved)
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "this receipt photo was already scanned",
+                        "reason": "duplicate",
+                        "duplicate_of": dup["id"],
+                        "duplicate_status": dup["status"],
+                    },
+                    status_code=409,
+                )
+
+    # Every photo's hash, so a re-sent second section is caught too.
+    scan = await asyncio.to_thread(pm.create_scan, kind, saved, ",".join(hashes) or None)
     pm.start_scan(scan["id"])
     logger.info("[PANTRY] Scan %s queued: %s, %d photo(s)", scan["id"], kind, len(saved))
     return JSONResponse({"ok": True, "scan_id": scan["id"], "status": "queued"}, status_code=202)
@@ -254,7 +278,12 @@ async def pantry_diet_get() -> JSONResponse:
 
 @router.put("/diet")
 async def pantry_diet_put(req: Request) -> JSONResponse:
-    body = await _safe_json(req)
+    try:
+        body = await req.json()
+    except (json.JSONDecodeError, ValueError):
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body must be a JSON object"}, status_code=400)
     before = await asyncio.to_thread(diet_profiles.load)
     try:
         settings = await asyncio.to_thread(diet_profiles.save, body)

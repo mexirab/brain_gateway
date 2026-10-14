@@ -1,7 +1,7 @@
 # F-015: Pantry & Meal Prep
 
 **Priority:** P1 — daily-life feature; supports health-motivated diets (e.g. heart-healthy)
-**Status:** Phases 1 (inventory) and 2 (diet profile + weekly plan) done — Phases 3–4 not started. Built-state reference: `docs/PANTRY.md`
+**Status:** Phases 1 (inventory), 2 (diet profile + weekly plan) and 3 (receipts; Telegram caption routing deferred) done — Phase 4 not started. Built-state reference: `docs/PANTRY.md`
 **Depends on:** vision (`VISION_*`, the Helios brain), `shopping_list` (state_store), `log_meal` (meal_manager), F-011/F-013 push buttons, Telegram bot
 **Blocks:** None
 
@@ -296,7 +296,7 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - **Helios asleep:** the scan fails fast via `check_vision_health()` (fires `wake_helios()` when `HELIOS_WAKE_ENABLED`) instead of sitting `queued`; the user taps Retry once Helios is up.
 - **Matching:** same-location only (rapidfuzz `token_sort_ratio` ≥ 88); matched lines SET the item on commit (stock-take = truth); low-confidence lines start unticked.
 - **Uploads:** magic-byte JPEG/PNG/WebP (not extension), 411 without `Content-Length`, max 3 open scans (429), per-photo cap bounded by `VISION_MAX_IMAGE_SIZE`. Frontend downscales to 2048 px JPEG (strips EXIF/GPS, converts HEIC).
-- **Photos (open question 3 for stock-takes):** deleted on commit/discard, daily `pantry_sweep` (04:20) clears stale scans (72 h) + orphan files (24 h), excluded from `backup_state.py`. Receipts (Phase 3) still undecided.
+- **Photos (open question 3 for stock-takes):** deleted on commit/discard, daily `pantry_sweep` (04:20) clears stale scans (72 h) + orphan files (24 h), excluded from `backup_state.py`. Receipts: same — decided in Phase 3.
 - **Tool:** no `query` field — `search` uses `item`; added `remove` (exact name) and `add_to_shopping`; categories gained `bakery`, `prepared`.
 - **Metrics:** `bgw_pantry_scan_latency_seconds` carries `{kind,result}`; `bgw_barcode_lookup_total` adds `invalid`. `bgw_pantry_items` gauge not built.
 - **Barcode camera** needs HTTPS (secure context); the dashboard is served via Tailscale Serve. Over HTTP it decodes a photo of the barcode or typed digits.
@@ -320,9 +320,25 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - **Metrics:** `bgw_meal_plan_generated_total{result}` (`ok|retry_ok|invalid|llm_error|asleep|error|interrupted`), `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`; planner calls in `bgw_llm_calls_total{purpose=meal_plan|meal_plan_swap}`.
 - **Known limits:** `recipes` never pruned; swaps/replacements don't remove previously added grocery items.
 
-### Phase 3 — Receipts
-- [ ] Receipt prompt + parsing, `pantry_aliases` learning, dedup guard
-- [ ] Telegram photo caption routing (`receipt`, `fridge`)
+### Phase 3 — Receipts (done, except Telegram routing)
+- [x] Receipt prompt + parsing, `pantry_aliases` learning, dedup guard (`orchestrator/receipt_scanner.py`)
+- [x] `/pantry` Stock-take tab "Receipt" kind + receipt review screen
+- [x] Grafana: scans by kind, "Receipt Lines (/7d)", "Scan Latency p95 by Kind"
+- [x] Tests: `test_receipt_scanner.py`, `test_receipt_routes.py`
+- [ ] Telegram photo caption routing (`receipt`, `fridge`) — deferred (touches `telegram_bot.py`)
+
+**Phase 3 as built — deviations from the spec above:**
+- **Prompt shape:** `{store, date, total, items_sold, lines[{raw, name, qty, food, cat, sure}]}` — no per-line `price` (not needed, less to leak). Compact JSON, `thinking=False`, fits the existing 2048 `max_tokens` (~250 tokens per receipt, 2–6 s).
+- **Hardening in code, not just the prompt:** payment/summary lines dropped (payment words at line start with context; card fragments anywhere — so "Kirkland Signature almonds", "Fage Total", "Kool-Aid", "Balance bar", "Authentic salsa" survive), ≥4-digit runs masked, store letters only. Truncated JSON salvaged with a "photograph long receipts in parts" warning. Timeout (busy) vs transport failure (asleep) distinguished; model text never echoed.
+- **Multi-photo receipts:** one scan = one receipt in up to 8 parts; seam duplicate dropped; 150 lines max. Extra warning when `items_sold` ≠ lines read.
+- **Matching:** alias → inventory → new as specced, but inventory matching uses a custom `name_score` ≥ 88 (head noun + descriptor rule; "X with Y" compares X; peanut butter ≠ butter, oat/chocolate milk ≠ milk), not plain rapidfuzz ≥ 85, and no "recent names" source. Non-food lines are kept (unticked, collapsible) rather than dropped; unsure lines start unticked.
+- **Alias learning:** only real corrections (user renamed an unmatched line) or re-confirmed remembered lines — not every confirmed pair (an unnoticed model guess would teach a wrong alias). Raw text taken from the stored proposal, never the request.
+- **Commit:** one DB transaction (`pantry_manager.add_item(conn=…)`); counts +qty (≤50/line), levels → full. Also ticks grocery-list entries matching the line's own read name at `name_score` ≥ 95 (previewed as "ticks off …").
+- **Duplicate guard:** identical photo hash → 409 at upload, photos deleted (`force=true` overrides; all photo hashes stored; failed/discarded scans don't block); same store+date+total among committed receipts → review warning.
+- **Open question 3 decided:** receipt photos deleted on commit/discard (no Paperless handoff, not backed up); `proposed_json` cut to `{receipt:{store,date,total}}` after commit/discard — no line-level purchase history retained.
+- **Metrics:** `bgw_pantry_scan_total{kind="receipt"}`, new `bgw_pantry_receipt_lines_total{result=matched_alias|matched_inventory|new|non_food}`; scan latency buckets now start at 1 s.
+- **Also:** `PUT /api/pantry/diet` returns 400 on a non-object body.
+- **Known limits:** alias keys keep size words (5OZ vs 12OZ → different keys); hash duplicate check only catches the same re-encoded photo from the same device; matching is English-centric.
 
 ### Phase 4 — Consumption tracking
 - [ ] `prep_batches`; cook events (`meal_plan cooked`, push Done) with consume semantics
@@ -335,5 +351,5 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 
 1. Breakfasts: plan them, or treat as staples-only (oats/yogurt/eggs tracked as levels)?
 2. Recipe source: LLM-generated only, or also let the user paste/import favourite recipes (URL → text → recipe)?
-3. Keep receipt photos long-term (backup + Paperless handoff) or delete after commit?
+3. ~~Keep receipt photos long-term (backup + Paperless handoff) or delete after commit?~~ Decided (Phase 3): delete after commit/discard; keep only store/date/total.
 4. Nutrition estimates: LLM ballpark is fine for steering; is a real nutrient DB (USDA FoodData Central, offline) wanted later?

@@ -23,6 +23,9 @@ public-domain photos; re-fetch with
 `pantry_photos/` is also excluded: transient stock-take photos of the inside of
 the home, deleted on commit/discard and by the daily `pantry_sweep` — never
 worth keeping in 30 rotated archives on two machines (see `docs/PANTRY.md`).
+Receipt photos follow the same rule, and committed/discarded receipt scans keep
+only store/date/total in `brain_state.db` — no line-level purchase history
+reaches the backups.
 
 ## What the backup does
 

@@ -226,16 +226,16 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 | POST | `/api/pantry/items/{id}/use` | "Used some": `{count?}` — count −N (default 1), level steps down one, staple unchanged |
 | POST | `/api/pantry/items/{id}/out` | Mark out (does NOT touch the shopping list — the chat tool does) |
 | GET | `/api/pantry/events` | Ledger. Query: `item_id?`, `limit` 1–500 (default 50) |
-| POST | `/api/pantry/scan` | Multipart `files` (1–8, JPEG/PNG/WebP magic bytes) + `kind` (`fridge\|freezer\|pantry`) → 202 `{ok, scan_id, status:"queued"}`. 400 bad kind/count/empty, 409 `VISION_ENABLED=false`, 411 no `Content-Length`, 413 photo over cap, 415 bad format, 429 already 3 open scans |
+| POST | `/api/pantry/scan` | Multipart `files` (1–8, JPEG/PNG/WebP magic bytes) + `kind` (`fridge\|freezer\|pantry\|receipt`) + `force?` (`true` skips the receipt duplicate-photo check) → 202 `{ok, scan_id, status:"queued"}`. 400 bad kind/count/empty, 409 `VISION_ENABLED=false`, 409 `{reason:"duplicate", duplicate_of, duplicate_status}` (receipt photo identical to one in an earlier non-failed/non-discarded receipt scan), 411 no `Content-Length`, 413 photo over cap, 415 bad format, 429 already 3 open scans |
 | GET | `/api/pantry/scans` | Recent scans. Query: `status?` (`queued\|processing\|pending_review\|failed\|committed\|discarded`), `limit` 1–50 |
-| GET | `/api/pantry/scan/{id}` | `{id, kind, status, photo_count, photos_available, proposed: {items, warnings} \| null, error, created_at, committed_at}` — no filesystem paths. Poll while `queued`/`processing` |
+| GET | `/api/pantry/scan/{id}` | `{id, kind, status, photo_count, photos_available, proposed: {items, warnings} \| null, error, created_at, committed_at}` — no filesystem paths. Poll while `queued`/`processing`. Receipts: `proposed` adds `receipt: {store, date, total, items_sold, duplicate_of}`; lines carry `key, raw, read_name, action (restock\|add), match_id, match_name, matched_by (alias\|inventory\|model), food, ticks[], include`. After commit/discard a receipt's `proposed` is only `{receipt: {store, date, total}}` |
 | GET | `/api/pantry/scan/{id}/photo/{index}` | Scan photo (`Cache-Control: private, no-store`); 404 after commit/discard |
-| POST | `/api/pantry/scan/{id}/commit` | `{items: [{include?, match_id?, name, category?, location?, track_mode?, qty?, level?}]}` (≤200). Matched lines SET the item, others add → `{ok, added, updated, skipped}`. A `match_id` is honoured only if this scan's own proposal matched it (otherwise the line adds). 409 unless `pending_review` |
+| POST | `/api/pantry/scan/{id}/commit` | `{items: [{include?, match_id?, name, category?, location?, track_mode?, qty?, level?}]}` (≤200). Matched lines SET the item, others add → `{ok, added, updated, skipped}`. A `match_id` is honoured only if this scan's own proposal matched it (otherwise the line adds). 409 unless `pending_review`. **Receipts:** lines also send `key` (proposal line); one transaction; matched lines restock (count +qty ≤50, level → full), aliases learned from corrections, grocery entries ticked → adds `aliases_learned, grocery_checked` |
 | POST | `/api/pantry/scan/{id}/discard` | Discard + delete photos. 409 unless `pending_review`/`failed` (or stuck >10 min) |
 | POST | `/api/pantry/scan/{id}/retry` | Re-queue a `failed` scan → 202. 409 otherwise |
 | GET | `/api/pantry/barcode/{code}` | Open Food Facts lookup (cached) → `{ok, name, category, ...}`. 400 not 8–14 digits, 409 lookup disabled, 404 unknown product, 502 upstream error |
 | GET | `/api/pantry/diet` | `{settings, profiles: [{key, label, description}]}` — settings fields: `docs/PANTRY.md` → Diet settings |
-| PUT | `/api/pantry/diet` | Partial update (`reminders` merged key-wise) → `{ok, settings, rescheduled_plans}` (active plans' reminders moved when reminder settings changed). 400 on invalid value |
+| PUT | `/api/pantry/diet` | Partial update (`reminders` merged key-wise) → `{ok, settings, rescheduled_plans}` (active plans' reminders moved when reminder settings changed). 400 on invalid value or non-object body |
 | GET | `/api/pantry/plan` | `{active, draft}` — `active` = accepted plan covering today, else next upcoming; `draft` = newest `generating`/`draft`, else a `failed` attempt from the last 2 days. Each a plan object or null |
 | POST | `/api/pantry/plan/generate` | 202 `{ok, plan_id, week_start}` (runs in background — poll `GET /plan/{id}`). 409 one already generating (`plan_id`), 400 nothing to plan (both counts 0), 503 brain asleep (wakes Helios if `HELIOS_WAKE_ENABLED`) |
 | GET | `/api/pantry/plan/{id}` | Plan: `{id, week_start, status, profile, profile_label, notes, warnings[], error, created_at, accepted_at, entries[{id, plan_id, day, slot, recipe_id, mode, portions, status}], recipes{id: {name, minutes, ingredients[{item, amount, have}], steps, est_*, rating, ...}}, missing[]}`. `have`/`missing` computed live vs inventory |
@@ -244,7 +244,7 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 | POST | `/api/pantry/plan/entry/{id}/swap` | Replace one recipe (draft/active plan) → `{ok, added_to_list, plan}`. 404 unknown entry, 409 busy / plan not editable / already changed, 502 LLM error or unusable reply, 503 brain asleep |
 | POST | `/api/pantry/recipe/{id}/rate` | `{rating: "up"\|"down"\|"clear"}` → `{ok}`. 400 bad rating, 404 unknown recipe |
 
-Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`, `bgw_meal_plan_generated_total{result}`, `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`.
+Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_receipt_lines_total{result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`, `bgw_meal_plan_generated_total{result}`, `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`.
 
 ### Paperless Bridge (F-012)
 
@@ -652,7 +652,7 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 ```
 - `action` (enum, required): `view | add | use | out | set | search | remove`. Other fields: `item`, `count` (number), `level` (`full|half|low|out`), `location` (`fridge|freezer|pantry`), `category` (add only: `produce|dairy|protein|grain|legume|canned|condiment|spice|frozen|snack|beverage|bakery|prepared|other`), `add_to_shopping` (out only, default true).
 - `out` also adds the item to the `grocery` shopping list (dedup) unless `add_to_shopping=false`. `set` needs `count`, `level`, or `location`. `remove` requires the exact item name.
-- Only exposed when `PANTRY_ENABLED=true` (`PANTRY_TOOL_NAMES`); handler self-gates. Photo stock-takes are a dashboard flow, not a tool.
+- Only exposed when `PANTRY_ENABLED=true` (`PANTRY_TOOL_NAMES`); handler self-gates. Photo stock-takes and receipt scans are a dashboard flow, not a tool.
 
 ### meal_plan
 ```json
@@ -728,9 +728,10 @@ Created unconditionally by `SCHEMA_SQL`. Timestamps ISO 8601 local.
 
 | Table | Columns / notes |
 |-------|-----------------|
-| `pantry_items` | `id`, `name`, `category`, `location` (`fridge\|freezer\|pantry`), `track_mode` (`count\|level\|staple`), `qty` (count mode), `level` (`full\|half\|low\|out`), `status` (`active\|probably_gone\|gone`), `shelf_life_days` (NULL = keeps), `acquired_at`, `last_confirmed_at`, `barcode`, `source` (`manual\|chat\|scan\|barcode`), `created_at`, `updated_at`. Index on `status` |
+| `pantry_items` | `id`, `name`, `category`, `location` (`fridge\|freezer\|pantry`), `track_mode` (`count\|level\|staple`), `qty` (count mode), `level` (`full\|half\|low\|out`), `status` (`active\|probably_gone\|gone`), `shelf_life_days` (NULL = keeps), `acquired_at`, `last_confirmed_at`, `barcode`, `source` (`manual\|chat\|scan\|receipt\|barcode`), `created_at`, `updated_at`. Index on `status` |
 | `pantry_events` | Append-only ledger: `id`, `item_id`, `kind` (`add\|consume\|adjust\|remove`), `source`, `before_json`, `after_json`, `ref_type`/`ref_id` (e.g. scan), `note`, `at`. Index on `(item_id, at)` |
-| `pantry_scans` | `id`, `kind`, `photo_paths` (JSON list under `PANTRY_PHOTOS_DIR`), `image_sha256`, `status` (`queued\|processing\|pending_review\|committing\|committed\|discarded\|failed`), `proposed_json`, `error`, `created_at`, `committed_at`. Index on `status` |
+| `pantry_scans` | `id`, `kind` (`fridge\|freezer\|pantry\|receipt`), `photo_paths` (JSON list under `PANTRY_PHOTOS_DIR`), `image_sha256` (receipts: every photo's hash, comma-joined), `status` (`queued\|processing\|pending_review\|committing\|committed\|discarded\|failed`), `proposed_json` (receipts: cut to `{receipt:{store,date,total}}` after commit/discard), `error`, `created_at`, `committed_at`. Index on `status` |
+| `pantry_aliases` | `alias_norm` PK (`receipt_scanner.alias_key(raw)`), `item_name`, `hits`, `updated_at`. Receipt text → item name, learned only from user corrections / re-confirmed remembered lines |
 | `barcode_cache` | `barcode` PK, `name`, `category`, `payload_json`, `fetched_at`. Misses are cached too (re-tried after 7 days) |
 | `recipes` | `id`, `name`, `diet_tags`, `servings`, `batchable`, `minutes`, `method` (steps JSON), `est_kcal`, `est_satfat_g`, `est_fiber_g`, `source` (`llm`), `times_cooked`, `rating` (5 up / 1 down / NULL), `created_at`. Never pruned |
 | `recipe_ingredients` | `id`, `recipe_id`, `item_name`, `amount`, `consume` (default `some`), `optional`. Index on `recipe_id` |

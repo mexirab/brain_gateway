@@ -124,9 +124,14 @@ class TestDietRoutes:
         r = client.put("/api/pantry/diet", json=payload)
         assert r.status_code == 400 and r.json()["ok"] is False
 
-    def test_put_non_object_body_is_noop(self, client):
-        r = client.put("/api/pantry/diet", json=["x"])
-        assert r.status_code == 200 and r.json()["settings"]["profile"] == "mediterranean"
+    def test_put_non_object_body_is_rejected(self, client):
+        # Was a silent 200 no-op (phase 2 pentest nit) — now an explicit 400.
+        for body in (["x"], "hello", 3):
+            r = client.put("/api/pantry/diet", json=body)
+            assert r.status_code == 400
+        r = client.put("/api/pantry/diet", content=b"{bad json", headers={"content-type": "application/json"})
+        assert r.status_code == 400
+        assert client.get("/api/pantry/diet").json()["settings"]["profile"] == "mediterranean"
 
     def test_put_saves_and_reschedules_only_on_reminder_change(self, client, mp):
         pid = make_draft(mp)

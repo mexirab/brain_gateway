@@ -65,7 +65,10 @@ LOCATIONS = ("fridge", "freezer", "pantry")
 TRACK_MODES = ("count", "level", "staple")
 LEVELS = ("full", "half", "low", "out")
 STATUSES = ("active", "probably_gone", "gone")
-SCAN_KINDS = LOCATIONS  # a scan is a stock-take of one storage location
+RECEIPT_KIND = "receipt"
+# A scan is a stock-take of one storage location, or a shop receipt
+# (receipt_scanner handles reading + committing those).
+SCAN_KINDS = LOCATIONS + (RECEIPT_KIND,)
 
 MAX_NAME_LEN = 80
 MAX_QTY = 10_000
@@ -298,68 +301,82 @@ def add_item(
     source: str = "manual",
     ref_type: Optional[str] = None,
     ref_id: Optional[int] = None,
+    conn=None,
 ) -> Dict[str, Any]:
     """Add an item, or restock the existing one with the same name+location
     (or barcode). Restock adds to a count, and resets a level to ``level`` or full.
+
+    Pass ``conn`` to run inside a caller's transaction (receipt commits are
+    all-or-nothing); otherwise the call commits on its own.
     """
     clean = _clean_name(name)
     if not clean:
         return {"ok": False, "error": "name is required"}
+    code = str(barcode).strip() if barcode not in (None, "") else None
+    if code and not _BARCODE_RE.match(code):
+        return {"ok": False, "error": "barcode must be 8-14 digits"}
+    args = (clean, category, location, track_mode, qty, level, shelf_life_days, code, source, ref_type, ref_id)
+    if conn is not None:
+        res = _add_item_in(conn, *args)
+    else:
+        with state_store.get_db() as own:
+            res = _add_item_in(own, *args)
+    res["item"]["is_out"] = is_out(res["item"])
+    return res
+
+
+def _add_item_in(
+    conn, clean, category, location, track_mode, qty, level, shelf_life_days, code, source, ref_type, ref_id
+) -> Dict[str, Any]:
     cat = _pick(category, CATEGORIES, "other")
     loc = _pick(location, LOCATIONS, "pantry")
     q = _parse_qty(qty)
     mode = _pick(track_mode, TRACK_MODES, None) or _infer_track_mode(cat, q)
     lvl = _pick(level, LEVELS, None)
-    code = str(barcode).strip() if barcode not in (None, "") else None
-    if code and not _BARCODE_RE.match(code):
-        return {"ok": False, "error": "barcode must be 8-14 digits"}
     now = _now()
 
-    with state_store.get_db() as conn:
-        existing = _find_merge_target(conn, clean, loc, code)
-        if existing:
-            before = dict(existing)
-            if existing["track_mode"] == "count":
-                new_qty = min((existing["qty"] or 0) + (q if q is not None else 1), MAX_QTY)
-                conn.execute(
-                    "UPDATE pantry_items SET qty = ?, status = 'active', last_confirmed_at = ?, acquired_at = ?, "
-                    "updated_at = ? WHERE id = ?",
-                    (new_qty, now, now, now, existing["id"]),
-                )
-            else:
-                new_level = lvl if lvl and lvl != "out" else "full"
-                conn.execute(
-                    "UPDATE pantry_items SET level = ?, status = 'active', last_confirmed_at = ?, acquired_at = ?, "
-                    "updated_at = ? WHERE id = ?",
-                    (new_level, now, now, now, existing["id"]),
-                )
-            if code and not existing.get("barcode"):
-                conn.execute("UPDATE pantry_items SET barcode = ? WHERE id = ?", (code, existing["id"]))
-            after = _row(conn, existing["id"])
-            _log_event(conn, existing["id"], "add", source, before, after, ref_type, ref_id, "restock")
-            after["is_out"] = is_out(after)
-            return {"ok": True, "item": after, "merged": True}
-
-        if mode == "count":
-            q = q if q is not None else 1
-            lvl = None
+    existing = _find_merge_target(conn, clean, loc, code)
+    if existing:
+        before = dict(existing)
+        if existing["track_mode"] == "count":
+            new_qty = min((existing["qty"] or 0) + (q if q is not None else 1), MAX_QTY)
+            conn.execute(
+                "UPDATE pantry_items SET qty = ?, status = 'active', last_confirmed_at = ?, acquired_at = ?, "
+                "updated_at = ? WHERE id = ?",
+                (new_qty, now, now, now, existing["id"]),
+            )
         else:
-            q = None
-            lvl = lvl or "full"
-            if mode == "staple" and lvl in ("half", "low"):
-                lvl = "full"
-        shelf = _parse_int_days(shelf_life_days)
-        if shelf is None:
-            shelf = default_shelf_life(cat, loc, clean)
-        cur = conn.execute(
-            """INSERT INTO pantry_items (name, category, location, track_mode, qty, level, status,
-                   shelf_life_days, acquired_at, last_confirmed_at, barcode, source, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)""",
-            (clean, cat, loc, mode, q, lvl, shelf, now, now, code, source, now, now),
-        )
-        item = _row(conn, cur.lastrowid)
-        _log_event(conn, item["id"], "add", source, None, item, ref_type, ref_id)
-    item["is_out"] = is_out(item)
+            new_level = lvl if lvl and lvl != "out" else "full"
+            conn.execute(
+                "UPDATE pantry_items SET level = ?, status = 'active', last_confirmed_at = ?, acquired_at = ?, "
+                "updated_at = ? WHERE id = ?",
+                (new_level, now, now, now, existing["id"]),
+            )
+        if code and not existing.get("barcode"):
+            conn.execute("UPDATE pantry_items SET barcode = ? WHERE id = ?", (code, existing["id"]))
+        after = _row(conn, existing["id"])
+        _log_event(conn, existing["id"], "add", source, before, after, ref_type, ref_id, "restock")
+        return {"ok": True, "item": after, "merged": True}
+
+    if mode == "count":
+        q = q if q is not None else 1
+        lvl = None
+    else:
+        q = None
+        lvl = lvl or "full"
+        if mode == "staple" and lvl in ("half", "low"):
+            lvl = "full"
+    shelf = _parse_int_days(shelf_life_days)
+    if shelf is None:
+        shelf = default_shelf_life(cat, loc, clean)
+    cur = conn.execute(
+        """INSERT INTO pantry_items (name, category, location, track_mode, qty, level, status,
+               shelf_life_days, acquired_at, last_confirmed_at, barcode, source, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)""",
+        (clean, cat, loc, mode, q, lvl, shelf, now, now, code, source, now, now),
+    )
+    item = _row(conn, cur.lastrowid)
+    _log_event(conn, item["id"], "add", source, None, item, ref_type, ref_id)
     return {"ok": True, "item": item, "merged": False}
 
 
@@ -935,6 +952,7 @@ async def process_scan(scan_id: int) -> None:
     kind = "fridge"
     t0 = time.monotonic()
     result = "failed"
+    delegated = False
     try:
         row = await asyncio.to_thread(_scan_row, scan_id)
         if not row:
@@ -947,6 +965,13 @@ async def process_scan(scan_id: int) -> None:
         # Fail fast on a sleeping brain instead of timing out once per photo.
         if not await check_vision_health():
             await _fail_scan(scan_id, kind, _ASLEEP_MSG, unreachable=True)
+            return
+
+        if kind == RECEIPT_KIND:
+            from orchestrator.receipt_scanner import process_receipt
+
+            delegated = True  # records its own outcome + latency
+            await process_receipt(scan_id, paths)
             return
 
         per_photo: List[List[Dict[str, Any]]] = []
@@ -1011,7 +1036,8 @@ async def process_scan(scan_id: int) -> None:
         except Exception as e2:
             logger.error("[PANTRY] Could not mark scan %s failed: %s", scan_id, e2)
     finally:
-        PANTRY_SCAN_LATENCY.labels(kind=kind, result=result).observe(time.monotonic() - t0)
+        if not delegated:
+            PANTRY_SCAN_LATENCY.labels(kind=kind, result=result).observe(time.monotonic() - t0)
 
 
 def _maybe_wake_helios() -> None:
@@ -1086,6 +1112,8 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
         return {"ok": False, "error": f"too many items (max {MAX_COMMIT_ITEMS})", "status_code": 400}
     if not _transition(scan_id, ("pending_review",), "committing"):
         return {"ok": False, "error": f"scan is {row['status']}, not awaiting review", "status_code": 409}
+    if row["kind"] == RECEIPT_KIND:
+        return _commit_receipt_scan(scan_id, row, items)
 
     added = updated = skipped = 0
     seen_matches: set[int] = set()
@@ -1155,6 +1183,32 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
     return {"ok": True, "added": added, "updated": updated, "skipped": skipped}
 
 
+def _commit_receipt_scan(scan_id: int, row: Dict[str, Any], items: List[Any]) -> Dict[str, Any]:
+    """Receipt commits: same status machine + photo cleanup as a stock-take;
+    receipt_scanner restocks/adds, learns aliases and ticks the grocery list."""
+    from orchestrator.receipt_scanner import commit_receipt, minimise_record
+
+    try:
+        res = commit_receipt(scan_id, row, items)  # one transaction: all lines or none
+    except Exception:
+        _transition(scan_id, ("committing",), "pending_review")
+        raise
+    _transition(scan_id, ("committing",), "committed", committed_at=_now())
+    _delete_photos(json.loads(row["photo_paths"] or "[]"))
+    minimise_record(scan_id)
+    PANTRY_SCAN.labels(kind=RECEIPT_KIND, result="committed").inc()
+    logger.info(
+        "[PANTRY] Receipt scan %s committed: %d added, %d restocked, %d skipped, %d aliases, %d grocery ticked",
+        scan_id,
+        res["added"],
+        res["updated"],
+        res["skipped"],
+        res["aliases_learned"],
+        res["grocery_checked"],
+    )
+    return res
+
+
 def discard_scan(scan_id: int, reason: str = "user") -> Dict[str, Any]:
     row = _scan_row(scan_id)
     if not row:
@@ -1172,6 +1226,10 @@ def discard_scan(scan_id: int, reason: str = "user") -> Dict[str, Any]:
     if not _transition(scan_id, allowed, "discarded"):
         return {"ok": False, "error": f"scan is {row['status']}", "status_code": 409}
     _delete_photos(json.loads(row["photo_paths"] or "[]"))
+    if row["kind"] == RECEIPT_KIND:
+        from orchestrator.receipt_scanner import minimise_record
+
+        minimise_record(scan_id)
     PANTRY_SCAN.labels(kind=row["kind"], result="discarded").inc()
     logger.info("[PANTRY] Scan %s discarded (%s)", scan_id, reason)
     return {"ok": True}

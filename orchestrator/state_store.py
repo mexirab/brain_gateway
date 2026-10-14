@@ -400,6 +400,15 @@ CREATE TABLE IF NOT EXISTS meal_plan_entries (
 
 CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_plan ON meal_plan_entries(plan_id);
 
+-- Receipt text → pantry item name, learned from the user's corrections
+-- (F-015 phase 3, receipt_scanner). Key = receipt_scanner.alias_key(raw).
+CREATE TABLE IF NOT EXISTS pantry_aliases (
+    alias_norm TEXT PRIMARY KEY,
+    item_name TEXT NOT NULL,
+    hits INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS barcode_cache (
     barcode TEXT PRIMARY KEY,
     name TEXT,

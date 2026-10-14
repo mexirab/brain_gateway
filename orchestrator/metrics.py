@@ -1126,21 +1126,30 @@ for _r in ("found", "not_found", "library_missing"):
 PANTRY_SCAN = Counter(
     "bgw_pantry_scan_total",
     "Pantry photo scans by kind and outcome.",
-    # kind: fridge | pantry | freezer
+    # kind: fridge | pantry | freezer | receipt
     # result: proposed (ready for review) | empty (nothing recognised) | failed
     #         (vision error / brain asleep) | committed | discarded
     ["kind", "result"],
 )
-for _k in ("fridge", "pantry", "freezer"):
+for _k in ("fridge", "pantry", "freezer", "receipt"):
     for _r in ("proposed", "empty", "failed", "committed", "discarded"):
         PANTRY_SCAN.labels(kind=_k, result=_r)
+
+PANTRY_RECEIPT_LINES = Counter(
+    "bgw_pantry_receipt_lines_total",
+    "Receipt lines read, by how they were matched to the pantry.",
+    # matched_alias (a learned correction) | matched_inventory | new | non_food
+    ["result"],
+)
+for _r in ("matched_alias", "matched_inventory", "new", "non_food"):
+    PANTRY_RECEIPT_LINES.labels(result=_r)
 
 PANTRY_SCAN_LATENCY = Histogram(
     "bgw_pantry_scan_latency_seconds",
     "Wall time to turn one scan's photos into a review proposal (sequential vision calls).",
     # result: proposed | empty | failed — so fast failures don't drag p50 down
     ["kind", "result"],
-    buckets=(5, 10, 20, 40, 60, 120, 240, 480),
+    buckets=(1, 2.5, 5, 10, 20, 40, 60, 120, 240, 480),
 )
 
 PANTRY_EVENTS = Counter(
