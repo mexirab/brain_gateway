@@ -6,6 +6,7 @@ import os
 import time
 import wave
 
+import httpx
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
@@ -249,15 +250,53 @@ async def openai_audio_speech(request: Request):
     return Response(content=audio, media_type=content_type)
 
 
+# The dashboard chat speaks replies one sentence at a time and caps the spoken
+# portion client-side (~600 chars), so a single request never needs more than
+# this. The cap keeps one bearer-authed call from pinning the single-GPU TTS
+# server for minutes.
+TTS_SYNTH_MAX_CHARS = 1000
+
+
 @router.post("/api/tts/synthesize")
 async def tts_synthesize(request: Request):
-    """Synthesize text to speech and return WAV audio."""
-    body = await request.json()
-    text = body.get("text", "")
-    if not text:
+    """Synthesize text to speech for the dashboard chat.
+
+    Status codes the frontend relies on: 400 bad/empty text, 413 over
+    TTS_SYNTH_MAX_CHARS, 503 TTS unreachable (Helios asleep / not configured —
+    shown as "Jess's voice is asleep"), 502 TTS server answered with an error.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
         return JSONResponse({"error": "No text provided"}, status_code=400)
+    if len(text) > TTS_SYNTH_MAX_CHARS:
+        return JSONResponse({"error": f"Text too long (max {TTS_SYNTH_MAX_CHARS} chars)"}, status_code=413)
     backend = shared.tts_backend
     if not backend:
         return JSONResponse({"error": "TTS not available"}, status_code=503)
-    audio_bytes = await backend.synthesize(text)
-    return Response(content=audio_bytes, media_type="audio/wav")
+
+    _t0 = time.time()
+    try:
+        audio_bytes = await backend.synthesize(text)
+    except httpx.HTTPStatusError as e:
+        logger.warning("[TTS] synthesize -> HTTP %s", e.response.status_code)
+        return JSONResponse({"error": "TTS failed"}, status_code=502)
+    except (httpx.TransportError, OSError) as e:
+        # Connect refused / timeout: Helios is power-tiered and usually asleep.
+        logger.warning("[TTS] synthesize unreachable: %s", type(e).__name__)
+        return JSONResponse({"error": "TTS unavailable"}, status_code=503)
+    finally:
+        VOICE_TTS_LATENCY.observe(time.time() - _t0)
+
+    media_type = backend.audio_format
+    if media_type == "audio/wav":
+        # Same first-phoneme stutter fix as /v1/audio/speech; matters more here
+        # because the chat plays one short clip per sentence.
+        try:
+            audio_bytes = _prepend_silence_wav(audio_bytes, TTS_SILENCE_PAD_MS)
+        except Exception as e:
+            logger.warning("[TTS] silence pre-pad failed (%s) — returning raw audio", e)
+    return Response(content=audio_bytes, media_type=media_type, headers={"Cache-Control": "no-store"})

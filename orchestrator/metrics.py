@@ -973,7 +973,7 @@ VOICE_PIPELINE_LATENCY = Histogram(
 # separate from the orchestrator LLM slice.
 VOICE_TTS_LATENCY = Histogram(
     "bgw_voice_tts_seconds",
-    "TTS synthesis latency (proxy /v1/audio/speech). Excludes browser playback.",
+    "TTS synthesis latency (/v1/audio/speech proxy + dashboard /api/tts/synthesize). Excludes browser playback.",
     buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
 )
 
