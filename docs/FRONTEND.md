@@ -74,7 +74,7 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/dashboard/SelfcareTodayCard.tsx` — Today's selfcare log (medication/meal/water/movement) with last-seen timestamps and expandable entry rows
 - `frontend/src/components/layout/MobileNav.tsx` — Mobile bottom nav (4 tabs + More sheet); used by `(private)/layout.tsx`
 - `frontend/src/app/(private)/chat/page.tsx` — Chat page: SSE streaming, mic (walkie-talkie: mic-sent messages always get a spoken reply), speaker toggle (localStorage `tts_enabled`, default off), header Stop pill, sr-only aria-live voice-status region, call-mode wiring; a failed conversation-create no longer leaves the input disabled
-- `frontend/src/hooks/useVoiceCall.ts` — Hands-free call loop: listen (MediaRecorder, 3 s gapless restarts) → STT → send as voice message → wait for spoken reply → listen; end conditions in `docs/VOICE_AND_TTS.md` → Hands-free call mode
+- `frontend/src/hooks/useVoiceCall.ts` — Hands-free call loop: listen (MediaRecorder, 3 s gapless restarts) → release mic → STT → send as voice message → wait for spoken reply → re-acquire mic → listen (mic closed during replies — iOS playback quality); end conditions in `docs/VOICE_AND_TTS.md` → Hands-free call mode
 - `frontend/src/lib/vad.ts` — `EnergyVad`: calibrated adaptive-floor energy VAD (1.8 s silence ends an utterance, 90 s cap discarded as noise)
 - `frontend/src/lib/stt.ts` — `/api/stt/transcribe` client + `pickRecorderMime` (webm/opus → webm → mp4); used by call mode and `hooks/useVoiceRecorder.ts`
 - `frontend/src/components/chat/VoiceCallBar.tsx` — Replaces the chat input during a call: phase label, Interrupt, End
