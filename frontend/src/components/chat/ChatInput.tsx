@@ -31,12 +31,15 @@ export default function ChatInput({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { isRecording, isTranscribing, startRecording, stopRecording, error: micError } = useVoiceRecorder();
+  const {
+    isRecording, isTranscribing, startRecording, stopRecording, error: micError, clearError: clearMicError,
+  } = useVoiceRecorder();
 
   const handleSubmit = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
     onUserGesture?.();
+    clearMicError();
     onSend(trimmed, 'text');
     setText('');
     if (textareaRef.current) {
@@ -127,7 +130,15 @@ export default function ChatInput({
         </button>
       </div>
       {micError && !isRecording && (
-        <p role="alert" className="mt-1.5 px-1 text-xs text-danger">{micError}</p>
+        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-xs text-danger">
+          <span>{micError}</span>
+          <button
+            onClick={clearMicError}
+            className="min-h-11 px-2 text-content-muted hover:text-content-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 rounded"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
     </div>
   );

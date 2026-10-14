@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { EnergyVad, rmsOf } from '@/lib/vad';
 import { pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
-import { setAudioSessionType } from '@/lib/audio-session';
+import { setAudioSessionType, type AudioSessionType } from '@/lib/audio-session';
 
 /**
  * Hands-free "call mode": one tap opens the mic for the whole call; the page
@@ -125,12 +125,12 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
   }, []);
 
   /** Close the mic (iOS leaves "phone call" audio mode once nothing captures). */
-  const releaseMic = useCallback(() => {
+  const releaseMic = useCallback((next: AudioSessionType = 'playback') => {
     streamRef.current?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     streamRef.current = null;
     sourceRef.current?.disconnect();
     sourceRef.current = null;
-    setAudioSessionType('playback');
+    setAudioSessionType(next);
   }, []);
 
   const end = useCallback(() => {
@@ -140,7 +140,9 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     abortRef.current = null;
     void finishRecording(recordingRef.current, false);
     recordingRef.current = null;
-    releaseMic();
+    // 'auto', not 'playback': a 'playback' session blocks capture on iOS and
+    // would break the plain mic button after the call (one write, no blip).
+    releaseMic('auto');
     analyserRef.current = null;
     const ctx = ctxRef.current;
     ctxRef.current = null;
@@ -150,9 +152,6 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     }
     wakeLockRef.current?.release().catch(() => {});
     wakeLockRef.current = null;
-    // releaseMic() left the session on 'playback', which blocks capture on
-    // iOS — hand it back or the plain mic button can't record afterwards.
-    setAudioSessionType('auto');
     setPhase('off');
   }, [finishRecording, releaseMic]);
 

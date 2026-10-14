@@ -10,6 +10,7 @@ interface UseVoiceRecorderReturn {
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<string | null>;
   error: string | null;
+  clearError: () => void;
 }
 
 export default function useVoiceRecorder(): UseVoiceRecorderReturn {
@@ -87,5 +88,7 @@ export default function useVoiceRecorder(): UseVoiceRecorderReturn {
     }
   }, []);
 
-  return { isRecording, isTranscribing, startRecording, stopRecording, error };
+  const clearError = useCallback(() => setError(null), []);
+
+  return { isRecording, isTranscribing, startRecording, stopRecording, error, clearError };
 }
