@@ -31,12 +31,15 @@ export default function ChatInput({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { isRecording, isTranscribing, startRecording, stopRecording } = useVoiceRecorder();
+  const {
+    isRecording, isTranscribing, startRecording, stopRecording, error: micError, clearError: clearMicError,
+  } = useVoiceRecorder();
 
   const handleSubmit = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
     onUserGesture?.();
+    clearMicError();
     onSend(trimmed, 'text');
     setText('');
     if (textareaRef.current) {
@@ -75,55 +78,68 @@ export default function ChatInput({
   const micDisabled = disabled || isTranscribing;
 
   return (
-    <div className="flex items-end gap-2">
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onInput={handleInput}
-        placeholder={isRecording ? 'Listening...' : 'Message Jess...'}
-        disabled={disabled || isRecording}
-        rows={1}
-        className="flex-1 px-4 py-2.5 bg-surface-raised/60 border border-line/50 rounded-xl text-sm text-white placeholder-content-muted focus:outline-none focus:border-brand/50 resize-none disabled:opacity-50"
-      />
-      {onStartCall && (
-        <button
-          ref={callButtonRef}
-          onClick={() => { onUserGesture?.(); onStartCall(); }}
-          disabled={disabled || isRecording || isTranscribing}
-          className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl transition-colors shrink-0 bg-surface-overlay/30 text-content-secondary hover:bg-surface-overlay/50 hover:text-white disabled:opacity-30"
-          title="Hands-free conversation"
-          aria-label="Start hands-free conversation"
-        >
-          <AudioLines size={18} />
-        </button>
-      )}
-      <button
-        onClick={handleMicClick}
-        disabled={micDisabled}
-        className={`inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl transition-colors shrink-0 ${
-          isRecording
-            ? 'bg-danger/30 text-danger animate-pulse'
-            : 'bg-surface-overlay/30 text-content-secondary hover:bg-surface-overlay/50 hover:text-white'
-        } disabled:opacity-30`}
-        title={isRecording ? 'Stop recording' : 'Voice input'}
-        aria-label={isRecording ? 'Stop recording' : 'Voice input'}
-      >
-        {isTranscribing ? (
-          <Loader2 size={18} className="animate-spin" />
-        ) : (
-          <Mic size={18} />
+    <div>
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onInput={handleInput}
+          placeholder={isRecording ? 'Listening...' : 'Message Jess...'}
+          disabled={disabled || isRecording}
+          rows={1}
+          className="flex-1 px-4 py-2.5 bg-surface-raised/60 border border-line/50 rounded-xl text-sm text-white placeholder-content-muted focus:outline-none focus:border-brand/50 resize-none disabled:opacity-50"
+        />
+        {onStartCall && (
+          <button
+            ref={callButtonRef}
+            onClick={() => { onUserGesture?.(); onStartCall(); }}
+            disabled={disabled || isRecording || isTranscribing}
+            className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl transition-colors shrink-0 bg-surface-overlay/30 text-content-secondary hover:bg-surface-overlay/50 hover:text-white disabled:opacity-30"
+            title="Hands-free conversation"
+            aria-label="Start hands-free conversation"
+          >
+            <AudioLines size={18} />
+          </button>
         )}
-      </button>
-      <button
-        onClick={handleSubmit}
-        disabled={disabled || !text.trim()}
-        className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl bg-brand/20 text-brand hover:bg-brand/30 transition-colors disabled:opacity-30 shrink-0"
-        aria-label="Send message"
-      >
-        <Send size={18} />
-      </button>
+        <button
+          onClick={handleMicClick}
+          disabled={micDisabled}
+          className={`inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl transition-colors shrink-0 ${
+            isRecording
+              ? 'bg-danger/30 text-danger animate-pulse'
+              : 'bg-surface-overlay/30 text-content-secondary hover:bg-surface-overlay/50 hover:text-white'
+          } disabled:opacity-30`}
+          title={isRecording ? 'Stop recording' : 'Voice input'}
+          aria-label={isRecording ? 'Stop recording' : 'Voice input'}
+        >
+          {isTranscribing ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : (
+            <Mic size={18} />
+          )}
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={disabled || !text.trim()}
+          className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl bg-brand/20 text-brand hover:bg-brand/30 transition-colors disabled:opacity-30 shrink-0"
+          aria-label="Send message"
+        >
+          <Send size={18} />
+        </button>
+      </div>
+      {micError && !isRecording && (
+        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-xs text-danger">
+          <span>{micError}</span>
+          <button
+            onClick={clearMicError}
+            className="min-h-11 px-2 text-content-muted hover:text-content-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 rounded"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </div>
   );
 }

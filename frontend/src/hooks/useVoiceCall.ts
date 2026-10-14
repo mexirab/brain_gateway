@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { EnergyVad, rmsOf } from '@/lib/vad';
 import { pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
+import { setAudioSessionType, type AudioSessionType } from '@/lib/audio-session';
 
 /**
  * Hands-free "call mode": one tap opens the mic for the whole call; the page
@@ -51,18 +52,6 @@ const MIC_CONSTRAINTS: MediaStreamConstraints = {
 };
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
-
-/**
- * Safari 16.4+ Audio Session API: pin the session type explicitly instead of
- * relying on WebKit to leave play-and-record once capture stops (older iOS
- * kept the degraded "phone call" routing). No-op elsewhere.
- */
-function setAudioSessionType(type: 'playback' | 'play-and-record'): void {
-  try {
-    const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
-    if (session) session.type = type;
-  } catch { /* unsupported value / browser */ }
-}
 
 interface Recording {
   rec: MediaRecorder;
@@ -136,12 +125,12 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
   }, []);
 
   /** Close the mic (iOS leaves "phone call" audio mode once nothing captures). */
-  const releaseMic = useCallback(() => {
+  const releaseMic = useCallback((next: AudioSessionType = 'playback') => {
     streamRef.current?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     streamRef.current = null;
     sourceRef.current?.disconnect();
     sourceRef.current = null;
-    setAudioSessionType('playback');
+    setAudioSessionType(next);
   }, []);
 
   const end = useCallback(() => {
@@ -151,7 +140,9 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     abortRef.current = null;
     void finishRecording(recordingRef.current, false);
     recordingRef.current = null;
-    releaseMic();
+    // 'auto', not 'playback': a 'playback' session blocks capture on iOS and
+    // would break the plain mic button after the call (one write, no blip).
+    releaseMic('auto');
     analyserRef.current = null;
     const ctx = ctxRef.current;
     ctxRef.current = null;
