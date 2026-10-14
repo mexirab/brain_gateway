@@ -838,9 +838,9 @@ async def _handle_callback(client: httpx.AsyncClient, cb: Dict[str, Any]) -> Non
         # Selfcare bridge — identical inference to the ntfy route.
         text = result.get("text", "") or ""
         try:
-            from orchestrator.reminder_manager import infer_selfcare_action_from_text
+            from orchestrator.reminder_manager import selfcare_action_for_reminder
 
-            sc_action = infer_selfcare_action_from_text(text)
+            sc_action = selfcare_action_for_reminder(result)
             if sc_action:
                 from orchestrator import selfcare_manager
 

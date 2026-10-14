@@ -1161,3 +1161,34 @@ BARCODE_LOOKUP = Counter(
 )
 for _r in ("hit", "cache", "miss", "error", "disabled", "invalid"):
     BARCODE_LOOKUP.labels(result=_r)
+
+MEAL_PLAN_GENERATED = Counter(
+    "bgw_meal_plan_generated_total",
+    "Weekly meal-plan generation attempts by outcome (meal_planner).",
+    # ok | retry_ok (first reply unusable, retry with thinking off worked) |
+    # invalid (unusable after retry) | llm_error (timeout / bad reply) |
+    # asleep (brain unreachable) | error (bug) | interrupted (restart/cancel)
+    ["result"],
+)
+for _r in ("ok", "retry_ok", "invalid", "llm_error", "asleep", "error", "interrupted"):
+    MEAL_PLAN_GENERATED.labels(result=_r)
+
+MEAL_PLAN_LATENCY = Histogram(
+    "bgw_meal_plan_latency_seconds",
+    "Wall time to generate a weekly meal plan (LLM call(s) + validation).",
+    buckets=(10, 20, 30, 60, 90, 120, 180, 300),
+)
+
+MEAL_PLAN_SWAP = Counter(
+    "bgw_meal_plan_swap_total",
+    "Single-recipe swaps in a meal plan by outcome.",
+    ["result"],  # ok | invalid | llm_error | asleep | busy (another swap running)
+)
+for _r in ("ok", "invalid", "llm_error", "asleep", "busy"):
+    MEAL_PLAN_SWAP.labels(result=_r)
+
+MEAL_PLAN_SWAP_LATENCY = Histogram(
+    "bgw_meal_plan_swap_latency_seconds",
+    "Wall time of a single-meal swap (LLM call + apply).",
+    buckets=(1, 2, 5, 10, 20, 40, 80, 160),
+)

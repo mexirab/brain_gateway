@@ -371,11 +371,21 @@ class TestCommit:
 
     def test_duplicate_match_id_not_applied_twice(self, pm):
         eggs = _add(pm, "Eggs", location="fridge", qty=2)
-        sid, _ = _scan(pm, status="pending_review")
         line = {"name": "Eggs", "match_id": eggs["id"], "track_mode": "count", "qty": 6}
+        sid, _ = _scan(pm, status="pending_review", proposed=[line])
         res = pm.commit_scan(sid, [line, dict(line)])
         assert (res["updated"], res["skipped"]) == (1, 1)
         assert pm.get_item(eggs["id"])["qty"] == 6
+
+    def test_match_id_outside_the_proposal_cannot_retarget_an_item(self, pm):
+        # A crafted commit naming an item this scan never matched must not
+        # overwrite that item — the line is treated as a plain add instead.
+        oil = _add(pm, "Olive oil", location="pantry", level="half")
+        sid, _ = _scan(pm, status="pending_review", proposed=[])
+        res = pm.commit_scan(sid, [{"name": "Kiwi", "match_id": oil["id"], "qty": 3, "track_mode": "count"}])
+        assert res["added"] == 1
+        assert pm.get_item(oil["id"])["level"] == "half"
+        assert pm.get_item(oil["id"])["name"] == "Olive oil"
 
     def test_stale_match_id_falls_back_to_add(self, pm):
         sid, _ = _scan(pm, status="pending_review")

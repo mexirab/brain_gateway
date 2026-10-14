@@ -455,7 +455,7 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
         REMINDER_ACK_LATENCY,
     )
     from orchestrator.reminder_manager import (
-        infer_selfcare_action_from_text,
+        selfcare_action_for_reminder,
         verify_callback_signature,
     )
 
@@ -540,7 +540,7 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
         pass
 
     text = result.get("text", "") or ""
-    action = infer_selfcare_action_from_text(text)
+    action = selfcare_action_for_reminder(result)
     NTFY_ACK_TOTAL.labels(inferred_action=action or "none").inc()
 
     if action:

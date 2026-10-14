@@ -24,7 +24,7 @@ Implementation specs for Claude Code. One file per feature.
 | F-012 | [Paperless-ngx Bridge](./F-012-paperless-bridge.md) | P2 | Ready | Done |
 | F-013 | [Pushover Push Bridge](./F-013-pushover-bridge.md) | P1 | Ready | Done |
 | F-014 | [Daily Self-Audit](./F-014-self-audit.md) | P2 | Ready | Done |
-| F-015 | [Pantry & Meal Prep](./F-015-pantry-meal-prep.md) | P1 | Ready | Phase 1 done (inventory); 2–4 not started |
+| F-015 | [Pantry & Meal Prep](./F-015-pantry-meal-prep.md) | P1 | Ready | Phases 1–2 done (inventory, weekly meal plan); 3–4 not started |
 
 ## Build Order
 

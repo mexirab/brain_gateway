@@ -1159,6 +1159,63 @@ def build() -> dict:
     row, y = grid_row(budget_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Pantry & Meal Plan
+    # F-015. Vision stock-take scans (phase 1) and the weekly meal planner
+    # (phase 2). Both put long calls on the single llama.cpp slot, so the
+    # planner latency and llama's own queue are shown side by side. Volume is
+    # ~weekly, so no rate alerts — this row is the forensic view.
+    r, y = row_divider("Pantry & Meal Plan", y)
+    panels.append(r)
+
+    pantry_row = [
+        timeseries(
+            "Meal Plan Generations (/d)",
+            [("sum by (result) (increase(bgw_meal_plan_generated_total[1d]))", "{{result}}")],
+            unit="none",
+            description="ok | retry_ok (first reply unusable, retry worked) | invalid | "
+            "llm_error | asleep (Helios off) | error (bug — check logs) | interrupted.",
+        ),
+        timeseries(
+            "Meal Plan Latency",
+            [
+                ("histogram_quantile(0.5, sum by (le) (rate(bgw_meal_plan_latency_seconds_bucket[1d])))", "p50 plan"),
+                ("histogram_quantile(0.95, sum by (le) (rate(bgw_meal_plan_latency_seconds_bucket[1d])))", "p95 plan"),
+                (
+                    "histogram_quantile(0.95, sum by (le) (rate(bgw_meal_plan_swap_latency_seconds_bucket[1d])))",
+                    "p95 swap",
+                ),
+            ],
+            unit="s",
+            description="Whole-plan generation (thinking on, waits for chat to go idle first) and "
+            "single-meal swaps. Long plans hold the one model slot.",
+        ),
+        timeseries(
+            "Brain Queue (llama-server)",
+            [
+                ('max_over_time(llamacpp:requests_deferred{job="llama-primary"}[5m])', "deferred"),
+                ('max_over_time(llamacpp:requests_processing{job="llama-primary"}[5m])', "processing"),
+            ],
+            unit="none",
+            description="Requests waiting for / using the single primary slot. 'deferred' > 0 "
+            "means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
+        ),
+        timeseries(
+            "Pantry Scans & Swaps (/d)",
+            [
+                ("sum by (result) (increase(bgw_pantry_scan_total[1d]))", "scan {{result}}"),
+                ("sum by (result) (increase(bgw_meal_plan_swap_total[1d]))", "swap {{result}}"),
+            ],
+            unit="none",
+            description="Photo stock-takes (proposed/empty/failed/committed/discarded) and meal swaps.",
+        ),
+        logs(
+            "Pantry & Meal Plan Logs",
+            '{container="brain-orchestrator"} |~ "\\\\[(PANTRY|MEALPLAN)\\\\]"',
+        ),
+    ]
+    row, y = grid_row(pantry_row, y, heights=[8, 8, 8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Background Jobs
     r, y = row_divider("Background Jobs", y)
     panels.append(r)

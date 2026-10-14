@@ -814,6 +814,20 @@ async def deliver_via_ntfy(reminder_id: str, text: str, priority: Optional[int] 
         return {"success": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def selfcare_action_for_reminder(reminder: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Selfcare action implied by tapping Done on a reminder, or None.
+
+    Meal-plan cooking reminders (ids prefixed ``mp-``, see meal_planner) never
+    count: their text is a model-written recipe name, and "Done" on a prep
+    reminder doesn't mean anything was eaten — or that meds were taken.
+    """
+    if not reminder:
+        return None
+    if str(reminder.get("id", "")).startswith("mp-"):
+        return None
+    return infer_selfcare_action_from_text(reminder.get("text", "") or "")
+
+
 def infer_selfcare_action_from_text(text: str) -> Optional[str]:
     """Return the selfcare action a reminder body corresponds to, or None.
 

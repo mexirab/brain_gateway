@@ -8127,7 +8127,7 @@
     },
     {
       "type": "row",
-      "title": "Background Jobs",
+      "title": "Pantry & Meal Plan",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -8137,6 +8137,452 @@
         "y": 241
       },
       "id": 110
+    },
+    {
+      "type": "timeseries",
+      "title": "Meal Plan Generations (/d)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_meal_plan_generated_total[1d]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "ok | retry_ok (first reply unusable, retry worked) | invalid | llm_error | asleep (Helios off) | error (bug \u2014 check logs) | interrupted.",
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 0,
+        "y": 242
+      },
+      "id": 111
+    },
+    {
+      "type": "timeseries",
+      "title": "Meal Plan Latency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(bgw_meal_plan_latency_seconds_bucket[1d])))",
+          "legendFormat": "p50 plan",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_meal_plan_latency_seconds_bucket[1d])))",
+          "legendFormat": "p95 plan",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_meal_plan_swap_latency_seconds_bucket[1d])))",
+          "legendFormat": "p95 swap",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Whole-plan generation (thinking on, waits for chat to go idle first) and single-meal swaps. Long plans hold the one model slot.",
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 4,
+        "y": 242
+      },
+      "id": 112
+    },
+    {
+      "type": "timeseries",
+      "title": "Brain Queue (llama-server)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max_over_time(llamacpp:requests_deferred{job=\"llama-primary\"}[5m])",
+          "legendFormat": "deferred",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max_over_time(llamacpp:requests_processing{job=\"llama-primary\"}[5m])",
+          "legendFormat": "processing",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Requests waiting for / using the single primary slot. 'deferred' > 0 means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 8,
+        "y": 242
+      },
+      "id": 113
+    },
+    {
+      "type": "timeseries",
+      "title": "Pantry Scans & Swaps (/d)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_pantry_scan_total[1d]))",
+          "legendFormat": "scan {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_meal_plan_swap_total[1d]))",
+          "legendFormat": "swap {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Photo stock-takes (proposed/empty/failed/committed/discarded) and meal swaps.",
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 12,
+        "y": 242
+      },
+      "id": 114
+    },
+    {
+      "type": "logs",
+      "title": "Pantry & Meal Plan Logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "P8E80F9AEF21F6940"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "P8E80F9AEF21F6940"
+          },
+          "editorMode": "code",
+          "expr": "{container=\"brain-orchestrator\"} |~ \"\\\\[(PANTRY|MEALPLAN)\\\\]\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 242
+      },
+      "id": 115
+    },
+    {
+      "type": "row",
+      "title": "Background Jobs",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 250
+      },
+      "id": 116
     },
     {
       "type": "stat",
@@ -8197,9 +8643,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 242
+        "y": 251
       },
-      "id": 111
+      "id": 117
     },
     {
       "type": "timeseries",
@@ -8283,9 +8729,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 242
+        "y": 251
       },
-      "id": 112
+      "id": 118
     },
     {
       "type": "stat",
@@ -8346,9 +8792,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 242
+        "y": 251
       },
-      "id": 113
+      "id": 119
     },
     {
       "type": "timeseries",
@@ -8436,9 +8882,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 250
+        "y": 259
       },
-      "id": 114
+      "id": 120
     },
     {
       "type": "stat",
@@ -8504,9 +8950,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 250
+        "y": 259
       },
-      "id": 115
+      "id": 121
     },
     {
       "type": "stat",
@@ -8572,9 +9018,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 250
+        "y": 259
       },
-      "id": 116
+      "id": 122
     },
     {
       "type": "stat",
@@ -8640,9 +9086,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 258
+        "y": 267
       },
-      "id": 117
+      "id": 123
     },
     {
       "type": "timeseries",
@@ -8726,9 +9172,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 258
+        "y": 267
       },
-      "id": 118
+      "id": 124
     },
     {
       "type": "row",
@@ -8739,9 +9185,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 266
+        "y": 275
       },
-      "id": 119
+      "id": 125
     },
     {
       "type": "logs",
@@ -8780,9 +9226,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 267
+        "y": 276
       },
-      "id": 120
+      "id": 126
     },
     {
       "type": "logs",
@@ -8821,9 +9267,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 267
+        "y": 276
       },
-      "id": 121
+      "id": 127
     }
   ]
 }

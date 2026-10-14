@@ -1,7 +1,7 @@
 # F-015: Pantry & Meal Prep
 
 **Priority:** P1 — daily-life feature; supports health-motivated diets (e.g. heart-healthy)
-**Status:** Phase 1 (inventory) done — Phases 2–4 not started. Built-state reference: `docs/PANTRY.md`
+**Status:** Phases 1 (inventory) and 2 (diet profile + weekly plan) done — Phases 3–4 not started. Built-state reference: `docs/PANTRY.md`
 **Depends on:** vision (`VISION_*`, the Helios brain), `shopping_list` (state_store), `log_meal` (meal_manager), F-011/F-013 push buttons, Telegram bot
 **Blocks:** None
 
@@ -301,12 +301,24 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - **Metrics:** `bgw_pantry_scan_latency_seconds` carries `{kind,result}`; `bgw_barcode_lookup_total` adds `invalid`. `bgw_pantry_items` gauge not built.
 - **Barcode camera** needs HTTPS (secure context); the dashboard is served via Tailscale Serve. Over HTTP it decodes a photo of the barcode or typed digits.
 
-### Phase 2 — Diet profile + weekly plan
-- [ ] `diet_profiles.py`, `diet_profile.yaml`, settings panel
-- [ ] Tables `recipes`, `recipe_ingredients`, `meal_plans`, `meal_plan_entries`
-- [ ] Plan generation job + validation + swap; accept → shopping list + nudges
-- [ ] Medication-interaction flagging (server-side read)
-- [ ] `/pantry` Plan tab; `meal_plan` tool (view/generate/swap)
+### Phase 2 — Diet profile + weekly plan (done)
+- [x] `diet_profiles.py`, `diet_profile.yaml` (`DIET_PROFILE_PATH`), settings UI (inline, see deviations)
+- [x] Tables `recipes`, `recipe_ingredients`, `meal_plans`, `meal_plan_entries`
+- [x] Plan generation (background task) + validation + swap; accept → shopping list + prep/dinner reminders
+- [x] Medication-interaction flagging (server-side read)
+- [x] `/pantry` Meal plan tab; `meal_plan` tool (view/generate/accept/swap/recipe)
+- [x] Recipe ratings (👍/👎) fed back into the prompt
+- [x] Grafana "Pantry & Meal Plan" row (pulled forward from Phase 4; no alerts by design)
+- [x] Tests: `test_diet_profiles.py`, `test_meal_planner.py`, `test_meal_planner_routes.py`
+
+**Phase 2 as built — deviations from the spec above:**
+- **Diet settings live inline on the `/pantry` Meal plan tab**, not a `/settings` panel. Still atomic YAML + `config_changes` audit (panel `diet`). Added fields: `fresh_dinners_per_week`, `max_dinner_minutes`, `extra_rules`, `reminders {prep, dinners, prep_time, dinner_time}`.
+- **No `prep_batches` yet** (Phase 4): batch lunches are plan entries (`slot` `prep|lunch`, `mode` `batch|portion`). The `meal_plan` tool has no `cooked|ate|skip`; routes have no `cooked|skip` or `GET /prep`, and `GET /plan` takes no `?week=`. Added: `POST /plan/{id}/discard`, `POST /recipe/{id}/rate`, `GET /plan/{id}`.
+- **Slot etiquette:** each planner call waits up to 60 s for interactive chat to go idle (`bgw_active_requests`). Attempt 1 runs with thinking on (`max_tokens` 4500); any problem → one retry with thinking off. The brain is checked up front (503 "Helios asleep", wakes it when `HELIOS_WAKE_ENABLED`).
+- **Avoid list is a hard rule:** offending dinners are dropped, an offending batch recipe invalidates the plan; swaps honour the current avoid list. Recipe names use a strict allowlist (spoken/pushed); model text naming a medication is dropped. Interaction flags are keyword matches → "check with your prescriber", never advice.
+- **Nudges:** prep/dinner reminders go through the normal reminder pipeline (generic `reminder` speaker route, voice + phone), ids prefixed `mp-`; Done taps do **not** fire the selfcare bridge (no cook event until Phase 4). No weekly fridge-check push yet. Accept moves "already have" items into the pantry instead of the grocery list.
+- **Metrics:** `bgw_meal_plan_generated_total{result}` (`ok|retry_ok|invalid|llm_error|asleep|error|interrupted`), `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`; planner calls in `bgw_llm_calls_total{purpose=meal_plan|meal_plan_swap}`.
+- **Known limits:** `recipes` never pruned; swaps/replacements don't remove previously added grocery items.
 
 ### Phase 3 — Receipts
 - [ ] Receipt prompt + parsing, `pantry_aliases` learning, dedup guard
@@ -317,7 +329,7 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - [ ] Portion eaten (`meal_plan ate`) → decrement + `log_meal`
 - [ ] Decay job + morning-briefing "use today" line
 - [ ] Weekly reconcile scan (diff proposals) + Saturday nudge
-- [ ] Grafana row + metrics
+- [ ] Grafana panels for consumption metrics (row exists since Phase 2)
 
 ## Open questions (decide at build time)
 

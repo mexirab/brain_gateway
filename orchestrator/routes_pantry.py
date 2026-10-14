@@ -12,8 +12,8 @@ from typing import List
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from orchestrator import diet_profiles, meal_planner, shared
 from orchestrator import pantry_manager as pm
-from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _result(res: dict, ok_status: int = 200) -> JSONResponse:
     if res.get("ok"):
         return JSONResponse(res, status_code=ok_status)
     if status is None:
-        status = 404 if res.get("error") in ("item not found", "scan not found") else 400
+        status = 404 if str(res.get("error", "")).endswith("not found") else 400
     return JSONResponse(res, status_code=status)
 
 
@@ -62,6 +62,8 @@ async def pantry_items(
 @router.post("/items")
 async def pantry_add(req: Request) -> JSONResponse:
     body = await _safe_json(req)
+    if not isinstance(body.get("name"), str):
+        return JSONResponse({"ok": False, "error": "name must be a string"}, status_code=400)
     res = await asyncio.to_thread(
         pm.add_item,
         body.get("name"),
@@ -237,3 +239,86 @@ async def pantry_barcode(code: str) -> JSONResponse:
         return JSONResponse(res)
     status = {"invalid": 400, "disabled": 409, "miss": 404}.get(res.get("reason"), 502)
     return JSONResponse(res, status_code=status)
+
+
+# ---------------------------------------------------------------------------
+# Diet settings + weekly meal plan (F-015 phase 2)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/diet")
+async def pantry_diet_get() -> JSONResponse:
+    settings = await asyncio.to_thread(diet_profiles.load)
+    return JSONResponse({"settings": settings, "profiles": diet_profiles.public_profiles()})
+
+
+@router.put("/diet")
+async def pantry_diet_put(req: Request) -> JSONResponse:
+    body = await _safe_json(req)
+    before = await asyncio.to_thread(diet_profiles.load)
+    try:
+        settings = await asyncio.to_thread(diet_profiles.save, body)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    moved = 0
+    if settings["reminders"] != before["reminders"]:
+        # New reminder times apply to the plan already accepted, too.
+        moved = await asyncio.to_thread(meal_planner.reschedule_active_plans)
+    return JSONResponse({"ok": True, "settings": settings, "rescheduled_plans": moved})
+
+
+@router.get("/plan")
+async def pantry_plan_current() -> JSONResponse:
+    return JSONResponse(await asyncio.to_thread(meal_planner.current_plans))
+
+
+@router.post("/plan/generate")
+async def pantry_plan_generate() -> JSONResponse:
+    if not await meal_planner.brain_ready():
+        meal_planner.MEAL_PLAN_GENERATED.labels(result="asleep").inc()
+        return JSONResponse({"ok": False, "error": meal_planner.asleep_message()}, status_code=503)
+    res = await asyncio.to_thread(meal_planner.start_generation_sync)
+    if res.get("ok"):
+        meal_planner.launch(res["plan_id"])
+        return JSONResponse(res, status_code=202)
+    return _result(res)
+
+
+@router.get("/plan/{plan_id}")
+async def pantry_plan_get(plan_id: int) -> JSONResponse:
+    if _bad_id(plan_id):
+        return JSONResponse({"ok": False, "error": "plan not found"}, status_code=404)
+    plan = await asyncio.to_thread(meal_planner.get_plan, plan_id)
+    if not plan:
+        return JSONResponse({"ok": False, "error": "plan not found"}, status_code=404)
+    return JSONResponse(plan)
+
+
+@router.post("/plan/{plan_id}/accept")
+async def pantry_plan_accept(plan_id: int, req: Request) -> JSONResponse:
+    if _bad_id(plan_id):
+        return JSONResponse({"ok": False, "error": "plan not found"}, status_code=404)
+    body = await _safe_json(req)
+    return _result(await asyncio.to_thread(meal_planner.accept_plan, plan_id, body.get("already_have")))
+
+
+@router.post("/plan/{plan_id}/discard")
+async def pantry_plan_discard(plan_id: int) -> JSONResponse:
+    if _bad_id(plan_id):
+        return JSONResponse({"ok": False, "error": "plan not found"}, status_code=404)
+    return _result(await asyncio.to_thread(meal_planner.discard_plan, plan_id))
+
+
+@router.post("/plan/entry/{entry_id}/swap")
+async def pantry_plan_swap(entry_id: int) -> JSONResponse:
+    if _bad_id(entry_id):
+        return JSONResponse({"ok": False, "error": "entry not found"}, status_code=404)
+    return _result(await meal_planner.swap_entry(entry_id))
+
+
+@router.post("/recipe/{recipe_id}/rate")
+async def pantry_recipe_rate(recipe_id: int, req: Request) -> JSONResponse:
+    if _bad_id(recipe_id):
+        return JSONResponse({"ok": False, "error": "recipe not found"}, status_code=404)
+    body = await _safe_json(req)
+    return _result(await asyncio.to_thread(meal_planner.rate_recipe, recipe_id, body.get("rating")))

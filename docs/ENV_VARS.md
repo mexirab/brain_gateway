@@ -285,6 +285,7 @@ See `docs/PANTRY.md`. Validated by `config.py` `validate_pantry_config` (logs, n
 | `PANTRY_MAX_UPLOAD_MB` | `15` | Per-photo cap. Outside 1–50 → reset to 15. Effective cap is also bounded by `VISION_MAX_IMAGE_SIZE`. |
 | `PANTRY_BARCODE_LOOKUP_ENABLED` | `false` | Barcode → product name via Open Food Facts (only the digits leave the network). |
 | `PANTRY_OFF_URL` | `https://world.openfoodfacts.org` | Open Food Facts base URL. Non-http(s) value auto-disables barcode lookup. |
+| `DIET_PROFILE_PATH` | `/app/data/diet_profile.yaml` | Diet settings YAML for the weekly meal planner (profile, servings, schedule, avoid list, reminder times). Written by `PUT /api/pantry/diet`; missing file = defaults. Personal — never commit it. |
 
 ## Finance — Actual Budget sync
 

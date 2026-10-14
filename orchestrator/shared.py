@@ -400,6 +400,7 @@ PANTRY_PHOTOS_DIR = settings.pantry_photos_dir
 PANTRY_MAX_UPLOAD_MB = settings.pantry_max_upload_mb
 PANTRY_BARCODE_LOOKUP_ENABLED = settings.pantry_barcode_lookup_enabled
 PANTRY_OFF_URL = settings.pantry_off_url
+DIET_PROFILE_PATH = settings.diet_profile_path
 # Paperless bridge (F-012) — config.py auto-disables this when PAPERLESS_URL /
 # PAPERLESS_API_TOKEN are missing; tool_definitions hides paperless_save from
 # the LLM schema when it is off (the handler stays registered and self-gates).

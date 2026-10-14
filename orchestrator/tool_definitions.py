@@ -1286,6 +1286,32 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "meal_plan",
+            "description": (
+                "Weekly meal-prep plan built from the pantry and the user's diet profile. view = this week's plan "
+                '("what\'s for dinner", "what am I prepping"); generate = make a new plan (runs ~1 min in the '
+                "background); accept = accept the draft (adds missing ingredients to the grocery list and sets cooking "
+                'reminders — only when the user says so); swap = replace one meal ("something else for Tuesday"); '
+                "recipe = ingredients + steps for a meal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["view", "generate", "accept", "swap", "recipe"]},
+                    "day": {"type": "string", "description": "YYYY-MM-DD; default today. swap/recipe only."},
+                    "slot": {
+                        "type": "string",
+                        "enum": ["dinner", "batch"],
+                        "description": "swap/recipe only; default dinner.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 # Code agent tool — added dynamically when enabled
@@ -1375,7 +1401,7 @@ WORKOUT_TOOL_NAMES: frozenset[str] = frozenset(
 )
 MEAL_TOOL_NAMES: frozenset[str] = frozenset({"log_meal"})
 # Pantry & meal prep (F-015) — PANTRY_ENABLED.
-PANTRY_TOOL_NAMES: frozenset[str] = frozenset({"pantry"})
+PANTRY_TOOL_NAMES: frozenset[str] = frozenset({"pantry", "meal_plan"})
 
 # Helios wake-on-demand (PT-C) — only exposed when HELIOS_WAKE_ENABLED. The
 # handler stays registered regardless (it self-gates), but hiding the schema

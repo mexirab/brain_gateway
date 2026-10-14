@@ -166,3 +166,92 @@ export function describeAmount(item: Pick<PantryItem, 'track_mode' | 'qty' | 'le
   if (item.track_mode === 'staple') return 'have';
   return item.level ?? 'full';
 }
+
+// ---------------------------------------------------------------------------
+// Diet settings + weekly meal plan (F-015 phase 2)
+// ---------------------------------------------------------------------------
+
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+export interface DietSettings {
+  profile: string;
+  servings: number;
+  batch_day: Weekday;
+  batch_lunch_days: number;
+  fresh_dinners_per_week: number;
+  max_dinner_minutes: number;
+  avoid: string[];
+  extra_rules: string[];
+  reminders: { prep: boolean; dinners: boolean; prep_time: string; dinner_time: string };
+}
+
+export interface DietProfileOption {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface RecipeIngredient {
+  item: string;
+  amount: string;
+  have: boolean;
+}
+
+export interface Recipe {
+  id: number;
+  name: string;
+  minutes: number | null;
+  servings: number;
+  steps: string[];
+  ingredients: RecipeIngredient[];
+  est_kcal: number | null;
+  est_satfat_g: number | null;
+  est_fiber_g: number | null;
+  rating: number | null;
+}
+
+export interface PlanEntry {
+  id: number;
+  day: string;
+  slot: 'prep' | 'lunch' | 'dinner';
+  recipe_id: number;
+  mode: 'batch' | 'portion' | 'fresh';
+  portions: number | null;
+}
+
+export type PlanStatus = 'generating' | 'draft' | 'active' | 'failed' | 'discarded' | 'replaced';
+
+export interface MealPlan {
+  id: number;
+  week_start: string;
+  status: PlanStatus;
+  profile_label: string;
+  notes: string | null;
+  warnings: string[];
+  error: string | null;
+  created_at: string;
+  entries: PlanEntry[];
+  recipes: Record<string, Recipe>;
+  missing: string[];
+}
+
+export const planApi = {
+  diet: () => call<{ settings: DietSettings; profiles: DietProfileOption[] }>('/api/pantry/diet'),
+  saveDiet: (changes: Partial<DietSettings>) =>
+    call<{ ok: boolean; settings: DietSettings; rescheduled_plans: number }>('/api/pantry/diet', json('PUT', changes)),
+  current: () => call<{ active: MealPlan | null; draft: MealPlan | null }>('/api/pantry/plan'),
+  generate: () => call<{ ok: boolean; plan_id: number }>('/api/pantry/plan/generate', json('POST')),
+  accept: (id: number, alreadyHave: string[]) =>
+    call<{ ok: boolean; added_to_list: number; added_to_pantry: number; reminders: number }>(
+      `/api/pantry/plan/${id}/accept`,
+      json('POST', { already_have: alreadyHave }),
+    ),
+  discard: (id: number) => call<{ ok: boolean }>(`/api/pantry/plan/${id}/discard`, json('POST')),
+  swap: (entryId: number) =>
+    call<{ ok: boolean; plan: MealPlan; added_to_list: number }>(
+      `/api/pantry/plan/entry/${entryId}/swap`,
+      json('POST'),
+    ),
+  rate: (recipeId: number, rating: 'up' | 'down' | 'clear') =>
+    call<{ ok: boolean }>(`/api/pantry/recipe/${recipeId}/rate`, json('POST', { rating })),
+};

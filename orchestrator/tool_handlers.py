@@ -5,6 +5,7 @@ Tool execution handlers: dispatcher + all tool_* functions.
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -2321,6 +2322,57 @@ def _handle_pantry(arguments: dict) -> str:
         return f"Removed {item['name']} from the pantry inventory."
 
     return f"Unknown pantry action '{action}'. Use view, add, use, out, set, search, or remove."
+
+
+@register_tool("meal_plan")
+async def _reg_meal_plan(arguments: dict) -> str:
+    if not shared.PANTRY_ENABLED:
+        return "The pantry isn't enabled on this install."
+    from orchestrator import meal_planner as mp
+
+    action = str(arguments.get("action") or "view").lower()
+    day = arguments.get("day")
+    if day is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(day)):
+        return "day must be YYYY-MM-DD."
+    slot = arguments.get("slot") or "dinner"
+
+    if action == "view":
+        return await asyncio.to_thread(mp.plan_summary)
+    if action == "recipe":
+        return await asyncio.to_thread(mp.recipe_text, day, slot)
+    if action == "generate":
+        if not await mp.brain_ready():
+            return mp.asleep_message()
+        res = await asyncio.to_thread(mp.start_generation_sync)
+        if not res.get("ok"):
+            return res.get("error", "Couldn't start a plan.")
+        mp.launch(res["plan_id"])
+        return (
+            f"Started planning the week of {res['week_start']}. It starts once this reply is done and takes about "
+            "a minute — the draft will be in Pantry → Meal plan, or ask me to show it."
+        )
+    if action == "accept":
+        plans = await asyncio.to_thread(mp.current_plans)
+        draft = plans.get("draft")
+        if not draft or draft["status"] != "draft":
+            return "There's no draft plan to accept."
+        res = await asyncio.to_thread(mp.accept_plan, draft["id"])
+        if not res.get("ok"):
+            return res.get("error", "Couldn't accept the plan.")
+        return (
+            f"Plan accepted. Added {res['added_to_list']} item(s) to the grocery list and set "
+            f"{res['reminders']} cooking reminder(s)."
+        )
+    if action == "swap":
+        entry_id = await asyncio.to_thread(mp.find_entry, day, slot)
+        if entry_id is None:
+            return f"No {'batch prep' if slot == 'batch' else 'dinner'} in the plan for that day."
+        res = await mp.swap_entry(entry_id)
+        if not res.get("ok"):
+            return res.get("error", "Couldn't swap that meal.")
+        extra = f" Added {res['added_to_list']} new item(s) to the grocery list." if res.get("added_to_list") else ""
+        return "Swapped. " + (await asyncio.to_thread(mp.plan_summary)) + extra
+    return "Unknown meal_plan action. Use view, generate, accept, swap, or recipe."
 
 
 @register_tool("pantry")

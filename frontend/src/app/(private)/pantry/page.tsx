@@ -5,8 +5,11 @@ import { Refrigerator, X } from 'lucide-react';
 import { Button, Card } from '@/components/ui';
 import InventoryTab from '@/components/pantry/InventoryTab';
 import ScanTab from '@/components/pantry/ScanTab';
+import PlanTab from '@/components/pantry/PlanTab';
 
-type Tab = 'inventory' | 'scan';
+type Tab = 'inventory' | 'scan' | 'plan';
+
+const TAB_LABEL: Record<Tab, string> = { inventory: 'What I have', scan: 'Stock-take', plan: 'Meal plan' };
 
 export default function PantryPage() {
   const [tab, setTab] = useState<Tab>('inventory');
@@ -14,9 +17,10 @@ export default function PantryPage() {
   // Remount the inventory after a scan commit so it reloads.
   const [inventoryKey, setInventoryKey] = useState(0);
 
-  // Deep link: /pantry?tab=scan (e.g. from a future "weekly fridge check" nudge).
+  // Deep links: /pantry?tab=scan (weekly fridge check), /pantry?tab=plan (cooking reminders).
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('tab') === 'scan') setTab('scan');
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t === 'scan' || t === 'plan') setTab(t);
   }, []);
 
   return (
@@ -27,7 +31,7 @@ export default function PantryPage() {
       </h1>
 
       <div className="flex gap-1 p-1 rounded-lg bg-surface-raised/40 border border-line-subtle" role="tablist">
-        {(['inventory', 'scan'] as Tab[]).map((t) => (
+        {(['inventory', 'plan', 'scan'] as Tab[]).map((t) => (
           <button
             key={t}
             role="tab"
@@ -39,7 +43,7 @@ export default function PantryPage() {
               tab === t ? 'bg-brand/25 text-content-primary' : 'text-content-muted hover:text-content-primary'
             }`}
           >
-            {t === 'inventory' ? 'What I have' : 'Photo stock-take'}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>
@@ -71,6 +75,9 @@ export default function PantryPage() {
             setTab('inventory');
           }}
         />
+      </div>
+      <div role="tabpanel" id="pantry-panel-plan" aria-labelledby="pantry-tab-plan" hidden={tab !== 'plan'}>
+        <PlanTab shown={tab === 'plan'} />
       </div>
     </div>
   );

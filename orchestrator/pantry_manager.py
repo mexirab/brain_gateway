@@ -1086,6 +1086,12 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
 
     added = updated = skipped = 0
     seen_matches: set[int] = set()
+    # A line may only update an item this scan's own proposal matched — a
+    # crafted commit can't retarget arbitrary inventory rows.
+    proposed = json.loads(row.get("proposed_json") or "{}").get("items") or []
+    allowed_matches = {
+        line.get("match_id") for line in proposed if isinstance(line, dict) and isinstance(line.get("match_id"), int)
+    }
     try:
         for line in items:
             if not isinstance(line, dict) or line.get("include") is False:
@@ -1100,6 +1106,7 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
             if (
                 isinstance(match_id, int)
                 and not isinstance(match_id, bool)
+                and match_id in allowed_matches
                 and match_id not in seen_matches
                 and get_item(match_id)
             ):

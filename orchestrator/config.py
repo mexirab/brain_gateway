@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     # the network; results are cached in barcode_cache. Separate opt-in.
     pantry_barcode_lookup_enabled: bool = False
     pantry_off_url: str = "https://world.openfoodfacts.org"
+    # Weekly meal planning (F-015 phase 2): diet profile + schedule YAML.
+    diet_profile_path: str = "/app/data/diet_profile.yaml"
     # Exercise how-to library (photos + steps), filled by
     # `python -m orchestrator.exercise_library fetch`. Empty dir = feature dark.
     exercise_library_path: str = "/app/data/exercise_library"

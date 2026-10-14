@@ -534,6 +534,14 @@ async def _startup_logic():
                 logger.warning("[PANTRY] Marked %d interrupted scan(s) failed (retry from /pantry)", n)
         except Exception as e:
             logger.error("[PANTRY] Scan recovery failed: %s", e, exc_info=True)
+        try:
+            from orchestrator.meal_planner import recover_interrupted_plans
+
+            n = recover_interrupted_plans()
+            if n:
+                logger.warning("[MEALPLAN] Marked %d interrupted plan(s) failed", n)
+        except Exception as e:
+            logger.error("[MEALPLAN] Plan recovery failed: %s", e, exc_info=True)
 
     # Pre-create dead-speaker metric series (AnnouncementSpeakerUnavailable).
     from orchestrator.reminder_manager import seed_announcement_metrics

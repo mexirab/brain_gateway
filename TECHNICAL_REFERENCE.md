@@ -220,7 +220,7 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/pantry/items` | `{items, count}`. Query: `status` (`active` default \| `probably_gone` \| `gone` \| `all`), `location` (`fridge\|freezer\|pantry`) |
-| POST | `/api/pantry/items` | Add: `{name, category?, location?, track_mode?, qty?, level?, shelf_life_days?, barcode?}` → 201 new, 200 when merged into an existing item (`merged: true`) |
+| POST | `/api/pantry/items` | Add: `{name, category?, location?, track_mode?, qty?, level?, shelf_life_days?, barcode?}` → 201 new, 200 when merged into an existing item (`merged: true`); 400 when `name` isn't a string |
 | PATCH | `/api/pantry/items/{id}` | Update any of `name, category, location, track_mode, qty, level, status, shelf_life_days` |
 | DELETE | `/api/pantry/items/{id}` | Delete (ledger keeps a `remove` event) |
 | POST | `/api/pantry/items/{id}/use` | "Used some": `{count?}` — count −N (default 1), level steps down one, staple unchanged |
@@ -230,12 +230,21 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 | GET | `/api/pantry/scans` | Recent scans. Query: `status?` (`queued\|processing\|pending_review\|failed\|committed\|discarded`), `limit` 1–50 |
 | GET | `/api/pantry/scan/{id}` | `{id, kind, status, photo_count, photos_available, proposed: {items, warnings} \| null, error, created_at, committed_at}` — no filesystem paths. Poll while `queued`/`processing` |
 | GET | `/api/pantry/scan/{id}/photo/{index}` | Scan photo (`Cache-Control: private, no-store`); 404 after commit/discard |
-| POST | `/api/pantry/scan/{id}/commit` | `{items: [{include?, match_id?, name, category?, location?, track_mode?, qty?, level?}]}` (≤200). Matched lines SET the item, others add → `{ok, added, updated, skipped}`. 409 unless `pending_review` |
+| POST | `/api/pantry/scan/{id}/commit` | `{items: [{include?, match_id?, name, category?, location?, track_mode?, qty?, level?}]}` (≤200). Matched lines SET the item, others add → `{ok, added, updated, skipped}`. A `match_id` is honoured only if this scan's own proposal matched it (otherwise the line adds). 409 unless `pending_review` |
 | POST | `/api/pantry/scan/{id}/discard` | Discard + delete photos. 409 unless `pending_review`/`failed` (or stuck >10 min) |
 | POST | `/api/pantry/scan/{id}/retry` | Re-queue a `failed` scan → 202. 409 otherwise |
 | GET | `/api/pantry/barcode/{code}` | Open Food Facts lookup (cached) → `{ok, name, category, ...}`. 400 not 8–14 digits, 409 lookup disabled, 404 unknown product, 502 upstream error |
+| GET | `/api/pantry/diet` | `{settings, profiles: [{key, label, description}]}` — settings fields: `docs/PANTRY.md` → Diet settings |
+| PUT | `/api/pantry/diet` | Partial update (`reminders` merged key-wise) → `{ok, settings, rescheduled_plans}` (active plans' reminders moved when reminder settings changed). 400 on invalid value |
+| GET | `/api/pantry/plan` | `{active, draft}` — `active` = accepted plan covering today, else next upcoming; `draft` = newest `generating`/`draft`, else a `failed` attempt from the last 2 days. Each a plan object or null |
+| POST | `/api/pantry/plan/generate` | 202 `{ok, plan_id, week_start}` (runs in background — poll `GET /plan/{id}`). 409 one already generating (`plan_id`), 400 nothing to plan (both counts 0), 503 brain asleep (wakes Helios if `HELIOS_WAKE_ENABLED`) |
+| GET | `/api/pantry/plan/{id}` | Plan: `{id, week_start, status, profile, profile_label, notes, warnings[], error, created_at, accepted_at, entries[{id, plan_id, day, slot, recipe_id, mode, portions, status}], recipes{id: {name, minutes, ingredients[{item, amount, have}], steps, est_*, rating, ...}}, missing[]}`. `have`/`missing` computed live vs inventory |
+| POST | `/api/pantry/plan/{id}/accept` | `{already_have?: [str]}` (≤100) → `{ok, added_to_list, added_to_pantry, reminders}`. 409 unless `draft`, 400 bad `already_have` |
+| POST | `/api/pantry/plan/{id}/discard` | `draft`/`failed`/`active` (or `generating` >10 min) → `discarded`; pending reminders cancelled. 409 otherwise |
+| POST | `/api/pantry/plan/entry/{id}/swap` | Replace one recipe (draft/active plan) → `{ok, added_to_list, plan}`. 404 unknown entry, 409 busy / plan not editable / already changed, 502 LLM error or unusable reply, 503 brain asleep |
+| POST | `/api/pantry/recipe/{id}/rate` | `{rating: "up"\|"down"\|"clear"}` → `{ok}`. 400 bad rating, 404 unknown recipe |
 
-Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`.
+Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`, `bgw_meal_plan_generated_total{result}`, `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`.
 
 ### Paperless Bridge (F-012)
 
@@ -645,6 +654,14 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 - `out` also adds the item to the `grocery` shopping list (dedup) unless `add_to_shopping=false`. `set` needs `count`, `level`, or `location`. `remove` requires the exact item name.
 - Only exposed when `PANTRY_ENABLED=true` (`PANTRY_TOOL_NAMES`); handler self-gates. Photo stock-takes are a dashboard flow, not a tool.
 
+### meal_plan
+```json
+{"action": "swap", "day": "2026-10-20", "slot": "dinner"}
+```
+- `action` (enum, required): `view | generate | accept | swap | recipe`. `day` (`YYYY-MM-DD`, default today) and `slot` (`dinner|batch`, default `dinner`) apply to `swap`/`recipe`.
+- `generate` starts a background plan (~1 min) and returns immediately; fails fast when the brain is asleep. `accept` accepts the current draft (grocery list + cooking reminders) — only on the user's explicit say-so. `view` returns the draft, else the active plan (≤7500 chars; recipe names labelled as data).
+- Only exposed when `PANTRY_ENABLED=true` (`PANTRY_TOOL_NAMES = {pantry, meal_plan}`); handler self-gates. Listed in the EXTERNAL CONTENT state-changing tool list.
+
 ## ChromaDB Schema
 
 **Chunk ID:** `chunk::{path}::{section}::{index}::{hash[:12]}`
@@ -715,6 +732,10 @@ Created unconditionally by `SCHEMA_SQL`. Timestamps ISO 8601 local.
 | `pantry_events` | Append-only ledger: `id`, `item_id`, `kind` (`add\|consume\|adjust\|remove`), `source`, `before_json`, `after_json`, `ref_type`/`ref_id` (e.g. scan), `note`, `at`. Index on `(item_id, at)` |
 | `pantry_scans` | `id`, `kind`, `photo_paths` (JSON list under `PANTRY_PHOTOS_DIR`), `image_sha256`, `status` (`queued\|processing\|pending_review\|committing\|committed\|discarded\|failed`), `proposed_json`, `error`, `created_at`, `committed_at`. Index on `status` |
 | `barcode_cache` | `barcode` PK, `name`, `category`, `payload_json`, `fetched_at`. Misses are cached too (re-tried after 7 days) |
+| `recipes` | `id`, `name`, `diet_tags`, `servings`, `batchable`, `minutes`, `method` (steps JSON), `est_kcal`, `est_satfat_g`, `est_fiber_g`, `source` (`llm`), `times_cooked`, `rating` (5 up / 1 down / NULL), `created_at`. Never pruned |
+| `recipe_ingredients` | `id`, `recipe_id`, `item_name`, `amount`, `consume` (default `some`), `optional`. Index on `recipe_id` |
+| `meal_plans` | `id`, `week_start`, `diet_profile`, `status` (`generating\|draft\|active\|failed\|discarded\|replaced`), `notes`, `warnings` (JSON), `error`, `settings_json` (diet settings snapshot), `reminder_ids` (JSON, `mp-` ids), `created_at`, `accepted_at`. Index on `(status, week_start)` |
+| `meal_plan_entries` | `id`, `plan_id`, `day`, `slot` (`prep\|lunch\|dinner`), `recipe_id`, `mode` (`batch\|portion\|fresh`), `portions`, `status` (default `planned`). Index on `plan_id` |
 
 ## SQLite Schema (`finance.db`)
 

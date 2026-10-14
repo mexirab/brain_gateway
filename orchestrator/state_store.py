@@ -342,6 +342,64 @@ CREATE TABLE IF NOT EXISTS pantry_scans (
 
 CREATE INDEX IF NOT EXISTS idx_pantry_scans_status ON pantry_scans(status);
 
+-- Weekly meal planning (F-015 phase 2).
+CREATE TABLE IF NOT EXISTS recipes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    diet_tags TEXT,
+    servings INTEGER NOT NULL DEFAULT 1,
+    batchable INTEGER NOT NULL DEFAULT 0,
+    minutes INTEGER,
+    method TEXT,
+    est_kcal INTEGER,
+    est_satfat_g REAL,
+    est_fiber_g REAL,
+    source TEXT NOT NULL DEFAULT 'llm',
+    times_cooked INTEGER NOT NULL DEFAULT 0,
+    rating INTEGER,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id INTEGER NOT NULL,
+    item_name TEXT NOT NULL,
+    amount TEXT,
+    consume TEXT NOT NULL DEFAULT 'some',
+    optional INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON recipe_ingredients(recipe_id);
+
+CREATE TABLE IF NOT EXISTS meal_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    week_start TEXT NOT NULL,
+    diet_profile TEXT NOT NULL,
+    status TEXT NOT NULL,
+    notes TEXT,
+    warnings TEXT,
+    error TEXT,
+    settings_json TEXT,
+    reminder_ids TEXT,
+    created_at TEXT NOT NULL,
+    accepted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_meal_plans_status ON meal_plans(status, week_start);
+
+CREATE TABLE IF NOT EXISTS meal_plan_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    recipe_id INTEGER,
+    mode TEXT NOT NULL,
+    portions INTEGER,
+    status TEXT NOT NULL DEFAULT 'planned'
+);
+
+CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_plan ON meal_plan_entries(plan_id);
+
 CREATE TABLE IF NOT EXISTS barcode_cache (
     barcode TEXT PRIMARY KEY,
     name TEXT,
