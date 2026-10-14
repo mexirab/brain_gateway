@@ -86,7 +86,7 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 | `interrupted` | iOS paused the element (screen lock, call, Siri) | "Voice paused — tap to replay" |
 | `error` | other failure, 30 s client timeout | error text |
 
-**Backend:** `POST /api/tts/synthesize` (`orchestrator/routes_vision.py`) — caps 1000 chars / 2000 UTF-8 bytes, status contract in `TECHNICAL_REFERENCE.md` → Voice. Success pre-pads ~150 ms WAV silence (`TTS_SILENCE_PAD_MS`, same as `/v1/audio/speech`) and calls `shared.mark_voice_activity()`, so `reminder_manager`'s voice-session gate holds house-speaker announcements (retry +2 min) while the browser speaks.
+**Backend:** `POST /api/tts/synthesize` (`orchestrator/routes_vision.py`) — caps 1000 chars / 2000 UTF-8 bytes, status contract in `TECHNICAL_REFERENCE.md` → Voice. Success pre-pads ~150 ms WAV silence (`TTS_SILENCE_PAD_MS`, same as `/v1/audio/speech`) and calls `shared.mark_voice_activity()`, so `reminder_manager`'s voice-session gate holds house-speaker announcements while the browser speaks (reminders: speakers only, at most ~10 min; phone push is immediate — see Reminder Voice Retry).
 
 **Metrics:** `bgw_dashboard_tts_total{result}` (`ok|unreachable|timeout|upstream_error|not_configured|bad_request|too_long`, pre-initialized). `bgw_voice_tts_seconds` observes SUCCESSFUL synth only, fed by `/v1/audio/speech` and `/api/tts/synthesize` (one sample per sentence). Grafana TTS Synthesis row (`brain_gateway_sre.py`): "Dashboard TTS Outcomes" (replaced "TTS Call Rate"), "TTS Sentences (24h)" (was "TTS Calls (24h)").
 
@@ -103,6 +103,15 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 ## Reminder Voice Retry
 
 Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry once after 2 minutes. If the retry also fails, the system falls back to a phone notification so the reminder is never silently lost.
+
+**Suppression (`tool_handlers.deliver_reminder_job`):**
+
+| Gate | Effect |
+|------|--------|
+| Voice session active (`shared.is_voice_session_active()`, 60 s window refreshed by dashboard STT + each `/api/tts/synthesize` sentence) | Phone channels (HA Companion, ntfy, Pushover, Telegram) delivered in the same run; only the speaker part re-armed +2 min, max `MAX_VOICE_SESSION_DEFERRALS` = 5 (~10 min, kwarg `voice_deferrals`). After the cap: speakers skipped if the push went out, else announced via `_announce_voice(..., ignore_voice_session=True)` (DND still applies). |
+| DND active | Whole delivery (phone included) deferred 30 min. If DND starts after a voice-session push already went out, the speaker part is skipped, not replayed when DND lifts. |
+
+A failed re-arm does not strand the reminder `pending`: speakers are dropped if the push went out, else announced immediately. Tests: `orchestrator/tests/test_reminder_delivery.py`.
 
 ## HTTP STT Server (port 8003)
 
