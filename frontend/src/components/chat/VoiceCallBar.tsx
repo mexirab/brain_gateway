@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { AudioLines, Loader2, PhoneOff, Square } from 'lucide-react';
 import type { CallPhase } from '@/hooks/useVoiceCall';
 
@@ -25,7 +26,15 @@ function label(phase: CallPhase, speaking: boolean): string {
 }
 
 /** Replaces the text input while a hands-free call is active. */
+// Screen-reader announcements: only the moments the user acts on — not every
+// phase, which VoiceOver would read over Jess's own voice.
+function announcement(phase: CallPhase): string {
+  return phase === 'listening' ? 'Listening' : '';
+}
+
 export default function VoiceCallBar({ phase, speaking, onInterrupt, onEnd }: VoiceCallBarProps) {
+  const endRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { endRef.current?.focus(); }, []); // the input it replaced had focus
   const live = phase === 'listening' || phase === 'hearing';
   const busy = phase === 'starting' || phase === 'transcribing' || (phase === 'responding' && !speaking);
   return (
@@ -46,7 +55,8 @@ export default function VoiceCallBar({ phase, speaking, onInterrupt, onEnd }: Vo
             className={`shrink-0 ${live || speaking ? 'text-brand' : ''} ${phase === 'hearing' || speaking ? 'animate-pulse' : ''}`}
           />
         )}
-        <span aria-live="polite">{label(phase, speaking)}</span>
+        <span>{label(phase, speaking)}</span>
+        <span className="sr-only" aria-live="polite">{announcement(phase)}</span>
       </div>
       {phase === 'responding' && speaking && (
         <button
@@ -59,6 +69,7 @@ export default function VoiceCallBar({ phase, speaking, onInterrupt, onEnd }: Vo
         </button>
       )}
       <button
+        ref={endRef}
         onClick={onEnd}
         aria-label="End hands-free call"
         className={`flex items-center gap-1.5 min-h-11 px-3 rounded-xl bg-danger/20 text-danger text-sm hover:bg-danger/30 transition-colors shrink-0 ${FOCUS_RING}`}

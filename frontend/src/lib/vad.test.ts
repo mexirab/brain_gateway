@@ -18,8 +18,8 @@ describe('EnergyVad', () => {
     expect(r.events).toEqual([]);
     r = run(vad, r.end, 1500, 0.08); // talking
     expect(r.events).toEqual([['speech-start', 2200]]);
-    r = run(vad, r.end, 2000, 0.002); // stops
-    expect(r.events).toEqual([['speech-end', 4650]]); // last loud frame 3450 + 1200
+    r = run(vad, r.end, 2500, 0.002); // stops
+    expect(r.events).toEqual([['speech-end', 5250]]); // last loud frame 3450 + 1800
   });
 
   it('ignores blips shorter than minSpeechMs (door click, cough)', () => {
@@ -33,8 +33,8 @@ describe('EnergyVad', () => {
     const vad = new EnergyVad();
     run(vad, 0, 500, 0.002);
     run(vad, 500, 1000, 0.08);
-    expect(run(vad, 1500, 700, 0.002).events).toEqual([]); // 0.7 s pause < 1.2 s
-    expect(run(vad, 2200, 1000, 0.08).events).toEqual([]);
+    expect(run(vad, 1500, 1500, 0.002).events).toEqual([]); // 1.5 s thinking pause < 1.8 s
+    expect(run(vad, 3000, 1000, 0.08).events).toEqual([]);
     expect(vad.isSpeaking).toBe(true);
   });
 
@@ -45,11 +45,11 @@ describe('EnergyVad', () => {
     expect(run(vad, 5000, 600, 0.2).events.map((e) => e[0])).toEqual(['speech-start']);
   });
 
-  it('caps an utterance at maxUtteranceMs', () => {
+  it('reports a capped utterance as speech-timeout (noise — caller discards it)', () => {
     const vad = new EnergyVad({ maxUtteranceMs: 3000 });
     run(vad, 0, 500, 0.002);
     const r = run(vad, 500, 5000, 0.1);
-    expect(r.events.map((e) => e[0])).toEqual(['speech-start', 'speech-end']);
+    expect(r.events.map((e) => e[0])).toEqual(['speech-start', 'speech-timeout']);
     expect(r.events[1][1] - r.events[0][1]).toBeLessThanOrEqual(3000);
   });
 
@@ -83,5 +83,17 @@ describe('EnergyVad calibration', () => {
     run(vad, 0, 500, 0.002);
     run(vad, 500, 4000, 0.1); // TV switched on: start → capped end
     expect(run(vad, 4500, 5000, 0.1).events).toEqual([]);
+  });
+});
+
+describe('EnergyVad onset', () => {
+  it('isRising is true while a possible onset is being confirmed', () => {
+    const vad = new EnergyVad();
+    run(vad, 0, 1000, 0.002);
+    expect(vad.isRising).toBe(false);
+    vad.feed(0.1, 1000);
+    expect(vad.isRising).toBe(true);
+    vad.feed(0.002, 1050);
+    expect(vad.isRising).toBe(false);
   });
 });

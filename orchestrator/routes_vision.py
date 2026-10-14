@@ -143,6 +143,21 @@ STT_URL = os.environ.get("STT_URL", "")
 MAX_AUDIO_UPLOAD = 10 * 1024 * 1024  # 10 MB
 
 
+# Only these reach the STT server as the upload's type — the client's own
+# filename/content-type are not forwarded verbatim (hacker review: httpx
+# doesn't sanitise a forwarded content-type).
+_STT_UPLOAD_TYPES = {
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/mp4": "m4a",
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "video/webm": "webm",
+    "video/mp4": "m4a",
+}
+
+
 def _stt_error(result: str, error: str, status_code: int) -> JSONResponse:
     DASHBOARD_STT_TOTAL.labels(result=result).inc()
     return JSONResponse({"ok": False, "error": error}, status_code=status_code)
@@ -159,12 +174,15 @@ async def stt_transcribe(file: UploadFile = File(...)) -> Response:
     audio_data = await file.read()
     if len(audio_data) > MAX_AUDIO_UPLOAD:
         return _stt_error("too_large", "Audio file too large (max 10 MB)", 413)
-    shared._last_voice_at = time.time()
-    shared.mark_voice_activity()
+    if not STT_URL:
+        return _stt_error("not_configured", "Speech recognition not configured", 503)
+    base_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    upload_type = base_type if base_type in _STT_UPLOAD_TYPES else "application/octet-stream"
+    upload_name = f"audio.{_STT_UPLOAD_TYPES.get(base_type, 'webm')}"
     try:
         r = await shared._http.post(
             f"{STT_URL}/v1/audio/transcriptions",
-            files={"file": (file.filename or "audio.webm", audio_data, file.content_type or "audio/webm")},
+            files={"file": (upload_name, audio_data, upload_type)},
             data={"model": "whisper-1"},
             timeout=30,
         )
@@ -180,13 +198,24 @@ async def stt_transcribe(file: UploadFile = File(...)) -> Response:
         # Connect refused / unreachable: Helios is power-tiered and usually asleep.
         logger.warning("[STT] transcribe unreachable: %s", type(e).__name__)
         return _stt_error("unreachable", "Speech recognition unavailable", 503)
+    except ValueError:
+        logger.warning("[STT] transcribe returned a non-JSON body")
+        return _stt_error("upstream_error", "Transcription failed", 502)
     except Exception:
         logger.exception("[STT] transcribe failed unexpectedly")
         return _stt_error("upstream_error", "Transcription failed", 502)
     if not isinstance(data, dict):
+        logger.warning("[STT] transcribe returned %s, expected an object", type(data).__name__)
         return _stt_error("upstream_error", "Transcription failed", 502)
     text = data.get("text")
-    DASHBOARD_STT_TOTAL.labels(result="ok" if isinstance(text, str) and text.strip() else "empty").inc()
+    if not (isinstance(text, str) and text.strip()):
+        # Nothing heard (noise false-trigger) — not voice activity: must not
+        # hold announcements or tag the next typed chat as a voice turn.
+        DASHBOARD_STT_TOTAL.labels(result="empty").inc()
+        return JSONResponse(data)
+    shared._last_voice_at = time.time()
+    shared.mark_voice_activity()
+    DASHBOARD_STT_TOTAL.labels(result="ok").inc()
     return JSONResponse(data)
 
 

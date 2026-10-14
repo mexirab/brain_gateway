@@ -217,8 +217,26 @@ export default function ChatPage() {
     const speechDone = speakReply ? beginReply(assistantMsg.uid) : undefined;
     if (!speakReply) stopSpeech();
 
-    // Ensure conversation exists
-    const convId = await ensureConversation(text);
+    // Ensure conversation exists. If that fails, finish the turn visibly
+    // (otherwise `streaming` stays true and the input is dead).
+    let convId: string;
+    try {
+      convId = await ensureConversation(text);
+    } catch (err) {
+      setStreaming(false);
+      streamingRef.current = false;
+      if (speakReply) endReply();
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          error: true,
+          content: friendlyError(err, 'Sorry — I couldn’t start the conversation just now. Please try again.'),
+        };
+        return updated;
+      });
+      return;
+    }
 
     // Persist user message
     api.saveMessage(convId, 'user', text).catch(() => {});
@@ -288,9 +306,13 @@ export default function ChatPage() {
   // the call waits for the spoken reply before listening again.
   useEffect(() => { callEndRef.current = call.end; });
   const handleSendRef = useRef(handleSend);
-  handleSendRef.current = handleSend;
+  useEffect(() => { handleSendRef.current = handleSend; });
   const call = useVoiceCall(useCallback((text: string) => handleSendRef.current(text, 'voice'), []));
-  const endCall = useCallback(() => { call.end(); stopSpeech(); }, [call, stopSpeech]);
+  const { end: callEnd } = call;
+  const endCall = useCallback(() => { callEnd(); stopSpeech(); }, [callEnd, stopSpeech]);
+  // Return focus to the call button when a call ends (the bar unmounts).
+  const wasInCallRef = useRef(false);
+  useEffect(() => { wasInCallRef.current = call.active; }, [call.active]);
 
   return (
     <div className="h-full flex" style={{ height: 'calc(100vh - 3rem)' }}>
@@ -419,6 +441,7 @@ export default function ChatPage() {
               onUserGesture={unlock}
               onRecordStart={stopSpeech}
               onStartCall={() => { stopSpeech(); call.start(); }}
+              focusCallButton={wasInCallRef.current}
             />
           )}
         </div>

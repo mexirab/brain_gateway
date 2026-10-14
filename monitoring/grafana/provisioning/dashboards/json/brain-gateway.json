@@ -1461,11 +1461,97 @@
       "description": "Successful TTS round-trips to Qwen3-TTS on Helios :8002, from the dashboard chat's /api/tts/synthesize (one call per spoken sentence) and the /v1/audio/speech proxy (OWUI, stopped). Failures are NOT in this histogram \u2014 see Dashboard TTS Outcomes. Excludes browser playback. Both paths prepend ~150ms of silence against first-word stutter (TTS_SILENCE_PAD_MS).",
       "gridPos": {
         "h": 8,
-        "w": 6,
+        "w": 8,
         "x": 0,
         "y": 35
       },
       "id": 17
+    },
+    {
+      "type": "timeseries",
+      "title": "Dashboard STT Outcomes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (rate(bgw_dashboard_stt_total[5m])) * 60",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Per-utterance /api/stt/transcribe results per minute (mic button + hands-free call). A high share of 'empty' means the call-mode voice detector is false-triggering on room noise; unreachable = Helios asleep.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 35
+      },
+      "id": 18
     },
     {
       "type": "timeseries",
@@ -1547,11 +1633,11 @@
       "description": "Per-sentence /api/tts/synthesize results per minute. unreachable = Helios asleep (chat shows 'Jess's voice is asleep'); timeout = TTS awake but stuck; upstream_error = TTS returned an error.",
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 6,
+        "w": 8,
+        "x": 16,
         "y": 35
       },
-      "id": 18
+      "id": 19
     },
     {
       "type": "stat",
@@ -1617,12 +1703,12 @@
         }
       },
       "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 12,
-        "y": 35
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 43
       },
-      "id": 19
+      "id": 20
     },
     {
       "type": "stat",
@@ -1680,12 +1766,12 @@
         }
       },
       "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 18,
-        "y": 35
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 43
       },
-      "id": 20
+      "id": 21
     },
     {
       "type": "row",
@@ -1696,9 +1782,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 47
       },
-      "id": 21
+      "id": 22
     },
     {
       "type": "timeseries",
@@ -1781,9 +1867,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 44
+        "y": 48
       },
-      "id": 22
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1878,9 +1964,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 44
+        "y": 48
       },
-      "id": 23
+      "id": 24
     },
     {
       "type": "timeseries",
@@ -1963,9 +2049,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 44
+        "y": 48
       },
-      "id": 24
+      "id": 25
     },
     {
       "type": "stat",
@@ -2056,9 +2142,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 44
+        "y": 48
       },
-      "id": 25
+      "id": 26
     },
     {
       "type": "timeseries",
@@ -2142,9 +2228,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 44
+        "y": 48
       },
-      "id": 26
+      "id": 27
     },
     {
       "type": "row",
@@ -2155,9 +2241,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 56
       },
-      "id": 27
+      "id": 28
     },
     {
       "type": "stat",
@@ -2238,9 +2324,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 53
+        "y": 57
       },
-      "id": 28
+      "id": 29
     },
     {
       "type": "stat",
@@ -2301,9 +2387,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 53
+        "y": 57
       },
-      "id": 29
+      "id": 30
     },
     {
       "type": "timeseries",
@@ -2398,9 +2484,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 53
+        "y": 57
       },
-      "id": 30
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -2496,9 +2582,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 53
+        "y": 57
       },
-      "id": 31
+      "id": 32
     },
     {
       "type": "row",
@@ -2509,9 +2595,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 65
       },
-      "id": 32
+      "id": 33
     },
     {
       "type": "stat",
@@ -2592,9 +2678,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 62
+        "y": 66
       },
-      "id": 33
+      "id": 34
     },
     {
       "type": "timeseries",
@@ -2678,9 +2764,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 62
+        "y": 66
       },
-      "id": 34
+      "id": 35
     },
     {
       "type": "timeseries",
@@ -2799,9 +2885,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 62
+        "y": 66
       },
-      "id": 35
+      "id": 36
     },
     {
       "type": "stat",
@@ -2862,9 +2948,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 62
+        "y": 66
       },
-      "id": 36
+      "id": 37
     },
     {
       "type": "row",
@@ -2875,9 +2961,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 70
+        "y": 74
       },
-      "id": 37
+      "id": 38
     },
     {
       "type": "timeseries",
@@ -2960,9 +3046,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 71
+        "y": 75
       },
-      "id": 38
+      "id": 39
     },
     {
       "type": "timeseries",
@@ -3057,9 +3143,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 71
+        "y": 75
       },
-      "id": 39
+      "id": 40
     },
     {
       "type": "timeseries",
@@ -3142,9 +3228,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 71
+        "y": 75
       },
-      "id": 40
+      "id": 41
     },
     {
       "type": "row",
@@ -3155,9 +3241,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 83
       },
-      "id": 41
+      "id": 42
     },
     {
       "type": "timeseries",
@@ -3240,9 +3326,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 80
+        "y": 84
       },
-      "id": 42
+      "id": 43
     },
     {
       "type": "timeseries",
@@ -3337,9 +3423,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 80
+        "y": 84
       },
-      "id": 43
+      "id": 44
     },
     {
       "type": "stat",
@@ -3400,9 +3486,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 80
+        "y": 84
       },
-      "id": 44
+      "id": 45
     },
     {
       "type": "timeseries",
@@ -3497,9 +3583,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 80
+        "y": 84
       },
-      "id": 45
+      "id": 46
     },
     {
       "type": "row",
@@ -3510,9 +3596,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 92
       },
-      "id": 46
+      "id": 47
     },
     {
       "type": "timeseries",
@@ -3607,9 +3693,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 89
+        "y": 93
       },
-      "id": 47
+      "id": 48
     },
     {
       "type": "timeseries",
@@ -3704,9 +3790,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 89
+        "y": 93
       },
-      "id": 48
+      "id": 49
     },
     {
       "type": "timeseries",
@@ -3801,9 +3887,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 89
+        "y": 93
       },
-      "id": 49
+      "id": 50
     },
     {
       "type": "row",
@@ -3814,9 +3900,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 97
+        "y": 101
       },
-      "id": 50
+      "id": 51
     },
     {
       "type": "timeseries",
@@ -3899,9 +3985,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 98
+        "y": 102
       },
-      "id": 51
+      "id": 52
     },
     {
       "type": "timeseries",
@@ -3984,9 +4070,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 98
+        "y": 102
       },
-      "id": 52
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -4081,9 +4167,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 98
+        "y": 102
       },
-      "id": 53
+      "id": 54
     },
     {
       "type": "row",
@@ -4094,9 +4180,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 106
+        "y": 110
       },
-      "id": 54
+      "id": 55
     },
     {
       "type": "timeseries",
@@ -4191,9 +4277,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 107
+        "y": 111
       },
-      "id": 55
+      "id": 56
     },
     {
       "type": "timeseries",
@@ -4288,9 +4374,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 107
+        "y": 111
       },
-      "id": 56
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -4373,9 +4459,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 107
+        "y": 111
       },
-      "id": 57
+      "id": 58
     },
     {
       "type": "row",
@@ -4386,9 +4472,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 119
       },
-      "id": 58
+      "id": 59
     },
     {
       "type": "stat",
@@ -4457,9 +4543,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 116
+        "y": 120
       },
-      "id": 59
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4567,9 +4653,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 116
+        "y": 120
       },
-      "id": 60
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -4652,9 +4738,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 116
+        "y": 120
       },
-      "id": 61
+      "id": 62
     },
     {
       "type": "row",
@@ -4665,9 +4751,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 128
       },
-      "id": 62
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4750,9 +4836,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 125
+        "y": 129
       },
-      "id": 63
+      "id": 64
     },
     {
       "type": "timeseries",
@@ -4835,9 +4921,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 125
+        "y": 129
       },
-      "id": 64
+      "id": 65
     },
     {
       "type": "row",
@@ -4848,9 +4934,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 133
+        "y": 137
       },
-      "id": 65
+      "id": 66
     },
     {
       "type": "timeseries",
@@ -4945,9 +5031,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 134
+        "y": 138
       },
-      "id": 66
+      "id": 67
     },
     {
       "type": "gauge",
@@ -5014,9 +5100,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 134
+        "y": 138
       },
-      "id": 67
+      "id": 68
     },
     {
       "type": "timeseries",
@@ -5111,9 +5197,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 134
+        "y": 138
       },
-      "id": 68
+      "id": 69
     },
     {
       "type": "row",
@@ -5124,9 +5210,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 146
       },
-      "id": 69
+      "id": 70
     },
     {
       "type": "timeseries",
@@ -5221,9 +5307,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 143
+        "y": 147
       },
-      "id": 70
+      "id": 71
     },
     {
       "type": "timeseries",
@@ -5306,9 +5392,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 143
+        "y": 147
       },
-      "id": 71
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5403,9 +5489,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 143
+        "y": 147
       },
-      "id": 72
+      "id": 73
     },
     {
       "type": "timeseries",
@@ -5488,9 +5574,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 151
+        "y": 155
       },
-      "id": 73
+      "id": 74
     },
     {
       "type": "timeseries",
@@ -5585,9 +5671,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 151
+        "y": 155
       },
-      "id": 74
+      "id": 75
     },
     {
       "type": "row",
@@ -5598,9 +5684,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 159
+        "y": 163
       },
-      "id": 75
+      "id": 76
     },
     {
       "type": "timeseries",
@@ -5683,9 +5769,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 160
+        "y": 164
       },
-      "id": 76
+      "id": 77
     },
     {
       "type": "timeseries",
@@ -5768,9 +5854,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 160
+        "y": 164
       },
-      "id": 77
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5865,9 +5951,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 160
+        "y": 164
       },
-      "id": 78
+      "id": 79
     },
     {
       "type": "timeseries",
@@ -5950,9 +6036,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 168
+        "y": 172
       },
-      "id": 79
+      "id": 80
     },
     {
       "type": "timeseries",
@@ -6059,9 +6145,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 168
+        "y": 172
       },
-      "id": 80
+      "id": 81
     },
     {
       "type": "piechart",
@@ -6130,9 +6216,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 168
+        "y": 172
       },
-      "id": 81
+      "id": 82
     },
     {
       "type": "row",
@@ -6143,9 +6229,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 176
+        "y": 180
       },
-      "id": 82
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -6228,9 +6314,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 177
+        "y": 181
       },
-      "id": 83
+      "id": 84
     },
     {
       "type": "timeseries",
@@ -6325,9 +6411,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 177
+        "y": 181
       },
-      "id": 84
+      "id": 85
     },
     {
       "type": "timeseries",
@@ -6422,9 +6508,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 177
+        "y": 181
       },
-      "id": 85
+      "id": 86
     },
     {
       "type": "row",
@@ -6435,9 +6521,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 185
+        "y": 189
       },
-      "id": 86
+      "id": 87
     },
     {
       "type": "timeseries",
@@ -6545,9 +6631,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 186
+        "y": 190
       },
-      "id": 87
+      "id": 88
     },
     {
       "type": "stat",
@@ -6612,9 +6698,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 186
+        "y": 190
       },
-      "id": 88
+      "id": 89
     },
     {
       "type": "stat",
@@ -6679,9 +6765,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 186
+        "y": 190
       },
-      "id": 89
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6776,9 +6862,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 186
+        "y": 190
       },
-      "id": 90
+      "id": 91
     },
     {
       "type": "timeseries",
@@ -6885,9 +6971,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 194
+        "y": 198
       },
-      "id": 91
+      "id": 92
     },
     {
       "type": "timeseries",
@@ -6998,9 +7084,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 194
+        "y": 198
       },
-      "id": 92
+      "id": 93
     },
     {
       "type": "timeseries",
@@ -7096,9 +7182,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 194
+        "y": 198
       },
-      "id": 93
+      "id": 94
     },
     {
       "type": "row",
@@ -7109,9 +7195,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 202
+        "y": 206
       },
-      "id": 94
+      "id": 95
     },
     {
       "type": "timeseries",
@@ -7194,9 +7280,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 203
+        "y": 207
       },
-      "id": 95
+      "id": 96
     },
     {
       "type": "timeseries",
@@ -7280,9 +7366,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 203
+        "y": 207
       },
-      "id": 96
+      "id": 97
     },
     {
       "type": "timeseries",
@@ -7366,9 +7452,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 203
+        "y": 207
       },
-      "id": 97
+      "id": 98
     },
     {
       "type": "row",
@@ -7379,9 +7465,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 211
+        "y": 215
       },
-      "id": 98
+      "id": 99
     },
     {
       "type": "stat",
@@ -7447,9 +7533,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 212
+        "y": 216
       },
-      "id": 99
+      "id": 100
     },
     {
       "type": "stat",
@@ -7515,9 +7601,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 212
+        "y": 216
       },
-      "id": 100
+      "id": 101
     },
     {
       "type": "timeseries",
@@ -7601,9 +7687,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 212
+        "y": 216
       },
-      "id": 101
+      "id": 102
     },
     {
       "type": "stat",
@@ -7669,9 +7755,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 212
+        "y": 216
       },
-      "id": 102
+      "id": 103
     },
     {
       "type": "row",
@@ -7682,9 +7768,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 220
+        "y": 224
       },
-      "id": 103
+      "id": 104
     },
     {
       "type": "stat",
@@ -7754,9 +7840,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 221
+        "y": 225
       },
-      "id": 104
+      "id": 105
     },
     {
       "type": "timeseries",
@@ -7840,9 +7926,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 221
+        "y": 225
       },
-      "id": 105
+      "id": 106
     },
     {
       "type": "logs",
@@ -7881,9 +7967,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 221
+        "y": 225
       },
-      "id": 106
+      "id": 107
     },
     {
       "type": "row",
@@ -7894,9 +7980,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 229
+        "y": 233
       },
-      "id": 107
+      "id": 108
     },
     {
       "type": "stat",
@@ -7957,9 +8043,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 230
+        "y": 234
       },
-      "id": 108
+      "id": 109
     },
     {
       "type": "timeseries",
@@ -8043,9 +8129,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 230
+        "y": 234
       },
-      "id": 109
+      "id": 110
     },
     {
       "type": "stat",
@@ -8106,9 +8192,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 230
+        "y": 234
       },
-      "id": 110
+      "id": 111
     },
     {
       "type": "timeseries",
@@ -8196,9 +8282,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 238
+        "y": 242
       },
-      "id": 111
+      "id": 112
     },
     {
       "type": "stat",
@@ -8264,9 +8350,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 238
+        "y": 242
       },
-      "id": 112
+      "id": 113
     },
     {
       "type": "stat",
@@ -8332,9 +8418,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 238
+        "y": 242
       },
-      "id": 113
+      "id": 114
     },
     {
       "type": "stat",
@@ -8400,9 +8486,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 246
+        "y": 250
       },
-      "id": 114
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8486,9 +8572,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 246
+        "y": 250
       },
-      "id": 115
+      "id": 116
     },
     {
       "type": "row",
@@ -8499,9 +8585,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 254
+        "y": 258
       },
-      "id": 116
+      "id": 117
     },
     {
       "type": "logs",
@@ -8540,9 +8626,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 255
+        "y": 259
       },
-      "id": 117
+      "id": 118
     },
     {
       "type": "logs",
@@ -8581,9 +8667,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 255
+        "y": 259
       },
-      "id": 118
+      "id": 119
     }
   ]
 }

@@ -11,6 +11,11 @@ import { pickRecorderMime, transcribe, STTUnavailableError } from '@/lib/stt';
  *
  * The mic is not analysed while Jess is answering (her own voice would
  * otherwise trigger it) — interrupting is a tap, not barge-in.
+ *
+ * Privacy/safety rules (security review): only the utterance plus at most
+ * ~IDLE_RESTART_MS of lead-in is ever uploaded; audio the VAD classifies as
+ * steady noise ('speech-timeout') is discarded, never transcribed; an open
+ * call with nobody talking ends itself after IDLE_CALL_END_MS.
  */
 
 export type CallPhase =
@@ -22,21 +27,33 @@ export type CallPhase =
   | 'responding'; // Jess is thinking / speaking
 
 const TICK_MS = 50;
-// While nobody talks, restart the recorder periodically so the eventual
-// upload doesn't carry minutes of silence.
-const IDLE_RESTART_MS = 20_000;
+// While nobody talks the recorder is restarted this often and the old audio
+// dropped — bounds both upload size and how much room audio from BEFORE the
+// user spoke can ride along with an utterance.
+const IDLE_RESTART_MS = 3_000;
 // Let the tail of Jess's audio die down before analysing the mic again.
 const RELISTEN_DELAY_MS = 350;
 // One undecodable snippet (e.g. a tiny false trigger) shouldn't end the call;
 // repeated failures mean something is actually wrong.
 const MAX_CONSECUTIVE_STT_FAILURES = 3;
+// Noise that keeps transcribing to nothing backs off: 1 s, 2 s, 4 s, 5 s…
+const EMPTY_BACKOFF_MAX_MS = 5_000;
+// End an open call when nobody has said anything for this long.
+const IDLE_CALL_END_MS = 5 * 60_000;
+// How long iOS gets to resume an interrupted AudioContext (call/Siri/alarm).
+const INTERRUPT_GRACE_MS = 1_500;
 
 interface WakeLockSentinelLike { release: () => Promise<void> }
+
+interface Recording {
+  rec: MediaRecorder;
+  chunks: Blob[];
+}
 
 export interface UseVoiceCallReturn {
   phase: CallPhase;
   active: boolean;
-  /** Why the last call ended on its own (mic/STT failure); null otherwise. */
+  /** Why the last call ended on its own (mic/STT failure, idle); null otherwise. */
   error: string | null;
   clearError: () => void;
   /** Must be called synchronously from a tap (creates the AudioContext). */
@@ -60,38 +77,41 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
   const ctxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const recordingRef = useRef<Recording | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const vadRef = useRef<EnergyVad | null>(null);
   const sttFailuresRef = useRef(0);
+  const emptyRunRef = useRef(0);
+  const lastHeardRef = useRef(0); // performance.now() of the last real utterance (or call start)
 
   const stopTimer = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
   };
 
-  const startRecorder = useCallback(() => {
+  const newRecording = useCallback((): Recording | null => {
     const stream = streamRef.current;
-    if (!stream) return;
+    if (!stream) return null;
     const { mimeType } = pickRecorderMime();
     const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    chunksRef.current = [];
-    rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    const r: Recording = { rec, chunks: [] };
+    rec.ondataavailable = (e) => { if (e.data.size > 0) r.chunks.push(e.data); };
     rec.start();
-    recorderRef.current = rec;
+    return r;
   }, []);
 
-  /** Stop the current recorder; resolves with its audio (or null if discarded). */
-  const stopRecorder = useCallback((keep: boolean): Promise<Blob | null> => {
-    const rec = recorderRef.current;
-    recorderRef.current = null;
-    if (!rec || rec.state === 'inactive') return Promise.resolve(null);
+  /** Stop a recording; resolves with its audio when `keep`, else null (dropped in the browser). */
+  const finishRecording = useCallback((r: Recording | null, keep: boolean): Promise<Blob | null> => {
+    if (!r || r.rec.state === 'inactive') return Promise.resolve(null);
     return new Promise((resolve) => {
-      rec.onstop = () => resolve(keep ? new Blob(chunksRef.current, { type: rec.mimeType }) : null);
-      rec.stop();
+      r.rec.onstop = () => {
+        const blob = keep ? new Blob(r.chunks, { type: r.rec.mimeType }) : null;
+        r.chunks.length = 0;
+        resolve(blob);
+      };
+      r.rec.stop();
     });
   }, []);
 
@@ -100,16 +120,21 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     stopTimer();
     abortRef.current?.abort();
     abortRef.current = null;
-    void stopRecorder(false);
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    void finishRecording(recordingRef.current, false);
+    recordingRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     streamRef.current = null;
     analyserRef.current = null;
-    ctxRef.current?.close().catch(() => {});
+    const ctx = ctxRef.current;
     ctxRef.current = null;
+    if (ctx) {
+      ctx.onstatechange = null;
+      ctx.close().catch(() => {});
+    }
     wakeLockRef.current?.release().catch(() => {});
     wakeLockRef.current = null;
     setPhase('off');
-  }, [stopRecorder]);
+  }, [finishRecording]);
 
   const fail = useCallback((message: string) => {
     end();
@@ -124,7 +149,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     setPhase('listening');
     vad.reset();
     try {
-      startRecorder();
+      recordingRef.current = newRecording();
     } catch {
       fail('Couldn’t start recording on this browser.');
       return;
@@ -132,8 +157,14 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
     const buf = new Float32Array(analyser.fftSize);
     let idleSince = performance.now();
 
+    const relisten = (delayMs: number) => {
+      setPhase('listening'); // label now; the mic is analysed after the delay
+      setTimeout(() => { if (gen === genRef.current) listen(); }, delayMs);
+    };
+
     const finishUtterance = async () => {
-      const blob = await stopRecorder(true);
+      const blob = await finishRecording(recordingRef.current, true);
+      recordingRef.current = null;
       if (gen !== genRef.current) return;
       if (!blob || blob.size === 0) { listen(); return; }
       setPhase('transcribing');
@@ -155,37 +186,63 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       }
       if (gen !== genRef.current) return;
       sttFailuresRef.current = 0;
-      if (!text) { listen(); return; } // cough / noise: nothing heard
+      if (!text) {
+        // Cough / noise: nothing heard. Back off so a noisy room doesn't
+        // hammer the STT server.
+        emptyRunRef.current += 1;
+        relisten(Math.min(1000 * 2 ** (emptyRunRef.current - 1), EMPTY_BACKOFF_MAX_MS));
+        return;
+      }
+      emptyRunRef.current = 0;
+      lastHeardRef.current = performance.now();
       setPhase('responding');
       try {
         await onUtteranceRef.current(text);
       } catch { /* the chat page shows its own error */ }
       if (gen !== genRef.current) return;
-      setPhase('listening'); // label now; the mic is analysed after the delay
-      setTimeout(() => { if (gen === genRef.current) listen(); }, RELISTEN_DELAY_MS);
+      lastHeardRef.current = performance.now();
+      relisten(RELISTEN_DELAY_MS);
     };
 
     timerRef.current = setInterval(() => {
       if (gen !== genRef.current) { stopTimer(); return; }
-      analyser.getFloatTimeDomainData(buf);
       const now = performance.now();
+      if (now - lastHeardRef.current > IDLE_CALL_END_MS) {
+        fail('Call ended — nobody has said anything for 5 minutes.');
+        return;
+      }
+      analyser.getFloatTimeDomainData(buf);
       const ev = vad.feed(rmsOf(buf), now);
       if (ev === 'speech-start') {
         setPhase('hearing');
       } else if (ev === 'speech-end') {
         stopTimer();
         void finishUtterance();
-      } else if (!vad.isSpeaking && now - idleSince > IDLE_RESTART_MS) {
+      } else if (ev === 'speech-timeout') {
+        // Steady noise (TV/radio) — drop it in the browser, never transcribe.
+        stopTimer();
+        void finishRecording(recordingRef.current, false).then(() => {
+          recordingRef.current = null;
+          if (gen === genRef.current) listen();
+        });
+      } else if (!vad.isSpeaking && !vad.isRising && now - idleSince > IDLE_RESTART_MS) {
         idleSince = now;
-        void stopRecorder(false).then(() => { if (gen === genRef.current) startRecorder(); });
+        // Start the new recording before dropping the old one: no gap.
+        const old = recordingRef.current;
+        try {
+          recordingRef.current = newRecording();
+        } catch {
+          fail('Couldn’t start recording on this browser.');
+          return;
+        }
+        void finishRecording(old, false);
       }
     }, TICK_MS);
-  }, [fail, startRecorder, stopRecorder]);
+  }, [fail, finishRecording, newRecording]);
 
   const start = useCallback(() => {
     if (ctxRef.current) return;
     setError(null);
-    const gen = ++genRef.current;
     // Created + resumed inside the tap: iOS keeps a context suspended otherwise.
     const Ctx = window.AudioContext
       ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -193,12 +250,28 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       setError('Hands-free mode isn’t supported in this browser.');
       return;
     }
+    const gen = ++genRef.current;
     const ctx = new Ctx();
     ctx.resume().catch(() => {});
     ctxRef.current = ctx;
     vadRef.current = new EnergyVad();
     sttFailuresRef.current = 0;
+    emptyRunRef.current = 0;
+    lastHeardRef.current = performance.now();
     setPhase('starting');
+
+    // iOS moves the context to 'interrupted' for a phone call, Siri or an
+    // alarm — the analyser then reads silence and the call would sit on
+    // "Listening" forever. Try to resume; if it stays down, end visibly.
+    ctx.onstatechange = () => {
+      if (gen !== genRef.current || ctx.state === 'running' || ctx.state === 'closed') return;
+      ctx.resume().catch(() => {});
+      setTimeout(() => {
+        if (gen === genRef.current && ctx.state !== 'running') {
+          fail('The call was paused by your phone — tap the call button to start again.');
+        }
+      }, INTERRUPT_GRACE_MS);
+    };
 
     void (async () => {
       let stream: MediaStream;
@@ -212,13 +285,26 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
       }
       if (gen !== genRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current = stream;
+      stream.getAudioTracks().forEach((t) => {
+        t.onended = () => { if (gen === genRef.current) fail('The microphone was disconnected, so the call ended.'); };
+      });
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
+      // WebKit may not pull nodes with no path to the destination; a muted
+      // gain keeps the analyser fed without playing the mic back.
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
       ctx.createMediaStreamSource(stream).connect(analyser);
+      analyser.connect(mute);
+      mute.connect(ctx.destination);
       analyserRef.current = analyser;
       try {
         const wl = (navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<WakeLockSentinelLike> } }).wakeLock;
-        if (wl) wakeLockRef.current = await wl.request('screen');
+        if (wl) {
+          const sentinel = await wl.request('screen');
+          if (gen !== genRef.current) { sentinel.release().catch(() => {}); return; }
+          wakeLockRef.current = sentinel;
+        }
       } catch { /* screen may lock; the call ends when the page is hidden */ }
       if (gen === genRef.current) listen();
     })();
@@ -233,12 +319,7 @@ export default function useVoiceCall(onUtterance: (text: string) => Promise<unkn
 
   useEffect(() => () => { if (ctxRef.current) end(); }, [end]);
 
-  return {
-    phase,
-    active: phase !== 'off',
-    error,
-    clearError: useCallback(() => setError(null), []),
-    start,
-    end,
-  };
+  const clearError = useCallback(() => setError(null), []);
+
+  return { phase, active: phase !== 'off', error, clearError, start, end };
 }

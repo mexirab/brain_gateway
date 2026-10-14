@@ -11,9 +11,13 @@
 export interface VadConfig {
   /** Level must stay above the speech threshold this long to count as speech. */
   minSpeechMs: number;
-  /** Silence after speech that ends the utterance. */
+  /** Silence after speech that ends the utterance (generous: people pause to think). */
   silenceMs: number;
-  /** Hard cap on one utterance (TV in the background must not record forever). */
+  /**
+   * Nobody talks this long without a `silenceMs` pause — it is steady noise
+   * (TV, radio). Reported as 'speech-timeout' so the caller DISCARDS it rather
+   * than sending room audio to the assistant as if the user had said it.
+   */
   maxUtteranceMs: number;
   /** Absolute minimum RMS treated as speech, whatever the noise floor. */
   minRms: number;
@@ -29,8 +33,8 @@ export interface VadConfig {
 
 export const DEFAULT_VAD_CONFIG: VadConfig = {
   minSpeechMs: 200,
-  silenceMs: 1200,
-  maxUtteranceMs: 30_000,
+  silenceMs: 1800,
+  maxUtteranceMs: 90_000,
   minRms: 0.01,
   ratio: 3,
   holdFactor: 0.6,
@@ -38,7 +42,7 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
   calibrationMs: 400,
 };
 
-export type VadEvent = 'speech-start' | 'speech-end' | null;
+export type VadEvent = 'speech-start' | 'speech-end' | 'speech-timeout' | null;
 
 export class EnergyVad {
   private readonly cfg: VadConfig;
@@ -59,6 +63,11 @@ export class EnergyVad {
 
   get isSpeaking(): boolean {
     return this.speaking;
+  }
+
+  /** Above threshold but not yet confirmed as speech (onset in progress). */
+  get isRising(): boolean {
+    return this.aboveSince !== null;
   }
 
   get threshold(): number {
@@ -112,7 +121,7 @@ export class EnergyVad {
       // Adopt its level as the floor so it doesn't immediately re-trigger.
       this.speaking = false;
       this.floor = Math.max(this.floor, this.speechAvg);
-      return 'speech-end';
+      return 'speech-timeout';
     }
     return null;
   }
