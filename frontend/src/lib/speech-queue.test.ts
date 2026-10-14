@@ -125,3 +125,26 @@ describe('SpeechQueue', () => {
     expect(p.played).toEqual(['first reply', 'second reply']);
   });
 });
+
+describe('SpeechQueue completion promise', () => {
+  it('resolves with the final status, and with idle when superseded', async () => {
+    const q = new SpeechQueue(
+      () => Promise.reject(new TTSUnavailableError()),
+      { play: async () => {}, stop: () => {} },
+      () => {},
+    );
+    const first = q.begin('a');
+    const second = q.begin('b'); // supersedes 'a'
+    q.push(['hello there']); q.end();
+    await expect(first).resolves.toBe('idle');
+    await expect(second).resolves.toBe('asleep');
+  });
+
+  it('resolves idle for an empty reply and on stop()', async () => {
+    const q = new SpeechQueue(async () => new Blob(['x']), { play: async () => {}, stop: () => {} }, () => {});
+    const empty = q.begin('a'); q.end();
+    await expect(empty).resolves.toBe('idle');
+    const stopped = q.begin('b'); q.push(['some words here']); q.stop();
+    await expect(stopped).resolves.toBe('idle');
+  });
+});

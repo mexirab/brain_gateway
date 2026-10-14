@@ -47,6 +47,8 @@ interface Session {
   ended: boolean;
   controller: AbortController;
   wake: (() => void) | null;
+  /** Settles the promise returned by begin() — exactly once per session. */
+  done: (s: SpeechStatus) => void;
 }
 
 export class SpeechQueue {
@@ -59,9 +61,16 @@ export class SpeechQueue {
     private readonly maxInFlight = 2,
   ) {}
 
-  /** Start a new utterance for `key`, cancelling any current one. */
-  begin(key: string): void {
+  /**
+   * Start a new utterance for `key`, cancelling any current one. The promise
+   * resolves with the final status once the utterance has finished playing,
+   * failed, or been stopped/superseded ('idle') — hands-free call mode waits
+   * on it before listening again.
+   */
+  begin(key: string): Promise<SpeechStatus> {
     this.cancel();
+    let done!: (s: SpeechStatus) => void;
+    const finished = new Promise<SpeechStatus>((resolve) => { done = resolve; });
     const s: Session = {
       key,
       texts: [],
@@ -70,9 +79,11 @@ export class SpeechQueue {
       ended: false,
       controller: new AbortController(),
       wake: null,
+      done,
     };
     this.session = s;
     void this.run(s);
+    return finished;
   }
 
   push(texts: string[]): void {
@@ -104,6 +115,7 @@ export class SpeechQueue {
     s.controller.abort();
     this.player.stop();
     this.wakeUp(s);
+    s.done('idle');
   }
 
   private wakeUp(s: Session): void {
@@ -127,6 +139,7 @@ export class SpeechQueue {
       this.session = null;
       s.controller.abort();
       this.onState(status === 'idle' ? { status, key: null } : { status, key: s.key });
+      s.done(status);
     };
 
     for (let i = 0; ; i++) {

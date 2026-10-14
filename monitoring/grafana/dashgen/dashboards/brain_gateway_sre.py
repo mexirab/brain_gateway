@@ -236,6 +236,16 @@ def build() -> dict:
             description=tts_desc,
         ),
         timeseries(
+            "Dashboard STT Outcomes",
+            [("sum by (result) (rate(bgw_dashboard_stt_total[5m])) * 60", "{{result}}")],
+            unit="none",
+            description=(
+                "Per-utterance /api/stt/transcribe results per minute (mic button + "
+                "hands-free call). A high share of 'empty' means the call-mode voice "
+                "detector is false-triggering on room noise; unreachable = Helios asleep."
+            ),
+        ),
+        timeseries(
             "Dashboard TTS Outcomes",
             [("sum by (result) (rate(bgw_dashboard_tts_total[5m])) * 60", "{{result}}")],
             unit="none",
@@ -258,7 +268,10 @@ def build() -> dict:
             unit="none",
         ),
     ]
-    row, y = grid_row(tts_row, y, heights=[8, 8, 8, 8])
+    # 3 time series (latency, STT outcomes, TTS outcomes) over 2 stats.
+    row, y = grid_row(tts_row[:3], y, heights=[8, 8, 8])
+    panels.extend(row)
+    row, y = grid_row(tts_row[3:], y, heights=[4, 4])
     panels.extend(row)
 
     # -------------------------------------------------------- LLM Performance

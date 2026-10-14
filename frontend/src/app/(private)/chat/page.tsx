@@ -11,6 +11,8 @@ import MessageBubble from '@/components/chat/MessageBubble';
 import ChatInput, { type SendSource } from '@/components/chat/ChatInput';
 import ChatSidebar from '@/components/chat/ChatSidebar';
 import useTTSPlayback from '@/hooks/useTTSPlayback';
+import useVoiceCall from '@/hooks/useVoiceCall';
+import VoiceCallBar from '@/components/chat/VoiceCallBar';
 
 interface DisplayMessage {
   /** Client-side id: React key + which bubble a speech status belongs to. */
@@ -54,6 +56,8 @@ export default function ChatPage() {
     beginReply, pushText, endReply, speakText, stop: stopSpeech,
   } = useTTSPlayback();
   const ttsEnabledRef = useRef(false);
+  // Set after useVoiceCall below; lets earlier callbacks end a call.
+  const callEndRef = useRef<() => void>(() => {});
   const messagesRef = useRef<DisplayMessage[]>([]);
 
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
@@ -109,6 +113,7 @@ export default function ChatPage() {
     try {
       const { messages: saved } = await api.getConversationMessages(convId);
       stopSpeech();
+      callEndRef.current();
       const display: DisplayMessage[] = saved.map((m) => ({
         uid: nextUid(),
         role: m.role as 'user' | 'assistant',
@@ -127,6 +132,7 @@ export default function ChatPage() {
   // Create new conversation
   const createNewChat = useCallback(async () => {
     stopSpeech();
+    callEndRef.current();
     setMessages([]);
     setActiveConvId(null);
   }, [stopSpeech]);
@@ -206,11 +212,31 @@ export default function ChatPage() {
     // messages follow the speaker toggle. Speech starts per sentence while
     // the reply is still streaming.
     const speakReply = source === 'voice' || ttsEnabledRef.current;
-    if (speakReply) beginReply(assistantMsg.uid);
-    else stopSpeech();
+    // Resolves when the spoken reply has finished (or was stopped) — call
+    // mode waits on it before listening again.
+    const speechDone = speakReply ? beginReply(assistantMsg.uid) : undefined;
+    if (!speakReply) stopSpeech();
 
-    // Ensure conversation exists
-    const convId = await ensureConversation(text);
+    // Ensure conversation exists. If that fails, finish the turn visibly
+    // (otherwise `streaming` stays true and the input is dead).
+    let convId: string;
+    try {
+      convId = await ensureConversation(text);
+    } catch (err) {
+      setStreaming(false);
+      streamingRef.current = false;
+      if (speakReply) endReply();
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          error: true,
+          content: friendlyError(err, 'Sorry — I couldn’t start the conversation just now. Please try again.'),
+        };
+        return updated;
+      });
+      return;
+    }
 
     // Persist user message
     api.saveMessage(convId, 'user', text).catch(() => {});
@@ -273,7 +299,20 @@ export default function ChatPage() {
         });
       },
     );
+    await speechDone;
   };
+
+  // Hands-free call: each finished utterance is sent like a mic message and
+  // the call waits for the spoken reply before listening again.
+  useEffect(() => { callEndRef.current = call.end; });
+  const handleSendRef = useRef(handleSend);
+  useEffect(() => { handleSendRef.current = handleSend; });
+  const call = useVoiceCall(useCallback((text: string) => handleSendRef.current(text, 'voice'), []));
+  const { end: callEnd } = call;
+  const endCall = useCallback(() => { callEnd(); stopSpeech(); }, [callEnd, stopSpeech]);
+  // Return focus to the call button when a call ends (the bar unmounts).
+  const wasInCallRef = useRef(false);
+  useEffect(() => { wasInCallRef.current = call.active; }, [call.active]);
 
   return (
     <div className="h-full flex" style={{ height: 'calc(100vh - 3rem)' }}>
@@ -377,12 +416,34 @@ export default function ChatPage() {
 
         {/* Input */}
         <div className="px-4 pb-4">
-          <ChatInput
-            onSend={handleSend}
-            disabled={streaming}
-            onUserGesture={unlock}
-            onRecordStart={stopSpeech}
-          />
+          {call.error && !call.active && (
+            <div className="flex items-center justify-between gap-2 mb-2 px-3 py-2 rounded-lg bg-surface-overlay/40 text-xs text-content-secondary" role="alert">
+              <span>{call.error}</span>
+              <button
+                onClick={call.clearError}
+                className="min-h-11 px-2 text-content-muted hover:text-content-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 rounded"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+          {call.active ? (
+            <VoiceCallBar
+              phase={call.phase}
+              speaking={isSpeaking}
+              onInterrupt={stopSpeech}
+              onEnd={endCall}
+            />
+          ) : (
+            <ChatInput
+              onSend={handleSend}
+              disabled={streaming}
+              onUserGesture={unlock}
+              onRecordStart={stopSpeech}
+              onStartCall={() => { stopSpeech(); call.start(); }}
+              focusCallButton={wasInCallRef.current}
+            />
+          )}
         </div>
       </div>
     </div>

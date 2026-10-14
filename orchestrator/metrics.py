@@ -988,6 +988,17 @@ DASHBOARD_TTS_TOTAL = Counter(
 for _r in ("ok", "unreachable", "timeout", "upstream_error", "not_configured", "bad_request", "too_long"):
     DASHBOARD_TTS_TOTAL.labels(result=_r)
 
+DASHBOARD_STT_TOTAL = Counter(
+    "bgw_dashboard_stt_total",
+    "Dashboard /api/stt/transcribe outcomes (mic button + hands-free call utterances)",
+    # result: ok | empty (nothing heard — call mode just keeps listening) |
+    #         unreachable (503 — Helios asleep) | timeout (504) |
+    #         upstream_error (502) | too_large (413) | not_configured (503)
+    ["result"],
+)
+for _r in ("ok", "empty", "unreachable", "timeout", "upstream_error", "too_large", "not_configured"):
+    DASHBOARD_STT_TOTAL.labels(result=_r)
+
 # -- Recurring reminders (settings page) -------------------------------------
 RECURRING_REMINDERS_EXPANDED = Counter(
     "bgw_recurring_reminders_expanded_total",

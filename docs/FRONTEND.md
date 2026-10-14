@@ -8,7 +8,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 |------|-------|------|
 | Architecture | `/architecture` | Public. Interactive animated system diagram, cluster nodes, data flow, capabilities grid |
 | Dashboard | `/dashboard` | Private. Calendar, reminders, selfcare today, focus timer, system health, temperature monitoring, finance snapshot |
-| Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges, mic input, spoken replies (speaker toggle, Stop pill, per-message replay). See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies |
+| Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges, mic input, spoken replies (speaker toggle, Stop pill, per-message replay), hands-free call mode (AudioLines button). See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies + Hands-free call mode |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
 | Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; exercise names open a how-to modal with photos + steps; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
@@ -71,11 +71,15 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/components/dashboard/AnnouncementHistoryCard.tsx` — TTS announcement history with type color-coding and stats
 - `frontend/src/components/dashboard/SelfcareTodayCard.tsx` — Today's selfcare log (medication/meal/water/movement) with last-seen timestamps and expandable entry rows
 - `frontend/src/components/layout/MobileNav.tsx` — Mobile bottom nav (4 tabs + More sheet); used by `(private)/layout.tsx`
-- `frontend/src/app/(private)/chat/page.tsx` — Chat page: SSE streaming, mic (walkie-talkie: mic-sent messages always get a spoken reply), speaker toggle (localStorage `tts_enabled`, default off), header Stop pill, sr-only aria-live voice-status region
+- `frontend/src/app/(private)/chat/page.tsx` — Chat page: SSE streaming, mic (walkie-talkie: mic-sent messages always get a spoken reply), speaker toggle (localStorage `tts_enabled`, default off), header Stop pill, sr-only aria-live voice-status region, call-mode wiring; a failed conversation-create no longer leaves the input disabled
+- `frontend/src/hooks/useVoiceCall.ts` — Hands-free call loop: listen (MediaRecorder, 3 s gapless restarts) → STT → send as voice message → wait for spoken reply → listen; end conditions in `docs/VOICE_AND_TTS.md` → Hands-free call mode
+- `frontend/src/lib/vad.ts` — `EnergyVad`: calibrated adaptive-floor energy VAD (1.8 s silence ends an utterance, 90 s cap discarded as noise)
+- `frontend/src/lib/stt.ts` — `/api/stt/transcribe` client + `pickRecorderMime` (webm/opus → webm → mp4); used by call mode and `hooks/useVoiceRecorder.ts`
+- `frontend/src/components/chat/VoiceCallBar.tsx` — Replaces the chat input during a call: phase label, Interrupt, End
 - `frontend/src/hooks/useTTSPlayback.ts` — One persistent `HTMLAudioElement` unlocked by a silent WAV inside the user tap (iOS Safari autoplay); statuses `idle|loading|speaking|blocked|asleep|interrupted|error`; 30 s per-request timeout
 - `frontend/src/lib/speech-text.ts` — Markdown/code/URL/emoji stripping, streamed sentence splitting, 600-char spoken cap ("The rest is on screen.")
 - `frontend/src/lib/speech-queue.ts` — Per-sentence synth during streaming, ordered playback, ≤2 synth requests in flight per tab
-- Tests: `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts` (vitest)
+- Tests: `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`, `frontend/src/lib/vad.test.ts` (vitest)
 - `frontend/src/app/(private)/workouts/page.tsx` — Workout page: location picker, program line, today's plan, inline set logging, history
 - `frontend/src/components/workouts/ExerciseInfoModal.tsx` — Exercise how-to modal: 1 s photo flip (pause/play; paused under `prefers-reduced-motion`), steps, muscles, video link, retry on error. See `docs/WORKOUTS_AND_MEALS.md`
 - `frontend/src/app/(private)/meals/page.tsx` — Meals page: calorie log, photo-estimate upload, 7-day bar chart
