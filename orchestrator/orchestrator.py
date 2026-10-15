@@ -27,10 +27,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from orchestrator.log_config import configure_logging
-
-# Configure structured JSON logging
 from orchestrator.metrics import EMBEDDING_HEALTHY
 
+# Configure structured JSON logging
 configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
@@ -525,7 +524,11 @@ async def _startup_logic():
     # (search, RAG context, palace writes, auto_learn) fails per call and only
     # shows up as scattered errors — it went unnoticed for 12 days once.
     try:
-        await asyncio.to_thread(lambda: shared.embedding_model.encode("self-test", normalize_embeddings=True))
+        # Bounded: a hung encode must not block startup (memory is broken anyway).
+        await asyncio.wait_for(
+            asyncio.to_thread(lambda: shared.embedding_model.encode("self-test", normalize_embeddings=True)),
+            timeout=60,
+        )
         EMBEDDING_HEALTHY.set(1)
         logger.info("[EMBEDDING] Self-test OK")
     except Exception as e:

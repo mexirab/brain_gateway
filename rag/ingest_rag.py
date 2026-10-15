@@ -1,11 +1,18 @@
-import argparse, hashlib, re
+import argparse
+import hashlib
+import re
+import sys
 from pathlib import Path
-from typing import Iterable, List, Tuple, Dict, Any
+from typing import Any, Dict, Iterable, List, Tuple
 
 import chromadb
 from chromadb.config import Settings
-from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
+
+# Pinned model + remote-code revisions (shared with the orchestrator).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from orchestrator.embedding_pin import load_kwargs as embedding_load_kwargs  # noqa: E402
 
 TEXT_EXTS = {".md", ".txt", ".log", ".rst"}
 IGNORE_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
@@ -114,7 +121,7 @@ def main():
         settings=Settings(anonymized_telemetry=False),
     )
     coll = client.get_or_create_collection(name=args.collection)
-    model = SentenceTransformer(args.embed_model, trust_remote_code=True)
+    model = SentenceTransformer(args.embed_model, **embedding_load_kwargs(args.embed_model))
 
     # Map existing file markers: file::<rel> -> hash
     existing_hash_by_rel: Dict[str, str] = {}
