@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from orchestrator.config import settings as _settings
+from orchestrator.voice_style import current_reply_style
 
 logger = logging.getLogger(__name__)
 
@@ -485,15 +486,19 @@ async def _synthesize_speech(client: httpx.AsyncClient, text: str) -> Optional[b
     MP3 and renders it as a proper voice message. Returns None on any failure —
     the caller has already sent the text reply, so a voice miss is non-fatal.
     """
+    body = {
+        "model": "tts-1",
+        "input": text,
+        "voice": _settings.tts_voice or "default",
+        "response_format": "mp3",
+    }
+    style = current_reply_style()
+    if style:
+        body["instructions"] = style  # VoxCPM2 style note; Qwen3-TTS ignores it
     try:
         resp = await client.post(
             f"{_settings.tts_url.rstrip('/')}/v1/audio/speech",
-            json={
-                "model": "tts-1",
-                "input": text,
-                "voice": _settings.tts_voice or "default",
-                "response_format": "mp3",
-            },
+            json=body,
             timeout=60.0,
         )
         if resp.status_code != 200:

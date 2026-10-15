@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 
 from orchestrator import shared
 from orchestrator.metrics import DASHBOARD_STT_TOTAL, DASHBOARD_TTS_TOTAL, VOICE_TTS_LATENCY
+from orchestrator.voice_style import current_reply_style
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,11 @@ async def openai_audio_speech(request: Request):
     body = await request.json()
     # Force WAV so the silence pad stays lossless and we avoid an MP3 decode.
     body["response_format"] = "wav"
+    # Style notes only ever come from voice_style's preset table, never from the client.
+    body.pop("instructions", None)
+    style = current_reply_style()
+    if style:
+        body["instructions"] = style
 
     _t0 = time.time()
     try:
@@ -351,7 +357,7 @@ async def tts_synthesize(request: Request) -> Response:
 
     _t0 = time.time()
     try:
-        audio_bytes = await backend.synthesize(text)
+        audio_bytes = await backend.synthesize(text, style=current_reply_style())
     except httpx.HTTPStatusError as e:
         logger.warning("[TTS] synthesize -> HTTP %s", e.response.status_code)
         return _tts_error("upstream_error", "TTS failed", 502)

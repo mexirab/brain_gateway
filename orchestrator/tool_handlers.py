@@ -1596,6 +1596,41 @@ async def _auto_unmute_dnd():
     logger.info("[DND] Auto-unmuted after timed mute")
 
 
+@register_tool("voice_style")
+async def _reg_voice_style(arguments: dict) -> str:
+    from orchestrator import voice_style
+    from orchestrator.config import settings
+
+    action = arguments.get("action", "status")
+    if action == "reset":
+        voice_style.reset_override(changed_by="chat")
+        logger.info("[VOICE_STYLE] Override cleared")
+        return "Voice style reset — back to my normal automatic tone."
+    if action == "set":
+        style = arguments.get("style")
+        if not isinstance(style, str) or style not in voice_style.PRESETS or style == "auto":
+            choices = ", ".join(k for k in voice_style.PRESETS if k != "auto")
+            return f"Unknown voice style. Choose one of: {choices}."
+        try:
+            override = voice_style.set_override(style, arguments.get("duration_hours"))
+        except (TypeError, ValueError) as e:
+            return f"Couldn't set voice style: {e}"
+        logger.info("[VOICE_STYLE] Override set: style=%s timed=%s", style, override["until"] is not None)
+        note = (
+            "" if settings.tts_style_enabled else " (Voice styling is switched off in config, so it won't be audible.)"
+        )
+        if override["until"]:
+            from datetime import datetime
+
+            until = datetime.fromtimestamp(override["until"]).strftime("%I:%M %p").lstrip("0")
+            return f"Voice style set to {style} until {until}.{note}"
+        return f"Voice style set to {style} until you tell me to reset it.{note}"
+    override = voice_style.get_override()
+    if override:
+        return f"Current voice style: {override['style']} (set by you)."
+    return "No voice style override — I'm using the automatic tone for each situation (editable in Settings → Voice Style)."
+
+
 @register_tool("helios_power")
 async def _reg_helios_power(arguments: dict) -> str:
     """PT-C: power Helios (the GPU box) on/off via the HA-controlled smart plug.

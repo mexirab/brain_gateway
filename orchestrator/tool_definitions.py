@@ -875,6 +875,47 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "voice_style",
+            "description": (
+                "Change how your spoken voice sounds (tone, not words). Use when the user says "
+                "'talk softer/quieter', 'be more upbeat/energetic', 'calm down your voice', 'be firmer "
+                "with me', 'sound happier' (action=set), 'talk normally again' / 'back to normal' "
+                "(action=reset), or asks how you're set to sound (action=status). Applies to everything "
+                "you say aloud until reset or duration_hours runs out. Only the user can ask for this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["set", "reset", "status"]},
+                    "style": {
+                        "type": "string",
+                        "enum": [
+                            "calm",
+                            "gentle",
+                            "soothing",
+                            "quiet",
+                            "warm",
+                            "thoughtful",
+                            "encouraging",
+                            "upbeat",
+                            "proud",
+                            "energetic",
+                            "firm",
+                        ],
+                        "description": "Required for set. Pick the closest match to what they asked for.",
+                    },
+                    "duration_hours": {
+                        "type": "number",
+                        "description": "Hours before reverting automatically. Omit to keep it until reset.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "helios_power",
             "description": (
                 "Power the Helios GPU box on or off. Use this when the user says "
@@ -1515,6 +1556,7 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
         "focus_status",
         "focus_sprint",
         "sleep_mode",
+        "voice_style",  # "talk softer" is a spoken request
         "decide_for_me",
         "start_routine",
         "routine_action",

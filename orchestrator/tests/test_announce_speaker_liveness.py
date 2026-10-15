@@ -35,7 +35,7 @@ class _CountingBackend:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def synthesize(self, text: str, voice: str | None = None) -> bytes:
+    async def synthesize(self, text: str, voice: str | None = None, style: str = "") -> bytes:
         self.calls += 1
         return b"\x00\x01"
 

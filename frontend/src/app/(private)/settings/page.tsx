@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell } from 'lucide-react';
+import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell, AudioLines } from 'lucide-react';
 import IdentityPanel from '@/components/settings/IdentityPanel';
 import SelfcarePanel from '@/components/settings/SelfcarePanel';
 import QuietHoursPanel from '@/components/settings/QuietHoursPanel';
 import RecurringRemindersPanel from '@/components/settings/RecurringRemindersPanel';
 import RoutinesPanel from '@/components/settings/RoutinesPanel';
 import SpeakersPanel from '@/components/settings/SpeakersPanel';
+import VoiceStylePanel from '@/components/settings/VoiceStylePanel';
 import WorkoutsPanel from '@/components/settings/WorkoutsPanel';
 import type { LucideIcon } from 'lucide-react';
 
@@ -19,6 +20,7 @@ export type PanelKey =
   | 'quiet'
   | 'routines'
   | 'speakers'
+  | 'voice'
   | 'recurring'
   | 'workouts';
 
@@ -35,6 +37,7 @@ const TABS: Tab[] = [
   { key: 'quiet', label: 'Quiet Hours', icon: Moon, description: 'Do-not-disturb window' },
   { key: 'routines', label: 'Routines', icon: Sunrise, description: 'Morning + evening step-by-step flows' },
   { key: 'speakers', label: 'Speakers', icon: Volume2, description: 'Per-category speaker routing' },
+  { key: 'voice', label: 'Voice Style', icon: AudioLines, description: 'How Jess sounds in each situation' },
   { key: 'recurring', label: 'Recurring Reminders', icon: Repeat, description: 'Schedules + cron rules' },
   { key: 'workouts', label: 'Workouts', icon: Dumbbell, description: 'Program + gym equipment' },
 ];
@@ -54,6 +57,7 @@ export default function SettingsPage() {
     quiet: false,
     routines: false,
     speakers: false,
+    voice: false,
     recurring: false,
     workouts: false,
   });
@@ -132,6 +136,7 @@ export default function SettingsPage() {
           {active === 'quiet' && <QuietHoursPanel registerDirty={registerDirty} />}
           {active === 'routines' && <RoutinesPanel registerDirty={registerDirty} />}
           {active === 'speakers' && <SpeakersPanel registerDirty={registerDirty} />}
+          {active === 'voice' && <VoiceStylePanel registerDirty={registerDirty} />}
           {active === 'recurring' && <RecurringRemindersPanel registerDirty={registerDirty} />}
           {active === 'workouts' && <WorkoutsPanel registerDirty={registerDirty} />}
         </section>

@@ -196,6 +196,23 @@ export interface SpeakersPayload {
   categories: string[];
 }
 
+export interface VoiceStyleMaps {
+  modes: Record<string, string>;
+  announcements: Record<string, string>;
+}
+
+export interface VoiceStylePayload {
+  /** False when TTS_STYLE_ENABLED is off — settings save but aren't audible. */
+  enabled: boolean;
+  /** Preset key → phrase sent to the TTS ("auto" = no instruction). */
+  presets: Record<string, string>;
+  modes: string[];
+  announcement_types: string[];
+  defaults: VoiceStyleMaps;
+  /** Style set by asking Jess in chat; until = epoch seconds or null (until reset). */
+  override: { style: string; until: number | null } | null;
+}
+
 export interface DiscoveredSpeaker {
   entity_id: string;
   friendly_name: string;
@@ -290,6 +307,12 @@ export const settingsApi = {
     put<SpeakersPayload>('/api/config/speakers', { routes }),
   discoverSpeakers: () =>
     get<{ speakers: DiscoveredSpeaker[] }>('/api/config/speakers/discover'),
+
+  // Voice style
+  getVoiceStyle: () => get<VoiceStylePayload>('/api/config/voice_style'),
+  updateVoiceStyle: (maps: VoiceStyleMaps) =>
+    put<VoiceStylePayload>('/api/config/voice_style', maps),
+  clearVoiceStyleOverride: () => del<VoiceStylePayload>('/api/config/voice_style/override'),
 
   // Recurring reminders
   listRecurring: () =>

@@ -139,10 +139,16 @@ scrape_configs:
           service: 'orchestrator'
           node: 'jupiter'
 
-      # TTS (Qwen3-TTS on Helios GPU1)
+      # TTS (Qwen3-TTS on Helios GPU1) — rollback target once VoxCPM2 is live
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
         labels:
           service: 'tts'
+          node: 'helios'
+
+      # TTS (VoxCPM2 on Helios GPU1, tts/voxcpm-tts.service; /health 503s with no usable voice)
+      - targets: ['http://${NODE_HELIOS_IP}:8004/health']
+        labels:
+          service: 'tts-voxcpm'
           node: 'helios'
 
       # STT (Whisper on Helios GPU1)

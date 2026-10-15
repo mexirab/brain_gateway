@@ -127,6 +127,11 @@ class Settings(BaseSettings):
     # -- TTS (empty = disabled) --------------------------------------------------
     tts_url: str = ""
     tts_voice: str = "default"
+    # Send a style note ("calm, gentle and reassuring") with each synthesis,
+    # chosen from the mode_router mode / announcement type (voice_style.py).
+    # Honored by the VoxCPM2 server (tts/voxcpm_server.py); the Qwen3-TTS
+    # server ignores it, so leaving this on is harmless there.
+    tts_style_enabled: bool = True
 
     # -- STT (empty = disabled) --------------------------------------------------
     stt_url: str = ""

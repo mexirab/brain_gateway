@@ -31,7 +31,7 @@ class _FakeBackend:
     audio_format = "audio/mpeg"
     file_extension = "mp3"
 
-    async def synthesize(self, text: str, voice: str | None = None) -> bytes:
+    async def synthesize(self, text: str, voice: str | None = None, style: str = "") -> bytes:
         return b"\x00\x01\x02\x03"
 
 

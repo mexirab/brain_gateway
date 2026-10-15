@@ -37,6 +37,7 @@ from orchestrator.metrics import (
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
+from orchestrator.voice_style import record_reply_style
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,7 @@ class CloudBrain:
         routing_info["intent_intensity"] = intent.intensity
         routing_info["intent_tags"] = intent.tags
         MODE_ROUTE_COUNT.labels(mode=intent.mode, intensity=intent.intensity).inc()
+        record_reply_style(intent.mode)
         # Tags are the matched phrases from the user's message (e.g. distress terms) —
         # mental-state data: never logged, only how many matched.
         logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%d", intent.mode, intent.intensity, len(intent.tags))

@@ -46,7 +46,7 @@ class _FakeBackend:
     def audio_format(self) -> str:
         return self._format
 
-    async def synthesize(self, text: str, voice: str | None = None) -> bytes:
+    async def synthesize(self, text: str, voice: str | None = None, style: str = "") -> bytes:
         self.calls.append(text)
         if self._exc is not None:
             raise self._exc

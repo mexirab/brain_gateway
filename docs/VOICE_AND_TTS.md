@@ -38,7 +38,7 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 ## TTS Pacing
 
-Voice clone (personal reference on the live deployment; configurable elsewhere) runs through Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002). The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Two pacing controls:
+Voice clone (personal reference on the live deployment; configurable elsewhere) runs through Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002). (VoxCPM2 on :8004 is built as its replacement — see VoxCPM2 TTS server below; the pacing notes here are Qwen-specific.) The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Two pacing controls:
 
 1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
 2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery
@@ -64,6 +64,78 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 - Speaker ids must match `media_player\.[a-z0-9_]+` — enforced at announce time, in the Speakers panel validator (`announcement_routes._validate_speaker_string`), and on a routine's `speaker` (`routines_config`). The state GET URL-encodes the entity id.
 - Metrics: `bgw_announcement_speaker_unavailable_total{speaker}` (configured speakers, else `other`; pre-seeded at 0 by `seed_announcement_metrics` at startup) and `bgw_announcement_fallback_total{type}`. Alert `AnnouncementSpeakerUnavailable` — see `monitoring/README.md`.
 - Fix for a dead speaker is physical: power-cycle it; a stereo pair that doesn't return in HA needs re-pairing in Google Home.
+
+## VoxCPM2 TTS server (port 8004)
+
+Second TTS server on Helios, built to replace Qwen3-TTS (:8002) as the live voice. **Status: running-ready on Helios, orchestrator NOT cut over** (`TTS_URL` on Jupiter still points at :8002). Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
+
+| Property | Value |
+|----------|-------|
+| Unit / source | `voxcpm-tts.service` / `tts/voxcpm_server.py` (repo copies: `tts/voxcpm-tts.service`, `tts/voxcpm_server.py`) |
+| Model | `openbmb/VoxCPM2` (Apache-2.0, 2B), weights copied to `/home/labadmin/models/VoxCPM2`, loaded offline; HF revision + sha256s in the unit header |
+| GPU / VRAM | GPU1 RTX PRO 5000 (`CUDA_VISIBLE_DEVICES=1`), ~7.4 GiB resident |
+| Speed | ~0.4–1.3 s per sentence; output 24 kHz WAV (`VOXCPM_OUTPUT_SR`, same rate as Qwen) |
+| Startup | first-ever start ~50 s (torch.compile); warm ~27 s — compile cache in `/var/cache/voxcpm`, persists across boots |
+| API | Same as `tts/server.py`: `/health`, `/voices`, `/tts` (honors `emotion`), `/v1/audio/speech` (honors OpenAI `instructions`) |
+| Voices | Same `voices.json` as the Qwen server (`VOXCPM_VOICES_DIR`); only `ref_audio` is used — reference-only cloning keeps the timbre, not the clip's mood, so the style note can steer |
+| Logs | `journalctl -u voxcpm-tts` on Helios (not shipped to Loki; text never logged, lengths only) |
+
+**Style note:** `emotion` / `instructions` becomes a VoxCPM2 controllable-cloning prefix, `(calm, gentle and reassuring)text`. No note = the model infers prosody from the text.
+
+**Server guards:** `()` / `[]` and their NFKC lookalikes are stripped from body text (so text can't inject a style note); text capped at 2000 chars (`VOXCPM_MAX_CHARS`), style at 80; more than 8 pending requests → 503 (`VOXCPM_MAX_PENDING`); `/health` returns 503 when no voice is usable; refuses to start without CUDA (`VOXCPM_REQUIRE_CUDA=true`).
+
+**Sandbox** (mirrors `llama-server-primary`): nologin `llama` user, `ProtectSystem=strict`, `ProtectHome=tmpfs` + read-only binds of the venv, uv Python, voices and weights dirs, `DevicePolicy=closed`. `DeviceAllow` **must include `/dev/nvidia0`** even though it is pinned to GPU1 — CUDA opens it while enumerating, and without it torch silently falls back to CPU (~7 s/sentence). Install steps (uv-managed Python 3.11 venv, pinned `voxcpm`/torch cu128, world-readable paths): unit header.
+
+Env vars: `VOXCPM_*` — `docs/ENV_VARS.md` → TTS.
+
+**Cutover (operator, on Jupiter; Helios must be awake):**
+```bash
+cp .env .env.bak-qwen-tts
+# set TTS_URL=http://10.0.0.195:8004 in .env
+docker compose up -d --force-recreate orchestrator
+docker logs brain-orchestrator 2>&1 | grep '\[TTS\] Backend'   # confirm :8004
+```
+Rollback: `cp .env.bak-qwen-tts .env && docker compose up -d --force-recreate orchestrator`. `qwen-tts` keeps running on :8002 alongside. The Wyoming bridge (`wyoming-jessica-tts`) reads `--tts-url ${TTS_URL}` from the `.env` of the compose host it runs on and is not recreated by the command above — recreate it there too if HA Assist should use VoxCPM2.
+
+```bash
+ssh labadmin@10.0.0.195 'sudo systemctl restart voxcpm-tts'
+ssh labadmin@10.0.0.195 'journalctl -u voxcpm-tts -f'
+```
+
+**Monitoring:** blackbox probe `service="tts-voxcpm"` on `:8004/health`; `TTSDown` covers `service=~"tts|tts-voxcpm"`, so both servers alert while both run. No server-side `/metrics` yet.
+
+## Voice style
+
+How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voice_style.py` and sent to the TTS as a style note. Qwen3-TTS accepts and ignores it, so it is harmless before cutover.
+
+**Presets** (the only phrases that ever reach the TTS — never free text from the user, model or content): `auto` (no note), `calm`, `gentle`, `soothing`, `quiet`, `warm`, `thoughtful`, `encouraging`, `upbeat`, `proud`, `energetic`, `firm`.
+
+**Resolution** (highest first):
+1. **User override** — set by asking in chat (`voice_style` tool: "talk softer for an hour", "back to normal"). Stored in `app_state` key `voice_style_override` (survives restarts), optional expiry ≤ 168 h, applies to everything spoken. Audited in `config_changes` as panel `voice_style_override`. Clearable from Settings.
+2. **Defaults** — `/settings` → Voice Style (`/api/config/voice_style`); YAML at `VOICE_STYLE_PATH` stores only non-default entries (audited as panel `voice_style`).
+
+| Mode (chat replies) | Default | | Announcement type | Default |
+|------|---------|-|------|---------|
+| explainer | auto | | progress | proud |
+| mirror | thoughtful | | greeting, briefing | warm |
+| counterbalance | gentle | | selfcare | gentle |
+| challenge | firm | | routine | encouraging |
+| baseline | soothing | | ambient | quiet |
+| | | | all others (incl. unknown types) | auto |
+
+**Where it applies:**
+- Chat replies: `cloud_brain` records the mode_router mode of the latest message (`record_reply_style`); the dashboard `/api/tts/synthesize`, Telegram voice replies and the `/v1/audio/speech` proxy read `current_reply_style()`. The proxy strips any client-sent `instructions` first.
+- Announcements: `reminder_manager._announce_voice` uses `style_for_announcement(type)`.
+- `tts_backend.synthesize(..., style="")` on every backend; `LocalHTTPBackend` sends `emotion` only when non-empty.
+- Kill switch: `TTS_STYLE_ENABLED=false` (no notes sent anywhere).
+
+Metric: `bgw_tts_style_applied_total{source=override|mode|announcement|none, style}`, one per synthesis.
+
+**Known limits:**
+- Wyoming / HA Assist bridge sends no style — the model infers from the text.
+- The reply mode is process-global with a 300 s TTL, not per conversation (single-user system); a reply spoken > 5 min after its message gets no mode style.
+- Long text is not sentence-split server-side; callers (dashboard, Telegram) send short segments.
+- No `/metrics` on the VoxCPM2 server yet — health is the blackbox probe only.
 
 ## Dashboard chat voice replies
 

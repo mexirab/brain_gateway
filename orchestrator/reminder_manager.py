@@ -19,6 +19,7 @@ import httpx
 
 from orchestrator import state_store
 from orchestrator.user_profile import get_profile
+from orchestrator.voice_style import style_for_announcement
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +375,7 @@ async def _announce_voice(
             # Synthesize only once we know something can play it — a dead-only
             # route used to burn a Helios TTS call on every retry/poll.
             # Generate audio via backend
-            audio_bytes = await backend.synthesize(text)
+            audio_bytes = await backend.synthesize(text, style=style_for_announcement(announcement_type))
 
             # Save audio with UUID (file I/O off the event loop)
             audio_id = str(uuid.uuid4())[:8]
