@@ -1,12 +1,12 @@
 # Frontend Dashboard (ConvivialProphet.com)
 
-Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via `AUTH_TOKEN` cookie.
+Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via the `brain_token` cookie, checked against `DASHBOARD_TOKEN` in `src/middleware.ts` (see Auth below).
 
 ## Pages
 
 | Page | Route | What |
 |------|-------|------|
-| Architecture | `/architecture` | Public. Interactive animated system diagram, cluster nodes, data flow, capabilities grid |
+| Architecture | `/architecture` | Private (shows live infra status). Interactive animated system diagram, cluster nodes, data flow, capabilities grid |
 | Dashboard | `/dashboard` | Private. Calendar, reminders, selfcare today, focus timer, system health, temperature monitoring, finance snapshot |
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges, mic input, spoken replies (speaker toggle, Stop pill, per-message replay), hands-free call mode (AudioLines button). See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies + Hands-free call mode |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
@@ -15,6 +15,13 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 | Pantry | `/pantry` | Private, gated on `pantry_enabled`. Tabs "What I have" (inventory by location, use/out/edit, "Still have these?" tray, add form with barcode scan), "Meal plan" (`PlanTab`: inline diet settings card `DietSettingsCard`; generate → poll → draft with warnings, missing-ingredient checklist where unticked = "already have", accept/discard, per-meal swap (one at a time), 👍/👎 ratings; active plan view) and "Stock-take" (kind picker Fridge/Freezer/Pantry/Receipt; 1–8 photos → poll → review checklist → commit. Receipt review: store · date · $total, printed text per line, "remembered" badge, restock "Add N"/"set back to full", grocery "ticks off …", location per new line, collapsible Not-food, sticky Save bar, "Nothing to add — discard"; duplicate-photo 409 offers "Open it" when the earlier scan is still open, else "Scan it anyway"). `?tab=scan` / `?tab=plan` deep-link. See `docs/PANTRY.md` |
 | Settings | `/settings` | Private. Four-panel settings UI (Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders) with left-rail tab switcher. Each panel has a shared `SaveBar`; switching tabs while a panel is dirty triggers a confirm guard so unsaved edits aren't silently lost. Backed by `/api/config/*` via `lib/settings-api.ts` (typed client, mirrors `finance-api.ts` shape; goes through `/api/proxy` for bearer injection). |
+| Personal Facts | `/personal-facts` | Private. Read-only peek at the meds/projects/profile the model reads from the YAML source of truth (`GET /api/config/personal-facts`) |
+
+## Auth
+
+- `src/middleware.ts` redirects requests without a valid `brain_token` cookie to `/login?redirect=<path>` (307).
+- **Adding a page under `(private)/`:** add it to BOTH `PROTECTED_PATHS` and `config.matcher` (matcher must be a static literal — Next can't derive it from the array). The `(private)` route group does not protect anything on its own.
+- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect, a valid cookie passes. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`.
 
 ## Dashboard Widgets
 
