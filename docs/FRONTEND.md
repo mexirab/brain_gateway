@@ -9,7 +9,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Architecture | `/architecture` | Private (shows live infra status). Interactive animated system diagram, cluster nodes, data flow, capabilities grid |
 | Dashboard | `/dashboard` | Private. Calendar, reminders, selfcare today, focus timer, system health, temperature monitoring, finance snapshot |
 | Calendar | `/calendar` | Private. Mon–Sun week agenda of the merged calendar (personal CalDAV + work Exchange, tagged "Work") from `GET /api/calendar/range`. Prev/next week + "This week"; today highlighted and scrolled into view, today's finished events dimmed; banner when a source is unavailable; note when the browser timezone differs from Jess's; "Manage calendars" link to `CALENDAR_WEB_URL`. Never shows another week's data under a week's headings. Refreshes every 5 min. Helpers `lib/calendar-week.ts`, hook `useCalendarRange` (`lib/hooks.ts`) |
-| Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges, mic input, spoken replies (speaker toggle, Stop pill, per-message replay), hands-free call mode (AudioLines button). See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies + Hands-free call mode |
+| Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges, mic input, spoken replies (speaker toggle, Stop pill, per-message replay), hands-free call mode (AudioLines button), optional 3D avatar (UserRound button; see Chat Avatar below). See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies + Hands-free call mode |
 | Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes) |
 | Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
 | Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; exercise names open a how-to modal with photos + steps; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
@@ -24,6 +24,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 - **Fail closed:** `DASHBOARD_TOKEN` unset, empty or `'changeme'` → nothing authenticates. `POST /api/auth/login` returns 503 with a fix-it message (400 on malformed JSON, 401 on wrong password). Compose passes `${DASHBOARD_TOKEN:-}` (no default).
 - `(private)/layout.tsx` also redirects to `/login` server-side when the cookie is invalid (defense in depth for a page missing from the middleware lists; no `?redirect=` there). Private pages therefore render dynamically.
 - `src/middleware.ts` redirects requests without a valid `brain_token` cookie to `/login?redirect=<path+query>` (307) — the query is kept so deep links like `/pantry?tab=scan` survive re-login.
+- **Non-page paths:** `/avatar` (the chat avatar model) is also in both lists so the `.vrm` needs the cookie; it isn't a `(private)/` route, which `middleware.test.ts` allows.
 - **Adding a page under `(private)/`:** add it to BOTH `PROTECTED_PATHS` in `src/lib/protected-paths.ts` (shared by middleware + login page; `middleware.ts` re-exports it) and `config.matcher` in `src/middleware.ts` (matcher must be a static literal — Next can't derive it from the array). The `(private)` route group does not protect anything on its own.
 - **Login redirect:** `safeRedirect()` (`src/lib/protected-paths.ts`) honours `?redirect=` only if it parses (WHATWG URL) to a same-origin path under a protected route with no encoded `%2F`/`%5C`; anything else (`//host`, `javascript:`, unprotected paths) goes to `/dashboard`. Blocks open redirect / `javascript:` URLs on `/login`.
 - `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect (with query preserved), a valid cookie passes. `src/lib/protected-paths.test.ts` covers `safeRedirect`. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`. `src/lib/dashboard-auth.test.ts` covers the placeholder/fail-closed rules.
@@ -47,6 +48,30 @@ Bottom nav (mobile only, `<md` breakpoint) shows 4 primary tabs — Dashboard, C
 **Feature-flag nav gating.** The Workouts, Meals, Pantry, and Finance nav links are conditional on runtime flags so disabled features don't leave dead 404 links. The server layout (`(private)/layout.tsx`) fetches `GET /api/config/features` via `getFeatureFlags()` in `lib/features.server.ts` (direct orchestrator call with the `API_TOKEN` bearer — not through `/api/proxy`, which needs the browser auth cookie a server component doesn't carry; fails open to "show all" if the orchestrator is unreachable). It filters the sidebar `NAV_ITEMS` with the pure `isNavItemEnabled(href, flags)` predicate (`lib/features.ts`) and passes the `flags` object to `<MobileNav>`, which filters both its `PRIMARY` and `MORE` lists with the same predicate. Mapping: `/workouts`→`workouts_enabled`, `/meals`→`meals_enabled`, `/pantry`→`pantry_enabled`, `/finance`→`jess_advanced`. Hiding the link isn't a security boundary (the orchestrator routes 404 / are unmounted regardless) — it's UX. As defense for direct URL hits, each feature's route `layout.tsx` (`workouts/`, `meals/`, `pantry/`, `finance/`) wraps its children in the async server component `<FeatureGate flag="..." label="...">` (`components/layout/FeatureGate.tsx`), which renders `<FeatureDisabled>` instead of the page when the flag is off. Finance's pre-existing client tabs/provider were moved to `finance/FinanceShell.tsx` so `finance/layout.tsx` could become the server gate. Flags are read with `next: { revalidate: 30 }`, so a flag flip surfaces within ~30s (or a dev-server restart) — they're env-var driven and only change on an orchestrator restart anyway.
 
 **Full-height pages.** `<main>` in `(private)/layout.tsx` reserves bottom padding for the fixed MobileNav (`calc(5rem + env(safe-area-inset-bottom))` below `md`). Pages that fill the viewport (chat, documents) must use the `.page-viewport` class (`globals.css`, `@layer components`: `100dvh` with `vh` fallback, minus `<main>`'s padding) — not `calc(100vh …)`, which hid the chat input behind the nav on phones. Its offsets are coupled to `<main>`'s padding; change both together. Safe-area insets are currently 0 on iOS (root `viewport` export has no `viewportFit: 'cover'`).
+
+## Chat Avatar
+
+Optional 3D talking avatar on `/chat`. Off by default.
+
+- **Toggle:** header button (UserRound icon, `aria-label="Jess avatar"`, `aria-pressed`), persisted in localStorage `chat:avatar`.
+- **Layout:** panel above the messages, shrinks before them (`basis-[34%] max-h-[36dvh]`, `42dvh` on md+); hidden when viewport height ≤ 500px (phone landscape / keyboard open).
+- **Rendering:** `components/chat/JessAvatar.tsx` — three.js `0.186.1` + `@pixiv/three-vrm` `3.5.5` (exact pins; `@types/three` dev), lazy-loaded via `next/dynamic` `ssr:false`, so `/chat` first-load JS is unchanged. Runs on the viewer's device GPU (no server GPU, no backend routes/metrics/env vars, no extra TTS calls).
+- **Behaviour:** blinks, breathing, gaze, per-state body language + rim/halo colour for `idle | listening | thinking | speaking` (derived in `chat/page.tsx` from `speech.status`, `call.phase`, streaming). Honours `prefers-reduced-motion`. 30 fps when not speaking, full rate while speaking; rAF stops in hidden tabs. WebGL context loss / render errors → "couldn't load" message. Toggle-off disposes everything (`VRMUtils.deepDispose` + `renderer.forceContextLoss`).
+- **Lip-sync:** `lib/lipsync.ts` decodes each TTS clip offline (one reused `OfflineAudioContext`) into a 50 fps viseme track (FFT spectral centroid → `aa`/`ih`/`ou`; per-clip loudness normalisation at the 65th-percentile voiced level; absolute noise floor keeps hiss closed; ~100 ms release closes the mouth between words). The avatar samples it with the reply `<audio>` element's `currentTime`. Clips arrive via `lib/speech-clip-bus.ts` (pub/sub), emitted by `ElementPlayer.play()` in `hooks/useTTSPlayback.ts`. The shared `<audio>` element is deliberately NOT routed through Web Audio (iOS gesture-unlock/playback).
+
+**Model file:** `frontend/public/avatar/jess.vrm` — operator-supplied, gitignored (`frontend/public/avatar/*.vrm`). A fresh clone has none → panel shows a "No avatar model yet" hint.
+
+1. Design in VRoid Studio (or use any VRM; the pixiv `VRM1_Constraint_Twist_Sample` is redistributable as a placeholder).
+2. Export `.vrm` self-contained; strip author/contact meta.
+3. Place at `frontend/public/avatar/jess.vrm` in the checkout (the Docker build context includes untracked files).
+4. Rebuild: `docker compose up -d --build --force-recreate frontend`. Swapping models = replace the file + rebuild.
+
+**Auth:** `/avatar` is in `PROTECTED_PATHS` + `config.matcher` (see Auth) — the model may be a personal likeness, so it needs the dashboard cookie.
+
+**Known limits:**
+- The `.vrm` is baked into the local frontend image — don't push that image to a registry.
+- Not backed up by anything; keep your own copy of the source/export.
+- Verified in headless Chromium only, not yet on a real iPhone.
 
 ## Finance System (Actual Budget sync)
 
@@ -92,11 +117,14 @@ docker compose up -d --build --force-recreate frontend
 - `frontend/src/lib/audio-session.ts` — `setAudioSessionType('auto'|'playback'|'play-and-record')` wrapper for Safari's `navigator.audioSession` (no-op without it); type is page-global and sticky — whoever sets `playback` must restore `auto`
 - `frontend/src/lib/vad.ts` — `EnergyVad`: calibrated adaptive-floor energy VAD (1.8 s silence ends an utterance, 90 s cap discarded as noise)
 - `frontend/src/lib/stt.ts` — `/api/stt/transcribe` client + `pickRecorderMime` (webm/opus → webm → mp4); used by call mode and `hooks/useVoiceRecorder.ts`
+- `frontend/src/components/chat/JessAvatar.tsx` — Optional 3D VRM avatar (lazy, client-only); see Chat Avatar
+- `frontend/src/lib/lipsync.ts` — Offline per-clip viseme track (50 fps) for avatar lip-sync
+- `frontend/src/lib/speech-clip-bus.ts` — Pub/sub for TTS clips (`useTTSPlayback` → avatar)
 - `frontend/src/components/chat/VoiceCallBar.tsx` — Replaces the chat input during a call: phase label, Interrupt, End
 - `frontend/src/hooks/useTTSPlayback.ts` — One persistent `HTMLAudioElement` unlocked by a silent WAV inside the user tap (iOS Safari autoplay); statuses `idle|loading|speaking|blocked|asleep|interrupted|error`; 30 s per-request timeout
 - `frontend/src/lib/speech-text.ts` — Markdown/code/URL/emoji stripping, streamed sentence splitting, `splitLong()` 400-char per-request segments, 1200-char spoken budget `SPEECH_MAX_CHARS` ("The rest is on screen.")
 - `frontend/src/lib/speech-queue.ts` — Per-sentence synth during streaming, ordered playback, ≤2 synth requests in flight per tab
-- Tests: `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`, `frontend/src/lib/vad.test.ts`, `frontend/src/lib/audio-session.test.ts` (vitest)
+- Tests: `frontend/src/lib/speech-text.test.ts`, `frontend/src/lib/speech-queue.test.ts`, `frontend/src/lib/vad.test.ts`, `frontend/src/lib/audio-session.test.ts`, `frontend/src/lib/lipsync.test.ts`, `frontend/src/lib/speech-clip-bus.test.ts` (vitest)
 - `frontend/src/app/(private)/workouts/page.tsx` — Workout page: location picker, program line, today's plan, inline set logging, history
 - `frontend/src/components/workouts/ExerciseInfoModal.tsx` — Exercise how-to modal: 1 s photo flip (pause/play; paused under `prefers-reduced-motion`), steps, muscles, video link, retry on error. See `docs/WORKOUTS_AND_MEALS.md`
 - `frontend/src/app/(private)/meals/page.tsx` — Meals page: calorie log, photo-estimate upload, 7-day bar chart

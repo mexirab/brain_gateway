@@ -6,7 +6,11 @@
 // app/(private)/ must be listed here AND in middleware.ts `config.matcher`
 // (Next needs the matcher to be a static literal) — middleware.test.ts
 // enforces both.
-export const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals', '/pantry', '/personal-facts', '/calendar'];
+//
+// `/avatar` is not a page: it holds the chat avatar's VRM model
+// (public/avatar/jess.vrm), which may be a personal likeness, so it gets the
+// same cookie check as the pages instead of being served to anyone.
+export const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals', '/pantry', '/personal-facts', '/calendar', '/avatar'];
 
 export const DEFAULT_LOGIN_REDIRECT = '/dashboard';
 

@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import useSWR from 'swr';
-import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, Square } from 'lucide-react';
+import dynamic from 'next/dynamic';
+import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, Square, UserRound } from 'lucide-react';
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
 import { friendlyError } from '@/lib/errors';
@@ -13,6 +14,10 @@ import ChatSidebar from '@/components/chat/ChatSidebar';
 import useTTSPlayback from '@/hooks/useTTSPlayback';
 import useVoiceCall from '@/hooks/useVoiceCall';
 import VoiceCallBar from '@/components/chat/VoiceCallBar';
+import type { AvatarMode } from '@/components/chat/JessAvatar';
+
+// three.js + the VRM loader only download when the avatar is switched on.
+const JessAvatar = dynamic(() => import('@/components/chat/JessAvatar'), { ssr: false });
 
 interface DisplayMessage {
   /** Client-side id: React key + which bubble a speech status belongs to. */
@@ -35,6 +40,7 @@ const SPEECH_ANNOUNCE: Record<string, string> = {
 };
 
 const SIDEBAR_PREF_KEY = 'chat:sidebar-open';
+const AVATAR_PREF_KEY = 'chat:avatar';
 
 let uidCounter = 0;
 const nextUid = () => `m${++uidCounter}`;
@@ -46,6 +52,7 @@ export default function ChatPage() {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarReady, setSidebarReady] = useState(false);
+  const [avatarOn, setAvatarOn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastSeenIdRef = useRef<number | null>(null);
   const initRef = useRef(false);
@@ -81,6 +88,24 @@ export default function ChatPage() {
     }
     setSidebarOpen(initial);
     setSidebarReady(true);
+  }, []);
+
+  useEffect(() => {
+    try {
+      setAvatarOn(localStorage.getItem(AVATAR_PREF_KEY) === '1');
+    } catch { /* storage blocked — default off */ }
+  }, []);
+
+  const toggleAvatar = useCallback(() => {
+    setAvatarOn((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(AVATAR_PREF_KEY, next ? '1' : '0');
+      } catch {
+        // ignore — preference simply won't persist
+      }
+      return next;
+    });
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -338,6 +363,12 @@ export default function ChatPage() {
   const wasInCallRef = useRef(false);
   useEffect(() => { wasInCallRef.current = call.active; }, [call.active]);
 
+  const avatarMode: AvatarMode =
+    speech.status === 'speaking' ? 'speaking'
+      : call.phase === 'listening' || call.phase === 'hearing' ? 'listening'
+        : streaming || call.phase === 'transcribing' || speech.status === 'loading' ? 'thinking'
+          : 'idle';
+
   return (
     <div className="page-viewport flex">
       {/* Conversation sidebar — collapsible. Hidden on mobile, toggleable on md+. */}
@@ -387,6 +418,19 @@ export default function ChatPage() {
               </button>
             )}
             <button
+              onClick={toggleAvatar}
+              aria-pressed={avatarOn}
+              aria-label="Jess avatar"
+              className={`inline-flex items-center justify-center min-h-11 min-w-11 rounded-lg transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
+                avatarOn
+                  ? 'bg-brand/20 text-brand'
+                  : 'bg-surface-overlay/30 text-content-muted hover:text-content-primary'
+              }`}
+              title={avatarOn ? 'Hide avatar' : 'Show avatar'}
+            >
+              <UserRound size={18} aria-hidden />
+            </button>
+            <button
               onClick={() => {
                 const next = !ttsEnabled;
                 if (next) unlock(); else stopSpeech();
@@ -394,7 +438,7 @@ export default function ChatPage() {
               }}
               aria-pressed={ttsEnabled}
               aria-label={ttsEnabled ? 'Disable voice responses' : 'Enable voice responses'}
-              className={`p-2 rounded-lg transition-colors shrink-0 ${
+              className={`inline-flex items-center justify-center min-h-11 min-w-11 rounded-lg transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
                 ttsEnabled
                   ? 'bg-brand/20 text-brand'
                   : 'bg-surface-overlay/30 text-content-muted hover:text-content-primary'
@@ -405,6 +449,14 @@ export default function ChatPage() {
             </button>
           </div>
         </div>
+
+        {avatarOn && (
+          // Shrinks before the messages do, and steps aside on short screens
+          // (phone landscape, keyboard open) so the chat stays readable.
+          <div className="min-h-0 shrink basis-[34%] max-h-[36dvh] md:max-h-[42dvh] px-4 pb-2 [@media(max-height:500px)]:hidden">
+            <JessAvatar mode={avatarMode} />
+          </div>
+        )}
 
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 px-4 pb-4">

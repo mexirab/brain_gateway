@@ -5,6 +5,7 @@ import {
   SpeechQueue, TTSUnavailableError, type SpeechPlayer, type SpeechState, type SpeechStatus,
 } from '@/lib/speech-queue';
 import { SpeechSegmenter, segmentForSpeech } from '@/lib/speech-text';
+import { emitSpeechClip } from '@/lib/speech-clip-bus';
 
 const PROXY = '/api/proxy';
 const LS_KEY = 'tts_enabled';
@@ -99,6 +100,7 @@ class ElementPlayer implements SpeechPlayer {
         reject(Object.assign(new Error('playback paused by the system'), { name: 'MediaInterrupted' }));
       };
       el.src = this.url!;
+      emitSpeechClip(audio, el); // lets the chat avatar lip-sync
       el.play().catch((err: unknown) => {
         this.rejectPending = null;
         reject(err instanceof Error ? err : new Error(String(err)));

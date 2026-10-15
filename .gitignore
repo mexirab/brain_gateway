@@ -135,3 +135,6 @@ radicale/data/
 radicale/users
 radicale/backups/
 radicale-*.tar.gz
+
+# Chat avatar model (operator-supplied VRM; keep personal models out of the public repo)
+frontend/public/avatar/*.vrm

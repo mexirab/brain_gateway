@@ -11,13 +11,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@pixiv/three-vrm": "3.5.5",
     "@zxing/browser": "0.1.5",
     "@zxing/library": "0.21.3",
     "lucide-react": "^0.460.0",
     "next": "^14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "swr": "^2.4.1"
+    "swr": "^2.4.1",
+    "three": "0.186.1"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
@@ -27,6 +29,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
+    "@types/three": "0.186.0",
     "autoprefixer": "^10.4.0",
     "eslint": "^8.57.0",
     "eslint-config-next": "^14.2.0",
