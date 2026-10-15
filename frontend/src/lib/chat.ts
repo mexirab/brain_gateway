@@ -5,6 +5,7 @@ export async function streamChat(
   onChunk: (text: string) => void,
   onDone: (routing?: RoutingInfo) => void,
   onError: (error: Error) => void,
+  options: { conversationId?: string } = {},
 ): Promise<void> {
   try {
     const res = await fetch('/api/proxy/v1/chat/completions', {
@@ -14,6 +15,8 @@ export async function streamChat(
         model: 'jessica',
         messages,
         stream: true,
+        // Lets the orchestrator learn from each conversation once (auto_learn).
+        ...(options.conversationId ? { conversation_id: `dashboard:${options.conversationId}` } : {}),
       }),
     });
 

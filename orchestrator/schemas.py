@@ -4,6 +4,7 @@ Pydantic models for API request/response validation.
 All API endpoints should use these models instead of raw dicts.
 """
 
+import re
 from typing import Any, Optional
 
 from fastapi.responses import JSONResponse
@@ -83,10 +84,26 @@ class ChatMessage(BaseModel):
         return v
 
 
+_CONVERSATION_ID_RE = re.compile(r"[A-Za-z0-9:_.\-]+")
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     tools: Optional[list[dict[str, Any]]] = None
+    # Stable id of the client's conversation (dashboard conversation id,
+    # "telegram:<chat>:<start>"). Lets auto_learn extract each conversation
+    # once; clients without one fall back to a first-message heuristic.
+    # Optional and only used for learning, so a malformed id is dropped (None)
+    # rather than failing the user's chat turn.
+    conversation_id: Optional[str] = None
+
+    @field_validator("conversation_id", mode="before")
+    @classmethod
+    def _drop_bad_conversation_id(cls, v: Any) -> Optional[str]:
+        if isinstance(v, str) and len(v) <= 128 and _CONVERSATION_ID_RE.fullmatch(v):
+            return v
+        return None
 
 
 # ---------------------------------------------------------------------------

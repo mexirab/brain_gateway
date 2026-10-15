@@ -586,10 +586,13 @@ def build() -> dict:
 
     autolearn_row = [
         timeseries(
-            "Extractions + Facts Stored",
+            # One extraction per conversation (not per turn) since 2026-10-15.
+            "Extractions (per conversation) + Facts Stored",
             [
                 ("rate(bgw_auto_learn_extractions_total[15m]) * 60", "extractions/min"),
                 ("sum by (category) (rate(bgw_auto_learn_facts_stored_total[15m])) * 60", "stored {{category}}"),
+                ("sum by (reason) (rate(bgw_auto_learn_dropped_total[15m])) * 60", "dropped {{reason}}"),
+                ("rate(bgw_auto_learn_deferred_total[15m]) * 60", "deferred (brain asleep)"),
             ],
             unit="none",
         ),

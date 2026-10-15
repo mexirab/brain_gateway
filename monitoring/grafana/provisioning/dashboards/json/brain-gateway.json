@@ -3756,7 +3756,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Extractions + Facts Stored",
+      "title": "Extractions (per conversation) + Facts Stored",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"
@@ -3785,6 +3785,30 @@
           "range": true,
           "instant": false,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(bgw_auto_learn_dropped_total[15m])) * 60",
+          "legendFormat": "dropped {{reason}}",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_auto_learn_deferred_total[15m]) * 60",
+          "legendFormat": "deferred (brain asleep)",
+          "range": true,
+          "instant": false,
+          "refId": "D"
         }
       ],
       "fieldConfig": {
