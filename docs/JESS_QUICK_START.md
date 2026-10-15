@@ -272,6 +272,7 @@ Highlights:
 - **Reminders** — see + ack pending reminders from any device
 - **Selfcare today** — at-a-glance status for meals / meds / water / movement
 - **Chat by voice** — tap the mic to send a voice message (Jess answers aloud), or the call button (sound-wave icon) for a hands-free conversation: talk, she answers, she listens again. Tap End to stop. Needs Helios awake; it can't tell you apart from other people talking nearby.
+- **Chat avatar (optional)** — tap the person icon in the chat header to show a 3D Jess who reacts while listening/thinking and lip-syncs her spoken replies. Needs a model file set up by whoever runs the box.
 - **Mobile-friendly** — works as a PWA from your phone home screen
 
 ---
