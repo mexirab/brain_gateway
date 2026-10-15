@@ -1,0 +1,51 @@
+# Radicale access rules (from_file). First matching section wins; no match = no access.
+#
+# Users (bcrypt htpasswd at /home/labadmin/radicale/users, outside the repo):
+#   owner — the human; full control of their own calendars (iPhone CalDAV account).
+#   jess  — the orchestrator's service account; may read and write EVENTS in the
+#           owner's calendars, but may not create, delete or overwrite calendars,
+#           and owns nothing of its own.
+#
+# Permission letters: R/W = principal collections, r/w = calendar contents,
+# d = deny deleting a calendar, o = deny overwriting a calendar.
+# Full list: radicale/rights/__init__.py in the image.
+
+# Everyone authenticated may see the root (needed for CalDAV discovery).
+[root]
+user: .+
+collection:
+permissions: R
+
+# The owner: full control of their principal and every calendar under it.
+[owner-principal]
+user: owner
+collection: owner
+permissions: RW
+
+[owner-calendars]
+user: owner
+collection: owner/[^/]+
+permissions: rw
+
+# Jess: discover the owner's calendars (R on the principal), and read/write events
+# inside them (no calendar delete or overwrite).
+# KNOWN GAP (verified 2026-10-14): Radicale checks MKCALENDAR against the NEW
+# collection's own path, which this rule matches with "w", so jess CAN create a new
+# empty calendar under owner/. It still cannot delete or overwrite one. Jess's
+# client never issues MKCALENDAR; closing this fully means listing the owner's
+# calendar names explicitly here instead of [^/]+.
+[jess-owner-principal]
+user: jess
+collection: owner
+permissions: R
+
+[jess-owner-calendars]
+user: jess
+collection: owner/[^/]+
+permissions: rwdo
+
+# Jess's own principal: read-only so discovery works but nothing can be stored there.
+[jess-principal]
+user: jess
+collection: jess
+permissions: R

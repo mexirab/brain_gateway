@@ -17,7 +17,7 @@ route:
     # TSDB and therefore every other alert in this file; it went unnoticed for
     # 3 days on 2026-07-15 precisely because nothing was watching the watcher.
     - matchers:
-        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken"
+        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
@@ -25,7 +25,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|SelfAuditStale|SelfAuditFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|SelfAuditStale|SelfAuditFailing"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a

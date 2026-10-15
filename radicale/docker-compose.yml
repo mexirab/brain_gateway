@@ -1,0 +1,73 @@
+# Radicale — self-hosted CalDAV server on Jupiter (the always-on node), the
+# personal calendar source of truth that replaces Google/iCloud calendars.
+# Kept as its own compose project, like homeassistant/ and the monitoring stack:
+# a pulled image with its own lifecycle, never touched by the orchestrator's
+# build/deploy. Runbook: docs/CALENDAR.md. Plan: docs/internal/CALENDAR_SELF_HOST_PLAN.md.
+#
+# Exposure: NOT on the LAN. One published port, loopback only:
+#   127.0.0.1:5232   — Tailscale Serve proxies https://jupiter-amds.tail74fc4a.ts.net:5233
+#                      here (tailnet-only HTTPS for the iPhone).
+# Containers reach it by name (http://radicale:5232) over two external networks:
+#   gateway_nerves_gateway-net — brain-orchestrator (Jess's CalDAV client)
+#   monitoring_monitoring-net  — blackbox-exporter (RadicaleDown probe)
+# A 172.17.0.1 (docker0) publish was tried first and dropped: Docker's DNAT for a
+# non-loopback host IP has no ingress guard, so a LAN host with a static route to
+# 172.17.0.1 via Jupiter could reach it. Network names are created by the main and
+# monitoring compose projects — if either is `down`ed, re-run `docker compose up -d` here.
+#
+# Runs as labadmin (1000:1000) with a read-only rootfs and no capabilities, so the
+# image entrypoint never chowns or su-execs, and the nightly backup can read the
+# data dir without sudo. Runtime state lives OUTSIDE the repo:
+#   /home/labadmin/radicale/data   — collections (the calendars themselves)
+#   /home/labadmin/radicale/secrets/users — bcrypt htpasswd (owner + jess), chmod 600
+# Nightly backup: radicale/backup_radicale.sh.
+services:
+  radicale:
+    container_name: radicale
+    # 3.8.3.0 = Radicale 3.8.3 (released 2026-10-08). Pinned by digest; bump both
+    # together after reading the upstream changelog.
+    image: tomsquest/docker-radicale:3.8.3.0@sha256:a3b1b452f4bc3d1aee43015b85bc2d9ee5de0ff7e96d5d2b47f1d889aa682409
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TAKE_FILE_OWNERSHIP=false
+    volumes:
+      # Directory mount (not single files): a single-file bind mount pins the
+      # inode, so a git pull would leave the container reading the old config.
+      - ./config:/config:ro
+      - /home/labadmin/radicale/data:/data
+      # Directory, not the file, for the same inode reason: an edited htpasswd
+      # must be seen without a restart.
+      - /home/labadmin/radicale/secrets:/secrets:ro
+    tmpfs:
+      - /tmp:size=16m
+    ports:
+      - "127.0.0.1:5232:5232"
+    networks:
+      - gateway-net
+      - monitoring-net
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:5232/.web/ || exit 1"]
+      interval: 120s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  gateway-net:
+    name: gateway_nerves_gateway-net
+    external: true
+  monitoring-net:
+    name: monitoring_monitoring-net
+    external: true

@@ -186,6 +186,27 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter:9115
 
+  # Radicale (self-hosted CalDAV on Jupiter). Own job because it needs the
+  # HTTP/1.0-tolerant module. Probed by container name over monitoring-net
+  # (Radicale publishes only on 127.0.0.1). RadicaleDown keys on service=radicale.
+  - job_name: 'blackbox-http10'
+    metrics_path: /probe
+    params:
+      module: [http_2xx_http10]
+    static_configs:
+      - targets: ['http://radicale:5232/.web/']
+        labels:
+          service: 'radicale'
+          node: 'jupiter'
+          tier: 'app'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
   # ============================================
   # BRAIN GATEWAY ORCHESTRATOR METRICS
   # ============================================

@@ -13,6 +13,18 @@ modules:
       preferred_ip_protocol: "ip4"
       ip_protocol_fallback: false
 
+  # Radicale's built-in server answers HTTP/1.0, which http_2xx rejects.
+  http_2xx_http10:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: ["HTTP/1.0", "HTTP/1.1"]
+      valid_status_codes: [200]
+      method: GET
+      follow_redirects: false
+      preferred_ip_protocol: "ip4"
+      ip_protocol_fallback: false
+
   http_post_2xx:
     prober: http
     timeout: 10s

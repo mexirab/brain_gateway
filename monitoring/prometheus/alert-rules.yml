@@ -275,6 +275,18 @@ groups:
         annotations:
           summary: "Self-hosted app '{{ $labels.service }}' is down"
           description: "{{ $labels.service }} on {{ $labels.node }} has failed its HTTP probe for 2 minutes."
+      - alert: RadicaleDown
+        # The self-hosted calendar (source of truth for personal events). AppDown
+        # also fires for it but is Grafana-only; this one routes to pushover-quiet.
+        # restart: unless-stopped does NOT act on an unhealthy container, so a hung
+        # Radicale stays hung until someone is told.
+        expr: probe_success{service="radicale"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Radicale (calendar server) is down"
+          description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d`."
 
   # ===========================================================================
   # UPS / Power Chain
@@ -484,14 +496,27 @@ groups:
         annotations:
           summary: "Home Assistant backup is stale (>36h)"
           description: "The nightly HA backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/homeassistant/backup_ha.sh."
+      - alert: JessCalendarBackupStale
+        # Radicale (self-hosted CalDAV, the personal calendar source of truth)
+        # runs on Jupiter since 2026-10-14. radicale/backup_radicale.sh runs
+        # nightly and writes this. >36h stale = the calendars are unprotected.
+        expr: time() - jess_calendar_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Calendar (Radicale) backup is stale (>36h)"
+          description: "The nightly Radicale backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/radicale/backup_radicale.sh."
       - alert: JessBackupOffboxFailing
-        expr: jess_backup_offbox_success == 0
+        # Covers all three nightly backups: state (jess_backup_*), HA
+        # (jess_ha_backup_*) and the Radicale calendar (jess_calendar_backup_*).
+        expr: '{__name__=~"jess_(ha_|calendar_)?backup_offbox_success"} == 0'
         for: 3d
         labels:
           severity: info
         annotations:
-          summary: "Jess off-box backup copy has been failing for 3 days"
-          description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+          summary: "Off-box backup copy has been failing for 3 days ({{ $labels.__name__ }})"
+          description: "Local backups are fine, but the rsync to Saturn keeps failing for {{ $labels.__name__ }} — a single-disk loss would still take that data. Check SSH keys / the remote path and the backup's cron log."
 
       # Fires only once bgw_tool_call_source_total exists (it ships on the
       # tool-call instrumentation branch); until then there is no series and this
