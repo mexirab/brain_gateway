@@ -1,16 +1,10 @@
 import { cookies } from 'next/headers';
+import { COOKIE_NAME, isValidDashboardToken } from './dashboard-auth';
 
-const COOKIE_NAME = 'brain_token';
-const TOKEN = process.env.DASHBOARD_TOKEN || 'changeme';
-
-export function validateToken(token: string): boolean {
-  return token === TOKEN;
-}
-
+/** Server components: does this request carry a valid dashboard cookie? */
 export async function isAuthenticated(): Promise<boolean> {
   const cookieStore = await cookies();
-  const token = cookieStore.get(COOKIE_NAME)?.value;
-  return token ? validateToken(token) : false;
+  return isValidDashboardToken(cookieStore.get(COOKIE_NAME)?.value);
 }
 
 export { COOKIE_NAME };

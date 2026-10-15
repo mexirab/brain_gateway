@@ -1,7 +1,9 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Refrigerator, Settings, ListTodo, Pill } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
 import { SWRProvider } from '@/components/providers/SWRProvider';
+import { isAuthenticated } from '@/lib/auth';
 import { getFeatureFlags } from '@/lib/features.server';
 import { isNavItemEnabled } from '@/lib/features';
 
@@ -27,6 +29,11 @@ export default async function PrivateLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // Defense in depth: middleware.ts is the real gate, but a page added under
+  // (private)/ without a PROTECTED_PATHS/matcher entry still fails closed here
+  // (minus the ?redirect= middleware would add — the layout can't see the path).
+  if (!(await isAuthenticated())) redirect('/login');
+
   const flags = await getFeatureFlags();
   const navItems = NAV_ITEMS.filter(({ href }) => isNavItemEnabled(href, flags));
 

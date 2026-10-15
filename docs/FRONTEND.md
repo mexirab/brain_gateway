@@ -1,6 +1,6 @@
 # Frontend Dashboard (ConvivialProphet.com)
 
-Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via the `brain_token` cookie, checked against `DASHBOARD_TOKEN` in `src/middleware.ts` (see Auth below).
+Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via the `brain_token` cookie, checked against `DASHBOARD_TOKEN` by `src/lib/dashboard-auth.ts` (see Auth below).
 
 ## Pages
 
@@ -19,10 +19,13 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 
 ## Auth
 
+- **Single token check:** `src/lib/dashboard-auth.ts` (`COOKIE_NAME`, `expectedDashboardToken()`, `isValidDashboardToken()`) — used by middleware, the `/api/proxy` route, `lib/auth.ts`, login/logout routes and the `(private)` layout. Don't re-read `DASHBOARD_TOKEN` anywhere else.
+- **Fail closed:** `DASHBOARD_TOKEN` unset, empty or `'changeme'` → nothing authenticates. `POST /api/auth/login` returns 503 with a fix-it message (400 on malformed JSON, 401 on wrong password). Compose passes `${DASHBOARD_TOKEN:-}` (no default).
+- `(private)/layout.tsx` also redirects to `/login` server-side when the cookie is invalid (defense in depth for a page missing from the middleware lists; no `?redirect=` there). Private pages therefore render dynamically.
 - `src/middleware.ts` redirects requests without a valid `brain_token` cookie to `/login?redirect=<path+query>` (307) — the query is kept so deep links like `/pantry?tab=scan` survive re-login.
 - **Adding a page under `(private)/`:** add it to BOTH `PROTECTED_PATHS` in `src/lib/protected-paths.ts` (shared by middleware + login page; `middleware.ts` re-exports it) and `config.matcher` in `src/middleware.ts` (matcher must be a static literal — Next can't derive it from the array). The `(private)` route group does not protect anything on its own.
 - **Login redirect:** `safeRedirect()` (`src/lib/protected-paths.ts`) honours `?redirect=` only if it parses (WHATWG URL) to a same-origin path under a protected route with no encoded `%2F`/`%5C`; anything else (`//host`, `javascript:`, unprotected paths) goes to `/dashboard`. Blocks open redirect / `javascript:` URLs on `/login`.
-- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect (with query preserved), a valid cookie passes. `src/lib/protected-paths.test.ts` covers `safeRedirect`. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`.
+- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect (with query preserved), a valid cookie passes. `src/lib/protected-paths.test.ts` covers `safeRedirect`. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`. `src/lib/dashboard-auth.test.ts` covers the placeholder/fail-closed rules.
 
 ## Dashboard Widgets
 
@@ -118,6 +121,15 @@ tailscale serve --bg --https=443 http://localhost:3001   # → https://<host>.<t
 Over plain `http://<lan-ip>:3001` the pantry barcode scanner falls back to decoding a photo of the barcode or typed digits. Barcode decode: `@zxing/browser` 0.1.5 + `@zxing/library` 0.21.3 (pinned; iOS Safari has no `BarcodeDetector`).
 
 ## API Proxy Notes
+
+Upstream URLs are built only by `buildUpstreamUrl()` (`src/lib/proxy-url.ts`) — the proxy attaches the `API_TOKEN` bearer, so the target must stay the orchestrator:
+
+- First path segment must be `api`, `v1` or `health`.
+- Empty, `.`/`..` segments and segments containing `/`, `\` or control chars are refused (Next hands segments over percent-decoded); each segment is re-encoded.
+- Resulting origin must equal `ORCHESTRATOR_URL`'s origin.
+- Anything else → `400 {"error":"Path not allowed"}`, nothing fetched. (Fixed an SSRF: `/api/proxy/%2Fhost/x` sent the bearer to another host.)
+- New orchestrator path roots need adding to `ALLOWED_ROOTS`.
+- Tests: `src/lib/proxy-url.test.ts`, `src/app/api/proxy/[...path]/route.test.ts` (refused paths never call `fetch`).
 
 The proxy `route.ts` now handles `PATCH` in addition to `GET/POST/PUT/DELETE`. Required by both workouts (modify plan) and meals (edit entry) endpoints.
 

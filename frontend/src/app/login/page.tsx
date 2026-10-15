@@ -29,6 +29,9 @@ function LoginForm() {
       if (res.ok) {
         router.push(redirect);
         router.refresh();
+      } else if (res.status === 503) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Login is not configured');
       } else {
         setError('Invalid password');
       }

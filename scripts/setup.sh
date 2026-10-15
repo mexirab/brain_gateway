@@ -395,8 +395,8 @@ if [ -n "${DASHBOARD_TOKEN_VALUE}" ] && [ "${DASHBOARD_TOKEN_VALUE}" != "changem
     info "  login password: ${BOLD}${DASHBOARD_TOKEN_VALUE}${NC}"
     info "  (you can change this later by editing DASHBOARD_TOKEN in .env)"
 else
-    warn "  login password: ${BOLD}changeme${NC} — this is the insecure default!"
-    warn "  Set DASHBOARD_TOKEN in .env to something random and restart the frontend."
+    warn "  Dashboard login is DISABLED: DASHBOARD_TOKEN in .env is unset (or the old 'changeme')."
+    warn "  Set it to a long random string, then: docker compose up -d --force-recreate frontend"
 fi
 say "Settings (change anything later)"
 info "  http://${LAN_IP}:3001/settings"
