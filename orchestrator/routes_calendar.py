@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from orchestrator import shared
+from orchestrator.calendar_types import CalendarEvent, CalendarResponse
 from orchestrator.metrics import PHONE_CALENDAR_LAST_SYNC, PHONE_CALENDAR_SYNC_REJECTED
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,44 @@ async def run_email_to_calendar():
         return JSONResponse({"error": "Email-to-calendar scan failed"}, status_code=500)
 
 
+def _event_json(ev: CalendarEvent) -> dict:
+    """One merged event in the shape the dashboard consumes (card + /calendar page)."""
+    from orchestrator import calendar_sources
+    from orchestrator.calendar_types import SOURCE_LABELS
+
+    label = calendar_sources.event_label(ev)
+    return {
+        "id": ev.id,
+        "title": ev.title,
+        "start": ev.start.isoformat(),
+        "end": ev.end.isoformat(),
+        "location": ev.location or None,
+        "description": None,
+        "all_day": ev.all_day,
+        "calendar": label or (ev.calendar_name or SOURCE_LABELS.get(ev.source, ev.source)),
+        "source": ev.source,
+    }
+
+
+def _merged_payload(resp: CalendarResponse) -> dict:
+    """Common response body: events + which sources couldn't be read + the web link."""
+    from orchestrator.calendar_types import SOURCE_LABELS
+
+    unavailable = sorted({SOURCE_LABELS.get(s, s) for s in resp.failed_sources})
+    web_url = shared.CALENDAR_WEB_URL or None  # "Open" link to the calendar's own web UI
+    if not resp.success:
+        return {"ok": True, "events": [], "source": "none", "count": 0, "unavailable": unavailable, "web_url": web_url}
+    events = [_event_json(ev) for ev in resp.events]
+    return {
+        "ok": True,
+        "events": events,
+        "source": "merged",
+        "count": len(events),
+        "unavailable": unavailable,
+        "web_url": web_url,
+    }
+
+
 @router.get("/api/calendar/today")
 async def calendar_today():
     """Today's events for the dashboard, from every calendar source merged.
@@ -40,44 +80,75 @@ async def calendar_today():
     answered but couldn't, so the card can say so instead of showing a
     partial day as complete.
     """
-    from zoneinfo import ZoneInfo
-
     from orchestrator import calendar_sources
-    from orchestrator.calendar_types import SOURCE_LABELS
 
     # Same timezone calendar_sources builds its day window with.
+    today = datetime.now(ZoneInfo(shared.TIMEZONE)).date()
+    return _merged_payload(await calendar_sources.events_on(today))
+
+
+# The /calendar page shows up to 6 weeks at a time; no further back than ~2 years
+# or forward than ~5 (also bounds what a stray query can make the sources do).
+_RANGE_MAX_DAYS = 42
+_RANGE_PAST_DAYS = 2 * 366
+_RANGE_FUTURE_DAYS = 5 * 366
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Every read of the big Home calendar costs Radicale ~2 s regardless of the
+# window (it scans all items), so paging back and forth between weeks or
+# refocusing the tab reuses a recent answer instead of re-asking.
+_RANGE_CACHE_TTL = 30.0
+_RANGE_CACHE_MAX = 32
+_range_cache: dict[tuple[str, int], tuple[float, dict]] = {}
+
+
+def _bad_range(message: str) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": message}, status_code=400)
+
+
+@router.get("/api/calendar/range", response_model=None)
+async def calendar_range(start: str = "", days: str = "7") -> dict | JSONResponse:
+    """Events overlapping [start, start + days) — local dates — for the /calendar page.
+
+    ``start`` is YYYY-MM-DD (default: today), ``days`` 1–42 (default 7). Same
+    merged sources and event shape as /api/calendar/today, plus the window.
+    Bad input is a 400 ``{ok: false, error}`` and never reaches a calendar.
+    """
+    from datetime import date, timedelta
+
+    from orchestrator import calendar_sources
+
     tz = ZoneInfo(shared.TIMEZONE)
     today = datetime.now(tz).date()
-    resp = await calendar_sources.events_on(today)
-    unavailable = sorted({SOURCE_LABELS.get(s, s) for s in resp.failed_sources})
-    web_url = shared.CALENDAR_WEB_URL or None  # "Open calendar" link on the card
-    if not resp.success:
-        return {"ok": True, "events": [], "source": "none", "count": 0, "unavailable": unavailable, "web_url": web_url}
+    if start and not _DATE_RE.match(start):
+        return _bad_range("start must be YYYY-MM-DD")
+    try:
+        first = date.fromisoformat(start) if start else today
+    except ValueError:
+        return _bad_range("start must be YYYY-MM-DD")
+    if not days.isdigit() or not 1 <= int(days) <= _RANGE_MAX_DAYS:
+        return _bad_range(f"days must be a whole number 1-{_RANGE_MAX_DAYS}")
+    n_days = int(days)
+    if not (today - timedelta(days=_RANGE_PAST_DAYS) <= first <= today + timedelta(days=_RANGE_FUTURE_DAYS)):
+        return _bad_range("start is out of range")
 
-    events = []
-    for ev in resp.events:
-        label = calendar_sources.event_label(ev)
-        events.append(
-            {
-                "id": ev.id,
-                "title": ev.title,
-                "start": ev.start.isoformat(),
-                "end": ev.end.isoformat(),
-                "location": ev.location or None,
-                "description": None,
-                "all_day": ev.all_day,
-                "calendar": label or (ev.calendar_name or SOURCE_LABELS.get(ev.source, ev.source)),
-                "source": ev.source,
-            }
-        )
-    return {
-        "ok": True,
-        "events": events,
-        "source": "merged",
-        "count": len(events),
-        "unavailable": unavailable,
-        "web_url": web_url,
-    }
+    key = (first.isoformat(), n_days)
+    hit = _range_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _RANGE_CACHE_TTL:
+        return hit[1]
+
+    window_start = datetime(first.year, first.month, first.day, tzinfo=tz)
+    window_end = window_start + timedelta(days=n_days)
+    resp = await calendar_sources.get_events(window_start, window_end)
+    payload = _merged_payload(resp)
+    payload.update({"start": first.isoformat(), "days": n_days, "timezone": shared.TIMEZONE})
+    # Only complete answers are reused — "Try again" after a failed or partial
+    # read must actually ask again.
+    if resp.success and not resp.failed_sources:
+        if len(_range_cache) >= _RANGE_CACHE_MAX:
+            _range_cache.clear()
+        _range_cache[key] = (time.monotonic(), payload)
+    return payload
 
 
 # Limits on what the iPhone Shortcut may push (the body is otherwise stored as-is).

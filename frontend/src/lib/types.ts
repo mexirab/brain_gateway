@@ -108,6 +108,18 @@ export interface CalendarEvent {
   source?: 'caldav' | 'exchange' | 'phone' | 'google';
 }
 
+export interface CalendarRangeResponse {
+  ok: boolean;
+  events: CalendarEvent[];
+  source?: 'merged' | 'none';
+  count?: number;
+  unavailable?: string[];
+  web_url?: string | null;
+  start: string;
+  days: number;
+  timezone?: string;
+}
+
 export interface TemperatureReading {
   temperature: number | null;
   unit?: string;

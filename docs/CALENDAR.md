@@ -221,6 +221,8 @@ then say "Busy" but keep the times.
 **From the dashboard:** the calendar card's **Open** link (top right) opens
 this web UI. It is set by `CALENDAR_WEB_URL` in `.env` and appears after the #83
 deploy.
+The **Calendar** page (`/calendar`) shows the merged calendar as a Monday–Sunday
+week, with a **Manage calendars** link to the same web UI.
 
 ## Run / upgrade
 

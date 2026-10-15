@@ -59,6 +59,17 @@ export function useCalendarToday(config?: SWRConfiguration) {
   return useSWR('calendar:today', () => api.calendarToday(), config);
 }
 
+/** Events for [start, start + days) — the /calendar page. No keepPreviousData:
+ *  another week's events must never render under this week's headings. Gentle
+ *  5-min refresh so events added elsewhere show up on a long-open tab. */
+export function useCalendarRange(start: string, days: number, config?: SWRConfiguration) {
+  return useSWR(['calendar:range', start, days], () => api.calendarRange(start, days), {
+    keepPreviousData: false,
+    refreshInterval: 5 * 60_000,
+    ...config,
+  });
+}
+
 export function useFocus(config?: SWRConfiguration) {
   return useSWR('focus', () => api.focus(), { refreshInterval: POLL.focus, ...config });
 }

@@ -32,6 +32,7 @@ import type {
   MealPhotoEstimate,
   SelfcareTodayResponse,
   ServicesResponse,
+  CalendarRangeResponse,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -83,6 +84,10 @@ export const api = {
       web_url?: string | null;
     }>(
       '/api/calendar/today',
+    ),
+  calendarRange: (start: string, days: number) =>
+    fetcher<CalendarRangeResponse>(
+      `/api/calendar/range?start=${encodeURIComponent(start)}&days=${days}`,
     ),
   temperatures: () => fetcher<TemperaturesResponse>('/api/temperatures'),
   progressToday: () => fetcher<ProgressToday>('/api/progress/today'),

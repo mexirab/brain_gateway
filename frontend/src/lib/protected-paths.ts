@@ -6,7 +6,7 @@
 // app/(private)/ must be listed here AND in middleware.ts `config.matcher`
 // (Next needs the matcher to be a static literal) — middleware.test.ts
 // enforces both.
-export const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals', '/pantry', '/personal-facts'];
+export const PROTECTED_PATHS = ['/dashboard', '/chat', '/tasks', '/home', '/finance', '/announcements', '/shopping', '/documents', '/architecture', '/settings', '/workouts', '/meals', '/pantry', '/personal-facts', '/calendar'];
 
 export const DEFAULT_LOGIN_REDIRECT = '/dashboard';
 

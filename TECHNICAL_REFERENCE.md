@@ -119,10 +119,13 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/calendar/today` | Today's events from every source merged (`calendar_sources`: CalDAV + work Exchange push + Google) |
+| GET | `/api/calendar/range` | Merged events for `days` days from `start` (dashboard `/calendar` week view) |
 | GET/POST/PUT | `/api/calendar/sync` | Work-calendar (Exchange) push from the iPhone Shortcut (GET=status, POST/PUT=full snapshot) |
 | POST | `/api/email-to-calendar/run` | Manually trigger email-to-calendar extraction (dormant by default — see `EMAIL_TO_CALENDAR_ENABLED`); writes to CalDAV (else Google), skipped when nothing is writable |
 
-**`GET /api/calendar/today`** → `{ok, events: [{id, title, start, end, location, description: null, all_day, calendar, source}], source: "merged"|"none", count, unavailable: [<source label>]}`. `unavailable` lists sources that should have answered but failed (dashboard shows "Couldn't reach your X calendar"); `source: "none"` when no source answered.
+**`GET /api/calendar/today`** → `{ok, events: [{id, title, start, end, location, description: null, all_day, calendar, source}], source: "merged"|"none", count, unavailable: [<source label>], web_url}`. `unavailable` lists sources that should have answered but failed (dashboard shows "Couldn't reach your X calendar"); `source: "none"` when no source answered; `web_url` = `CALENDAR_WEB_URL` or null.
+
+**`GET /api/calendar/range?start=YYYY-MM-DD&days=N`** (bearer) → same shape as `/today` plus `start, days, timezone`. `days` 1–42 (default 7); `start` strict `YYYY-MM-DD` within today −2 y / +5 y. Bad input → 400 `{ok: false, error}`. 30 s in-process cache keyed by `(start, days)`, complete successful answers only, max 32 entries.
 
 **`POST/PUT /api/calendar/sync`** body: `{"source": "exchange", "events": [{title, start, end, location, all_day, calendar?, id?}]}` — a full snapshot posted once; it replaces the previous one. Without `"source": "exchange"` (bare list or `{"events": [...]}`) it's the retired legacy push: stored as `phone`, ignored by Jess. iOS dict-of-dicts `events` is converted. Only the listed fields are kept (length-capped, whitespace collapsed); descriptions are dropped. Limits/rejections (counted in `bgw_phone_calendar_sync_rejected_total{reason}`): body >1 MB (streamed cap) or >1000 events → 413; single-event body / bad shape / bad JSON / empty → 400; events present but none with a readable start → 422 (previous snapshot kept). Success → `{ok, source, used: source=="exchange", events_received, events_parsed, message}`. **GET** → `{ok, synced, last_sync, event_count, source}`.
 

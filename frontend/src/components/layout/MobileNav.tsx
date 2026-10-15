@@ -21,6 +21,7 @@ import {
   Settings,
   Pill,
   X,
+  CalendarDays,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { isNavItemEnabled, type FeatureFlags } from '@/lib/features';
@@ -40,6 +41,7 @@ const PRIMARY: NavItem[] = [
 ];
 
 const MORE: NavItem[] = [
+  { href: '/calendar', label: 'Calendar', icon: CalendarDays },
   { href: '/pantry', label: 'Pantry', icon: Refrigerator },
   { href: '/shopping', label: 'Shopping', icon: ShoppingCart },
   { href: '/documents', label: 'Documents', icon: FileText },
