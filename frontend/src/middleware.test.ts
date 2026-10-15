@@ -2,7 +2,7 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { PROTECTED_PATHS, config, middleware } from './middleware';
 
@@ -27,7 +27,13 @@ function topLevelRoutes(dir: string): string[] {
 }
 
 const privateRoutes = topLevelRoutes(fileURLToPath(new URL('./app/(private)', import.meta.url)));
-const validToken = process.env.DASHBOARD_TOKEN || 'changeme';
+const validToken = 'test-dashboard-token';
+beforeEach(() => {
+  vi.stubEnv('DASHBOARD_TOKEN', validToken);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function request(path: string, token?: string): NextRequest {
   const req = new NextRequest(`http://localhost:3001${path}`);
@@ -80,6 +86,13 @@ describe('middleware route protection', () => {
     const res = middleware(request('/personal-facts', validToken));
     expect(res.headers.get('x-middleware-next')).toBe('1');
     expect(res.headers.get('location')).toBeNull();
+  });
+
+  it.each([undefined, '', 'changeme'])('fails closed when DASHBOARD_TOKEN is %j', (configured) => {
+    vi.stubEnv('DASHBOARD_TOKEN', configured as string);
+    for (const cookie of [undefined, '', 'changeme']) {
+      expectLoginRedirect(middleware(request('/chat', cookie)), '/chat');
+    }
   });
 
   it('leaves public routes alone', () => {

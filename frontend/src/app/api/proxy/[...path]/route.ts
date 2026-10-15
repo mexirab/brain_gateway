@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { COOKIE_NAME, isValidDashboardToken } from '@/lib/dashboard-auth';
+import { buildUpstreamUrl } from '@/lib/proxy-url';
 
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || 'http://localhost:8888';
-const COOKIE_NAME = 'brain_token';
-const TOKEN = process.env.DASHBOARD_TOKEN || 'changeme';
 const API_TOKEN = process.env.API_TOKEN || '';
 
 function isAuthed(request: NextRequest): boolean {
-  return request.cookies.get(COOKIE_NAME)?.value === TOKEN;
+  return isValidDashboardToken(request.cookies.get(COOKIE_NAME)?.value);
+}
+
+function badPath(): NextResponse {
+  return NextResponse.json({ error: 'Path not allowed' }, { status: 400 });
 }
 
 /** Return binary response directly instead of parsing as JSON. */
@@ -36,9 +40,8 @@ export async function GET(
   }
 
   const { path } = await params;
-  const targetPath = '/' + path.join('/');
-  const url = new URL(targetPath, ORCHESTRATOR_URL);
-  url.search = request.nextUrl.search;
+  const url = buildUpstreamUrl(path, request.nextUrl.search, ORCHESTRATOR_URL);
+  if (!url) return badPath();
 
   const res = await fetch(url.toString(), {
     headers: { 'Authorization': `Bearer ${API_TOKEN}` },
@@ -61,8 +64,8 @@ export async function POST(
   }
 
   const { path } = await params;
-  const targetPath = '/' + path.join('/');
-  const url = new URL(targetPath, ORCHESTRATOR_URL);
+  const url = buildUpstreamUrl(path, '', ORCHESTRATOR_URL);
+  if (!url) return badPath();
 
   const contentType = request.headers.get('content-type') || 'application/json';
 
@@ -107,8 +110,8 @@ export async function PUT(
   }
 
   const { path } = await params;
-  const targetPath = '/' + path.join('/');
-  const url = new URL(targetPath, ORCHESTRATOR_URL);
+  const url = buildUpstreamUrl(path, '', ORCHESTRATOR_URL);
+  if (!url) return badPath();
 
   const body = await request.text();
   const contentType = request.headers.get('content-type') || 'application/json';
@@ -133,8 +136,8 @@ export async function PATCH(
   }
 
   const { path } = await params;
-  const targetPath = '/' + path.join('/');
-  const url = new URL(targetPath, ORCHESTRATOR_URL);
+  const url = buildUpstreamUrl(path, '', ORCHESTRATOR_URL);
+  if (!url) return badPath();
 
   const body = await request.text();
   const contentType = request.headers.get('content-type') || 'application/json';
@@ -159,9 +162,8 @@ export async function DELETE(
   }
 
   const { path } = await params;
-  const targetPath = '/' + path.join('/');
-  const url = new URL(targetPath, ORCHESTRATOR_URL);
-  url.search = request.nextUrl.search;
+  const url = buildUpstreamUrl(path, request.nextUrl.search, ORCHESTRATOR_URL);
+  if (!url) return badPath();
 
   const res = await fetch(url.toString(), {
     method: 'DELETE',

@@ -572,7 +572,7 @@ services:
     environment:
       # Client code hits same-origin /api/proxy/* which the Next.js server forwards here.
       - ORCHESTRATOR_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}
-      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-changeme}
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
     depends_on:
       - orchestrator
