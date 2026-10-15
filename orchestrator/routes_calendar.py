@@ -50,8 +50,9 @@ async def calendar_today():
     today = datetime.now(tz).date()
     resp = await calendar_sources.events_on(today)
     unavailable = sorted({SOURCE_LABELS.get(s, s) for s in resp.failed_sources})
+    web_url = shared.CALENDAR_WEB_URL or None  # "Open calendar" link on the card
     if not resp.success:
-        return {"ok": True, "events": [], "source": "none", "count": 0, "unavailable": unavailable}
+        return {"ok": True, "events": [], "source": "none", "count": 0, "unavailable": unavailable, "web_url": web_url}
 
     events = []
     for ev in resp.events:
@@ -69,7 +70,14 @@ async def calendar_today():
                 "source": ev.source,
             }
         )
-    return {"ok": True, "events": events, "source": "merged", "count": len(events), "unavailable": unavailable}
+    return {
+        "ok": True,
+        "events": events,
+        "source": "merged",
+        "count": len(events),
+        "unavailable": unavailable,
+        "web_url": web_url,
+    }
 
 
 # Limits on what the iPhone Shortcut may push (the body is otherwise stored as-is).

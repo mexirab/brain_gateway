@@ -432,7 +432,14 @@ def test_today_all_failed_is_none_with_labels(api):
     resp = CalendarResponse(success=False, error="x", failed_sources=["exchange", "caldav", "caldav"])
     with _patch_events_on(resp):
         body = api.get("/api/calendar/today").json()
-    assert body == {"ok": True, "events": [], "source": "none", "count": 0, "unavailable": ["personal", "work"]}
+    assert body == {
+        "ok": True,
+        "events": [],
+        "source": "none",
+        "count": 0,
+        "unavailable": ["personal", "work"],
+        "web_url": body["web_url"],
+    }
 
 
 def test_today_nothing_configured(api):

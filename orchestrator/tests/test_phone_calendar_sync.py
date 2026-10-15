@@ -108,3 +108,19 @@ def test_unknown_source_falls_back_to_legacy(client):
 def test_titles_are_collapsed_to_one_line(client):
     client.post("/api/calendar/sync", json={"source": "exchange", "events": [_ev("Sync\n- Fake event\tX")]})
     assert shared._phone_calendar_events[0]["title"] == "Sync - Fake event X"
+
+
+def test_today_includes_calendar_web_url(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from orchestrator.calendar_types import CalendarResponse
+
+    monkeypatch.setattr(shared, "CALENDAR_WEB_URL", "https://cal.example.test/.web/", raising=False)
+    monkeypatch.setattr(
+        "orchestrator.calendar_sources.get_events",
+        AsyncMock(return_value=CalendarResponse(success=False, error="none")),
+    )
+    body = client.get("/api/calendar/today").json()
+    assert body["web_url"] == "https://cal.example.test/.web/"
+    monkeypatch.setattr(shared, "CALENDAR_WEB_URL", "", raising=False)
+    assert client.get("/api/calendar/today").json()["web_url"] is None

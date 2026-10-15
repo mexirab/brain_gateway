@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, Calendar, Clock } from 'lucide-react';
+import { AlertTriangle, Calendar, Clock, ExternalLink } from 'lucide-react';
 import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useCalendarToday } from '@/lib/hooks';
 
@@ -8,6 +8,8 @@ export default function CalendarCard() {
   const { data, error, isLoading, mutate } = useCalendarToday();
   const events = data?.events ?? [];
   const unavailable = data?.unavailable ?? [];
+  // Only http(s) links are rendered, even though the backend already validates.
+  const webUrl = data?.web_url && /^https?:\/\//.test(data.web_url) ? data.web_url : null;
   // source 'none' = no calendar answered: either nothing is connected
   // (unavailable empty) or every connected calendar failed.
   const nothingAnswered = data?.source === 'none';
@@ -31,6 +33,18 @@ export default function CalendarCard() {
           <Calendar size={18} className="text-brand" />
           Today
         </h2>
+        {webUrl && (
+          <a
+            href={webUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-[44px] px-2 -mr-2 rounded shrink-0 whitespace-nowrap text-xs text-content-muted hover:text-brand flex items-center gap-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+          >
+            Open
+            <span className="sr-only"> calendar (opens in new tab)</span>
+            <ExternalLink size={12} aria-hidden />
+          </a>
+        )}
       </div>
 
       {!isLoading && !error && unavailableText && (

@@ -232,6 +232,9 @@ class Settings(BaseSettings):
     caldav_calendar_home: str = ""
     caldav_calendars: str = ""
     caldav_default_calendar: str = ""
+    # Link the dashboard's calendar card opens (e.g. Radicale's web UI over
+    # Tailscale). Empty = no link. Must be http(s); never fetched server-side.
+    calendar_web_url: str = ""
     # Google Calendar as an event source (read, and write when CalDAV is off).
     # Turn off once the CalDAV migration is done (plan milestone 5).
     calendar_google_enabled: bool = True
@@ -566,6 +569,17 @@ class Settings(BaseSettings):
         import logging
 
         log = logging.getLogger(__name__)
+        if self.calendar_web_url:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(self.calendar_web_url)
+            if not self.calendar_web_url.startswith(("http://", "https://")):
+                log.error("[CONFIG] CALENDAR_WEB_URL must start with http:// or https://; ignoring it.")
+                object.__setattr__(self, "calendar_web_url", "")
+            elif parts.username or parts.password:
+                # It's sent to every browser that loads the dashboard.
+                log.error("[CONFIG] CALENDAR_WEB_URL must not contain credentials; ignoring it.")
+                object.__setattr__(self, "calendar_web_url", "")
         if self.phone_calendar_max_age_hours <= 0:
             object.__setattr__(self, "phone_calendar_max_age_hours", 26.0)
         any_set = bool(self.caldav_url or self.caldav_username or self.caldav_password)

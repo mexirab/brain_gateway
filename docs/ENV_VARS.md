@@ -215,6 +215,7 @@ Read by `orchestrator/calendar_sources.py`, which merges CalDAV (Radicale), the 
 | `CALDAV_CALENDAR_HOME` | `/<username>/` | Collection holding the calendars to read (live: `/owner/`). |
 | `CALDAV_CALENDARS` | (empty = all) | Optional comma list of calendar ids or display names to read. |
 | `CALDAV_DEFAULT_CALENDAR` | (empty = first alphabetically) | Calendar (id or display name) that `create_calendar_event` and email→calendar write to. A name that doesn't exist → write refused, not guessed. |
+| `CALENDAR_WEB_URL` | (empty = no link) | Link the dashboard's calendar card opens in a new tab ("Open"), e.g. Radicale's web UI over Tailscale `https://<host>:5233/.web/`. Must be http(s); never fetched by the server. |
 | `CALENDAR_GOOGLE_ENABLED` | `true` | Google Calendar as a source (read; write only when CalDAV is off). Turn off once migrated (plan milestone 5). |
 | `PHONE_CALENDAR_SYNC_ENABLED` | `true` | Accept the iPhone Shortcut push at `/api/calendar/sync`. |
 | `PHONE_CALENDAR_MAX_AGE_HOURS` | `26` | A work (Exchange) push older than this is stale: not shown, and reported as "couldn't reach your work calendar". Matches `ExchangeCalendarSyncStale`. Values ≤0 reset to 26. |

@@ -75,7 +75,13 @@ export const api = {
       body: JSON.stringify({ entity_id: entityId, service, data }),
     }),
   calendarToday: () =>
-    fetcher<{ events: CalendarEvent[]; source?: 'merged' | 'none'; count?: number; unavailable?: string[] }>(
+    fetcher<{
+      events: CalendarEvent[];
+      source?: 'merged' | 'none';
+      count?: number;
+      unavailable?: string[];
+      web_url?: string | null;
+    }>(
       '/api/calendar/today',
     ),
   temperatures: () => fetcher<TemperaturesResponse>('/api/temperatures'),

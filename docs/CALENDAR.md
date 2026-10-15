@@ -218,6 +218,10 @@ Server-side rules for the sync:
 phone, set `title` to a fixed text such as "Busy" in step 2. Alerts and briefings
 then say "Busy" but keep the times.
 
+**From the dashboard:** the calendar card's **Open** link (top right) opens
+this web UI. It is set by `CALENDAR_WEB_URL` in `.env` and appears after the #83
+deploy.
+
 ## Run / upgrade
 
 ```bash

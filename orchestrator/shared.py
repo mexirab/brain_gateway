@@ -269,6 +269,7 @@ CALDAV_CALENDAR_HOME = settings.caldav_calendar_home
 CALDAV_CALENDARS = settings.caldav_calendars
 CALDAV_DEFAULT_CALENDAR = settings.caldav_default_calendar
 CALENDAR_GOOGLE_ENABLED = settings.calendar_google_enabled
+CALENDAR_WEB_URL = settings.calendar_web_url
 
 # Cached events from last phone sync (list of dicts)
 # Persisted to disk so they survive orchestrator restarts
