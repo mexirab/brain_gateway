@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -110,6 +111,24 @@ def _is_empty_assistant(m: dict) -> bool:
                 return False  # odd/non-string text is kept, never crashes
         return True
     return False
+
+
+def _user_texts(messages: List[Dict]) -> List[str]:
+    out = []
+    for m in messages:
+        if m.get("role") != "user":
+            continue
+        c = m.get("content", "")
+        if isinstance(c, list):
+            c = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+        out.append(c if isinstance(c, str) else "")
+    return out
+
+
+def _continues_conversation(prev: List[Dict], new: List[Dict]) -> bool:
+    """True if `new` is `prev` plus more turns (same user turns, in order)."""
+    p, n = _user_texts(prev), _user_texts(new)
+    return len(n) >= len(p) and n[: len(p)] == p
 
 
 class CloudBrain:
@@ -586,30 +605,47 @@ class CloudBrain:
                                 first_user = part.get("text", "")[:100]
                                 break
                     break
-            msg_count = sum(1 for m in messages if m.get("role") == "user")
-            session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}:{msg_count}".encode()).hexdigest()[:16]
+            # One key per CONVERSATION (opening message + date). Each new turn
+            # re-arms the same job, so a conversation is extracted once, ~delay
+            # after it goes quiet, over its full history. (The key used to
+            # include the user-message count, so every turn queued its own
+            # extraction on the single LLM slot — a 20-turn voice call queued 20.)
+            session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}".encode()).hexdigest()[:16]
+
+            from datetime import timedelta
+
+            run_at = datetime.now() + timedelta(minutes=shared.AUTO_LEARN_DELAY_MINUTES)
+
+            # A DIFFERENT conversation that opens the same way the same day
+            # ("hi") shares the key: don't let it overwrite the cached one —
+            # extract the earlier conversation on its own instead.
+            prev = shared._auto_learn_conversations.get(session_key)
+            if prev is not None and not _continues_conversation(prev, messages):
+                flushed_key = f"{session_key}-{uuid.uuid4().hex[:6]}"
+                shared._auto_learn_conversations[flushed_key] = prev
+                shared.scheduler.add_job(
+                    self._run_auto_learn_job,
+                    trigger="date",
+                    run_date=run_at,
+                    args=[flushed_key],
+                    id=f"auto_learn_{flushed_key}",
+                    replace_existing=True,
+                )
 
             # Cache in-memory (never to disk) — cap at 20 entries to prevent memory leaks
+            shared._auto_learn_conversations.pop(session_key, None)  # re-insert = most recent
             if len(shared._auto_learn_conversations) >= 20:
                 oldest = next(iter(shared._auto_learn_conversations))
                 shared._auto_learn_conversations.pop(oldest, None)
             shared._auto_learn_conversations[session_key] = messages
 
-            # Schedule/reschedule extraction job
-            job_id = f"auto_learn_{session_key}"
-
-            with contextlib.suppress(Exception):
-                shared.scheduler.remove_job(job_id)
-
-            from datetime import timedelta
-
-            run_at = datetime.now() + timedelta(minutes=shared.AUTO_LEARN_DELAY_MINUTES)
+            # Schedule/reschedule this conversation's single extraction job
             shared.scheduler.add_job(
                 self._run_auto_learn_job,
                 trigger="date",
                 run_date=run_at,
                 args=[session_key],
-                id=job_id,
+                id=f"auto_learn_{session_key}",
                 replace_existing=True,
             )
         except Exception as e:
