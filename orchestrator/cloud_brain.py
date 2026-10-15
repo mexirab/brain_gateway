@@ -23,6 +23,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from orchestrator import setup_env, shared, welcome
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
+    AUTO_LEARN_DEFERRED,
+    AUTO_LEARN_DROPPED,
     CHAT_STREAM_OUTCOME,
     CHAT_TTFT,
     FAST_PATH_COUNT,
@@ -133,6 +135,28 @@ def _user_texts(messages: List[Dict]) -> List[str]:
         c = c if isinstance(c, str) else ""
         out.append(_IMAGE_ANALYSIS_RE.sub("", c).strip())
     return out
+
+
+_AUTO_LEARN_MAX_MESSAGES = 200  # merged-window cap per cached conversation
+_AUTO_LEARN_RETRY_MINUTES = 30  # brain unreachable at fire time → try again
+_AUTO_LEARN_MAX_ATTEMPTS = 16  # ~8h of retries (Helios asleep overnight)
+
+
+def _message_key(m: Dict) -> tuple:
+    (text,) = _user_texts([{**m, "role": "user"}])
+    return (m.get("role"), text)
+
+
+def _merge_window(prev: List[Dict], new: List[Dict]) -> Optional[List[Dict]]:
+    """Join a rolling window onto the cached history (Telegram sends only the
+    last N messages, so earlier turns slide out). Returns prev + the part of
+    `new` after their longest overlap (>= 2 messages), or None if they don't
+    overlap."""
+    pk, nk = [_message_key(m) for m in prev], [_message_key(m) for m in new]
+    for n in range(min(len(pk), len(nk)), 1, -1):
+        if pk[-n:] == nk[:n]:
+            return (prev + new[n:])[-_AUTO_LEARN_MAX_MESSAGES:]
+    return None
 
 
 def _continues_conversation(prev: List[Dict], new: List[Dict]) -> bool:
@@ -608,8 +632,12 @@ class CloudBrain:
 
             if cid:
                 # The client told us which conversation this is: one key for
-                # its whole life; edits/regenerations simply replace the copy.
+                # its whole life. A rolling window (Telegram) is merged onto
+                # the cached history; edits/regenerations replace it.
                 session_key = hashlib.sha256(f"cid:{cid}".encode()).hexdigest()[:16]
+                prev = cache.get(session_key)
+                if prev is not None and not _continues_conversation(prev, snapshot):
+                    snapshot = _merge_window(prev, snapshot) or snapshot
             else:
                 # Fallback (HA Assist, OWUI): opening message + date. A turn
                 # that doesn't continue the cached conversation is treated as a
@@ -637,6 +665,7 @@ class CloudBrain:
             if len(cache) >= 20:
                 oldest = next(iter(cache))
                 cache.pop(oldest, None)
+                AUTO_LEARN_DROPPED.labels(reason="evicted").inc()
                 logger.info("[AUTO_LEARN] Cache full — dropped the oldest pending conversation")
             cache[session_key] = snapshot
 
@@ -654,11 +683,39 @@ class CloudBrain:
             logger.warning("[AUTO_LEARN] Failed to schedule extraction: %s", e)
 
     @staticmethod
-    async def _run_auto_learn_job(session_key: str):
-        """Scheduler callback: run auto-learn and clear conversation cache."""
-        from orchestrator.auto_learn import run_auto_learn
+    async def _run_auto_learn_job(session_key: str, attempt: int = 0) -> None:
+        """Scheduler callback: run auto-learn and clear conversation cache.
 
-        messages = shared._auto_learn_conversations.pop(session_key, None)
+        Each conversation gets one extraction, so if the brain is unreachable
+        (Helios asleep) the snapshot is put back and retried later instead of
+        being lost.
+        """
+        from orchestrator.auto_learn import run_auto_learn
+        from orchestrator.model_manager import check_model_health
+
+        cache = shared._auto_learn_conversations
+        if session_key not in cache:
+            return
+        if not await check_model_health():
+            if attempt + 1 >= _AUTO_LEARN_MAX_ATTEMPTS:
+                cache.pop(session_key, None)
+                AUTO_LEARN_DROPPED.labels(reason="model_unavailable").inc()
+                logger.warning(
+                    "[AUTO_LEARN] Model unreachable after %d attempts — conversation not extracted", attempt + 1
+                )
+                return
+            AUTO_LEARN_DEFERRED.inc()
+            logger.info("[AUTO_LEARN] Model unreachable — retrying extraction in %d min", _AUTO_LEARN_RETRY_MINUTES)
+            shared.scheduler.add_job(
+                CloudBrain._run_auto_learn_job,
+                trigger="date",
+                run_date=datetime.now() + timedelta(minutes=_AUTO_LEARN_RETRY_MINUTES),
+                args=[session_key, attempt + 1],
+                id=f"auto_learn_{session_key}",
+                replace_existing=True,
+            )
+            return
+        messages = cache.pop(session_key, None)
         if messages:
             await run_auto_learn(messages)
 

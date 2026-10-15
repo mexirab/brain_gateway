@@ -258,7 +258,10 @@ JSON ARRAY:"""
 # ---------------------------------------------------------------------------
 
 
-def _format_conversation(messages: List[Dict]) -> str:
+_EXTRACTION_MAX_CHARS = 12000
+
+
+def _format_conversation(messages: List[Dict], assistant_max_chars: Optional[int] = None) -> str:
     """Format messages into a readable conversation string for extraction."""
     lines = []
     for msg in messages:
@@ -272,8 +275,11 @@ def _format_conversation(messages: List[Dict]) -> str:
             content = " ".join(text_parts)
         if not content or not content.strip():
             continue
+        content = content.strip()
+        if role == "assistant" and assistant_max_chars and len(content) > assistant_max_chars:
+            content = content[:assistant_max_chars] + " [...]"
         label = "User" if role == "user" else "Assistant"
-        lines.append(f"{label}: {content.strip()}")
+        lines.append(f"{label}: {content}")
     return "\n".join(lines)
 
 
@@ -288,13 +294,16 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
         logger.info("[AUTO_LEARN] Conversation too short for extraction")
         return []
 
-    # Keep the prompt manageable: the MOST RECENT ~4000 chars (at a newline
-    # boundary). Extraction now runs once per conversation after it ends, so
-    # keeping the start would drop everything said later.
-    if len(conversation_text) > 4000:
-        start = conversation_text.find("\n", len(conversation_text) - 4000)
+    # Each conversation is extracted once, so fit as much of it as is cheap
+    # (~3k tokens; prefill is seconds). Over budget: shorten assistant replies
+    # first (facts come from what the USER said), then keep the most recent.
+    if len(conversation_text) > _EXTRACTION_MAX_CHARS:
+        conversation_text = _format_conversation(messages, assistant_max_chars=300)
+    if len(conversation_text) > _EXTRACTION_MAX_CHARS:
+        cut = len(conversation_text) - _EXTRACTION_MAX_CHARS
+        start = conversation_text.find("\n", cut)
         if start == -1:
-            start = len(conversation_text) - 4000
+            start = cut
         conversation_text = "[...earlier conversation omitted...]\n" + conversation_text[start:].lstrip("\n")
 
     # Use replace instead of .format() to avoid crashing on curly braces in conversation

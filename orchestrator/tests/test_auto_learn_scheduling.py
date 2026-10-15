@@ -79,7 +79,10 @@ def test_disabled_schedules_nothing(sched, monkeypatch):
 async def test_job_extracts_once_and_clears_cache(sched):
     _schedule(_conv("plan my day", "add a walk"))
     (func, args) = next(iter(sched.jobs.values()))
-    with patch("orchestrator.auto_learn.run_auto_learn", new_callable=AsyncMock) as run:
+    with (
+        patch("orchestrator.model_manager.check_model_health", AsyncMock(return_value=True)),
+        patch("orchestrator.auto_learn.run_auto_learn", new_callable=AsyncMock) as run,
+    ):
         await func(*args)
         await func(*args)  # a second firing finds nothing left to do
     run.assert_awaited_once()
@@ -123,14 +126,23 @@ def cid():
     conversation_id_var.reset(token)
 
 
-def test_conversation_id_keeps_one_job_even_when_the_window_slides(sched, cid):
-    # Telegram sends a rolling window: the opening message changes every turn.
-    _schedule(_conv("one", "two", "three"))
-    _schedule(_conv("two", "three", "four"))
-    _schedule(_conv("three", "four", "five"))
+def _window(first, last):
+    """Telegram-style rolling window over a conversation of turns t1..tN."""
+    msgs = []
+    for i in range(1, last + 1):
+        msgs += [{"role": "user", "content": f"t{i}"}, {"role": "assistant", "content": f"r{i}"}]
+    return msgs[(first - 1) * 2 : -1]
+
+
+def test_conversation_id_merges_a_sliding_window(sched, cid):
+    # Telegram sends only the last N messages: the opening turns slide out,
+    # but they must still be extracted.
+    _schedule(_window(1, 3))
+    _schedule(_window(2, 4))
+    _schedule(_window(3, 5))
     assert len(sched.jobs) == 1
     (cached,) = shared._auto_learn_conversations.values()
-    assert [m["content"] for m in cached if m["role"] == "user"] == ["three", "four", "five"]
+    assert [m["content"] for m in cached if m["role"] == "user"] == ["t1", "t2", "t3", "t4", "t5"]
 
 
 def test_conversation_id_edit_replaces_instead_of_flushing(sched, cid):
@@ -181,16 +193,14 @@ def test_fallback_ignores_regenerated_image_analysis(sched):
 
 
 def test_chat_request_conversation_id_validation():
-    from pydantic import ValidationError
-
     from orchestrator.schemas import ChatRequest
 
-    ok = ChatRequest(messages=[], conversation_id="dashboard:3f2a-9c_1.x")
-    assert ok.conversation_id == "dashboard:3f2a-9c_1.x"
+    ok = ChatRequest(messages=[], conversation_id="telegram:-100123:1700000000")
+    assert ok.conversation_id == "telegram:-100123:1700000000"
     assert ChatRequest(messages=[]).conversation_id is None
-    for bad in ("has space", "x" * 129, "semi;colon"):
-        with pytest.raises(ValidationError):
-            ChatRequest(messages=[], conversation_id=bad)
+    # A malformed id is dropped, never a reason to fail the chat turn.
+    for bad in ("has space", "x" * 129, "semi;colon", "a\nb", 42, ["x"]):
+        assert ChatRequest(messages=[], conversation_id=bad).conversation_id is None
 
 
 async def test_extraction_keeps_the_end_of_long_conversations():
@@ -199,7 +209,7 @@ async def test_extraction_keeps_the_end_of_long_conversations():
     msgs = []
     for i in range(80):
         msgs.append({"role": "user", "content": f"turn {i} with some filler text to make it long enough"})
-        msgs.append({"role": "assistant", "content": "ok"})
+        msgs.append({"role": "assistant", "content": "a long reply " * 60})
     msgs.append({"role": "user", "content": "LAST TURN marker"})
     captured = {}
 
@@ -209,5 +219,92 @@ async def test_extraction_keeps_the_end_of_long_conversations():
 
     with patch("orchestrator.orchestrator.call_model", fake_call_model):
         await auto_learn.extract_facts(msgs)
-    assert "LAST TURN marker" in captured.get("prompt", "")
-    assert "turn 0 with" not in captured.get("prompt", "")
+    prompt = captured.get("prompt", "")
+    assert "LAST TURN marker" in prompt
+    # Assistant replies are shortened before any user turn is dropped.
+    assert "[...]" in prompt
+    assert "turn 0 with" not in prompt
+    assert len(prompt) < 16000
+
+
+def test_conversation_id_without_overlap_replaces(sched, cid):
+    _schedule(_conv("my appointment is Tuesday", "thanks"))
+    _schedule(_conv("my appointment is Wednesday", "thanks"))  # edited earlier turn
+    (cached,) = shared._auto_learn_conversations.values()
+    assert cached[0]["content"] == "my appointment is Wednesday"
+
+
+def test_eviction_is_counted(sched):
+    from orchestrator.metrics import AUTO_LEARN_DROPPED
+
+    before = AUTO_LEARN_DROPPED.labels(reason="evicted")._value.get()
+    for i in range(25):
+        _schedule(_conv(f"conversation {i}"))
+    assert AUTO_LEARN_DROPPED.labels(reason="evicted")._value.get() - before == 5
+
+
+# --- brain asleep at fire time ----------------------------------------------
+
+
+async def test_job_retries_when_model_is_unreachable(sched):
+    _schedule(_conv("plan my day"))
+    (job_id, (func, args)) = next(iter(sched.jobs.items()))
+    with (
+        patch("orchestrator.model_manager.check_model_health", AsyncMock(return_value=False)),
+        patch("orchestrator.auto_learn.run_auto_learn", new_callable=AsyncMock) as run,
+    ):
+        await func(*args)
+    run.assert_not_awaited()
+    assert len(shared._auto_learn_conversations) == 1  # kept for the retry
+    _, retry_args = sched.jobs[job_id]
+    assert retry_args[1] == 1  # attempt counter advanced
+
+    with (
+        patch("orchestrator.model_manager.check_model_health", AsyncMock(return_value=True)),
+        patch("orchestrator.auto_learn.run_auto_learn", new_callable=AsyncMock) as run,
+    ):
+        await func(*retry_args)
+    run.assert_awaited_once()
+    assert shared._auto_learn_conversations == {}
+
+
+async def test_job_gives_up_after_max_attempts(sched):
+    from orchestrator.cloud_brain import _AUTO_LEARN_MAX_ATTEMPTS
+    from orchestrator.metrics import AUTO_LEARN_DROPPED
+
+    _schedule(_conv("plan my day"))
+    (func, args) = next(iter(sched.jobs.values()))
+    before = AUTO_LEARN_DROPPED.labels(reason="model_unavailable")._value.get()
+    with patch("orchestrator.model_manager.check_model_health", AsyncMock(return_value=False)):
+        await func(args[0], _AUTO_LEARN_MAX_ATTEMPTS - 1)
+    assert shared._auto_learn_conversations == {}
+    assert AUTO_LEARN_DROPPED.labels(reason="model_unavailable")._value.get() - before == 1
+
+
+# --- streaming path: the loop mutates `messages` in place --------------------
+
+
+async def test_streaming_schedules_the_client_transcript_not_the_loop_mutated_list(sched):
+    def make_brain():
+        brain = CloudBrain.__new__(CloudBrain)
+        brain._fallback_model_url = ""
+        brain._fallback_model_name = "fb"
+        brain._get_all_tools = lambda: []
+
+        async def loop_fn(**kwargs):
+            kwargs["messages"].append({"role": "user", "content": "The action(s) above are complete."})
+            return "Done"
+
+        brain._run_unified_loop = loop_fn
+        return brain
+
+    for turn in (_conv("turn on the lamp"), _conv("turn on the lamp", "and the fan")):
+        resp = make_brain()._stream_loop_response(
+            messages=list(turn), system_prompt="s", tools=[], model_url="u", model_name="m", is_voice=False
+        )
+        async for _ in resp.body_iterator:
+            pass
+
+    assert len(sched.jobs) == 1
+    (cached,) = shared._auto_learn_conversations.values()
+    assert [m["content"] for m in cached if m["role"] == "user"] == ["turn on the lamp", "and the fan"]

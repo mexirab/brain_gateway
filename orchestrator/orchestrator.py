@@ -26,9 +26,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from orchestrator.cloud_brain import conversation_id_var
 from orchestrator.log_config import configure_logging
-from orchestrator.metrics import EMBEDDING_HEALTHY
+from orchestrator.metrics import AUTO_LEARN_DROPPED, EMBEDDING_HEALTHY
 
 # Configure structured JSON logging
 configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
@@ -448,6 +447,8 @@ async def chat_completions(req: Request):
     if is_voice:
         shared.mark_voice_activity()
 
+    from orchestrator.cloud_brain import conversation_id_var
+
     chat_req = ChatRequest(**body)
     conversation_id_var.set(chat_req.conversation_id)
 
@@ -468,6 +469,12 @@ async def chat_completions(req: Request):
 async def _shutdown_logic():
     """Clean up resources on shutdown (invoked from the lifespan handler)."""
     global _http
+
+    # auto_learn's pending conversations live in RAM only; make the loss visible.
+    pending = len(shared._auto_learn_conversations)
+    if pending:
+        AUTO_LEARN_DROPPED.labels(reason="shutdown").inc(pending)
+        logger.info("[AUTO_LEARN] %d pending conversation(s) dropped at shutdown", pending)
 
     # Stop the Telegram long-poll task before the HTTP layer goes away.
     telegram_task = getattr(shared, "telegram_task", None)

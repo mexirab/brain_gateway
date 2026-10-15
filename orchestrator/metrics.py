@@ -775,6 +775,23 @@ AUTO_LEARN_CATEGORY_BLOCKED = Counter(
     ["category"],
 )
 
+# Pending conversations that were never extracted. reason: evicted (20-entry
+# cache full), shutdown (RAM-only cache lost on restart/deploy),
+# model_unavailable (brain stayed asleep through every retry).
+AUTO_LEARN_DROPPED = Counter(
+    "bgw_auto_learn_dropped_total",
+    "Pending auto-learn conversations dropped without extraction",
+    ["reason"],
+)
+for _reason in ("evicted", "shutdown", "model_unavailable"):
+    AUTO_LEARN_DROPPED.labels(reason=_reason)
+
+# Extraction postponed because the primary model was unreachable at fire time.
+AUTO_LEARN_DEFERRED = Counter(
+    "bgw_auto_learn_deferred_total",
+    "Auto-learn extractions postponed because the model was unreachable",
+)
+
 AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
     "bgw_auto_learn_extraction_duration_seconds",
     "Auto-learn extraction pipeline latency",
