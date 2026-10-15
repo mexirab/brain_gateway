@@ -17,6 +17,7 @@ describe('safeRedirect', () => {
     ['/chat', '/chat'],
     ['/finance/transactions?x=1#top', '/finance/transactions?x=1#top'],
     ['/pantry?tab=scan', '/pantry?tab=scan'],
+    ['/dashboard/é', '/dashboard/%C3%A9'],
   ])('keeps the app path %s', (raw, expected) => {
     expect(safeRedirect(raw)).toBe(expected);
   });
@@ -47,6 +48,11 @@ describe('safeRedirect', () => {
     '/api/auth/logout',
     '/api/proxy/health',
     '/dashboard/../api/auth/logout',
+    '/dashboard/%2e%2e/api/auth/logout',
+    '/dashboard\\..\\api',
+    '/%2F%2Fevil.example',
+    '/dashboard/..%2F..%2Fapi',
+    '/finance/..%5c..%5capi',
     '/design-system',
     '/',
   ])('falls back to the dashboard for %j', (raw) => {

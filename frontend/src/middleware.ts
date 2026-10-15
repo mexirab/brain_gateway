@@ -19,7 +19,8 @@ export function middleware(request: NextRequest) {
 
   if (token !== expectedToken) {
     const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname);
+    // Keep the query (e.g. /pantry?tab=scan); the login page validates it.
+    loginUrl.searchParams.set('redirect', pathname + request.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 

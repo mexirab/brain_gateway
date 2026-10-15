@@ -23,9 +23,11 @@ const BASE = 'http://login.invalid';
  * The value is attacker-controllable (anyone can send a /login link), so it is
  * resolved with the WHATWG URL parser — the same rules the browser applies —
  * rather than prefix-checked: that catches `//host`, `/\host`, tab/newline
- * smuggling and `javascript:`/`data:` schemes. Anything that leaves the origin
- * or isn't a protected app route falls back to the dashboard. The returned
- * value is rebuilt from the parsed URL, never the raw input.
+ * smuggling and `javascript:`/`data:` schemes. Anything that leaves the origin,
+ * isn't a protected app route, or keeps an encoded slash/backslash in the path
+ * (`..%2F..` survives parsing as one segment; Next 404s it today, but don't
+ * rely on that) falls back to the dashboard. The returned value is rebuilt
+ * from the parsed URL, never the raw input.
  */
 export function safeRedirect(raw: string | null | undefined): string {
   if (!raw || !raw.startsWith('/')) return DEFAULT_LOGIN_REDIRECT;
@@ -35,6 +37,8 @@ export function safeRedirect(raw: string | null | undefined): string {
   } catch {
     return DEFAULT_LOGIN_REDIRECT;
   }
-  if (url.origin !== BASE || !isProtectedPath(url.pathname)) return DEFAULT_LOGIN_REDIRECT;
+  if (url.origin !== BASE || !isProtectedPath(url.pathname) || /%2f|%5c/i.test(url.pathname)) {
+    return DEFAULT_LOGIN_REDIRECT;
+  }
   return url.pathname + url.search + url.hash;
 }
