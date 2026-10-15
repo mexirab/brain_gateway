@@ -308,3 +308,21 @@ async def test_streaming_schedules_the_client_transcript_not_the_loop_mutated_li
     assert len(sched.jobs) == 1
     (cached,) = shared._auto_learn_conversations.values()
     assert [m["content"] for m in cached if m["role"] == "user"] == ["turn on the lamp", "and the fan"]
+
+
+# --- restart/deploy: pending conversations are lost; the count must survive ---
+
+
+async def test_shutdown_drop_count_is_persisted(monkeypatch):
+    from orchestrator import orchestrator as orch
+
+    store = {}
+    monkeypatch.setattr(orch.state_store, "get_app_state", lambda k: store.get(k))
+    monkeypatch.setattr(orch.state_store, "set_app_state", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr(shared, "_auto_learn_conversations", {"a": [], "b": []})
+    monkeypatch.setattr(shared, "telegram_task", None, raising=False)
+    monkeypatch.setattr(orch, "_http", None)
+
+    await orch._shutdown_logic()
+    await orch._shutdown_logic()  # a second restart adds to the stored count
+    assert store[orch._AUTO_LEARN_SHUTDOWN_DROPS_KEY] == "4"

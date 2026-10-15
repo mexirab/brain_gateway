@@ -466,15 +466,24 @@ async def chat_completions(req: Request):
 # =============================================================================
 
 
+_AUTO_LEARN_SHUTDOWN_DROPS_KEY = "auto_learn_dropped_at_shutdown"
+
+
 async def _shutdown_logic():
     """Clean up resources on shutdown (invoked from the lifespan handler)."""
     global _http
 
-    # auto_learn's pending conversations live in RAM only; make the loss visible.
+    # auto_learn's pending conversations live in RAM only; make the loss
+    # visible. The counter dies with this process, so the count is persisted
+    # and added to the metric by the next startup.
     pending = len(shared._auto_learn_conversations)
     if pending:
-        AUTO_LEARN_DROPPED.labels(reason="shutdown").inc(pending)
         logger.info("[AUTO_LEARN] %d pending conversation(s) dropped at shutdown", pending)
+        try:
+            prior = int(state_store.get_app_state(_AUTO_LEARN_SHUTDOWN_DROPS_KEY) or 0)
+            state_store.set_app_state(_AUTO_LEARN_SHUTDOWN_DROPS_KEY, str(prior + pending))
+        except Exception as e:
+            logger.warning("[AUTO_LEARN] Could not persist shutdown drop count: %s", type(e).__name__)
 
     # Stop the Telegram long-poll task before the HTTP layer goes away.
     telegram_task = getattr(shared, "telegram_task", None)
@@ -546,6 +555,13 @@ async def _startup_logic():
 
     # Initialize persistent state store (SQLite)
     state_store.init_db()
+    try:
+        dropped = int(state_store.get_app_state(_AUTO_LEARN_SHUTDOWN_DROPS_KEY) or 0)
+        if dropped:
+            AUTO_LEARN_DROPPED.labels(reason="shutdown").inc(dropped)
+            state_store.delete_app_state(_AUTO_LEARN_SHUTDOWN_DROPS_KEY)
+    except Exception as e:
+        logger.warning("[AUTO_LEARN] Could not read shutdown drop count: %s", type(e).__name__)
     state_store.clear_stale_notifications(older_than_hours=48)
     state_store.cleanup_old_announcements(keep_days=30)
     state_store.cleanup_old_selfcare(keep_days=90)

@@ -15,6 +15,8 @@ All orchestrator endpoints live on port 8888. Many endpoints require `Authorizat
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
 | GET | `/v1/models` | List models |
 
+**`/v1/chat/completions` request body:** OpenAI shape (`messages`, `stream`, `tools`) plus optional `conversation_id` — stable client conversation id used only to key auto_learn (one extraction per conversation). ≤128 chars, `[A-Za-z0-9:_.\-]+`; a malformed value is silently dropped to `null` (never fails the chat). Senders: dashboard `dashboard:<conversation uuid>`, Telegram `telegram:<chat_id>:<conversation start unix ts>` (new on `/new` or empty history). Omitted → first-user-message + date fallback key. See `docs/MEMPALACE.md` → Auto-learn.
+
 ### Home Assistant
 
 | Method | Path | Purpose |

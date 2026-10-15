@@ -139,7 +139,7 @@ def _user_texts(messages: List[Dict]) -> List[str]:
 
 _AUTO_LEARN_MAX_MESSAGES = 200  # merged-window cap per cached conversation
 _AUTO_LEARN_RETRY_MINUTES = 30  # brain unreachable at fire time → try again
-_AUTO_LEARN_MAX_ATTEMPTS = 16  # ~8h of retries (Helios asleep overnight)
+_AUTO_LEARN_MAX_ATTEMPTS = 16  # 15 retries ≈ 7.5h (Helios asleep overnight)
 
 
 def _message_key(m: Dict) -> tuple:
@@ -704,16 +704,22 @@ class CloudBrain:
                     "[AUTO_LEARN] Model unreachable after %d attempts — conversation not extracted", attempt + 1
                 )
                 return
+            try:
+                shared.scheduler.add_job(
+                    CloudBrain._run_auto_learn_job,
+                    trigger="date",
+                    run_date=datetime.now() + timedelta(minutes=_AUTO_LEARN_RETRY_MINUTES),
+                    args=[session_key, attempt + 1],
+                    id=f"auto_learn_{session_key}",
+                    replace_existing=True,
+                )
+            except Exception as e:
+                cache.pop(session_key, None)
+                AUTO_LEARN_DROPPED.labels(reason="model_unavailable").inc()
+                logger.warning("[AUTO_LEARN] Could not schedule extraction retry: %s", type(e).__name__)
+                return
             AUTO_LEARN_DEFERRED.inc()
             logger.info("[AUTO_LEARN] Model unreachable — retrying extraction in %d min", _AUTO_LEARN_RETRY_MINUTES)
-            shared.scheduler.add_job(
-                CloudBrain._run_auto_learn_job,
-                trigger="date",
-                run_date=datetime.now() + timedelta(minutes=_AUTO_LEARN_RETRY_MINUTES),
-                args=[session_key, attempt + 1],
-                id=f"auto_learn_{session_key}",
-                replace_existing=True,
-            )
             return
         messages = cache.pop(session_key, None)
         if messages:

@@ -113,7 +113,7 @@ An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.ex
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `AUTO_LEARN_ENABLED` | `true` | Enable/disable background fact extraction |
-| `AUTO_LEARN_DELAY_MINUTES` | `10` | Delay after conversation before extracting facts |
+| `AUTO_LEARN_DELAY_MINUTES` | `10` | Minutes after the conversation's LAST turn (conversation gone quiet) before its single extraction job fires; each new turn re-arms it |
 | `AUTO_LEARN_MAX_FACTS` | `5` | Max facts extracted per conversation |
 | `AUTO_LEARN_DEDUP_THRESHOLD` | `0.85` | Cosine similarity threshold for deduplication |
 | `AUTO_LEARN_MARKDOWN` | `false` | Also append facts to a markdown file |
