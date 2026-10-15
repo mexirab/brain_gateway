@@ -11,6 +11,11 @@ pydantic-settings>=2.13,<3.0
 # AI/ML
 chromadb>=1.5,<2.0
 sentence-transformers>=5.3,<6.0
+# nomic-embed-text-v2-moe's remote code (nomic-bert-2048) calls
+# get_extended_attention_mask, removed in transformers 5.12 — with 5.12+
+# every embedding fails (memory search, RAG, palace writes, auto_learn).
+# Unpinned, a rebuild pulled 5.18 and broke memory 2026-10-02 → 10-15.
+transformers>=5.0,<5.12
 einops>=0.8,<1.0
 rapidfuzz>=3.14,<4.0
 

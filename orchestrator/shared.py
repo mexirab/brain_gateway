@@ -20,6 +20,7 @@ from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
 from orchestrator.config import settings
+from orchestrator.embedding_pin import load_kwargs as embedding_load_kwargs
 from orchestrator.focus_state import FocusSession
 from orchestrator.ha_integration import HomeAssistantClient
 from orchestrator.llm_backend import LLMBackend, LLMConfig, create_backend
@@ -168,7 +169,7 @@ chroma = chromadb.PersistentClient(
     settings=ChromaSettings(anonymized_telemetry=False),
 )
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, trust_remote_code=True)
+embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, **embedding_load_kwargs(EMBEDDING_MODEL_NAME))
 
 # ---------------------------------------------------------------------------
 # Agentic settings

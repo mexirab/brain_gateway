@@ -41,6 +41,10 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
+# Pinned model + remote-code revisions (shared with the orchestrator).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from orchestrator.embedding_pin import load_kwargs as embedding_load_kwargs  # noqa: E402
+
 # Test queries to verify re-indexing quality
 TEST_QUERIES = [
     "what medications do I take in the morning",
@@ -109,7 +113,6 @@ def run_test_queries(collection, model, queries):
 
 def _route_to_wing_room(doc_text, meta, routing_rules=None):
     """Route a document to a palace wing/room based on content and metadata."""
-    import re as _re
 
     # Already has palace metadata — keep it
     if meta and meta.get("wing"):
@@ -316,7 +319,7 @@ def main():
     # Load embedding model
     print(f"\nLoading embedding model: {args.embed_model}")
     t0 = time.time()
-    model = SentenceTransformer(args.embed_model, trust_remote_code=True)
+    model = SentenceTransformer(args.embed_model, **embedding_load_kwargs(args.embed_model))
     print(f"Model loaded in {time.time() - t0:.1f}s")
     print(f"Embedding dimension: {model.get_sentence_embedding_dimension()}")
 
@@ -339,7 +342,7 @@ def main():
         target.query(query_embeddings=test_embed, n_results=1)
     except Exception as e:
         if "dimension" in str(e).lower():
-            print(f"\nEmbedding dimension changed — recreating target collection...")
+            print("\nEmbedding dimension changed — recreating target collection...")
             client.delete_collection(name=target_collection_name)
             target = client.create_collection(name=target_collection_name)
             print(f"Collection recreated (new dimension: {new_dim})")

@@ -212,6 +212,18 @@ groups:
           summary: "VRAM >95% on {{ $labels.node }}"
           description: "VRAM usage is {{ $value | humanizePercentage }} on {{ $labels.node }}."
 
+      # Memory offline: the embedding model can't encode (startup self-test).
+      # Memory search, RAG context, palace writes and auto_learn all fail per
+      # call — it went unnoticed for 12 days (2026-10-02 → 10-15). Paging.
+      - alert: EmbeddingModelBroken
+        expr: bgw_embedding_healthy == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Embedding model can't encode — Jess's memory is offline"
+          description: "The startup self-test failed: memory search, RAG context, memory-palace writes and auto_learn all fail. Check `docker logs brain-orchestrator | grep EMBEDDING` and the transformers pin in orchestrator/requirements.txt (nomic remote code needs transformers<5.12)."
+
   - name: brain_gateway_informational
     interval: 60s
     rules:

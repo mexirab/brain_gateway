@@ -10,6 +10,7 @@ startup/shutdown, and hosts the chat endpoint. All tool execution, prompts,
 routes, and infrastructure logic live in their respective modules.
 """
 
+import asyncio
 import collections
 import logging
 import os
@@ -25,9 +26,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Configure structured JSON logging
 from orchestrator.log_config import configure_logging
+from orchestrator.metrics import EMBEDDING_HEALTHY
 
+# Configure structured JSON logging
 configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
@@ -517,6 +519,21 @@ async def _startup_logic():
         limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
     )
     logger.info("[orchestrator] Initialized shared HTTP client")
+
+    # Embedding self-test: if the model can't encode, every memory feature
+    # (search, RAG context, palace writes, auto_learn) fails per call and only
+    # shows up as scattered errors — it went unnoticed for 12 days once.
+    try:
+        # Bounded: a hung encode must not block startup (memory is broken anyway).
+        await asyncio.wait_for(
+            asyncio.to_thread(lambda: shared.embedding_model.encode("self-test", normalize_embeddings=True)),
+            timeout=60,
+        )
+        EMBEDDING_HEALTHY.set(1)
+        logger.info("[EMBEDDING] Self-test OK")
+    except Exception as e:
+        EMBEDDING_HEALTHY.set(0)
+        logger.error("[EMBEDDING] Self-test FAILED — memory search/storage is broken: %s", type(e).__name__)
 
     # Initialize persistent state store (SQLite)
     state_store.init_db()

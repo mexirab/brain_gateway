@@ -620,6 +620,12 @@ HELIOS_PLUG_WATTS = Gauge(
     "Last-known Helios smart-plug power draw in watts (from HA sensor)",
 )
 
+EMBEDDING_HEALTHY = Gauge(
+    "bgw_embedding_healthy",
+    "1 if the embedding model encoded a test sentence at startup, else 0. Every "
+    "memory feature (search, RAG context, palace writes, auto_learn) depends on it.",
+)
+
 HELIOS_RUNNING = Gauge(
     "bgw_helios_running",
     "Whether Helios is inferred to be running from the plug state (1=running, "
