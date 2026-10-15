@@ -161,10 +161,14 @@ services:
     restart: unless-stopped
     ports:
       - "${MONITORING_BLACKBOX_PORT:-9115}:9115"
+    # Directory mount, not a single-file mount: a file mount is pinned to the
+    # inode at container start, so a `git pull` edit to blackbox.yml stays
+    # invisible even across /-/reload (bit us 2026-10-15 with http_2xx_http10).
+    # scripts/reload-monitoring.sh reloads + content-verifies it.
     volumes:
-      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+      - ./blackbox:/etc/blackbox_exporter:ro
     command:
-      - '--config.file=/etc/blackbox_exporter/config.yml'
+      - '--config.file=/etc/blackbox_exporter/blackbox.yml'
     networks:
       - monitoring-net
 
