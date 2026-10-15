@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Refrigerator, Settings, ListTodo, Pill } from 'lucide-react';
+import { CalendarDays, LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Refrigerator, Settings, ListTodo, Pill } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
 import { SWRProvider } from '@/components/providers/SWRProvider';
 import { isAuthenticated } from '@/lib/auth';
@@ -10,6 +10,7 @@ import { isNavItemEnabled } from '@/lib/features';
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/tasks', label: 'Tasks', icon: ListTodo },
+  { href: '/calendar', label: 'Calendar', icon: CalendarDays },
   { href: '/announcements', label: 'Announcements', icon: Volume2 },
   { href: '/workouts', label: 'Workouts', icon: Dumbbell },
   { href: '/meals', label: 'Meals', icon: UtensilsCrossed },

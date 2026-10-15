@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start --port 3001",
     "lint": "next lint",
-    "test": "vitest run",
+    "test": "TZ=America/New_York vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
