@@ -19,9 +19,10 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 
 ## Auth
 
-- `src/middleware.ts` redirects requests without a valid `brain_token` cookie to `/login?redirect=<path>` (307).
-- **Adding a page under `(private)/`:** add it to BOTH `PROTECTED_PATHS` and `config.matcher` (matcher must be a static literal — Next can't derive it from the array). The `(private)` route group does not protect anything on its own.
-- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect, a valid cookie passes. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`.
+- `src/middleware.ts` redirects requests without a valid `brain_token` cookie to `/login?redirect=<path+query>` (307) — the query is kept so deep links like `/pantry?tab=scan` survive re-login.
+- **Adding a page under `(private)/`:** add it to BOTH `PROTECTED_PATHS` in `src/lib/protected-paths.ts` (shared by middleware + login page; `middleware.ts` re-exports it) and `config.matcher` in `src/middleware.ts` (matcher must be a static literal — Next can't derive it from the array). The `(private)` route group does not protect anything on its own.
+- **Login redirect:** `safeRedirect()` (`src/lib/protected-paths.ts`) honours `?redirect=` only if it parses (WHATWG URL) to a same-origin path under a protected route with no encoded `%2F`/`%5C`; anything else (`//host`, `javascript:`, unprotected paths) goes to `/dashboard`. Blocks open redirect / `javascript:` URLs on `/login`.
+- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect (with query preserved), a valid cookie passes. `src/lib/protected-paths.test.ts` covers `safeRedirect`. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`.
 
 ## Dashboard Widgets
 
