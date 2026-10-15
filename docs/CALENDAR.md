@@ -54,6 +54,19 @@ Jupiter itself can't resolve its own MagicDNS name. To test the HTTPS URL from J
 
 ## Users and access rules
 
+The rules in `radicale/config/rights` don't name any human user: `jess` is the
+service account, and **any other login owns its own calendars**. Your real
+username lives only in the local login file. To swap the initial `owner` login
+for your own name and password, run `/home/labadmin/radicale/rename-user.sh` on
+Jupiter. It is a local script, not in the repo. It prompts for the name and the
+password (the password is never shown) and then:
+- replaces the login line;
+- moves the calendar folder to the new name;
+- sets `CALDAV_CALENDAR_HOME=/<name>/` in `.env`;
+- deletes `owner-password.txt`.
+
+Below, `owner` means whatever name you chose.
+
 | User | Can |
 |------|-----|
 | `owner` | Everything under `/owner/`: create, rename and delete calendars, and read/write events. |
