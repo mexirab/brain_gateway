@@ -72,6 +72,10 @@ describe('middleware route protection', () => {
     expectLoginRedirect(middleware(request('/finance/transactions')), '/finance/transactions');
   });
 
+  it('keeps the query string in redirect', () => {
+    expectLoginRedirect(middleware(request('/pantry?tab=scan')), '/pantry?tab=scan');
+  });
+
   it('lets a request with the valid token through', () => {
     const res = middleware(request('/personal-facts', validToken));
     expect(res.headers.get('x-middleware-next')).toBe('1');

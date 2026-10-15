@@ -3,6 +3,7 @@
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button, Card } from '@/components/ui';
+import { safeRedirect } from '@/lib/protected-paths';
 
 function LoginForm() {
   const [password, setPassword] = useState('');
@@ -10,7 +11,8 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get('redirect') || '/dashboard';
+  // Untrusted query param: only ever a same-origin protected app path.
+  const redirect = safeRedirect(searchParams.get('redirect'));
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
