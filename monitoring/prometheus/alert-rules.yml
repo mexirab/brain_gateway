@@ -227,6 +227,15 @@ groups:
       # truncated answer to the user (no user-facing error). Non-paging — it's
       # a UX degradation, not an outage — but on-call should see a sustained
       # rate. for:2m rides out the increase() counter-reset blip on CI restarts.
+      - alert: EmbeddingModelBroken
+        expr: bgw_embedding_healthy == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Embedding model can't encode — Jess's memory is offline"
+          description: "The startup self-test failed: memory search, RAG context, memory-palace writes and auto_learn all fail. Check `docker logs brain-orchestrator | grep EMBEDDING` and the transformers pin in orchestrator/requirements.txt (nomic remote code needs transformers<5.12)."
+
       - alert: ChatStreamTruncating
         expr: increase(bgw_chat_stream_outcome_total{outcome="died_mid_emission"}[1h]) > 0
         for: 2m
