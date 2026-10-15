@@ -109,3 +109,105 @@ def test_continues_conversation_reads_multipart_text():
     prev = [{"role": "user", "content": [{"type": "text", "text": "look at this"}, {"type": "image_url"}]}]
     new = prev + [{"role": "assistant", "content": "ok"}, {"role": "user", "content": "and?"}]
     assert _continues_conversation(prev, new) is True
+
+
+# --- conversation_id from the client (dashboard / Telegram) -----------------
+
+from orchestrator.cloud_brain import conversation_id_var  # noqa: E402
+
+
+@pytest.fixture
+def cid():
+    token = conversation_id_var.set("telegram:12345:1700000000")
+    yield
+    conversation_id_var.reset(token)
+
+
+def test_conversation_id_keeps_one_job_even_when_the_window_slides(sched, cid):
+    # Telegram sends a rolling window: the opening message changes every turn.
+    _schedule(_conv("one", "two", "three"))
+    _schedule(_conv("two", "three", "four"))
+    _schedule(_conv("three", "four", "five"))
+    assert len(sched.jobs) == 1
+    (cached,) = shared._auto_learn_conversations.values()
+    assert [m["content"] for m in cached if m["role"] == "user"] == ["three", "four", "five"]
+
+
+def test_conversation_id_edit_replaces_instead_of_flushing(sched, cid):
+    _schedule(_conv("my appointment is Tuesday"))
+    _schedule(_conv("my appointment is Wednesday"))
+    assert len(sched.jobs) == 1
+    (cached,) = shared._auto_learn_conversations.values()
+    assert cached[0]["content"] == "my appointment is Wednesday"
+
+
+def test_cached_copy_is_not_aliased_to_the_callers_list(sched, cid):
+    msgs = _conv("plan my day")
+    _schedule(msgs)
+    msgs.append({"role": "user", "content": "The action(s) above are complete."})  # loop mutation
+    (cached,) = shared._auto_learn_conversations.values()
+    assert len(cached) == 1
+
+
+def test_different_conversation_ids_get_different_jobs(sched):
+    for c in ("dashboard:a", "dashboard:b"):
+        token = conversation_id_var.set(c)
+        _schedule(_conv("hi"))
+        conversation_id_var.reset(token)
+    assert len(sched.jobs) == 2
+
+
+# --- fallback heuristic refinements -----------------------------------------
+
+
+def test_fallback_edit_of_last_turn_is_extracted_separately(sched):
+    # Without a conversation id an edit is indistinguishable from a new chat
+    # with the same opener; keep both rather than risk losing one.
+    _schedule(_conv("plan my day", "add a walk"))
+    _schedule(_conv("plan my day", "add a run"))
+    assert len(sched.jobs) == 2
+
+
+def test_fallback_ignores_regenerated_image_analysis(sched):
+    first = [{"role": "user", "content": "look\n\n[Image 1 Analysis]\nA red mug on a desk."}]
+    second = [
+        {"role": "user", "content": "look\n\n[Image 1 Analysis]\nA red cup on a table."},
+        {"role": "assistant", "content": "nice"},
+        {"role": "user", "content": "thanks"},
+    ]
+    _schedule(first)
+    _schedule(second)
+    assert len(sched.jobs) == 1
+
+
+def test_chat_request_conversation_id_validation():
+    from pydantic import ValidationError
+
+    from orchestrator.schemas import ChatRequest
+
+    ok = ChatRequest(messages=[], conversation_id="dashboard:3f2a-9c_1.x")
+    assert ok.conversation_id == "dashboard:3f2a-9c_1.x"
+    assert ChatRequest(messages=[]).conversation_id is None
+    for bad in ("has space", "x" * 129, "semi;colon"):
+        with pytest.raises(ValidationError):
+            ChatRequest(messages=[], conversation_id=bad)
+
+
+async def test_extraction_keeps_the_end_of_long_conversations():
+    from orchestrator import auto_learn
+
+    msgs = []
+    for i in range(80):
+        msgs.append({"role": "user", "content": f"turn {i} with some filler text to make it long enough"})
+        msgs.append({"role": "assistant", "content": "ok"})
+    msgs.append({"role": "user", "content": "LAST TURN marker"})
+    captured = {}
+
+    async def fake_call_model(*args, **kwargs):
+        captured["prompt"] = str(args) + str(kwargs)
+        raise RuntimeError("stop after capturing the prompt")
+
+    with patch("orchestrator.orchestrator.call_model", fake_call_model):
+        await auto_learn.extract_facts(msgs)
+    assert "LAST TURN marker" in captured.get("prompt", "")
+    assert "turn 0 with" not in captured.get("prompt", "")

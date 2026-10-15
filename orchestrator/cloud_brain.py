@@ -11,9 +11,11 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
-from datetime import datetime
+from contextvars import ContextVar
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -113,7 +115,14 @@ def _is_empty_assistant(m: dict) -> bool:
     return False
 
 
+# Set per request by the chat endpoint from ChatRequest.conversation_id.
+conversation_id_var: ContextVar[Optional[str]] = ContextVar("conversation_id", default=None)
+
+_IMAGE_ANALYSIS_RE = re.compile(r"\[Image \d+ Analysis\].*", re.DOTALL)
+
+
 def _user_texts(messages: List[Dict]) -> List[str]:
+    """User turns' text, without vision-analysis text (re-generated each turn)."""
     out = []
     for m in messages:
         if m.get("role") != "user":
@@ -121,7 +130,8 @@ def _user_texts(messages: List[Dict]) -> List[str]:
         c = m.get("content", "")
         if isinstance(c, list):
             c = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-        out.append(c if isinstance(c, str) else "")
+        c = c if isinstance(c, str) else ""
+        out.append(_IMAGE_ANALYSIS_RE.sub("", c).strip())
     return out
 
 
@@ -591,55 +601,47 @@ class CloudBrain:
         if not shared.AUTO_LEARN_ENABLED:
             return
         try:
-            # Generate session key from first user message + date
-            first_user = ""
-            for m in messages:
-                if m.get("role") == "user":
-                    content = m.get("content", "")
-                    if isinstance(content, str):
-                        first_user = content[:100]
-                    elif isinstance(content, list):
-                        # Extract text from multipart content (images + text)
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                first_user = part.get("text", "")[:100]
-                                break
-                    break
-            # One key per CONVERSATION (opening message + date). Each new turn
-            # re-arms the same job, so a conversation is extracted once, ~delay
-            # after it goes quiet, over its full history. (The key used to
-            # include the user-message count, so every turn queued its own
-            # extraction on the single LLM slot — a 20-turn voice call queued 20.)
-            session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}".encode()).hexdigest()[:16]
-
-            from datetime import timedelta
-
+            cid = conversation_id_var.get()
             run_at = datetime.now() + timedelta(minutes=shared.AUTO_LEARN_DELAY_MINUTES)
+            cache = shared._auto_learn_conversations
+            snapshot = list(messages)  # never alias a list the caller may mutate later
 
-            # A DIFFERENT conversation that opens the same way the same day
-            # ("hi") shares the key: don't let it overwrite the cached one —
-            # extract the earlier conversation on its own instead.
-            prev = shared._auto_learn_conversations.get(session_key)
-            if prev is not None and not _continues_conversation(prev, messages):
-                flushed_key = f"{session_key}-{uuid.uuid4().hex[:6]}"
-                shared._auto_learn_conversations[flushed_key] = prev
-                shared.scheduler.add_job(
-                    self._run_auto_learn_job,
-                    trigger="date",
-                    run_date=run_at,
-                    args=[flushed_key],
-                    id=f"auto_learn_{flushed_key}",
-                    replace_existing=True,
-                )
+            if cid:
+                # The client told us which conversation this is: one key for
+                # its whole life; edits/regenerations simply replace the copy.
+                session_key = hashlib.sha256(f"cid:{cid}".encode()).hexdigest()[:16]
+            else:
+                # Fallback (HA Assist, OWUI): opening message + date. A turn
+                # that doesn't continue the cached conversation is treated as a
+                # DIFFERENT conversation that opens the same way, and the cached
+                # one is extracted separately. (An edited last turn looks the
+                # same; extracting it twice beats losing a real conversation.)
+                user_texts = _user_texts(messages)
+                first_user = user_texts[0][:100] if user_texts else ""
+                session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}".encode()).hexdigest()[:16]
+                prev = cache.get(session_key)
+                if prev is not None and not _continues_conversation(prev, messages):
+                    flushed_key = f"{session_key}-{uuid.uuid4().hex[:6]}"
+                    cache[flushed_key] = prev
+                    shared.scheduler.add_job(
+                        self._run_auto_learn_job,
+                        trigger="date",
+                        run_date=run_at,
+                        args=[flushed_key],
+                        id=f"auto_learn_{flushed_key}",
+                        replace_existing=True,
+                    )
 
-            # Cache in-memory (never to disk) — cap at 20 entries to prevent memory leaks
-            shared._auto_learn_conversations.pop(session_key, None)  # re-insert = most recent
-            if len(shared._auto_learn_conversations) >= 20:
-                oldest = next(iter(shared._auto_learn_conversations))
-                shared._auto_learn_conversations.pop(oldest, None)
-            shared._auto_learn_conversations[session_key] = messages
+            # In-memory only (never disk), capped at 20 conversations.
+            cache.pop(session_key, None)  # re-insert = most recent
+            if len(cache) >= 20:
+                oldest = next(iter(cache))
+                cache.pop(oldest, None)
+                logger.info("[AUTO_LEARN] Cache full — dropped the oldest pending conversation")
+            cache[session_key] = snapshot
 
-            # Schedule/reschedule this conversation's single extraction job
+            # (Re)arm this conversation's single extraction job: one run, a
+            # delay after the conversation goes quiet, over its full history.
             shared.scheduler.add_job(
                 self._run_auto_learn_job,
                 trigger="date",
@@ -711,7 +713,9 @@ class CloudBrain:
                     is_voice=is_voice,
                     on_delta=_on_delta,
                 )
-                self._schedule_auto_learn(messages)
+                # The loop mutated `messages` in place (assistant/tool/synthetic user
+                # turns); learn from what the client actually sent.
+                self._schedule_auto_learn(original_messages)
                 await queue.put(("final", result))
             except asyncio.CancelledError:
                 raise

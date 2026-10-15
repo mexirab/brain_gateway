@@ -87,6 +87,10 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     tools: Optional[list[dict[str, Any]]] = None
+    # Stable id of the client's conversation (dashboard conversation id,
+    # "telegram:<chat>:<start>"). Lets auto_learn extract each conversation
+    # once; clients without one fall back to a first-message heuristic.
+    conversation_id: Optional[str] = Field(None, max_length=128, pattern=r"^[A-Za-z0-9:_.\-]+$")
 
 
 # ---------------------------------------------------------------------------

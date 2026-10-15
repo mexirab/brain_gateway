@@ -51,6 +51,11 @@ logger = logging.getLogger(__name__)
 # Rolling per-chat history: chat_id -> list[{"role": ..., "content": ...}].
 # RAM-only by design; capped at telegram_history_turns entries.
 _history: Dict[str, List[Dict[str, str]]] = {}
+# When each chat's current conversation began (a new one starts whenever the
+# history is empty: first message, /new, or after a restart). Sent as
+# conversation_id so auto_learn extracts each conversation once even though
+# Telegram only sends a rolling window of recent turns.
+_conv_started: Dict[str, int] = {}
 
 # Rate-limit for unknown-chat log lines: chat_id -> last-logged monotonic ts.
 _denied_log_ts: Dict[str, float] = {}
@@ -356,14 +361,17 @@ async def _ask_jess(chat_id: str, text: str) -> str:
     mode router, fast-path, tool loop, and any future routing improvements.
     """
     history = _history.setdefault(chat_id, [])
+    if not history or chat_id not in _conv_started:
+        _conv_started[chat_id] = int(time.time())
     messages = [*history, {"role": "user", "content": text}]
+    conversation_id = f"telegram:{chat_id}:{_conv_started[chat_id]}"
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0)) as client:
             resp = await client.post(
                 f"{_settings.telegram_self_url.rstrip('/')}/v1/chat/completions",
                 headers={"Authorization": f"Bearer {_settings.api_token}"},
-                json={"messages": messages, "stream": False},
+                json={"messages": messages, "stream": False, "conversation_id": conversation_id},
             )
         if resp.status_code != 200:
             # log-safe: Telegram API / our own route's error body, not the user's message

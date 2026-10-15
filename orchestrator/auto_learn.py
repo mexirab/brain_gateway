@@ -288,12 +288,14 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
         logger.info("[AUTO_LEARN] Conversation too short for extraction")
         return []
 
-    # Truncate very long conversations to keep prompt manageable (at last newline boundary)
+    # Keep the prompt manageable: the MOST RECENT ~4000 chars (at a newline
+    # boundary). Extraction now runs once per conversation after it ends, so
+    # keeping the start would drop everything said later.
     if len(conversation_text) > 4000:
-        cutoff = conversation_text.rfind("\n", 0, 4000)
-        if cutoff == -1:
-            cutoff = 4000
-        conversation_text = conversation_text[:cutoff] + "\n[...conversation truncated...]"
+        start = conversation_text.find("\n", len(conversation_text) - 4000)
+        if start == -1:
+            start = len(conversation_text) - 4000
+        conversation_text = "[...earlier conversation omitted...]\n" + conversation_text[start:].lstrip("\n")
 
     # Use replace instead of .format() to avoid crashing on curly braces in conversation
     prompt = _EXTRACTION_PROMPT.replace("{conversation}", conversation_text)

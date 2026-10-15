@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from orchestrator.cloud_brain import conversation_id_var
 from orchestrator.log_config import configure_logging
 from orchestrator.metrics import EMBEDDING_HEALTHY
 
@@ -448,6 +449,7 @@ async def chat_completions(req: Request):
         shared.mark_voice_activity()
 
     chat_req = ChatRequest(**body)
+    conversation_id_var.set(chat_req.conversation_id)
 
     return await cloud_brain.chat(
         [m.model_dump() for m in chat_req.messages],
