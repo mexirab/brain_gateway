@@ -72,22 +72,22 @@ Use `host=helios` in LogQL to isolate Helios-origin streams. Loki stream labels 
 
 The generator renders to a temp file, **validates it first** (`promtool check config` / `amtool check-config` via the digest-pinned images from the compose file; promtool also syntax-checks `alert-rules.yml`), then cat-truncates the live file in place. Missing Pushover keys → the alertmanager render is skipped loudly (an empty-key render can't load and would crash-loop the container at the next restart). Missing template, or a root-owned/directory output → hard fail with fix instructions.
 
-After editing a template or `prometheus/alert-rules.yml`:
+After editing a template, `prometheus/alert-rules.yml`, or `blackbox/blackbox.yml`:
 
 ```bash
 bash scripts/generate-configs.sh     # render + validate
-bash scripts/reload-monitoring.sh    # reload + verify (PROM_URL / AM_URL env overrides)
+bash scripts/reload-monitoring.sh    # reload + verify (PROM_URL / AM_URL / BLACKBOX_URL env overrides)
 ```
 
-`reload-monitoring.sh` verifies CONTENT, not just HTTP 200: every `- alert:` name in `alert-rules.yml` must appear in Prometheus `/api/v1/rules`, and the Alertmanager loaded config (`/api/v2/status`, secrets masked) must structurally match the render (receiver names + normalized route matchers). A 200 reload against a stale mount is exactly how the pre-compose alertmanager rotted — it silently dropped `EveningBriefingStale` paging during PR #54.
+`reload-monitoring.sh` verifies CONTENT, not just HTTP 200: every `- alert:` name in `alert-rules.yml` must appear in Prometheus `/api/v1/rules`, and the Alertmanager loaded config (`/api/v2/status`, secrets masked) must structurally match the render (receiver names + normalized route matchers), and every module in `blackbox/blackbox.yml` must be loaded in the Blackbox exporter's `/config` with each setting we wrote at the same value (subset match — `/config` adds defaults and omits zero values; `blackbox.yml` is not templated, so the checkout file is the live config). An invalid `blackbox.yml` makes `/-/reload` return 500; the script fails and the exporter keeps its previous config. A 200 reload against a stale mount is exactly how the pre-compose alertmanager rotted — it silently dropped `EveningBriefingStale` paging during PR #54.
 
 Before reloading, `reload-monitoring.sh` also **fails if `alertmanager.yml` or `prometheus.yml` is older than its `.template`** (stale render — the content checks compare live config against the render, so a render that never happened passes them; bit us 2026-10-02 when `generate-configs.sh` aborted and the new `SelfAudit*` routes never went live).
 
 **`.env` is sourced with bash:** `generate-configs.sh` `source`s `.env`, so any value containing a space must be quoted (e.g. `ACTUAL_BUDGET_FILE='My Budget'`) — an unquoted one aborts the render (the 2026-10-02 failure above).
 
-**CI deploys this automatically:** on merge to main, changed files under `monitoring/prometheus/`, `monitoring/alertmanager/`, `monitoring/docker-compose.yml`, or `scripts/{generate-configs,reload-monitoring}.sh` trigger render → compose `up -d --remove-orphans` (only if the compose file changed) → reload + verify.
+**CI deploys this automatically:** on merge to main, changed files under `monitoring/prometheus/`, `monitoring/alertmanager/`, `monitoring/blackbox/`, `monitoring/docker-compose.yml`, or `scripts/{generate-configs,reload-monitoring}.sh` trigger render → compose `up -d --remove-orphans` (only if the compose file changed) → reload + verify.
 
-**Directory mounts, not single-file mounts:** prometheus and alertmanager mount `./prometheus` and `./alertmanager` as directories. A single-file bind mount is pinned to the inode at container start, and `git pull` / most editors replace files with new inodes — the container keeps reading the pre-edit file while `/-/reload` reports success (bit us 2026-07-06 with an invisible `alert-rules.yml` edit). Directory mounts resolve inner files by path on every access. Same reason `generate-configs.sh` truncates renders in place — never `rm`/`mv` a rendered config.
+**Directory mounts, not single-file mounts:** prometheus, alertmanager and blackbox-exporter mount `./prometheus`, `./alertmanager` and `./blackbox` as directories. A single-file bind mount is pinned to the inode at container start, and `git pull` / most editors replace files with new inodes — the container keeps reading the pre-edit file while `/-/reload` reports success (bit us 2026-07-06 with an invisible `alert-rules.yml` edit, and again 2026-10-15 when PR #83's new `http_2xx_http10` blackbox module stayed unloaded — and `blackbox-http10` DOWN — until a manual restart). Directory mounts resolve inner files by path on every access. Same reason `generate-configs.sh` truncates renders in place — never `rm`/`mv` a rendered config.
 
 ## Alertmanager
 

@@ -84,11 +84,11 @@ docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up
 docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring down     # Stop
 ```
 
-### Deploy a Prometheus/Alertmanager config change
+### Deploy a Prometheus/Alertmanager/Blackbox config change
 ```bash
 cd ~/gateway_nerves
 bash scripts/generate-configs.sh     # render templates + validate (promtool/amtool)
-bash scripts/reload-monitoring.sh    # reload both + verify rules/receivers actually loaded
+bash scripts/reload-monitoring.sh    # reload Prometheus + Alertmanager + blackbox + verify rules/receivers/modules actually loaded
 ```
 Or just merge to main — CI runs both when `monitoring/` or these scripts change.
 Edit the `.template` files, never the renders (`alertmanager/alertmanager.yml` is gitignored — Pushover keys from `.env`).

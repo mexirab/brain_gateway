@@ -182,7 +182,7 @@ jobs:
           # reloaded file would surprise-apply at the next unrelated restart.
           # Herestrings (not `echo |`) so grep -q can't SIGPIPE-skip a match
           # on a huge changeset under pipefail.
-          if grep -qE "^monitoring/(prometheus|alertmanager)/|^monitoring/docker-compose\.yml$|^scripts/(generate-configs|reload-monitoring)\.sh$" <<<"$CHANGED"; then
+          if grep -qE "^monitoring/(prometheus|alertmanager|blackbox)/|^monitoring/docker-compose\.yml$|^scripts/(generate-configs|reload-monitoring)\.sh$" <<<"$CHANGED"; then
             echo "::group::Re-rendering monitoring configs"
             bash scripts/generate-configs.sh
             echo "::endgroup::"
@@ -196,7 +196,7 @@ jobs:
               echo "::endgroup::"
             fi
 
-            echo "::group::Reloading + verifying Prometheus and Alertmanager"
+            echo "::group::Reloading + verifying Prometheus, Alertmanager and Blackbox"
             bash scripts/reload-monitoring.sh
             echo "::endgroup::"
           fi
