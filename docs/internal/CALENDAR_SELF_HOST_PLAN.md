@@ -9,7 +9,7 @@ iPhone Calendar app ──CalDAV (Tailscale HTTPS)──► Radicale (Jupiter :5
 iPhone Exchange account ──Shortcut POST──► /api/calendar/sync ──► phone cache (source=exchange) ◄──read── Jess
 ```
 
-Status: **Milestone 1 done 2026-10-14** (see `docs/CALENDAR.md`). Milestones 2–5 not started.
+Status (2026-10-15): **M1 live** (2026-10-14). **M3 server side + M4 built on PR #83, not deployed** (Radicale runs from the `gateway_nerves-calendar` worktree until it merges). Owner steps remain: M2 (move the iPhone) and the M3 work Shortcut. M5 (retire Google) pending. Current behaviour: `docs/CALENDAR.md`.
 
 ---
 

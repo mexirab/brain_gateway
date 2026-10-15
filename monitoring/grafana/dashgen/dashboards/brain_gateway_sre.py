@@ -780,13 +780,81 @@ def build() -> dict:
     row, y = grid_row(focus_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Calendar sources
+    # calendar_sources merges personal (CalDAV/Radicale), work (iPhone Exchange
+    # push) and Google. Alerts: CalendarSourceFailing, ExchangeCalendarSyncStale,
+    # RadicaleDown. See docs/CALENDAR.md.
+    r, y = row_divider("Calendar Sources", y)
+    panels.append(r)
+
+    calsrc_row_1 = [
+        timeseries(
+            "Source reads by result (per min)",
+            [("sum by (source, result) (rate(bgw_calendar_source_fetch_total[15m])) * 60", "{{source}} {{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Source success ratio (1h)",
+            [
+                (
+                    'sum by (source) (rate(bgw_calendar_source_fetch_total{result="ok"}[1h]))'
+                    " / sum by (source) (rate(bgw_calendar_source_fetch_total[1h]))",
+                    "{{source}}",
+                )
+            ],
+            unit="percentunit",
+        ),
+        timeseries(
+            "Source read latency p95",
+            [
+                (
+                    "histogram_quantile(0.95, sum by (le, source) (rate(bgw_calendar_source_fetch_duration_seconds_bucket[15m])))",
+                    "{{source}}",
+                )
+            ],
+            unit="s",
+        ),
+    ]
+    row, y = grid_row(calsrc_row_1, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    calsrc_row_2 = [
+        stat(
+            "Work calendar sync age",
+            "(time() - bgw_phone_calendar_last_sync_timestamp_seconds) and bgw_phone_calendar_last_sync_timestamp_seconds > 0",
+            unit="s",
+            thresholds=[(None, "green"), (86400, "orange"), (93600, "red")],
+            description="Age of the last iPhone work-calendar (Exchange) push. No data = the work Shortcut has never synced.",
+        ),
+        timeseries(
+            "iPhone push rejections by reason (24h)",
+            [("sum by (reason) (increase(bgw_phone_calendar_sync_rejected_total[24h]))", "{{reason}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Calendar writes by target/result (24h)",
+            [("sum by (target, result) (increase(bgw_calendar_write_total[24h]))", "{{target}} {{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Radicale probe",
+            [
+                ('probe_success{service="radicale"}', "up"),
+                ('probe_duration_seconds{service="radicale"}', "probe s"),
+            ],
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(calsrc_row_2, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Calendar + Gmail + Email→Cal
     r, y = row_divider("Calendar + Gmail + Email→Calendar", y)
     panels.append(r)
 
     calgmail_row_1 = [
         timeseries(
-            "Calendar API (calls + errors by operation)",
+            "Calendar tools: check/create (calls + errors)",
             [
                 ("sum by (operation) (rate(bgw_calendar_api_calls_total[15m])) * 60", "{{operation}}"),
                 ("sum by (operation) (rate(bgw_calendar_api_errors_total[15m])) * 60", "err {{operation}}"),
@@ -794,7 +862,7 @@ def build() -> dict:
             unit="none",
         ),
         timeseries(
-            "Calendar API Latency p95 by operation",
+            "Calendar tools latency p95 (check/create)",
             [
                 (
                     "histogram_quantile(0.95, sum by (le, operation) (rate(bgw_calendar_api_duration_seconds_bucket[15m])))",

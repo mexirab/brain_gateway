@@ -1,16 +1,16 @@
 """Calendar and email-to-calendar API routes."""
 
+import json
 import logging
-import re
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from orchestrator import shared
-from orchestrator.google_calendar import get_calendar_client
-from orchestrator.shared import profile
+from orchestrator.metrics import PHONE_CALENDAR_LAST_SYNC, PHONE_CALENDAR_SYNC_REJECTED
 
 logger = logging.getLogger(__name__)
 
@@ -32,206 +32,185 @@ async def run_email_to_calendar():
 
 @router.get("/api/calendar/today")
 async def calendar_today():
-    """Get today's calendar events for the dashboard.
+    """Today's events for the dashboard, from every calendar source merged.
 
-    Merges events from two sources:
-    1. Phone calendar sync (iPhone Shortcut -- Outlook + Google + iCloud)
-    2. Google Calendar API (fallback if phone sync is stale/missing)
-
-    Phone sync is preferred when fresh (<24h old) since it aggregates all
-    iPhone calendars. Google Calendar is used as fallback. Events are
-    deduplicated by title + start time to avoid duplicates when Google
-    events appear in both sources.
+    Sources: the self-hosted personal calendar (CalDAV), the work calendar
+    pushed from the iPhone (Exchange), and Google while it's still enabled —
+    see calendar_sources. ``unavailable`` names sources that should have
+    answered but couldn't, so the card can say so instead of showing a
+    partial day as complete.
     """
     from zoneinfo import ZoneInfo
 
-    tz = ZoneInfo(profile.timezone)
+    from orchestrator import calendar_sources
+    from orchestrator.calendar_types import SOURCE_LABELS
+
+    # Same timezone calendar_sources builds its day window with.
+    tz = ZoneInfo(shared.TIMEZONE)
     today = datetime.now(tz).date()
-    merged: list[dict] = []
-    seen: set[str] = set()  # "title|start_iso" for dedup
-    source = "none"
+    resp = await calendar_sources.events_on(today)
+    unavailable = sorted({SOURCE_LABELS.get(s, s) for s in resp.failed_sources})
+    if not resp.success:
+        return {"ok": True, "events": [], "source": "none", "count": 0, "unavailable": unavailable}
 
-    def _parse_phone_datetime(s: str) -> datetime:
-        """Parse date strings from iPhone Shortcuts.
+    events = []
+    for ev in resp.events:
+        label = calendar_sources.event_label(ev)
+        events.append(
+            {
+                "id": ev.id,
+                "title": ev.title,
+                "start": ev.start.isoformat(),
+                "end": ev.end.isoformat(),
+                "location": ev.location or None,
+                "description": None,
+                "all_day": ev.all_day,
+                "calendar": label or (ev.calendar_name or SOURCE_LABELS.get(ev.source, ev.source)),
+                "source": ev.source,
+            }
+        )
+    return {"ok": True, "events": events, "source": "merged", "count": len(events), "unavailable": unavailable}
 
-        Handles formats like:
-        - "Mar 4, 2026 at 10:00\u202fAM"  (narrow no-break space before AM/PM)
-        - "Mar 4, 2026 at 1:00 PM"         (regular space)
-        - "2026-03-04T10:00:00"            (ISO format)
-        """
-        if not s:
-            raise ValueError("empty date string")
-        # Try ISO first
-        try:
-            return datetime.fromisoformat(s)
-        except ValueError:
-            pass
-        # Normalize unicode spaces and "at" keyword
-        cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
-        # Remove extra whitespace
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        # Try common iOS Shortcut formats
-        for fmt in (
-            "%b %d, %Y %I:%M %p",  # "Mar 4, 2026 1:00 PM"
-            "%B %d, %Y %I:%M %p",  # "March 4, 2026 1:00 PM"
-            "%m/%d/%Y %I:%M %p",  # "03/04/2026 1:00 PM"
-            "%b %d, %Y",  # "Mar 4, 2026" (all-day)
-        ):
-            try:
-                return datetime.strptime(cleaned, fmt)
-            except ValueError:
-                continue
-        raise ValueError(f"unrecognized date format: {s!r}")
 
-    # Source 1: Phone calendar sync (has ALL calendars)
-    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-    if shared._phone_calendar_events and phone_age < 86400:
-        source = "phone"
-        for ev in shared._phone_calendar_events:
-            try:
-                start_str = ev.get("start", "")
-                start = _parse_phone_datetime(start_str)
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=tz)
-                if start.date() != today:
-                    continue
+# Limits on what the iPhone Shortcut may push (the body is otherwise stored as-is).
+_SYNC_MAX_BYTES = 1_000_000
+_SYNC_MAX_EVENTS = 1000
+_SYNC_FIELDS = {"title": 300, "start": 64, "end": 64, "location": 300, "calendar": 100, "id": 200}
+_SYNC_SOURCES = ("exchange", "phone")
 
-                end_str = ev.get("end", "")
-                end = None
-                if end_str:
-                    try:
-                        end = _parse_phone_datetime(end_str)
-                        if end.tzinfo is None:
-                            end = end.replace(tzinfo=tz)
-                    except ValueError:
-                        pass
 
-                title = ev.get("title", "(No title)")
-                dedup_key = f"{title.lower().strip()}|{start.isoformat()}"
-                if dedup_key in seen:
-                    continue
-                seen.add(dedup_key)
+def _clean_sync_record(ev: dict) -> dict:
+    """Keep only the fields Jess uses, capped. iOS sometimes adds a trailing
+    space to keys ("calendar "), so both spellings are accepted. Descriptions
+    and notes are dropped — they're never shown and can be large/sensitive."""
+    out: dict = {}
+    for key, cap in _SYNC_FIELDS.items():
+        v = ev.get(key, ev.get(key + " "))
+        if v is None:
+            continue
+        out[key] = " ".join((v if isinstance(v, str) else str(v)).split())[:cap]
+    all_day = ev.get("all_day", ev.get("all_day "))
+    if all_day is not None:
+        out["all_day"] = all_day if isinstance(all_day, bool) else str(all_day)[:8]
+    return out
 
-                # Handle trailing-space key from iOS ("calendar " vs "calendar")
-                cal_name = ev.get("calendar") or ev.get("calendar ") or ""
 
-                merged.append(
-                    {
-                        "id": ev.get("id", f"phone_{len(merged)}"),
-                        "title": title.strip(),
-                        "start": start.isoformat(),
-                        "end": end.isoformat() if end else start.isoformat(),
-                        "location": ev.get("location") or None,
-                        "description": ev.get("description") or None,
-                        "all_day": ev.get("all_day", False),
-                        "calendar": cal_name.strip(),
-                        "source": "phone",
-                    }
-                )
-            except (ValueError, TypeError) as exc:
-                logger.warning(
-                    f"[CALENDAR] Skipping phone event: {type(exc).__name__} (fields: {sorted(ev) if isinstance(ev, dict) else type(ev).__name__})"
-                )
-                continue
-    else:
-        # Source 2: Google Calendar API (fallback)
-        source = "google"
-        cal = get_calendar_client()
-        if cal and cal.is_configured:
-            result = await cal.list_events(days_ahead=1)
-            if result.success:
-                for e in result.events:
-                    title = e.title
-                    dedup_key = f"{title.lower()}|{e.start.isoformat()}"
-                    seen.add(dedup_key)
-                    merged.append(
-                        {
-                            "id": e.id,
-                            "title": title,
-                            "start": e.start.isoformat(),
-                            "end": e.end.isoformat(),
-                            "location": e.location or None,
-                            "description": e.description or None,
-                            "all_day": e.all_day,
-                            "calendar": "Google",
-                            "source": "google",
-                        }
-                    )
-
-    # Sort by start time (all-day events first, then by time)
-    merged.sort(key=lambda e: (0 if e.get("all_day") else 1, e["start"]))
-
-    return {"events": merged, "source": source, "count": len(merged)}
+def _reject(reason: str, message: str, status: int = 400) -> JSONResponse:
+    PHONE_CALENDAR_SYNC_REJECTED.labels(reason=reason).inc()
+    logger.warning(f"[PHONE_SYNC] Rejected push: {reason}")
+    return JSONResponse({"ok": False, "error": message}, status_code=status)
 
 
 @router.api_route("/api/calendar/sync", methods=["GET", "POST", "PUT"])
 async def sync_phone_calendar(req: Request):
-    """Receive consolidated calendar events from iPhone Shortcut, or return status.
+    """Receive the work (Exchange) calendar from the iPhone Shortcut, or return status.
 
-    GET: Returns sync status (last sync time, event count).
-    POST/PUT: Receives calendar events from iPhone Shortcut.
+    GET: sync status (last sync age, event count, source).
+    POST/PUT: a FULL snapshot that replaces the previous one. The Shortcut must
+    collect every event into a list and post it ONCE — a post per event inside
+    a Repeat loop would leave only the last event, so a bare single-event
+    object is rejected (400) rather than silently stored.
 
-    Accepts multiple body formats for flexibility with iOS Shortcuts:
-    1. {"events": [...]}           -- wrapped in events key
-    2. [...]                       -- bare list at top level
-    3. {"events": {"0": {...}}}    -- iOS dict-of-dicts (auto-converted)
-    4. {"events": {single event}}  -- single event dict (auto-wrapped)
+    Accepted bodies:
+    1. {"source": "exchange", "events": [...]}   -- the work-calendar Shortcut (read by Jess)
+    2. {"events": [...]} / [...]                 -- no source: legacy push, stored as "phone"
+                                                    and ignored by calendar_sources (retired)
+    3. {"events": {"0": {...}, "1": {...}}}      -- iOS dict-of-dicts (converted)
+
+    A snapshot with records but none parseable is rejected (422) and the
+    previous snapshot is kept, so a broken Shortcut shows up as a stale sync
+    (ExchangeCalendarSyncStale) instead of an empty calendar.
     """
-    # GET or no body -> return status
+    from orchestrator.calendar_sources import phone_record_to_event
+
     if req.method == "GET":
-        sync_age = ""
         if shared._phone_calendar_sync_time > 0:
             age_min = int((time.time() - shared._phone_calendar_sync_time) / 60)
             sync_age = f"{age_min} minutes ago"
         else:
             sync_age = "never"
         return {
+            "ok": True,
             "synced": shared._phone_calendar_sync_time > 0,
             "last_sync": sync_age,
             "event_count": len(shared._phone_calendar_events),
+            "source": shared._phone_calendar_source or None,
         }
 
-    # POST/PUT -> receive events
-    # iOS Shortcuts sends one event per request inside a Repeat loop.
-    # Accumulate events arriving within 60s as a single batch.
     try:
-        raw_body = await req.body()
+        # Read with a running cap: RequestSizeLimitMiddleware only checks
+        # Content-Length, and a chunked body would otherwise be buffered whole.
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in req.stream():
+            size += len(chunk)
+            if size > _SYNC_MAX_BYTES:
+                return _reject("too_large", "body too large", 413)
+            chunks.append(chunk)
+        raw_body = b"".join(chunks)
         if not raw_body:
-            return JSONResponse({"error": "empty body"}, status_code=400)
+            return _reject("empty", "empty body")
+        # Log only the size: the body holds calendar titles and locations.
+        logger.debug(f"[PHONE_SYNC] Raw body ({len(raw_body)} bytes)")
 
-        # Log only the size: the body holds calendar titles, locations and notes.
-        truncated = " [truncated]" if len(raw_body) > 2000 else ""
-        logger.debug(f"[PHONE_SYNC] Raw body ({len(raw_body)} bytes){truncated}")
+        try:
+            body = json.loads(raw_body)
+        except ValueError:
+            return _reject("bad_json", "body is not JSON")
 
-        body = await req.json()
-
-        # Normalize: accept multiple input shapes from iOS Shortcuts
+        # The work-calendar Shortcut sends "source": "exchange". A body without
+        # it is the legacy all-calendars push ("phone"): stored, but not read
+        # (calendar_sources treats it as retired) — never mislabelled as work.
+        source = "phone"
         if isinstance(body, list):
             events = body
         elif isinstance(body, dict):
-            events = body.get("events", body)
+            if body.get("source") in _SYNC_SOURCES:
+                source = body["source"]
+            if "events" not in body:
+                return _reject("single_event", 'expected {"events": [...]} with the full list, posted once')
+            events = body["events"]
             if isinstance(events, dict):
-                if all(isinstance(v, dict) for v in events.values()):
+                if events and all(isinstance(v, dict) for v in events.values()):
                     events = list(events.values())
                 else:
-                    events = [events]
+                    return _reject("single_event", "expected a list of events, posted once — not one event per request")
         else:
-            return JSONResponse({"error": f"unexpected body type: {type(body).__name__}"}, status_code=400)
+            return _reject("bad_shape", "unexpected body type")
 
         if not isinstance(events, list):
-            events = [events]
+            return _reject("bad_shape", "events must be a list")
+        if len(events) > _SYNC_MAX_EVENTS:
+            return _reject("too_many", f"at most {_SYNC_MAX_EVENTS} events per sync", 413)
 
-        # Each POST is a full calendar snapshot — replace, don't append.
-        shared._phone_calendar_events = events
+        cleaned = [_clean_sync_record(ev) for ev in events if isinstance(ev, dict)]
+        tz = ZoneInfo(shared.TIMEZONE)
+        parsed = 0
+        for rec in cleaned:
+            try:
+                phone_record_to_event(rec, tz, source)
+                parsed += 1
+            except (ValueError, TypeError, AttributeError):
+                continue
+        if events and parsed == 0:
+            return _reject("unparseable", "no event had a readable start time — snapshot not stored", 422)
+
+        shared._phone_calendar_events = cleaned
+        shared._phone_calendar_source = source
         shared._phone_calendar_sync_time = time.time()
         shared._save_phone_calendar()
-        logger.info(f"[PHONE_SYNC] Replaced batch with {len(events)} event(s)")
+        if source == "exchange":
+            PHONE_CALENDAR_LAST_SYNC.set(shared._phone_calendar_sync_time)
+        logger.info(f"[PHONE_SYNC] Stored {source} snapshot: {parsed}/{len(cleaned)} event(s) parseable")
 
         return {
             "ok": True,
-            "events_received": len(shared._phone_calendar_events),
-            "message": f"Synced {len(shared._phone_calendar_events)} calendar events",
+            "source": source,
+            "used": source == "exchange",
+            "events_received": len(cleaned),
+            "events_parsed": parsed,
+            "message": f"Synced {len(cleaned)} calendar events",
         }
     except Exception as e:
-        logger.error(f"[PHONE_SYNC] Error: {e}")
+        logger.error(f"[PHONE_SYNC] Error: {type(e).__name__}")
         return JSONResponse({"error": "Calendar sync failed"}, status_code=500)

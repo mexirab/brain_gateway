@@ -116,12 +116,15 @@ async def wind_down_nudge():
             from orchestrator.jobs_calendar import get_tomorrow_events
 
             tz = ZoneInfo(TIMEZONE)
-            events, _source = await get_tomorrow_events(tz, log_tag="WIND_DOWN")
+            events, _source, cal_note = await get_tomorrow_events(tz, log_tag="WIND_DOWN")
             timed = [e for e in events if not e["all_day"]]
             if timed:
                 first = timed[0]
                 time_str = first["start"].strftime("%I:%M %p").lstrip("0")
                 anchor = f"Tomorrow's first thing is {first['title']} at {time_str} — you're covered."
+            elif cal_note:
+                # Never "nothing early tomorrow" off a calendar we couldn't read.
+                anchor = ""
         except Exception as cal_err:
             logger.warning(f"[WIND_DOWN] Tomorrow lookup failed: {cal_err}")
             anchor = ""

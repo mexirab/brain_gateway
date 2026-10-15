@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from orchestrator.log_config import configure_logging
-from orchestrator.metrics import AUTO_LEARN_DROPPED, EMBEDDING_HEALTHY
+from orchestrator.metrics import AUTO_LEARN_DROPPED, EMBEDDING_HEALTHY, PHONE_CALENDAR_LAST_SYNC
 
 # Configure structured JSON logging
 configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
@@ -44,6 +44,7 @@ logging.getLogger().addHandler(log_ring)
 from apscheduler.events import EVENT_JOB_MISSED
 
 from orchestrator import (
+    calendar_sources,
     shared,
     state_store,  # REST API routes (infrastructure endpoints)
 )
@@ -51,6 +52,7 @@ from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
 from orchestrator.background_jobs import evening_briefing, morning_briefing, poll_calendar, process_emails_for_events
+from orchestrator.calendar_sources import get_calendar
 from orchestrator.cloud_brain import CloudBrain
 
 # Fast-path for simple device commands (bypasses LLMs)
@@ -59,7 +61,6 @@ from orchestrator.finance_manager import router as finance_router
 
 # Focus session management
 from orchestrator.focus_manager import deliver_focus_break
-from orchestrator.google_calendar import get_calendar_client
 
 # Model lifecycle management
 from orchestrator.model_manager import check_model_health, start_model_server
@@ -648,12 +649,19 @@ async def _startup_logic():
     shared._ha_tool_cache_time = 0.0
     logger.info(f"[orchestrator] Loaded {count} HA entities")
 
-    # Initialize Google Calendar client
-    cal_client = get_calendar_client(http_client=_http)
-    if cal_client.is_configured:
-        logger.info("[orchestrator] Google Calendar configured — tools enabled")
-    else:
-        logger.info("[orchestrator] Google Calendar not configured — tools disabled (run google_setup.py)")
+    # Initialize the calendar sources (self-hosted CalDAV, iPhone work push,
+    # Google while enabled). See calendar_sources.
+    cal_client = get_calendar(http_client=_http)
+    _cal = calendar_sources.health()
+    logger.info(
+        f"[orchestrator] Calendar sources — caldav: {_cal['caldav']['configured']}, "
+        f"google: {_cal['google']['configured']}, phone sync: {_cal['phone_sync']['expected']}"
+    )
+    # Seed from the persisted push so ExchangeCalendarSyncStale ages from the
+    # real last sync, not from this restart (0 = never synced).
+    # Only a work (Exchange) push arms the alert; a legacy all-calendars
+    # push is retired and reads as "never synced" (0).
+    PHONE_CALENDAR_LAST_SYNC.set(shared._phone_calendar_sync_time if shared._phone_calendar_source == "exchange" else 0)
 
     # Initialize CloudBrain (v7 unified)
     cloud_brain = CloudBrain(

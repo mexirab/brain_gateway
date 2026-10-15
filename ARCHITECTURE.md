@@ -65,8 +65,8 @@ User Request → Orchestrator
 | `tool_start_focus()` | → Endel audio + Pi-hole blocking + timer |
 | `tool_focus_status()` | → Check remaining focus time |
 | `tool_web_search()` | → `web_search.SearXNGClient.search()` |
-| `tool_check_calendar()` | → `google_calendar.GoogleCalendarClient.list_events()` |
-| `tool_create_calendar_event()` | → `google_calendar.GoogleCalendarClient.create_event()` |
+| `tool_check_calendar()` | → `calendar_sources.get_events()` (CalDAV + work push + Google merged) |
+| `tool_create_calendar_event()` | → `calendar_sources.create_event()` (CalDAV, else Google) |
 | `tool_check_email()` | → `google_gmail.GmailClient.check_inbox()` |
 | `tool_search_email()` | → `google_gmail.GmailClient.search()` |
 
@@ -90,9 +90,10 @@ CalendarEvent(id, title, start, end, location, description, all_day)
 CalendarResponse(success, events, error)
 
 # Client methods
-GoogleCalendarClient.list_events(days_ahead=7) → CalendarResponse
-GoogleCalendarClient.create_event(title, start_time, duration_minutes=60, ...) → CalendarResponse
-GoogleCalendarClient.get_upcoming(hours_ahead=2) → CalendarResponse  # for proactive polling
+# Calendar reads/writes go through calendar_sources (see docs/CALENDAR.md)
+calendar_sources.get_events(start, end) → CalendarResponse  # merged, with failed_sources
+calendar_sources.create_event(title, start_time, ...) → CalendarResponse
+GoogleCalendarClient.list_window(start, end) → CalendarResponse  # Google source, paginated
 
 # Singleton
 get_calendar_client(http_client=_http) → GoogleCalendarClient
@@ -188,7 +189,7 @@ YAML (source) → Markdown (for RAG) → ChromaDB (via watch_and_ingest.py)
 
 ```
 1. APScheduler triggers poll_calendar() every 5 min
-2. GoogleCalendarClient.get_upcoming(hours_ahead=2)
+2. get_calendar().get_upcoming(hours_ahead=2) — facade over calendar_sources (all sources merged)
 3. Tiered alerts: picks closest un-announced tier (60/30/15/5 min),
    auto-marks larger tiers as notified on catch-up
 4. TTS via _announce_voice() → HA media_player (with speaker fallback)

@@ -20,9 +20,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from orchestrator import shared
+from orchestrator import calendar_sources, shared
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
-from orchestrator.google_calendar import get_calendar_client
 from orchestrator.metrics import (
     FALLBACK_ONLINE,
     FOCUS_ACTIVE,
@@ -131,13 +130,13 @@ async def health(req: Request):
     scheduled_jobs = len(scheduler.get_jobs())
 
     # Shared health fields (calendar, RAG, HA, scheduler, focus, endel)
-    cal_client = get_calendar_client()
+    cal_health = calendar_sources.health()
     common_fields = {
         "calendar": {
-            "configured": cal_client.is_configured,
-            "poll_interval_min": CALENDAR_POLL_INTERVAL if cal_client.is_configured else None,
+            **cal_health,
+            "poll_interval_min": CALENDAR_POLL_INTERVAL if cal_health["configured"] else None,
             "morning_briefing": MORNING_BRIEFING_TIME
-            if MORNING_BRIEFING_ENABLED and cal_client.is_configured
+            if MORNING_BRIEFING_ENABLED and cal_health["configured"]
             else None,
         },
         "rag_collection": CHROMA_COLLECTION,

@@ -201,7 +201,25 @@ These env vars are bootstrap defaults. Once the runtime YAML at `SELFCARE_SCHEDU
 | `EMAIL_TO_CALENDAR_ENABLED` | `false` | Enable autonomous email→calendar event creation. **Dormant by default.** Flip to `true` to turn on. |
 | `EMAIL_TO_CALENDAR_INTERVAL` | `60` | Minutes between inbox scans |
 
-Implementation lives in `orchestrator/jobs_calendar.py::process_emails_for_events` and is wired into `orchestrator.py` startup behind the enable flag. See `jess-features/F-009-decision-simplifier.md` or the git log entry `840c77e` for context.
+Implementation lives in `orchestrator/jobs_calendar.py::process_emails_for_events` and is wired into `orchestrator.py` startup behind the enable flag. See `jess-features/F-009-decision-simplifier.md` or the git log entry `840c77e` for context. Events are written to CalDAV (`CALDAV_DEFAULT_CALENDAR`), or Google if CalDAV is off; the scan is skipped when no calendar is writable.
+
+## Calendar sources
+
+Read by `orchestrator/calendar_sources.py`, which merges CalDAV (Radicale), the iPhone work-calendar push and Google. Detail: `docs/CALENDAR.md`. `.env` changes need `docker compose up -d --force-recreate orchestrator`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CALDAV_ENABLED` | `true` | Master switch for the CalDAV source. CalDAV is active only when it's on AND URL/username/password are all set. |
+| `CALDAV_URL` | (empty) | CalDAV server, e.g. `http://radicale:5232`. Must be `http(s)://`; operator-trusted like `MODEL_URL`. |
+| `CALDAV_USERNAME` / `CALDAV_PASSWORD` | (empty) | Jess's CalDAV login (Radicale user `jess`). Secret. |
+| `CALDAV_CALENDAR_HOME` | `/<username>/` | Collection holding the calendars to read (live: `/owner/`). |
+| `CALDAV_CALENDARS` | (empty = all) | Optional comma list of calendar ids or display names to read. |
+| `CALDAV_DEFAULT_CALENDAR` | (empty = first alphabetically) | Calendar (id or display name) that `create_calendar_event` and email→calendar write to. A name that doesn't exist → write refused, not guessed. |
+| `CALENDAR_GOOGLE_ENABLED` | `true` | Google Calendar as a source (read; write only when CalDAV is off). Turn off once migrated (plan milestone 5). |
+| `PHONE_CALENDAR_SYNC_ENABLED` | `true` | Accept the iPhone Shortcut push at `/api/calendar/sync`. |
+| `PHONE_CALENDAR_MAX_AGE_HOURS` | `26` | A work (Exchange) push older than this is stale: not shown, and reported as "couldn't reach your work calendar". Matches `ExchangeCalendarSyncStale`. Values ≤0 reset to 26. |
+
+`config.py` `validate_caldav_config` disables CalDAV (logs an error, never raises) when only some of URL/username/password are set or the URL isn't http(s). Nothing set = simply not configured, no log.
 
 ## Weather (morning briefing)
 

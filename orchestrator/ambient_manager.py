@@ -6,8 +6,7 @@ LED status indicator via HA, ambient dashboard mode support.
 """
 
 import logging
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
@@ -27,63 +26,29 @@ async def get_ambient_status() -> Dict[str, Any]:
     now = datetime.now(tz)
     status: Dict[str, Any] = {"timestamp": now.isoformat()}
 
-    # Schedule density + next event. Source priority mirrors
-    # tool_check_calendar / morning_briefing: phone sync first (superset —
-    # covers iCloud + Work + Gmail), Google as fallback. Previously this path
-    # hit Google directly and silently missed events that only lived on the
-    # iPhone calendars (observed 2026-04-17: 10am summary announced "no more
-    # events today" while a 1pm event was on the phone sync only).
-    window_end = now + timedelta(hours=12)
+    # Schedule density + next event, from every calendar source merged
+    # (calendar_sources: personal CalDAV + work Exchange push + Google while
+    # enabled). "unknown" when no source answers, never a false "clear".
     upcoming: list[Dict[str, Any]] = []
     source: str | None = None
 
     try:
-        from orchestrator.jobs_calendar import _parse_phone_datetime
+        from orchestrator import calendar_sources
 
-        phone_age = (
-            time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-        )
-        phone_parsed_count = 0
-        if shared._phone_calendar_events and phone_age < 86400:
-            for ev in shared._phone_calendar_events:
-                try:
-                    start = _parse_phone_datetime(ev.get("start", ""), tz)
-                    phone_parsed_count += 1
-                    if start.tzinfo is None:
-                        start = start.replace(tzinfo=tz)
-                    if ev.get("all_day", False):
-                        continue
-                    if not (now <= start < window_end):
-                        continue
-                    upcoming.append({"title": ev.get("title", "(No title)"), "start": start})
-                except (ValueError, TypeError):
+        response = await calendar_sources.upcoming(12)
+        if response.success:
+            for e in response.events:
+                if e.all_day or e.start < now:
                     continue
-            # Same defensive guard as tool_check_calendar: records present but
-            # none parseable -> treat phone sync as broken and fall through.
-            if phone_parsed_count == 0:
-                logger.warning(
-                    f"[AMBIENT] Phone cache has {len(shared._phone_calendar_events)} records "
-                    f"but zero parsed — falling back to Google."
-                )
-            else:
-                source = "phone"
-                upcoming.sort(key=lambda e: e["start"])
-                logger.info(f"[AMBIENT] Using phone sync ({len(upcoming)} upcoming in 12h window)")
-
-        if source is None:
-            from orchestrator.google_calendar import get_calendar_client
-
-            client = get_calendar_client(http_client=shared._http)
-            if client and client.is_configured:
-                response = await client.get_upcoming(hours_ahead=12)
-                if response.success:
-                    for e in response.events:
-                        if e.all_day:
-                            continue
-                        upcoming.append({"title": e.title, "start": e.start})
-                    upcoming.sort(key=lambda x: x["start"])
-                    source = "google"
-                    logger.info(f"[AMBIENT] Using Google ({len(upcoming)} upcoming in 12h window)")
+                upcoming.append({"title": e.title, "start": e.start})
+            upcoming.sort(key=lambda x: x["start"])
+            # Nothing upcoming but a source couldn't be read: we don't actually
+            # know the schedule is clear, so leave density "unknown".
+            source = None if (not upcoming and response.failed_sources) else "calendar"
+            logger.info(
+                f"[AMBIENT] {len(upcoming)} upcoming in 12h window, "
+                f"{len(response.failed_sources)} source(s) unavailable"
+            )
 
         if source is not None:
             status["events_remaining"] = len(upcoming)

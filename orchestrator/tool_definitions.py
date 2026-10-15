@@ -447,7 +447,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "check_calendar",
-            "description": "Check the user's Google Calendar for upcoming events. Use when they ask about their schedule, what's on their calendar, or what's happening today/tomorrow/this week.",
+            "description": "Check the user's calendars for upcoming events — their personal calendar plus their work calendar (work events are tagged [work]). Use when they ask about their schedule, what's on their calendar, or what's happening today/tomorrow/this week.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -464,7 +464,7 @@ STATIC_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_calendar_event",
-            "description": "Create a new event on the user's Google Calendar. Use when they ask to add, schedule, or create a calendar event.",
+            "description": "Create a new event on the user's personal calendar. Use when they ask to add, schedule, or create a calendar event. Their work calendar is read-only — never offer to put something on it.",
             "parameters": {
                 "type": "object",
                 "properties": {

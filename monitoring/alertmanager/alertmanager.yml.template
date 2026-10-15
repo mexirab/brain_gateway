@@ -25,13 +25,19 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|SelfAuditStale|SelfAuditFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
     # day is enough.
     - matchers:
         - alertname="AnnouncementSpeakerUnavailable"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
+    # A stale work-calendar sync needs the owner to fix the iPhone Shortcut —
+    # once a day is enough, like the dead-speaker notice.
+    - matchers:
+        - alertname="ExchangeCalendarSyncStale"
       receiver: "pushover-quiet"
       repeat_interval: 24h
 receivers:

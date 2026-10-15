@@ -10,7 +10,7 @@ All orchestrator endpoints live on port 8888. Many endpoints require `Authorizat
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | Status, versions, counts |
+| GET | `/health` | Status, versions, counts (authenticated: includes a `calendar` block, see Calendar & Email) |
 | GET | `/metrics` | Prometheus metrics (bearer-auth) |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
 | GET | `/v1/models` | List models |
@@ -118,9 +118,15 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/calendar/today` | Today's calendar events (phone sync + Google fallback) |
-| GET/POST/PUT | `/api/calendar/sync` | Phone calendar sync (GET=status, POST/PUT=receive events) |
-| POST | `/api/email-to-calendar/run` | Manually trigger email-to-calendar extraction (dormant by default — see `EMAIL_TO_CALENDAR_ENABLED`) |
+| GET | `/api/calendar/today` | Today's events from every source merged (`calendar_sources`: CalDAV + work Exchange push + Google) |
+| GET/POST/PUT | `/api/calendar/sync` | Work-calendar (Exchange) push from the iPhone Shortcut (GET=status, POST/PUT=full snapshot) |
+| POST | `/api/email-to-calendar/run` | Manually trigger email-to-calendar extraction (dormant by default — see `EMAIL_TO_CALENDAR_ENABLED`); writes to CalDAV (else Google), skipped when nothing is writable |
+
+**`GET /api/calendar/today`** → `{ok, events: [{id, title, start, end, location, description: null, all_day, calendar, source}], source: "merged"|"none", count, unavailable: [<source label>]}`. `unavailable` lists sources that should have answered but failed (dashboard shows "Couldn't reach your X calendar"); `source: "none"` when no source answered.
+
+**`POST/PUT /api/calendar/sync`** body: `{"source": "exchange", "events": [{title, start, end, location, all_day, calendar?, id?}]}` — a full snapshot posted once; it replaces the previous one. Without `"source": "exchange"` (bare list or `{"events": [...]}`) it's the retired legacy push: stored as `phone`, ignored by Jess. iOS dict-of-dicts `events` is converted. Only the listed fields are kept (length-capped, whitespace collapsed); descriptions are dropped. Limits/rejections (counted in `bgw_phone_calendar_sync_rejected_total{reason}`): body >1 MB (streamed cap) or >1000 events → 413; single-event body / bad shape / bad JSON / empty → 400; events present but none with a readable start → 422 (previous snapshot kept). Success → `{ok, source, used: source=="exchange", events_received, events_parsed, message}`. **GET** → `{ok, synced, last_sync, event_count, source}`.
+
+**`/health` `calendar` block** (authenticated): `{configured, caldav: {configured, last}, google: {configured, last}, phone_sync: {expected, source, last, age_minutes, event_count}, poll_interval_min, morning_briefing}` where `last` = `{result, at}` of the most recent read (`ok|error|timeout|stale|corrupt`) or `null`.
 
 ### Progress Tracking
 
@@ -154,7 +160,7 @@ Live deployment: `VISION_MODEL_URL=http://10.0.0.195:8080/v1`, `VISION_MODEL_NAM
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color). Calendar source: phone-sync-first (<24h, at least one parseable record) → Google fallback. Same priority as `check_calendar` and `morning_briefing` — see `docs/GOOGLE_INTEGRATIONS.md` → Phone Calendar Sync. |
+| GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color). Calendar: merged via `calendar_sources` (same as `check_calendar` and the briefings); schedule reads "unknown" when a source fails — see `docs/CALENDAR.md`. |
 
 ### Helios Power (PT-C)
 
@@ -780,6 +786,7 @@ See `.env.example` for full list. Key vars:
 | GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |
 | GOOGLE_TOKEN_PATH | OAuth2 token JSON path |
 | CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 5) |
+| CALDAV_*, CALENDAR_GOOGLE_ENABLED, PHONE_CALENDAR_MAX_AGE_HOURS | Calendar sources — see `docs/ENV_VARS.md` → Calendar sources |
 | MORNING_BRIEFING_TIME | HH:MM for morning briefing (default: 07:00 in config.py; .env.example sets 07:30) |
 | MORNING_BRIEFING_ENABLED | true/false (default: true) |
 | EVENING_BRIEFING_TIME | HH:MM for the evening shutdown ritual (default: 21:30) |

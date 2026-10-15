@@ -10,15 +10,14 @@ import contextlib
 import json
 import logging
 import os
-import re
-import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from orchestrator import shared, state_store
-from orchestrator.google_calendar import get_calendar_client
+from orchestrator import calendar_sources, shared, state_store
+from orchestrator.calendar_sources import get_calendar
+from orchestrator.calendar_types import SOURCE_EXCHANGE
 from orchestrator.google_gmail import get_gmail_client
 from orchestrator.metrics import (
     CALENDAR_POLL_EVENTS_FOUND,
@@ -170,8 +169,8 @@ async def poll_calendar():
     tiered = shared.CALENDAR_TIERED_ALERTS
     tiers = sorted(shared.CALENDAR_ALERT_TIERS, reverse=True)  # e.g. [60, 30, 15, 5]
 
-    client = get_calendar_client()
-    if not client or not client.is_configured:
+    client = get_calendar()
+    if not client.is_configured:
         return
 
     try:
@@ -184,14 +183,24 @@ async def poll_calendar():
         for event in response.events:
             if event.all_day:
                 continue
+            # "Already announced" state is keyed on the event's identity (title +
+            # start), not its source id: during the Google→CalDAV migration the
+            # same event exists in both, and a source flipping must not re-announce.
+            akey = calendar_sources.alert_key(event)
+            ref = calendar_sources.log_ref(akey)
             minutes = int((event.start - now).total_seconds() / 60)
             if minutes < 0 or minutes > 120:
                 continue
 
             # --- Travel-time-aware announcement for events with locations ---
-            travel_key = f"travel:{event.id}"
+            travel_key = f"travel:{akey}"
+            # Work (Exchange) locations come from external meeting invites and
+            # are usually rooms/links — never send them to Google Maps.
             has_physical_location = (
-                event.location and shared.GOOGLE_MAPS_API_KEY and not state_store.is_notified(travel_key)
+                event.location
+                and event.source != SOURCE_EXCHANGE
+                and shared.GOOGLE_MAPS_API_KEY
+                and not state_store.is_notified(travel_key)
             )
 
             if has_physical_location:
@@ -200,7 +209,7 @@ async def poll_calendar():
                     drive_min = travel.duration_in_traffic_minutes
                     leave_by_min = minutes - drive_min - shared.TRAVEL_TIME_BUFFER
 
-                    if leave_by_min <= 0 and not state_store.is_notified(f"cal:{event.id}:leave_now"):
+                    if leave_by_min <= 0 and not state_store.is_notified(f"cal:{akey}:leave_now"):
                         message = (
                             f"{profile.user_name}, you should leave now for {event.title}. "
                             f"It's a {drive_min} minute drive to {event.location}."
@@ -208,15 +217,15 @@ async def poll_calendar():
                         result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
                             state_store.mark_notified(travel_key)
-                            state_store.mark_notified(f"cal:{event.id}:leave_now")
+                            state_store.mark_notified(f"cal:{akey}:leave_now")
                             CALENDAR_POLL_EVENTS_FOUND.inc()
                             logger.info(
-                                f"[CALENDAR_POLL] LEAVE NOW (event {event.id}, {drive_min} min drive)",
+                                f"[CALENDAR_POLL] LEAVE NOW (event {ref}, {drive_min} min drive)",
                                 extra={"component": "calendar"},
                             )
                         else:
                             logger.error(
-                                f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
+                                f"[CALENDAR_POLL] TTS FAILED for event {ref}: {result.get('error')} — will retry next poll",
                                 extra={"component": "calendar"},
                             )
                         continue
@@ -232,12 +241,12 @@ async def poll_calendar():
                             state_store.mark_notified(travel_key)
                             CALENDAR_POLL_EVENTS_FOUND.inc()
                             logger.info(
-                                f"[CALENDAR_POLL] Leave in {leave_by_min} min (event {event.id}, {drive_min} min drive)",
+                                f"[CALENDAR_POLL] Leave in {leave_by_min} min (event {ref}, {drive_min} min drive)",
                                 extra={"component": "calendar"},
                             )
                         else:
                             logger.error(
-                                f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
+                                f"[CALENDAR_POLL] TTS FAILED for event {ref}: {result.get('error')} — will retry next poll",
                                 extra={"component": "calendar"},
                             )
                         continue
@@ -246,9 +255,7 @@ async def poll_calendar():
             if tiered:
                 # Smart suppression: skip if focus session is related to this event
                 if _is_focus_related(event):
-                    logger.debug(
-                        f"[CALENDAR_POLL] Suppressed nudge for event {event.id} — related focus session active"
-                    )
+                    logger.debug(f"[CALENDAR_POLL] Suppressed nudge for event {ref} — related focus session active")
                     continue
 
                 # Find the best matching tier: the largest tier that we've
@@ -259,13 +266,13 @@ async def poll_calendar():
                 for tier_min in sorted(tiers):
                     if minutes > tier_min:
                         continue  # not yet reached this tier
-                    tier_key = f"cal:{event.id}:{tier_min}"
+                    tier_key = f"cal:{akey}:{tier_min}"
                     if not state_store.is_notified(tier_key):
                         best_tier = tier_min
                         break  # closest un-announced tier
 
                 if best_tier is not None:
-                    tier_key = f"cal:{event.id}:{best_tier}"
+                    tier_key = f"cal:{akey}:{best_tier}"
                     template = _TIER_MESSAGES.get(
                         best_tier,
                         "{name}, {title} in " + str(best_tier) + " minutes.",
@@ -282,21 +289,21 @@ async def poll_calendar():
                             # Also mark all larger tiers as notified (catch-up)
                             for t in tiers:
                                 if t > best_tier:
-                                    state_store.mark_notified(f"cal:{event.id}:{t}")
+                                    state_store.mark_notified(f"cal:{akey}:{t}")
                             CALENDAR_POLL_EVENTS_FOUND.inc()
                             logger.info(
-                                f"[CALENDAR_POLL] Tier {best_tier}min (event {event.id}, actual: {minutes}min away)",
+                                f"[CALENDAR_POLL] Tier {best_tier}min (event {ref}, actual: {minutes}min away)",
                                 extra={"component": "calendar"},
                             )
                         else:
                             logger.error(
-                                f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
+                                f"[CALENDAR_POLL] TTS FAILED for event {ref}: {result.get('error')} — will retry next poll",
                                 extra={"component": "calendar"},
                             )
 
             else:
                 # --- Legacy single announcement ---
-                cal_key = f"cal:{event.id}"
+                cal_key = f"cal:{akey}"
                 if state_store.is_notified(cal_key):
                     continue
 
@@ -318,12 +325,10 @@ async def poll_calendar():
                 if result.get("success"):
                     state_store.mark_notified(cal_key)
                     CALENDAR_POLL_EVENTS_FOUND.inc()
-                    logger.info(
-                        f"[CALENDAR_POLL] Announced event {event.id} at {time_str}", extra={"component": "calendar"}
-                    )
+                    logger.info(f"[CALENDAR_POLL] Announced event {ref} at {time_str}", extra={"component": "calendar"})
                 else:
                     logger.error(
-                        f"[CALENDAR_POLL] TTS FAILED for event {event.id}: {result.get('error')} — will retry next poll",
+                        f"[CALENDAR_POLL] TTS FAILED for event {ref}: {result.get('error')} — will retry next poll",
                         extra={"component": "calendar"},
                     )
 
@@ -333,30 +338,8 @@ async def poll_calendar():
         logger.error(f"[CALENDAR_POLL] Unexpected error: {e}", exc_info=True)
 
 
-def _parse_phone_datetime(s: str, tz=None) -> datetime:
-    """Parse date strings from iPhone Shortcuts.
-
-    Handles: "Mar 4, 2026 at 10:00\u202fAM", ISO format, etc.
-    """
-    if not s:
-        raise ValueError("empty date string")
-    try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        pass
-    cleaned = s.replace("\u202f", " ").replace("\u00a0", " ").replace(" at ", " ")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    for fmt in (
-        "%b %d, %Y %I:%M %p",
-        "%B %d, %Y %I:%M %p",
-        "%m/%d/%Y %I:%M %p",
-        "%b %d, %Y",
-    ):
-        try:
-            return datetime.strptime(cleaned, fmt)
-        except ValueError:
-            continue
-    raise ValueError(f"unrecognized date format: {s!r}")
+# Kept for importers/tests; the parser lives in calendar_sources now.
+_parse_phone_datetime = calendar_sources.parse_phone_datetime
 
 
 def build_missed_recap(undelivered: list) -> str:
@@ -395,71 +378,25 @@ async def morning_briefing():
     MORNING_BRIEFING_LAST_RUN.set_to_current_time()
 
     try:
-        # Build unified event list from available sources
+        # Today's events from every calendar source, merged (personal CalDAV +
+        # work Exchange push + Google while enabled). A source that should
+        # answer but can't is named in the briefing instead of reading as a
+        # clear day.
         briefing_events = []
-
-        # Source 1: Phone calendar sync (preferred — has ALL calendars)
-        phone_age = (
-            time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-        )
-        phone_parsed_count = 0  # how many phone records had a valid start time
-        phone_fresh = bool(shared._phone_calendar_events) and phone_age < 86400  # synced within 24h
-        if phone_fresh:
-            for ev in shared._phone_calendar_events:
-                try:
-                    start_str = ev.get("start", "")
-                    start = _parse_phone_datetime(start_str, tz)
-                    phone_parsed_count += 1
-                    if start.tzinfo is None:
-                        start = start.replace(tzinfo=tz)
-                    if start.date() != today:
-                        continue
-                    is_all_day = ev.get("all_day", False)
-                    briefing_events.append(
-                        {
-                            "title": ev.get("title", "(No title)"),
-                            "start": start,
-                            "all_day": is_all_day,
-                            "calendar": ev.get("calendar") or ev.get("calendar ") or "",
-                            "location": ev.get("location", ""),
-                        }
-                    )
-                except (ValueError, TypeError):
-                    continue
-
-        # Defensive: if the phone cache is fresh and has records but NONE
-        # parsed (e.g. the iPhone Shortcut is posting empty payloads — observed
-        # 2026-04-17 where all records had title='' and start=''), treat the
-        # sync as broken and fall through to Google rather than announcing
-        # "your calendar is clear" off a corrupted source. Mirrors the same
-        # guard in tool_check_calendar / get_ambient_status.
-        if phone_fresh and phone_parsed_count == 0:
-            logger.warning(
-                f"[MORNING_BRIEFING] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
-                "likely broken iPhone Shortcut payload. Falling through to Google."
+        calendar_note = ""
+        cal_resp = await calendar_sources.events_on(today)
+        if cal_resp.success:
+            briefing_events = [calendar_sources.event_to_dict(ev) for ev in cal_resp.events]
+            calendar_note = calendar_sources.describe_failures(cal_resp.failed_sources)
+            logger.info(
+                f"[MORNING_BRIEFING] {len(briefing_events)} events today, "
+                f"{len(cal_resp.failed_sources)} source(s) unavailable"
             )
-
-        if phone_fresh and phone_parsed_count > 0:
-            logger.info(f"[MORNING_BRIEFING] Using phone calendar ({len(briefing_events)} today's events)")
+        elif cal_resp.failed_sources:
+            calendar_note = calendar_sources.describe_failures(cal_resp.failed_sources)
+            logger.warning(f"[MORNING_BRIEFING] No calendar source answered ({len(cal_resp.failed_sources)} failed)")
         else:
-            # Source 2: Google Calendar API (fallback)
-            client = get_calendar_client()
-            if client and client.is_configured:
-                response = await client.list_events(days_ahead=1)
-                if response.success:
-                    for event in response.events:
-                        briefing_events.append(
-                            {
-                                "title": event.title,
-                                "start": event.start,
-                                "all_day": event.all_day,
-                                "calendar": "Google",
-                                "location": event.location,
-                            }
-                        )
-                logger.info(f"[MORNING_BRIEFING] Using Google Calendar fallback ({len(briefing_events)} events)")
-            else:
-                logger.info("[MORNING_BRIEFING] No calendar source available")
+            logger.info("[MORNING_BRIEFING] No calendar source available")
 
         # Sort by time (all-day first, then by start time)
         briefing_events.sort(key=lambda e: (not e["all_day"], e["start"]))
@@ -508,6 +445,10 @@ async def morning_briefing():
                 else:
                     time_str = ev["start"].strftime("%I:%M %p").lstrip("0")
                     parts.append(f"At {time_str}: {ev['title']}")
+            if calendar_note:
+                parts.append(f"Heads up, {calendar_note}, so there may be more.")
+        elif calendar_note:
+            parts.append(f"{calendar_note[0].upper()}{calendar_note[1:]}, so I can't tell you what's on today.")
         else:
             parts.append("Your calendar is clear today.")
 
@@ -662,75 +603,31 @@ def _routine_active_or_imminent(window_seconds: int = 120) -> bool:
     return False
 
 
-async def get_tomorrow_events(tz, log_tag: str = "TOMORROW_EVENTS") -> tuple[list, str]:
-    """Build tomorrow's event list: phone-cache-first with the same zero-parsed
-    guard as morning_briefing, Google Calendar fallback.
+async def get_tomorrow_events(tz, log_tag: str = "TOMORROW_EVENTS") -> tuple[list, str, str]:
+    """Tomorrow's events from every calendar source (calendar_sources), merged.
 
-    Returns (events, source) where events are dicts sorted timed-first by
-    start ({title, start, all_day, location}) and source is phone|google|none.
+    Returns (events, source, note):
+    - events: dicts sorted timed-first by start ({title, start, all_day, location, ...}).
+      Timed events must START tomorrow — tonight's late event that runs past
+      midnight is not "tomorrow's first thing". All-day events overlapping
+      tomorrow are kept.
+    - source: comma-joined sources that answered, or "none".
+    - note: "" or e.g. "I couldn't reach your work calendar" — speak it so a
+      broken source never reads as a clear day.
     Shared by evening_briefing and the wind-down T-30 nudge.
     """
     tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
-    events = []
-    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-    phone_parsed_count = 0
-    phone_fresh = bool(shared._phone_calendar_events) and phone_age < 86400
-    if phone_fresh:
-        for ev in shared._phone_calendar_events:
-            try:
-                start = _parse_phone_datetime(ev.get("start", ""), tz)
-                phone_parsed_count += 1
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=tz)
-                if start.date() != tomorrow:
-                    continue
-                events.append(
-                    {
-                        "title": ev.get("title", "(No title)"),
-                        "start": start,
-                        "all_day": ev.get("all_day", False),
-                        "location": ev.get("location", ""),
-                    }
-                )
-            except (ValueError, TypeError):
-                continue
-
-    # Same guard as morning_briefing: fresh-but-corrupted phone cache must
-    # not read as "clear tomorrow" — fall through to Google instead.
-    if phone_fresh and phone_parsed_count == 0:
-        logger.warning(
-            f"[{log_tag}] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
-            "likely broken iPhone Shortcut payload. Falling through to Google."
-        )
-
-    source = "none"
-    if phone_fresh and phone_parsed_count > 0:
-        source = "phone"
-    else:
-        client = get_calendar_client()
-        if client and client.is_configured:
-            source = "google"
-            response = await client.list_events(days_ahead=2)
-            if response.success:
-                for event in response.events:
-                    start = event.start
-                    if start.tzinfo is None:
-                        start = start.replace(tzinfo=tz)
-                    if start.date() != tomorrow:
-                        continue
-                    events.append(
-                        {
-                            "title": event.title,
-                            "start": start,
-                            "all_day": event.all_day,
-                            "location": event.location,
-                        }
-                    )
-        else:
+    resp = await calendar_sources.events_on(tomorrow)
+    note = calendar_sources.describe_failures(resp.failed_sources)
+    if not resp.success:
+        if not resp.failed_sources:
             logger.info(f"[{log_tag}] No calendar source available")
-
+        return [], "none", note
+    midnight = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=tz)
+    events = [calendar_sources.event_to_dict(ev) for ev in resp.events if ev.all_day or ev.start >= midnight]
     events.sort(key=lambda e: (e["all_day"], e["start"]))
-    return events, source
+    answered = sorted({e["source"] for e in events}) or ["calendar"]
+    return events, ",".join(answered), note
 
 
 async def evening_briefing():
@@ -751,14 +648,16 @@ async def evening_briefing():
     EVENING_BRIEFING_LAST_RUN.set_to_current_time()
 
     try:
-        events, cal_source = await get_tomorrow_events(tz, log_tag="EVENING_BRIEFING")
+        events, cal_source, cal_note = await get_tomorrow_events(tz, log_tag="EVENING_BRIEFING")
         timed = [e for e in events if not e["all_day"]]
 
         parts = [f"Alright {profile.user_name}, wrapping up the day."]
 
         # Tomorrow's first event + leave-by time
         first = timed[0] if timed else (events[0] if events else None)
-        if first is None:
+        if first is None and cal_note:
+            parts.append(f"{cal_note[0].upper()}{cal_note[1:]}, so I can't tell you what's on tomorrow.")
+        elif first is None:
             parts.append("Nothing on the calendar tomorrow.")
         elif first["all_day"]:
             parts.append(f"Tomorrow, all day: {first['title']}.")
@@ -775,6 +674,8 @@ async def evening_briefing():
         if len(events) > 1:
             more = len(events) - 1
             parts.append(f"Plus {more} more event{'s' if more > 1 else ''} tomorrow.")
+        if first is not None and cal_note:
+            parts.append(f"Heads up, {cal_note}, so there may be more.")
 
         # Evening meds check — a failed lookup must never sink the ritual.
         try:
@@ -900,12 +801,12 @@ JSON ARRAY:"""
 async def process_emails_for_events():
     """Scan recent emails for events/appointments and auto-add to calendar."""
     gmail = get_gmail_client()
-    cal = get_calendar_client()
+    cal = get_calendar()
 
     if not gmail or not gmail.is_configured:
         return
-    if not cal or not cal.is_configured:
-        return
+    if not calendar_sources.writable():
+        return  # nowhere to write — don't spend LLM calls extracting events
 
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)

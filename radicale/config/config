@@ -17,6 +17,9 @@ htpasswd_filename = /secrets/users
 htpasswd_encryption = bcrypt
 # Seconds to wait after a failed login (slows password guessing).
 delay = 2
+# Cache successful logins so each CalDAV request (Jess does a PROPFIND +
+# one REPORT per calendar per read) doesn't pay a bcrypt verify.
+cache_logins = True
 
 [rights]
 type = from_file

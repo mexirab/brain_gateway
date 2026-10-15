@@ -5381,7 +5381,7 @@
     },
     {
       "type": "row",
-      "title": "Calendar + Gmail + Email\u2192Calendar",
+      "title": "Calendar Sources",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -5394,7 +5394,614 @@
     },
     {
       "type": "timeseries",
-      "title": "Calendar API (calls + errors by operation)",
+      "title": "Source reads by result (per min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source, result) (rate(bgw_calendar_source_fetch_total[15m])) * 60",
+          "legendFormat": "{{source}} {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 155
+      },
+      "id": 73
+    },
+    {
+      "type": "timeseries",
+      "title": "Source success ratio (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (rate(bgw_calendar_source_fetch_total{result=\"ok\"}[1h])) / sum by (source) (rate(bgw_calendar_source_fetch_total[1h]))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 155
+      },
+      "id": 74
+    },
+    {
+      "type": "timeseries",
+      "title": "Source read latency p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, source) (rate(bgw_calendar_source_fetch_duration_seconds_bucket[15m])))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 155
+      },
+      "id": 75
+    },
+    {
+      "type": "stat",
+      "title": "Work calendar sync age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "(time() - bgw_phone_calendar_last_sync_timestamp_seconds) and bgw_phone_calendar_last_sync_timestamp_seconds > 0",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 86400
+              },
+              {
+                "color": "red",
+                "value": 93600
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Age of the last iPhone work-calendar (Exchange) push. No data = the work Shortcut has never synced.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 163
+      },
+      "id": 76
+    },
+    {
+      "type": "timeseries",
+      "title": "iPhone push rejections by reason (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (increase(bgw_phone_calendar_sync_rejected_total[24h]))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 163
+      },
+      "id": 77
+    },
+    {
+      "type": "timeseries",
+      "title": "Calendar writes by target/result (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (target, result) (increase(bgw_calendar_write_total[24h]))",
+          "legendFormat": "{{target}} {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 163
+      },
+      "id": 78
+    },
+    {
+      "type": "timeseries",
+      "title": "Radicale probe",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "probe_success{service=\"radicale\"}",
+          "legendFormat": "up",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "probe_duration_seconds{service=\"radicale\"}",
+          "legendFormat": "probe s",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 163
+      },
+      "id": 79
+    },
+    {
+      "type": "row",
+      "title": "Calendar + Gmail + Email\u2192Calendar",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 171
+      },
+      "id": 80
+    },
+    {
+      "type": "timeseries",
+      "title": "Calendar tools: check/create (calls + errors)",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"
@@ -5485,13 +6092,13 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 155
+        "y": 172
       },
-      "id": 73
+      "id": 81
     },
     {
       "type": "timeseries",
-      "title": "Calendar API Latency p95 by operation",
+      "title": "Calendar tools latency p95 (check/create)",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"
@@ -5570,9 +6177,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 155
+        "y": 172
       },
-      "id": 74
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -5667,9 +6274,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 155
+        "y": 172
       },
-      "id": 75
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -5752,9 +6359,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 163
+        "y": 180
       },
-      "id": 76
+      "id": 84
     },
     {
       "type": "timeseries",
@@ -5849,9 +6456,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 163
+        "y": 180
       },
-      "id": 77
+      "id": 85
     },
     {
       "type": "row",
@@ -5862,9 +6469,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 171
+        "y": 188
       },
-      "id": 78
+      "id": 86
     },
     {
       "type": "timeseries",
@@ -5947,9 +6554,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 172
+        "y": 189
       },
-      "id": 79
+      "id": 87
     },
     {
       "type": "timeseries",
@@ -6032,9 +6639,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 172
+        "y": 189
       },
-      "id": 80
+      "id": 88
     },
     {
       "type": "timeseries",
@@ -6129,9 +6736,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 172
+        "y": 189
       },
-      "id": 81
+      "id": 89
     },
     {
       "type": "timeseries",
@@ -6214,9 +6821,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 180
+        "y": 197
       },
-      "id": 82
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6323,9 +6930,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 180
+        "y": 197
       },
-      "id": 83
+      "id": 91
     },
     {
       "type": "piechart",
@@ -6394,9 +7001,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 180
+        "y": 197
       },
-      "id": 84
+      "id": 92
     },
     {
       "type": "row",
@@ -6407,9 +7014,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 188
+        "y": 205
       },
-      "id": 85
+      "id": 93
     },
     {
       "type": "timeseries",
@@ -6492,9 +7099,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 189
+        "y": 206
       },
-      "id": 86
+      "id": 94
     },
     {
       "type": "timeseries",
@@ -6589,9 +7196,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 189
+        "y": 206
       },
-      "id": 87
+      "id": 95
     },
     {
       "type": "timeseries",
@@ -6686,9 +7293,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 189
+        "y": 206
       },
-      "id": 88
+      "id": 96
     },
     {
       "type": "row",
@@ -6699,9 +7306,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 197
+        "y": 214
       },
-      "id": 89
+      "id": 97
     },
     {
       "type": "timeseries",
@@ -6809,9 +7416,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 198
+        "y": 215
       },
-      "id": 90
+      "id": 98
     },
     {
       "type": "stat",
@@ -6876,9 +7483,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 198
+        "y": 215
       },
-      "id": 91
+      "id": 99
     },
     {
       "type": "stat",
@@ -6943,9 +7550,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 198
+        "y": 215
       },
-      "id": 92
+      "id": 100
     },
     {
       "type": "timeseries",
@@ -7040,9 +7647,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 198
+        "y": 215
       },
-      "id": 93
+      "id": 101
     },
     {
       "type": "timeseries",
@@ -7149,9 +7756,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 206
+        "y": 223
       },
-      "id": 94
+      "id": 102
     },
     {
       "type": "timeseries",
@@ -7262,9 +7869,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 206
+        "y": 223
       },
-      "id": 95
+      "id": 103
     },
     {
       "type": "timeseries",
@@ -7360,9 +7967,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 206
+        "y": 223
       },
-      "id": 96
+      "id": 104
     },
     {
       "type": "row",
@@ -7373,9 +7980,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 214
+        "y": 231
       },
-      "id": 97
+      "id": 105
     },
     {
       "type": "timeseries",
@@ -7458,9 +8065,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 215
+        "y": 232
       },
-      "id": 98
+      "id": 106
     },
     {
       "type": "timeseries",
@@ -7544,9 +8151,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 215
+        "y": 232
       },
-      "id": 99
+      "id": 107
     },
     {
       "type": "timeseries",
@@ -7630,9 +8237,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 215
+        "y": 232
       },
-      "id": 100
+      "id": 108
     },
     {
       "type": "row",
@@ -7643,9 +8250,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 223
+        "y": 240
       },
-      "id": 101
+      "id": 109
     },
     {
       "type": "stat",
@@ -7711,9 +8318,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 224
+        "y": 241
       },
-      "id": 102
+      "id": 110
     },
     {
       "type": "stat",
@@ -7779,9 +8386,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 224
+        "y": 241
       },
-      "id": 103
+      "id": 111
     },
     {
       "type": "timeseries",
@@ -7865,9 +8472,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 224
+        "y": 241
       },
-      "id": 104
+      "id": 112
     },
     {
       "type": "stat",
@@ -7933,9 +8540,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 224
+        "y": 241
       },
-      "id": 105
+      "id": 113
     },
     {
       "type": "row",
@@ -7946,9 +8553,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 232
+        "y": 249
       },
-      "id": 106
+      "id": 114
     },
     {
       "type": "stat",
@@ -8018,9 +8625,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 233
+        "y": 250
       },
-      "id": 107
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8104,9 +8711,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 233
+        "y": 250
       },
-      "id": 108
+      "id": 116
     },
     {
       "type": "logs",
@@ -8145,9 +8752,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 233
+        "y": 250
       },
-      "id": 109
+      "id": 117
     },
     {
       "type": "row",
@@ -8158,9 +8765,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 241
+        "y": 258
       },
-      "id": 110
+      "id": 118
     },
     {
       "type": "timeseries",
@@ -8244,9 +8851,9 @@
         "h": 8,
         "w": 3,
         "x": 0,
-        "y": 242
+        "y": 259
       },
-      "id": 111
+      "id": 119
     },
     {
       "type": "timeseries",
@@ -8354,9 +8961,9 @@
         "h": 8,
         "w": 3,
         "x": 3,
-        "y": 242
+        "y": 259
       },
-      "id": 112
+      "id": 120
     },
     {
       "type": "timeseries",
@@ -8452,9 +9059,9 @@
         "h": 8,
         "w": 3,
         "x": 6,
-        "y": 242
+        "y": 259
       },
-      "id": 113
+      "id": 121
     },
     {
       "type": "timeseries",
@@ -8550,9 +9157,9 @@
         "h": 8,
         "w": 3,
         "x": 9,
-        "y": 242
+        "y": 259
       },
-      "id": 114
+      "id": 122
     },
     {
       "type": "logs",
@@ -8591,9 +9198,9 @@
         "h": 8,
         "w": 3,
         "x": 12,
-        "y": 242
+        "y": 259
       },
-      "id": 115
+      "id": 123
     },
     {
       "type": "timeseries",
@@ -8677,9 +9284,9 @@
         "h": 8,
         "w": 3,
         "x": 15,
-        "y": 242
+        "y": 259
       },
-      "id": 116
+      "id": 124
     },
     {
       "type": "timeseries",
@@ -8763,9 +9370,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 242
+        "y": 259
       },
-      "id": 117
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -8861,9 +9468,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 250
+        "y": 267
       },
-      "id": 118
+      "id": 126
     },
     {
       "type": "timeseries",
@@ -8971,9 +9578,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 250
+        "y": 267
       },
-      "id": 119
+      "id": 127
     },
     {
       "type": "stat",
@@ -9043,9 +9650,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 250
+        "y": 267
       },
-      "id": 120
+      "id": 128
     },
     {
       "type": "row",
@@ -9056,9 +9663,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 258
+        "y": 275
       },
-      "id": 121
+      "id": 129
     },
     {
       "type": "stat",
@@ -9119,9 +9726,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 259
+        "y": 276
       },
-      "id": 122
+      "id": 130
     },
     {
       "type": "timeseries",
@@ -9205,9 +9812,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 259
+        "y": 276
       },
-      "id": 123
+      "id": 131
     },
     {
       "type": "stat",
@@ -9268,9 +9875,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 259
+        "y": 276
       },
-      "id": 124
+      "id": 132
     },
     {
       "type": "timeseries",
@@ -9358,9 +9965,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 267
+        "y": 284
       },
-      "id": 125
+      "id": 133
     },
     {
       "type": "stat",
@@ -9426,9 +10033,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 267
+        "y": 284
       },
-      "id": 126
+      "id": 134
     },
     {
       "type": "stat",
@@ -9494,9 +10101,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 267
+        "y": 284
       },
-      "id": 127
+      "id": 135
     },
     {
       "type": "stat",
@@ -9562,9 +10169,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 275
+        "y": 292
       },
-      "id": 128
+      "id": 136
     },
     {
       "type": "timeseries",
@@ -9648,9 +10255,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 275
+        "y": 292
       },
-      "id": 129
+      "id": 137
     },
     {
       "type": "row",
@@ -9661,9 +10268,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 283
+        "y": 300
       },
-      "id": 130
+      "id": 138
     },
     {
       "type": "logs",
@@ -9702,9 +10309,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 284
+        "y": 301
       },
-      "id": 131
+      "id": 139
     },
     {
       "type": "logs",
@@ -9743,9 +10350,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 284
+        "y": 301
       },
-      "id": 132
+      "id": 140
     }
   ]
 }

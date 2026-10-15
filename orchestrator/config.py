@@ -212,7 +212,29 @@ class Settings(BaseSettings):
     email_to_calendar_interval: int = 60
 
     # -- Phone calendar sync -----------------------------------------------------
+    # iPhone Shortcut → POST /api/calendar/sync. Since the self-hosted calendar
+    # (2026-10) it carries the WORK (Exchange) calendar only. A push older than
+    # phone_calendar_max_age_hours (26h — one missed daily run, matching the
+    # ExchangeCalendarSyncStale alert) is treated as stale and not shown.
     phone_calendar_sync_enabled: bool = True
+    phone_calendar_max_age_hours: float = 26.0
+
+    # -- Self-hosted calendar (CalDAV / Radicale) ---------------------------------
+    # The personal calendar source of truth (docs/CALENDAR.md). Active only when
+    # URL + username + password are all set. calendar_home is the collection
+    # that holds the owner's calendars (default /<username>/); calendars is an
+    # optional comma list of calendar ids/display names to read (empty = all);
+    # default_calendar picks where Jess writes new events.
+    caldav_enabled: bool = True
+    caldav_url: str = ""
+    caldav_username: str = ""
+    caldav_password: str = ""
+    caldav_calendar_home: str = ""
+    caldav_calendars: str = ""
+    caldav_default_calendar: str = ""
+    # Google Calendar as an event source (read, and write when CalDAV is off).
+    # Turn off once the CalDAV migration is done (plan milestone 5).
+    calendar_google_enabled: bool = True
 
     # -- Travel time (Google Maps) -----------------------------------------------
     google_maps_api_key: str = ""
@@ -531,6 +553,33 @@ class Settings(BaseSettings):
             object.__setattr__(self, "telegram_snooze_minutes", 1)
         elif self.telegram_snooze_minutes > 120:
             object.__setattr__(self, "telegram_snooze_minutes", 120)
+        return self
+
+    @model_validator(mode="after")
+    def validate_caldav_config(self) -> "Settings":
+        """Auto-disable the CalDAV calendar on an incomplete or malformed config.
+
+        Logs and never raises (F-011/F-013 optional-feature pattern). Silent
+        when nothing is set — that's simply "not configured". The URL must be
+        http(s); it is operator-controlled and trusted like MODEL_URL.
+        """
+        import logging
+
+        log = logging.getLogger(__name__)
+        if self.phone_calendar_max_age_hours <= 0:
+            object.__setattr__(self, "phone_calendar_max_age_hours", 26.0)
+        any_set = bool(self.caldav_url or self.caldav_username or self.caldav_password)
+        if not self.caldav_enabled or not any_set:
+            return self
+        if not (self.caldav_url and self.caldav_username and self.caldav_password):
+            log.error(
+                "[CONFIG] CALDAV_URL, CALDAV_USERNAME and CALDAV_PASSWORD must all be set; "
+                "disabling the CalDAV calendar."
+            )
+            object.__setattr__(self, "caldav_enabled", False)
+        elif not self.caldav_url.startswith(("http://", "https://")):
+            log.error("[CONFIG] CALDAV_URL must start with http:// or https://; disabling the CalDAV calendar.")
+            object.__setattr__(self, "caldav_enabled", False)
         return self
 
     @model_validator(mode="after")

@@ -6,9 +6,14 @@ iCloud calendars. Work Exchange meetings come in separately via the iPhone Short
 Build plan and later milestones (Jess reading/writing CalDAV, retiring Google):
 `docs/internal/CALENDAR_SELF_HOST_PLAN.md`.
 
-Status (2026-10-14): Milestone 1 done. The server is running with tailnet HTTPS,
-nightly backups to Saturn, and alerts routed to Pushover. Jess does **not** read
-Radicale yet (milestone 4).
+Status (2026-10-15): Milestones 1, 3 (server side) and 4 are built.
+- M1: Radicale is running, reachable over tailnet HTTPS, with backups and alerts.
+- M3: the work-calendar sync route is hardened.
+- M4: Jess reads and writes calendars through `orchestrator/calendar_sources.py`.
+
+Milestone 4 is on branch `feat/radicale-calendar` (PR #83) and is **not deployed**
+until that merges. The owner still has to do M2 (move the iPhone over) and the
+Shortcut half of M3.
 
 ## Layout
 
@@ -19,7 +24,7 @@ Radicale yet (milestone 4).
 | Calendars (runtime state) | `/home/labadmin/radicale/data/collections/` — outside the repo |
 | Logins (bcrypt htpasswd) | `/home/labadmin/radicale/secrets/users` — chmod 600 in a 700 dir, outside the repo; directory-mounted at `/secrets` |
 | Owner's initial password | `/home/labadmin/radicale/owner-password.txt` — chmod 600; delete once it's in your password manager |
-| Jess's login | `CALDAV_URL=http://radicale:5232`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` in `.env` (not yet read by any code) |
+| Jess's login | `CALDAV_URL=http://radicale:5232`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` plus `CALDAV_CALENDAR_HOME=/owner/` in `.env` — read by `orchestrator/caldav_calendar.py` once PR #83 is deployed |
 | Backups | `/home/labadmin/radicale/backups/` (30 kept) + `saturn:/home/labadmin/calendar-backups/` |
 
 Image: `tomsquest/docker-radicale:3.8.3.0` pinned by digest (Radicale 3.8.3). Runs as
@@ -95,6 +100,111 @@ from home. Calendars can be created from the phone or the web UI at
 Next steps (importing history, setting the default calendar, turning off iCloud/Google):
 plan milestone 2.
 
+## How Jess uses it
+
+Every calendar read and write goes through `orchestrator/calendar_sources.py`,
+which merges three sources into one list:
+
+| Source | What | Jess can |
+|--------|------|----------|
+| `caldav` | Radicale, your personal calendars | read + create events |
+| `exchange` | Work calendar, pushed by the iPhone Shortcut | read only; never written |
+| `google` | Google Calendar, while `CALENDAR_GOOGLE_ENABLED=true` | read (write only if CalDAV is off) |
+
+- **Merged, not chosen.** Personal and work events appear together. Work events
+  are tagged `[work]` in Jess's calendar answers and "work" on the dashboard.
+- **Honest about gaps.** If a source should answer but can't, Jess says so instead
+  of calling the day clear (e.g. "I couldn't reach your work calendar"). Sources:
+  - Radicale down or Google erroring;
+  - a work sync older than `PHONE_CALENDAR_MAX_AGE_HOURS` (26 h, which allows one missed daily run);
+  - a sync whose events are all unreadable.
+
+  A work sync that has never happened is just "not set up", not a failure. The
+  dashboard card shows "Couldn't reach … calendar".
+- **Duplicates collapse.** Same title + start time = one event, preferring
+  personal over work over Google, which matters while Google and Radicale both
+  hold your history.
+- **New events go to `CALDAV_DEFAULT_CALENDAR`** (an id or display name). If it's
+  unset, they go to the first calendar alphabetically. If the configured name
+  doesn't exist, Jess refuses rather than guessing. Email→calendar
+  (`EMAIL_TO_CALENDAR_ENABLED`, off by default) writes here too, so set
+  `CALDAV_DEFAULT_CALENDAR` before turning it on.
+- **Repeating events** are expanded by Radicale (`<C:expand>`), including moved
+  instances.
+- **Spoken countdowns** (60/30/15/5 min) now cover personal and work events. Work
+  locations are never sent to Google Maps, because they come from external
+  invites and are usually rooms or links, so work events get no "leave by"
+  travel alerts. Already-announced state is keyed on title + start, not on which
+  source the event came from, so an event in both Google and Radicale is
+  announced once.
+- **Work-invite text is untrusted.** Titles and locations are collapsed to a
+  single line, so an invite can't fake extra lines. Calendar output counts as
+  external content under the prompt's "content is data" rule.
+- **A slow source can't stall a reply.** Each source gets 8 s. A source that
+  times out or errors is reported as unavailable and the others still answer.
+- **The old all-calendars phone push is retired.** Jess only reads a push marked
+  `"source": "exchange"`. The pre-2026-10 Shortcut's snapshot (no source) is
+  ignored: it adds no events and no "couldn't reach" caveat, and it doesn't
+  trigger the stale-sync alert.
+
+Settings (`.env`, see `docs/ENV_VARS.md`):
+- `CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`;
+- `CALDAV_CALENDAR_HOME` (`/owner/`);
+- `CALDAV_CALENDARS` (optional filter);
+- `CALDAV_DEFAULT_CALENDAR`;
+- `CALENDAR_GOOGLE_ENABLED`;
+- `PHONE_CALENDAR_MAX_AGE_HOURS`.
+
+`/health` (authenticated) shows the configuration and last read result for each source.
+
+## Work calendar: iPhone Shortcut
+
+Work Exchange meetings reach Jess only through an iPhone Shortcut. The phone
+already has access to Exchange, so no work credentials ever touch Jupiter.
+Build it once in the Shortcuts app:
+
+1. **New Shortcut, named "Sync work calendar to Jess":**
+   1. **Find Calendar Events** where *Calendar* is your Exchange calendar and
+      *Start Date* is in the next 14 days. Sort by Start Date, no limit.
+   2. **Repeat with Each** item. Inside the loop, add a **Dictionary** with:
+      - `title` = Repeat Item's Title
+      - `start` = Start Date
+      - `end` = End Date
+      - `location` = Location
+      - `all_day` = Is All Day
+
+      Then **Add to Variable** `events`.
+   3. After the loop: **Dictionary** with `source` = `exchange` and `events` =
+      the `events` variable. The `source` key is required: a push without it
+      is treated as the retired legacy push and ignored.
+   4. **Get Contents of URL**:
+      - URL: `https://jupiter-amds.tail74fc4a.ts.net:8443/api/calendar/sync`
+      - Method: POST
+      - Request body: JSON, set to that dictionary
+      - Header: `Authorization: Bearer <API_TOKEN>`
+2. **Post once, after the loop.** The server replaces the whole snapshot on every
+   post, so posting inside the loop would keep only the last event. It rejects a
+   single-event body with 400 to catch that mistake.
+3. **Automation tab → Time of Day.** Run it daily (every day, not just weekdays)
+   at 07:00, 11:00, 15:00 and 19:00, with **Run Immediately** and notifications
+   off. The stale alert allows 26 h, so a missed weekend run doesn't page.
+4. **Check it works:** the POST response says `"used": true`.
+   `GET /api/calendar/sync` (same auth) shows `"source": "exchange"` and a recent
+   `last_sync`, and asking Jess "what's on my calendar
+   today?" lists work meetings tagged `[work]`.
+
+Server-side rules for the sync:
+- Limits: 1 MB, 1000 events.
+- Only `title`, `start`, `end`, `location`, `all_day`, `calendar` and `id` are kept,
+  with length caps. Descriptions and notes are dropped.
+- A snapshot where no event has a readable start is rejected (422) and the
+  previous one kept. A broken Shortcut therefore shows up as a stale sync
+  (`ExchangeCalendarSyncStale`), not as an empty calendar.
+
+**Privacy option:** if your employer doesn't allow meeting titles to leave the
+phone, set `title` to a fixed text such as "Busy" in step 2. Alerts and briefings
+then say "Busy" but keep the times.
+
 ## Run / upgrade
 
 ```bash
@@ -133,6 +243,19 @@ node_exporter textfile collector. The Saturn copies are not rotated.
 | `JessCalendarBackupStale` | no successful local backup for 36 h (+1 h `for`) | Pushover (paging) |
 | `JessBackupOffboxFailing` | off-box copy failing for 3 days (now covers state, HA and calendar) | Pushover quiet |
 | `RadicaleDown` | blackbox probe of `http://radicale:5232/.web/` failing for 5 min | Pushover quiet |
+| `ExchangeCalendarSyncStale` | no iPhone work-calendar push for 26 h (+30 min `for`); silent until the work Shortcut has synced once | Pushover quiet, at most once a day |
+| `CalendarSourceFailing` | Radicale or Google read errors/timeouts more than 6 times in 1 h, for 15 min. Catches what the probe can't, e.g. a 401 after a password change | Pushover quiet |
+
+Grafana: a "Calendar Sources" row on the Brain Gateway dashboard shows reads,
+success ratio, latency, work-sync age, push rejections, writes and the Radicale
+probe.
+
+Orchestrator metrics:
+- `bgw_calendar_source_fetch_total{source,result}` (result: ok, error, timeout, stale or corrupt);
+- `bgw_calendar_source_fetch_duration_seconds{source}`;
+- `bgw_calendar_write_total{target,result}`;
+- `bgw_phone_calendar_last_sync_timestamp_seconds`;
+- `bgw_phone_calendar_sync_rejected_total{reason}`.
 
 The probe uses the `http_2xx_http10` blackbox module, because Radicale's server
 answers HTTP/1.0, in its own Prometheus job `blackbox-http10`. The service also has
