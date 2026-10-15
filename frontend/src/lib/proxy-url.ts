@@ -20,7 +20,12 @@ export function buildUpstreamUrl(segments: string[], search: string, base: strin
   if (segments.some((s) => s === '' || s === '.' || s === '..' || UNSAFE_SEGMENT.test(s))) return null;
 
   const origin = new URL(base).origin;
-  const url = new URL('/' + segments.map(encodeURIComponent).join('/'), origin);
+  let url: URL;
+  try {
+    url = new URL('/' + segments.map(encodeURIComponent).join('/'), origin);
+  } catch {
+    return null; // encodeURIComponent throws on a lone surrogate
+  }
   url.search = search;
   return url.origin === origin ? url : null;
 }
