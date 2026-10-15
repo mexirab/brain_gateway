@@ -26,6 +26,7 @@ import {
   type PlanEntry,
   type Recipe,
 } from '@/lib/pantry-api';
+import CookedOtherCard from './CookedOtherCard';
 import DietSettingsCard from './DietSettingsCard';
 
 const POLL_MS = 4000;
@@ -346,6 +347,14 @@ export default function PlanTab({ shown }: { shown: boolean }) {
           </Button>
         </Card>
       )}
+
+      <CookedOtherCard
+        shown={shown}
+        onChanged={() => {
+          // Pantry amounts changed: refresh the plan's "have" badges.
+          loadPlans().catch(() => undefined);
+        }}
+      />
     </div>
   );
 }

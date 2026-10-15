@@ -401,3 +401,27 @@ async def pantry_prep_finish(batch_id: int) -> JSONResponse:
     if _bad_id(batch_id):
         return JSONResponse({"ok": False, "error": "batch not found"}, status_code=404)
     return _result(await asyncio.to_thread(pantry_consumption.finish_batch, batch_id))
+
+
+@router.post("/cooked-other")
+async def pantry_cooked_other(req: Request) -> JSONResponse:
+    """Off-plan meal: {item_ids: [int], dish?: str}."""
+    body = await _safe_json(req)
+    ids = body.get("item_ids")
+    if not isinstance(ids, list) or not ids:
+        return JSONResponse({"ok": False, "error": "item_ids must be a non-empty list"}, status_code=400)
+    if len(ids) > pantry_consumption.MAX_OTHER_ITEMS:
+        return JSONResponse({"ok": False, "error": "too many items"}, status_code=400)
+    return _result(await asyncio.to_thread(pantry_consumption.cook_other, ids, None, body.get("dish", ""), "dashboard"))
+
+
+@router.get("/cooked-other")
+async def pantry_cooked_other_list(days: int = Query(2, ge=1, le=14)) -> JSONResponse:
+    return JSONResponse({"cooks": await asyncio.to_thread(pantry_consumption.recent_other, days)})
+
+
+@router.post("/cooked-other/{cook_id}/undo")
+async def pantry_cooked_other_undo(cook_id: int) -> JSONResponse:
+    if _bad_id(cook_id):
+        return JSONResponse({"ok": False, "error": "cook not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.undo_other, cook_id))

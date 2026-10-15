@@ -327,6 +327,7 @@ CREATE TABLE IF NOT EXISTS pantry_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pantry_events_item ON pantry_events(item_id, at);
+CREATE INDEX IF NOT EXISTS idx_pantry_events_ref ON pantry_events(ref_type, ref_id);
 
 CREATE TABLE IF NOT EXISTS pantry_scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -417,6 +418,16 @@ CREATE TABLE IF NOT EXISTS prep_batches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_prep_batches_status ON prep_batches(status);
+
+-- Off-plan cooking ("cooked something else"): one row per meal; its
+-- deductions are pantry_events with ref_type 'cook_other', ref_id = id.
+CREATE TABLE IF NOT EXISTS pantry_cooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dish TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL,
+    cooked_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+);
 
 -- Which plan entry a cooking reminder belongs to (a Done tap = "cooked it").
 CREATE TABLE IF NOT EXISTS meal_plan_reminders (

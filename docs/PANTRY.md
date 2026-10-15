@@ -2,7 +2,7 @@
 
 Kitchen inventory for fridge / freezer / pantry (chat updates, photo stock-takes, receipt scans, barcode lookups) plus a diet-profile weekly meal-prep planner. Default-OFF behind `PANTRY_ENABLED`. Spec + per-phase deviations: `jess-features/F-015-pantry-meal-prep.md`.
 
-**Built:** inventory CRUD + event ledger, `pantry` tool, photo stock-take with review/commit, receipt scans (restock + learned store abbreviations + grocery tick-off), barcode lookup, diet settings, weekly plan (generate / accept / swap / rate), `meal_plan` tool, `/pantry` page (3 tabs), Grafana row; consumption tracking (cook / undo / skip, prepped portions, cooking-reminder Done = cooked, daily decay, morning "use today" line, weekly fridge-check nudge + "not seen" stock-take lines).
+**Built:** inventory CRUD + event ledger, `pantry` tool, photo stock-take with review/commit, receipt scans (restock + learned store abbreviations + grocery tick-off), barcode lookup, diet settings, weekly plan (generate / accept / swap / rate), `meal_plan` tool, `/pantry` page (3 tabs), Grafana row; consumption tracking (cook / undo / skip, off-plan "cooked something else", prepped portions, cooking-reminder Done = cooked, daily decay, morning "use today" line, weekly fridge-check nudge + "not seen" stock-take lines).
 **Not built:** Telegram photo-caption routing (`receipt`/`fridge` — deferred from Phase 3); alerts (none by design); un-eating a portion.
 
 ## Data model
@@ -14,7 +14,7 @@ Tables live in `brain_state.db` (`state_store.SCHEMA_SQL`), created unconditiona
 | Locations | `fridge` \| `freezer` \| `pantry` |
 | `track_mode` | `count` (eggs, cans — `qty`), `level` (`full/half/low/out`), `staple` (have/out only — spices, oil). Inferred from category + qty when not given |
 | `shelf_life_days` | Per item; category default per location + name hints (e.g. eggs 28 d in the fridge). Drives the daily decay pass, the morning "use today" line and the planner's USE SOON hint |
-| Ledger | Every write appends a `pantry_events` row with `before_json`/`after_json` snapshots (`kind` add/consume/adjust/remove, `source` manual/chat/scan/receipt/barcode/cook/decay). Cook deductions carry `ref_type` `cook` (`ref_id` = plan entry); undo writes `uncook` rows |
+| Ledger | Every write appends a `pantry_events` row with `before_json`/`after_json` snapshots (`kind` add/consume/adjust/remove, `source` manual/chat/scan/receipt/barcode/cook/decay). Cook deductions carry `ref_type` `cook` (`ref_id` = plan entry); undo writes `uncook` rows. Off-plan cooks use `cook_other` / `uncook_other` (`ref_id` = `pantry_cooks.id`) |
 | Aliases | `pantry_aliases`: receipt text (`receipt_scanner.alias_key(raw)`) → item name, learned from receipt corrections |
 | Names | Allowlist-sanitised, ≤80 chars; same barcode, or same normalised name + location, merges (restock) instead of duplicating |
 
@@ -110,9 +110,9 @@ Startup `recover_interrupted_plans()` fails leftover `generating` rows. A `gener
 
 ### `meal_plan` tool
 
-`{action: view|generate|accept|swap|recipe|cooked|uncook|ate|skip, day?: YYYY-MM-DD, slot?: dinner|batch}` (`slot` default `dinner`; `batch` = the batch prep; `day` applies to swap/recipe/cooked/uncook/skip). `cooked`/`uncook`/`skip`/`ate` → see Consumption tracking. `generate` returns immediately (the plan starts once the reply finishes); `accept` only when the user says so (prompt guidance + EXTERNAL CONTENT state-changing list). Output labels recipe names as data. Schema: `TECHNICAL_REFERENCE.md` → meal_plan.
+`{action: view|generate|accept|swap|recipe|cooked|uncook|ate|skip, day?: YYYY-MM-DD, slot?: dinner|batch|other, ingredients?: [string], dish?: string}` (`slot` default `dinner`; `batch` = the batch prep; `other` = off-plan meal, cooked/uncook only; `day` applies to swap/recipe/cooked/uncook/skip). `cooked`/`uncook`/`skip`/`ate` → see Consumption tracking. `generate` returns immediately (the plan starts once the reply finishes); `accept` only when the user says so (prompt guidance + EXTERNAL CONTENT state-changing list). Output labels recipe names as data. Schema: `TECHNICAL_REFERENCE.md` → meal_plan.
 
-Routes: `GET/PUT /api/pantry/diet`, `GET /api/pantry/plan`, `POST /api/pantry/plan/generate`, `GET /api/pantry/plan/{id}`, `POST /api/pantry/plan/{id}/accept|discard`, `POST /api/pantry/plan/entry/{id}/swap|cooked|uncook|skip`, `GET /api/pantry/prep`, `POST /api/pantry/prep/{id}/eat|finish`, `POST /api/pantry/recipe/{id}/rate` — shapes in `TECHNICAL_REFERENCE.md` → Pantry.
+Routes: `GET/PUT /api/pantry/diet`, `GET /api/pantry/plan`, `POST /api/pantry/plan/generate`, `GET /api/pantry/plan/{id}`, `POST /api/pantry/plan/{id}/accept|discard`, `POST /api/pantry/plan/entry/{id}/swap|cooked|uncook|skip`, `GET /api/pantry/prep`, `POST /api/pantry/prep/{id}/eat|finish`, `POST/GET /api/pantry/cooked-other`, `POST /api/pantry/cooked-other/{id}/undo`, `POST /api/pantry/recipe/{id}/rate` — shapes in `TECHNICAL_REFERENCE.md` → Pantry.
 
 ### Known limits
 
@@ -124,7 +124,7 @@ Routes: `GET/PUT /api/pantry/diet`, `GET /api/pantry/plan`, `POST /api/pantry/pl
 
 ## Consumption tracking (Phase 4)
 
-`orchestrator/pantry_consumption.py`. Keeps the inventory roughly right without logging every item. Only an **active** (accepted) plan's `prep`/`dinner` entries can be cooked.
+`orchestrator/pantry_consumption.py`. Keeps the inventory roughly right without logging every item. Only an **active** (accepted) plan's `prep`/`dinner` entries can be cooked; meals outside the plan go through the off-plan cook.
 
 | Action | Behavior |
 |--------|----------|
@@ -134,6 +134,8 @@ Routes: `GET/PUT /api/pantry/diet`, `GET /api/pantry/plan`, `POST /api/pantry/pl
 | Skip (`skip_entry`) | `planned` → `skipped`; pending cooking reminder cancelled; nothing deducted. A skipped meal can still be cooked later ("Cooked it after all") |
 | Eat (`eat_portion`) | One portion off a batch (default: the active batch that expires soonest); last portion → `finished`. Ticks today's planned lunch from that batch (`eaten`) and logs a meal with selfcare. No undo |
 | Finish (`finish_batch`) | Rest eaten or thrown out → `finished`, `portions_left` 0 |
+| Off-plan cook (`cook_other`) | A meal not in the plan. Items by id (dashboard; max 30 `MAX_OTHER_ITEMS`, deduped, out/gone skipped) or by name (chat; matched like recipe ingredients). One use of each: count −1, level one step down, staples untouched. One transaction: new `pantry_cooks` row + `consume` events (`ref_type` `cook_other`). Nothing matched → 404, rolled back. The same deductible item set again within 10 min (`REPEAT_WINDOW_MINUTES`) → 409 (double tap / repeated tool call). `dish` cleaned with the item-name allowlist. Logs a meal with selfcare (label `cooked_other:{id}`) |
+| Off-plan undo (`undo_other`) | Latest active one, or by id; within 48 h (`OTHER_UNDO_HOURS`). Same delta restore as `undo_cook` (shared `_restore`), ledger `uncook_other`; row → `undone`. Already undone / too old → 409 |
 
 **Cooking-reminder Done.** `on_reminder_done` runs from the ntfy/Pushover ack route and the Telegram callback (`asyncio.to_thread`, never fails the ack). An `mp-` reminder linked in `meal_plan_reminders` → `cook_entry(source="push")`. Result: `cooked`, `already` (marked before), `refused` (plan no longer active / entry gone), `unlinked`, `error`. Reminders scheduled before Phase 4 have no link row, so their Done taps deduct nothing.
 
@@ -143,11 +145,11 @@ Routes: `GET/PUT /api/pantry/diet`, `GET /api/pantry/plan`, `POST /api/pantry/pl
 
 **Weekly fridge check** (`fridge_check_tick`, APScheduler `pantry_fridge_check` every 15 min). On `fridge_check.day` once `fridge_check.time` has passed, schedules one phone reminder (`pc-` id, "3 shelf photos, about 2 minutes"). The day is claimed in `app_state` `pantry_fridge_check_sent` before sending (a failure after that skips the week rather than repeating every 15 min; a scheduling failure releases it). Not sent more than 3 h late. The resulting stock-take shows the "not seen" lines.
 
-**Frontend** (`/pantry`): Meal plan tab — per-entry tracker on the accepted plan (Cooked it / Skip, Cooked it after all, Ate one on lunches, Undo cooked with a confirm on the prep), fridge-check settings in `DietSettingsCard`. Inventory tab — "Prepped" section (Ate one, Finished with confirm). Stock-take review — collapsible "Not seen in these photos" group.
+**Frontend** (`/pantry`): Meal plan tab — per-entry tracker on the accepted plan (Cooked it / Skip, Cooked it after all, Ate one on lunches, Undo cooked with a confirm on the prep), fridge-check settings in `DietSettingsCard`, and at the bottom `CookedOtherCard` "Cooked something not on the plan?" (optional dish name, ingredient filter, checkboxes of tracked non-staple in-stock items, "Log meal (N items)", recent off-plan meals with Undo for 48 h). The card needs no LLM, so it works while Helios is asleep; the chat path needs Helios. Inventory tab — "Prepped" section (Ate one, Finished with confirm). Stock-take review — collapsible "Not seen in these photos" group.
 
-**Chat.** `meal_plan` `cooked` ("I made the soup") / `uncook` / `skip` resolve the entry by `day` + `slot`; `ate` ("had a bowl") eats from the soonest-expiring batch and logs the meal itself — `_PANTRY_GUIDANCE` tells the model not to also call `selfcare_log`. `inventory_summary` (pantry `view`) appends a `PREPPED:` line.
+**Chat.** `meal_plan` `cooked` ("I made the soup") / `uncook` / `skip` resolve the entry by `day` + `slot`. Off-plan ("made turkey tacos tonight"): `cooked` + `slot: other` + `ingredients` (+ `dish`); `cooked` with `ingredients` on slot `dinner` is treated as off-plan only when that day has no dinner in an **active** plan (`meal_planner.has_active_entry`; a draft doesn't count), else it cooks the planned dinner. `uncook` + `slot: other` undoes the latest off-plan meal; `other` with recipe/swap/skip is refused; `ate` ("had a bowl") eats from the soonest-expiring batch and logs the meal itself — `_PANTRY_GUIDANCE` tells the model not to also call `selfcare_log`. `inventory_summary` (pantry `view`) appends a `PREPPED:` line.
 
-**Known limits:** eating a portion can't be undone; a mistaken chat "ate" still calms that day's meal nudges. Ingredient matching is name-based (`name_score`), so untracked or differently named items show up in `not_tracked`.
+**Known limits:** eating a portion can't be undone; a mistaken chat "ate" still calms that day's meal nudges. Undoing an off-plan meal doesn't remove its selfcare meal log. A staples-only meal can't be logged from the dashboard card (staples aren't listed) — tell Jess or use `selfcare_log`. Ingredient matching is name-based (`name_score`), so untracked or differently named items show up in `not_tracked`.
 
 ## Config
 
@@ -164,9 +166,9 @@ Scans also need `VISION_ENABLED` (409 otherwise) and the Helios brain awake; pla
 
 ## Metrics
 
-`bgw_pantry_scan_total{kind,result}` (kind `fridge|freezer|pantry|receipt`; result `proposed|empty|failed|committed|discarded`), `bgw_pantry_scan_latency_seconds{kind,result}` (buckets from 1 s), `bgw_pantry_receipt_lines_total{result}` (`matched_alias|matched_inventory|new|non_food`), `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}` (`hit|cache|miss|error|disabled|invalid`), `bgw_meal_plan_generated_total{result}` (`ok|retry_ok|invalid|llm_error|asleep|error|interrupted`), `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}` (`ok|invalid|llm_error|asleep|busy`), `bgw_meal_plan_swap_latency_seconds`, `bgw_pantry_cook_events_total{slot,source}` (slot `prep|dinner`; source `dashboard|chat|push|undo`), `bgw_pantry_portions_eaten_total{source}` (`dashboard|chat`), `bgw_pantry_decay_total{kind}` (`item|batch`), `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}` (`sent|error`), `bgw_pantry_reminder_done_total{result}` (`cooked|already|refused|unlinked|error`). `bgw_pantry_events_total` sources: `manual|chat|scan|barcode|receipt|cook|decay`. Planner LLM calls also count in `bgw_llm_calls_total` / `bgw_llm_call_duration_seconds` with `purpose=meal_plan|meal_plan_swap`.
+`bgw_pantry_scan_total{kind,result}` (kind `fridge|freezer|pantry|receipt`; result `proposed|empty|failed|committed|discarded`), `bgw_pantry_scan_latency_seconds{kind,result}` (buckets from 1 s), `bgw_pantry_receipt_lines_total{result}` (`matched_alias|matched_inventory|new|non_food`), `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}` (`hit|cache|miss|error|disabled|invalid`), `bgw_meal_plan_generated_total{result}` (`ok|retry_ok|invalid|llm_error|asleep|error|interrupted`), `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}` (`ok|invalid|llm_error|asleep|busy`), `bgw_meal_plan_swap_latency_seconds`, `bgw_pantry_cook_events_total{slot,source}` (slot `prep|dinner|other`; source `dashboard|chat|push|undo`), `bgw_pantry_portions_eaten_total{source}` (`dashboard|chat`), `bgw_pantry_decay_total{kind}` (`item|batch`), `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}` (`sent|error`), `bgw_pantry_reminder_done_total{result}` (`cooked|already|refused|unlinked|error`). `bgw_pantry_events_total` sources: `manual|chat|scan|barcode|receipt|cook|decay`. Planner LLM calls also count in `bgw_llm_calls_total` / `bgw_llm_call_duration_seconds` with `purpose=meal_plan|meal_plan_swap`.
 
-Grafana: "Pantry & Meal Plan" row in `brain_gateway_sre.py` (generations, latency, llama queue, scans by kind+result & swaps, "Receipt Lines (/7d)", "Scan Latency p95 by Kind", "Cooked & Portions Eaten (/7d)", "Cooking Reminder Done + Fridge Check (/30d)" (also decay counts), "Pantry Decay Heartbeat Age", logs). No alerts by design.
+Grafana: "Pantry & Meal Plan" row in `brain_gateway_sre.py` (generations, latency, llama queue, scans by kind+result & swaps, "Receipt Lines (/7d)", "Scan Latency p95 by Kind", "Cooked & Portions Eaten (/7d)" (incl. off-plan, `slot=other`), "Cooking Reminder Done + Fridge Check (/30d)" (also decay counts), "Pantry Decay Heartbeat Age", logs). No alerts by design.
 
 ## Key files
 
@@ -177,13 +179,13 @@ Grafana: "Pantry & Meal Plan" row in `brain_gateway_sre.py` (generations, latenc
 | `orchestrator/routes_pantry.py` | `/api/pantry/*` router (mounted only when enabled) |
 | `orchestrator/diet_profiles.py` | Built-in profiles, diet settings YAML load/validate/save |
 | `orchestrator/meal_planner.py` | Plan generation, validation, accept/discard/swap/rate, reminders, tool text |
-| `orchestrator/pantry_consumption.py` | Cook/undo/skip, prep batches + portions, cooking-reminder Done hook, decay job, "use today" line, fridge-check nudge |
+| `orchestrator/pantry_consumption.py` | Cook/undo/skip, off-plan cooks (`cook_other`/`undo_other`/`recent_other`), prep batches + portions, cooking-reminder Done hook, decay job, "use today" line, fridge-check nudge |
 | `orchestrator/tool_handlers.py` → `_handle_pantry`, `_reg_meal_plan` | `pantry` + `meal_plan` tools |
 | `frontend/src/app/(private)/pantry/` | Page + `FeatureGate` layout |
-| `frontend/src/components/pantry/` | `InventoryTab`, `ScanTab`, `AddItemForm`, `BarcodeScanner`, `PlanTab`, `DietSettingsCard` |
+| `frontend/src/components/pantry/` | `InventoryTab`, `ScanTab`, `AddItemForm`, `BarcodeScanner`, `PlanTab`, `DietSettingsCard`, `CookedOtherCard` |
 | `frontend/src/lib/pantry-api.ts` | Typed client via `/api/proxy` |
 | `frontend/src/lib/image-resize.ts` | Client-side downscale to 2048 px JPEG |
 | `orchestrator/tests/test_pantry*.py` | Manager, scan pipeline, routes |
 | `orchestrator/tests/test_receipt_scanner.py`, `test_receipt_routes.py` | Receipt parsing/matching/commit, receipt routes |
 | `orchestrator/tests/test_diet_profiles.py`, `test_meal_planner*.py` | Diet settings, planner, plan routes |
-| `orchestrator/tests/test_pantry_consumption.py` | Consumption tracking |
+| `orchestrator/tests/test_pantry_consumption.py`, `test_pantry_cook_other.py` | Consumption tracking, off-plan cooks |

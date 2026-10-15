@@ -1213,7 +1213,8 @@ class TestTool:
         assert "can't skip" in await tool({"action": "skip"})
 
     async def test_no_entry(self, tool, found):
-        assert await tool({"action": "cooked"}) == "No dinner in the plan for that day."
+        out = await tool({"action": "cooked"})
+        assert out.startswith("No dinner in the plan for that day.") and "slot other" in out
         assert await tool({"action": "skip", "slot": "batch"}) == "No batch prep in the plan for that day."
 
     async def test_ate(self, tool, meals):

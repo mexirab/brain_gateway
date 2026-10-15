@@ -1358,3 +1358,10 @@ def recipe_text(day: Optional[str], slot: Optional[str]) -> str:
 def find_entry(day: Optional[str], slot: Optional[str]) -> Optional[int]:
     hit = _find(day, slot, editable_only=True)
     return hit[1]["id"] if hit else None
+
+
+def has_active_entry(day: Optional[str], slot: Optional[str]) -> bool:
+    """True when an ACCEPTED plan holds that day + slot (a draft can't be cooked,
+    so it mustn't stop an off-plan meal from being logged)."""
+    hit = _find(day, slot, editable_only=True)
+    return bool(hit and hit[0]["status"] == "active")

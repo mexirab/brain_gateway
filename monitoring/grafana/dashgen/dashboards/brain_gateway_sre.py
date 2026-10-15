@@ -1245,7 +1245,7 @@ def build() -> dict:
                 ("sum by (source) (increase(bgw_pantry_portions_eaten_total[7d]))", "ate {{source}}"),
             ],
             unit="none",
-            description="Planned meals marked cooked (dashboard / chat / push = reminder Done) and prepped "
+            description="Meals marked cooked — planned prep/dinner or an off-plan meal (slot=other); dashboard / chat / push = reminder Done — and prepped "
             "portions eaten. source=undo is the mis-tap rate.",
         ),
         timeseries(

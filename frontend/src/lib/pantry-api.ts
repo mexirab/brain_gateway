@@ -273,6 +273,26 @@ export interface CookResult {
   portions: number | null;
 }
 
+export interface OtherCookResult {
+  ok: boolean;
+  cook_id: number;
+  dish: string;
+  deducted: string[];
+  running_low: string[];
+  not_tracked: string[];
+}
+
+/** A meal cooked outside the plan (GET /api/pantry/cooked-other). */
+export interface OtherCook {
+  id: number;
+  dish: string;
+  source: string;
+  cooked_at: string;
+  status: 'active' | 'undone';
+  items: string[];
+  can_undo: boolean;
+}
+
 export type PlanStatus = 'generating' | 'draft' | 'active' | 'failed' | 'discarded' | 'replaced';
 
 export interface MealPlan {
@@ -318,6 +338,11 @@ export const planApi = {
       json('POST'),
     ),
   finishBatch: (batchId: number) => call<{ ok: boolean }>(`/api/pantry/prep/${batchId}/finish`, json('POST')),
+  cookedOther: (itemIds: number[], dish: string) =>
+    call<OtherCookResult>('/api/pantry/cooked-other', json('POST', { item_ids: itemIds, dish })),
+  recentOther: () => call<{ cooks: OtherCook[] }>('/api/pantry/cooked-other').then((r) => r.cooks),
+  undoOther: (cookId: number) =>
+    call<{ ok: boolean; restored: number }>(`/api/pantry/cooked-other/${cookId}/undo`, json('POST')),
   rate: (recipeId: number, rating: 'up' | 'down' | 'clear') =>
     call<{ ok: boolean }>(`/api/pantry/recipe/${recipeId}/rate`, json('POST', { rating })),
 };

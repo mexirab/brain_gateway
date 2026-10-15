@@ -1297,7 +1297,10 @@ STATIC_TOOLS = [
                 "background); accept = accept the draft (adds missing ingredients to the grocery list and sets cooking "
                 'reminders — only when the user says so); swap = replace one meal ("something else for Tuesday"); '
                 "recipe = ingredients + steps for a meal; cooked = the user cooked a planned dinner or the batch "
-                'prep ("I made the lentil soup") — deducts its ingredients; uncook = undo a wrong "cooked"; ate = ate one prepped portion '
+                'prep ("I made the lentil soup") — deducts its ingredients (a cooked dinner or off-plan meal also logs the '
+                "meal — don't also call selfcare_log). For a meal NOT in the plan "
+                '("made turkey tacos tonight") use cooked with slot other + ingredients (the pantry items used) + dish. uncook = undo a '
+                'wrong "cooked" (slot other = the last off-plan meal); ate = ate one prepped portion '
                 '("had a bowl for lunch"; it logs the meal itself — don\'t also call selfcare_log); skip = not '
                 "cooking a planned dinner."
             ),
@@ -1314,9 +1317,15 @@ STATIC_TOOLS = [
                     },
                     "slot": {
                         "type": "string",
-                        "enum": ["dinner", "batch"],
-                        "description": "default dinner; batch = the batch prep.",
+                        "enum": ["dinner", "batch", "other"],
+                        "description": "default dinner; batch = the batch prep; other = a meal not in the plan.",
                     },
+                    "ingredients": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": 'cooked + slot other: pantry items used, e.g. ["ground turkey", "onion"].',
+                    },
+                    "dish": {"type": "string", "description": "cooked + slot other: what they made (optional)."},
                 },
                 "required": ["action"],
             },

@@ -1208,11 +1208,11 @@ MEAL_PLAN_SWAP_LATENCY = Histogram(
 
 PANTRY_COOK_EVENTS = Counter(
     "bgw_pantry_cook_events_total",
-    "Planned meals marked cooked (ingredients deducted), by slot and where the tap came from.",
-    # slot: prep | dinner ; source: dashboard | chat | push | undo
+    "Meals marked cooked (ingredients deducted): planned prep/dinner or an off-plan meal, by where the tap came from.",
+    # slot: prep | dinner | other (off-plan) ; source: dashboard | chat | push | undo
     ["slot", "source"],
 )
-for _sl in ("prep", "dinner"):
+for _sl in ("prep", "dinner", "other"):
     for _so in ("dashboard", "chat", "push", "undo"):
         PANTRY_COOK_EVENTS.labels(slot=_sl, source=_so)
 

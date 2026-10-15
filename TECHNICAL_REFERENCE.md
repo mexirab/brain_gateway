@@ -248,9 +248,12 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 | GET | `/api/pantry/prep` | Active prep batches → `{batches: [{id, plan_id, entry_id, recipe_id, recipe_name, cooked_at, portions_made, portions_left, good_until, location, status, expired}]}`, soonest `good_until` first |
 | POST | `/api/pantry/prep/{id}/eat` | One portion eaten (ticks today's planned lunch, logs a meal) → `{ok, batch_id, recipe, portions_left, good_until}`. 404 unknown batch, 409 batch finished |
 | POST | `/api/pantry/prep/{id}/finish` | Batch finished/thrown out → `{ok}`. 404 no active batch with that id |
+| POST | `/api/pantry/cooked-other` | Off-plan meal `{item_ids: [int], dish?}` — one use of each item (out/gone skipped, staples untouched), logs a meal → `{ok, cook_id, dish, deducted[], running_low[], not_tracked[]}`. 400 `item_ids` missing/empty/>30, 404 nothing usable, 409 same items logged within 10 min |
+| GET | `/api/pantry/cooked-other?days=` | Off-plan meals of the last `days` (1–14, default 2), newest first, max 20 → `{cooks: [{id, dish, source, cooked_at, status, items[], can_undo}]}` |
+| POST | `/api/pantry/cooked-other/{id}/undo` | Undo an off-plan meal (≤48 h) → `{ok, cook_id, dish, restored}`. 404 unknown id, 409 already undone / too old |
 | POST | `/api/pantry/recipe/{id}/rate` | `{rating: "up"\|"down"\|"clear"}` → `{ok}`. 400 bad rating, 404 unknown recipe |
 
-Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_receipt_lines_total{result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`, `bgw_meal_plan_generated_total{result}`, `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`, `bgw_pantry_cook_events_total{slot,source}`, `bgw_pantry_portions_eaten_total{source}`, `bgw_pantry_decay_total{kind}`, `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}`, `bgw_pantry_reminder_done_total{result}`.
+Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_receipt_lines_total{result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`, `bgw_meal_plan_generated_total{result}`, `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`, `bgw_pantry_cook_events_total{slot,source}` (slot `prep|dinner|other`), `bgw_pantry_portions_eaten_total{source}`, `bgw_pantry_decay_total{kind}`, `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}`, `bgw_pantry_reminder_done_total{result}`.
 
 ### Paperless Bridge (F-012)
 
@@ -664,7 +667,8 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 ```json
 {"action": "swap", "day": "2026-10-20", "slot": "dinner"}
 ```
-- `action` (enum, required): `view | generate | accept | swap | recipe | cooked | uncook | ate | skip`. `day` (`YYYY-MM-DD`, default today) and `slot` (`dinner|batch`, default `dinner`; `batch` = the batch prep) apply to `swap`/`recipe`/`cooked`/`uncook`/`skip`.
+- `action` (enum, required): `view | generate | accept | swap | recipe | cooked | uncook | ate | skip`. `day` (`YYYY-MM-DD`, default today) and `slot` (`dinner|batch|other`, default `dinner`; `batch` = the batch prep; `other` = a meal not in the plan, `cooked`/`uncook` only) apply to `swap`/`recipe`/`cooked`/`uncook`/`skip`.
+- `ingredients` (array of strings) + `dish` (string, optional): for an off-plan `cooked` — pantry items used, fuzzy-matched to inventory (max 30). `cooked` + `slot: other` → off-plan; `cooked` with `ingredients` and slot `dinner` (or omitted) → off-plan only when that day has no dinner in an **active** plan (a draft doesn't count), else the planned dinner. `uncook` + `slot: other` undoes the latest off-plan meal (≤48 h).
 - `cooked` marks the entry cooked and deducts its ingredients (reply lists used / running low / not tracked); `uncook` undoes the latest cook; `skip` marks a planned meal skipped; `ate` eats one portion from the soonest-expiring prep batch and logs the meal (the model must not also call `selfcare_log`). Detail: `docs/PANTRY.md` → Consumption tracking.
 - `generate` starts a background plan (~1 min) and returns immediately; fails fast when the brain is asleep. `accept` accepts the current draft (grocery list + cooking reminders) — only on the user's explicit say-so. `view` returns the draft, else the active plan (≤7500 chars; recipe names labelled as data).
 - Only exposed when `PANTRY_ENABLED=true` (`PANTRY_TOOL_NAMES = {pantry, meal_plan}`); handler self-gates. Listed in the EXTERNAL CONTENT state-changing tool list.
@@ -736,7 +740,7 @@ Created unconditionally by `SCHEMA_SQL`. Timestamps ISO 8601 local.
 | Table | Columns / notes |
 |-------|-----------------|
 | `pantry_items` | `id`, `name`, `category`, `location` (`fridge\|freezer\|pantry`), `track_mode` (`count\|level\|staple`), `qty` (count mode), `level` (`full\|half\|low\|out`), `status` (`active\|probably_gone\|gone`), `shelf_life_days` (NULL = keeps), `acquired_at`, `last_confirmed_at`, `barcode`, `source` (`manual\|chat\|scan\|receipt\|barcode`), `created_at`, `updated_at`. Index on `status` |
-| `pantry_events` | Append-only ledger: `id`, `item_id`, `kind` (`add\|consume\|adjust\|remove`), `source`, `before_json`, `after_json`, `ref_type`/`ref_id` (e.g. scan; `cook` / `uncook` → plan entry id; `uncook` marker rows have NULL `item_id`), `note`, `at`. Index on `(item_id, at)` |
+| `pantry_events` | Append-only ledger: `id`, `item_id`, `kind` (`add\|consume\|adjust\|remove`), `source`, `before_json`, `after_json`, `ref_type`/`ref_id` (e.g. scan; `cook` / `uncook` → plan entry id; `cook_other` / `uncook_other` → `pantry_cooks.id`; `uncook` marker rows have NULL `item_id`), `note`, `at`. Indexes on `(item_id, at)` and `(ref_type, ref_id)` |
 | `pantry_scans` | `id`, `kind` (`fridge\|freezer\|pantry\|receipt`), `photo_paths` (JSON list under `PANTRY_PHOTOS_DIR`), `image_sha256` (receipts: every photo's hash, comma-joined), `status` (`queued\|processing\|pending_review\|committing\|committed\|discarded\|failed`), `proposed_json` (receipts: cut to `{receipt:{store,date,total}}` after commit/discard), `error`, `created_at`, `committed_at`. Index on `status` |
 | `pantry_aliases` | `alias_norm` PK (`receipt_scanner.alias_key(raw)`), `item_name`, `hits`, `updated_at`. Receipt text → item name, learned only from user corrections / re-confirmed remembered lines |
 | `barcode_cache` | `barcode` PK, `name`, `category`, `payload_json`, `fetched_at`. Misses are cached too (re-tried after 7 days) |
@@ -745,6 +749,7 @@ Created unconditionally by `SCHEMA_SQL`. Timestamps ISO 8601 local.
 | `meal_plans` | `id`, `week_start`, `diet_profile`, `status` (`generating\|draft\|active\|failed\|discarded\|replaced`), `notes`, `warnings` (JSON), `error`, `settings_json` (diet settings snapshot), `reminder_ids` (JSON, `mp-` ids, 10 hex chars since Phase 4), `created_at`, `accepted_at`. Index on `(status, week_start)` |
 | `meal_plan_entries` | `id`, `plan_id`, `day`, `slot` (`prep\|lunch\|dinner`), `recipe_id`, `mode` (`batch\|portion\|fresh`), `portions`, `status` (`planned\|cooked\|eaten\|skipped`, default `planned`), `prep_batch_id` (lunch entries → the cooked batch; added by migration). Index on `plan_id` |
 | `prep_batches` | `id`, `plan_id`, `entry_id`, `recipe_id`, `cooked_at`, `portions_made`, `portions_left`, `good_until` (cook date + 4 days), `location` (default `fridge`), `status` (`active\|finished\|expired\|undone`). Index on `status` |
+| `pantry_cooks` | Off-plan meals: `id`, `dish` (allowlist-cleaned, may be empty), `source` (`dashboard\|chat`), `cooked_at`, `status` (`active\|undone`). Deductions are `pantry_events` with `ref_type` `cook_other` |
 | `meal_plan_reminders` | `reminder_id` PK (`mp-` id), `entry_id`. Links a cooking reminder to its plan entry so a Done tap = cooked; rows deleted when the reminder is cancelled or its entry swapped |
 
 ## SQLite Schema (`finance.db`)

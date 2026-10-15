@@ -92,6 +92,58 @@ def _match_inventory(conn, name: str, used: set) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Deduct / restore (shared by planned and off-plan cooks)
+# ---------------------------------------------------------------------------
+
+
+def _deduct(conn, item: Dict[str, Any], count: int, ref_type: str, ref_id: int) -> Optional[Dict[str, Any]]:
+    """Take one use of ``item``: counts drop by ``count``, levels step down,
+    staples are left alone (returns None). Logs a 'consume' ledger event
+    carrying the before/after snapshots that undo works from."""
+    if item["track_mode"] == "staple":
+        return None  # have/out only: cooking never empties a staple
+    before = dict(item)
+    if item["track_mode"] == "count":
+        new_qty = max((item["qty"] or 0) - count, 0)
+        conn.execute("UPDATE pantry_items SET qty = ?, updated_at = ? WHERE id = ?", (new_qty, _now(), item["id"]))
+    else:
+        new_level = _LEVEL_DOWN.get(item["level"] or "full", "half")
+        conn.execute("UPDATE pantry_items SET level = ?, updated_at = ? WHERE id = ?", (new_level, _now(), item["id"]))
+    after = pm._row(conn, item["id"])
+    pm._log_event(conn, item["id"], "consume", "cook", before, after, ref_type, ref_id)
+    return after
+
+
+def _restore(conn, events, undo_ref_type: str, ref_id: int) -> int:
+    """Give back what each 'consume' event took, on top of anything changed
+    since (a restock after cooking must survive the undo). A level item
+    changed by hand since the cook is left alone. Returns items restored."""
+    restored = 0
+    for ev in events:
+        before = json.loads(ev["before_json"] or "{}")
+        after = json.loads(ev["after_json"] or "{}")
+        item = pm._row(conn, ev["item_id"])
+        if not item or not before:
+            continue
+        if item["track_mode"] == "count":
+            taken = max((before.get("qty") or 0) - (after.get("qty") or 0), 0)
+            conn.execute(
+                "UPDATE pantry_items SET qty = COALESCE(qty, 0) + ?, updated_at = ? WHERE id = ?",
+                (taken, _now(), item["id"]),
+            )
+        elif item.get("level") == after.get("level"):
+            conn.execute(
+                "UPDATE pantry_items SET level = ?, updated_at = ? WHERE id = ?",
+                (before.get("level"), _now(), item["id"]),
+            )
+        else:
+            continue
+        pm._log_event(conn, item["id"], "adjust", "cook", item, pm._row(conn, item["id"]), undo_ref_type, ref_id)
+        restored += 1
+    return restored
+
+
+# ---------------------------------------------------------------------------
 # Cook / undo / skip
 # ---------------------------------------------------------------------------
 
@@ -131,24 +183,11 @@ def cook_entry(entry_id: int, source: str = "dashboard") -> Dict[str, Any]:
                     not_tracked.append(ing["item_name"])
                 continue
             used.add(item["id"])
-            before = dict(item)
-            if item["track_mode"] == "staple":
-                continue  # have/out only: cooking never empties a staple
-            if item["track_mode"] == "count":
-                new_qty = max((item["qty"] or 0) - _deduct_count(ing["amount"] or ""), 0)
-                conn.execute(
-                    "UPDATE pantry_items SET qty = ?, updated_at = ? WHERE id = ?", (new_qty, _now(), item["id"])
-                )
-            else:
-                new_level = _LEVEL_DOWN.get(item["level"] or "full", "half")
-                conn.execute(
-                    "UPDATE pantry_items SET level = ?, updated_at = ? WHERE id = ?", (new_level, _now(), item["id"])
-                )
-            after = pm._row(conn, item["id"])
-            pm._log_event(conn, item["id"], "consume", "cook", before, after, "cook", entry_id)
-            deducted.append(after["name"])
-            if pm.is_out(after) or after.get("level") == "low":
-                running_low.append(after["name"])
+            after = _deduct(conn, item, _deduct_count(ing["amount"] or ""), "cook", entry_id)
+            if after:
+                deducted.append(after["name"])
+                if pm.is_out(after) or after.get("level") == "low":
+                    running_low.append(after["name"])
 
         batch_id = None
         if entry["slot"] == "prep":
@@ -217,30 +256,7 @@ def undo_cook(entry_id: int) -> Dict[str, Any]:
             "ORDER BY id DESC",
             (entry_id, last_undo),
         ).fetchall()
-        restored = 0
-        for ev in events:
-            before = json.loads(ev["before_json"] or "{}")
-            after = json.loads(ev["after_json"] or "{}")
-            item = pm._row(conn, ev["item_id"])
-            if not item or not before:
-                continue
-            # Give back what the cook took, on top of anything changed since
-            # (a restock after cooking must survive the undo).
-            if item["track_mode"] == "count":
-                taken = max((before.get("qty") or 0) - (after.get("qty") or 0), 0)
-                conn.execute(
-                    "UPDATE pantry_items SET qty = COALESCE(qty, 0) + ?, updated_at = ? WHERE id = ?",
-                    (taken, _now(), item["id"]),
-                )
-            elif item.get("level") == after.get("level"):
-                conn.execute(
-                    "UPDATE pantry_items SET level = ?, updated_at = ? WHERE id = ?",
-                    (before.get("level"), _now(), item["id"]),
-                )
-            else:
-                continue  # level changed by hand since the cook — leave it
-            pm._log_event(conn, item["id"], "adjust", "cook", item, pm._row(conn, item["id"]), "uncook", entry_id)
-            restored += 1
+        restored = _restore(conn, events, "uncook", entry_id)
         conn.execute(
             "INSERT INTO pantry_events (item_id, kind, source, ref_type, ref_id, note, at) "
             "VALUES (NULL, 'adjust', 'cook', 'uncook', ?, 'undo marker', ?)",
@@ -286,6 +302,167 @@ def skip_entry(entry_id: int) -> Dict[str, Any]:
             return {"ok": False, "error": f"can't skip a {e['slot']} that is {e['status']}", "status_code": 409}
     _cancel_entry_reminders(entry_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Off-plan cooks ("cooked something else")
+# ---------------------------------------------------------------------------
+
+MAX_OTHER_ITEMS = 30
+OTHER_UNDO_HOURS = 48  # an off-plan cook can be undone for two days
+
+
+REPEAT_WINDOW_MINUTES = 10  # the same items again this soon is a double tap / repeated call
+
+
+def _clean_dish(raw: Any) -> str:
+    """Same allowlist cleaner as item names (one cleaner for all user food text)."""
+    return pm._clean_name(raw) if isinstance(raw, str) else ""
+
+
+def cook_other(
+    item_ids: Optional[List[int]] = None,
+    names: Optional[List[str]] = None,
+    dish: Any = "",
+    source: str = "dashboard",
+) -> Dict[str, Any]:
+    """A meal that isn't in the plan: deduct the given pantry items (by id
+    from the dashboard, or by name from chat — fuzzy-matched like recipe
+    ingredients), one use each, in one transaction; log the meal.
+    Undo with ``undo_other``."""
+    item_ids = [i for i in (item_ids or []) if isinstance(i, int) and not isinstance(i, bool) and 0 < i < 2**62]
+    names = [n.strip() for n in (names or []) if isinstance(n, str) and n.strip()]
+    item_ids = list(dict.fromkeys(item_ids))[:MAX_OTHER_ITEMS]
+    names = [pm._clean_name(n) for n in names[:MAX_OTHER_ITEMS]]
+    names = [n for n in names if n]
+    if not item_ids and not names:
+        return {"ok": False, "error": "say which pantry items you used", "status_code": 400}
+    dish_name = _clean_dish(dish)
+    deducted: List[str] = []
+    running_low: List[str] = []
+    not_tracked: List[str] = []
+    with state_store.get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "INSERT INTO pantry_cooks (dish, source, cooked_at, status) VALUES (?, ?, ?, 'active')",
+            (dish_name, source, _now()),
+        )
+        cook_id = cur.lastrowid
+        used: set = set()
+        targets: List[Dict[str, Any]] = []
+        for iid in item_ids:
+            item = pm._row(conn, iid)
+            if item and item["status"] != "gone" and not pm.is_out(item) and iid not in used:
+                used.add(iid)
+                targets.append(item)
+        for name in names:
+            item = _match_inventory(conn, name, used)
+            if not item:
+                not_tracked.append(name)
+                continue
+            used.add(item["id"])
+            targets.append(item)
+        if not targets:
+            conn.rollback()
+            error = "none of those are tracked in the pantry" if names else "those items are already used up"
+            return {"ok": False, "error": error, "not_tracked": not_tracked, "status_code": 404}
+        # Refuse the exact same items again within a few minutes: a double tap,
+        # or the model repeating a call (each call would take another use).
+        since = (datetime.now() - timedelta(minutes=REPEAT_WINDOW_MINUTES)).isoformat(timespec="seconds")
+        for prev in conn.execute(
+            "SELECT id FROM pantry_cooks WHERE status = 'active' AND cooked_at >= ? AND id != ?", (since, cook_id)
+        ).fetchall():
+            prev_ids = sorted(
+                r["item_id"]
+                for r in conn.execute(
+                    "SELECT item_id FROM pantry_events WHERE ref_type = 'cook_other' AND ref_id = ? AND kind = 'consume'",
+                    (prev["id"],),
+                )
+            )
+            deductible = sorted(t["id"] for t in targets if t["track_mode"] != "staple")
+            if prev_ids and prev_ids == deductible:
+                conn.rollback()
+                return {"ok": False, "error": "that meal was just logged", "status_code": 409}
+        for item in targets:
+            after = _deduct(conn, item, 1, "cook_other", cook_id)
+            if after:
+                deducted.append(after["name"])
+                if pm.is_out(after) or after.get("level") == "low":
+                    running_low.append(after["name"])
+    _record_meal(f"cooked_other:{cook_id}")
+    PANTRY_COOK_EVENTS.labels(slot="other", source=source).inc()
+    logger.info(
+        "[PANTRY] Off-plan cook %s (%s): %d deducted, %d not tracked",
+        cook_id,
+        source,
+        len(deducted),
+        len(not_tracked),
+    )
+    return {
+        "ok": True,
+        "cook_id": cook_id,
+        "dish": dish_name,
+        "deducted": deducted,
+        "running_low": running_low,
+        "not_tracked": not_tracked,
+    }
+
+
+def undo_other(cook_id: Optional[int] = None) -> Dict[str, Any]:
+    """Undo an off-plan cook (the latest one when no id) within OTHER_UNDO_HOURS."""
+    cutoff = (datetime.now() - timedelta(hours=OTHER_UNDO_HOURS)).isoformat(timespec="seconds")
+    with state_store.get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if cook_id is None:
+            row = conn.execute(
+                "SELECT * FROM pantry_cooks WHERE status = 'active' AND cooked_at >= ? ORDER BY id DESC LIMIT 1",
+                (cutoff,),
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": "no recent off-plan cooking to undo", "status_code": 404}
+        else:
+            row = conn.execute("SELECT * FROM pantry_cooks WHERE id = ?", (cook_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "cook not found", "status_code": 404}
+        if row["status"] != "active":
+            return {"ok": False, "error": "that was already undone", "status_code": 409}
+        if row["cooked_at"] < cutoff:
+            return {"ok": False, "error": "too long ago to undo — fix amounts by hand", "status_code": 409}
+        events = conn.execute(
+            "SELECT * FROM pantry_events WHERE ref_type = 'cook_other' AND ref_id = ? AND kind = 'consume' "
+            "ORDER BY id DESC",
+            (row["id"],),
+        ).fetchall()
+        restored = _restore(conn, events, "uncook_other", row["id"])
+        conn.execute("UPDATE pantry_cooks SET status = 'undone' WHERE id = ?", (row["id"],))
+    PANTRY_COOK_EVENTS.labels(slot="other", source="undo").inc()
+    logger.info("[PANTRY] Off-plan cook %s undone: %d item(s) restored", row["id"], restored)
+    return {"ok": True, "cook_id": row["id"], "dish": row["dish"], "restored": restored}
+
+
+def recent_other(days: int = 2) -> List[Dict[str, Any]]:
+    """Off-plan cooks of the last ``days`` days, newest first, with what each used."""
+    days = max(1, min(int(days), 14))
+    since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    undo_cutoff = (datetime.now() - timedelta(hours=OTHER_UNDO_HOURS)).isoformat(timespec="seconds")
+    with state_store.get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pantry_cooks WHERE cooked_at >= ? ORDER BY id DESC LIMIT 20", (since,)
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["items"] = [
+                json.loads(e["after_json"] or "{}").get("name", "")
+                for e in conn.execute(
+                    "SELECT after_json FROM pantry_events WHERE ref_type = 'cook_other' AND ref_id = ? "
+                    "AND kind = 'consume' ORDER BY id",
+                    (r["id"],),
+                )
+            ]
+            d["can_undo"] = d["status"] == "active" and d["cooked_at"] >= undo_cutoff
+            out.append(d)
+    return out
 
 
 # ---------------------------------------------------------------------------
