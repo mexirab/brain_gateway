@@ -47,13 +47,15 @@ class TTSBackend(ABC):
         return "wav"
 
     @abstractmethod
-    async def synthesize(self, text: str, voice: Optional[str] = None) -> bytes:
+    async def synthesize(self, text: str, voice: Optional[str] = None, style: str = "") -> bytes:
         """
         Generate audio from text.
 
         Args:
             text: Text to synthesize.
             voice: Override voice (uses config default if None).
+            style: Optional style note (see voice_style.py). Only the local
+                HTTP backend sends it; cloud/Piper backends ignore it.
 
         Returns:
             Audio bytes in the format indicated by audio_format property.
@@ -75,11 +77,12 @@ class LocalHTTPBackend(TTSBackend):
     This is the current behavior — POST to {url}/tts with JSON payload.
     """
 
-    async def synthesize(self, text: str, voice: Optional[str] = None) -> bytes:
+    async def synthesize(self, text: str, voice: Optional[str] = None, style: str = "") -> bytes:
         target_voice = voice or self.config.voice
         r = await self._http.post(
             f"{self.config.url}/tts",
-            json={"text": text, "voice": target_voice},
+            # "emotion" is the style field on both local servers; Qwen3-TTS ignores it.
+            json={"text": text, "voice": target_voice, **({"emotion": style} if style else {})},
             timeout=60,
         )
         r.raise_for_status()
@@ -102,7 +105,7 @@ class ElevenLabsBackend(TTSBackend):
     def file_extension(self) -> str:
         return "mp3"
 
-    async def synthesize(self, text: str, voice: Optional[str] = None) -> bytes:
+    async def synthesize(self, text: str, voice: Optional[str] = None, style: str = "") -> bytes:
         target_voice = voice or self.config.voice
         r = await self._http.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{target_voice}",
@@ -132,7 +135,7 @@ class PiperBackend(TTSBackend):
     No GPU required.
     """
 
-    async def synthesize(self, text: str, voice: Optional[str] = None) -> bytes:
+    async def synthesize(self, text: str, voice: Optional[str] = None, style: str = "") -> bytes:
         target_voice = voice or self.config.voice
         r = await self._http.get(
             f"{self.config.url}/api/tts",
@@ -160,7 +163,7 @@ class OpenAITTSBackend(TTSBackend):
     def file_extension(self) -> str:
         return "mp3"
 
-    async def synthesize(self, text: str, voice: Optional[str] = None) -> bytes:
+    async def synthesize(self, text: str, voice: Optional[str] = None, style: str = "") -> bytes:
         target_voice = voice or self.config.voice or "nova"
         model = self.config.model or "tts-1"
         r = await self._http.post(

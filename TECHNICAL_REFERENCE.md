@@ -65,7 +65,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/stt/transcribe` | Dashboard mic button + hands-free call utterances. Multipart `file` (max 10 MB) → `STT_URL` `/v1/audio/transcriptions`; forwarded filename/content-type pinned to an allowlist (webm/ogg/mp4/mpeg/wav, else `application/octet-stream`). 200 = STT JSON (`{text}`); voice activity (`shared.mark_voice_activity()` + next-chat voice flag) marked only when `text` is non-empty. Errors `{ok:false, error}`: **413** > 10 MB; **503** not configured or STT unreachable (Helios asleep — call mode ends); **504** STT read/write/pool timeout; **502** STT HTTP error, non-JSON or non-object body, unexpected exception. Metric `bgw_dashboard_stt_total{result}`. See `docs/VOICE_AND_TTS.md` → Hands-free call mode. |
-| POST | `/api/tts/synthesize` | Dashboard chat voice replies (one call per sentence; the client splits segments at ≤ 400 chars and speaks ≤ 1200 chars per reply). Body `{text}`. 200 audio (media type = TTS backend `audio_format`, ~150 ms WAV silence pre-pad via `TTS_SILENCE_PAD_MS`, `Cache-Control: no-store`; calls `shared.mark_voice_activity()` so house-speaker reminder announcements defer while the browser speaks — speakers only, +2 min, max ~10 min; phone push is not held). Errors `{ok:false, error}`: **400** invalid JSON / non-object / missing, blank or non-string `text` / not UTF-8 encodable (lone surrogate); **413** > 1000 chars (`TTS_SYNTH_MAX_CHARS`) or > 2000 UTF-8 bytes (`TTS_SYNTH_MAX_BYTES`); **503** TTS unreachable (connect failure — Helios asleep) or not configured; **504** TTS read/write/pool timeout; **502** TTS HTTP error or unexpected exception. Metric `bgw_dashboard_tts_total{result}`. See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies. |
+| POST | `/api/tts/synthesize` | Dashboard chat voice replies (one call per sentence; the client splits segments at ≤ 400 chars and speaks ≤ 1200 chars per reply). Body `{text}`. 200 audio (media type = TTS backend `audio_format`, ~150 ms WAV silence pre-pad via `TTS_SILENCE_PAD_MS`, `Cache-Control: no-store`; calls `shared.mark_voice_activity()` so house-speaker reminder announcements defer while the browser speaks — speakers only, +2 min, max ~10 min; phone push is not held). Errors `{ok:false, error}`: **400** invalid JSON / non-object / missing, blank or non-string `text` / not UTF-8 encodable (lone surrogate); **413** > 1000 chars (`TTS_SYNTH_MAX_CHARS`) or > 2000 UTF-8 bytes (`TTS_SYNTH_MAX_BYTES`); **503** TTS unreachable (connect failure — Helios asleep) or not configured; **504** TTS read/write/pool timeout; **502** TTS HTTP error or unexpected exception. Sends the current reply style note (`voice_style.current_reply_style()`). Metric `bgw_dashboard_tts_total{result}`. See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies. |
 | POST | `/api/announce` | Trigger TTS announcement via voice system (`{text, speaker?}`, `announcement_type="manual"`). 200 `{ok:true, text, speaker}`; 200 `{ok:true, suppressed:true, reason}` under DND; **502** `{ok:false, error, unavailable:[...]}` when delivery fails (e.g. named speaker is `unavailable` in HA — manual announcements never fall back to another speaker). Speaker must match `media_player\.[a-z0-9_]+`. |
 | GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS) |
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
@@ -360,6 +360,9 @@ All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orche
 | POST   | `/api/config/recurring_reminders` | Create a rule: `{text, cron_expression, target, days_of_week, enabled}`. Cron validated via `croniter`. |
 | PUT    | `/api/config/recurring_reminders/{id}` | Partial update. |
 | DELETE | `/api/config/recurring_reminders/{id}` | Delete a rule. |
+| GET    | `/api/config/voice_style` | Returns `{enabled, presets: {key: phrase}, modes: [...], announcement_types: [...], defaults: {modes: {mode: preset}, announcements: {type: preset}}, override: {style, until} \| null}` (`until` = epoch seconds or null). |
+| PUT    | `/api/config/voice_style` | Partial `{modes, announcements}` maps (extra keys rejected). Unknown mode/type or preset → 400. Writes `VOICE_STYLE_PATH` (non-default entries only); audited as panel `voice_style`. Returns the GET view. |
+| DELETE | `/api/config/voice_style/override` | Clear the chat-set override (audited as panel `voice_style_override`). Returns the GET view. |
 
 **Recurring expansion job.** `recurring_reminders.expand_due_reminders()` runs every 5 min as APScheduler interval job `id="recurring_reminders_expand"` (registered in `orchestrator.py`). For each enabled rule it walks `croniter` forward (capped at 14 days lookahead), filters by `days_of_week`, materializes due rows into the existing one-shot `reminders` table for `deliver_reminder_job` to pick up, and auto-disables rules whose cron never fires (e.g. `0 0 30 2 *` — Feb 30). Metrics: `bgw_recurring_reminders_expanded_total`, `bgw_recurring_reminders_expand_errors_total`.
 
@@ -665,6 +668,15 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 ```
 - `action` (enum, required): `wake | sleep | status`. `wake` = power Helios on (HA `switch.turn_on`, debounced), `sleep` = power off (HA `switch.turn_off`, a hard cut), `status` = report inferred running/asleep from switch state + power draw.
 - Only exposed to the LLM when `HELIOS_WAKE_ENABLED=true` (filtered via `HELIOS_TOOL_NAMES` in `get_all_tools()`); the handler stays registered and self-gates. Routes through `orchestrator/helios_power.py` — same dicts as `POST /api/helios/{wake,sleep}` + `GET /api/helios/power`.
+
+### voice_style
+```json
+{"action": "set", "style": "quiet", "duration_hours": 1}
+```
+- `action` (enum, required): `set | reset | status`.
+- `style` (enum, required for `set`): `calm | gentle | soothing | quiet | warm | thoughtful | encouraging | upbeat | proud | energetic | firm`.
+- `duration_hours` (number, optional): auto-revert after N hours, `0 < N ≤ 168`. Omit = until reset.
+- Non-terminal; in `VOICE_TOOL_NAMES`; listed as state-changing in the prompt's EXTERNAL CONTENT rule. Override stored in `app_state` key `voice_style_override`, audited as `config_changes` panel `voice_style_override`. Counted per synthesis in `bgw_tts_style_applied_total{source=override|mode|announcement|none, style}`. See `docs/VOICE_AND_TTS.md` → Voice style.
 
 ### pantry
 ```json

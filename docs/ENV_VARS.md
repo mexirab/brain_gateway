@@ -174,6 +174,32 @@ These env vars are bootstrap defaults. Once the runtime YAML at `SELFCARE_SCHEDU
 |----------|---------|---------|
 | `ANNOUNCEMENT_ROUTES_PATH` | `/app/data/announcement_routes.yaml` | Writable YAML written by the `/settings → Speakers` panel. Maps each announcement category (`selfcare`, `reminder`, `calendar`, `ambient`, `progress`, `focus`, `briefing`) → speaker entity-id (single or comma-separated for multi-room). `_announce_voice(speaker=None, announcement_type=...)` consults `announcement_routes.route_for(...)`. Empty string in a category means "use the legacy fallback" (`REMINDER_SPEAKER` for most, `MORNING_BRIEFING_SPEAKER` for `briefing`, `FOCUS_AUDIO_PLAYER` for `focus`). Hot-reloads on every PUT via `reload_routes()`. The `default` key (if present) acts as a wildcard for any announcement_type not in `CATEGORIES`. |
 
+## TTS — voice style + VoxCPM2
+
+Orchestrator (`.env` on Jupiter):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TTS_STYLE_ENABLED` | `true` | Send a style note (`voice_style.py` preset phrase) with each synthesis. Honored by VoxCPM2; Qwen3-TTS ignores it, so `true` is harmless there. `false` = no notes anywhere. |
+| `VOICE_STYLE_PATH` | `/app/data/voice_style.yaml` | Writable YAML behind `/settings` → Voice Style. Stores only non-default per-mode / per-announcement presets. |
+
+VoxCPM2 server (`tts/voxcpm-tts.service` on Helios — set in the unit, not `.env`):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VOXCPM_MODEL` | `openbmb/VoxCPM2` | HF id or local snapshot path (unit: `/home/labadmin/models/VoxCPM2`, with `HF_HUB_OFFLINE=1`). |
+| `VOXCPM_VOICES_DIR` | `/home/labadmin/tts-voices` | Dir with `voices.json` + reference clips (same format as the Qwen server; only `ref_audio` used). |
+| `VOXCPM_HOST` | `0.0.0.0` | Bind address. |
+| `VOXCPM_PORT` | `8004` | Listen port. |
+| `VOXCPM_OUTPUT_SR` | `24000` | Output sample rate (matches Qwen for Wyoming/HA consumers); `0` = native 48 kHz. |
+| `VOXCPM_CFG` | `2.0` | Classifier-free guidance value. |
+| `VOXCPM_STEPS` | `10` | Inference steps. |
+| `VOXCPM_MAX_CHARS` | `2000` | Max input text length (style note capped separately at 80). |
+| `VOXCPM_MAX_PENDING` | `8` | Requests waiting for/holding the GPU worker before new ones get 503. |
+| `VOXCPM_REQUIRE_CUDA` | `true` | Refuse to start without CUDA (prevents a silent ~7 s/sentence CPU fallback). |
+
+Cutover = point `TTS_URL` at `http://<helios>:8004`. See `docs/VOICE_AND_TTS.md` → VoxCPM2 TTS server.
+
 ## Progress Tracking
 
 | Variable | Default | Purpose |

@@ -185,6 +185,21 @@ Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-o
 
 ---
 
+## Voice style
+
+How Jess *sounds* when she speaks (dashboard voice replies, Telegram voice replies, announcements). Audible once the VoxCPM2 voice is live.
+
+| Say this | What happens |
+|----------|--------------|
+| "Talk softer for an hour" | Quiet voice for an hour, then back to automatic |
+| "Be more upbeat" / "Be firmer with me" | Switches style until you reset it |
+| "Back to normal" / "Talk normally again" | Clears it — automatic tone per situation |
+| "How are you set to sound?" | Tells you the current style |
+
+Styles: calm, gentle, soothing, quiet, warm, thoughtful, encouraging, upbeat, proud, energetic, firm. Max 7 days for a timed style. Default tone per situation is editable in `/settings → Voice Style`.
+
+---
+
 ## Documents
 
 | Say this | What happens |
@@ -271,6 +286,7 @@ Visit `/settings` to tune things without restarting:
 - **Routines** — edit step labels, change trigger times, set per-routine nudge limits
 - **Speakers** — map each announcement category to a specific HA `media_player.*` entity (or multiple, comma-separated)
 - **Recurring Reminders** — cron-based rules ("every weekday at 9am, take meds") that auto-materialize into the normal reminder pipeline
+- **Voice Style** — default voice tone per conversation mode and per announcement type; clear a style you set by asking
 
 ---
 

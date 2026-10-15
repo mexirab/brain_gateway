@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -523,6 +523,72 @@ async def put_speakers(req: Request):
     log_config_change("speakers", before, after)
     logger.info(f"[CONFIG] Speakers updated: categories={sorted(payload.routes)}")
     return JSONResponse(after)
+
+
+# ---------------------------------------------------------------------------
+# Voice Style panel — default TTS style per mode / announcement type
+# ---------------------------------------------------------------------------
+
+
+class VoiceStyleIn(BaseModel):
+    """Shape only — values are checked against voice_style's preset tables in save_defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+    modes: Dict[str, str] = Field(default_factory=dict)
+    announcements: Dict[str, str] = Field(default_factory=dict)
+
+
+def _voice_style_view() -> Dict[str, Any]:
+    from orchestrator import voice_style
+    from orchestrator.config import settings
+
+    return {
+        "enabled": settings.tts_style_enabled,
+        "presets": voice_style.PRESETS,
+        "modes": list(voice_style.MODES),
+        "announcement_types": list(voice_style.ANNOUNCEMENT_TYPES),
+        "defaults": voice_style.load_defaults(),
+        "override": voice_style.get_override(),
+    }
+
+
+@router.get("/voice_style")
+async def get_voice_style():
+    return JSONResponse(_voice_style_view())
+
+
+@router.put("/voice_style")
+async def put_voice_style(req: Request):
+    """Body: {"modes": {mode: preset}, "announcements": {type: preset}} — partial maps allowed."""
+    from orchestrator import voice_style
+    from orchestrator.config_writer import log_config_change
+
+    body = await _parse_json_body(req)
+    try:
+        payload = VoiceStyleIn.model_validate(body)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=_format_validation_errors(e)) from None
+    before = voice_style.load_defaults()
+    try:
+        after = voice_style.save_defaults(payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except OSError as e:
+        logger.error("[CONFIG] Voice style write failed: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="Could not save voice style") from None
+    log_config_change("voice_style", before, after)
+    logger.info("[CONFIG] Voice style updated")
+    return JSONResponse(_voice_style_view())
+
+
+@router.delete("/voice_style/override")
+async def delete_voice_style_override():
+    """Clear the style the user set by asking Jess in chat."""
+    from orchestrator import voice_style
+
+    voice_style.reset_override(changed_by="user")
+    logger.info("[CONFIG] Voice style override cleared from settings")
+    return JSONResponse(_voice_style_view())
 
 
 @router.get("/speakers/discover")

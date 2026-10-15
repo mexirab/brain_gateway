@@ -227,7 +227,7 @@ def build() -> dict:
 
     # -------------------------------------------------------- TTS Synthesis
     tts_desc = (
-        "Successful TTS round-trips to Qwen3-TTS on Helios :8002, from the "
+        "Successful TTS round-trips to the TTS server at TTS_URL on Helios (VoxCPM2 :8004 or Qwen3-TTS :8002), from the "
         "dashboard chat's /api/tts/synthesize (one call per spoken sentence) and "
         "the /v1/audio/speech proxy (OWUI, stopped). Failures are NOT in this "
         "histogram — see Dashboard TTS Outcomes. Excludes browser playback. Both "

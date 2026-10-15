@@ -134,13 +134,13 @@ groups:
           description: "prometheus_notifications_alertmanagers_discovered has been < 1 for 5 minutes — alerts are firing into the void. Check the alertmanager container in the monitoring compose project."
 
       - alert: TTSDown
-        expr: probe_success{service="tts"} == 0
+        expr: probe_success{service=~"tts|tts-voxcpm"} == 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "TTS service (Helios) is down"
-          description: "Jessica TTS has not responded for 5 minutes. Voice output unavailable."
+          summary: "TTS service {{ $labels.service }} (Helios) is down"
+          description: "{{ $labels.service }} has not responded for 5 minutes (tts = Qwen3-TTS :8002, tts-voxcpm = VoxCPM2 :8004; whichever TTS_URL points at is the live voice). Diagnose with journalctl -u qwen-tts / voxcpm-tts on Helios."
 
       - alert: STTDown
         expr: probe_success{service="stt"} == 0

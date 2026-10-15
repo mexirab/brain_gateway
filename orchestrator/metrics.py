@@ -1025,8 +1025,8 @@ VOICE_PIPELINE_LATENCY = Histogram(
 )
 
 # TTS synthesis latency — observed on the /v1/audio/speech proxy in
-# routes_vision. Captures time to fetch audio bytes from Qwen3-TTS,
-# separate from the orchestrator LLM slice.
+# routes_vision. Captures time to fetch audio bytes from the TTS server at
+# TTS_URL (VoxCPM2 :8004 or Qwen3-TTS :8002), separate from the LLM slice.
 VOICE_TTS_LATENCY = Histogram(
     "bgw_voice_tts_seconds",
     "Successful TTS synthesis latency (/v1/audio/speech proxy + dashboard "
@@ -1043,6 +1043,15 @@ EMPTY_REPLY_TOTAL = Counter(
 )
 for _r in ("retried", "recovered", "still_empty"):
     EMPTY_REPLY_TOTAL.labels(outcome=_r)
+
+TTS_STYLE_APPLIED = Counter(
+    "bgw_tts_style_applied_total",
+    "Style notes resolved for TTS calls (voice_style.py), one per synthesis",
+    # source: override (user asked in chat) | mode (mode_router default) |
+    #         announcement (per-type default) | none (no recent chat turn)
+    # style: preset key from voice_style.PRESETS ("auto" = no note sent)
+    ["source", "style"],
+)
 
 DASHBOARD_TTS_TOTAL = Counter(
     "bgw_dashboard_tts_total",
