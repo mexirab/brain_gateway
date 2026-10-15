@@ -76,7 +76,7 @@ An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.ex
 | `MODEL_NAME` | `qwen3.6-27b-int4` | Primary model name. Matches `VLLM_SERVED_NAME` (compose) or the llama-server `--alias`. Helios deployment: `qwen3.8-27b-turbo-q6k` since the 2026-10-02 llama.cpp cutover (was `qwen3.8-27b-nvfp4` 2026-09-28 → 2026-10-02, `qwen3.6-27b-int4` from 2026-04-26, `Qwen3.5-27B` before). |
 | `FALLBACK_MODEL_URL` | — | Fallback model endpoint (optional) |
 | `FALLBACK_MODEL_NAME` | — | Fallback model name (current production: `qwen3.8-27b-turbo-q6k`; matches `MODEL_NAME`) |
-| `EMBEDDING_MODEL` | — | Embedding model for RAG indexing |
+| `EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v2-moe` | Embedding model for all memory (palace search/writes, RAG, auto_learn). The default is loaded at pinned model + remote-code revisions (`orchestrator/embedding_pin.py`); any other value loads unpinned at `main` with `trust_remote_code=True`. Changing it invalidates existing vectors (re-index). See `docs/MEMPALACE.md` → Embedding model. |
 | `MODEL_SERVER_IP` | — | SSH target for remote model start/stop |
 | `MODEL_SSH_USER` | — | SSH user for model server |
 | `MODEL_START_CMD` | `sudo systemctl start llama-server-primary` | Command to start model server via SSH (default changed 2026-10-02 from the disabled `llama-server` unit) |

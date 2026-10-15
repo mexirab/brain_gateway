@@ -20,6 +20,26 @@ Five code paths write into the mempalace collection. Not all of them go through 
 | `auto_learn.py::store_fact` | `shared.collection.add`, `PALACE_STORES_TOTAL` incremented manually with the routed wing/room | ✅ (as of commit `e5e1d07`) |
 | Document vault (`document_vault` tool) | `palace.store()` | ✅ |
 
+## Embedding model
+
+All palace vectors come from `nomic-ai/nomic-embed-text-v2-moe` (`EMBEDDING_MODEL`), loaded once as `shared.embedding_model` and also by `scripts/reindex_rag.py` and `rag/ingest_rag.py`. Every memory feature — `search_memory`, per-turn RAG context, palace writes (`update_memory`, document vault), auto_learn — depends on it.
+
+**Pins (all three must move together):**
+
+| Pin | Where | Why |
+|---|---|---|
+| `transformers>=5.0,<5.12` | `orchestrator/requirements.txt` | The model's remote code calls `get_extended_attention_mask`, removed in transformers 5.12 |
+| Model revision `1066b6599d099fbb93dfcb64f9c37a7c9e503e85` | `orchestrator/embedding_pin.py` (`revision`) | Reproducible weights/config |
+| Remote-code revision `7710840340a098cfb869c4f65e87cf2b1b70caca` (repo `nomic-ai/nomic-bert-2048`) | `orchestrator/embedding_pin.py` (`code_revision` via `config_kwargs`/`model_kwargs`) | The config's `auto_map` points at code in a second repo; `revision` alone does not pin it — unpinned, every start executed that repo's `main` |
+
+`embedding_pin.load_kwargs(name)` applies the pins only when `EMBEDDING_MODEL` is the default; a custom model loads unpinned.
+
+**Upgrading:** test the new SHAs (and any transformers bump) in a throwaway container — `encode()` must succeed and the log must not show "A new version of the following files was downloaded" — then change them together. Procedure also in the `embedding_pin.py` docstring.
+
+**Health:** startup self-test encodes one sentence (60 s timeout) → gauge `bgw_embedding_healthy` (1/0, log line `[EMBEDDING] Self-test OK|FAILED`). Paging alert `EmbeddingModelBroken` fires on `== 0` for 5 m. Gap: the self-test only runs at boot — there is no runtime error counter yet, so a failure that starts after startup is visible only as per-call errors in the logs.
+
+**Outage 2026-10-02 → 2026-10-15:** transformers was unpinned; a rebuild pulled 5.18 and every encode failed with `'NomicBertModel' object has no attribute 'get_extended_attention_mask'`. Memory search, RAG context, palace writes and auto_learn all failed (auto_learn stored 0 facts) for ~12 days with no alert. Explicit "remember this" requests in that window were lost and cannot be recovered. The pinned load produces identical vectors to the pre-outage model, so existing memories remain compatible (no re-index needed).
+
 ## Configuration
 
 Palace env vars live in [`ENV_VARS.md`](ENV_VARS.md#mempalace-unified-memory). Palace structure itself (wings, rooms, routing rules) lives in `data/palace.yaml`.
@@ -54,6 +74,7 @@ Run manually via `POST /api/palace/mine` or the MCP tool `palace_mine_sessions`.
 
 **Search returns nothing:**
 - Check `PALACE_ENABLED=true`
+- Check `bgw_embedding_healthy` — if 0, the embedding model can't encode (see Embedding model above; `docker logs brain-orchestrator | grep EMBEDDING`).
 - Check `bgw_palace_memories_total` gauge — if 0, the collection is empty. Run `/api/rag/ingest` to force ingestion, or check that auto_learn is firing (look at `bgw_auto_learn_facts_stored_total`).
 
 **Write volume looks wrong:**
