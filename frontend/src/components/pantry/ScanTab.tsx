@@ -482,8 +482,10 @@ function ActiveScan({
   const warnings = scan.proposed?.warnings ?? [];
   const isReceipt = scan.kind === 'receipt';
   const receipt = scan.proposed?.receipt;
-  const foodLines = isReceipt ? lines.filter((l) => l.food !== false) : lines;
+  const foodLines = isReceipt ? lines.filter((l) => l.food !== false) : lines.filter((l) => l.action !== 'not_seen');
   const otherLines = isReceipt ? lines.filter((l) => l.food === false) : [];
+  // Stock-takes: tracked here but not in the photos (weekly drift check).
+  const notSeen = isReceipt ? [] : lines.filter((l) => l.action === 'not_seen');
 
   return (
     <Card padding="sm" className="space-y-4 border-info/30">
@@ -491,7 +493,7 @@ function ActiveScan({
         <h2 className="text-sm font-medium text-content-primary">
           {isReceipt
             ? `Check the receipt (${foodLines.length} food line${foodLines.length === 1 ? '' : 's'})`
-            : `Check the ${LABEL[scan.kind].toLowerCase()} list (${lines.length} found)`}
+            : `Check the ${LABEL[scan.kind].toLowerCase()} list (${foodLines.length} found)`}
         </h2>
         {isReceipt && receipt && (receipt.store || receipt.date || receipt.total != null) && (
           <p className="text-xs text-content-secondary mt-0.5">
@@ -542,11 +544,13 @@ function ActiveScan({
         </ul>
       )}
 
-      {lines.length === 0 && (
+      {(isReceipt ? lines.length === 0 : foodLines.length === 0) && (
         <p className="text-sm text-content-muted">
           {isReceipt
             ? 'Jess couldn’t read any lines on this receipt — try a flatter, brighter photo, or add items by hand.'
-            : 'Jess couldn’t make out any food in these photos.'}
+            : notSeen.length > 0
+              ? 'Jess couldn’t make out any food in these photos — they may be too dark or blurry, so don’t tick the “Not seen” items just because of this.'
+              : 'Jess couldn’t make out any food in these photos.'}
         </p>
       )}
       {isReceipt && lines.length > 0 && foodLines.length === 0 && (
@@ -560,6 +564,34 @@ function ActiveScan({
           <ReviewLine key={l.key} line={l} receipt={isReceipt} onChange={(f) => patch(l.key, f)} />
         ))}
       </ul>
+
+      {notSeen.length > 0 && (
+        <details className="group rounded-lg border border-line-subtle p-2">
+          <summary className="cursor-pointer list-none text-sm text-content-secondary min-h-[40px] flex items-center gap-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+            <ChevronRight size={16} className="transition-transform group-open:rotate-90" aria-hidden />
+            Not seen in these photos ({notSeen.length}) — tick any that are gone
+          </summary>
+          <p className="text-xs text-content-muted mt-1">
+            Things at the back of a shelf often don’t show up, so nothing here changes unless you tick it.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {notSeen.map((l) => (
+              <li key={l.key}>
+                <label className="flex items-center gap-3 min-h-[40px] text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 shrink-0"
+                    checked={l.include}
+                    onChange={(e) => patch(l.key, { include: e.target.checked })}
+                  />
+                  <span className={l.include ? 'line-through text-content-muted' : ''}>{l.name}</span>
+                  {l.include && <span className="text-[11px] text-warning">gone</span>}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {otherLines.length > 0 && (
         <details className="group rounded-lg border border-line-subtle p-2" open={foodLines.length === 0 || undefined}>
@@ -627,6 +659,7 @@ function ActiveScan({
                   onDone(
                     `Saved: ${res.added} added, ${res.updated} ${isReceipt ? 'restocked' : 'updated'}` +
                       (res.grocery_checked ? `, ${res.grocery_checked} ticked off your grocery list` : '') +
+                      (res.gone ? `, ${res.gone} marked gone` : '') +
                       (failed ? `, ${failed} couldn’t be saved` : '') +
                       '.',
                   );

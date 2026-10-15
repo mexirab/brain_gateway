@@ -62,7 +62,7 @@ export interface ScanLine {
   qty: number | null;
   level: Level | null;
   confidence: 'high' | 'medium' | 'low';
-  action: 'add' | 'update' | 'restock';
+  action: 'add' | 'update' | 'restock' | 'not_seen';
   match_id: number | null;
   match_name: string | null;
   include: boolean;
@@ -78,6 +78,8 @@ export interface CommitResult {
   /** Receipt commits only. */
   aliases_learned?: number;
   grocery_checked?: number;
+  /** Stock-takes: expected items the user confirmed are gone. */
+  gone?: number;
 }
 
 export interface ReceiptMeta {
@@ -212,6 +214,7 @@ export interface DietSettings {
   avoid: string[];
   extra_rules: string[];
   reminders: { prep: boolean; dinners: boolean; prep_time: string; dinner_time: string };
+  fridge_check: { enabled: boolean; day: Weekday; time: string };
 }
 
 export interface DietProfileOption {
@@ -246,6 +249,28 @@ export interface PlanEntry {
   recipe_id: number;
   mode: 'batch' | 'portion' | 'fresh';
   portions: number | null;
+  status: 'planned' | 'cooked' | 'eaten' | 'skipped';
+  prep_batch_id: number | null;
+}
+
+export interface PrepBatch {
+  id: number;
+  recipe_name: string;
+  portions_made: number;
+  portions_left: number;
+  good_until: string;
+  status: 'active' | 'finished' | 'expired' | 'undone';
+  expired: boolean;
+}
+
+export interface CookResult {
+  ok: boolean;
+  recipe: string;
+  slot: 'prep' | 'dinner';
+  deducted: string[];
+  running_low: string[];
+  not_tracked: string[];
+  portions: number | null;
 }
 
 export type PlanStatus = 'generating' | 'draft' | 'active' | 'failed' | 'discarded' | 'replaced';
@@ -261,6 +286,7 @@ export interface MealPlan {
   created_at: string;
   entries: PlanEntry[];
   recipes: Record<string, Recipe>;
+  batches: Record<string, { portions_made: number; portions_left: number; good_until: string; status: string }>;
   missing: string[];
 }
 
@@ -281,6 +307,17 @@ export const planApi = {
       `/api/pantry/plan/entry/${entryId}/swap`,
       json('POST'),
     ),
+  cooked: (entryId: number) => call<CookResult>(`/api/pantry/plan/entry/${entryId}/cooked`, json('POST')),
+  uncook: (entryId: number) =>
+    call<{ ok: boolean; restored: number }>(`/api/pantry/plan/entry/${entryId}/uncook`, json('POST')),
+  skip: (entryId: number) => call<{ ok: boolean }>(`/api/pantry/plan/entry/${entryId}/skip`, json('POST')),
+  prep: () => call<{ batches: PrepBatch[] }>('/api/pantry/prep').then((r) => r.batches),
+  eat: (batchId: number) =>
+    call<{ ok: boolean; recipe: string; portions_left: number; good_until: string }>(
+      `/api/pantry/prep/${batchId}/eat`,
+      json('POST'),
+    ),
+  finishBatch: (batchId: number) => call<{ ok: boolean }>(`/api/pantry/prep/${batchId}/finish`, json('POST')),
   rate: (recipeId: number, rating: 'up' | 'down' | 'clear') =>
     call<{ ok: boolean }>(`/api/pantry/recipe/${recipeId}/rate`, json('POST', { rating })),
 };

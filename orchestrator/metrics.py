@@ -1159,7 +1159,7 @@ PANTRY_EVENTS = Counter(
     ["kind", "source"],
 )
 for _k in ("add", "consume", "adjust", "remove"):
-    for _s in ("manual", "chat", "scan", "barcode"):
+    for _s in ("manual", "chat", "scan", "barcode", "receipt", "cook", "decay"):
         PANTRY_EVENTS.labels(kind=_k, source=_s)
 
 BARCODE_LOOKUP = Counter(
@@ -1201,3 +1201,55 @@ MEAL_PLAN_SWAP_LATENCY = Histogram(
     "Wall time of a single-meal swap (LLM call + apply).",
     buckets=(1, 2, 5, 10, 20, 40, 80, 160),
 )
+
+# ---------------------------------------------------------------------------
+# Pantry consumption tracking (F-015 phase 4) — pantry_consumption
+# ---------------------------------------------------------------------------
+
+PANTRY_COOK_EVENTS = Counter(
+    "bgw_pantry_cook_events_total",
+    "Planned meals marked cooked (ingredients deducted), by slot and where the tap came from.",
+    # slot: prep | dinner ; source: dashboard | chat | push | undo
+    ["slot", "source"],
+)
+for _sl in ("prep", "dinner"):
+    for _so in ("dashboard", "chat", "push", "undo"):
+        PANTRY_COOK_EVENTS.labels(slot=_sl, source=_so)
+
+PANTRY_PORTIONS_EATEN = Counter(
+    "bgw_pantry_portions_eaten_total",
+    "Prepped portions eaten.",
+    ["source"],  # dashboard | chat
+)
+for _so in ("dashboard", "chat"):
+    PANTRY_PORTIONS_EATEN.labels(source=_so)
+
+PANTRY_DECAY = Counter(
+    "bgw_pantry_decay_total",
+    "Daily expiry pass: perishables marked probably_gone and prep batches expired.",
+    ["kind"],  # item | batch
+)
+for _k in ("item", "batch"):
+    PANTRY_DECAY.labels(kind=_k)
+
+PANTRY_DECAY_LAST_RUN = Gauge(
+    "bgw_pantry_decay_last_run_timestamp_seconds",
+    "Unix time the daily pantry expiry pass last completed (re-seeded at startup from app_state).",
+)
+
+PANTRY_FRIDGE_CHECK = Counter(
+    "bgw_pantry_fridge_check_nudge_total",
+    "Weekly fridge-check nudges.",
+    ["result"],  # sent | error
+)
+for _r in ("sent", "error"):
+    PANTRY_FRIDGE_CHECK.labels(result=_r)
+
+PANTRY_REMINDER_DONE = Counter(
+    "bgw_pantry_reminder_done_total",
+    "Done taps on meal-plan cooking reminders (ntfy / Pushover / Telegram).",
+    # cooked | already (marked before) | refused (plan replaced) | unlinked (pre-dates phase 4) | error
+    ["result"],
+)
+for _r in ("cooked", "already", "refused", "unlinked", "error"):
+    PANTRY_REMINDER_DONE.labels(result=_r)

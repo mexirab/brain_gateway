@@ -8744,6 +8744,286 @@
       "id": 117
     },
     {
+      "type": "timeseries",
+      "title": "Cooked & Portions Eaten (/7d)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (slot, source) (increase(bgw_pantry_cook_events_total[7d]))",
+          "legendFormat": "cooked {{slot}} {{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (increase(bgw_pantry_portions_eaten_total[7d]))",
+          "legendFormat": "ate {{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Planned meals marked cooked (dashboard / chat / push = reminder Done) and prepped portions eaten. source=undo is the mis-tap rate.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 250
+      },
+      "id": 118
+    },
+    {
+      "type": "timeseries",
+      "title": "Cooking Reminder Done + Fridge Check (/30d)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_pantry_reminder_done_total[30d]))",
+          "legendFormat": "done {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_pantry_fridge_check_nudge_total[30d]))",
+          "legendFormat": "fridge {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind) (increase(bgw_pantry_decay_total[30d]))",
+          "legendFormat": "decay {{kind}}",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Done taps on cooking reminders: unlinked = reminder from before phase 4, refused = plan replaced. Weekly fridge-check nudges. Items/batches the daily expiry pass retired.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 250
+      },
+      "id": 119
+    },
+    {
+      "type": "stat",
+      "title": "Pantry Decay Heartbeat Age",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time() - (bgw_pantry_decay_last_run_timestamp_seconds > 0)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 91800
+              },
+              {
+                "color": "red",
+                "value": 176400
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Seconds since the 04:15 expiry pass last completed (re-seeded from the DB at startup, so a restart doesn't hide a dead job). If it stops, the morning 'use today' line goes stale. No data = it hasn't completed since the feature was deployed.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 250
+      },
+      "id": 120
+    },
+    {
       "type": "row",
       "title": "Background Jobs",
       "collapsed": false,
@@ -8752,9 +9032,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 250
+        "y": 258
       },
-      "id": 118
+      "id": 121
     },
     {
       "type": "stat",
@@ -8815,9 +9095,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 251
+        "y": 259
       },
-      "id": 119
+      "id": 122
     },
     {
       "type": "timeseries",
@@ -8901,9 +9181,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 251
+        "y": 259
       },
-      "id": 120
+      "id": 123
     },
     {
       "type": "stat",
@@ -8964,9 +9244,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 251
+        "y": 259
       },
-      "id": 121
+      "id": 124
     },
     {
       "type": "timeseries",
@@ -9054,9 +9334,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 259
+        "y": 267
       },
-      "id": 122
+      "id": 125
     },
     {
       "type": "stat",
@@ -9122,9 +9402,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 259
+        "y": 267
       },
-      "id": 123
+      "id": 126
     },
     {
       "type": "stat",
@@ -9190,9 +9470,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 259
+        "y": 267
       },
-      "id": 124
+      "id": 127
     },
     {
       "type": "stat",
@@ -9258,9 +9538,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 267
+        "y": 275
       },
-      "id": 125
+      "id": 128
     },
     {
       "type": "timeseries",
@@ -9344,9 +9624,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 267
+        "y": 275
       },
-      "id": 126
+      "id": 129
     },
     {
       "type": "row",
@@ -9357,9 +9637,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 275
+        "y": 283
       },
-      "id": 127
+      "id": 130
     },
     {
       "type": "logs",
@@ -9398,9 +9678,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 276
+        "y": 284
       },
-      "id": 128
+      "id": 131
     },
     {
       "type": "logs",
@@ -9439,9 +9719,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 276
+        "y": 284
       },
-      "id": 129
+      "id": 132
     }
   ]
 }

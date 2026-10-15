@@ -1,7 +1,7 @@
 # F-015: Pantry & Meal Prep
 
 **Priority:** P1 — daily-life feature; supports health-motivated diets (e.g. heart-healthy)
-**Status:** Phases 1 (inventory), 2 (diet profile + weekly plan) and 3 (receipts; Telegram caption routing deferred) done — Phase 4 not started. Built-state reference: `docs/PANTRY.md`
+**Status:** All four phases done — 1 (inventory), 2 (diet profile + weekly plan), 3 (receipts; Telegram caption routing deferred), 4 (consumption tracking). Built-state reference: `docs/PANTRY.md`
 **Depends on:** vision (`VISION_*`, the Helios brain), `shopping_list` (state_store), `log_meal` (meal_manager), F-011/F-013 push buttons, Telegram bot
 **Blocks:** None
 
@@ -340,12 +340,27 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - **Also:** `PUT /api/pantry/diet` returns 400 on a non-object body.
 - **Known limits:** alias keys keep size words (5OZ vs 12OZ → different keys); hash duplicate check only catches the same re-encoded photo from the same device; matching is English-centric.
 
-### Phase 4 — Consumption tracking
-- [ ] `prep_batches`; cook events (`meal_plan cooked`, push Done) with consume semantics
-- [ ] Portion eaten (`meal_plan ate`) → decrement + `log_meal`
-- [ ] Decay job + morning-briefing "use today" line
-- [ ] Weekly reconcile scan (diff proposals) + Saturday nudge
-- [ ] Grafana panels for consumption metrics (row exists since Phase 2)
+### Phase 4 — Consumption tracking (done)
+- [x] `prep_batches`; cook events (`meal_plan cooked`, push Done) with consume semantics (`orchestrator/pantry_consumption.py`)
+- [x] Portion eaten (`meal_plan ate`) → decrement + meal logged (see deviations)
+- [x] Decay job + morning-briefing "use today" line
+- [x] Weekly reconcile scan (diff proposals) + Saturday nudge
+- [x] Grafana panels for consumption metrics
+- [x] Tests: `test_pantry_consumption.py`
+
+**Phase 4 as built — deviations from the spec above:**
+- **Cook semantics:** recipe ingredients matched to inventory with `receipt_scanner.name_score` ≥ 88 (not rapidfuzz). Counts drop by the amount's leading number (1–12), but an amount with a unit ("12oz", "200 g", "1 cup") takes 1; levels step full → half → low (never to out); staples untouched. Ledger `source=cook`, `ref_type=cook`. Only an active plan's prep/dinner entries can be cooked; a skipped meal can still be cooked. Cooking cancels that entry's pending reminder; a cooked dinner logs a meal.
+- **Undo** (`uncook`, not in the spec): only the latest cook (events after the last `uncook` marker), restored by delta so later restocks survive; a level item changed by hand since is left alone; refused once a portion of its batch was eaten.
+- **Batches:** fixed 4 fridge days (`PREP_FRIDGE_DAYS`); the plan's lunch entries point at the batch (`meal_plan_entries.prep_batch_id`). Batch statuses `active|finished|expired|undone`. `ate` without an id eats from the soonest-expiring batch and ticks today's lunch (`eaten`). Expired batches keep `portions_left` (status `expired`), not 0.
+- **Meal logging:** portions and cooked dinners log through `selfcare_manager.record_meal_logged` (calms meal nudges), not `log_meal` (calorie tracking, separately gated by `MEALS_ENABLED`).
+- **Push Done = cooked:** new table `meal_plan_reminders` (reminder id → entry) written after each reminder is scheduled; `mp-` ids now 10 hex chars. Hooked into the ntfy/Pushover ack route and the Telegram callback, run off the event loop; outcomes `cooked|already|refused|unlinked|error`. Reminders scheduled before Phase 4 are unlinked, so their Done taps deduct nothing. Reschedules skip non-`planned` entries; swapping a non-planned entry → 409; a swap unlinks delivered reminders of the swapped entries.
+- **Decay:** as specced (cron 04:15, no env var — `PANTRY_DECAY_TIME` not built); batches → `expired`. Heartbeat in `app_state` `pantry_decay_last_run_ts`, re-seeded at startup.
+- **"Use today" line:** "Use today if you can: …", max 4 names; skips items more than 2 days past shelf life (decay's job).
+- **Fridge check:** a weekly phone reminder (`pc-` ids, skipped by the selfcare bridge) configured in diet settings `fridge_check {enabled, day, time}` (default on, Sat 18:00) — not `PANTRY_RECONCILE_NUDGE`; checked every 15 min, sent at most once per day, not if more than 3 h late. No deep link. The reconcile is the normal stock-take: proposals now include `not_seen` lines (expected in that location, not in the photos), unticked; ticking one marks the item out; commit returns `gone`.
+- **Scan cap race fixed:** `create_scan` counts + inserts in one `BEGIN IMMEDIATE` (`MAX_OPEN_SCANS=3` → 429) — the Phase 3 pentest low finding.
+- **Routes:** `POST /plan/entry/{id}/cooked|uncook|skip`, `GET /prep`, `POST /prep/{id}/eat|finish`. `GET /plan/{id}` returns `batches`.
+- **Metrics:** `bgw_pantry_cook_events_total{slot,source}`, `bgw_pantry_portions_eaten_total{source}`, `bgw_pantry_decay_total{kind}`, `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}`, `bgw_pantry_reminder_done_total{result}`; three panels in the "Pantry & Meal Plan" row. No alerts.
+- **Known limits:** eating a portion can't be undone; a mistaken chat "ate" calms that day's meal nudges.
 
 ## Open questions (decide at build time)
 

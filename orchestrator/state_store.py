@@ -395,10 +395,34 @@ CREATE TABLE IF NOT EXISTS meal_plan_entries (
     recipe_id INTEGER,
     mode TEXT NOT NULL,
     portions INTEGER,
-    status TEXT NOT NULL DEFAULT 'planned'
+    status TEXT NOT NULL DEFAULT 'planned',
+    prep_batch_id INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_meal_plan_entries_plan ON meal_plan_entries(plan_id);
+
+-- Consumption tracking (F-015 phase 4). A cooked batch recipe becomes
+-- portions that are eaten down over the week.
+CREATE TABLE IF NOT EXISTS prep_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER,
+    entry_id INTEGER,
+    recipe_id INTEGER NOT NULL,
+    cooked_at TEXT NOT NULL,
+    portions_made INTEGER NOT NULL,
+    portions_left INTEGER NOT NULL,
+    good_until TEXT NOT NULL,
+    location TEXT NOT NULL DEFAULT 'fridge',
+    status TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE INDEX IF NOT EXISTS idx_prep_batches_status ON prep_batches(status);
+
+-- Which plan entry a cooking reminder belongs to (a Done tap = "cooked it").
+CREATE TABLE IF NOT EXISTS meal_plan_reminders (
+    reminder_id TEXT PRIMARY KEY,
+    entry_id INTEGER NOT NULL
+);
 
 -- Receipt text → pantry item name, learned from the user's corrections
 -- (F-015 phase 3, receipt_scanner). Key = receipt_scanner.alias_key(raw).
@@ -472,6 +496,8 @@ def init_db():
             ("workouts", "program_day", "INTEGER"),
             ("workouts", "is_deload", "INTEGER NOT NULL DEFAULT 0"),
             ("workout_programs", "deload_every_weeks", "INTEGER NOT NULL DEFAULT 6"),
+            # F-015 phase 4: lunch entries point at the cooked batch they eat from.
+            ("meal_plan_entries", "prep_batch_id", "INTEGER"),
         ]
         for table, col_name, col_def in _workout_migrations:
             cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}

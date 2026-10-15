@@ -108,6 +108,8 @@ DEFAULTS: Dict[str, Any] = {
     "avoid": [],
     "extra_rules": [],
     "reminders": {"prep": True, "dinners": True, "prep_time": "15:00", "dinner_time": "17:30"},
+    # Weekly "photograph the fridge" nudge (F-015 phase 4) — fixes drift.
+    "fridge_check": {"enabled": True, "day": "sat", "time": "18:00"},
 }
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -173,6 +175,22 @@ def validate(data: Dict[str, Any]) -> Dict[str, Any]:
                 if not isinstance(r[t], str) or not _TIME_RE.match(r[t]):
                     raise ValueError(f"reminders.{t} must be HH:MM")
                 out["reminders"][t] = r[t]
+    if "fridge_check" in data:
+        fc = data["fridge_check"]
+        if not isinstance(fc, dict):
+            raise ValueError("fridge_check must be an object")
+        if "enabled" in fc:
+            if not isinstance(fc["enabled"], bool):
+                raise ValueError("fridge_check.enabled must be true/false")
+            out["fridge_check"]["enabled"] = fc["enabled"]
+        if "day" in fc:
+            if not isinstance(fc["day"], str) or fc["day"] not in WEEKDAYS:
+                raise ValueError("fridge_check.day must be mon..sun")
+            out["fridge_check"]["day"] = fc["day"]
+        if "time" in fc:
+            if not isinstance(fc["time"], str) or not _TIME_RE.match(fc["time"]):
+                raise ValueError("fridge_check.time must be HH:MM")
+            out["fridge_check"]["time"] = fc["time"]
     return out
 
 
@@ -197,6 +215,8 @@ def save(changes: Dict[str, Any]) -> Dict[str, Any]:
     merged = {**before, **changes}
     if isinstance(changes.get("reminders"), dict):
         merged["reminders"] = {**before["reminders"], **changes["reminders"]}
+    if isinstance(changes.get("fridge_check"), dict):
+        merged["fridge_check"] = {**before["fridge_check"], **changes["fridge_check"]}
     after = validate(merged)
     os.makedirs(os.path.dirname(_path()) or ".", exist_ok=True)
     atomic_write_yaml(_path(), after)

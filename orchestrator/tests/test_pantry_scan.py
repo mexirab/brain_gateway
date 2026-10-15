@@ -351,7 +351,7 @@ class TestCommit:
         ]
         sid, paths = _scan(pm, status="pending_review", proposed=lines)
         res = pm.commit_scan(sid, lines)
-        assert res == {"ok": True, "added": 1, "updated": 1, "skipped": 2}
+        assert res == {"ok": True, "added": 1, "updated": 1, "skipped": 2, "gone": 0}
         e = pm.get_item(eggs["id"])
         assert e["qty"] == 6 and e["category"] == "dairy"  # update honours category
         hummus = pm.resolve_item("Hummus")["item"]

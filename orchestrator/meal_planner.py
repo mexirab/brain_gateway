@@ -856,6 +856,16 @@ def get_plan(plan_id: int) -> Optional[Dict[str, Any]]:
                 rec = _recipe(conn, e["recipe_id"], inventory)
                 if rec:
                     recipes[e["recipe_id"]] = rec
+    batch_ids = {e["prep_batch_id"] for e in entries if e.get("prep_batch_id")}
+    batches: Dict[str, Any] = {}
+    if batch_ids:
+        with state_store.get_db() as conn:
+            for b in conn.execute(
+                f"SELECT id, portions_made, portions_left, good_until, status FROM prep_batches "
+                f"WHERE id IN ({','.join('?' * len(batch_ids))})",
+                list(batch_ids),
+            ):
+                batches[str(b["id"])] = dict(b)
     missing: Dict[str, str] = {}
     for rec in recipes.values():
         for ing in rec["ingredients"]:
@@ -874,6 +884,7 @@ def get_plan(plan_id: int) -> Optional[Dict[str, Any]]:
         "accepted_at": p["accepted_at"],
         "entries": entries,
         "recipes": {str(k): v for k, v in recipes.items()},
+        "batches": batches,
         "missing": sorted(missing.values(), key=str.lower),
     }
 
@@ -944,6 +955,8 @@ def _cancel_reminders(reminder_ids: List[str]) -> None:
             row = get_reminder(rid)
             if row and row.get("status") == "pending":
                 remove_reminder(rid)
+                with state_store.get_db() as conn:  # its Done button can never be tapped now
+                    conn.execute("DELETE FROM meal_plan_reminders WHERE reminder_id = ?", (rid,))
         except Exception as e:
             logger.warning("[MEALPLAN] Could not remove reminder %s: %s", rid, e)
 
@@ -962,6 +975,8 @@ def _schedule_reminders(plan: Dict[str, Any], settings: Dict[str, Any]) -> List[
             rec = plan["recipes"].get(str(e["recipe_id"]))
             if not rec:
                 continue
+            if e.get("status", "planned") != "planned":
+                continue  # cooked / skipped: a reschedule (swap, time change) must not re-arm it
             day = date.fromisoformat(e["day"])
             dow = WEEKDAY_NAMES[day.weekday()]
             if e["slot"] == "prep" and rem["prep"]:
@@ -977,7 +992,7 @@ def _schedule_reminders(plan: Dict[str, Any], settings: Dict[str, Any]) -> List[
             when = datetime.combine(day, datetime.min.time()).replace(hour=hh, minute=mm)
             if when <= now:
                 continue
-            rid = f"{REMINDER_ID_PREFIX}{uuid.uuid4().hex[:6]}"
+            rid = f"{REMINDER_ID_PREFIX}{uuid.uuid4().hex[:10]}"
             add_reminder(rid, text, when, "both")
             ids.append(rid)
             shared.scheduler.add_job(
@@ -988,6 +1003,14 @@ def _schedule_reminders(plan: Dict[str, Any], settings: Dict[str, Any]) -> List[
                 id=f"reminder_{rid}",
                 replace_existing=True,
             )
+            # After the job: a failed link only loses "Done = cooked", never the reminder.
+            try:
+                from orchestrator.pantry_consumption import link_reminder
+
+                with state_store.get_db() as conn:
+                    link_reminder(conn, rid, e["id"])
+            except Exception as ex:
+                logger.error("[MEALPLAN] Could not link reminder %s: %s", rid, type(ex).__name__, exc_info=True)
         except Exception as ex:
             logger.error("[MEALPLAN] Could not schedule reminder for entry %s: %s", e.get("id"), ex, exc_info=True)
     return ids
@@ -1139,6 +1162,8 @@ async def _swap_entry(entry_id: int) -> Dict[str, Any]:
     entry, plan, settings = ctx
     if not plan or plan["status"] not in ("draft", "active"):
         return {"ok": False, "error": "only draft or active plans can be changed", "status_code": 409}
+    if entry.get("status", "planned") != "planned":
+        return {"ok": False, "error": f"that meal is already {entry['status']} — undo it first", "status_code": 409}
     if not await brain_ready():
         MEAL_PLAN_SWAP.labels(result="asleep").inc()
         return {"ok": False, "error": asleep_message(), "status_code": 503}
@@ -1173,6 +1198,13 @@ async def _swap_entry(entry_id: int) -> Dict[str, Any]:
                 if not p or p["status"] not in ("draft", "active"):
                     return {"ok": False, "error": "the plan changed meanwhile — reload", "status_code": 409}
                 rid = _insert_recipe(conn, recipe, settings["servings"], batchable, settings["profile"])
+                # Already-delivered reminders keep their Done button; unlink them so a
+                # late tap can't cook the new recipe.
+                conn.execute(
+                    "DELETE FROM meal_plan_reminders WHERE entry_id IN "
+                    "(SELECT id FROM meal_plan_entries WHERE plan_id = ? AND recipe_id = ?)",
+                    (entry["plan_id"], entry["recipe_id"]),
+                )
                 cur = conn.execute(
                     "UPDATE meal_plan_entries SET recipe_id = ? WHERE plan_id = ? AND recipe_id = ?",
                     (rid, entry["plan_id"], entry["recipe_id"]),

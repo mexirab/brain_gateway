@@ -9,7 +9,9 @@ import {
   LOCATIONS,
   describeAmount,
   pantryApi,
+  planApi,
   type Level,
+  type PrepBatch,
   type PantryItem,
   type PantryLocation,
 } from '@/lib/pantry-api';
@@ -32,11 +34,21 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
   const [toast, setToast] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
+  const [batches, setBatches] = useState<PrepBatch[]>([]);
+
   const load = useCallback(async () => {
     try {
-      const all = await pantryApi.items('all');
+      let prepFailed = false;
+      const [all, prep] = await Promise.all([
+        pantryApi.items('all'),
+        planApi.prep().catch(() => {
+          prepFailed = true;
+          return [] as PrepBatch[];
+        }),
+      ]);
       setItems(all.filter((i) => i.status !== 'gone'));
-      setError(null);
+      setBatches(prep);
+      setError(prepFailed ? 'Couldn’t load prepped portions.' : null);
     } catch (e) {
       setError(friendlyError(e, 'Couldn’t load the pantry.'));
     }
@@ -69,6 +81,33 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
       setItems((prev) => prev?.filter((i) => i.id !== item.id) ?? prev);
     } catch (e) {
       setError(friendlyError(e, 'Couldn’t remove that item.'));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Prep-batch buttons share busyId with items, using negative ids.
+  // The action and the refresh are separate: eating isn't idempotent, so a
+  // failed refresh must not look like a failed eat (the user would tap again).
+  const batchAction = async (
+    batchId: number,
+    fn: () => Promise<unknown>,
+    done: string,
+    local: (prev: PrepBatch[]) => PrepBatch[],
+  ) => {
+    setBusyId(-batchId);
+    try {
+      await fn();
+    } catch (e) {
+      setError(friendlyError(e, 'Couldn’t update that batch.', { preferDetail: true }));
+      setBusyId(null);
+      return;
+    }
+    setToast(done);
+    try {
+      setBatches(await planApi.prep());
+    } catch {
+      setBatches(local);
     } finally {
       setBusyId(null);
     }
@@ -155,6 +194,59 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
             </Button>
           }
         />
+      )}
+
+      {batches.length > 0 && (filter === 'all' || filter === 'fridge') && (
+        <section className="space-y-2" aria-label="Prepped portions">
+          <h2 className="text-xs uppercase tracking-wider text-content-muted">Prepped · {batches.length}</h2>
+          {batches.map((b) => (
+            <Card key={b.id} padding="none" className="p-3 flex flex-wrap items-center gap-2 border-success/30">
+              <div className="flex-1 min-w-[8rem]">
+                <div className="text-content-primary">{b.recipe_name}</div>
+                <div className="text-[11px] text-content-muted mt-0.5">
+                  {b.portions_left} portion{b.portions_left === 1 ? '' : 's'} left · good until{' '}
+                  {new Date(`${b.good_until}T12:00:00`).toLocaleDateString(
+                    [],
+                    b.expired ? { month: 'short', day: 'numeric' } : { weekday: 'short' },
+                  )}
+                  {b.expired && <span className="text-warning"> · past its date</span>}
+                </div>
+              </div>
+              <Button
+                variant="secondary"
+                className="min-h-[40px]"
+                disabled={busyId === -b.id || b.portions_left <= 0}
+                onClick={() =>
+                  batchAction(
+                    b.id,
+                    () => planApi.eat(b.id),
+                    'Enjoy! Logged one portion.',
+                    (prev) =>
+                      prev.map((x) => (x.id === b.id ? { ...x, portions_left: Math.max(0, x.portions_left - 1) } : x)),
+                  )
+                }
+              >
+                Ate one
+              </Button>
+              <Button
+                variant="ghost"
+                className="min-h-[40px]"
+                disabled={busyId === -b.id}
+                onClick={() => {
+                  if (window.confirm(`Mark the rest of ${b.recipe_name} as finished or thrown out?`))
+                    batchAction(
+                      b.id,
+                      () => planApi.finishBatch(b.id),
+                      'Batch finished.',
+                      (prev) => prev.filter((x) => x.id !== b.id),
+                    );
+                }}
+              >
+                Finished
+              </Button>
+            </Card>
+          ))}
+        </section>
       )}
 
       {maybeGone.length > 0 && (

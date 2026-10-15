@@ -846,6 +846,12 @@ async def _handle_callback(client: httpx.AsyncClient, cb: Dict[str, Any]) -> Non
             from orchestrator.reminder_manager import selfcare_action_for_reminder
 
             sc_action = selfcare_action_for_reminder(result)
+            try:  # Done on a meal-plan cooking reminder = "cooked it" (F-015 phase 4)
+                from orchestrator.pantry_consumption import on_reminder_done
+
+                await asyncio.to_thread(on_reminder_done, result)
+            except Exception as pantry_err:
+                logger.error("[TELEGRAM-ACK] Pantry cook hook failed: %s", type(pantry_err).__name__, exc_info=True)
             if sc_action:
                 from orchestrator import selfcare_manager
 

@@ -21,6 +21,7 @@ import {
   planApi,
   type DietProfileOption,
   type DietSettings,
+  type CookResult,
   type MealPlan,
   type PlanEntry,
   type Recipe,
@@ -58,6 +59,11 @@ export default function PlanTab({ shown }: { shown: boolean }) {
   const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The cook summary lands at the top; on a phone the button was far below.
+  const noticeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (notice) noticeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [notice]);
   const [status, setStatus] = useState('');
   // "Need to buy" unticks per draft id — survive reloads and tab switches.
   const [buyByPlan, setBuyByPlan] = useState<Record<number, Record<string, boolean>>>({});
@@ -166,6 +172,41 @@ export default function PlanTab({ shown }: { shown: boolean }) {
     if (window.confirm('Throw away this draft plan?')) run(() => planApi.discard(plan.id));
   };
 
+  // Consumption tracking (phase 4): only on the accepted plan.
+  const track: Tracker = {
+    cooked: (entryId) =>
+      run(
+        () => planApi.cooked(entryId),
+        (r) => {
+          const res = r as CookResult;
+          const bits = [`Marked ${res.recipe} cooked.`];
+          if (res.deducted.length) bits.push(`Used: ${res.deducted.join(', ')}.`);
+          if (res.portions) bits.push(`${res.portions} portion${res.portions === 1 ? '' : 's'} in the fridge.`);
+          if (res.running_low.length) bits.push(`Running low: ${res.running_low.join(', ')}.`);
+          if (res.not_tracked.length) {
+            const more = res.not_tracked.length > 5 ? ` +${res.not_tracked.length - 5} more` : '';
+            bits.push(`Not tracked: ${res.not_tracked.slice(0, 5).join(', ')}${more}.`);
+          }
+          setNotice(bits.join(' '));
+        },
+      ),
+    uncook: (entryId) =>
+      run(
+        () => planApi.uncook(entryId),
+        () => setNotice('Undone — everything is back in the pantry.'),
+      ),
+    skip: (entryId) =>
+      run(
+        () => planApi.skip(entryId),
+        () => setNotice('Skipped — the ingredients stay in the pantry.'),
+      ),
+    eat: (batchId) =>
+      run(
+        () => planApi.eat(batchId),
+        (r) => setNotice(`Enjoy! ${(r as { portions_left: number }).portions_left} left.`),
+      ),
+  };
+
   const swap = async (entryId: number) => {
     setSwapping(true);
     setError(null);
@@ -218,6 +259,7 @@ export default function PlanTab({ shown }: { shown: boolean }) {
           </Button>
         </Card>
       )}
+      <div ref={noticeRef} />
       {notice && (
         <Card
           padding="none"
@@ -289,6 +331,7 @@ export default function PlanTab({ shown }: { shown: boolean }) {
           showNewPlan={!draft}
           onNewPlan={generate}
           onSwap={swap}
+          track={track}
         />
       )}
 
@@ -438,6 +481,7 @@ function ActivePlan({
   showNewPlan,
   onNewPlan,
   onSwap,
+  track,
 }: {
   plan: MealPlan;
   collapsedByDefault: boolean;
@@ -446,6 +490,7 @@ function ActivePlan({
   showNewPlan: boolean;
   onNewPlan: () => void;
   onSwap: (entryId: number) => Promise<void>;
+  track: Tracker;
 }) {
   const [open, setOpen] = useState(!collapsedByDefault);
   useEffect(() => setOpen(!collapsedByDefault), [collapsedByDefault]);
@@ -468,7 +513,7 @@ function ActivePlan({
           </Button>
         )}
       </div>
-      {open && <PlanBody plan={plan} busy={busy} swapping={swapping} onSwap={onSwap} />}
+      {open && <PlanBody plan={plan} busy={busy} swapping={swapping} onSwap={onSwap} track={track} />}
     </section>
   );
 }
@@ -478,11 +523,14 @@ function PlanBody({
   busy,
   swapping,
   onSwap,
+  track,
 }: {
   plan: MealPlan;
   busy: boolean;
   swapping: boolean;
   onSwap: (entryId: number) => Promise<void>;
+  /** Only for the accepted plan: cooked / undo / skip / ate buttons. */
+  track?: Tracker;
 }) {
   const prep = plan.entries.find((e) => e.slot === 'prep');
   const lunches = plan.entries.filter((e) => e.slot === 'lunch');
@@ -514,6 +562,8 @@ function PlanBody({
           busy={busy}
           swapping={swapping}
           onSwap={onSwap}
+          track={track}
+          batch={prep.status === 'cooked' ? lunchBatch(plan, lunches) : undefined}
         />
       )}
       {dinners.map((d) =>
@@ -526,6 +576,7 @@ function PlanBody({
             busy={busy}
             swapping={swapping}
             onSwap={onSwap}
+            track={track}
           />
         ) : null,
       )}
@@ -541,6 +592,8 @@ function MealCard({
   busy,
   swapping,
   onSwap,
+  track,
+  batch,
 }: {
   label: string;
   sub?: string;
@@ -549,6 +602,8 @@ function MealCard({
   busy: boolean;
   swapping: boolean;
   onSwap: (entryId: number) => Promise<void>;
+  track?: Tracker;
+  batch?: { id: number; portions_made: number; portions_left: number; good_until: string; status: string };
 }) {
   const [open, setOpen] = useState(false);
   const [mySwap, setMySwap] = useState(false);
@@ -635,8 +690,14 @@ function MealCard({
         </div>
       )}
 
+      {track && <TrackRow entry={entry} batch={batch} busy={busy || swapping} track={track} />}
       <div className="flex items-center gap-2">
-        <Button variant="ghost" className="min-h-[40px]" disabled={busy || swapping || rateBusy} onClick={swap}>
+        <Button
+          variant="ghost"
+          className="min-h-[40px]"
+          disabled={busy || swapping || rateBusy || (track !== undefined && entry.status !== 'planned')}
+          onClick={swap}
+        >
           {mySwap ? <Loader2 size={14} className="animate-spin" /> : <Shuffle size={14} />}
           {mySwap ? 'Finding something else…' : 'Something else'}
         </Button>
@@ -665,5 +726,98 @@ function MealCard({
         </Button>
       </div>
     </Card>
+  );
+}
+
+interface Tracker {
+  cooked: (entryId: number) => void;
+  uncook: (entryId: number) => void;
+  skip: (entryId: number) => void;
+  eat: (batchId: number) => void;
+}
+
+/** The batch the plan's lunches eat from, once the prep is cooked. */
+function lunchBatch(plan: MealPlan, lunches: PlanEntry[]) {
+  const id = lunches.find((l) => l.prep_batch_id)?.prep_batch_id;
+  const b = id ? plan.batches?.[String(id)] : undefined;
+  return id && b ? { id, ...b } : undefined;
+}
+
+function TrackRow({
+  entry,
+  batch,
+  busy,
+  track,
+}: {
+  entry: PlanEntry;
+  batch?: { id: number; portions_made: number; portions_left: number; good_until: string; status: string };
+  busy: boolean;
+  track: Tracker;
+}) {
+  if (entry.status === 'planned') {
+    return (
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="success"
+          className="min-h-[40px] flex-1"
+          disabled={busy}
+          onClick={() => track.cooked(entry.id)}
+        >
+          <Check size={16} /> Cooked it
+        </Button>
+        {entry.slot === 'dinner' && (
+          <Button variant="ghost" className="min-h-[40px]" disabled={busy} onClick={() => track.skip(entry.id)}>
+            Skip
+          </Button>
+        )}
+      </div>
+    );
+  }
+  if (entry.status === 'skipped') {
+    return (
+      <div className="flex items-center gap-2 text-xs text-content-muted">
+        <span className="flex-1">Skipped</span>
+        <Button variant="ghost" className="min-h-[40px]" disabled={busy} onClick={() => track.cooked(entry.id)}>
+          Cooked it after all
+        </Button>
+      </div>
+    );
+  }
+  const live = batch !== undefined && batch.status === 'active' && batch.portions_left > 0;
+  const eaten = batch !== undefined && batch.portions_left < batch.portions_made;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="flex items-center gap-1 text-xs text-success">
+        <Check size={14} aria-hidden /> Cooked
+      </span>
+      {batch && (
+        <span className="text-xs text-content-muted">
+          {batch.portions_left} portion{batch.portions_left === 1 ? '' : 's'} left · good until{' '}
+          {new Date(`${batch.good_until}T12:00:00`).toLocaleDateString([], { weekday: 'short' })}
+        </span>
+      )}
+      <span className="flex-1" />
+      {live && (
+        <Button variant="secondary" className="min-h-[40px]" disabled={busy} onClick={() => track.eat(batch.id)}>
+          Ate one
+        </Button>
+      )}
+      {!eaten && (
+        <Button
+          variant="ghost"
+          className="min-h-[40px]"
+          disabled={busy}
+          onClick={() => {
+            if (
+              !batch ||
+              window.confirm('Undo the batch prep? This puts the ingredients back and removes the portions.')
+            )
+              track.uncook(entry.id);
+          }}
+        >
+          Undo cooked
+        </Button>
+      )}
+    </div>
   );
 }

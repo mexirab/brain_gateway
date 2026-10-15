@@ -1144,6 +1144,30 @@ async def _startup_logic():
         )
         logger.info("[SCHEDULER] Pantry stale-scan sweep daily at 04:20")
 
+        # Consumption tracking (F-015 phase 4): daily expiry pass + the weekly
+        # fridge-check nudge (ticks every 15 min; sends once on the set day/time).
+        from orchestrator.pantry_consumption import fridge_check_tick, run_decay, seed_decay_gauge
+
+        scheduler.add_job(
+            run_decay,
+            trigger="cron",
+            hour=4,
+            minute=15,
+            id="pantry_decay",
+            name="Pantry perishable / prep-batch expiry",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            fridge_check_tick,
+            trigger="interval",
+            minutes=15,
+            id="pantry_fridge_check",
+            name="Pantry weekly fridge-check nudge",
+            replace_existing=True,
+        )
+        seed_decay_gauge()  # real last run from app_state, not now()
+        logger.info("[SCHEDULER] Pantry decay daily at 04:15; fridge-check tick every 15m")
+
     # Helios wake-on-demand (PT-C): keep bgw_helios_plug_watts / bgw_helios_running
     # fresh so dashboards + alerts can trust them. Without this the gauges only
     # update when a human/LLM happens to query power state. Only when enabled —

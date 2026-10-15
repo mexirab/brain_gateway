@@ -293,7 +293,8 @@ _PANTRY_GUIDANCE = (
     '- Food at home: "we\'re out of X" / "finished the X" → pantry out (it adds X to the grocery list '
     'itself — don\'t also call shopping_list); "used / bought X" → pantry use / add; "do I have X", '
     '"what\'s in the fridge" → pantry search / view. "What\'s for dinner", "plan my meals", "swap Tuesday" → '
-    "meal_plan; accept a plan only when the user says to.\n"
+    'meal_plan; accept a plan only when the user says to. "I made the soup" → meal_plan cooked; "had a bowl" → '
+    "meal_plan ate (it logs the meal — don't also call selfcare_log).\n"
 )
 _CLAUDE_ACTIVITY_CLAUSE = ' check_claude_activity (recent code changes) when something "just broke".'
 _CODE_AGENT_CLAUSE = (

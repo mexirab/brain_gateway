@@ -247,7 +247,7 @@ class TestScanLifecycleRoutes:
         sid = _pending_scan(pm)
         lines = [{"name": "Oat milk", "track_mode": "level", "level": "full"}]
         r = client.post(f"/api/pantry/scan/{sid}/commit", json={"items": lines})
-        assert r.status_code == 200 and r.json() == {"ok": True, "added": 1, "updated": 0, "skipped": 0}
+        assert r.status_code == 200 and r.json() == {"ok": True, "added": 1, "updated": 0, "skipped": 0, "gone": 0}
         r = client.post(f"/api/pantry/scan/{sid}/commit", json={"items": lines})
         assert r.status_code == 409 and "status_code" not in r.json()
         assert client.get(f"/api/pantry/scan/{sid}/photo/0").status_code == 404  # photos gone

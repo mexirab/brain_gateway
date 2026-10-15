@@ -511,6 +511,17 @@ async def morning_briefing():
         else:
             parts.append("Your calendar is clear today.")
 
+        # Pantry (F-015 phase 4): perishables at their last day / prep to finish.
+        if getattr(shared, "PANTRY_ENABLED", False):
+            try:
+                from orchestrator.pantry_consumption import use_soon_line
+
+                use_line = await asyncio.to_thread(use_soon_line)
+                if use_line:
+                    parts.append(use_line)
+            except Exception as pantry_err:
+                logger.warning(f"[MORNING_BRIEFING] Pantry use-today lookup failed: {type(pantry_err).__name__}")
+
         # Evening-ritual pickup: offer back the one thing parked last night
         # (see evening_briefing). Cleared only after a successfully SPOKEN
         # announce so a failed or suppressed TTS run doesn't silently eat the

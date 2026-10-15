@@ -646,6 +646,17 @@ def inventory_summary(location: Optional[str] = None) -> str:
         )
     if out_items:
         lines.append("OUT: " + ", ".join(i["name"] for i in out_items))
+    try:
+        from orchestrator.pantry_consumption import list_batches
+
+        prepped = [b for b in list_batches() if b["portions_left"] > 0]
+    except Exception:
+        prepped = []
+    if prepped:
+        lines.append(
+            "PREPPED: "
+            + ", ".join(f"{b['recipe_name']} ×{b['portions_left']} (good until {b['good_until']})" for b in prepped)
+        )
     text = "\n".join(lines)
     return text[:7500]
 
@@ -690,7 +701,16 @@ def save_scan_photo(data: bytes) -> Dict[str, Any]:
 
 
 def create_scan(kind: str, photo_paths: List[str], image_sha256: Optional[str] = None) -> Dict[str, Any]:
+    """Insert a queued scan, or {"error": "too_many_open"} when MAX_OPEN_SCANS
+    are already open. Count + insert share one IMMEDIATE transaction so
+    parallel uploads can't all slip past the cap (phase 3 pentest finding)."""
     with state_store.get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        n = conn.execute(
+            "SELECT COUNT(*) FROM pantry_scans WHERE status IN ('queued', 'processing', 'pending_review')"
+        ).fetchone()[0]
+        if n >= MAX_OPEN_SCANS:
+            return {"error": "too_many_open"}
         cur = conn.execute(
             "INSERT INTO pantry_scans (kind, photo_paths, image_sha256, status, created_at) VALUES (?, ?, ?, 'queued', ?)",
             (kind, json.dumps(photo_paths), image_sha256, _now()),
@@ -891,6 +911,28 @@ def build_proposal(kind: str, detected: List[Dict[str, Any]]) -> List[Dict[str, 
                 "match_name": match["name"] if match else None,
                 # Unsure reads start unticked — the user opts them in.
                 "include": it["confidence"] != "low",
+            }
+        )
+    # Weekly-check drift fix (F-015 phase 4): what we expected here but the
+    # photos didn't show. Unticked by default — shelves hide things at the
+    # back — ticking one marks it out. Out items are already known-gone.
+    for item in existing:
+        if item["id"] in used or item["status"] != "active" or is_out(item):
+            continue
+        lines.append(
+            {
+                "key": len(lines),
+                "name": item["name"],
+                "category": item["category"],
+                "location": kind,
+                "track_mode": item["track_mode"],
+                "qty": item["qty"],
+                "level": item["level"],
+                "confidence": "high",
+                "action": "not_seen",
+                "match_id": item["id"],
+                "match_name": item["name"],
+                "include": False,
             }
         )
     return lines
@@ -1123,6 +1165,13 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
     allowed_matches = {
         line.get("match_id") for line in proposed if isinstance(line, dict) and isinstance(line.get("match_id"), int)
     }
+    # The stored proposal, not the request, says which matches are "not seen".
+    not_seen = {
+        line.get("match_id")
+        for line in proposed
+        if isinstance(line, dict) and line.get("action") == "not_seen" and isinstance(line.get("match_id"), int)
+    }
+    gone = 0
     try:
         for line in items:
             if not isinstance(line, dict) or line.get("include") is False:
@@ -1142,6 +1191,16 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
                 and get_item(match_id)
             ):
                 seen_matches.add(match_id)
+                if match_id in not_seen:
+                    if line.get("include") is not True:  # marking out is opt-in, never by omission
+                        skipped += 1
+                        continue
+                    res = mark_out(match_id, source="scan")
+                    if res.get("ok"):
+                        gone += 1
+                    else:
+                        skipped += 1
+                    continue
                 fields = {
                     k: line[k]
                     for k in ("category", "location", "track_mode", "qty", "level")
@@ -1180,7 +1239,7 @@ def commit_scan(scan_id: int, items: Any) -> Dict[str, Any]:
     _delete_photos(json.loads(row["photo_paths"] or "[]"))
     PANTRY_SCAN.labels(kind=row["kind"], result="committed").inc()
     logger.info("[PANTRY] Scan %s committed: %d added, %d updated, %d skipped", scan_id, added, updated, skipped)
-    return {"ok": True, "added": added, "updated": updated, "skipped": skipped}
+    return {"ok": True, "added": added, "updated": updated, "skipped": skipped, "gone": gone}
 
 
 def _commit_receipt_scan(scan_id: int, row: Dict[str, Any], items: List[Any]) -> Dict[str, Any]:

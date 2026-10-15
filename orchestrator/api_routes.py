@@ -444,6 +444,17 @@ def _callback_response(
 # taps → Safari opens the URL, which is a GET). HMAC verification gates
 # state mutation identically for both; the response shape differs — JSON
 # for POST (machine callers), HTML for GET (browser).
+async def _pantry_reminder_done(reminder) -> None:
+    """Done on a meal-plan cooking reminder = "cooked it" (F-015 phase 4).
+    Off the event loop: the cook is a BEGIN IMMEDIATE + fuzzy matching."""
+    try:
+        from orchestrator.pantry_consumption import on_reminder_done
+
+        await _asyncio.to_thread(on_reminder_done, reminder)
+    except Exception as e:  # the ack itself must still succeed
+        logger.error("[NTFY-ACK] Pantry cook hook failed: %s", type(e).__name__, exc_info=True)
+
+
 @router.api_route("/api/reminder/ack/{reminder_id}", methods=["GET", "POST"])
 async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", exp: int = 0):
     """Ack a reminder from an ntfy (POST) or Pushover (GET) action. HMAC-gated, no bearer."""
@@ -542,6 +553,7 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
     text = result.get("text", "") or ""
     action = selfcare_action_for_reminder(result)
     NTFY_ACK_TOTAL.labels(inferred_action=action or "none").inc()
+    await _pantry_reminder_done(result)
 
     if action:
         try:

@@ -273,6 +273,47 @@ export default function DietSettingsCard({
             </div>
           </fieldset>
 
+          <fieldset className="space-y-2">
+            <legend className="text-sm text-content-secondary mb-1">Weekly fridge check</legend>
+            <p className="text-[11px] text-content-muted">
+              A push asking for 3 quick shelf photos, so Jess can spot what’s gone. Keeps the pantry honest.
+            </p>
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <label className="flex items-center gap-2 min-h-[40px]">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5"
+                  checked={draft.fridge_check?.enabled ?? true}
+                  onChange={(e) => set('fridge_check', { ...draft.fridge_check, enabled: e.target.checked })}
+                />
+                Remind me
+              </label>
+              <div className="flex gap-2">
+                <select
+                  className="input w-auto min-h-[40px] text-base md:text-sm"
+                  value={draft.fridge_check?.day ?? 'sat'}
+                  onChange={(e) => set('fridge_check', { ...draft.fridge_check, day: e.target.value as Weekday })}
+                  aria-label="Fridge check day"
+                  disabled={!(draft.fridge_check?.enabled ?? true)}
+                >
+                  {DAYS.map((d) => (
+                    <option key={d.key} value={d.key}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="time"
+                  className="input w-auto min-h-[40px] text-base md:text-sm"
+                  value={draft.fridge_check?.time ?? '18:00'}
+                  onChange={(e) => set('fridge_check', { ...draft.fridge_check, time: e.target.value })}
+                  aria-label="Fridge check time"
+                  disabled={!(draft.fridge_check?.enabled ?? true)}
+                />
+              </div>
+            </div>
+          </fieldset>
+
           {msg && (
             <p className={`text-sm ${msg.ok ? 'text-success' : 'text-danger'}`} aria-live="polite">
               {msg.text}

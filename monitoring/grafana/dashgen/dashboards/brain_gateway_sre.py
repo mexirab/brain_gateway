@@ -1236,6 +1236,42 @@ def build() -> dict:
     row, y = grid_row(pantry_row, y, heights=[8, 8, 8, 8, 8, 8, 8])
     panels.extend(row)
 
+    # Phase 4: consumption tracking. Weekly volume — no alerts.
+    consumption_row = [
+        timeseries(
+            "Cooked & Portions Eaten (/7d)",
+            [
+                ("sum by (slot, source) (increase(bgw_pantry_cook_events_total[7d]))", "cooked {{slot}} {{source}}"),
+                ("sum by (source) (increase(bgw_pantry_portions_eaten_total[7d]))", "ate {{source}}"),
+            ],
+            unit="none",
+            description="Planned meals marked cooked (dashboard / chat / push = reminder Done) and prepped "
+            "portions eaten. source=undo is the mis-tap rate.",
+        ),
+        timeseries(
+            "Cooking Reminder Done + Fridge Check (/30d)",
+            [
+                ("sum by (result) (increase(bgw_pantry_reminder_done_total[30d]))", "done {{result}}"),
+                ("sum by (result) (increase(bgw_pantry_fridge_check_nudge_total[30d]))", "fridge {{result}}"),
+                ("sum by (kind) (increase(bgw_pantry_decay_total[30d]))", "decay {{kind}}"),
+            ],
+            unit="none",
+            description="Done taps on cooking reminders: unlinked = reminder from before phase 4, refused = plan "
+            "replaced. Weekly fridge-check nudges. Items/batches the daily expiry pass retired.",
+        ),
+        stat(
+            "Pantry Decay Heartbeat Age",
+            "time() - (bgw_pantry_decay_last_run_timestamp_seconds > 0)",
+            unit="s",
+            thresholds=[(None, "green"), (91800, "orange"), (176400, "red")],
+            description="Seconds since the 04:15 expiry pass last completed (re-seeded from the DB at startup, "
+            "so a restart doesn't hide a dead job). If it stops, the morning 'use today' line goes stale. "
+            "No data = it hasn't completed since the feature was deployed.",
+        ),
+    ]
+    row, y = grid_row(consumption_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Background Jobs
     r, y = row_divider("Background Jobs", y)
     panels.append(r)

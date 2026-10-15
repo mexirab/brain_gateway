@@ -280,12 +280,12 @@ See `docs/PANTRY.md`. Validated by `config.py` `validate_pantry_config` (logs, n
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PANTRY_ENABLED` | `false` | Master gate: `pantry` tool schema, `/api/pantry/*` router, `pantry_sweep` job, startup scan recovery, `/pantry` nav (`pantry_enabled` in `/api/config/features`). |
+| `PANTRY_ENABLED` | `false` | Master gate: `pantry` tool schema, `/api/pantry/*` router, `pantry_sweep` / `pantry_decay` / `pantry_fridge_check` jobs, morning-briefing "use today" line, cooking-reminder Done → cooked, startup scan recovery, `/pantry` nav (`pantry_enabled` in `/api/config/features`). |
 | `PANTRY_PHOTOS_DIR` | `/app/data/pantry_photos` | Stock-take photo staging. Deleted on commit/discard + daily sweep; excluded from backups. |
 | `PANTRY_MAX_UPLOAD_MB` | `15` | Per-photo cap. Outside 1–50 → reset to 15. Effective cap is also bounded by `VISION_MAX_IMAGE_SIZE`. |
 | `PANTRY_BARCODE_LOOKUP_ENABLED` | `false` | Barcode → product name via Open Food Facts (only the digits leave the network). |
 | `PANTRY_OFF_URL` | `https://world.openfoodfacts.org` | Open Food Facts base URL. Non-http(s) value auto-disables barcode lookup. |
-| `DIET_PROFILE_PATH` | `/app/data/diet_profile.yaml` | Diet settings YAML for the weekly meal planner (profile, servings, schedule, avoid list, reminder times). Written by `PUT /api/pantry/diet`; missing file = defaults. Personal — never commit it. |
+| `DIET_PROFILE_PATH` | `/app/data/diet_profile.yaml` | Diet settings YAML for the weekly meal planner (profile, servings, schedule, avoid list, reminder times, weekly fridge-check day/time). Written by `PUT /api/pantry/diet`; missing file = defaults. Personal — never commit it. |
 
 ## Finance — Actual Budget sync
 

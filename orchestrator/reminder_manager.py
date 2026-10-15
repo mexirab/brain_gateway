@@ -825,8 +825,8 @@ def selfcare_action_for_reminder(reminder: Optional[Dict[str, Any]]) -> Optional
     """
     if not reminder:
         return None
-    if str(reminder.get("id", "")).startswith("mp-"):
-        return None
+    if str(reminder.get("id", "")).startswith(("mp-", "pc-")):
+        return None  # meal-plan cooking / weekly fridge-check reminders
     return infer_selfcare_action_from_text(reminder.get("text", "") or "")
 
 

@@ -12,7 +12,7 @@ from typing import List
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from orchestrator import diet_profiles, meal_planner, receipt_scanner, shared
+from orchestrator import diet_profiles, meal_planner, pantry_consumption, receipt_scanner, shared
 from orchestrator import pantry_manager as pm
 
 logger = logging.getLogger(__name__)
@@ -188,6 +188,11 @@ async def pantry_scan_create(
 
     # Every photo's hash, so a re-sent second section is caught too.
     scan = await asyncio.to_thread(pm.create_scan, kind, saved, ",".join(hashes) or None)
+    if scan.get("error") == "too_many_open":
+        pm._delete_photos(saved)
+        return JSONResponse(
+            {"ok": False, "error": "finish or discard your open scans first (max 3 at a time)"}, status_code=429
+        )
     pm.start_scan(scan["id"])
     logger.info("[PANTRY] Scan %s queued: %s, %d photo(s)", scan["id"], kind, len(saved))
     return JSONResponse({"ok": True, "scan_id": scan["id"], "status": "queued"}, status_code=202)
@@ -351,3 +356,48 @@ async def pantry_recipe_rate(recipe_id: int, req: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "recipe not found"}, status_code=404)
     body = await _safe_json(req)
     return _result(await asyncio.to_thread(meal_planner.rate_recipe, recipe_id, body.get("rating")))
+
+
+# ---------------------------------------------------------------------------
+# Consumption tracking (F-015 phase 4)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/plan/entry/{entry_id}/cooked")
+async def pantry_entry_cooked(entry_id: int) -> JSONResponse:
+    if _bad_id(entry_id):
+        return JSONResponse({"ok": False, "error": "entry not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.cook_entry, entry_id, "dashboard"))
+
+
+@router.post("/plan/entry/{entry_id}/uncook")
+async def pantry_entry_uncook(entry_id: int) -> JSONResponse:
+    if _bad_id(entry_id):
+        return JSONResponse({"ok": False, "error": "entry not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.undo_cook, entry_id))
+
+
+@router.post("/plan/entry/{entry_id}/skip")
+async def pantry_entry_skip(entry_id: int) -> JSONResponse:
+    if _bad_id(entry_id):
+        return JSONResponse({"ok": False, "error": "entry not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.skip_entry, entry_id))
+
+
+@router.get("/prep")
+async def pantry_prep_list() -> JSONResponse:
+    return JSONResponse({"batches": await asyncio.to_thread(pantry_consumption.list_batches)})
+
+
+@router.post("/prep/{batch_id}/eat")
+async def pantry_prep_eat(batch_id: int) -> JSONResponse:
+    if _bad_id(batch_id):
+        return JSONResponse({"ok": False, "error": "batch not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.eat_portion, batch_id, "dashboard"))
+
+
+@router.post("/prep/{batch_id}/finish")
+async def pantry_prep_finish(batch_id: int) -> JSONResponse:
+    if _bad_id(batch_id):
+        return JSONResponse({"ok": False, "error": "batch not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.finish_batch, batch_id))

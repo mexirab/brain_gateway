@@ -1296,17 +1296,26 @@ STATIC_TOOLS = [
                 '("what\'s for dinner", "what am I prepping"); generate = make a new plan (runs ~1 min in the '
                 "background); accept = accept the draft (adds missing ingredients to the grocery list and sets cooking "
                 'reminders — only when the user says so); swap = replace one meal ("something else for Tuesday"); '
-                "recipe = ingredients + steps for a meal."
+                "recipe = ingredients + steps for a meal; cooked = the user cooked a planned dinner or the batch "
+                'prep ("I made the lentil soup") — deducts its ingredients; uncook = undo a wrong "cooked"; ate = ate one prepped portion '
+                '("had a bowl for lunch"; it logs the meal itself — don\'t also call selfcare_log); skip = not '
+                "cooking a planned dinner."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["view", "generate", "accept", "swap", "recipe"]},
-                    "day": {"type": "string", "description": "YYYY-MM-DD; default today. swap/recipe only."},
+                    "action": {
+                        "type": "string",
+                        "enum": ["view", "generate", "accept", "swap", "recipe", "cooked", "uncook", "ate", "skip"],
+                    },
+                    "day": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD; default today. swap/recipe/cooked/uncook/skip.",
+                    },
                     "slot": {
                         "type": "string",
                         "enum": ["dinner", "batch"],
-                        "description": "swap/recipe only; default dinner.",
+                        "description": "default dinner; batch = the batch prep.",
                     },
                 },
                 "required": ["action"],
