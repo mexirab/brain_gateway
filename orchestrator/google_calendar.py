@@ -7,18 +7,19 @@ Gracefully disabled when OAuth2 credentials are not configured.
 
 Usage:
     client = get_calendar_client(http_client=_http)
-    events = await client.list_events(days_ahead=7)
+    resp = await client.list_window(start, end)
 """
 
+import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import httpx
 
+from orchestrator.calendar_types import CalendarEvent, CalendarResponse  # noqa: F401 — re-exported
 from orchestrator.google_auth import get_credentials
 
 logger = logging.getLogger(__name__)
@@ -27,37 +28,14 @@ CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 TIMEZONE = os.environ.get("TZ", "America/Chicago")
 
 
-@dataclass
-class CalendarEvent:
-    """A single calendar event."""
-
-    id: str
-    title: str
-    start: datetime
-    end: datetime
-    location: str = ""
-    description: str = ""
-    calendar_name: str = "primary"
-    all_day: bool = False
-
-
-@dataclass
-class CalendarResponse:
-    """Response from a calendar query."""
-
-    success: bool
-    events: List[CalendarEvent] = field(default_factory=list)
-    error: Optional[str] = None
-
-
 class GoogleCalendarClient:
     """
     Google Calendar API v3 client.
 
     Handles:
-    - Listing events with day-range filtering
-    - Creating new events
-    - Fetching upcoming events for proactive notifications
+    - Listing event instances in a time window (list_window, used by
+      calendar_sources — the only reader)
+    - Creating new events (only when CalDAV isn't configured)
     - Graceful fallback when not configured
     """
 
@@ -83,7 +61,8 @@ class GoogleCalendarClient:
     async def _get(self, path: str, params: dict = None) -> dict:
         """Make authenticated GET request to Calendar API."""
         url = f"{CALENDAR_API}{path}"
-        headers = self._auth_headers()
+        # Token refresh is a blocking HTTP call — keep it off the event loop.
+        headers = await asyncio.to_thread(self._auth_headers)
         if self._http:
             resp = await self._http.get(url, headers=headers, params=params, timeout=15)
         else:
@@ -95,7 +74,8 @@ class GoogleCalendarClient:
     async def _post(self, path: str, json_data: dict) -> dict:
         """Make authenticated POST request to Calendar API."""
         url = f"{CALENDAR_API}{path}"
-        headers = self._auth_headers()
+        # Token refresh is a blocking HTTP call — keep it off the event loop.
+        headers = await asyncio.to_thread(self._auth_headers)
         headers["Content-Type"] = "application/json"
         if self._http:
             resp = await self._http.post(url, headers=headers, json=json_data, timeout=15)
@@ -130,52 +110,39 @@ class GoogleCalendarClient:
             all_day=all_day,
         )
 
-    async def list_events(self, days_ahead: int = 7, calendar_id: str = "primary") -> CalendarResponse:
-        """
-        List calendar events for the next N days.
+    async def list_window(self, start: datetime, end: datetime, calendar_id: str = "primary") -> CalendarResponse:
+        """List event instances overlapping [start, end) (recurrences expanded).
 
-        Args:
-            days_ahead: Number of days to look ahead (default 7)
-            calendar_id: Calendar ID (default "primary")
-
-        Returns:
-            CalendarResponse with events or error
+        Follows nextPageToken (up to 5 pages of 250) so a long window isn't
+        silently truncated.
         """
         if not self.is_configured:
-            return CalendarResponse(
-                success=False,
-                error="Google Calendar not configured. Run google_setup.py first.",
-            )
-
-        tz = ZoneInfo(TIMEZONE)
-        now = datetime.now(tz)
-        time_min = now.isoformat()
-        time_max = (now + timedelta(days=days_ahead)).isoformat()
-
-        logger.info(f"[CALENDAR] Listing events for next {days_ahead} days")
-
+            return CalendarResponse(success=False, error="Google Calendar not configured")
         try:
-            data = await self._get(
-                f"/calendars/{calendar_id}/events",
-                params={
-                    "timeMin": time_min,
-                    "timeMax": time_max,
+            items: list = []
+            page_token = None
+            for _ in range(5):
+                params = {
+                    "timeMin": start.isoformat(),
+                    "timeMax": end.isoformat(),
                     "singleEvents": "true",
                     "orderBy": "startTime",
-                    "maxResults": "50",
-                },
-            )
-
-            events = [self._parse_event(item) for item in data.get("items", [])]
-            logger.info(f"[CALENDAR] Found {len(events)} events")
-            return CalendarResponse(success=True, events=events)
-
+                    "maxResults": "250",
+                }
+                if page_token:
+                    params["pageToken"] = page_token
+                data = await self._get(f"/calendars/{calendar_id}/events", params=params)
+                items.extend(data.get("items", []))
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+            return CalendarResponse(success=True, events=[self._parse_event(i) for i in items])
         except httpx.HTTPStatusError as e:
-            logger.error(f"[CALENDAR] API error: {e.response.status_code}")
+            logger.warning(f"[CALENDAR] Google API error: {e.response.status_code}")
             return CalendarResponse(success=False, error=f"Calendar API error: {e.response.status_code}")
         except Exception as e:
-            logger.error(f"[CALENDAR] Error: {e}")
-            return CalendarResponse(success=False, error=str(e))
+            logger.warning(f"[CALENDAR] Google read error: {type(e).__name__}")
+            return CalendarResponse(success=False, error="Google Calendar request failed")
 
     async def create_event(
         self,
@@ -239,38 +206,6 @@ class GoogleCalendarClient:
             return CalendarResponse(success=False, error=f"Failed to create event: {e.response.status_code}")
         except Exception as e:
             logger.error(f"[CALENDAR] Create error: {e}")
-            return CalendarResponse(success=False, error=str(e))
-
-    async def get_upcoming(self, hours_ahead: int = 2) -> CalendarResponse:
-        """
-        Get events starting within the next N hours.
-        Used by proactive calendar polling.
-        """
-        if not self.is_configured:
-            return CalendarResponse(success=False, error="Not configured")
-
-        tz = ZoneInfo(TIMEZONE)
-        now = datetime.now(tz)
-        time_min = now.isoformat()
-        time_max = (now + timedelta(hours=hours_ahead)).isoformat()
-
-        try:
-            data = await self._get(
-                "/calendars/primary/events",
-                params={
-                    "timeMin": time_min,
-                    "timeMax": time_max,
-                    "singleEvents": "true",
-                    "orderBy": "startTime",
-                    "maxResults": "10",
-                },
-            )
-
-            events = [self._parse_event(item) for item in data.get("items", [])]
-            return CalendarResponse(success=True, events=events)
-
-        except Exception as e:
-            logger.error(f"[CALENDAR] Upcoming poll error: {e}")
             return CalendarResponse(success=False, error=str(e))
 
 

@@ -105,7 +105,7 @@ export interface CalendarEvent {
   description: string | null;
   all_day: boolean;
   calendar?: string;
-  source?: 'phone' | 'google';
+  source?: 'caldav' | 'exchange' | 'phone' | 'google';
 }
 
 export interface TemperatureReading {

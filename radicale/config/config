@@ -1,0 +1,50 @@
+# Radicale server config (mounted read-only at /config/config).
+# Option reference: https://radicale.org/v3.html#configuration
+
+[server]
+hosts = 0.0.0.0:5232
+max_connections = 20
+# 10 MB request / 8 MB per resource (Radicale caps max_resource_size at 80% of
+# max_content_length; set explicitly so it doesn't WARN on every start). Big
+# enough for a one-off .ics import of years of history.
+max_content_length = 10000000
+max_resource_size = 8000000
+timeout = 30
+
+[auth]
+type = htpasswd
+htpasswd_filename = /secrets/users
+htpasswd_encryption = bcrypt
+# Seconds to wait after a failed login (slows password guessing).
+delay = 2
+# Cache successful logins so each CalDAV request (Jess does a PROPFIND +
+# one REPORT per calendar per read) doesn't pay a bcrypt verify.
+cache_logins = True
+
+[rights]
+type = from_file
+file = /config/rights
+
+[storage]
+filesystem_folder = /data/collections
+
+[web]
+# Built-in web UI at /.web/ — used for creating calendars and importing .ics.
+type = internal
+
+[logging]
+# Never debug: debug level can log request/response bodies (event content).
+# Info logs per request: method, path (calendar/event ids — UUIDs from iOS),
+# client IP, User-Agent, status, and the username on login. No titles or bodies.
+# These logs are deliberately NOT shipped to Loki (promtail keep-regex excludes
+# radicale) — keep it that way.
+level = info
+mask_passwords = True
+bad_put_request_content = False
+
+[sharing]
+# Token/map sharing (3.7+) would mint unauthenticated share URLs. Keep off.
+type = none
+
+[headers]
+Content-Security-Policy = default-src 'self'; object-src 'none'

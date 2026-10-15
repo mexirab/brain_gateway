@@ -657,6 +657,39 @@ CALENDAR_POLL_EVENTS_FOUND = Counter(
     "Events announced by calendar poller",
 )
 
+# Per-source reads by calendar_sources (caldav | exchange | phone | google).
+# result: ok | error (unreachable/HTTP error) | stale (phone push too old) |
+# corrupt (phone push has records but none parse).
+CALENDAR_SOURCE_FETCH = Counter(
+    "bgw_calendar_source_fetch_total",
+    "Calendar source reads by source and result",
+    ["source", "result"],
+)
+
+CALENDAR_SOURCE_LATENCY = Histogram(
+    "bgw_calendar_source_fetch_duration_seconds",
+    "Calendar source read latency",
+    ["source"],
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+)
+
+CALENDAR_WRITE = Counter(
+    "bgw_calendar_write_total",
+    "Calendar event writes by target and result",
+    ["target", "result"],
+)
+
+PHONE_CALENDAR_LAST_SYNC = Gauge(
+    "bgw_phone_calendar_last_sync_timestamp_seconds",
+    "Unix time of the last accepted iPhone calendar push (/api/calendar/sync); 0 = never",
+)
+
+PHONE_CALENDAR_SYNC_REJECTED = Counter(
+    "bgw_phone_calendar_sync_rejected_total",
+    "Rejected iPhone calendar pushes by reason",
+    ["reason"],
+)
+
 # -- Gmail -------------------------------------------------------------------
 GMAIL_API_CALLS = Counter(
     "bgw_gmail_api_calls_total",

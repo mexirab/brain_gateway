@@ -275,7 +275,7 @@ async def test_dim_heartbeat_stamped_even_under_dnd(reset_shared):
 
 
 def _nudge_patches(*, events=None, announce_result=None, tomorrow_error=None):
-    tomorrow = AsyncMock(return_value=(events or [], "phone"))
+    tomorrow = AsyncMock(return_value=(events or [], "phone", ""))
     if tomorrow_error:
         tomorrow = AsyncMock(side_effect=tomorrow_error)
     return {
@@ -427,10 +427,10 @@ def test_stamp_only_in_bedtime_window():
 
 
 def _morning_patches(*, sleep_entry, announce_result=None):
-    mock_client = MagicMock()
-    mock_client.is_configured = False
+    from orchestrator.tests.calendar_fakes import no_calendar_patch
+
     return {
-        "client": patch("orchestrator.jobs_calendar.get_calendar_client", return_value=mock_client),
+        "client": no_calendar_patch(),
         "voice": patch(
             "orchestrator.jobs_calendar._announce_voice",
             new_callable=AsyncMock,

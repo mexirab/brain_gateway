@@ -129,3 +129,9 @@ homepage/config/custom.css
 homepage/config/custom.js
 homepage/config/custom.scss
 homepage/config/logs/
+# Radicale (self-hosted calendar) runtime state + backups — data and the htpasswd
+# file live outside the repo at /home/labadmin/radicale; guard against them landing here.
+radicale/data/
+radicale/users
+radicale/backups/
+radicale-*.tar.gz

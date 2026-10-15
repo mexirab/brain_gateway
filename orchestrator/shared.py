@@ -258,11 +258,25 @@ EMAIL_TO_CALENDAR_INTERVAL = settings.email_to_calendar_interval
 # Phone calendar sync (iPhone Shortcut pushes consolidated calendar)
 # ---------------------------------------------------------------------------
 PHONE_CALENDAR_SYNC_ENABLED = settings.phone_calendar_sync_enabled
+PHONE_CALENDAR_MAX_AGE_HOURS = settings.phone_calendar_max_age_hours
+
+# Self-hosted CalDAV calendar (Radicale) + Google-as-source toggle
+CALDAV_ENABLED = settings.caldav_enabled
+CALDAV_URL = settings.caldav_url
+CALDAV_USERNAME = settings.caldav_username
+CALDAV_PASSWORD = settings.caldav_password
+CALDAV_CALENDAR_HOME = settings.caldav_calendar_home
+CALDAV_CALENDARS = settings.caldav_calendars
+CALDAV_DEFAULT_CALENDAR = settings.caldav_default_calendar
+CALENDAR_GOOGLE_ENABLED = settings.calendar_google_enabled
+CALENDAR_WEB_URL = settings.calendar_web_url
 
 # Cached events from last phone sync (list of dicts)
 # Persisted to disk so they survive orchestrator restarts
 _phone_calendar_events: list = []
 _phone_calendar_sync_time: float = 0.0
+# "exchange" (work-only Shortcut, 2026-10+) or "phone" (legacy all-calendars push)
+_phone_calendar_source: str = ""
 
 PHONE_CALENDAR_FILE = os.path.join(
     os.path.dirname(settings.finance_db_path),
@@ -316,7 +330,7 @@ def is_voice_session_active(window_sec: float = VOICE_SESSION_WINDOW_SEC) -> boo
 
 def _load_phone_calendar():
     """Load phone calendar events from disk (called at startup)."""
-    global _phone_calendar_events, _phone_calendar_sync_time
+    global _phone_calendar_events, _phone_calendar_sync_time, _phone_calendar_source
     import json
 
     try:
@@ -325,6 +339,7 @@ def _load_phone_calendar():
                 data = json.load(f)
             _phone_calendar_events = data.get("events", [])
             _phone_calendar_sync_time = data.get("sync_time", 0.0)
+            _phone_calendar_source = data.get("source", "")
             logging.getLogger(__name__).info(
                 f"[PHONE_CAL] Loaded {len(_phone_calendar_events)} events from disk "
                 f"(synced {int((time.time() - _phone_calendar_sync_time) / 60)}m ago)"
@@ -340,7 +355,14 @@ def _save_phone_calendar():
     try:
         os.makedirs(os.path.dirname(PHONE_CALENDAR_FILE), exist_ok=True)
         with open(PHONE_CALENDAR_FILE, "w") as f:
-            json.dump({"events": _phone_calendar_events, "sync_time": _phone_calendar_sync_time}, f)
+            json.dump(
+                {
+                    "events": _phone_calendar_events,
+                    "sync_time": _phone_calendar_sync_time,
+                    "source": _phone_calendar_source,
+                },
+                f,
+            )
     except Exception as e:
         logging.getLogger(__name__).warning(f"[PHONE_CAL] Failed to save to disk: {e}")
 

@@ -227,13 +227,21 @@ groups:
   - name: brain_gateway_informational
     interval: 60s
     rules:
-      - alert: CalendarPollingFailed
-        expr: increase(bgw_calendar_api_errors_total{operation="list_events"}[1h]) > 5
+      - alert: CalendarSourceFailing
+        # Replaces CalendarPollingFailed (which watched the Google-only
+        # bgw_calendar_api_errors_total and went dead when calendar reads moved
+        # to calendar_sources). Fires when Radicale or Google keeps failing
+        # reads from the orchestrator — including what RadicaleDown can't see
+        # (401 after a password change, a REPORT error). Poll alone reads every
+        # 5 min, so >6 errors/h is sustained, not one blip. Work-push staleness
+        # has its own alert (ExchangeCalendarSyncStale).
+        expr: sum by (source) (increase(bgw_calendar_source_fetch_total{source=~"caldav|google",result=~"error|timeout"}[1h])) > 6
         for: 15m
         labels:
-          severity: info
+          severity: warning
         annotations:
-          summary: "Calendar polling has >5 errors in the last hour"
+          summary: "Calendar source '{{ $labels.source }}' keeps failing"
+          description: "Jess couldn't read the {{ $labels.source }} calendar more than 6 times in the last hour — briefings say so, but events may be missing. Check `docker logs radicale` / the CALDAV_* settings, or Google OAuth."
 
       # Real streaming: a stream that dies AFTER emitting returns a silently
       # truncated answer to the user (no user-facing error). Non-paging — it's
@@ -275,6 +283,18 @@ groups:
         annotations:
           summary: "Self-hosted app '{{ $labels.service }}' is down"
           description: "{{ $labels.service }} on {{ $labels.node }} has failed its HTTP probe for 2 minutes."
+      - alert: RadicaleDown
+        # The self-hosted calendar (source of truth for personal events). AppDown
+        # also fires for it but is Grafana-only; this one routes to pushover-quiet.
+        # restart: unless-stopped does NOT act on an unhealthy container, so a hung
+        # Radicale stays hung until someone is told.
+        expr: probe_success{service="radicale"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Radicale (calendar server) is down"
+          description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d`."
 
   # ===========================================================================
   # UPS / Power Chain
@@ -484,14 +504,43 @@ groups:
         annotations:
           summary: "Home Assistant backup is stale (>36h)"
           description: "The nightly HA backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/homeassistant/backup_ha.sh."
+      - alert: JessCalendarBackupStale
+        # Radicale (self-hosted CalDAV, the personal calendar source of truth)
+        # runs on Jupiter since 2026-10-14. radicale/backup_radicale.sh runs
+        # nightly and writes this. >36h stale = the calendars are unprotected.
+        expr: time() - jess_calendar_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Calendar (Radicale) backup is stale (>36h)"
+          description: "The nightly Radicale backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/radicale/backup_radicale.sh."
+      - alert: ExchangeCalendarSyncStale
+        # The work (Exchange) calendar only reaches Jess through the iPhone
+        # Shortcut → POST /api/calendar/sync. If it stops (Shortcut disabled,
+        # iOS automation needing a tap, phone off the tailnet), work meetings
+        # silently vanish from briefings and alerts — the phone sync was dead
+        # for three months in 2026 before anyone noticed. Gauge is seeded at
+        # startup from the persisted push, so restarts don't reset it; 0 means
+        # "never synced" (or only a retired legacy push) and stays quiet. The
+        # time() side comes first so {{ $value }} is the age, not the epoch. 26h allows one missed daily run.
+        expr: time() - bgw_phone_calendar_last_sync_timestamp_seconds > 93600 and bgw_phone_calendar_last_sync_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Work calendar hasn't synced from the iPhone in over a day"
+          description: "Last iPhone calendar push was {{ $value | humanizeDuration }} ago — check the 'Sync work calendar to Jess' Shortcut automation (docs/CALENDAR.md → Work calendar)."
       - alert: JessBackupOffboxFailing
-        expr: jess_backup_offbox_success == 0
+        # Covers all three nightly backups: state (jess_backup_*), HA
+        # (jess_ha_backup_*) and the Radicale calendar (jess_calendar_backup_*).
+        expr: '{__name__=~"jess_(ha_|calendar_)?backup_offbox_success"} == 0'
         for: 3d
         labels:
           severity: info
         annotations:
-          summary: "Jess off-box backup copy has been failing for 3 days"
-          description: "Local backups are fine, but the rsync to JESS_BACKUP_REMOTE keeps failing — a single-disk loss would still take the state. Check SSH keys / the remote path."
+          summary: "Off-box backup copy has been failing for 3 days ({{ $labels.__name__ }})"
+          description: "Local backups are fine, but the rsync to Saturn keeps failing for {{ $labels.__name__ }} — a single-disk loss would still take that data. Check SSH keys / the remote path and the backup's cron log."
 
       # Fires only once bgw_tool_call_source_total exists (it ships on the
       # tool-call instrumentation branch); until then there is no series and this

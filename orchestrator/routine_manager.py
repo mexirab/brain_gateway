@@ -604,10 +604,10 @@ async def _get_calendar_buffer() -> tuple:
     try:
         from zoneinfo import ZoneInfo
 
-        from orchestrator.google_calendar import get_calendar_client
+        from orchestrator.calendar_sources import get_calendar
 
-        client = get_calendar_client(http_client=shared._http)
-        if not client or not client.is_configured:
+        client = get_calendar(http_client=shared._http)
+        if not client.is_configured:
             return (None, None)
 
         response = await client.get_upcoming(hours_ahead=4)
@@ -632,10 +632,10 @@ async def _get_calendar_buffer() -> tuple:
 async def _get_calendar_summary_text(days_ahead: int = 0) -> str:
     """Get a brief calendar summary for step announcements."""
     try:
-        from orchestrator.google_calendar import get_calendar_client
+        from orchestrator.calendar_sources import get_calendar
 
-        client = get_calendar_client(http_client=shared._http)
-        if not client or not client.is_configured:
+        client = get_calendar(http_client=shared._http)
+        if not client.is_configured:
             return ""
 
         hours = 12 if days_ahead == 0 else 36

@@ -1,12 +1,7 @@
 """
-Tests for jobs_calendar.morning_briefing() — specifically the phone-sync-first
-/ Google-fallback source priority and the fall-through guard added to mirror
-tool_check_calendar / get_ambient_status.
-
-Covers the two load-bearing branches of the phone/Google decision:
-- Phone cache fresh (<24h) but ALL records fail to parse (start='', title='')
-  -> WARNING logged + fall through to Google (client.list_events awaited).
-- Phone cache fresh with >=1 parseable record -> phone used, Google NOT called.
+Tests for jobs_calendar.morning_briefing() — calendar sources are merged
+(calendar_sources) and a broken source is named in the briefing instead of
+reading as a clear day; plus the routine-collision gate and outcome metrics.
 
 Runs inside the brain-orchestrator container (full deps available). Skips
 gracefully when orchestrator dependencies (chromadb, embedding model, etc.)
@@ -75,11 +70,14 @@ def reset_phone_cache():
 
     orig_events = shared._phone_calendar_events
     orig_time = shared._phone_calendar_sync_time
+    orig_source = shared._phone_calendar_source
     shared._phone_calendar_events = []
     shared._phone_calendar_sync_time = 0.0
+    shared._phone_calendar_source = "exchange"  # the work-calendar Shortcut
     yield shared
     shared._phone_calendar_events = orig_events
     shared._phone_calendar_sync_time = orig_time
+    shared._phone_calendar_source = orig_source
 
 
 @pytest.fixture
@@ -97,25 +95,17 @@ def fresh_phone_sync_time():
 
 @pytest.fixture
 def patch_briefing_deps():
-    """Patch the side-effecting collaborators of morning_briefing so the test
-    isolates the phone/Google source-selection logic.
-
-    Returns the mocked get_calendar_client factory so tests can configure the
-    Google client and assert on its list_events call.
-    """
+    """Patch the side-effecting collaborators of morning_briefing. The REAL
+    calendar_sources merge runs (incl. the phone cache in shared); only the
+    Google/CalDAV network clients are faked. Returns (google_client, patches)."""
 
     def _patch(*, google_configured=True, google_success=True, google_events=None):
-        mock_client = MagicMock()
-        mock_client.is_configured = google_configured
+        from orchestrator.tests.calendar_fakes import fake_client, patched_calendar
 
-        response = MagicMock()
-        response.success = google_success
-        response.events = google_events or []
-        mock_client.list_events = AsyncMock(return_value=response)
-
+        google = fake_client(configured=google_configured, success=google_success, events=google_events)
         return (
-            mock_client,
-            patch("orchestrator.jobs_calendar.get_calendar_client", return_value=mock_client),
+            google,
+            patched_calendar(google=google),
             patch("orchestrator.jobs_calendar._announce_voice", new_callable=AsyncMock, return_value={"success": True}),
             patch("orchestrator.jobs_calendar._get_weather_forecast", new_callable=AsyncMock, return_value=None),
             patch("orchestrator.jobs_calendar.list_pending_reminders", return_value=[]),
@@ -128,113 +118,94 @@ def _phone_event(title, start_str, all_day=False):
     return {"title": title, "start": start_str, "all_day": all_day}
 
 
-# ---------------------------------------------------------------------------
-# Branch A: fresh phone cache, all records unparseable -> Google fallback
-# ---------------------------------------------------------------------------
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_phone_fresh_all_unparseable_falls_through_to_google(
-    reset_phone_cache, fresh_phone_sync_time, patch_briefing_deps, caplog
-):
-    """The 2026-04-17 iPhone Shortcut bug: fresh phone cache, every record has
-    empty start/title -> zero parsed -> WARNING + fall through to Google."""
-    shared = reset_phone_cache
-    shared._phone_calendar_events = [
-        _phone_event("", ""),
-        _phone_event("", ""),
-        _phone_event("", ""),
-    ]
-    shared._phone_calendar_sync_time = fresh_phone_sync_time
-
-    mock_client, p_client, p_voice, p_weather, p_reminders = patch_briefing_deps(
-        google_configured=True, google_events=[]
-    )
-
-    with p_client, p_voice, p_weather, p_reminders:
-        from orchestrator import jobs_calendar
-
-        with caplog.at_level(logging.WARNING, logger="orchestrator.jobs_calendar"):
-            await jobs_calendar.morning_briefing()
-
-    # Google fallback path taken: list_events was awaited.
-    mock_client.list_events.assert_awaited_once()
-    # WARNING about the broken phone payload was logged.
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("zero parsed" in r.getMessage() and "Falling through to Google" in r.getMessage() for r in warnings), (
-        f"Expected fall-through WARNING; got: {[r.getMessage() for r in warnings]}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Branch B: fresh phone cache, >=1 parseable record -> phone used, no Google
-# ---------------------------------------------------------------------------
-
-
-@_skip_no_deps
-@pytest.mark.asyncio
-async def test_phone_fresh_with_parseable_record_uses_phone(
-    reset_phone_cache, fresh_phone_sync_time, patch_briefing_deps
-):
-    """Fresh phone cache with at least one parseable record -> phone source is
-    used and Google Calendar is NOT consulted."""
+def _today_at(hour, minute=0):
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
     from orchestrator.shared import TIMEZONE
 
-    shared = reset_phone_cache
-    # Build a phone event whose start parses and whose date == today (so the
-    # phone branch produces a real event and the parsed count is >= 1).
-    today = datetime.now(ZoneInfo(TIMEZONE)).date()
-    start_str = datetime(today.year, today.month, today.day, 10, 30).strftime("%b %d, %Y %I:%M %p")
-    shared._phone_calendar_events = [_phone_event("Standup", start_str)]
-    shared._phone_calendar_sync_time = fresh_phone_sync_time
-
-    mock_client, p_client, p_voice, p_weather, p_reminders = patch_briefing_deps(
-        google_configured=True, google_events=[]
-    )
-
-    with p_client, p_voice, p_weather, p_reminders:
-        from orchestrator import jobs_calendar
-
-        await jobs_calendar.morning_briefing()
-
-    # Phone source used -> Google list_events must NOT be called.
-    mock_client.list_events.assert_not_awaited()
+    tz = ZoneInfo(TIMEZONE)
+    today = datetime.now(tz).date()
+    return datetime(today.year, today.month, today.day, hour, minute, tzinfo=tz)
 
 
 # ---------------------------------------------------------------------------
-# Guard sanity: unparseable + Google unconfigured -> no Google call, no raise
+# Calendar sources are merged; a broken source is named, never read as "clear"
 # ---------------------------------------------------------------------------
 
 
 @_skip_no_deps
 @pytest.mark.asyncio
-async def test_phone_unparseable_google_unconfigured_no_crash(
+async def test_corrupt_work_push_is_named_and_google_events_still_spoken(
     reset_phone_cache, fresh_phone_sync_time, patch_briefing_deps, caplog
 ):
-    """All-unparseable phone cache + Google not configured -> falls through,
-    skips Google (is_configured False), and still delivers without raising."""
+    """The 2026-04-17 iPhone Shortcut bug (fresh push, every record empty):
+    the push is excluded and NAMED in the briefing, and the other source's
+    events are still announced."""
+    from orchestrator.tests.calendar_fakes import make_event
+
+    shared = reset_phone_cache
+    shared._phone_calendar_events = [_phone_event("", ""), _phone_event("", "")]
+    shared._phone_calendar_sync_time = fresh_phone_sync_time
+
+    google, p_cal, p_voice, p_weather, p_reminders = patch_briefing_deps(
+        google_events=[make_event("Dentist", _today_at(15))]
+    )
+    with p_cal, p_voice as voice, p_weather, p_reminders:
+        from orchestrator import jobs_calendar
+
+        with caplog.at_level(logging.WARNING):
+            await jobs_calendar.morning_briefing()
+
+    google.list_window.assert_awaited_once()
+    text = voice.await_args.args[0]
+    assert "Dentist" in text
+    assert "couldn't reach your work calendar" in text
+    assert any("corrupt" in r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_work_and_google_events_are_merged(reset_phone_cache, fresh_phone_sync_time, patch_briefing_deps):
+    from orchestrator.tests.calendar_fakes import make_event
+
+    shared = reset_phone_cache
+    start_str = _today_at(10, 30).strftime("%b %d, %Y %I:%M %p")
+    shared._phone_calendar_events = [_phone_event("Standup", start_str)]
+    shared._phone_calendar_sync_time = fresh_phone_sync_time
+
+    _, p_cal, p_voice, p_weather, p_reminders = patch_briefing_deps(google_events=[make_event("Gym", _today_at(18))])
+    with p_cal, p_voice as voice, p_weather, p_reminders:
+        from orchestrator import jobs_calendar
+
+        await jobs_calendar.morning_briefing()
+
+    text = voice.await_args.args[0]
+    assert "2 events today" in text
+    assert text.index("Standup") < text.index("Gym")
+    assert "couldn't reach" not in text
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_only_source_broken_says_so_instead_of_clear(
+    reset_phone_cache, fresh_phone_sync_time, patch_briefing_deps
+):
+    """Corrupt push + nothing else configured -> never 'your calendar is clear'."""
     shared = reset_phone_cache
     shared._phone_calendar_events = [_phone_event("", "")]
     shared._phone_calendar_sync_time = fresh_phone_sync_time
 
-    mock_client, p_client, p_voice, p_weather, p_reminders = patch_briefing_deps(
-        google_configured=False, google_events=[]
-    )
-
-    with p_client, p_voice, p_weather, p_reminders:
+    google, p_cal, p_voice, p_weather, p_reminders = patch_briefing_deps(google_configured=False)
+    with p_cal, p_voice as voice, p_weather, p_reminders:
         from orchestrator import jobs_calendar
 
-        with caplog.at_level(logging.WARNING, logger="orchestrator.jobs_calendar"):
-            await jobs_calendar.morning_briefing()
+        await jobs_calendar.morning_briefing()
 
-    # Google unconfigured -> list_events never awaited.
-    mock_client.list_events.assert_not_awaited()
-    # But the fall-through warning still fired.
-    assert any("zero parsed" in r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
+    google.list_window.assert_not_awaited()
+    text = voice.await_args.args[0]
+    assert "calendar is clear" not in text
+    assert "I couldn't reach your work calendar, so I can't tell you what's on today" in text
 
 
 # ---------------------------------------------------------------------------
@@ -298,10 +269,10 @@ def briefing_env(reset_phone_cache, monkeypatch):
             return {"value": env.parked, "updated_at": datetime.now().isoformat()}
         return None
 
-    client = MagicMock()
-    client.is_configured = False
+    from orchestrator.tests.calendar_fakes import no_calendar_patch
+
     with (
-        patch("orchestrator.jobs_calendar.get_calendar_client", return_value=client),
+        no_calendar_patch(),
         patch("orchestrator.jobs_calendar._announce_voice", env.voice),
         patch("orchestrator.jobs_calendar._get_weather_forecast", new_callable=AsyncMock, return_value=None),
         patch("orchestrator.jobs_calendar.list_pending_reminders", return_value=[]),
@@ -498,3 +469,24 @@ def test_routine_check_naive_next_run_time_is_swallowed():
     job.next_run_time = datetime.now() + timedelta(seconds=60)
     jobs_calendar.shared.scheduler.get_jobs.return_value = [job]
     assert jobs_calendar._routine_active_or_imminent() is False
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_legacy_phone_push_is_ignored_not_reported(reset_phone_cache, fresh_phone_sync_time, patch_briefing_deps):
+    """A pre-2026-10 all-calendars push (no "exchange" source) is retired: its
+    events aren't read and it never produces a "couldn't reach" caveat."""
+    shared = reset_phone_cache
+    shared._phone_calendar_source = ""
+    shared._phone_calendar_events = [_phone_event("Old", _today_at(10).strftime("%b %d, %Y %I:%M %p"))]
+    shared._phone_calendar_sync_time = fresh_phone_sync_time - 90 * 86400
+
+    _, p_cal, p_voice, p_weather, p_reminders = patch_briefing_deps(google_events=[])
+    with p_cal, p_voice as voice, p_weather, p_reminders:
+        from orchestrator import jobs_calendar
+
+        await jobs_calendar.morning_briefing()
+
+    text = voice.await_args.args[0]
+    assert "Old" not in text and "couldn't reach" not in text
+    assert "Your calendar is clear today." in text

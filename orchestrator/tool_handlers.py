@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 
 from orchestrator import shared
 from orchestrator.brain_dump_manager import process_brain_dump
+from orchestrator.calendar_sources import get_calendar
 from orchestrator.data_manager import handle_get_data, handle_update_data
 from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
-from orchestrator.google_calendar import get_calendar_client
 from orchestrator.google_gmail import get_gmail_client
 from orchestrator.metrics import (
     CALENDAR_API_CALLS,
@@ -209,156 +209,90 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
 async def tool_check_calendar(days_ahead: int = 7) -> str:
     """Check calendar for upcoming events.
 
-    Mirrors the morning briefing's source priority: phone calendar sync first
-    (covers the superset of calendars the user actually uses — e.g. Gmail +
-    iCloud + Work), with Google Calendar as the fallback when the phone sync is missing or stale
-    (>24h old). Previously this tool hit Google directly and silently missed
-    everything that only lived on the iPhone calendars.
+    Reads every configured source through calendar_sources and merges them:
+    the self-hosted personal calendar (CalDAV), the work calendar pushed from
+    the iPhone (Exchange), and Google while it's still enabled. If a source
+    that should answer can't be read, the reply says so rather than passing
+    off a partial list as the whole calendar.
     """
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
-    from orchestrator.jobs_calendar import _parse_phone_datetime
+    from orchestrator import calendar_sources
+
+    try:
+        days_ahead = int(days_ahead)
+    except (TypeError, ValueError):
+        days_ahead = 7
+    days_ahead = min(max(days_ahead, 1), 60)
 
     tz = ZoneInfo(shared.TIMEZONE)
-    today = datetime.now(tz).date()
-    cutoff = today + timedelta(days=days_ahead)
+    today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    events: list[dict] = []
-    source: str | None = None
+    CALENDAR_API_CALLS.labels(operation="list_events").inc()
+    _cal_t0 = time.time()
+    response = await calendar_sources.get_events(today, today + timedelta(days=days_ahead))
+    CALENDAR_API_LATENCY.labels(operation="list_events").observe(time.time() - _cal_t0)
 
-    # Source priority mirrors morning_briefing exactly: phone sync when fresh
-    # (<24h), else Google as a fallback. Phone sync is the superset (Gmail +
-    # iCloud + Work) so committing to it even on an empty-window result is
-    # correct — the alternative "fall through to Google if phone finds
-    # nothing" can surface Google-only events the user already deleted from
-    # their phone calendars.
-    phone_age = time.time() - shared._phone_calendar_sync_time if shared._phone_calendar_sync_time > 0 else float("inf")
-    phone_parsed_count = 0  # how many records had a valid start time
-    if shared._phone_calendar_events and phone_age < 86400:
-        for ev in shared._phone_calendar_events:
-            try:
-                start = _parse_phone_datetime(ev.get("start", ""), tz)
-                phone_parsed_count += 1
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=tz)
-                if not (today <= start.date() < cutoff):
-                    continue
-                events.append(
-                    {
-                        "title": ev.get("title", "(No title)"),
-                        "start": start,
-                        "all_day": ev.get("all_day", False),
-                        "location": ev.get("location", ""),
-                    }
-                )
-            except (ValueError, TypeError):
-                continue
-        # Defensive: if phone cache has records but NONE parsed (e.g. the
-        # iPhone Shortcut is posting empty payloads — observed 2026-04-17
-        # where all records had title='' and start=''), treat the sync as
-        # broken and fall through to Google rather than reporting "no events"
-        # from a corrupted source.
-        if phone_parsed_count == 0:
-            logger.warning(
-                f"[CALENDAR] Phone cache has {len(shared._phone_calendar_events)} records but zero parsed — "
-                f"likely broken iPhone Shortcut payload. Falling through to Google.",
-                extra={"component": "calendar"},
-            )
-        else:
-            source = "phone"
-            logger.info(
-                f"[CALENDAR] Using phone sync ({len(events)} events in {days_ahead}d, "
-                f"{phone_parsed_count}/{len(shared._phone_calendar_events)} records parseable, "
-                f"synced {int(phone_age / 60)}m ago)",
-                extra={"component": "calendar"},
-            )
-
-    if source is None:
-        client = get_calendar_client(http_client=shared._http)
-        if not client.is_configured:
-            return "Calendar is not available — phone sync has no recent data and Google Calendar is not configured."
-
-        CALENDAR_API_CALLS.labels(operation="list_events").inc()
-        _cal_t0 = time.time()
-        if phone_age == float("inf"):
-            fallback_reason = "no phone sync on record"
-        elif phone_age >= 86400:
-            fallback_reason = f"phone sync {int(phone_age / 3600)}h old"
-        else:
-            fallback_reason = "phone sync returned no parseable events"
-        logger.info(
-            f"[CALENDAR] {fallback_reason} — falling back to Google ({days_ahead}d)",
-            extra={"component": "calendar"},
-        )
-        response = await client.list_events(days_ahead=days_ahead)
-        CALENDAR_API_LATENCY.labels(operation="list_events").observe(time.time() - _cal_t0)
-
-        if not response.success:
+    if not response.success:
+        if response.failed_sources:
             CALENDAR_API_ERRORS.labels(operation="list_events").inc()
-            return f"Calendar error: {response.error}"
+            return f"Calendar error: {calendar_sources.describe_failures(response.failed_sources)}."
+        return "Calendar is not available — no calendar is connected yet."
 
-        for event in response.events:
-            events.append(
-                {
-                    "title": event.title,
-                    "start": event.start,
-                    "all_day": event.all_day,
-                    "location": event.location,
-                    "end": event.end,
-                }
-            )
-        source = "google"
+    note = calendar_sources.describe_failures(response.failed_sources)
+    note_line = f"\n(Note: {note}, so this may be incomplete.)" if note else ""
+    events = response.events
+    logger.info(
+        f"[CALENDAR] {len(events)} events in {days_ahead}d, {len(response.failed_sources)} source(s) unavailable",
+        extra={"component": "calendar"},
+    )
 
     if not events:
         if days_ahead == 1:
-            return "No events on the calendar for today."
-        return f"No events on the calendar for the next {days_ahead} days."
-
-    # All-day events first, then chronological by start
-    events.sort(key=lambda e: (not e["all_day"], e["start"]))
+            return "No events on the calendar for today." + note_line
+        return f"No events on the calendar for the next {days_ahead} days." + note_line
 
     lines = []
-    header_suffix = f" [{source}]" if source else ""
     if days_ahead == 1:
-        lines.append(f"Today's calendar ({len(events)} events){header_suffix}:")
+        lines.append(f"Today's calendar ({len(events)} events):")
     else:
-        lines.append(f"Calendar for the next {days_ahead} days ({len(events)} events){header_suffix}:")
+        lines.append(f"Calendar for the next {days_ahead} days ({len(events)} events):")
 
     for ev in events:
-        if ev["all_day"]:
-            date_str = ev["start"].strftime("%A %b %d")
-            lines.append(f"\n- {ev['title']} (all day, {date_str})")
+        tag = calendar_sources.event_label(ev)
+        tag = f" [{tag}]" if tag else ""
+        if ev.all_day:
+            date_str = ev.start.strftime("%A %b %d")
+            lines.append(f"\n- {ev.title} (all day, {date_str}){tag}")
         else:
-            time_str = ev["start"].strftime("%A %b %d, %I:%M %p")
-            if ev.get("end"):
-                end_str = ev["end"].strftime("%I:%M %p")
-                lines.append(f"\n- {ev['title']} — {time_str} to {end_str}")
+            time_str = ev.start.strftime("%A %b %d, %I:%M %p")
+            if ev.end and ev.end > ev.start:
+                lines.append(f"\n- {ev.title} — {time_str} to {ev.end.strftime('%I:%M %p')}{tag}")
             else:
-                lines.append(f"\n- {ev['title']} — {time_str}")
-        if ev.get("location"):
-            lines.append(f"  Location: {ev['location']}")
+                lines.append(f"\n- {ev.title} — {time_str}{tag}")
+        if ev.location:
+            lines.append(f"  Location: {ev.location}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + note_line
 
 
 async def tool_create_calendar_event(
     title: str, start_time: str, duration_minutes: int = 60, description: str = "", location: str = ""
 ) -> str:
-    """Create a new Google Calendar event."""
+    """Create an event on the personal calendar (self-hosted CalDAV; Google only
+    while CalDAV isn't configured). Never writes the work calendar."""
+    from orchestrator import calendar_sources
+
     if not title:
         return "Missing event title."
     if not start_time:
         return "Missing event start time. Provide an ISO 8601 datetime like '2026-02-21T19:00:00'."
 
-    client = get_calendar_client(http_client=shared._http)
-    if not client.is_configured:
-        return "Google Calendar is not configured. Run google_setup.py first to set up OAuth2 credentials."
-
     CALENDAR_API_CALLS.labels(operation="create_event").inc()
     _cal_t0 = time.time()
-    logger.info(f"[CALENDAR] Creating event ({len(title)}-char title) at {start_time}", extra={"component": "calendar"})
-    response = await client.create_event(
+    logger.info(f"[CALENDAR] Creating event ({len(title)}-char title)", extra={"component": "calendar"})
+    response = await calendar_sources.create_event(
         title=title,
         start_time=start_time,
         duration_minutes=duration_minutes,
@@ -1067,8 +1001,8 @@ async def tool_decide_for_me(arguments: Dict[str, Any]) -> str:
 
             # Upcoming calendar events
             try:
-                cal_client = get_calendar_client(http_client=shared._http)
-                if cal_client and cal_client.is_configured:
+                cal_client = get_calendar(http_client=shared._http)
+                if cal_client.is_configured:
                     response = await cal_client.get_upcoming(hours_ahead=48)
                     if response.success:
                         context["upcoming_events"] = [

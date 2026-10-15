@@ -59,11 +59,14 @@ def reset_shared():
     orig_focus = shared.current_focus_session.to_dict()
     shared._phone_calendar_events = []
     shared._phone_calendar_sync_time = 0.0
+    _orig_source = shared._phone_calendar_source
+    shared._phone_calendar_source = "exchange"
     shared.DND_ACTIVE = False
     shared.current_focus_session.reset()
     yield shared
     shared._phone_calendar_events = orig_events
     shared._phone_calendar_sync_time = orig_time
+    shared._phone_calendar_source = _orig_source
     shared.DND_ACTIVE = orig_dnd
     shared.current_focus_session.update(orig_focus)
 
@@ -92,15 +95,12 @@ def patch_evening_deps():
         open_tasks=None,
         announce_result=None,
     ):
-        mock_client = MagicMock()
-        mock_client.is_configured = google_configured
-        response = MagicMock()
-        response.success = google_success
-        response.events = google_events or []
-        mock_client.list_events = AsyncMock(return_value=response)
+        from orchestrator.tests.calendar_fakes import fake_client, patched_calendar
+
+        mock_client = fake_client(configured=google_configured, success=google_success, events=google_events)
 
         patches = {
-            "client": patch("orchestrator.jobs_calendar.get_calendar_client", return_value=mock_client),
+            "client": patched_calendar(google=mock_client),
             "voice": patch(
                 "orchestrator.jobs_calendar._announce_voice",
                 new_callable=AsyncMock,
@@ -144,12 +144,11 @@ def _google_event(title, day_offset, hour=9, all_day=False, location=""):
 
     tz = ZoneInfo(TIMEZONE)
     day = datetime.now(tz).date() + timedelta(days=day_offset)
-    ev = MagicMock()
-    ev.title = title
-    ev.start = datetime(day.year, day.month, day.day, hour, 0, tzinfo=tz)
-    ev.all_day = all_day
-    ev.location = location
-    return ev
+    from orchestrator.tests.calendar_fakes import make_event
+
+    return make_event(
+        title, datetime(day.year, day.month, day.day, hour, 0, tzinfo=tz), all_day=all_day, location=location
+    )
 
 
 async def _run_evening(patches):
@@ -177,7 +176,7 @@ def _spoken(mocks):
 @pytest.mark.asyncio
 async def test_phone_tomorrow_event_selected_today_excluded(reset_shared, fresh_phone_sync_time, patch_evening_deps):
     """Phone cache holds today's and tomorrow's events -> only tomorrow's first
-    timed event is spoken; Google is not consulted."""
+    timed event is spoken."""
     shared = reset_shared
     shared._phone_calendar_events = [
         _today_phone_event("Standup today", hour=10),
@@ -186,20 +185,19 @@ async def test_phone_tomorrow_event_selected_today_excluded(reset_shared, fresh_
     ]
     shared._phone_calendar_sync_time = fresh_phone_sync_time
 
-    mock_client, patches = patch_evening_deps()
+    mock_client, patches = patch_evening_deps(google_configured=False)
     mocks = await _run_evening(patches)
 
     text = _spoken(mocks)
     assert "Gym" in text and "8:30" in text, f"expected tomorrow's first timed event, got: {text}"
     assert "Standup today" not in text
     assert "Plus 1 more event" in text
-    mock_client.list_events.assert_not_awaited()
 
 
 @_skip_no_deps
 @pytest.mark.asyncio
 async def test_google_fallback_filters_to_tomorrow(reset_shared, patch_evening_deps):
-    """Stale phone cache -> Google fallback, filtered to tomorrow's date."""
+    """No phone push -> Google answers; only tomorrow's events are used."""
     mock_client, patches = patch_evening_deps(
         google_events=[
             _google_event("Today thing", 0, hour=11),
@@ -208,10 +206,37 @@ async def test_google_fallback_filters_to_tomorrow(reset_shared, patch_evening_d
     )
     mocks = await _run_evening(patches)
 
-    mock_client.list_events.assert_awaited_once()
+    mock_client.list_window.assert_awaited_once()
     text = _spoken(mocks)
     assert "Tomorrow thing" in text
     assert "Today thing" not in text
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_tonights_late_event_is_not_tomorrows_first_thing(reset_shared, patch_evening_deps):
+    """An event tonight that runs past midnight overlaps tomorrow but must not be
+    announced as tomorrow's first thing (or get a leave-by in the past)."""
+    from zoneinfo import ZoneInfo
+
+    from orchestrator.shared import TIMEZONE
+    from orchestrator.tests.calendar_fakes import make_event
+
+    tz = ZoneInfo(TIMEZONE)
+    today = datetime.now(tz).date()
+    late = make_event("Late show", datetime(today.year, today.month, today.day, 23, 0, tzinfo=tz), minutes=120)
+    _, patches = patch_evening_deps(google_events=[late, _google_event("Dentist", 1, hour=10)])
+    text = _spoken(await _run_evening(patches))
+    assert "Dentist" in text and "Late show" not in text
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_unreachable_calendar_is_not_a_clear_tomorrow(reset_shared, patch_evening_deps):
+    _, patches = patch_evening_deps(google_success=False)
+    text = _spoken(await _run_evening(patches))
+    assert "Nothing on the calendar tomorrow" not in text
+    assert "I couldn't reach your Google calendar, so I can't tell you what's on tomorrow" in text
 
 
 @_skip_no_deps
@@ -363,10 +388,10 @@ def _parked_entry(value, hours_ago=10):
 
 
 def _morning_patches(*, parked_entry, announce_result):
-    mock_client = MagicMock()
-    mock_client.is_configured = False
+    from orchestrator.tests.calendar_fakes import no_calendar_patch
+
     return {
-        "client": patch("orchestrator.jobs_calendar.get_calendar_client", return_value=mock_client),
+        "client": no_calendar_patch(),
         "voice": patch(
             "orchestrator.jobs_calendar._announce_voice",
             new_callable=AsyncMock,
