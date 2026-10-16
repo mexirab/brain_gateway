@@ -1046,8 +1046,10 @@ for _r in ("retried", "recovered", "still_empty"):
 
 TTS_STYLE_APPLIED = Counter(
     "bgw_tts_style_applied_total",
-    "Style notes resolved for TTS calls (voice_style.py), one per synthesis",
-    # source: override (user asked in chat) | mode (mode_router default) |
+    "Style notes resolved for TTS calls (voice_style.py) — one per synthesis call, i.e. per "
+    'spoken sentence, NOT per voice_style tool call (see bgw_tool_calls_total{tool="voice_style"})',
+    # source: this_reply (one-off "say it angry") | override (ongoing, asked in chat) |
+    #         mode (mode_router default) |
     #         announcement (per-type default) | none (no recent chat turn)
     # style: preset key from voice_style.PRESETS ("auto" = no note sent)
     ["source", "style"],

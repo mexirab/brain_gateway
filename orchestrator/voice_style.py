@@ -9,10 +9,14 @@ safe. "auto" (empty note) means no instruction — the model infers prosody
 from the text, which is the right default for ordinary replies.
 
 Resolution, highest first:
-  1. the user's override, set by asking in chat (`voice_style` tool) — applies
-     to everything she says until reset or until its duration runs out;
+  1. a one-reply style ("say it angry", `voice_style` scope=this_reply) — set
+     mid-turn by the tool, applies to the reply being spoken, and is cleared
+     when the next user message is routed (`record_reply_style`) or after the
+     reply TTL; RAM only; chat replies only, never announcements;
+  2. the user's ongoing override ("talk softer from now on", scope=ongoing) —
+     applies to everything she says until reset or until its duration runs out;
      stored in app_state so it survives restarts, expiry checked on read;
-  2. the defaults, editable on the /settings Voice Style panel
+  3. the defaults, editable on the /settings Voice Style panel
      (`/api/config/voice_style`, YAML at VOICE_STYLE_PATH):
        * chat replies — by mode_router mode for the user's latest message,
          recorded by cloud_brain (`record_reply_style`) and read back by the
@@ -60,7 +64,19 @@ PRESETS: Dict[str, str] = {
     "proud": "warm, upbeat and proud",
     "energetic": "energetic and enthusiastic",
     "firm": "firm, direct, no-nonsense but kind",
+    # Acting tones — mostly for one-off "say it angry" requests.
+    "excited": "super upbeat, excited and cheerful",
+    "sad": "sad, downcast and quiet",
+    "angry": "angry and furious, raised voice",
+    "scared": "frightened, scared and trembling",
+    "whisper": "whispering, very quiet and close",
+    "sultry": "low, breathy and sultry",
+    "sarcastic": "dry, deadpan and sarcastic",
 }
+# Acting tones never reach announcements via the chat override: a "whisper" or
+# "angry" override must not make a medication reminder inaudible or shouted.
+# (The settings panel can still assign them per type — an explicit owner choice.)
+ACTING_PRESETS = frozenset({"excited", "sad", "angry", "scared", "whisper", "sultry", "sarcastic"})
 
 # mode_router modes. explainer is the router's fallback for every
 # non-emotional message, so it defaults to auto (model reads the text).
@@ -109,6 +125,8 @@ MAX_OVERRIDE_HOURS = 24 * 7
 
 _reply_mode: str = ""
 _reply_mode_at: float = 0.0
+_one_reply_style: str = ""  # preset key, "" = none
+_one_reply_at: float = 0.0
 _lock = threading.RLock()
 _cache: Optional[Dict[str, Dict[str, str]]] = None
 
@@ -297,14 +315,43 @@ def _phrase(key: Optional[str]) -> str:
 
 
 def record_reply_style(mode: str) -> None:
-    """Remember the mode of the message just routed, for speaking its reply."""
-    global _reply_mode, _reply_mode_at
-    _reply_mode = mode if mode in MODES else ""
-    _reply_mode_at = time.monotonic()
+    """Remember the mode of the message just routed, for speaking its reply.
+
+    A new user message also ends any one-reply style from the previous turn.
+    """
+    global _reply_mode, _reply_mode_at, _one_reply_style
+    with _lock:
+        _reply_mode = mode if mode in MODES else ""
+        _reply_mode_at = time.monotonic()
+        _one_reply_style = ""
+
+
+def set_one_reply_style(style: str) -> None:
+    """Style for the reply currently being generated only (voice_style scope=this_reply)."""
+    global _one_reply_style, _one_reply_at
+    if not isinstance(style, str) or style not in PRESETS:
+        raise ValueError(f"unknown style {style!r}")
+    with _lock:
+        _one_reply_style = style
+        _one_reply_at = time.monotonic()
+
+
+def get_one_reply_style() -> str:
+    """Active one-reply style key, or "" (also "" once the reply TTL has passed)."""
+    with _lock:
+        if _one_reply_style and time.monotonic() - _one_reply_at <= REPLY_STYLE_TTL_SECONDS:
+            return _one_reply_style
+        return ""
+
+
+def clear_one_reply_style() -> None:
+    global _one_reply_style
+    with _lock:
+        _one_reply_style = ""
 
 
 def _count(source: str, key: str) -> str:
-    """Count the resolved style (bounded labels: 4 sources x 12 presets) and return its phrase."""
+    """Count the resolved style (bounded labels: 5 sources x len(PRESETS)) and return its phrase."""
     from orchestrator.metrics import TTS_STYLE_APPLIED
 
     key = key if key in PRESETS else "auto"
@@ -316,6 +363,9 @@ def current_reply_style() -> str:
     """Style phrase for speaking the latest chat reply ("" = no note)."""
     if not settings.tts_style_enabled:
         return ""
+    one_reply = get_one_reply_style()
+    if one_reply:
+        return _count("this_reply", one_reply)
     override = get_override()
     if override:
         return _count("override", override["style"])
@@ -329,6 +379,6 @@ def style_for_announcement(announcement_type: str) -> str:
     if not settings.tts_style_enabled:
         return ""
     override = get_override()
-    if override:
+    if override and override["style"] not in ACTING_PRESETS:
         return _count("override", override["style"])
     return _count("announcement", load_defaults()["announcements"].get(announcement_type, "auto"))

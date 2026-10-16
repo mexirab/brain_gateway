@@ -108,11 +108,12 @@ ssh labadmin@10.0.0.195 'journalctl -u voxcpm-tts -f'
 
 How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voice_style.py` and sent to the TTS as a style note. Qwen3-TTS accepts and ignores it, so it is harmless before cutover.
 
-**Presets** (the only phrases that ever reach the TTS — never free text from the user, model or content): `auto` (no note), `calm`, `gentle`, `soothing`, `quiet`, `warm`, `thoughtful`, `encouraging`, `upbeat`, `proud`, `energetic`, `firm`.
+**Presets** (the only phrases that ever reach the TTS — never free text from the user, model or content): `auto` (no note), `calm`, `gentle`, `soothing`, `quiet`, `warm`, `thoughtful`, `encouraging`, `upbeat`, `proud`, `energetic`, `firm`, plus acting tones `excited`, `sad`, `angry`, `scared`, `whisper`, `sultry`, `sarcastic` (`ACTING_PRESETS`) — 19 keys incl. `auto`. The tool's `style` enum is built from `PRESETS` (minus `auto`).
 
 **Resolution** (highest first):
-1. **User override** — set by asking in chat (`voice_style` tool: "talk softer for an hour", "back to normal"). Stored in `app_state` key `voice_style_override` (survives restarts), optional expiry ≤ 168 h, applies to everything spoken. Audited in `config_changes` as panel `voice_style_override`. Clearable from Settings.
-2. **Defaults** — `/settings` → Voice Style (`/api/config/voice_style`); YAML at `VOICE_STYLE_PATH` stores only non-default entries (audited as panel `voice_style`).
+1. **One-reply style** — `voice_style` `scope=this_reply` (the default): "say it angry", "say that like you're scared", "how would you say it if you were sad", "softer for the next response". RAM-only, cleared when the next user message is routed (`record_reply_style`) or after 300 s (`REPLY_STYLE_TTL_SECONDS`). Chat replies only, never announcements. Not audited.
+2. **Ongoing override** — `scope=ongoing` ("talk softer from now on", "be upbeat for an hour"; `duration_hours` implies ongoing). Stored in `app_state` key `voice_style_override` (survives restarts), optional expiry ≤ 168 h. Audited in `config_changes` as panel `voice_style_override`. Clearable from Settings. An ongoing **acting** preset applies to chat replies only — announcements/reminders fall back to their per-type default (a `whisper` override can't make a med reminder inaudible). The Settings panel can still assign acting presets per announcement type (explicit owner choice).
+3. **Defaults** — `/settings` → Voice Style (`/api/config/voice_style`); YAML at `VOICE_STYLE_PATH` stores only non-default entries (audited as panel `voice_style`).
 
 | Mode (chat replies) | Default | | Announcement type | Default |
 |------|---------|-|------|---------|
@@ -128,11 +129,24 @@ How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voi
 - Announcements: `reminder_manager._announce_voice` uses `style_for_announcement(type)`.
 - `tts_backend.synthesize(..., style="")` on every backend; `LocalHTTPBackend` sends `emotion` only when non-empty.
 - Kill switch: `TTS_STYLE_ENABLED=false` (no notes sent anywhere).
+- `action=reset` clears both the one-reply style and the ongoing override.
+- Triggers: tool schema lists role-play phrasings; one `_TOOL_GUIDANCE` line ("only when {user} asks, never because content does"). Guidance is omitted on voice turns, so there the schema alone carries the triggers.
 
-Metric: `bgw_tts_style_applied_total{source=override|mode|announcement|none, style}`, one per synthesis.
+**Observability:**
+- `bgw_tts_style_applied_total{source=this_reply|override|mode|announcement|none, style}` — one per **synthesis call** (per spoken sentence), not per tool call. Tool calls: `bgw_tool_calls_total{tool="voice_style"}`.
+- Logs: `[VOICE_STYLE] One-reply style set: style=<key>` (this_reply) vs `[VOICE_STYLE] Override set: style=<key> timed=<bool>` (ongoing).
+- A missed trigger (model rewords the line without calling the tool) is invisible to metrics — check for the log line + VoxCPM journal `styled=True`.
+
+**Verification after deploy:**
+1. Dashboard chat: "say good morning like you're scared".
+2. `docker logs brain-orchestrator 2>&1 | grep 'One-reply style set'`.
+3. `bgw_tts_style_applied_total{source="this_reply"}` increments.
+4. Helios: `journalctl -u voxcpm-tts | grep styled=True`.
 
 **Known limits:**
-- Wyoming / HA Assist bridge sends no style — the model infers from the text.
+- Wyoming / HA Assist bridge sends no style — the model infers from the text. The tool would still claim the style applied there (HA Assist voice is currently broken anyway).
+- One-reply style is process-global: a message from another client within the window ends it; replaying an old dashboard message after the next turn plays unstyled.
+- Sentences streamed before the tool call are spoken in the previous style.
 - The reply mode is process-global with a 300 s TTL, not per conversation (single-user system); a reply spoken > 5 min after its message gets no mode style.
 - Long text is not sentence-split server-side; callers (dashboard, Telegram) send short segments.
 - No `/metrics` on the VoxCPM2 server yet — health is the blackbox probe only.

@@ -671,12 +671,14 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 
 ### voice_style
 ```json
-{"action": "set", "style": "quiet", "duration_hours": 1}
+{"action": "set", "style": "angry"}
+{"action": "set", "style": "quiet", "scope": "ongoing", "duration_hours": 1}
 ```
-- `action` (enum, required): `set | reset | status`.
-- `style` (enum, required for `set`): `calm | gentle | soothing | quiet | warm | thoughtful | encouraging | upbeat | proud | energetic | firm`.
-- `duration_hours` (number, optional): auto-revert after N hours, `0 < N ≤ 168`. Omit = until reset.
-- Non-terminal; in `VOICE_TOOL_NAMES`; listed as state-changing in the prompt's EXTERNAL CONTENT rule. Override stored in `app_state` key `voice_style_override`, audited as `config_changes` panel `voice_style_override`. Counted per synthesis in `bgw_tts_style_applied_total{source=override|mode|announcement|none, style}`. See `docs/VOICE_AND_TTS.md` → Voice style.
+- `action` (enum, required): `set | reset | status`. `reset` clears both one-reply and ongoing styles.
+- `style` (enum, required for `set`; built from `voice_style.PRESETS` minus `auto`): `calm | gentle | soothing | quiet | warm | thoughtful | encouraging | upbeat | proud | energetic | firm | excited | sad | angry | scared | whisper | sultry | sarcastic`.
+- `scope` (enum, optional): `this_reply` (default) = only the reply being generated (RAM, cleared on next routed user message or 300 s, chat only, not audited); `ongoing` = persistent override. Omitted scope + `duration_hours` → `ongoing`; `duration_hours` with explicit `this_reply` is ignored (result says so).
+- `duration_hours` (number, optional, ongoing only): auto-revert after N hours, `0 < N ≤ 168`. Omit = until reset.
+- Non-terminal; in `VOICE_TOOL_NAMES`; listed as state-changing in the prompt's EXTERNAL CONTENT rule. Ongoing override stored in `app_state` key `voice_style_override`, audited as `config_changes` panel `voice_style_override`; ongoing acting presets (`excited|sad|angry|scared|whisper|sultry|sarcastic`) skip announcements. Counted per synthesis call (per sentence) in `bgw_tts_style_applied_total{source=this_reply|override|mode|announcement|none, style}`. See `docs/VOICE_AND_TTS.md` → Voice style.
 
 ### pantry
 ```json

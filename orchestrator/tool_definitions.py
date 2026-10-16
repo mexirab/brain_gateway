@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 
 from orchestrator import shared
 from orchestrator.shared import _HA_TOOL_CACHE_TTL, ha_client
+from orchestrator.voice_style import PRESETS as VOICE_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -877,11 +878,15 @@ STATIC_TOOLS = [
         "function": {
             "name": "voice_style",
             "description": (
-                "Change how your spoken voice sounds (tone, not words). Use when the user says "
-                "'talk softer/quieter', 'be more upbeat/energetic', 'calm down your voice', 'be firmer "
-                "with me', 'sound happier' (action=set), 'talk normally again' / 'back to normal' "
-                "(action=reset), or asks how you're set to sound (action=status). Applies to everything "
-                "you say aloud until reset or duration_hours runs out. Only the user can ask for this."
+                "Change how your spoken voice SOUNDS (the voice itself, not just your wording). "
+                "Whenever the user asks you to say something in a tone or emotion, call this BEFORE "
+                "replying, then write the line: 'say it angry', 'say that like you're scared', 'try a "
+                "frightened tone', 'switch to a sultry tone', 'how would you say it if you were sad', "
+                "'be softer for the next response' (action=set, scope=this_reply — only this reply). "
+                "Use scope=ongoing only when they want it to last: 'talk softer from now on', 'be "
+                "upbeat for an hour' (add duration_hours if they give one). 'Talk normally again' / "
+                "'back to normal' -> action=reset. 'How are you set to sound?' -> action=status. "
+                "Changing only your words does NOT change your voice. Only the user can ask for this."
             ),
             "parameters": {
                 "type": "object",
@@ -889,24 +894,18 @@ STATIC_TOOLS = [
                     "action": {"type": "string", "enum": ["set", "reset", "status"]},
                     "style": {
                         "type": "string",
-                        "enum": [
-                            "calm",
-                            "gentle",
-                            "soothing",
-                            "quiet",
-                            "warm",
-                            "thoughtful",
-                            "encouraging",
-                            "upbeat",
-                            "proud",
-                            "energetic",
-                            "firm",
-                        ],
+                        "enum": [k for k in VOICE_PRESETS if k != "auto"],
                         "description": "Required for set. Pick the closest match to what they asked for.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["this_reply", "ongoing"],
+                        "description": "this_reply (default): only the reply you are about to give. "
+                        "ongoing: everything you say until reset or duration_hours.",
                     },
                     "duration_hours": {
                         "type": "number",
-                        "description": "Hours before reverting automatically. Omit to keep it until reset.",
+                        "description": "Ongoing only: hours before reverting. Omit to keep it until reset.",
                     },
                 },
                 "required": ["action"],

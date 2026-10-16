@@ -38,6 +38,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(voice_style, "_cache", None)
     monkeypatch.setattr(voice_style, "_reply_mode", "")
     monkeypatch.setattr(voice_style, "_reply_mode_at", 0.0)
+    monkeypatch.setattr(voice_style, "_one_reply_style", "")
+    monkeypatch.setattr(voice_style, "_one_reply_at", 0.0)
     monkeypatch.setattr(state_store, "DB_PATH", str(tmp_path / "vs_state.db"))
     monkeypatch.setattr(settings, "tts_style_enabled", True, raising=False)
     state_store.init_db()
@@ -462,9 +464,98 @@ async def test_tool_set_rejects_bad_style(tool, style):
 
 
 async def test_tool_set_indefinite(tool):
-    out = await tool({"action": "set", "style": "calm"})
+    out = await tool({"action": "set", "style": "calm", "scope": "ongoing"})
     assert "until you tell me to reset" in out
     assert voice_style.get_override() == {"style": "calm", "until": None}
+    assert voice_style.get_one_reply_style() == ""
+
+
+# --- one-reply scope ("say it angry") -------------------------------------
+
+
+async def test_tool_set_defaults_to_this_reply(tool):
+    out = await tool({"action": "set", "style": "angry"})
+    assert "this reply only" in out
+    assert "don't describe it" in out
+    assert voice_style.get_one_reply_style() == "angry"
+    assert voice_style.get_override() is None  # nothing persisted
+    assert _audit_rows("voice_style_override") == []
+
+
+async def test_tool_duration_without_scope_means_ongoing(tool):
+    await tool({"action": "set", "style": "gentle", "duration_hours": 1})
+    assert voice_style.get_override()["style"] == "gentle"
+    assert voice_style.get_one_reply_style() == ""
+
+
+async def test_tool_unknown_scope_falls_back_to_this_reply(tool):
+    await tool({"action": "set", "style": "sad", "scope": "forever"})
+    assert voice_style.get_one_reply_style() == "sad"
+    assert voice_style.get_override() is None
+
+
+def test_one_reply_style_wins_then_clears_on_next_message():
+    voice_style.set_override("gentle")
+    voice_style.record_reply_style("explainer")  # turn N routed
+    voice_style.set_one_reply_style("scared")  # tool call inside turn N
+    before = _metric("this_reply", "scared")
+    assert voice_style.current_reply_style() == voice_style.PRESETS["scared"]
+    assert voice_style.current_reply_style() == voice_style.PRESETS["scared"]  # every sentence of the reply
+    assert _metric("this_reply", "scared") == before + 2
+    voice_style.record_reply_style("explainer")  # turn N+1 routed
+    assert voice_style.current_reply_style() == voice_style.PRESETS["gentle"]  # ongoing override resumes
+
+
+def test_one_reply_style_expires_after_ttl(monkeypatch):
+    voice_style.set_one_reply_style("whisper")
+    monkeypatch.setattr(voice_style, "_one_reply_at", time.monotonic() - voice_style.REPLY_STYLE_TTL_SECONDS - 1)
+    assert voice_style.get_one_reply_style() == ""
+
+
+@pytest.mark.parametrize("acting", sorted(voice_style.ACTING_PRESETS))
+def test_ongoing_acting_override_skips_announcements(acting):
+    voice_style.set_override(acting)
+    assert voice_style.style_for_announcement("reminder") == ""  # per-type default (auto)
+    assert voice_style.style_for_announcement("progress") == voice_style.PRESETS["proud"]
+    voice_style.record_reply_style("explainer")
+    assert voice_style.current_reply_style() == voice_style.PRESETS[acting]  # chat still gets it
+
+
+def test_ongoing_tone_override_still_reaches_announcements():
+    voice_style.set_override("calm")
+    assert voice_style.style_for_announcement("reminder") == voice_style.PRESETS["calm"]
+
+
+async def test_tool_ongoing_acting_mentions_chat_only(tool):
+    out = await tool({"action": "set", "style": "whisper", "scope": "ongoing"})
+    assert "reminders and announcements keep their normal voice" in out
+
+
+def test_one_reply_style_does_not_touch_announcements():
+    voice_style.set_one_reply_style("angry")
+    assert voice_style.style_for_announcement("reminder") == ""
+
+
+@pytest.mark.parametrize("bad", ["", "auto2", None, 3, "Angry"])
+def test_set_one_reply_style_rejects_unknown(bad):
+    with pytest.raises(ValueError):
+        voice_style.set_one_reply_style(bad)
+
+
+async def test_tool_reset_clears_one_reply_style(tool):
+    await tool({"action": "set", "style": "sultry"})
+    await tool({"action": "reset"})
+    assert voice_style.get_one_reply_style() == ""
+
+
+def test_acting_presets_present_and_in_tool_enum():
+    from orchestrator.tool_definitions import STATIC_TOOLS
+
+    for key in ("excited", "sad", "angry", "scared", "whisper", "sultry", "sarcastic"):
+        assert voice_style.PRESETS[key]
+    schema = next(t for t in STATIC_TOOLS if t["function"]["name"] == "voice_style")["function"]["parameters"]
+    assert schema["properties"]["style"]["enum"] == [k for k in voice_style.PRESETS if k != "auto"]
+    assert schema["properties"]["scope"]["enum"] == ["this_reply", "ongoing"]
 
 
 async def test_tool_set_timed(tool):
@@ -488,7 +579,7 @@ async def test_tool_set_mentions_disabled_config(tool, monkeypatch):
 
 
 async def test_tool_reset_and_status(tool):
-    await tool({"action": "set", "style": "firm"})
+    await tool({"action": "set", "style": "firm", "scope": "ongoing"})
     assert "firm" in await tool({"action": "status"})
     assert "reset" in (await tool({"action": "reset"})).lower()
     assert voice_style.get_override() is None
