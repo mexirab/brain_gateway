@@ -241,6 +241,37 @@ async def test_unreachable_calendar_is_not_a_clear_tomorrow(reset_shared, patch_
 
 @_skip_no_deps
 @pytest.mark.asyncio
+async def test_evening_never_sends_work_locations_to_maps(
+    reset_shared, fresh_phone_sync_time, patch_evening_deps, monkeypatch
+):
+    """Tomorrow's first thing is a work meeting (pushed from the iPhone, source
+    exchange): its invite location must not go to Google Maps."""
+    from orchestrator import shared
+
+    monkeypatch.setattr(shared, "GOOGLE_MAPS_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(shared, "HOME_ADDRESS", "1 Example St", raising=False)
+    reset_shared._phone_calendar_events = [_tomorrow_phone_event("Meeting", hour=10, location="Conference Room 4")]
+    reset_shared._phone_calendar_sync_time = fresh_phone_sync_time
+    _, patches = patch_evening_deps(google_configured=False)
+    mocks = await _run_evening(patches)
+    assert "Meeting" in _spoken(mocks)
+    mocks["travel"].assert_not_awaited()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_evening_personal_location_still_gets_travel_time(reset_shared, patch_evening_deps, monkeypatch):
+    from orchestrator import shared
+
+    monkeypatch.setattr(shared, "GOOGLE_MAPS_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(shared, "HOME_ADDRESS", "1 Example St", raising=False)
+    _, patches = patch_evening_deps(google_events=[_google_event("Dentist", 1, hour=10, location="2 Example Ave")])
+    mocks = await _run_evening(patches)
+    mocks["travel"].assert_awaited_once()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
 async def test_clear_tomorrow_still_delivers(reset_shared, patch_evening_deps):
     """No events at all -> 'nothing on the calendar' but the ritual still runs."""
     _, patches = patch_evening_deps(google_events=[])

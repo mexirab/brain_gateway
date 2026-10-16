@@ -122,6 +122,43 @@ async def test_poll_personal_location_does_use_travel_time(monkeypatch):
     h.travel.assert_awaited_once()
 
 
+@pytest.mark.parametrize("tiered", [False, True])
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://example.webex.com/example/j.php?MTID=m0123456789abcdef",
+        "Microsoft Teams Meeting",
+        "Zoom",
+        "meet.google.com/abc-defg-hij",
+    ],
+)
+async def test_poll_never_speaks_virtual_meeting_locations(monkeypatch, tiered, location):
+    h = _Poll(monkeypatch, tiered=tiered)
+    await h.poll(_ev("Standup", _soon(40), "exchange", location=location))
+    spoken = h.voice.await_args.args[0]
+    assert "Standup" in spoken
+    assert location.lower() not in spoken.lower() and "http" not in spoken and " at " not in spoken
+
+
+@pytest.mark.parametrize("tiered", [False, True])
+async def test_poll_still_speaks_physical_locations(monkeypatch, tiered):
+    h = _Poll(monkeypatch, tiered=tiered)
+    await h.poll(_ev("Dentist", _soon(40), "caldav", location="2 Example Ave"))
+    assert "at 2 Example Ave" in h.voice.await_args.args[0]
+
+
+async def test_poll_drive_line_omits_unspeakable_location(monkeypatch):
+    """Maps resolved a very long location: say the drive time, not the string."""
+    from orchestrator.travel_time import TravelInfo
+
+    h = _Poll(monkeypatch, maps_key="test-key")
+    h.travel.return_value = TravelInfo(duration_minutes=10, duration_in_traffic_minutes=10, distance_text="5 mi")
+    long_place = "Building " + "B" * 150
+    await h.poll(_ev("Appointment", _soon(40), "caldav", location=long_place))
+    spoken = h.voice.await_args.args[0]
+    assert "10 minute drive." in spoken and long_place not in spoken and "there" not in spoken
+
+
 async def test_poll_leave_now_keyed_on_alert_key(monkeypatch):
     """A leave-now alert for the google copy suppresses the caldav copy's alert."""
     h = _Poll(monkeypatch, maps_key="test-key")
