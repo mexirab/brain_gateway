@@ -123,6 +123,42 @@ consistent snapshot, but the HNSW `.bin` files were copied raw while live and
 may be inconsistent with it; if searches error or miss recent memories after a
 restore, rebuild the index (the sqlite is the source of truth).
 
+## Actual Budget (finance source of truth)
+
+Separate nightly job for the Actual Budget server (`actual/` compose project,
+container `actual-budget`, data at `/opt/apps/actual/data`, owned `1000:1000`
+mode `700`). Not covered by `backup_state.py`, which only holds the
+orchestrator's `finance.db` mirror.
+
+| | |
+|---|---|
+| Script | `actual/backup_actual.sh` (bash + stdlib python, runs as the host user — no sudo) |
+| Schedule | cron 03:55 on Jupiter |
+| What | every `*.sqlite` via the online-backup API + `PRAGMA quick_check` (fails the run on error); all other files (budget blobs) copied, retried once if they change mid-read; symlinks skipped |
+| Local | `/home/labadmin/actual/backups/actual-YYYYmmdd-HHMMSS.tar.gz` (mode 600), keep 30. A one-off `pre-compose-*.tar.gz` rollback snapshot there is not rotated. |
+| Off-box | rsync to `saturn:/home/labadmin/actual-backups/` (`JESS_ACTUAL_BACKUP_REMOTE`; plaintext, like the other backups) |
+| Log | `/home/labadmin/actual/backup.log` |
+| Metrics | textfile `jess_actual_backup.prom`: `jess_actual_backup_success_timestamp_seconds`, `jess_actual_backup_offbox_success`, `jess_actual_backup_files` |
+| Alerts | `JessActualBackupStale` (>36h, paging), `JessBackupOffboxFailing` (shared, quiet) |
+
+Overrides: `JESS_ACTUAL_DATA`, `JESS_ACTUAL_BACKUP_REMOTE`,
+`JESS_ACTUAL_BACKUP_METRICS_PATH`.
+
+**Restore** (archive has `data/` at the top):
+
+```bash
+cd /home/labadmin/gateway_nerves/actual && docker compose down
+tar tzf /home/labadmin/actual/backups/actual-<stamp>.tar.gz | head   # inspect
+mkdir -p /tmp/actual-restore && tar xzf /home/labadmin/actual/backups/actual-<stamp>.tar.gz -C /tmp/actual-restore
+sudo rsync -a --delete /tmp/actual-restore/data/ /opt/apps/actual/data/
+sudo chown -R 1000:1000 /opt/apps/actual/data && sudo chmod 700 /opt/apps/actual/data
+docker compose up -d
+rm -rf /tmp/actual-restore
+```
+
+Verify: `curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status`
+(or trigger a sync) and open the Actual UI on :5006.
+
 ## File ownership
 
 The orchestrator container runs as root, but the backup cron runs as the host

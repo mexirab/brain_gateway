@@ -32,9 +32,9 @@ Branch `feat/actual-budget`. Finance (Financial Quest Board) now syncs read-only
 
 ### Known gaps / operator to-dos (not done)
 
-- **HIGH:** the Actual server's own data (`/opt/apps/actual/data`) is not backed up by anything (only a one-off `~/actual-backup-2026-09-25.tar.gz` on the same disk), and the existing off-box backups to Saturn are failing while Saturn is down. Actual is now the finance source of truth.
-- `actual-budget` runs unpinned `actualbudget/actual-server:latest` — pin to 26.9.0 and bump together with `actualpy`. The orchestrator effectively trusts the server (actualpy runs server-provided migration SQL locally).
-- Revoke the old YNAB access token; delete `YNAB_*` lines from the live `.env` (ignored, but stale secrets).
+- ~~**HIGH:** the Actual server's own data (`/opt/apps/actual/data`) is not backed up~~ — RESOLVED 2026-10-16: nightly `actual/backup_actual.sh` (03:55, off-box to Saturn, alert `JessActualBackupStale`; see `docs/BACKUP.md`).
+- ~~`actual-budget` runs unpinned `actualbudget/actual-server:latest`~~ — RESOLVED 2026-10-16: compose project `actual/`, 26.9.0 digest-pinned, non-root, read-only rootfs. Bump together with `actualpy` (actualpy runs server-provided migration SQL locally).
+- ~~Revoke the old YNAB access token; delete `YNAB_*` from the live `.env`~~ — RESOLVED (owner confirmed).
 
 ### Docs
 

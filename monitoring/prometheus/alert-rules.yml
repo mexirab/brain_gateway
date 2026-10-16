@@ -295,6 +295,17 @@ groups:
         annotations:
           summary: "Radicale (calendar server) is down"
           description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d`."
+      - alert: ActualDown
+        # Actual Budget (finance source of truth). Same shape as RadicaleDown:
+        # AppDown is Grafana-only, BudgetSyncFailing only notices after ~6h, and
+        # restart: unless-stopped ignores an unhealthy container.
+        expr: probe_success{service="actual"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Actual Budget server is down"
+          description: "Actual on Jupiter (:5006) has failed its HTTP probe for 5 minutes. The budget web UI and Jess's finance sync are down. Check `docker logs actual-budget` and `cd ~/gateway_nerves/actual && docker compose up -d`."
 
   # ===========================================================================
   # UPS / Power Chain
@@ -515,6 +526,16 @@ groups:
         annotations:
           summary: "Calendar (Radicale) backup is stale (>36h)"
           description: "The nightly Radicale backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/radicale/backup_radicale.sh."
+      - alert: JessActualBackupStale
+        # Actual Budget (finance source of truth) on Jupiter. actual/backup_actual.sh
+        # runs nightly and writes this. >36h stale = the budget is unprotected.
+        expr: time() - jess_actual_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Actual Budget backup is stale (>36h)"
+          description: "The nightly Actual Budget backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/actual/backup_actual.sh (log: /home/labadmin/actual/backup.log)."
       - alert: ExchangeCalendarSyncStale
         # The work (Exchange) calendar only reaches Jess through the iPhone
         # Shortcut → POST /api/calendar/sync. If it stops (Shortcut disabled,
@@ -532,9 +553,10 @@ groups:
           summary: "Work calendar hasn't synced from the iPhone in over a day"
           description: "Last iPhone calendar push was {{ $value | humanizeDuration }} ago — check the 'Sync work calendar to Jess' Shortcut automation (docs/CALENDAR.md → Work calendar)."
       - alert: JessBackupOffboxFailing
-        # Covers all three nightly backups: state (jess_backup_*), HA
-        # (jess_ha_backup_*) and the Radicale calendar (jess_calendar_backup_*).
-        expr: '{__name__=~"jess_(ha_|calendar_)?backup_offbox_success"} == 0'
+        # Covers all four nightly backups: state (jess_backup_*), HA
+        # (jess_ha_backup_*), the Radicale calendar (jess_calendar_backup_*) and
+        # Actual Budget (jess_actual_backup_*).
+        expr: '{__name__=~"jess_(ha_|calendar_|actual_)?backup_offbox_success"} == 0'
         for: 3d
         labels:
           severity: info
