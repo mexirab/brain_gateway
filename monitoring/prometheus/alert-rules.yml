@@ -454,7 +454,7 @@ groups:
           severity: warning
         annotations:
           summary: "Self-audit has failed repeatedly"
-          description: "The daily self-audit could not read Loki on its last runs, so it is blind. Check SELF_AUDIT_LOKI_URL (must be an IP — MagicDNS doesn't resolve in the container), that Loki is up, and that promtail is shipping logs."
+          description: "The daily self-audit could not read Loki on its last runs, so it is blind. Check SELF_AUDIT_LOKI_URL (should be http://loki:3100 — Loki is loopback-only on the host and reached over gateway-net; a LAN IP no longer works), that Loki is up and still on gateway_nerves_gateway-net (`cd monitoring && docker compose --env-file ../.env -p monitoring up -d loki`), and that promtail is shipping logs."
       - alert: WindDownNudgeStale
         # 25.5h, matching the dashboard panel's orange threshold: the largest
         # legitimate gap is 25h (the DST fall-back night) plus the 300s

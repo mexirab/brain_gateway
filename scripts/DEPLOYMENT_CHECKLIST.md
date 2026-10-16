@@ -93,14 +93,14 @@ On **Helios**:
 cd /opt/gateway_mvp/monitoring
 
 # Restart monitoring to pick up new config
-docker compose -p monitoring down
-docker compose -p monitoring up -d
+docker compose --env-file ../.env -p monitoring down
+docker compose --env-file ../.env -p monitoring up -d
 
 # Verify blackbox exporter is running
 docker logs blackbox-exporter
 
 # Check Grafana dashboard
-# Open http://10.0.0.195:3000 (admin/braingw)
+# Open https://jupiter-amds.tail74fc4a.ts.net:3000 (login: GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD from .env)
 # The "Voice Pipeline (Always-On)" row should show service status
 ```
 

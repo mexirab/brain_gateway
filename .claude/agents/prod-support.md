@@ -103,27 +103,27 @@ docker logs brain-orchestrator --since 1h 2>&1 | grep -i warn
 
 ### Loki / LogQL (preferred for anything older than the live tail)
 
-Promtail ships container logs from Helios to Loki on Jupiter (`http://10.0.0.248:3100`). For any question that spans more than the current `docker logs` buffer — "how often did this error fire yesterday?", "what was happening before the crash at 14:32?", "show me every `[UNIFIED_LOOP]` round count in the last hour" — query Loki, don't tail Docker.
+Promtail ships container logs to Loki on Jupiter (loopback-only: `http://localhost:3100` from Jupiter, `http://loki:3100` from containers on `gateway-net`/`monitoring-net`; the Helios promtail is down since 2026-07). For any question that spans more than the current `docker logs` buffer — "how often did this error fire yesterday?", "what was happening before the crash at 14:32?", "show me every `[UNIFIED_LOOP]` round count in the last hour" — query Loki, don't tail Docker.
 
-**Query via Grafana Explore**: http://10.0.0.248:3000/explore (data source: Loki)
+**Query via Grafana Explore**: https://jupiter-amds.tail74fc4a.ts.net:3000/explore (tailnet, login required) or http://localhost:3000/explore from Jupiter (data source: Loki)
 
 **Query via API (from Helios)**:
 ```bash
 # Last 15 minutes of orchestrator errors
-curl -sG 'http://10.0.0.248:3100/loki/api/v1/query_range' \
+curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
   --data-urlencode 'query={container="brain-orchestrator"} |= "ERROR"' \
   --data-urlencode 'start='$(date -u -d '15 min ago' +%s)000000000 \
   --data-urlencode 'end='$(date -u +%s)000000000 \
   --data-urlencode 'limit=100' | python3 -m json.tool
 
 # Tool-loop rounds in last hour (structured extraction)
-curl -sG 'http://10.0.0.248:3100/loki/api/v1/query_range' \
+curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
   --data-urlencode 'query={container="brain-orchestrator"} |= "[UNIFIED_LOOP]" | json' \
   --data-urlencode 'start='$(date -u -d '1 hour ago' +%s)000000000 \
   --data-urlencode 'end='$(date -u +%s)000000000
 
 # Rate of LLM call errors per minute, last 30 min
-curl -sG 'http://10.0.0.248:3100/loki/api/v1/query_range' \
+curl -sG 'http://localhost:3100/loki/api/v1/query_range' \
   --data-urlencode 'query=sum(rate({container="brain-orchestrator"} |= "llm_call_errors" [1m]))' \
   --data-urlencode 'start='$(date -u -d '30 min ago' +%s)000000000 \
   --data-urlencode 'end='$(date -u +%s)000000000
@@ -387,17 +387,17 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 
 ## Grafana Dashboards
 
-Grafana runs on Jupiter (10.0.0.248:3000). Dashboard JSON lives at `/opt/gateway_mvp/monitoring/grafana/provisioning/dashboards/json/` and is provisioned into the Jupiter container via nebula-sync / volume mount.
+Grafana runs on Jupiter, bound to 127.0.0.1:3000 — browse via https://jupiter-amds.tail74fc4a.ts.net:3000 (Tailscale Serve, tailnet-only, login required) or localhost:3000 from Jupiter. Dashboard JSON lives at `/opt/gateway_mvp/monitoring/grafana/provisioning/dashboards/json/` and is provisioned into the Jupiter container via nebula-sync / volume mount.
 
 | Dashboard | UID | URL | Panels | What it's for |
 |-----------|-----|-----|--------|----------------|
-| Brain Gateway Overview | `brain-gateway-overview` | http://10.0.0.248:3000/d/brain-gateway-overview | 80 | Primary SRE dashboard — request rates, latency, tool usage, LLM health, reminders, focus, temps, all subsystem rollups. Start here. |
-| Brain Gateway Deep Dive | `brain-gateway-deep-dive` | http://10.0.0.248:3000/d/brain-gateway-deep-dive | 24 | Drill-down — tool-loop round distribution, per-model LLM latency, error-type breakdowns, calendar/Gmail API detail. Use when Overview shows a symptom but not a cause. |
-| Conjure | `conjure-dashboard` | http://10.0.0.248:3000/d/conjure-dashboard | 26 | Conjure (AI book visualizer) — not Brain Gateway. Only relevant if debugging Uranus/ComfyUI or Jupiter's Conjure API. |
+| Brain Gateway Overview | `brain-gateway-overview` | https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview | 80 | Primary SRE dashboard — request rates, latency, tool usage, LLM health, reminders, focus, temps, all subsystem rollups. Start here. |
+| Brain Gateway Deep Dive | `brain-gateway-deep-dive` | https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-deep-dive | 24 | Drill-down — tool-loop round distribution, per-model LLM latency, error-type breakdowns, calendar/Gmail API detail. Use when Overview shows a symptom but not a cause. |
+| Conjure | `conjure-dashboard` | https://jupiter-amds.tail74fc4a.ts.net:3000/d/conjure-dashboard | 26 | Conjure (AI book visualizer) — not Brain Gateway. Only relevant if debugging Uranus/ComfyUI or Jupiter's Conjure API. |
 
 **After editing JSON**: `ssh labadmin@10.0.0.248 docker restart grafana` (or let the provisioning reload pick it up). If editing via Grafana UI, export the JSON back to `monitoring/grafana/provisioning/dashboards/json/` and commit — the file is the source of truth, not the running dashboard.
 
-**Prometheus scrapes**: Jupiter's Prometheus scrapes `http://10.0.0.195:8888/metrics` (Helios orchestrator). Verify a new metric is reaching Prometheus before building a panel: `curl -s 'http://10.0.0.248:9090/api/v1/query?query=<metric_name>'`.
+**Prometheus scrapes**: Jupiter's Prometheus scrapes `http://10.0.0.195:8888/metrics` (Helios orchestrator). Verify a new metric is reaching Prometheus before building a panel (Prometheus is loopback-only — run on Jupiter): `curl -s 'http://localhost:9090/api/v1/query?query=<metric_name>'`.
 
 ---
 

@@ -10,16 +10,23 @@ bash scripts/generate-configs.sh   # render configs first — compose bind-mount
 docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d
 ```
 
-**Grafana:** http://localhost:3000 (admin / see GF_SECURITY_ADMIN_PASSWORD in .env)
+- **Every** compose command for this project needs the env file (`--env-file .env` from the repo root, `--env-file ../.env` from `monitoring/`) — `GF_SECURITY_ADMIN_PASSWORD` is required (`:?`) and compose refuses to start without it.
+- Bring the main stack up first: Loki joins the external `gateway_nerves_gateway-net` network. If the main stack was `down`'d (network deleted/recreated), re-run `up -d` here.
+
+**Network exposure:** ufw is inactive on Jupiter, so the publish address is the only control. Grafana, Prometheus, Loki, Alertmanager and Blackbox all bind `127.0.0.1` only.
+
+**Grafana:** https://jupiter-amds.tail74fc4a.ts.net:3000 (Tailscale Serve, tailnet only) or `http://localhost:3000` from Jupiter. Login required (anonymous access off): `GF_SECURITY_ADMIN_USER` / `GF_SECURITY_ADMIN_PASSWORD` from `.env`. The password only seeds a fresh `grafana.db` — to change it run `docker exec grafana grafana cli admin reset-admin-password '<new>'` and update `.env`. `GRAFANA_ROOT_URL` sets `GF_SERVER_ROOT_URL`; `GF_SECURITY_COOKIE_SECURE=true`.
+
+**Prometheus:** no browser URL — `http://localhost:9090` from Jupiter only (`--web.enable-lifecycle` makes `/-/quit` reachable by anyone who can reach the port). Grafana uses `prometheus:9090` over `monitoring-net`.
 
 ## Services
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| Grafana | 3000 | Dashboards |
-| Prometheus | 9090 | Metrics |
+| Grafana | 3000 (127.0.0.1 only; tailnet via Tailscale Serve HTTPS) | Dashboards |
+| Prometheus | 9090 (127.0.0.1 only) | Metrics |
 | Alertmanager | 9093 (127.0.0.1 only) | Alert routing → Pushover |
-| Loki | 3100 | Logs |
+| Loki | 3100 (127.0.0.1 only; containers use `loki:3100`) | Logs |
 | Promtail (Jupiter) | - | Log shipper — Jupiter-local containers (Grafana, Prometheus, Loki, Conjure, etc.) |
 | Promtail (Helios) | 9080 (internal only) | Log shipper — Helios Docker containers → Loki on Jupiter via tailnet |
 | Node Exporter | 9100 | System metrics |
@@ -48,6 +55,8 @@ Helios and Jupiter each run their own promtail instance. Logs from both hosts la
 |----------|---------|-----------|--------------|
 | Jupiter (monitoring stack) | Jupiter Docker socket + journal | local Loki | (Jupiter default, no static override) |
 | Helios (`promtail-helios` sidecar in `docker-compose.yml`) | Helios Docker socket | Loki on Jupiter via `LOKI_PUSH_URL` over Tailscale MagicDNS | `host=helios` (static) |
+
+**Loki reachability:** loopback-only publish. Grafana + Jupiter promtail reach it as `loki:3100` over `monitoring-net`; the orchestrator reaches it as `loki:3100` over `gateway-net` (`SELF_AUDIT_LOKI_URL=http://loki:3100` — containers can't reach Tailscale Serve on the host's own tailnet IP). No tailnet forward for 3100 exists while `promtail-helios` is down (since 2026-07); when fixing it, restore the push path with `tailscale serve --bg --tcp=3100 tcp://127.0.0.1:3100` on Jupiter (ideally ACL'd to Helios). Loki has no auth, so the delete API (`deletion_mode: disabled`) and ruler API (`enable_api: false`) are off — an open delete API could wipe error streams and make the self-audit report a false "all clean".
 
 Use `host=helios` in LogQL to isolate Helios-origin streams. Loki stream labels set by the Helios promtail: `container`, `host`, `project`, `service`. Extracted JSON fields available via `| json`: `level`, `component`, `tool_name`, `mode`, `intensity`, `model`, `error_type`. `entity_id` and `request_id` are intentionally not labels (cardinality); query them via `| json entity_id request_id`.
 

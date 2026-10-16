@@ -38,6 +38,8 @@ schema_config:
 
 ruler:
   alertmanager_url: http://localhost:9093
+  # No auth on Loki: don't let callers write rules over HTTP.
+  enable_api: false
 
 limits_config:
   retention_period: 720h  # 30 days
@@ -45,6 +47,9 @@ limits_config:
   ingestion_burst_size_mb: 20
   max_streams_per_user: 10000
   max_line_size: 256kb
+  # No auth on Loki: an open delete API lets anything that reaches it wipe
+  # the error streams and turn the self-audit into a false "all clean".
+  deletion_mode: disabled
 
 compactor:
   working_directory: /loki/compactor

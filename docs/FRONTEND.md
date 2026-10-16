@@ -32,7 +32,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 ## Dashboard Widgets
 
 - **Budget card** -> clickable, links to `/finance` page
-- **System Health card** -> clickable, opens Grafana Brain Gateway Overview dashboard
+- **System Health card** -> clickable, opens Grafana Brain Gateway Overview dashboard over HTTPS (Tailscale Serve; login required, tailnet only)
 - **Calendar card** -> shows merged phone+Google calendar events with source label
 - **Reminders card** -> pending reminders with complete action
 - **Focus timer card** -> current session with start/stop controls

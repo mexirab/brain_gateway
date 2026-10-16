@@ -100,7 +100,7 @@ docker exec alertmanager amtool alert query
 ```
 
 ### View logs in Grafana
-1. Open http://localhost:3000 (admin/braingw)
+1. Open https://jupiter-amds.tail74fc4a.ts.net:3000 (tailnet) or http://localhost:3000 on Jupiter — login `GF_SECURITY_ADMIN_USER` / `GF_SECURITY_ADMIN_PASSWORD` from `.env`
 2. Go to Explore → Select Loki
 3. Query: `{container="brain-orchestrator"}`
 
