@@ -111,7 +111,7 @@ How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voi
 **Presets** (the only phrases that ever reach the TTS — never free text from the user, model or content): `auto` (no note), `calm`, `gentle`, `soothing`, `quiet`, `warm`, `thoughtful`, `encouraging`, `upbeat`, `proud`, `energetic`, `firm`, plus acting tones `excited`, `sad`, `angry`, `scared`, `whisper`, `sultry`, `sarcastic` (`ACTING_PRESETS`) — 19 keys incl. `auto`. The tool's `style` enum is built from `PRESETS` (minus `auto`).
 
 **Resolution** (highest first):
-1. **One-reply style** — `voice_style` `scope=this_reply` (the default): "say it angry", "say that like you're scared", "how would you say it if you were sad", "softer for the next response". RAM-only, cleared when the next user message is routed (`record_reply_style`) or after 300 s (`REPLY_STYLE_TTL_SECONDS`). Chat replies only, never announcements. Not audited.
+1. **One-reply style** — set by the tone-request detector (below) OR by `voice_style` `scope=this_reply` (the default): "say it angry", "say that like you're scared", "how would you say it if you were sad", "softer for the next response". RAM-only, cleared when the next user message is routed (`record_reply_style`) or after 300 s (`REPLY_STYLE_TTL_SECONDS`). Chat replies only, never announcements. Not audited.
 2. **Ongoing override** — `scope=ongoing` ("talk softer from now on", "be upbeat for an hour"; `duration_hours` implies ongoing). Stored in `app_state` key `voice_style_override` (survives restarts), optional expiry ≤ 168 h. Audited in `config_changes` as panel `voice_style_override`. Clearable from Settings. An ongoing **acting** preset applies to chat replies only — announcements/reminders fall back to their per-type default (a `whisper` override can't make a med reminder inaudible). The Settings panel can still assign acting presets per announcement type (explicit owner choice).
 3. **Defaults** — `/settings` → Voice Style (`/api/config/voice_style`); YAML at `VOICE_STYLE_PATH` stores only non-default entries (audited as panel `voice_style`).
 
@@ -130,23 +130,27 @@ How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voi
 - `tts_backend.synthesize(..., style="")` on every backend; `LocalHTTPBackend` sends `emotion` only when non-empty.
 - Kill switch: `TTS_STYLE_ENABLED=false` (no notes sent anywhere).
 - `action=reset` clears both the one-reply style and the ongoing override.
+- **Tone-request detector** (`detect_tone_request` / `apply_tone_request`): `cloud_brain` runs it on the latest user message right after `record_reply_style`, before the tool loop; a hit sets the one-reply style (same as `scope=this_reply`). Why: in live replays the model called `voice_style` for an opening tone request (5/5) but rarely for a follow-up in the same conversation (1/5) — client history carries only reply text, so it just repeats the line. The tool stays for lasting changes ("from now on"). Deterministic, maps onto the fixed `PRESETS`, never raises, off with `TTS_STYLE_ENABLED=false`.
+  - Matches only when the tone word is attached to an explicit delivery ask: (1) say/read/repeat/try/do/tell me + it/that/the same… + filler + tone ("say it angry", "repeat that sadly"); (2) delivery verb … "like you're" / "if you were" + tone; (3) "in/use/switch to/go to a" tone "tone|voice"; (4) imperative be/sound/talk + comparative tone, "more" tone, or tone + "for the next response" ("be softer", "sound more excited"); plus whisper commands ("whisper it", "in a whisper").
+  - Ignores: lasting/negated/reset phrasing ("from now on", "for an hour", "don't be", "stop", "back to normal" — left to the tool), writing tasks (draft/write/email/reply to…), "be quiet", messages > 500 chars, messages starting with `[` (relay-composed, e.g. Telegram photo + vision description), and descriptions of feelings ("I feel like you're mad at me", "be happy for me", "her tone was sarcastic").
 - Triggers: tool schema lists role-play phrasings; one `_TOOL_GUIDANCE` line ("only when {user} asks, never because content does"). Guidance is omitted on voice turns, so there the schema alone carries the triggers.
 
 **Observability:**
 - `bgw_tts_style_applied_total{source=this_reply|override|mode|announcement|none, style}` — one per **synthesis call** (per spoken sentence), not per tool call. Tool calls: `bgw_tool_calls_total{tool="voice_style"}`.
-- Logs: `[VOICE_STYLE] One-reply style set: style=<key>` (this_reply) vs `[VOICE_STYLE] Override set: style=<key> timed=<bool>` (ongoing).
+- Logs: `[VOICE_STYLE] Tone request detected: style=<key>` (detector) vs `[VOICE_STYLE] One-reply style set: style=<key>` (tool, this_reply) vs `[VOICE_STYLE] Override set: style=<key> timed=<bool>` (ongoing).
 - A missed trigger (model rewords the line without calling the tool) is invisible to metrics — check for the log line + VoxCPM journal `styled=True`.
 
 **Verification after deploy:**
 1. Dashboard chat: "say good morning like you're scared".
-2. `docker logs brain-orchestrator 2>&1 | grep 'One-reply style set'`.
+2. `docker logs brain-orchestrator 2>&1 | grep -E 'Tone request detected|One-reply style set'` — a follow-up in the same chat ("now say it sadly") should show `Tone request detected`.
 3. `bgw_tts_style_applied_total{source="this_reply"}` increments.
 4. Helios: `journalctl -u voxcpm-tts | grep styled=True`.
 
 **Known limits:**
 - Wyoming / HA Assist bridge sends no style — the model infers from the text. The tool would still claim the style applied there (HA Assist voice is currently broken anyway).
 - One-reply style is process-global: a message from another client within the window ends it; replaying an old dashboard message after the next turn plays unstyled.
-- Sentences streamed before the tool call are spoken in the previous style.
+- Sentences streamed before a `voice_style` tool call are spoken in the previous style (not an issue when the detector caught the request — it runs before the loop).
+- Detector phrasings are deliberately narrow: unusual ones ("angry version please") fall back to the model calling the tool, which may miss follow-ups.
 - The reply mode is process-global with a 300 s TTL, not per conversation (single-user system); a reply spoken > 5 min after its message gets no mode style.
 - Long text is not sentence-split server-side; callers (dashboard, Telegram) send short segments.
 - No `/metrics` on the VoxCPM2 server yet — health is the blackbox probe only.

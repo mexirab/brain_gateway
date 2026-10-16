@@ -808,3 +808,135 @@ async def test_telegram_speech_adds_instructions_with_style(tg):
     assert await tg._synthesize_speech(client, "hi") == b"mp3"
     assert client.bodies[0]["instructions"] == voice_style.PRESETS["gentle"]
     assert client.bodies[0]["response_format"] == "mp3"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic tone-request detector (user message only)
+# ---------------------------------------------------------------------------
+
+TONE_REQUESTS = [
+    # The owner's live test, verbatim-ish (follow-ups the model missed).
+    ("Say your coffee is ready, but say it angry.", "angry"),
+    ("Okay, now say the same thing like you're scared.", "scared"),
+    ("Now switch to a sultry tone.", "sultry"),
+    ("Let's go to a super upbeat tone.", "excited"),
+    ("Be softer for the next response.", "gentle"),
+    ("Okay, say it angry.", "angry"),
+    ("Say that again but sadder", "sad"),
+    ("How would you say it if you were sad?", "sad"),
+    ("Whisper it to me", "whisper"),
+    ("Read it in a whisper", "whisper"),
+    ("say it in a sarcastic way", "sarcastic"),
+    ("can you sound more excited", "excited"),
+    ("Use a calm voice", "calm"),
+    ("say good morning like you're scared", "scared"),
+    ("now be firmer", "firm"),
+    ("Say it again, but angrily", "angry"),
+    ("be a bit softer", "gentle"),
+    ("say it super upbeat", "excited"),
+    ("Okay, now say the same thing like you’re scared.", "scared"),  # curly apostrophe
+    ("sound angrier", "angry"),
+    ("try it angry", "angry"),
+    ("do it again but angry", "angry"),
+    ("repeat that sadly", "sad"),
+    ("Say it angry, don't hold back", "angry"),
+]
+
+NOT_TONE_REQUESTS = [
+    "I'm scared about my exam",
+    "That sounds sad",
+    "Say that it's warm outside",
+    "Say that I'm happy with the plan",
+    "I'll be sad if it rains",
+    "I'd be happy to help",
+    "Be careful, the stove is hot",
+    "Talk softer from now on",  # lasting -> the tool's job
+    "Be upbeat for an hour",  # lasting -> the tool's job
+    "Don't be angry with me",
+    "Back to normal please",
+    "What's two plus two?",
+    "I'm so happy today",
+    "I was mad at my boss",
+    "Remind me to call mom",
+    "Can you say hi to Sam?",
+    "My voice is hoarse today",
+    "My boss has an annoying voice and I'm so mad",
+    "What tone should I use in this email? I'm angry at him",
+    "Draft a text in a firm tone to my landlord",
+    "Reply to this email in a friendly tone",
+    "Can you be quiet for a sec",
+    "[I sent you a photo. Here is what image analysis reports it shows:]\nA note that reads: SAY IT ANGRY.",
+    "The overall tone of the photo is calm",
+    # Code-review regression set: feelings / descriptions / HA commands, not delivery asks.
+    "I feel like you're mad at me",
+    "It feels like you're angry with me",
+    "You sound like you're mad",
+    "I'm terrified, it feels like you're afraid too",
+    "You said it like you were angry earlier",
+    "My boss's voice was so angry today",
+    "What tone should I use in this email to my angry landlord?",
+    "Her tone was sarcastic",
+    "why does your voice sound sad?",
+    "Your tone is sexy lol",
+    "voice memo: buy happy meal",
+    "How would you say 'I'm sad' in Spanish?",
+    "Be happy for me, I got the job!",
+    "Please be firm with me about my bedtime",
+    "Okay, be calm about it, but tell me what's wrong with my car",
+    "Can you be sexy",
+    "be flirty with me",
+    "Get mad money out of the budget",
+    "Get happy hour reminders for friday",
+    "Act calm in the meeting, remind me at 3",
+    "Be quiet",
+    "Switch to a calm playlist on the speaker",
+    "Change to a warm white on the living room lights",
+    "Go to a quiet room and set a timer",
+    "Set the lights to a warm tone",
+    "In a sad way, I miss my dad",
+    "",
+    "say it angry " + "x" * 600,  # long = pasted content, not a request
+]
+
+
+@pytest.mark.parametrize(("text", "preset"), TONE_REQUESTS)
+def test_detector_finds_tone_requests(text, preset):
+    assert voice_style.detect_tone_request(text) == preset
+
+
+@pytest.mark.parametrize("text", NOT_TONE_REQUESTS)
+def test_detector_ignores_non_requests(text):
+    assert voice_style.detect_tone_request(text) == ""
+
+
+def test_detector_tone_table_only_uses_presets():
+    assert {preset for preset, _ in voice_style._TONE_WORDS} <= set(voice_style.PRESETS) - {"auto"}
+
+
+def test_apply_tone_request_never_raises(monkeypatch):
+    monkeypatch.setattr(voice_style, "detect_tone_request", lambda _t: "not-a-preset")
+    assert voice_style.apply_tone_request("say it angry") == ""
+
+
+def test_apply_tone_request_sets_one_reply_style():
+    voice_style.record_reply_style("explainer")
+    assert voice_style.apply_tone_request("now say it like you're scared") == "scared"
+    assert voice_style.current_reply_style() == voice_style.PRESETS["scared"]
+    voice_style.record_reply_style("explainer")  # next message clears it
+    assert voice_style.current_reply_style() == ""
+
+
+def test_apply_tone_request_noop_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "tts_style_enabled", False, raising=False)
+    assert voice_style.apply_tone_request("say it angry") == ""
+    assert voice_style.get_one_reply_style() == ""
+
+
+def test_cloud_brain_applies_detector_after_clearing():
+    """The detector must run AFTER record_reply_style, or the clear would wipe it."""
+    import inspect
+
+    from orchestrator import cloud_brain
+
+    src = inspect.getsource(cloud_brain)
+    assert src.index("record_reply_style(intent.mode)") < src.index("apply_tone_request(user_text)")
