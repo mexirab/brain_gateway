@@ -338,7 +338,7 @@ Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](h
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ACTUAL_SERVER_URL` | (empty) | Actual server base URL. Empty = disabled. Same host as the orchestrator: `http://host.docker.internal:5006` (a container name won't resolve — `actual-budget` sits on the default bridge network). |
+| `ACTUAL_SERVER_URL` | (empty) | Actual server base URL. Empty = disabled. Jupiter: `http://actual-budget:5006` (container name over `gateway-net`; Actual publishes only on 127.0.0.1, so `host.docker.internal:5006` no longer works). |
 | `ACTUAL_PASSWORD` | (empty) | Actual server password. Required when the URL is set. Single-quote it in `.env` if it contains `$`. |
 | `ACTUAL_BUDGET_FILE` | (empty) | Budget name as shown in Actual's file picker, or its sync id. Required when the URL is set. |
 | `ACTUAL_ENCRYPTION_PASSWORD` | (empty) | Only for end-to-end-encrypted budget files. |

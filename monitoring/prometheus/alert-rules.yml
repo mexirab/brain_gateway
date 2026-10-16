@@ -294,7 +294,7 @@ groups:
           severity: warning
         annotations:
           summary: "Radicale (calendar server) is down"
-          description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d`."
+          description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
       - alert: ActualDown
         # Actual Budget (finance source of truth). Same shape as RadicaleDown:
         # AppDown is Grafana-only, BudgetSyncFailing only notices after ~6h, and
@@ -305,7 +305,7 @@ groups:
           severity: warning
         annotations:
           summary: "Actual Budget server is down"
-          description: "Actual on Jupiter (:5006) has failed its HTTP probe for 5 minutes. The budget web UI and Jess's finance sync are down. Check `docker logs actual-budget` and `cd ~/gateway_nerves/actual && docker compose up -d`."
+          description: "Actual (container actual-budget, probed over monitoring-net) has failed its HTTP probe for 5 minutes. The budget web UI and Jess's finance sync are down. Check `docker logs actual-budget` and `cd ~/gateway_nerves/actual && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
 
   # ===========================================================================
   # UPS / Power Chain
