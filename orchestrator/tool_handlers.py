@@ -1603,31 +1603,55 @@ async def _reg_voice_style(arguments: dict) -> str:
 
     action = arguments.get("action", "status")
     if action == "reset":
+        voice_style.clear_one_reply_style()
         voice_style.reset_override(changed_by="chat")
-        logger.info("[VOICE_STYLE] Override cleared")
+        logger.info("[VOICE_STYLE] Voice style reset (one-reply + ongoing)")
         return "Voice style reset — back to my normal automatic tone."
     if action == "set":
         style = arguments.get("style")
         if not isinstance(style, str) or style not in voice_style.PRESETS or style == "auto":
             choices = ", ".join(k for k in voice_style.PRESETS if k != "auto")
             return f"Unknown voice style. Choose one of: {choices}."
+        note = (
+            "" if settings.tts_style_enabled else " (Voice styling is switched off in config, so it won't be audible.)"
+        )
+        # A duration only makes sense for an ongoing style; otherwise default to
+        # this reply only — a one-off that wears off beats one that silently sticks.
+        scope = arguments.get("scope")
+        if scope not in ("this_reply", "ongoing"):
+            scope = "ongoing" if arguments.get("duration_hours") is not None else "this_reply"
+        if scope == "this_reply":
+            voice_style.set_one_reply_style(style)
+            logger.info("[VOICE_STYLE] One-reply style set: style=%s", style)
+            ignored = (
+                " duration_hours was ignored — use scope=ongoing to make it last."
+                if arguments.get("duration_hours") is not None
+                else ""
+            )
+            return (
+                f"Your next reply will be spoken in a {style} voice (this reply only).{note}{ignored} "
+                "Now give the reply itself in plain words — your voice carries the tone, so don't "
+                "describe it. All your normal rules still apply."
+            )
         try:
             override = voice_style.set_override(style, arguments.get("duration_hours"))
         except (TypeError, ValueError) as e:
             return f"Couldn't set voice style: {e}"
         logger.info("[VOICE_STYLE] Override set: style=%s timed=%s", style, override["until"] is not None)
-        note = (
-            "" if settings.tts_style_enabled else " (Voice styling is switched off in config, so it won't be audible.)"
+        acting = (
+            " (Chat replies only — reminders and announcements keep their normal voice.)"
+            if style in voice_style.ACTING_PRESETS
+            else ""
         )
         if override["until"]:
             from datetime import datetime
 
             until = datetime.fromtimestamp(override["until"]).strftime("%I:%M %p").lstrip("0")
-            return f"Voice style set to {style} until {until}.{note}"
-        return f"Voice style set to {style} until you tell me to reset it.{note}"
+            return f"Voice style set to {style} until {until}.{note}{acting}"
+        return f"Voice style set to {style} until you tell me to reset it.{note}{acting}"
     override = voice_style.get_override()
     if override:
-        return f"Current voice style: {override['style']} (set by you)."
+        return f"Current voice style: {override['style']} (set by you, ongoing)."
     return "No voice style override — I'm using the automatic tone for each situation (editable in Settings → Voice Style)."
 
 
