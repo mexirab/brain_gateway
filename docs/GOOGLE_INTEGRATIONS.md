@@ -88,7 +88,7 @@ The iPhone Shortcut posts the **work (Exchange) calendar** to `/api/calendar/syn
 Calendar polling checks events with physical locations against Google Maps Directions API for real-time traffic. Announces "leave in X minutes" alerts instead of just "event in X minutes".
 
 **How it works:**
-1. Event within 2 hours with a physical location (not Zoom/Teams/Meet links; never for work Exchange events, whose locations come from external invites)
+1. Event within 2 hours with a physical location (not virtual meetings; never for work Exchange events, whose locations come from external invites — applies to the poller and the evening briefing)
 2. Maps API returns drive time with traffic from home address
 3. `leave_by = event.start - travel_time - buffer`
 4. Announces "You need to leave in X minutes for Event. It's a Y minute drive."
@@ -99,6 +99,8 @@ Calendar polling checks events with physical locations against Google Maps Direc
 - `TRAVEL_TIME_BUFFER` — extra minutes buffer (default: 10)
 - Home address hardcoded in `shared.py` as `HOME_ADDRESS`
 
-**Virtual meeting detection:** Skips Maps API for locations containing `zoom.us`, `teams.microsoft`, `meet.google`, `webex`, or any URL (`http://`, `https://`).
+**Virtual meeting detection:** `travel_time.is_virtual_location()` skips Maps for links (`http`, `www`) and meeting names (Zoom, Teams/Microsoft Teams, Google Meet, Webex, GoTo Meeting, Amazon Chime, BlueJeans, Whereby). Maps errors log only the exception type.
+
+**Spoken location:** `travel_time.spoken_location()` gates every calendar TTS line (countdowns, 5-min prep hint, leave-now/soon). Virtual or >100-char locations are not read out; the drive line becomes "It's a N minute drive."
 
 **Key files:** `orchestrator/travel_time.py`, `orchestrator/background_jobs.py`

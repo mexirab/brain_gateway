@@ -149,7 +149,9 @@ which merges three sources into one list:
   invites and are usually rooms or links, so work events get no "leave by"
   travel alerts. Already-announced state is keyed on title + start, not on which
   source the event came from, so an event in both Google and Radicale is
-  announced once.
+  announced once. Spoken lines read a location only via
+  `travel_time.spoken_location()`: virtual meetings (links, Zoom/Teams/Meet/
+  Webex etc.) and locations over 100 chars are dropped.
 - **Work-invite text is untrusted.** Titles and locations are collapsed to a
   single line, so an invite can't fake extra lines. Calendar output counts as
   external content under the prompt's "content is data" rule.

@@ -29,7 +29,7 @@ from orchestrator.metrics import (
 )
 from orchestrator.reminder_manager import _announce_voice, list_pending_reminders
 from orchestrator.shared import TIMEZONE, profile
-from orchestrator.travel_time import get_travel_time
+from orchestrator.travel_time import get_travel_time, is_virtual_location, spoken_location
 
 logger = logging.getLogger(__name__)
 
@@ -130,14 +130,16 @@ _SINGLE_MESSAGE = "Heads up {name}: {title} {time_str}"
 def _get_prep_hint(event) -> str:
     """Generate contextual transition scaffolding for the 5-minute tier."""
     desc = (event.description or "").lower()
-    loc = (event.location or "").lower()
 
-    # Video call links
-    if any(kw in desc or kw in loc for kw in ("zoom.us", "teams.microsoft", "meet.google", "webex")):
+    # Video call (link or conferencing product in the location or description)
+    if is_virtual_location(event.location or "") or any(
+        kw in desc for kw in ("zoom.us", "teams.microsoft", "meet.google", "webex")
+    ):
         return "Pull up the meeting link."
-    # Physical location
-    if event.location and not any(kw in loc for kw in ("http", "zoom", "teams", "meet.google")):
-        return f"Head out to {event.location}."
+    # Physical location (only if it's short enough to say)
+    place = spoken_location(event.location or "")
+    if place:
+        return f"Head out to {place}."
     # Agenda mention
     if "agenda" in desc:
         return "Check the agenda."
@@ -212,7 +214,8 @@ async def poll_calendar():
                     if leave_by_min <= 0 and not state_store.is_notified(f"cal:{akey}:leave_now"):
                         message = (
                             f"{profile.user_name}, you should leave now for {event.title}. "
-                            f"It's a {drive_min} minute drive to {event.location}."
+                            f"It's a {drive_min} minute drive"
+                            + (f" to {place}." if (place := spoken_location(event.location)) else ".")
                         )
                         result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
@@ -234,7 +237,8 @@ async def poll_calendar():
                         message = (
                             f"Heads up {profile.user_name}: You need to leave in "
                             f"{leave_by_min} minutes for {event.title}. "
-                            f"It's a {drive_min} minute drive to {event.location}."
+                            f"It's a {drive_min} minute drive"
+                            + (f" to {place}." if (place := spoken_location(event.location)) else ".")
                         )
                         result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
@@ -280,8 +284,9 @@ async def poll_calendar():
                     if template:
                         prep = _get_prep_hint(event) if best_tier <= 5 else ""
                         message = template.format(name=profile.user_name, title=event.title, prep=prep)
-                        if event.location and best_tier > 5:
-                            message += f" at {event.location}"
+                        place = spoken_location(event.location or "")
+                        if place and best_tier > 5:
+                            message += f" at {place}"
 
                         result = await _announce_voice(message, announcement_type="calendar")
                         if result.get("success"):
@@ -319,8 +324,9 @@ async def poll_calendar():
                         time_str += f" and {remaining} minutes"
 
                 message = _SINGLE_MESSAGE.format(name=profile.user_name, title=event.title, time_str=time_str)
-                if event.location:
-                    message += f" at {event.location}"
+                place = spoken_location(event.location or "")
+                if place:
+                    message += f" at {place}"
                 result = await _announce_voice(message, announcement_type="calendar")
                 if result.get("success"):
                     state_store.mark_notified(cal_key)
@@ -664,7 +670,13 @@ async def evening_briefing():
         else:
             time_str = first["start"].strftime("%I:%M %p").lstrip("0")
             parts.append(f"Tomorrow's first thing: {first['title']} at {time_str}.")
-            if first["location"] and shared.GOOGLE_MAPS_API_KEY and shared.HOME_ADDRESS:
+            # Work (Exchange) locations come from external invites — never sent to Maps.
+            if (
+                first["location"]
+                and first.get("source") != SOURCE_EXCHANGE
+                and shared.GOOGLE_MAPS_API_KEY
+                and shared.HOME_ADDRESS
+            ):
                 travel = await get_travel_time(shared.HOME_ADDRESS, first["location"], first["start"])
                 if travel:
                     drive_min = travel.duration_in_traffic_minutes

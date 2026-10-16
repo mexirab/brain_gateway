@@ -16,9 +16,13 @@ logger = logging.getLogger(__name__)
 # Cache: (destination_lower, event_date_str) -> TravelInfo
 _travel_cache: dict[tuple[str, str], "TravelInfo"] = {}
 
-# Patterns that indicate a virtual meeting (skip Maps API)
+# Patterns that indicate a virtual meeting: a link, or a conferencing product
+# named in the location field (Exchange often puts "Microsoft Teams Meeting" or a
+# bare Webex/Zoom URL there). Used to skip the Maps API and to keep locations
+# out of spoken announcements.
 _VIRTUAL_PATTERNS = re.compile(
-    r"zoom\.us|teams\.microsoft|meet\.google|webex|https?://",
+    r"https?://|www\.|zoom\.us|\bzoom\b|teams\.microsoft|microsoft teams|\bteams meeting\b|^\s*teams\s*$"
+    r"|meet\.google|google meet|webex|goto ?meeting|goto\.com|chime\.aws|\bamazon chime\b|bluejeans|whereby\.com",
     re.IGNORECASE,
 )
 
@@ -30,9 +34,25 @@ class TravelInfo:
     distance_text: str
 
 
-def _is_virtual_location(location: str) -> bool:
-    """Return True if location looks like a video call link."""
+def is_virtual_location(location: str) -> bool:
+    """Return True if location looks like a video call (link or product name)."""
     return bool(_VIRTUAL_PATTERNS.search(location))
+
+
+# Kept for existing callers/tests.
+_is_virtual_location = is_virtual_location
+
+# Longer than this isn't something to read aloud, even if it is a real place.
+_MAX_SPOKEN_LOCATION = 100
+
+
+def spoken_location(location: str) -> str:
+    """The location worth saying out loud, or "" — virtual-meeting links and
+    names (Webex, Teams, Zoom…) and over-long strings are never spoken."""
+    loc = " ".join((location or "").split())
+    if not loc or is_virtual_location(loc) or len(loc) > _MAX_SPOKEN_LOCATION:
+        return ""
+    return loc
 
 
 async def get_travel_time(
@@ -111,5 +131,7 @@ async def get_travel_time(
         return info
 
     except Exception as e:
-        logger.error(f"[TRAVEL] Error fetching directions: {e}")
+        # Type only: an HTTP error's message would carry the request URL, which
+        # holds the home address, the destination and the API key.
+        logger.error(f"[TRAVEL] Error fetching directions: {type(e).__name__}")
         return None
