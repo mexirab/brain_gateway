@@ -5,11 +5,17 @@
 # lifecycle, never touched by the orchestrator's build/deploy.
 # Replaced a hand-run `docker run ... actual-server:latest` container on 2026-10-16.
 #
-# Exposure: published on all interfaces :5006, same as the hand-run container —
-# the web UI is opened from LAN/tailnet browsers (homepage links
-# jupiter-amds.tail74fc4a.ts.net:5006), and the orchestrator reaches it as
-# http://host.docker.internal:5006 (it's not on gateway-net). Login is Actual's
-# own password.
+# Exposure: NOT on the LAN (was all-interfaces plain HTTP until 2026-10-16, so
+# the password crossed the LAN in cleartext). One published port, loopback only:
+#   127.0.0.1:5006 — Tailscale Serve proxies https://jupiter-amds.tail74fc4a.ts.net:5007
+#                    here (tailnet-only HTTPS; every device that opens the UI
+#                    needs Tailscale).
+# Containers reach it by name (http://actual-budget:5006) over two external networks:
+#   gateway_nerves_gateway-net — brain-orchestrator (ACTUAL_SERVER_URL)
+#   monitoring_monitoring-net  — blackbox-exporter (ActualDown probe)
+# Don't publish on 172.17.0.1 instead — see radicale/docker-compose.yml for why.
+# Network names are created by the main and monitoring compose projects — if
+# either is `down`ed, re-run `docker compose up -d` here.
 #
 # Runs as labadmin (1000:1000) with a read-only rootfs and no capabilities, so
 # the nightly backup can read the data dir without sudo. Data lives OUTSIDE the
@@ -34,7 +40,10 @@ services:
     tmpfs:
       - /tmp:size=64m
     ports:
-      - "5006:5006"
+      - "127.0.0.1:5006:5006"
+    networks:
+      - gateway-net
+      - monitoring-net
     restart: unless-stopped
     logging:
       driver: json-file
@@ -50,3 +59,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+networks:
+  gateway-net:
+    name: gateway_nerves_gateway-net
+    external: true
+  monitoring-net:
+    name: monitoring_monitoring-net
+    external: true

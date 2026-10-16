@@ -480,7 +480,7 @@ class Settings(BaseSettings):
     self_audit_hour_utc: int = 7
     self_audit_lookback_hours: int = 24
     self_audit_loki_url: str = ""  # required when self_audit_enabled; e.g. http://loki.example.tld:3100
-    self_audit_prom_url: str = ""  # optional, used by weekly review job; e.g. http://prom.example.tld:9090
+    self_audit_prom_url: str = ""  # optional, not read yet (planned weekly review); Jupiter Prometheus is loopback-only, so a container needs a network path to it first
     self_audit_max_clusters: int = 30
     self_audit_output_dir: str = "/app/data/self_audits"
     self_audit_llm_timeout_sec: int = 120

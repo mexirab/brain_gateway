@@ -31,7 +31,7 @@ fi
 
 echo "[migrate] stopping monitoring stack..."
 cd "$OLD"
-docker compose -f monitoring/docker-compose.yml down || true
+docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring down || true
 
 echo "[migrate] moving $OLD → $NEW"
 sudo mv "$OLD" "$NEW"
@@ -58,8 +58,8 @@ if [ -f .claude/settings.local.json ]; then
 fi
 
 echo "[migrate] starting monitoring stack from new location..."
-docker compose -f monitoring/docker-compose.yml pull
-docker compose -f monitoring/docker-compose.yml up -d
+docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring pull
+docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d
 
 echo "[migrate] done. Verify:"
 echo "  - docker ps       (grafana/prometheus/loki/blackbox-exporter/promtail up)"

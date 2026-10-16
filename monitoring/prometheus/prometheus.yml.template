@@ -177,8 +177,10 @@ scrape_configs:
 
       # Actual Budget (docker on Jupiter). tier=app is load-bearing: the
       # AppDown alert keys on probe_success{tier="app"} == 0 (Grafana
-      # visibility only — AppDown is not in the Pushover route).
-      - targets: ['http://${NODE_JUPITER_IP}:5006']
+      # visibility only — AppDown is not in the Pushover route); ActualDown
+      # keys on service=actual. Probed by container name over monitoring-net
+      # (Actual publishes only on 127.0.0.1).
+      - targets: ['http://actual-budget:5006/health']
         labels:
           service: 'actual'
           node: 'jupiter'

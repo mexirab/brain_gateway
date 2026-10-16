@@ -22,7 +22,7 @@ service, not the discretionary spending the Quest Board health bar tracks.
 Don't "fix" this without deciding that on purpose.
 
 Configuration (all via ``orchestrator.config.settings``):
-    ACTUAL_SERVER_URL            e.g. http://10.0.0.248:5006 (empty = disabled)
+    ACTUAL_SERVER_URL            e.g. http://actual-budget:5006 (empty = disabled)
     ACTUAL_PASSWORD              server password
     ACTUAL_BUDGET_FILE           budget name as shown in Actual, or its sync id
     ACTUAL_ENCRYPTION_PASSWORD   only for end-to-end-encrypted budgets

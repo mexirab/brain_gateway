@@ -157,7 +157,7 @@ rm -rf /tmp/actual-restore
 ```
 
 Verify: `curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status`
-(or trigger a sync) and open the Actual UI on :5006.
+(or trigger a sync) and open the Actual UI at https://jupiter-amds.tail74fc4a.ts.net:5007 (tailnet only).
 
 ## File ownership
 

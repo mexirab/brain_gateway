@@ -91,7 +91,7 @@ the model download. User kills it. No more restart loop.
 | `SELF_AUDIT_ENABLED` | `false` | Master kill switch |
 | `SELF_AUDIT_HOUR_UTC` | `7` | Hour-of-day for the daily run (scheduler-local timezone despite the name) |
 | `SELF_AUDIT_LOOKBACK_HOURS` | `24` | Loki query range |
-| `SELF_AUDIT_LOKI_URL` | `http://10.0.0.248:3100` | Loki base URL (no path). Use an IP/LAN name — MagicDNS `*.ts.net` doesn't resolve inside the container |
+| `SELF_AUDIT_LOKI_URL` | `http://loki:3100` (live) | Loki base URL (no path). Loki joins `gateway_nerves_gateway-net`, so the orchestrator uses the container name; Jupiter Loki is loopback-only and containers can't reach Tailscale Serve on the host's own tailnet IP |
 | `SELF_AUDIT_MAX_CLUSTERS` | `30` | Cap on clusters fed to Jess (prompt-size bound) |
 | `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Markdown report directory |
 | `SELF_AUDIT_PUSHOVER_PRIORITY_NORMAL` | `0` | Priority when no CRITICAL clusters |
@@ -129,7 +129,7 @@ Grafana (`brain_gateway_sre.py`, "Background Jobs" row): "Self-Audit Heartbeat A
 
 - **Read-only design:** Jess can only emit text. The orchestrator never exec()s anything from her output.
 - **Destructive command filter:** the prompt explicitly forbids `rm`, `dd`, `mkfs`, `format`, `drop`, `truncate`. The implementation also greps the LLM output for those tokens and tags any cluster with one as `severity=LOW, action=REJECTED-AUTO` so it's visible but flagged.
-- **Loki URL** is on the trusted LAN (`10.0.0.248:3100`). No auth on the query path is intentional and documented; if Tailscale ACLs ever loosen, this needs revisiting.
+- **Loki URL** is container-internal (`loki:3100` over `gateway-net`); Loki publishes on `127.0.0.1` only (no LAN/tailnet exposure). No auth on the query path is intentional. Because planted log lines reach the LLM, Loki's delete API (`deletion_mode: disabled`) and ruler API are off, so nothing reachable can wipe error streams into a false "all clean".
 - **systemd journal exposure to Promtail:** the journal mount is `:ro`. Promtail-helios already runs with `cap_drop: ALL` and `no-new-privileges`. Adding the journal mount widens its blast-radius slightly but doesn't grant new capabilities.
 - **Manual trigger endpoint** (`POST /api/self_audit/run`) is bearer-gated via the existing `BearerAuthMiddleware` — not added to `PUBLIC_PREFIXES`. Additionally, `run_self_audit()` re-checks `SELF_AUDIT_ENABLED` and `JESS_ADVANCED` at function entry, so the manual route honors the same productization gate as the cron registration in `orchestrator.py` (no bypass).
 

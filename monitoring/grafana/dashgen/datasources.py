@@ -8,7 +8,7 @@ state volume, these UIDs will regenerate and you'll need to update them here
 (or pin them explicitly in monitoring/grafana/provisioning/datasources/datasources.yml).
 
 Verify current UIDs with:
-    curl -s http://10.0.0.248:3000/api/datasources -u admin:<pw> | jq '.[] | {name,uid,type}'
+    curl -s http://localhost:3000/api/datasources -u admin:<pw> | jq '.[] | {name,uid,type}'
 """
 
 PROMETHEUS_UID = "PBFA97CFB590B2093"

@@ -338,7 +338,7 @@ Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](h
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ACTUAL_SERVER_URL` | (empty) | Actual server base URL. Empty = disabled. Same host as the orchestrator: `http://host.docker.internal:5006` (a container name won't resolve — `actual-budget` sits on the default bridge network). |
+| `ACTUAL_SERVER_URL` | (empty) | Actual server base URL. Empty = disabled. Jupiter: `http://actual-budget:5006` (container name over `gateway-net`; Actual publishes only on 127.0.0.1, so `host.docker.internal:5006` no longer works). |
 | `ACTUAL_PASSWORD` | (empty) | Actual server password. Required when the URL is set. Single-quote it in `.env` if it contains `$`. |
 | `ACTUAL_BUDGET_FILE` | (empty) | Budget name as shown in Actual's file picker, or its sync id. Required when the URL is set. |
 | `ACTUAL_ENCRYPTION_PASSWORD` | (empty) | Only for end-to-end-encrypted budget files. |
@@ -433,14 +433,19 @@ Daily 7am scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki fo
 | `SELF_AUDIT_ENABLED` | `false` | Master flag. Default-OFF; flip to `true` in `.env` to enable both the daily cron job and `POST /api/self_audit/run`. |
 | `SELF_AUDIT_HOUR_UTC` | `7` | Hour of day the daily cron fires. **Despite the name, interpreted in the scheduler's local timezone (`TIMEZONE`), not UTC** — known label mismatch, not fixed (the startup log prints the actual `TIMEZONE`, not "UTC"). |
 | `SELF_AUDIT_LOOKBACK_HOURS` | `24` | How far back to query Loki for error/warn logs. |
-| `SELF_AUDIT_LOKI_URL` | _empty (required when `SELF_AUDIT_ENABLED=true`)_ | Loki base URL (e.g. `http://10.0.0.248:3100`). Must be an IP or LAN name resolvable from inside the container — Tailscale MagicDNS (`*.ts.net`) does not resolve there. The liveness probe is a `query_range` over the lookback window (Loki 400s log selectors on instant `/query`). **Operator-controlled and trusted same as `MODEL_URL`** — there's no allow-list validator, only an `http(s)://` prefix check. Operators should not point this at attacker-controlled hosts. If empty while self-audit is on, the model_validator auto-disables self-audit at startup. |
-| `SELF_AUDIT_PROM_URL` | _empty (optional)_ | Prometheus base URL used by the weekly review (e.g. `http://prom.example.tld:9090`). When unset, the weekly review skips Prometheus aggregates. |
+| `SELF_AUDIT_LOKI_URL` | _empty (required when `SELF_AUDIT_ENABLED=true`)_ | Loki base URL (no path). Live: `http://loki:3100` — Loki joins the external `gateway_nerves_gateway-net` network, so the orchestrator reaches it by container name. Jupiter Loki is published on `127.0.0.1` only, and containers can't reach Tailscale Serve on the host's own tailnet IP (MagicDNS `*.ts.net` doesn't resolve in the container either). The liveness probe is a `query_range` over the lookback window (Loki 400s log selectors on instant `/query`). **Operator-controlled and trusted same as `MODEL_URL`** — there's no allow-list validator, only an `http(s)://` prefix check. Operators should not point this at attacker-controlled hosts. If empty while self-audit is on, the model_validator auto-disables self-audit at startup. |
+| `SELF_AUDIT_PROM_URL` | _empty (optional)_ | **Not read by any code yet** (reserved for a planned weekly review). Jupiter Prometheus is loopback-only, so a container would need a network path to it first. Removed from the live `.env`. |
 | `SELF_AUDIT_MAX_CLUSTERS` | `30` | Max number of `(service, first-80-chars-of-message)` clusters kept after frequency-bucketing before sending to Jess. |
 | `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Directory for `YYYY-MM-DD.md` markdown reports. Host-mounted via the existing `/app/data` bind. |
 | `SELF_AUDIT_LLM_TIMEOUT_SEC` | `120` | Per-call timeout for the diagnose-each-cluster `call_model` invocation. |
 
 ## Monitoring
 
+Monitoring compose (`monitoring/docker-compose.yml`) reads these from the main `.env` — every command needs `--env-file ../.env` (from `monitoring/`). Grafana/Prometheus/Loki/Alertmanager/Blackbox all publish on `127.0.0.1` only (ufw is inactive on Jupiter; the publish address is the only control). See `monitoring/README.md`.
+
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `LOKI_PUSH_URL` | _empty_ | Loki push endpoint used by the Helios promtail sidecar (e.g. `http://loki.example.tld:3100/loki/api/v1/push`). Required when `COMPOSE_PROFILES=advanced` is on (which brings up promtail); ignored otherwise. Soft default — fail-fast happens inside the promtail container, not at compose-parse time, because compose expands env vars file-wide before profile filtering. |
+| `GF_SECURITY_ADMIN_USER` | `admin` | Grafana admin username. Anonymous access is off — login required. |
+| `GF_SECURITY_ADMIN_PASSWORD` | _none — **required**_ | Grafana admin password. Compose fails (`:?`) if unset. Only seeds a fresh `grafana.db`; to change it later run `docker exec grafana grafana cli admin reset-admin-password '<new>'` and update `.env`. |
+| `GRAFANA_ROOT_URL` | `http://localhost:3000` | Public URL Grafana builds links/redirects from (`GF_SERVER_ROOT_URL`). Live: the Tailscale Serve HTTPS URL on port 3000 (Grafana binds `127.0.0.1:3000`; front it with `tailscale serve --bg --https=3000 http://127.0.0.1:3000`). `GF_SECURITY_COOKIE_SECURE=true` is hardcoded, so browser access must be HTTPS. |
+| `LOKI_PUSH_URL` | _empty_ | Loki push endpoint used by the Helios promtail sidecar (e.g. `http://loki.example.tld:3100/loki/api/v1/push`). Required when `COMPOSE_PROFILES=advanced` is on (which brings up promtail); ignored otherwise. Jupiter Loki is loopback-only, so this needs a tailnet forward on Jupiter (`tailscale serve --bg --tcp=3100 tcp://127.0.0.1:3100`) — not configured while `promtail-helios` is down (since 2026-07). Soft default — fail-fast happens inside the promtail container, not at compose-parse time, because compose expands env vars file-wide before profile filtering. |

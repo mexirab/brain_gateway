@@ -17,7 +17,7 @@ export default function SystemHealthCard() {
   return (
     <Card
       as="a"
-      href="http://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview/brain-gateway-overview"
+      href="https://jupiter-amds.tail74fc4a.ts.net:3000/d/brain-gateway-overview/brain-gateway-overview"
       target="_blank"
       rel="noopener noreferrer"
       className="block hover:border-brand/40 transition-colors cursor-pointer"
