@@ -54,7 +54,7 @@ scrape_configs:
           node: 'jupiter'
           role: 'monitoring'
 
-      # Helios (Gateway + primary LLM + TTS/STT + coder)
+      # Helios (Gateway + primary LLM + TTS/STT)
       - targets: ['${NODE_HELIOS_IP}:9100']
         labels:
           node: 'helios'
@@ -161,12 +161,6 @@ scrape_configs:
       - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
         labels:
           service: 'llama-primary'
-          node: 'helios'
-
-      # Code agent (llama-server-coder on Helios GPU1 RTX PRO 5000)
-      - targets: ['http://${NODE_HELIOS_IP}:8082/v1/models']
-        labels:
-          service: 'llama-coder'
           node: 'helios'
 
       # Conjure API (PM2 on Jupiter)
