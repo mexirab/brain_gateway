@@ -75,7 +75,7 @@ Optional 3D talking avatar on `/chat`. Off by default.
 
 ## Finance System (Actual Budget sync)
 
-- Read-only sync from the self-hosted Actual Budget server (`ACTUAL_*` env vars — `docs/ENV_VARS.md` → Finance; API — `TECHNICAL_REFERENCE.md` → Finance). Replaced YNAB 2026-10-02. Unconfigured = manual-entry mode (pages still work).
+- Read-only sync from the self-hosted Actual Budget server (`ACTUAL_*` env vars — `docs/ENV_VARS.md` → Finance; API — `TECHNICAL_REFERENCE.md` → Finance). Replaced YNAB 2026-10-02. Unconfigured = manual-entry mode (pages still work). Server: `actual/` compose project (26.9.0 digest-pinned), nightly backup — `docs/BACKUP.md` → Actual Budget.
 - Client: `lib/finance-api.ts` (`getSyncStatus`, `triggerSync`, `getBudgetCategories`, `updateCategoryMapping`, `resetSync`; errors surface the backend `{error}`), types in `lib/finance-types.ts` (`BudgetSyncStatus`; `Transaction.source` = `actual` | `ynab` (legacy) | `manual`).
 - Quest board: Sync button shown whenever the sync is configured (even after a failure); a failed last sync shows "Last sync failed" linking to Finance settings; 409 → "Sync already running".
 - Finance settings: Actual connection card, `last_error` alert, per-category discretionary mapping (grouped as in Actual, with budgeted/spent/balance).

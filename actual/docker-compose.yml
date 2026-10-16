@@ -1,0 +1,52 @@
+# Actual Budget — self-hosted budgeting server on Jupiter (the always-on node),
+# the finance source of truth the Financial Quest Board syncs from (read-only,
+# orchestrator/actual_client.py). Kept as its own compose project, like
+# radicale/, homeassistant/ and the monitoring stack: a pulled image with its own
+# lifecycle, never touched by the orchestrator's build/deploy.
+# Replaced a hand-run `docker run ... actual-server:latest` container on 2026-10-16.
+#
+# Exposure: published on all interfaces :5006, same as the hand-run container —
+# the web UI is opened from LAN/tailnet browsers (homepage links
+# jupiter-amds.tail74fc4a.ts.net:5006), and the orchestrator reaches it as
+# http://host.docker.internal:5006 (it's not on gateway-net). Login is Actual's
+# own password.
+#
+# Runs as labadmin (1000:1000) with a read-only rootfs and no capabilities, so
+# the nightly backup can read the data dir without sudo. Data lives OUTSIDE the
+# repo at /opt/apps/actual/data (chowned 1000:1000 at the cutover):
+#   server-files/account.sqlite — accounts, sessions
+#   user-files/*.sqlite, *.blob — budget files + sync messages
+# Nightly backup: actual/backup_actual.sh.
+services:
+  actual-budget:
+    container_name: actual-budget
+    # 26.9.0 pinned by digest. Bump together with actualpy in
+    # orchestrator/requirements.txt: actualpy runs server-provided migration SQL
+    # locally, so a server ahead of the client can break (or steer) the sync.
+    image: actualbudget/actual-server:26.9.0@sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /opt/apps/actual/data:/data
+    tmpfs:
+      - /tmp:size=64m
+    ports:
+      - "5006:5006"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      # No curl/wget in the image; node's fetch does the job.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5006/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 120s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
