@@ -35,6 +35,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 from copy import deepcopy
@@ -348,6 +349,149 @@ def clear_one_reply_style() -> None:
     global _one_reply_style
     with _lock:
         _one_reply_style = ""
+
+
+# ---------------------------------------------------------------------------
+# Tone-request detector (deterministic, user message only)
+# ---------------------------------------------------------------------------
+# The model reliably calls voice_style for a tone request that opens a
+# conversation, but NOT for follow-ups: the client history it sees carries only
+# reply text (no tool calls), so after "say it angry" it imitates having done
+# the tone by just repeating the line. This detector reads the latest user
+# message before the model runs and sets the one-reply style itself, mapping
+# onto the same fixed PRESETS. Lasting changes ("from now on") stay with the
+# voice_style tool. Inputs composed by a relay rather than typed/spoken by the
+# user (Telegram's "[I sent you a photo…]" + vision description) are skipped.
+
+# (preset, word pattern) — first match wins, so specific phrases come first.
+_TONE_WORDS: tuple[tuple[str, str], ...] = (
+    ("excited", r"super[- ]?upbeat|super[- ]?happy|excited(?:ly)?|hyped|enthusiastic(?:ally)?"),
+    ("whisper", r"whisper(?:ing|ed|y)?"),
+    ("sarcastic", r"sarcastic(?:ally)?|sarcasm|deadpan"),
+    ("sultry", r"sultry|seductive(?:ly)?|sexy|flirty|flirtatious(?:ly)?"),
+    ("angry", r"angr(?:y|ier|ily)|anger|furious(?:ly)?|mad|pissed(?: off)?|enraged|yell(?:ing)?|shout(?:ing)?"),
+    ("scared", r"scared|frightened|afraid|fearful(?:ly)?|terrified|fear"),
+    ("sad", r"sad(?:ly|der)?|sorrowful(?:ly)?|melancholy|gloomy|depressed|crying|tearful(?:ly)?"),
+    ("soothing", r"soothing(?:ly)?"),
+    ("gentle", r"soft(?:er|ly)?|gentl(?:e|er|y)|tender(?:ly)?"),
+    ("quiet", r"quiet(?:er|ly)?"),
+    ("calm", r"calm(?:er|ly)?|relaxed"),
+    ("firm", r"firm(?:er|ly)?|stern(?:er|ly)?|strict(?:er|ly)?"),
+    ("proud", r"proud(?:ly)?"),
+    ("energetic", r"energetic(?:ally)?"),
+    ("upbeat", r"upbeat|cheerful(?:ly)?|happ(?:y|ier|ily)|peppy|bubbly"),
+    ("warm", r"warm(?:er|ly)?|friendl(?:y|ier)"),
+)
+_TONE_RE = [(preset, re.compile(rf"\b(?:{words})\b")) for preset, words in _TONE_WORDS]
+
+# The message must explicitly ASK for a delivery, and the tone word must be
+# attached to that ask. Describing a feeling or someone else's tone ("I feel like
+# you're mad at me", "her tone was sarcastic", "be happy for me") must NOT
+# match: speaking a reassurance in an angry voice is the worst failure here.
+# Four grammars, each with the tone word in a fixed position:
+#  1. delivery verb + object + filler + TONE: "say it [again but] angry",
+#     "repeat that sadly", "try it angry", "do it again but angry";
+#  2. delivery verb … "like you're / if you were" + TONE:
+#     "say the same thing like you're scared", "how would you say it if you were sad";
+#  3. "in/use/switch to/go to a" TONE "tone|voice": "switch to a sultry tone";
+#  4. imperative be/sound/talk + COMPARATIVE TONE (or "more" TONE, or TONE "for
+#     the next response"): "be softer", "now be firmer", "sound more excited".
+_DELIVERY = r"(?:say|read|repeat|try|do|tell me)"
+_OBJECT = r"(?:it|that|this|those|the same(?: thing)?|the line|that line|something)"
+_DELIVERY_OBJ_RE = re.compile(rf"\b{_DELIVERY} {_OBJECT}(?: again)?\b")
+_AS_IF_RE = re.compile(
+    rf"\b{_DELIVERY}\b[^.!?]{{0,60}}?\b(?:like (?:you'?re|you are|you were|you'?d be)|(?:as )?if you (?:were|are|'re))\b"
+)
+_TONE_PHRASE_RE = re.compile(r"\b(?:in|with|use|using|try|switch to|go to|change to|into) (?:a|an|your)\s+")
+_TONE_NOUN_RE = re.compile(r"[\s-]+(?:tone|voice)\b")
+_IMPERATIVE_RE = re.compile(
+    r"(?:^|[.!?,;]\s*|\b(?:now|okay|ok|please|can you|could you|will you|would you|try to|let'?s|lets|and)\s+)"
+    r"(?:be|sound|talk|speak)\b"
+)
+_NEXT_REPLY_RE = re.compile(r"\s+for (?:the|your|this) next (?:response|reply|answer|one|line)\b")
+# Only filler may sit between a cue and its tone word.
+_FILLER_RE = re.compile(
+    r"(?:\s|,|again\b|but\b|and\b|now\b|in an?\b|a (?:bit|little)\b|even\b"
+    r"|really\b|so\b|very\b|extra\b|all\b|kinda\b|sort of\b)*"
+)
+# "whisper it", "now whisper…", "read it in a whisper" — the verb is the request.
+_WHISPER_CMD_RE = re.compile(
+    r"(?:^|[.!?,;]\s*|\b(?:now|okay|ok|please|can you|could you|and)\s+)whisper\b|\bin a whisper\b"
+)
+# Lasting / negated / reset phrasing is the tool's job (or no change at all);
+# writing tasks ("draft a text in a firm tone") are about the text, not her voice;
+# "be quiet" means stop talking.
+_SKIP_RE = re.compile(
+    r"\b(?:from now on|for the (?:next|rest) (?:hour|hours|day|days|evening|night|week)"
+    r"|for (?:an?|the|\d+) (?:hour|hours|minutes?|day|days|evening|night)"
+    r"|until|always|keep (?:it|talking|being)|anymore"
+    r"|don'?t (?:be|sound|say|talk|use)|do not (?:be|sound|say|talk|use)|stop|quit|no more|less"
+    r"|back to normal|talk normally|normal (?:voice|tone)|regular (?:voice|tone)"
+    r"|draft|write|rewrite|reply to|respond to|e-?mail|letter|message to|text (?:to|him|her|them|my|back)"
+    r"|be quiet|quiet for)\b"
+)
+
+
+def _tone_at(text: str, pos: int) -> tuple[str, int]:
+    """(preset, end) for a tone word starting at pos (after filler), else ("", pos)."""
+    start = _FILLER_RE.match(text, pos).end()
+    for preset, rx in _TONE_RE:
+        m = rx.match(text, start)
+        if m:
+            return preset, m.end()
+    return "", pos
+
+
+def detect_tone_request(user_text: str) -> str:
+    """Preset key for a one-off tone request in the user's own message, else "".
+
+    "say it angry", "say the same thing like you're scared", "switch to a sultry
+    tone", "be softer for the next response" → angry / scared / sultry / gentle.
+    """
+    if not isinstance(user_text, str) or not user_text.strip() or len(user_text) > 500:
+        return ""  # long messages are content (pasted text), not delivery requests
+    text = user_text.lower().replace("’", "'").strip()
+    if text.startswith("[") or _SKIP_RE.search(text):
+        return ""  # "[…]" = composed by a relay (e.g. Telegram photo + vision text)
+    if _WHISPER_CMD_RE.search(text):
+        return "whisper"
+    for rx in (_AS_IF_RE, _DELIVERY_OBJ_RE):  # 2 before 1: "say it if you were sad"
+        for m in rx.finditer(text):
+            tone, _ = _tone_at(text, m.end())
+            if tone:
+                return tone
+    for m in _TONE_PHRASE_RE.finditer(text):  # 3
+        tone, end = _tone_at(text, m.end())  # "a super upbeat tone" -> excited
+        if tone and _TONE_NOUN_RE.match(text, end):
+            return tone
+    for m in _IMPERATIVE_RE.finditer(text):  # 4
+        after = _FILLER_RE.match(text, m.end()).end()
+        more = text.startswith("more ", after)
+        tone, end = _tone_at(text, after + (5 if more else 0))
+        if not tone:
+            continue
+        word = text[after:end].split()[-1]
+        if more or word.endswith(("er", "ier")) or _NEXT_REPLY_RE.match(text, end):
+            return tone
+    return ""
+
+
+def apply_tone_request(user_text: str) -> str:
+    """Detect a tone request and set it as the one-reply style. Returns the key ("" = none).
+
+    Never raises: it runs on every chat turn, ahead of the model.
+    """
+    if not settings.tts_style_enabled:
+        return ""
+    try:
+        style = detect_tone_request(user_text)
+        if style:
+            set_one_reply_style(style)
+            logger.info("[VOICE_STYLE] Tone request detected: style=%s", style)
+        return style
+    except Exception as e:
+        logger.error("[VOICE_STYLE] Tone detection failed: %s", type(e).__name__)
+        return ""
 
 
 def _count(source: str, key: str) -> str:

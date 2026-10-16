@@ -192,10 +192,13 @@ How Jess *sounds* when she speaks (dashboard voice replies, Telegram voice repli
 | Say this | What happens |
 |----------|--------------|
 | "Say it angry" / "Say that like you're scared" / "How would you say it if you were sad?" | Just that one reply in that voice |
+| "Say it again but sadly" / "In a sarcastic tone" / "Be softer" / "Sound more excited" / "Whisper it" | Also just that one reply — works mid-conversation too |
 | "Talk softer from now on" / "Be firmer with me from now on" | Switches style until you reset it |
 | "Talk softer for an hour" | Quiet voice for an hour, then back to automatic |
 | "Back to normal" / "Talk normally again" | Clears it — automatic tone per situation |
 | "How are you set to sound?" | Tells you the current style |
+
+Tip: phrasings that start with "say it…", "in a … tone" or "be …-er" are picked up most reliably; odd wordings ("angry version please") may only change the words, not the voice.
 
 Styles: calm, gentle, soothing, quiet, warm, thoughtful, encouraging, upbeat, proud, energetic, firm, plus acting tones excited, sad, angry, scared, whisper, sultry, sarcastic. An ongoing acting tone only affects chat replies — reminders keep their normal voice. Max 7 days for a timed style. Not applied to Home Assistant voice. Default tone per situation is editable in `/settings → Voice Style`.
 
