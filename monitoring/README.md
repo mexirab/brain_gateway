@@ -23,7 +23,7 @@ docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up
 | Promtail (Jupiter) | - | Log shipper — Jupiter-local containers (Grafana, Prometheus, Loki, Conjure, etc.) |
 | Promtail (Helios) | 9080 (internal only) | Log shipper — Helios Docker containers → Loki on Jupiter via tailnet |
 | Node Exporter | 9100 | System metrics |
-| Blackbox | 9115 | HTTP probes |
+| Blackbox | 9115 (127.0.0.1 only) | HTTP probes |
 
 ## Remote Node Setup
 

@@ -159,8 +159,13 @@ services:
     image: prom/blackbox-exporter:latest@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc
     container_name: blackbox-exporter
     restart: unless-stopped
+    # Loopback only: /probe?target=... is an unauthenticated request proxy to
+    # anything the container can route to (monitoring-net services like
+    # actual-budget, radicale, loki by name, plus LAN/tailnet hosts), so it must
+    # not be LAN-reachable. Prometheus scrapes it as blackbox-exporter:9115;
+    # scripts/reload-monitoring.sh uses localhost:9115.
     ports:
-      - "${MONITORING_BLACKBOX_PORT:-9115}:9115"
+      - "127.0.0.1:${MONITORING_BLACKBOX_PORT:-9115}:9115"
     # Directory mount, not a single-file mount: a file mount is pinned to the
     # inode at container start, so a `git pull` edit to blackbox.yml stays
     # invisible even across /-/reload (bit us 2026-10-15 with http_2xx_http10).
