@@ -3,7 +3,7 @@
 FastAPI servers for Qwen3-TTS and Parakeet STT, running on Helios (10.0.0.195) as systemd services.
 
 **Deployment (as of 2026-09-28):**
-- Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`) on port 8002, GPU1 (RTX PRO 5000 Blackwell, 48GB) next to the code agent. The unit sets `QWEN_TTS_DEVICE=cuda:0`; the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`. Without it TTS lands on GPU0 (RTX 5090), which the Qwen3.8 brain needs to itself.
+- Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`) on port 8002, GPU1 (RTX PRO 5000 Blackwell, 48GB). The unit sets `QWEN_TTS_DEVICE=cuda:0`; the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`. Without it TTS lands on GPU0 (RTX 5090), which the Qwen3.8 brain needs to itself.
 - STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU (source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service`).
 - `parakeet-stt.service` (NeMo, Parakeet v3, GPU1 via `CUDA_VISIBLE_DEVICES=1`) is the **disabled** GPU alternative on the same port/API — it replaced the old Whisper HTTP STT server on 2026-04-26. See `README_PARAKEET.md`.
 

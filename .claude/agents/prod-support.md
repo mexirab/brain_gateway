@@ -16,7 +16,7 @@ Trigger with "prod support", "check logs", "something's broken", "check monitori
 
 | Node | IP (LAN) | Role |
 |------|----------|------|
-| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-27B TURBO Q6_K MTP GGUF on llama.cpp, `llama-server-primary.service`, GPU0 RTX 5090 alone, :8080; `vllm-primary.service` disabled = rollback), TTS (`qwen-tts`, GPU1 RTX PRO 5000, :8002), code agent (`llama-server-coder`, GPU1, :8082), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003) |
+| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-27B TURBO Q6_K MTP GGUF on llama.cpp, `llama-server-primary.service`, GPU0 RTX 5090 alone, :8080; `vllm-primary.service` disabled = rollback), TTS (`qwen-tts`, GPU1 RTX PRO 5000, :8002), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003); code agent `llama-server-coder` (:8082) retired + disabled 2026-10-16 |
 | Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole (idle, no clients — not the LAN resolver), monitoring host (Prometheus, Grafana, Alertmanager, Loki) |
 | Saturn | 10.0.0.58 | Pi-hole secondary (down; not the LAN resolver), backup target. Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
 | Uranus | 10.0.0.173 | Test box (2x RTX 5080), not in the runtime path |
@@ -374,8 +374,8 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 
 ### "Server closet is hot"
 1. Check `curl -s http://localhost:8888/api/temperatures`
-2. If closet > 80F: check which GPU workloads are active on Helios (RTX 5090 primary + RTX PRO 5000 TTS/code agent = major heat)
-3. If closet > 85F: consider stopping the code agent (GPU1) temporarily — the primary model on GPU0 is load-bearing, don't stop that
+2. If closet > 80F: check which GPU workloads are active on Helios (RTX 5090 primary + RTX PRO 5000 TTS = major heat)
+3. If closet > 85F: the code agent is already retired (2026-10-16); GPU1 now only carries TTS. The primary model on GPU0 is load-bearing, don't stop that
 
 ### "Container keeps restarting"
 1. `docker logs brain-orchestrator --tail 100`

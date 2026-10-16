@@ -10,7 +10,7 @@
 #   82e620db8cb83267e9775e5aad3e8d8aa5af7ace825e94c52d3d730eb35af88a  mmproj-F16.gguf
 #
 # Engine: /home/labadmin/llama.cpp-mtp (build 11358, 2026-10-02). The older
-# /home/labadmin/llama.cpp checkout (April 2026) is what llama-server-coder uses;
+# /home/labadmin/llama.cpp checkout (April 2026) is what the retired llama-server-coder uses;
 # it cannot load Qwen3.8 GGUFs and has no --spec-type — do not point this unit at it.
 #
 # Rollback to vLLM NVFP4:

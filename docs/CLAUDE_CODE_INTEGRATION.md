@@ -45,7 +45,9 @@ Example user-facing phrases:
 
 ## Code agent integration
 
-`orchestrator/code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt. This means when Jess delegates a coding task to the local Qwen3-Coder-Next 80B/3B MoE agent (Helios GPU0 + RAM-spilled experts, port 8082), the agent already knows what Claude Code has been working on and won't step on in-flight work.
+> **Status (2026-10-16):** the code agent is retired on the live deployment — `llama-server-coder.service` on Helios is stopped + disabled and `CODE_AGENT_ENABLED=false`, so `code_agent` is not in Jess's tool list. The feature remains in the code for other installs (`CODE_AGENT_ENABLED` + `JESS_ADVANCED`). Restore on Helios with `sudo systemctl enable --now llama-server-coder`.
+
+`orchestrator/code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt. This means when Jess delegates a coding task to the local Qwen3-Coder-Next 80B/3B MoE agent (Helios GPU1 + RAM-spilled experts, port 8082), the agent already knows what Claude Code has been working on and won't step on in-flight work.
 
 The injection happens transparently before every `code_agent` tool call. If no activity is found (e.g., hook not installed and JSONL files empty), the system prompt just omits the section rather than failing.
 
@@ -57,4 +59,4 @@ See [`TECHNICAL_REFERENCE.md`](../TECHNICAL_REFERENCE.md#claude-code-integration
 
 ## Privacy
 
-Everything is local. Claude Code → Jess is a LAN-only HTTP POST to the orchestrator on Helios. Neither the hook nor the tool sends anything to Anthropic or any third party. Session files live on your disk, the rolling buffer lives in your local SQLite, and the `code_agent` runs on your local GPU. This integration was explicitly designed to keep Jess's privacy guarantee intact — see the privacy intent memory for the decision rationale.
+Everything is local. Claude Code → Jess is a LAN-only HTTP POST to the orchestrator on Helios. Neither the hook nor the tool sends anything to Anthropic or any third party. Session files live on your disk, the rolling buffer lives in your local SQLite, and the `code_agent` (when enabled) runs on your local GPU. This integration was explicitly designed to keep Jess's privacy guarantee intact — see the privacy intent memory for the decision rationale.

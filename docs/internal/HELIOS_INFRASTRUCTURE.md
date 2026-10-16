@@ -64,16 +64,20 @@ NVIDIA driver baseline: **580+ required for vLLM 0.19+ on Blackwell** (RTX PRO 5
 
 Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` installer) to `580.126.09` (`nvidia-driver-580-server-open` from Ubuntu noble-security). Method: surgical `.run` uninstall → unhold + purge PPA-held `libnvidia-*-570` packages → `apt install nvidia-driver-580-server-open`. DKMS rebuilt modules for kernel 6.8.0-60-generic.
 
+### Kernel + IOMMU (2026-10-16)
+
+Chipset IOMMU faults killed Helios's USB controller and NIC on 2026-10-16. Fix: `iommu=pt` added to the kernel cmdline in `/etc/default/grub`, and the box now boots kernel 6.8.0-147-generic. Rollback: restore `/etc/default/grub.bak-pre-iommu-pt` + `update-grub`, and/or pick the 6.8.0-60 entry under GRUB "Advanced options".
+
 ## Helios GPU Layout (post llama.cpp cutover, 2026-10-02)
 
 | GPU | Card | VRAM | Tenants |
 |-----|------|------|---------|
 | GPU0 | RTX 5090 | 32 GB | llama.cpp primary only (`llama-server-primary.service`, port 8080, DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF + `mmproj-F16.gguf`, ~30 GB; peak 30.3 GB of 32.6 with a 3024×4032 vision request) |
-| GPU1 | RTX PRO 5000 Blackwell | 48 GB | TTS (`qwen-tts.service`, port 8002, `Qwen3-TTS-1.7B-Base`, voice `jessica`), Coder (`llama-server-coder.service`, port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) |
+| GPU1 | RTX PRO 5000 Blackwell | 48 GB | TTS (`qwen-tts.service`, port 8002, `Qwen3-TTS-1.7B-Base`, voice `jessica`). Coder retired 2026-10-16 (see below) |
 | CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`) |
 
 - **TTS on GPU1 via drop-in** `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28). Before that it silently ran on the 5090: the unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`, despite its Description saying GPU1. Revert: delete the file, `daemon-reload`, `restart qwen-tts`.
-- `llama-server-coder.service`'s Description says GPU0 — wrong; it runs on GPU1.
+- **Coder retired 2026-10-16:** `llama-server-coder.service` (port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) is stopped + disabled. An agentic debugging eval on planted Jess bugs had the primary brain fix 6/6 with exact one-line fixes; the coder fixed 2/3, ran ~51 tok/s (experts on CPU, 32K ctx) and wandered on a symptom-only bug. Unit file and GGUF (`/home/labadmin/.cache/llama.cpp/Qwen3-Coder-Next-UD-Q4_K_XL.gguf`) are still on disk. Restore: `sudo systemctl enable --now llama-server-coder` (and set `CODE_AGENT_ENABLED=true` + `JESS_ADVANCED=true` on Jupiter if the tool should be live). The unit's Description says GPU0 — wrong; it ran on GPU1.
 - `parakeet-stt.service` (NeMo, GPU, v3) is disabled; it is the GPU alternative to `stt-onnx`, same port + API.
 
 ### `llama-server-primary.service` (repo copy: `tts/llama-server-primary.service`) — LIVE since 2026-10-02
@@ -81,7 +85,7 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 The unit's header comments are the authoritative record (weight sha256s, tunables, rollback, sandbox caveats). Summary:
 
 - **Model:** `DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`, Q6_K MTP quant (24 GB) + `mmproj-F16.gguf`, at `/home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/`. Alias `qwen3.8-27b-turbo-q6k` (= `MODEL_NAME`/`FALLBACK_MODEL_NAME`/`VISION_MODEL_NAME` in Jupiter `.env`).
-- **Engine:** llama.cpp `llama-server` build 11358 (2026-10-02) from `/home/labadmin/llama.cpp-mtp/build/bin`. The OLD `/home/labadmin/llama.cpp` checkout (April 2026, build 8932) is what `llama-server-coder.service` uses — it cannot load Qwen3.8 GGUFs and has no `--spec-type`. Two checkouts coexist on purpose; never point this unit at the old one.
+- **Engine:** llama.cpp `llama-server` build 11358 (2026-10-02) from `/home/labadmin/llama.cpp-mtp/build/bin`. The OLD `/home/labadmin/llama.cpp` checkout (April 2026, build 8932) is what the retired `llama-server-coder.service` uses — it cannot load Qwen3.8 GGUFs and has no `--spec-type`. Two checkouts coexist on purpose; never point this unit at the old one.
 
 | Flag | Value | Why |
 |------|-------|-----|

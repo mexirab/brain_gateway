@@ -195,8 +195,8 @@ curl -s http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|re
 # Sandbox score (expect ~3.1)
 ssh labadmin@10.0.0.195 "systemd-analyze security llama-server-primary"
 
-# Coder (Qwen3-Coder-Next 80B/3B MoE) on GPU1
-ssh labadmin@10.0.0.195 "sudo systemctl status llama-server-coder"
+# Coder (Qwen3-Coder-Next 80B/3B MoE, GPU1) — RETIRED 2026-10-16 (stopped + disabled). Restore:
+# ssh labadmin@10.0.0.195 "sudo systemctl enable --now llama-server-coder"
 
 # Rollback to the vLLM NVFP4 brain (2026-09-28 → 2026-10-02), then on Jupiter:
 #   cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator

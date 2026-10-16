@@ -9,7 +9,7 @@ Wyoming bridge need no config changes.
 
 **Expected wins:** ~10× faster (RTFx >2000), lower WER (6.32% vs Whisper
 medium's 7.44%), sub-200ms streaming. Frees real VRAM headroom on Helios GPU1
-(RTX PRO 5000), which is shared with the code agent and TTS.
+(RTX PRO 5000), which is shared with TTS (and, until its 2026-10-16 retirement, the code agent).
 
 **Trade-off:** Parakeet is English-only. ATOM Echo and Open WebUI usage in this
 deployment is English, so this is acceptable.
