@@ -25,7 +25,7 @@ All orchestrator endpoints live on port 8888. Many endpoints require `Authorizat
 | POST | `/api/ha/command` | One guarded HA call (natural-language or structured) |
 | GET | `/api/temperatures` | Temperature sensor readings from HA |
 
-**`GET /api/ha/entities`** → `{total, rooms_available, state_ok, controllable: {domain: [entity]}}`. Only `HA_LISTED_DOMAINS` and entities not denied by `ha_guard` (Helios plug, `HA_TOOL_DENY_ENTITIES`); entities hidden in HA are omitted (listing only — not an access control; chat and `/api/ha/command` can still target them); empty domains omitted; `total` counts only what's shown (vacuum etc. hidden). Raw HA entity count: `/health` → `ha_entities`.
+**`GET /api/ha/entities`** → `{total, rooms_available, state_ok, controllable: {domain: [entity]}}`. Only `HA_LISTED_DOMAINS` and entities not denied by `ha_guard` (Helios plug, `HA_TOOL_DENY_ENTITIES`); entities hidden in HA are omitted (listing only — not an access control; chat and `/api/ha/command` can still target them); device-setting entities ARE listed (the `/home` Device settings card) but only the structured `/api/ha/command` body may change them; empty domains omitted; `total` counts only what's shown (vacuum etc. hidden). Raw HA entity count: `/health` → `ha_entities`.
 
 | Field | Meaning |
 |-------|---------|
@@ -37,7 +37,7 @@ All orchestrator endpoints live on port 8888. Many endpoints require `Authorizat
 | media_player: `volume` (0–1\|null), `media_title` (≤120 chars\|null) | |
 | climate: `current_temperature`, `temperature` (number\|null) | `temperature` = setpoint |
 
-States are at most 3 s old (`ha_client.refresh_entities(max_age_seconds=3)`: single-flight, 10 s timeout, 15 s back-off after a failed fetch — `force=True` bypasses; failures log WARNING `[HA] Entity refresh failed (<ExceptionType>)`). Area/category/hidden come from `orchestrator/ha_registry.py`: HA's WebSocket API (`config/entity_registry/list_for_display`, `config/device_registry/list`, `config/area_registry/list`), cached 600 s, retried no sooner than 60 s after a failure, 8 s timeout, never raises (serves the last good cache). Metric `bgw_ha_registry_fetch_total{result=ok|error}`; failures log WARNING `[HA] Registry fetch failed (<ExceptionType>)`.
+States are at most 3 s old (`ha_client.refresh_entities(max_age_seconds=3)`: single-flight, 10 s timeout, 15 s back-off after a failed fetch — `force=True` bypasses; failures log WARNING `[HA] Entity refresh failed (<ExceptionType>)`). Area/category/hidden come from `orchestrator/ha_registry.py`: HA's WebSocket API (`config/entity_registry/list_for_display`, `config/device_registry/list`, `config/area_registry/list`), cached 600 s, retried no sooner than 60 s after a failure, 8 s timeout, never raises (serves the last good cache). The category is also a guard input: `ensure_fresh()` (called before every tool / NLP call) starts one background single-flight refresh and returns at once when a cache exists, waiting ≤3 s (shielded) only on an empty cache; `cached_meta()` is the sync read. Warmed at startup after the HA entity refresh; a changed registry invalidates the HA tool-schema cache. Metrics `bgw_ha_registry_fetch_total{result=ok|error}`, `bgw_ha_registry_entities` (0 = never read → device-setting checks run on names only); failures log WARNING `[HA] Registry fetch failed (<ExceptionType>)`.
 
 **`POST /api/ha/command`** — exactly one shape:
 
@@ -46,7 +46,7 @@ States are at most 3 s old (`ha_client.refresh_entities(max_age_seconds=3)`: sin
 | `{"command": "turn off the kitchen light"}` (1–500 chars) | Legacy NLP parser (`ha_client.execute_command`, same as fast path). "unlock" / "open the X" are refused. |
 | `{"entity_id": "light.x", "service": "turn_on", "data": {...}}` (`data` optional, ≤32 keys) | Structured call — what the dashboard `/home` controls send. |
 
-Both go through `ha_guard.check_ha_call` (same rules as the `home_assistant` tool, below). Mixed/partial bodies → 422. Responses: success `{ok, action, entity_id, message}`; guard refusal (structured) → 403 `{ok:false, error}`; unknown entity (structured; not in a state list ≤5 s old — HA itself answers 200 for unknown ids) → 404 `{ok:false, error:"Unknown entity"}`; HA unreachable or call failure (structured) → 502 `{ok:false, error:"Home Assistant call failed"}`; NLP-path refusals/failures return 200 with `ok:false` + message. Refusals count `bgw_ha_call_refused_total{path=tool|nlp|api}` and log WARNING `[HA] Legacy command refused: domain.service` / `[HA] API command refused: domain.service|malformed` (never data values).
+Both go through `ha_guard.check_ha_call` (same rules as the `home_assistant` tool, below), except that the structured body passes `allow_device_settings=True` (the `/home` Device settings card); the `command` form does not. Mixed/partial bodies → 422. Responses: success `{ok, action, entity_id, message}`; guard refusal (structured) → 403 `{ok:false, error}`; unknown entity (structured; not in a state list ≤5 s old — HA itself answers 200 for unknown ids) → 404 `{ok:false, error:"Unknown entity"}`; HA unreachable or call failure (structured) → 502 `{ok:false, error:"Home Assistant call failed"}`; NLP-path refusals/failures return 200 with `ok:false` + message. Refusals count `bgw_ha_call_refused_total{path=tool|nlp|api}` and log WARNING `[HA] Legacy command refused: domain.service` / `[HA] API command refused: domain.service|malformed` (never data values).
 
 ### Memory (RAG + MemPalace + Auto-Learn)
 
@@ -455,7 +455,7 @@ No post-terminal-tool round cap (by design): the old `max_rounds = round_num + 2
 {"entity_id": "light.x", "service": "turn_on", "data": {"brightness": 128}}
 ```
 
-**Entity listing (schema description).** `tool_definitions.format_ha_entity_listing` lists every entity in `HA_LISTED_DOMAINS` (`light, switch, fan, climate, cover, scene, lock, media_player`), one line per domain: `light: light.kitchen, light.k1 (Kitchen Pendant), …`. Full entity_ids sorted by id; friendly name only when it adds information (NFKC-normalised, allow-listed characters, 32-char cap — names are device-owner-controlled text in the cache prefix). Depends only on ids + names, never state (prompt-cache prefix stability). Bounded by `HA_LISTING_BUDGET_CHARS = 6000`, shared round-robin across domains; overflow shows `(+N more not listed)`. Denied entities are not listed.
+**Entity listing (schema description).** `tool_definitions.format_ha_entity_listing` lists every entity in `HA_LISTED_DOMAINS` (`light, switch, fan, climate, cover, scene, lock, media_player`), one line per domain: `light: light.kitchen, light.k1 (Kitchen Pendant), …`. Full entity_ids sorted by id; friendly name only when it adds information (NFKC-normalised, allow-listed characters, 32-char cap — names are device-owner-controlled text in the cache prefix). Depends only on ids + names, never state (prompt-cache prefix stability). Bounded by `HA_LISTING_BUDGET_CHARS = 6000`, shared round-robin across domains; overflow shows `(+N more not listed)`. Denied and device-setting entities are not listed.
 
 **Guard (`orchestrator/ha_guard.py` → `check_ha_call`), in order** — shared by `tool_home_assistant`, the legacy NLP path (`ha_client.execute_command`: fast path + `/api/ha/command {"command"}`) and structured `/api/ha/command`. Internal callers (reminders, focus audio, routines, wind-down) call `ha_client.call_service` directly and are not guarded (operator-config targets). Every refusal ends "Nothing was changed.":
 
@@ -464,9 +464,10 @@ No post-terminal-tool round cap (by design): the old `max_rounds = round_num + 2
 | `entity_id` matches `[a-z_]+\.[a-z0-9_]{1,128}`, `service` matches `[a-z_]{1,64}`, `data` is an object | format error |
 | Domain in `HA_LISTED_DOMAINS` (alarm etc. not callable) | "the X domain can't be controlled from chat" |
 | Not denied: `HA_TOOL_DENY_ENTITIES` globs + the Helios plug object id in any domain (power goes through `helios_power` only) | "X can't be controlled from chat" |
+| Not a device setting (skipped only for structured `/api/ha/command`, `allow_device_settings=True`): source `registry` = cached entity_category `config`/`diagnostic`; `name` = object-id word naming a camera/motion/privacy/detection/recording/LED/IR/notification-style setting (any entity — many camera integrations don't categorise their switches; `led`/`indicator` ignored for `light`, `record` for `media_player`); `member` = scene/light group whose state `entity_id` members (one level) include one | "X is a device setting and can't be changed from chat"; metric `bgw_ha_device_setting_refused_total{path=tool\|nlp,source}` |
 | Service in `HA_ALLOWED_SERVICES[domain]` | cover/lock: "needs a confirmation step chat doesn't have yet"; others: "isn't available from chat" |
 | `media_player.play_media` / `join` data (see below) | "can only play the media library … not an arbitrary URL" / "join can only group media players that chat may control" |
-| Entity exists in the cache (tool only); if not, TTL refresh capped at 3 s | unknown → up to 5 "Closest matches: …" (listed domains, not denied), metric `bgw_ha_unknown_entity_total`; HA unreachable → "couldn't reach Home Assistant" |
+| Entity exists in the cache (tool only); if not, TTL refresh capped at 3 s | unknown → up to 5 "Closest matches: …" (listed domains, not denied, not device settings), metric `bgw_ha_unknown_entity_total`; HA unreachable → "couldn't reach Home Assistant" |
 
 Allowed services: light/switch `turn_on|turn_off|toggle`; fan adds `set_percentage|oscillate|set_preset_mode|set_direction`; climate `set_temperature|set_hvac_mode|set_fan_mode|set_preset_mode|turn_on|turn_off`; scene `turn_on`; media_player play/pause/stop/next/previous/volume/mute/on/off/`select_source|shuffle_set|repeat_set|join|unjoin|play_media`; cover `close_cover|stop_cover|close_cover_tilt|stop_cover_tilt` (no open); lock `lock` (no unlock).
 
@@ -475,6 +476,8 @@ Re-targeting keys are stripped from `data` before the call: `entity_id, area_id,
 Media limits: `play_media` keeps only `media_content_id`, `media_content_type`, `announce`, `enqueue` (nested `media` / `extra` dropped); `media_content_id` (≤2048, no whitespace, no `..`) must be `media-source://media_source/…` or `media-source://radio_browser/…` (not `tts`/camera), an exact `FOCUS_AUDIO_*_URL` stream, or `{ORCHESTRATOR_URL}/api/audio/…`. Chat can't play arbitrary URLs — focus audio goes through `start_focus`. `join` keeps only `group_members`: 1–16 non-denied `media_player.*` ids.
 
 Refusals: metric `bgw_ha_call_refused_total{path}` (`tool`, `nlp`, `api`).
+
+Device-setting threat: prompt-injected content (email, web page) steering the model to disable a camera or its motion detection. Known limits: member check is one level deep; name match can over-refuse (e.g. a camera floodlight — the dashboard still works). Add camera-touching scenes, or uncategorised camera switches with unusual names, to `HA_TOOL_DENY_ENTITIES` as a backstop.
 
 ### search_memory
 ```json
