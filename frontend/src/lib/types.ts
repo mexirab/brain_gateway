@@ -148,6 +148,8 @@ export interface TemperatureReading {
 export interface TemperaturesResponse {
   sensors: Record<string, TemperatureReading>;
   delta: number | null;
+  /** Closet alert bands from the user profile (absent on older orchestrators). */
+  thresholds?: { warning: number; critical: number };
   estimated_monthly_cooling_cost: number | null;
   timestamp: string;
 }

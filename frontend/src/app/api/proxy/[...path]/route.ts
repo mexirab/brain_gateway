@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { COOKIE_NAME, isValidDashboardSession } from '@/lib/dashboard-auth';
 import { asAttachment } from '@/lib/content-disposition';
 import { buildUpstreamUrl } from '@/lib/proxy-url';
+import { upstreamTimeoutMs } from '@/lib/proxy-timeout';
 import { isCrossSiteRequest } from '@/lib/same-origin';
 import { logEvent, routeLabel } from '@/lib/server-log';
 
@@ -117,10 +118,30 @@ async function forward(request: NextRequest, { params }: Ctx, method: Method): P
       : Buffer.from(await request.arrayBuffer());
   }
 
+  // Abort on a slow start (see proxy-timeout.ts) or when the browser goes away
+  // (which also cancels an in-flight SSE body upstream).
+  const controller = new AbortController();
+  const timeoutMs = upstreamTimeoutMs(path);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const clientSignal = request.signal;
+  if (clientSignal?.aborted) controller.abort();
+  else clientSignal?.addEventListener('abort', () => controller.abort(), { once: true });
+
   let res: Response;
   try {
-    res = await fetch(url.toString(), { method, headers, body, redirect: 'manual' });
+    res = await fetch(url.toString(), { method, headers, body, redirect: 'manual', signal: controller.signal });
   } catch (e) {
+    if (timedOut) {
+      logEvent('warning', '[PROXY] Orchestrator timed out', { route, method, timeout_ms: timeoutMs });
+      return jsonError('Orchestrator timed out', 504);
+    }
+    // The browser left (closed tab, navigated away): nobody to answer, and not
+    // an outage, so no warning in the logs.
+    if (clientSignal?.aborted) return new Response(null, { status: 499 });
     const code = (e as { cause?: { code?: unknown } })?.cause?.code;
     logEvent('warning', '[PROXY] Orchestrator unreachable', {
       route,
@@ -128,6 +149,8 @@ async function forward(request: NextRequest, { params }: Ctx, method: Method): P
       code: typeof code === 'string' ? code : 'unknown',
     });
     return jsonError('Orchestrator unreachable', 502);
+  } finally {
+    clearTimeout(timer);
   }
   return relay(res, route, method);
 }

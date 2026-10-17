@@ -44,6 +44,10 @@ const CATEGORY_DESCRIPTIONS: Record<string, { label: string; hint: string }> = {
     label: 'Morning briefing',
     hint: 'The 7am wake-up summary. Volume floor (MORNING_BRIEFING_MIN_VOLUME) still applies.',
   },
+  temperature: {
+    label: 'Server closet temperature',
+    hint: 'Closet too-hot warnings. The critical warning speaks even during quiet hours.',
+  },
   default: {
     label: 'Default (any other)',
     hint: 'Catch-all for any announcement type not listed above. Optional.',

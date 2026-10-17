@@ -12,6 +12,7 @@ Domain-specific routes are split into separate modules and included as sub-route
 
 import contextlib
 import logging
+import math
 import os
 import re
 from datetime import datetime, timedelta
@@ -887,8 +888,17 @@ async def announce_tts(body: AnnounceRequest):
         return JSONResponse({"ok": False, "error": "TTS announcement failed"}, status_code=500)
 
 
+def _numeric_state(state: Any) -> Optional[float]:
+    """An HA sensor state as a finite float, or None (unknown, unavailable, text, NaN)."""
+    try:
+        value = float(state)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 @router.get("/api/temperatures")
-async def get_temperatures():
+async def get_temperatures() -> dict:
     """Get temperature sensor readings from Home Assistant for dashboard widget."""
     sensors = {
         "closet": profile.closet_temp_sensor,
@@ -904,8 +914,12 @@ async def get_temperatures():
             )
             if resp.status_code == 200:
                 data = resp.json()
+                value = _numeric_state(data.get("state"))
+                if value is None:
+                    readings[label] = {"temperature": None, "error": "No reading"}
+                    continue
                 readings[label] = {
-                    "temperature": float(data["state"]),
+                    "temperature": value,
                     "unit": data.get("attributes", {}).get("unit_of_measurement", "°F"),
                     "friendly_name": data.get("attributes", {}).get("friendly_name", label),
                 }
@@ -918,7 +932,7 @@ async def get_temperatures():
     # Calculate delta if both readings available
     closet_temp = readings.get("closet", {}).get("temperature")
     ambient_temp = readings.get("ambient", {}).get("temperature")
-    delta = round(closet_temp - ambient_temp, 1) if closet_temp and ambient_temp else None
+    delta = round(closet_temp - ambient_temp, 1) if closet_temp is not None and ambient_temp is not None else None
 
     # Estimate monthly AC cost from server heat:
     # ~300W server heat → AC needs ~100W extra to remove it (COP ~3)
@@ -926,9 +940,14 @@ async def get_temperatures():
     # monthly_cost = (delta/5) * 0.1kW * 24h * 30d * $0.11/kWh
     monthly_cooling_cost = round((delta / 5.0) * 0.1 * 24 * 30 * 0.11, 2) if delta and delta > 0 else None
 
+    # Same bands the closet announcements use (jobs_monitoring), so the card's
+    # colours match what Jess actually warns about.
+    warning, critical = profile.temp_warning, profile.temp_critical
     return {
+        "ok": True,
         "sensors": readings,
         "delta": delta,
+        "thresholds": {"warning": warning, "critical": max(warning, critical)},
         "estimated_monthly_cooling_cost": monthly_cooling_cost,
         "timestamp": datetime.now().isoformat(),
     }

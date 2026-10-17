@@ -249,8 +249,12 @@ services:
       - ./blackbox:/etc/blackbox_exporter:ro
     command:
       - '--config.file=/etc/blackbox_exporter/blackbox.yml'
+    # frontend-probe-net: probes the dashboard as brain-frontend:3001 (it may
+    # publish on loopback only). Deliberately NOT gateway-net: see the network
+    # comment in the main docker-compose.yml.
     networks:
       - monitoring-net
+      - frontend-probe-net
 
   # NODE EXPORTER runs on host (systemd), not in container
 
@@ -263,6 +267,10 @@ networks:
   # for this project needs `--env-file ../.env` (GF_SECURITY_ADMIN_PASSWORD is required).
   gateway-net:
     name: gateway_nerves_gateway-net
+    external: true
+  # Created by the main compose project (brain-frontend + blackbox only).
+  frontend-probe-net:
+    name: gateway_nerves_frontend-probe-net
     external: true
   # loki-push-gw ↔ loki only (see loki-push-gw above).
   loki-push-net:

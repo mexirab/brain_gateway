@@ -578,8 +578,12 @@ services:
     container_name: brain-frontend
     restart: unless-stopped
     logging: *default-logging
+    # FRONTEND_BIND_ADDR: LAN (0.0.0.0) by default so a fresh install's
+    # http://<lan-ip>:3001 works. Set 127.0.0.1 when the dashboard is served
+    # through Tailscale Serve HTTPS (Jupiter does). The blackbox probe reaches
+    # it as brain-frontend:3001 over frontend-probe-net, not this published port.
     ports:
-      - "${SERVICE_FRONTEND_PORT:-3001}:3001"
+      - "${FRONTEND_BIND_ADDR:-0.0.0.0}:${SERVICE_FRONTEND_PORT:-3001}:3001"
     environment:
       # Client code hits same-origin /api/proxy/* which the Next.js server forwards here.
       - ORCHESTRATOR_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}
@@ -589,6 +593,7 @@ services:
       - orchestrator
     networks:
       - gateway-net
+      - frontend-probe-net
 
   # NOTE: An nginx static file server ("model-server") used to run here to host
   # the custom "Hey Jess" wake word (hey_jess.tflite + hey_jess.json) for the
@@ -651,6 +656,14 @@ services:
 
 networks:
   gateway-net:
+    driver: bridge
+  # Only brain-frontend + the monitoring stack's blackbox-exporter, so the
+  # unauthenticated /probe proxy can check the dashboard without joining
+  # gateway-net (which would let searxng/redis/orchestrator drive /probe, and
+  # through it Prometheus' lifecycle API). Fixed name: monitoring joins it as
+  # external. Absent on installs without the monitoring stack — harmless.
+  frontend-probe-net:
+    name: gateway_nerves_frontend-probe-net
     driver: bridge
 
 volumes:

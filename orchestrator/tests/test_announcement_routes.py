@@ -316,3 +316,33 @@ async def test_discover_swallows_exceptions(monkeypatch):
 
     # Swallows exception, returns empty list
     assert await discover_ha_speakers() == []
+
+
+def test_unset_temperature_follows_panel_reminder_route(_isolate_announcement_routes, stub_legacy_env):
+    """`temperature` was added after the panel shipped: left unset it must keep
+    following the panel's reminder route, not jump to the legacy env speaker."""
+    from orchestrator.announcement_routes import route_for, save_routes
+
+    save_routes({"routes": {"reminder": "media_player.reminder_target"}})
+    assert route_for("temperature") == "media_player.reminder_target"
+
+
+def test_unset_temperature_follows_panel_default_route(_isolate_announcement_routes, stub_legacy_env):
+    from orchestrator.announcement_routes import route_for, save_routes
+
+    save_routes({"routes": {"default": "media_player.default_target", "reminder": "media_player.reminder_target"}})
+    assert route_for("temperature") == "media_player.default_target"
+
+
+def test_temperature_route_can_be_set_on_its_own(_isolate_announcement_routes, stub_legacy_env):
+    from orchestrator.announcement_routes import route_for, save_routes
+
+    save_routes({"routes": {"reminder": "media_player.reminder_target", "temperature": "media_player.closet_target"}})
+    assert route_for("temperature") == "media_player.closet_target"
+    assert route_for("reminder") == "media_player.reminder_target"
+
+
+def test_temperature_with_nothing_configured_uses_legacy_reminder(stub_legacy_env):
+    from orchestrator.announcement_routes import route_for
+
+    assert route_for("temperature") == stub_legacy_env["reminder"]

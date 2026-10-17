@@ -48,7 +48,7 @@ Voice clone (personal reference on the live deployment; configurable elsewhere) 
 ssh labadmin@10.0.0.195 'sudo systemctl restart qwen-tts'
 ```
 
-TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Without an explicit `speaker=`, the target comes from the `/settings` Speakers panel (`announcement_routes.route_for(type)`), else the legacy `REMINDER_SPEAKER` / `MORNING_BRIEFING_SPEAKER` / `FOCUS_AUDIO_PLAYER` env vars (comma-separated = multi-room broadcast).
+TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Without an explicit `speaker=`, the target comes from the `/settings` Speakers panel (`announcement_routes.route_for(type)`), else the legacy `REMINDER_SPEAKER` / `MORNING_BRIEFING_SPEAKER` / `FOCUS_AUDIO_PLAYER` env vars (comma-separated = multi-room broadcast). Categories: `selfcare`, `reminder`, `calendar`, `ambient`, `progress`, `focus`, `briefing`, `temperature` (closet heat alerts; panel row "Server closet temperature"). `temperature` was added after the panel shipped: left unset it follows the panel `default` → `reminder` route (then legacy `REMINDER_SPEAKER`), as before it had a row.
 
 ### Speaker liveness (dead-speaker skip + fallback)
 
