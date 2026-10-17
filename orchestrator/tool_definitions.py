@@ -35,9 +35,10 @@ def ha_tool_denied(entity_id: str) -> bool:
     """Entities the chat home_assistant tool must never touch (and never list):
     HA_TOOL_DENY_ENTITIES globs plus the Helios plug, which is controlled only
     through the gated helios_power tool."""
-    patterns = [p.strip() for p in (shared.HA_TOOL_DENY_ENTITIES or "").split(",") if p.strip()]
+    patterns = [p.strip().lower() for p in (shared.HA_TOOL_DENY_ENTITIES or "").split(",") if p.strip()]
     if shared.HELIOS_PLUG_ENTITY:
-        patterns.append(shared.HELIOS_PLUG_ENTITY)
+        # Any domain: a switch_as_x / group wrapper keeps the object id.
+        patterns.append("*." + shared.HELIOS_PLUG_ENTITY.split(".", 1)[-1])
     return any(fnmatch.fnmatchcase(entity_id, p) for p in patterns)
 
 
@@ -139,7 +140,8 @@ SERVICES:
 - light: turn_on (brightness 0-255, rgb_color [R,G,B]), turn_off, toggle
 - switch/fan: turn_on, turn_off, toggle
 - climate: set_temperature (temperature: int)
-- cover: open_cover, close_cover
+- cover: close_cover, stop_cover (opening needs a confirmation step chat doesn't have)
+- lock: lock (unlocking needs a confirmation step chat doesn't have)
 - scene: turn_on
 - media_player: play_media (media_content_id: URL, media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
 
