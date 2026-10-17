@@ -32,7 +32,7 @@ route:
     # HeliosPoweredButUnreachable pages because NodeDown excludes the
     # power-tiered Helios; it is the plug-aware "Helios is hung" signal.
     - matchers:
-        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|HeliosPoweredButUnreachable"
+        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
@@ -40,7 +40,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|EmbeddingErrors|AutoLearnFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a

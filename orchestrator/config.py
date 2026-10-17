@@ -253,10 +253,6 @@ class Settings(BaseSettings):
     home_address: str = ""
     travel_time_buffer: int = 10
 
-    # -- Temperature monitoring --------------------------------------------------
-    closet_temp_warning: float = 85.0
-    closet_temp_critical: float = 95.0
-
     # -- Finance -----------------------------------------------------------------
     finance_db_path: str = "/app/data/finance.db"
     # Actual Budget (self-hosted, https://actualbudget.org) — replaced YNAB in

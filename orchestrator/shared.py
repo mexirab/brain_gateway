@@ -279,8 +279,6 @@ WIND_DOWN_SHORT_NIGHT_HOURS = settings.wind_down_short_night_hours
 # ---------------------------------------------------------------------------
 # Temperature monitoring
 # ---------------------------------------------------------------------------
-CLOSET_TEMP_WARNING = settings.closet_temp_warning
-CLOSET_TEMP_CRITICAL = settings.closet_temp_critical
 
 # ---------------------------------------------------------------------------
 # Email-to-calendar config

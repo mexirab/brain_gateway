@@ -157,10 +157,10 @@ class TestNotificationTracking:
     def test_clear_by_prefix(self, tmp_db):
         from orchestrator import state_store
 
-        state_store.mark_notified("temp:closet_80")
-        state_store.mark_notified("temp:closet_85")
+        state_store.mark_notified("temp:closet_warning")
+        state_store.mark_notified("temp:closet_critical")
         state_store.mark_notified("cal:event1")
         count = state_store.clear_notifications_by_prefix("temp:")
         assert count == 2
-        assert not state_store.is_notified("temp:closet_80")
+        assert not state_store.is_notified("temp:closet_warning")
         assert state_store.is_notified("cal:event1")

@@ -21,6 +21,7 @@ from ..panels import (
     GREEN_RED_BINARY,
     GREEN_YELLOW_RED,
     LATENCY_THRESHOLDS_S,
+    CLOSET_TEMP_THRESHOLDS,
     TEMP_THRESHOLDS,
     logs,
     stat,
@@ -102,7 +103,7 @@ def build() -> dict:
             'bgw_temperature_fahrenheit{location="closet"}',
             unit="fahrenheit",
             decimals=1,
-            thresholds=TEMP_THRESHOLDS,
+            thresholds=CLOSET_TEMP_THRESHOLDS,
             color_mode="background",
         ),
         stat(

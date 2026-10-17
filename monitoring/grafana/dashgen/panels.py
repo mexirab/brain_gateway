@@ -325,6 +325,9 @@ def row(title: str, collapsed: bool = False) -> dict:
 GREEN_YELLOW_RED = [(None, "green"), (5, "yellow"), (20, "red")]
 GREEN_RED_BINARY = [(None, "red"), (1, "green")]  # for up/down (0=down, 1=up)
 TEMP_THRESHOLDS = [(None, "green"), (75, "yellow"), (80, "orange"), (85, "red")]
+# Server closet: it normally runs in the 80s. Matches the live profile
+# thresholds (sensors.temperature.warning 90 / critical 95; re-arm below 87).
+CLOSET_TEMP_THRESHOLDS = [(None, "green"), (87, "yellow"), (90, "orange"), (95, "red")]
 LATENCY_THRESHOLDS_S = [(None, "green"), (1, "yellow"), (5, "orange"), (15, "red")]
 # Voice-pipeline specific: green at/under current p50 target (13s), yellow
 # when p95 slips, orange past prior floor (17s), red past the old 22s regime.
