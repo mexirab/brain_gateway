@@ -101,31 +101,43 @@ scrape_configs:
           expression: 'Stream TTS failed for sentence'
       - drop:
           longer_than: 2048
-      # A UPS driver that loses its USB link (2026-10-16: the chipset USB
-      # controller died) logs ~1800 warnings an hour. Cap it so a burst can't
-      # crowd everything else out of the self-audit's 5000-line window.
-      - match:
-          selector: '{service=~"nut-.*"}'
-          stages:
-            - limit:
-                rate: 0.05
-                burst: 20
-                drop: true
+      # No rate limit on the UPS units. A UPS driver that loses its USB link
+      # (2026-10-16: the chipset USB controller died) logs ~1800 warnings an
+      # hour — noisy, but exactly the evidence you want. A promtail `limit`
+      # stage here dropped every nut-* line during the startup backfill
+      # (2026-10-17). Open gap: a flap can fill the self-audit's single
+      # 5000-line Loki window in ~3 h and push older errors out of the audit;
+      # not handled yet — follow-up is to query Helios / nut-* separately in
+      # orchestrator/jobs_self_audit.py. (A `limit` with drop: false is not the
+      # fix: it backpressures the whole pipeline.)
       # The model units write to stdout, which journald stores at priority 6
       # (info) whatever the line says — so their own errors would arrive as
       # level="info" and the self-audit (level=~"error|warning|...") would skip
       # them. Re-derive the level from each format: llama.cpp prefixes
       # "<ts> E|W ", Python logging "[ERROR]"/"[WARNING]", uvicorn "ERROR:".
+      # No backslashes in these selectors: -config.expand-env collapses "\\"
+      # to "\" before LogQL parses them ("\S" then fails as an invalid escape
+      # and promtail won't start). Bracket classes ([^ ], [[], []]) instead.
       - match:
-          selector: '{service=~"llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx"} |~ "^\\S+ E |\\[(ERROR|CRITICAL)\\]|^(ERROR|CRITICAL):|^Traceback "'
+          selector: '{service=~"llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx"} |~ "^[^ ]+ E |[[](ERROR|CRITICAL)[]]|^(ERROR|CRITICAL):|^Traceback "'
           stages:
             - static_labels:
                 level: error
       # llama.cpp prints six fixed W notices on every start (no API key, the
-      # Qwen-VL image-token hint, reasoning preserved, future port change) —
-      # left at info so each wake doesn't hand the self-audit new "warnings".
+      # Qwen-VL image-token hint, reasoning preserved, future port change), and
+      # two routine prompt-cache notices in normal use (evicting the oldest cache
+      # entry, non-consecutive token position after cache reuse) — left at info
+      # so each wake doesn't hand the self-audit new "warnings".
       - match:
-          selector: '{service=~"llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx"} |~ "^\\S+ W |\\[WARNING\\]|^WARNING:" !~ "no API key is set|Qwen-VL models require|image-min-tokens|issues/16842|preserving reasoning|default port will be changed"'
+          selector: '{service=~"llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx"} |~ "^[^ ]+ W |[[]WARNING[]]|^WARNING:" !~ "no API key is set|Qwen-VL models require|image-min-tokens|issues/16842|preserving reasoning|default port will be changed|making room for prompt cache entry|non-consecutive token position"'
+          stages:
+            - static_labels:
+                level: warning
+      # upsmon logs "Communications with UPS … lost" / "Data stale" / "on
+      # battery" at info (stdout); they are the UPS-side evidence of a USB or
+      # power problem, so surface them as warnings for the self-audit.
+      - match:
+          selector: '{service="nut-monitor"} |~ "Communications with UPS .* lost|Data stale|on battery"'
           stages:
             - static_labels:
                 level: warning
