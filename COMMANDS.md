@@ -56,8 +56,10 @@ Full deploy + validation procedure (for a test box): `docs/MODEL_LAYER_BOOT_TEST
 ### Test HA command (structured)
 ```bash
 curl -X POST http://localhost:8888/api/ha/command \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
   -d '{"entity_id": "light.living_room", "service": "turn_on", "data": {"brightness": 128}}'
+# or natural language: -d '{"command": "turn off the living room light"}'
+# Same guard as the chat tool (ha_guard.py): refusal → 403, HA failure → 502
 ```
 
 ### Test full orchestrator flow
@@ -67,9 +69,9 @@ curl -s http://localhost:8888/v1/chat/completions \
   -d '{"model": "brain", "messages": [{"role": "user", "content": "Turn on bedroom lights and set to blue at 50%"}]}' | jq .
 ```
 
-### List HA entities available to the primary model
+### List HA entities chat/dashboard may control (listed domains, deny list applied)
 ```bash
-curl http://localhost:8888/api/ha/entities | jq .
+curl -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/ha/entities | jq .
 ```
 
 ---

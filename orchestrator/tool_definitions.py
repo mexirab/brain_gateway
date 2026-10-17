@@ -5,7 +5,6 @@ Contains all tool JSON schemas for the unified model,
 plus the dynamic HA tool builder.
 """
 
-import fnmatch
 import logging
 import re
 import time
@@ -13,6 +12,7 @@ import unicodedata
 from typing import Any, Dict, List
 
 from orchestrator import shared
+from orchestrator.ha_guard import HA_LISTED_DOMAINS, ha_tool_denied
 from orchestrator.ha_integration import Entity
 from orchestrator.shared import _HA_TOOL_CACHE_TTL, ha_client
 from orchestrator.voice_style import PRESETS as VOICE_PRESETS
@@ -20,8 +20,6 @@ from orchestrator.voice_style import PRESETS as VOICE_PRESETS
 logger = logging.getLogger(__name__)
 
 
-# Domains listed in the home_assistant tool schema, in listing order.
-HA_LISTED_DOMAINS = ("light", "switch", "fan", "climate", "cover", "scene", "lock", "media_player")
 # Character budget for the entity listing. The tool schemas are the bulk of the
 # prompt (and part of the llama.cpp prompt-cache prefix), so the listing is
 # bounded; ~156 entities fit in ~5.4k chars today. Over budget, every domain
@@ -29,17 +27,6 @@ HA_LISTED_DOMAINS = ("light", "switch", "fan", "climate", "cover", "scene", "loc
 # suggestions in tool_handlers.tool_home_assistant.
 HA_LISTING_BUDGET_CHARS = 6000
 _HA_NAME_MAX = 32
-
-
-def ha_tool_denied(entity_id: str) -> bool:
-    """Entities the chat home_assistant tool must never touch (and never list):
-    HA_TOOL_DENY_ENTITIES globs plus the Helios plug, which is controlled only
-    through the gated helios_power tool."""
-    patterns = [p.strip().lower() for p in (shared.HA_TOOL_DENY_ENTITIES or "").split(",") if p.strip()]
-    if shared.HELIOS_PLUG_ENTITY:
-        # Any domain: a switch_as_x / group wrapper keeps the object id.
-        patterns.append("*." + shared.HELIOS_PLUG_ENTITY.split(".", 1)[-1])
-    return any(fnmatch.fnmatchcase(entity_id, p) for p in patterns)
 
 
 def _ha_norm(text: str) -> str:
@@ -152,7 +139,7 @@ SERVICES:
 - cover: close_cover, stop_cover (opening needs a confirmation step chat doesn't have)
 - lock: lock (unlocking needs a confirmation step chat doesn't have)
 - scene: turn_on
-- media_player: play_media (media_content_id: URL, media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
+- media_player: play_media (media_content_id: media-source://media_source/... or media-source://radio_browser/..., media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
 
 COLORS: rgb_color as [R,G,B]. BRIGHTNESS: 0-255 (50%=128).""",
             "parameters": {

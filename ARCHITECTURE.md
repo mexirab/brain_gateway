@@ -272,7 +272,7 @@ Grafana ← Prometheus ← node_exporter (all nodes)
 |-------|-----|
 | 400 from Nemotron | Check `tool_choice: "none"` in call_model() |
 | Tool loops forever | Check `<tool_response>` wrapper + "Do NOT call more tools" |
-| HA commands fail | `curl localhost:8888/api/ha/entities`, check logs |
+| HA commands fail | `curl localhost:8888/api/ha/entities` (only allowed, non-denied entities), check logs for `[HA] … refused` |
 | RAG empty | `curl localhost:8888/health`, re-run ingest_rag.py |
 | Helios offline | Auto-starts on demand, or `./scripts/start-helios.sh` |
 | Calendar not configured | Check `/health` → `calendar.configured`, re-run google_setup.py |

@@ -1388,3 +1388,14 @@ HA_UNKNOWN_ENTITY = Counter(
     "bgw_ha_unknown_entity_total",
     "home_assistant tool calls refused because the entity_id does not exist (closest matches returned)",
 )
+# Steerable HA calls refused by ha_guard.check_ha_call (domain, deny list,
+# service allow-list, media args). path: tool (chat home_assistant tool),
+# nlp (ha_client.execute_command — fast path + /api/ha/command text),
+# api (structured /api/ha/command body).
+HA_CALL_REFUSED = Counter(
+    "bgw_ha_call_refused_total",
+    "Home Assistant service calls refused by the shared guard",
+    ["path"],
+)
+for _p in ("tool", "nlp", "api"):
+    HA_CALL_REFUSED.labels(path=_p)

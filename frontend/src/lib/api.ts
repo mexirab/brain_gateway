@@ -70,7 +70,7 @@ export const api = {
     }),
   entities: () => fetcher<HAEntitiesResponse>('/api/ha/entities'),
   haCommand: (entityId: string, service: string, data?: Record<string, unknown>) =>
-    fetcher<{ success: boolean }>('/api/ha/command', {
+    fetcher<{ ok: boolean }>('/api/ha/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entity_id: entityId, service, data }),
