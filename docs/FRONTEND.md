@@ -10,7 +10,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Dashboard | `/dashboard` | Private. Calendar, reminders, selfcare today, focus timer, system health, temperature monitoring, finance snapshot |
 | Calendar | `/calendar` | Private. Mon–Sun week agenda of the merged calendar (personal CalDAV + work Exchange, tagged "Work") from `GET /api/calendar/range`. Prev/next week + "This week"; today highlighted and scrolled into view, today's finished events dimmed; banner when a source is unavailable; note when the browser timezone differs from Jess's; "Manage calendars" link to `CALENDAR_WEB_URL`. Never shows another week's data under a week's headings. Refreshes every 5 min. Helpers `lib/calendar-week.ts`, hook `useCalendarRange` (`lib/hooks.ts`) |
 | Chat | `/chat` | Private. Streaming SSE chat with Jess, routing badges, mic input, spoken replies (speaker toggle, Stop pill, per-message replay), hands-free call mode (AudioLines button), optional 3D avatar (UserRound button; see Chat Avatar below). See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies + Hands-free call mode |
-| Home | `/home` | Private. HA entity controls grouped by domain (lights, switches, scenes). Lists `GET /api/ha/entities` (allowed, non-denied only); controls send structured `POST /api/ha/command`, held to the chat tool guard (`ha_guard.py`) |
+| Home | `/home` | Private. HA controls grouped by room or by type — see Home Controls below |
 | Finance | `/finance` | Private. Gamified budget tracker with read-only Actual Budget sync, XP/levels, quest board |
 | Workouts | `/workouts` | Private. Today's gym plan ("Where are you training?" location picker + "Next in your program" line before generating, flagging an upcoming deload week; per-exercise progression note under the name; exercise names open a how-to modal with photos + steps; "· deload week" in the header; add-exercise picker limited to the location's gear) with inline weight/reps inputs per set, "Ask Jess" button, add/remove exercises on today's plan, delete today's workout or any past workout from history, session history |
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
@@ -80,6 +80,28 @@ Optional 3D talking avatar on `/chat`. Off by default.
 - The `.vrm` is baked into the local frontend image — don't push that image to a registry.
 - Not backed up by anything; keep your own copy of the source/export.
 - Verified in headless Chromium only, not yet on a real iPhone.
+
+## Home Controls (`/home`)
+
+Reads `GET /api/ha/entities` (allowed, non-denied, not hidden in HA); every control sends structured `POST /api/ha/command` `{entity_id, service, data}`, held to the chat tool guard (`ha_guard.py`). Shapes: `TECHNICAL_REFERENCE.md` → Home Assistant.
+
+| Area | Behavior |
+|------|----------|
+| Grouping | Segmented control: **Rooms** (one section per HA area; entities without an area under "Other") or **Type** (per domain). Rooms falls back to Type when `rooms_available` is false. Rooms collapsed by default; open sections + mode persisted in localStorage `home.open` / `home.mode` |
+| Lights | Tiles: tap toggles; brightness slider (`turn_on` + `brightness_pct`, debounced) when `supports_brightness`; room-name prefix stripped from the label. Per-room "Lights off" |
+| Scenes | One-tap chips (`scene.turn_on`); first 6 shown, then "N more" |
+| Media | Play/pause only when playing/paused; power on/off; volume slider (`volume_set`, debounced); current title |
+| Switches / fans | Toggle rows |
+| Climate | Current temp + setpoint with −/+ (`set_temperature`) |
+| Covers / locks | Read-only (open/unlock refused by the guard anyway) |
+| Device settings | HA `config`/`diagnostic`-category entities, collapsed card |
+| Unavailable | `unavailable`/`unknown` entities, collapsed card (never-activated scenes, state `unknown`, stay with the scenes) |
+
+- Optimistic updates with rollback on failure; plain-language per-control errors mapped from 401 / 403 (guard refusal) / 404 (unknown entity) / 502 (HA unreachable).
+- Reconcile fetch 1.5 s after a command; 20 s poll while the tab is visible.
+- `state_ok: false` or a failed fetch → banner "Can't reach Home Assistant — showing last known state".
+
+Files: `frontend/src/app/(private)/home/page.tsx`, `frontend/src/components/home/{HomeContext,SectionCard,LightTile,SceneChips,MediaRow,ToggleRow,ClimateRow,CollapsedList}.tsx`, grouping logic `frontend/src/lib/home-groups.ts`. Tests: `lib/home-groups.test.ts`, `components/home/LightTile.test.tsx` (vitest).
 
 ## Finance System (Actual Budget sync)
 

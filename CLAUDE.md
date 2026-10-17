@@ -170,6 +170,7 @@ The files you'll touch most often. For the full map, run `ls orchestrator/` or g
 | `orchestrator/calendar_sources.py` | THE calendar read/write path: merges CalDAV + Exchange push + Google with per-source 8 s budget, dedup, `failed_sources`; `create_event` targets CalDAV (else Google). See `docs/CALENDAR.md` |
 | `orchestrator/caldav_calendar.py` | Radicale CalDAV client: REPORT + `<C:expand>` reads, UTC `.ics` PUT with `If-None-Match: *` |
 | `orchestrator/ha_integration.py` | Home Assistant entity discovery + service call wrapper |
+| `orchestrator/ha_registry.py` | Read-only HA entity/device/area registries over the WebSocket API (cached 600 s, never raises) + `entity_view()` — gives `GET /api/ha/entities` rooms/categories for the dashboard `/home` page. See `TECHNICAL_REFERENCE.md` → Home Assistant |
 | `orchestrator/ha_guard.py` | THE guard for every user/model-steerable HA call (chat tool, NLP/fast path, `/api/ha/command`): domains, deny list, service allow-list, media limits. Internal callers bypass it. |
 | `orchestrator/helios_power.py` | Helios wake-on-demand (PT-C) — `wake_helios()`/`sleep_helios()`/`helios_power_status()` via HA smart-plug. Self-contained httpx, never raises, default-OFF behind `HELIOS_WAKE_ENABLED`. |
 | `orchestrator/actual_client.py` | Read-only Actual Budget client (`actualpy`). `fetch_snapshot()` downloads the budget to a temp dir, extracts on-budget non-transfer spending + this month's category stats, never commits. Module docstring defines what counts as spending — read it before changing. |
