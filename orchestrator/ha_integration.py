@@ -198,6 +198,8 @@ class HomeAssistantClient:
         (r"close\s+(?:the\s+)?(.+)", "close_cover"),
     ]
 
+    FAILURE_BACKOFF = timedelta(seconds=15)
+
     def __init__(
         self,
         url: Optional[str] = None,
@@ -221,6 +223,12 @@ class HomeAssistantClient:
 
         # For fuzzy matching: friendly_name -> entity_id
         self._name_to_entity: Dict[str, str] = {}
+
+        # Single-flight: concurrent callers past the TTL share one /api/states fetch.
+        self._refresh_lock = asyncio.Lock()
+        # Last failed fetch: non-forced refreshes back off so a hung HA isn't
+        # re-polled (and the shared connection pool tied up) on every request.
+        self._last_failure: Optional[datetime] = None
 
     def set_http_client(self, http_client: httpx.AsyncClient) -> None:
         """Inject the shared pooled HTTP client (called from startup_event)."""
@@ -246,22 +254,39 @@ class HomeAssistantClient:
             "Content-Type": "application/json",
         }
 
-    async def refresh_entities(self, force: bool = False) -> int:
+    async def refresh_entities(self, force: bool = False, max_age_seconds: Optional[float] = None) -> int:
         """
         Fetch all entities from Home Assistant and cache them.
-        Returns the number of entities loaded.
+        Returns the number of entities loaded. ``max_age_seconds`` overrides
+        the cache TTL for callers that show live state (dashboard /home).
         """
         # Check if cache is still valid
-        if not force and self._last_refresh and datetime.now() - self._last_refresh < self.cache_ttl:
+        ttl = self.cache_ttl if max_age_seconds is None else timedelta(seconds=max_age_seconds)
+        if not force and self._last_refresh and datetime.now() - self._last_refresh < ttl:
             return len(self._entities)
 
+        if not force and self._last_failure and datetime.now() - self._last_failure < self.FAILURE_BACKOFF:
+            return len(self._entities)
+
+        started = datetime.now()
+        async with self._refresh_lock:
+            # Someone else refreshed (or failed) while we waited for the lock.
+            if (self._last_refresh and self._last_refresh >= started) or (
+                not force and self._last_failure and self._last_failure >= started
+            ):
+                return len(self._entities)
+            # Live-state callers (dashboard) get a shorter timeout than the 30 s default.
+            return await self._fetch_and_rebuild(timeout=10 if max_age_seconds is not None else 30)
+
+    async def _fetch_and_rebuild(self, timeout: float) -> int:
         try:
-            resp = await self._client().get(f"{self.url}/api/states", headers=self._headers, timeout=30)
+            resp = await self._client().get(f"{self.url}/api/states", headers=self._headers, timeout=timeout)
             resp.raise_for_status()
             states = resp.json()
         except Exception as e:
             self.last_refresh_ok = False
-            print(f"[ha_integration] Error fetching entities: {e}")
+            self._last_failure = datetime.now()
+            logger.warning(f"[HA] Entity refresh failed ({type(e).__name__}); keeping cached states")
             return len(self._entities)  # Return existing cache size
 
         # Clear and rebuild cache
@@ -290,6 +315,7 @@ class HomeAssistantClient:
                     self._name_to_entity[base] = entity.entity_id
 
         self._last_refresh = datetime.now()
+        self._last_failure = None
         self.last_refresh_ok = True
         return len(self._entities)
 

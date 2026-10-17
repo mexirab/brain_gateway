@@ -1399,3 +1399,12 @@ HA_CALL_REFUSED = Counter(
 )
 for _p in ("tool", "nlp", "api"):
     HA_CALL_REFUSED.labels(path=_p)
+
+# Dashboard /home: HA registry reads (rooms + entity categories) over the WS API.
+HA_REGISTRY_FETCH = Counter(
+    "bgw_ha_registry_fetch_total",
+    "Home Assistant registry fetches for the dashboard home page",
+    ["result"],
+)
+for _r in ("ok", "error"):
+    HA_REGISTRY_FETCH.labels(result=_r)

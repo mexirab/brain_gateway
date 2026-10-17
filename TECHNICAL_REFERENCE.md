@@ -25,7 +25,19 @@ All orchestrator endpoints live on port 8888. Many endpoints require `Authorizat
 | POST | `/api/ha/command` | One guarded HA call (natural-language or structured) |
 | GET | `/api/temperatures` | Temperature sensor readings from HA |
 
-**`GET /api/ha/entities`** → `{total, controllable: {domain: [{entity_id, friendly_name, state}]}}`. Only `HA_LISTED_DOMAINS` and entities not denied by `ha_guard` (Helios plug, `HA_TOOL_DENY_ENTITIES`); empty domains omitted; `total` counts only what's shown (vacuum etc. hidden). Raw HA entity count: `/health` → `ha_entities`.
+**`GET /api/ha/entities`** → `{total, rooms_available, state_ok, controllable: {domain: [entity]}}`. Only `HA_LISTED_DOMAINS` and entities not denied by `ha_guard` (Helios plug, `HA_TOOL_DENY_ENTITIES`); entities hidden in HA are omitted (listing only — not an access control; chat and `/api/ha/command` can still target them); empty domains omitted; `total` counts only what's shown (vacuum etc. hidden). Raw HA entity count: `/health` → `ha_entities`.
+
+| Field | Meaning |
+|-------|---------|
+| `rooms_available` | `false` when the HA registries couldn't be read (no `area`/`category`; `/home` falls back to grouping by type) |
+| `state_ok` | `false` when HA couldn't be reached on this request — states are the last known |
+| entity: `entity_id`, `friendly_name`, `state` | Always |
+| entity: `area`, `category` | HA area name (entity override, else its device's area) and entity category (`config`/`diagnostic`); `null` when unset or registries unavailable |
+| light: `brightness` (0–255\|null), `supports_brightness`, `is_group` | `is_group` = HA light group (has member `entity_id` list) |
+| media_player: `volume` (0–1\|null), `media_title` (≤120 chars\|null) | |
+| climate: `current_temperature`, `temperature` (number\|null) | `temperature` = setpoint |
+
+States are at most 3 s old (`ha_client.refresh_entities(max_age_seconds=3)`: single-flight, 10 s timeout, 15 s back-off after a failed fetch — `force=True` bypasses; failures log WARNING `[HA] Entity refresh failed (<ExceptionType>)`). Area/category/hidden come from `orchestrator/ha_registry.py`: HA's WebSocket API (`config/entity_registry/list_for_display`, `config/device_registry/list`, `config/area_registry/list`), cached 600 s, retried no sooner than 60 s after a failure, 8 s timeout, never raises (serves the last good cache). Metric `bgw_ha_registry_fetch_total{result=ok|error}`; failures log WARNING `[HA] Registry fetch failed (<ExceptionType>)`.
 
 **`POST /api/ha/command`** — exactly one shape:
 
@@ -34,7 +46,7 @@ All orchestrator endpoints live on port 8888. Many endpoints require `Authorizat
 | `{"command": "turn off the kitchen light"}` (1–500 chars) | Legacy NLP parser (`ha_client.execute_command`, same as fast path). "unlock" / "open the X" are refused. |
 | `{"entity_id": "light.x", "service": "turn_on", "data": {...}}` (`data` optional, ≤32 keys) | Structured call — what the dashboard `/home` controls send. |
 
-Both go through `ha_guard.check_ha_call` (same rules as the `home_assistant` tool, below). Mixed/partial bodies → 422. Responses: success `{ok, action, entity_id, message}`; guard refusal (structured) → 403 `{ok:false, error}`; HA call failure (structured) → 502 `{ok:false, error:"Home Assistant call failed"}`; NLP-path refusals/failures return 200 with `ok:false` + message. Refusals count `bgw_ha_call_refused_total{path=tool|nlp|api}` and log WARNING `[HA] Legacy command refused: domain.service` / `[HA] API command refused: domain.service|malformed` (never data values).
+Both go through `ha_guard.check_ha_call` (same rules as the `home_assistant` tool, below). Mixed/partial bodies → 422. Responses: success `{ok, action, entity_id, message}`; guard refusal (structured) → 403 `{ok:false, error}`; unknown entity (structured; not in a state list ≤5 s old — HA itself answers 200 for unknown ids) → 404 `{ok:false, error:"Unknown entity"}`; HA unreachable or call failure (structured) → 502 `{ok:false, error:"Home Assistant call failed"}`; NLP-path refusals/failures return 200 with `ok:false` + message. Refusals count `bgw_ha_call_refused_total{path=tool|nlp|api}` and log WARNING `[HA] Legacy command refused: domain.service` / `[HA] API command refused: domain.service|malformed` (never data values).
 
 ### Memory (RAG + MemPalace + Auto-Learn)
 
