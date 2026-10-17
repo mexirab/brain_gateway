@@ -119,6 +119,7 @@ def timeseries(
     max_value: float | None = None,
     draw_style: str = "line",
     description: str | None = None,
+    span_nulls: bool = True,
 ) -> dict:
     """Timeseries panel. queries is a list of (promql, legend) tuples."""
     targets = [prom(expr, legend, ref_id=chr(ord("A") + i)) for i, (expr, legend) in enumerate(queries)]
@@ -137,7 +138,7 @@ def timeseries(
             "lineWidth": 2,
             "fillOpacity": fill,
             "gradientMode": "opacity",
-            "spanNulls": True,
+            "spanNulls": span_nulls,
             "showPoints": "never",
             "stacking": {"mode": "normal" if stack else "none", "group": "A"},
             "axisPlacement": "auto",

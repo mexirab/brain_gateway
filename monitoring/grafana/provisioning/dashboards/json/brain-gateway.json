@@ -2388,7 +2388,7 @@
     },
     {
       "type": "row",
-      "title": "Helios Power Management",
+      "title": "Brain Server (llama-server)",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -2398,6 +2398,403 @@
         "y": 64
       },
       "id": 30
+    },
+    {
+      "type": "timeseries",
+      "title": "Prompt Cache Hit Ratio (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(llamacpp:prompt_tokens_cached_total{job=\"llama-primary\"}[1h])) / (sum(increase(llamacpp:prompt_tokens_cached_total{job=\"llama-primary\"}[1h])) + sum(increase(llamacpp:prompt_tokens_total{job=\"llama-primary\"}[1h])))",
+          "legendFormat": "hit ratio",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Share of prompt tokens served from llama-server's prompt cache instead of re-prefilled. Typical 1h windows: ~0.8 with chat, ~0.5 when background jobs dominate; a single conversation alone reaches ~0.9+. A drop means something volatile moved above DYNAMIC_CONTEXT_MARKER in prompt_builder, or the tool schemas stopped being byte-stable (e.g. HA entity list reordered). Background jobs with different prompts lower it a little. No data = Helios asleep.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 65
+      },
+      "id": 31
+    },
+    {
+      "type": "timeseries",
+      "title": "Decode / Prefill Speed (tok/s)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(llamacpp:tokens_predicted_total{job=\"llama-primary\"}[15m])) / sum(rate(llamacpp:tokens_predicted_seconds_total{job=\"llama-primary\"}[15m]))",
+          "legendFormat": "decode",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(llamacpp:prompt_tokens_total{job=\"llama-primary\"}[15m])) / sum(rate(llamacpp:prompt_seconds_total{job=\"llama-primary\"}[15m]))",
+          "legendFormat": "prefill",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline on the 5090 with MTP: ~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 65
+      },
+      "id": 32
+    },
+    {
+      "type": "timeseries",
+      "title": "MTP Draft Acceptance (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(llamacpp:spec_decode_num_accepted_tokens_total{job=\"llama-primary\"}[1h])) / sum(increase(llamacpp:spec_decode_num_draft_tokens_total{job=\"llama-primary\"}[1h]))",
+          "legendFormat": "accepted / drafted",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (position) (increase(llamacpp:spec_decode_num_accepted_tokens_per_pos_total{job=\"llama-primary\"}[1h])) / scalar(sum(increase(llamacpp:spec_decode_num_drafts_total{job=\"llama-primary\"}[1h])))",
+          "legendFormat": "pos {{position}}",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 65
+      },
+      "id": 33
+    },
+    {
+      "type": "timeseries",
+      "title": "Brain Queue (llama-server)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max_over_time(llamacpp:requests_deferred{job=\"llama-primary\"}[5m])",
+          "legendFormat": "deferred",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max_over_time(llamacpp:requests_processing{job=\"llama-primary\"}[5m])",
+          "legendFormat": "processing",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Requests waiting for / using the single primary slot. 'deferred' > 0 means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 65
+      },
+      "id": 34
+    },
+    {
+      "type": "row",
+      "title": "Helios Power Management",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "id": 35
     },
     {
       "type": "stat",
@@ -2478,9 +2875,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 65
+        "y": 74
       },
-      "id": 31
+      "id": 36
     },
     {
       "type": "stat",
@@ -2541,9 +2938,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 65
+        "y": 74
       },
-      "id": 32
+      "id": 37
     },
     {
       "type": "timeseries",
@@ -2638,9 +3035,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 65
+        "y": 74
       },
-      "id": 33
+      "id": 38
     },
     {
       "type": "timeseries",
@@ -2736,9 +3133,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 65
+        "y": 74
       },
-      "id": 34
+      "id": 39
     },
     {
       "type": "row",
@@ -2749,9 +3146,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 73
+        "y": 82
       },
-      "id": 35
+      "id": 40
     },
     {
       "type": "stat",
@@ -2832,9 +3229,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 74
+        "y": 83
       },
-      "id": 36
+      "id": 41
     },
     {
       "type": "timeseries",
@@ -2918,9 +3315,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 74
+        "y": 83
       },
-      "id": 37
+      "id": 42
     },
     {
       "type": "timeseries",
@@ -3039,9 +3436,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 74
+        "y": 83
       },
-      "id": 38
+      "id": 43
     },
     {
       "type": "stat",
@@ -3102,9 +3499,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 74
+        "y": 83
       },
-      "id": 39
+      "id": 44
     },
     {
       "type": "row",
@@ -3115,9 +3512,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 82
+        "y": 91
       },
-      "id": 40
+      "id": 45
     },
     {
       "type": "timeseries",
@@ -3198,11 +3595,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
-        "y": 83
+        "y": 92
       },
-      "id": 41
+      "id": 46
     },
     {
       "type": "timeseries",
@@ -3295,11 +3692,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 83
+        "w": 6,
+        "x": 6,
+        "y": 92
       },
-      "id": 42
+      "id": 47
     },
     {
       "type": "timeseries",
@@ -3380,11 +3777,97 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 83
+        "w": 6,
+        "x": 12,
+        "y": 92
       },
-      "id": 43
+      "id": 48
+    },
+    {
+      "type": "timeseries",
+      "title": "HA: Unknown entity_id refusals (/1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_ha_unknown_entity_total[1h])) or vector(0)",
+          "legendFormat": "refused",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "home_assistant calls refused because the entity_id doesn't exist (the model guessed; closest matches were returned). Sustained non-zero = the schema listing is over its budget ('+N more not listed') or entities were renamed in HA.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 92
+      },
+      "id": 49
     },
     {
       "type": "row",
@@ -3395,9 +3878,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 100
       },
-      "id": 44
+      "id": 50
     },
     {
       "type": "timeseries",
@@ -3480,9 +3963,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 92
+        "y": 101
       },
-      "id": 45
+      "id": 51
     },
     {
       "type": "timeseries",
@@ -3577,9 +4060,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 92
+        "y": 101
       },
-      "id": 46
+      "id": 52
     },
     {
       "type": "stat",
@@ -3640,9 +4123,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 92
+        "y": 101
       },
-      "id": 47
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -3737,9 +4220,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 92
+        "y": 101
       },
-      "id": 48
+      "id": 54
     },
     {
       "type": "stat",
@@ -3816,9 +4299,9 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 100
+        "y": 109
       },
-      "id": 49
+      "id": 55
     },
     {
       "type": "timeseries",
@@ -3901,9 +4384,9 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 100
+        "y": 109
       },
-      "id": 50
+      "id": 56
     },
     {
       "type": "row",
@@ -3914,9 +4397,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 106
+        "y": 115
       },
-      "id": 51
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -4035,9 +4518,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 107
+        "y": 116
       },
-      "id": 52
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -4132,9 +4615,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 107
+        "y": 116
       },
-      "id": 53
+      "id": 59
     },
     {
       "type": "timeseries",
@@ -4229,9 +4712,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 107
+        "y": 116
       },
-      "id": 54
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4314,9 +4797,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 115
+        "y": 124
       },
-      "id": 55
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -4411,9 +4894,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 115
+        "y": 124
       },
-      "id": 56
+      "id": 62
     },
     {
       "type": "row",
@@ -4424,9 +4907,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 123
+        "y": 132
       },
-      "id": 57
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4509,9 +4992,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 124
+        "y": 133
       },
-      "id": 58
+      "id": 64
     },
     {
       "type": "timeseries",
@@ -4594,9 +5077,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 124
+        "y": 133
       },
-      "id": 59
+      "id": 65
     },
     {
       "type": "timeseries",
@@ -4691,9 +5174,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 124
+        "y": 133
       },
-      "id": 60
+      "id": 66
     },
     {
       "type": "row",
@@ -4704,9 +5187,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 132
+        "y": 141
       },
-      "id": 61
+      "id": 67
     },
     {
       "type": "timeseries",
@@ -4801,9 +5284,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 133
+        "y": 142
       },
-      "id": 62
+      "id": 68
     },
     {
       "type": "timeseries",
@@ -4898,9 +5381,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 133
+        "y": 142
       },
-      "id": 63
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -4983,9 +5466,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 133
+        "y": 142
       },
-      "id": 64
+      "id": 70
     },
     {
       "type": "row",
@@ -4996,9 +5479,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 141
+        "y": 150
       },
-      "id": 65
+      "id": 71
     },
     {
       "type": "stat",
@@ -5067,9 +5550,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 142
+        "y": 151
       },
-      "id": 66
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5177,9 +5660,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 142
+        "y": 151
       },
-      "id": 67
+      "id": 73
     },
     {
       "type": "timeseries",
@@ -5262,9 +5745,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 142
+        "y": 151
       },
-      "id": 68
+      "id": 74
     },
     {
       "type": "row",
@@ -5275,9 +5758,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 150
+        "y": 159
       },
-      "id": 69
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5360,9 +5843,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 151
+        "y": 160
       },
-      "id": 70
+      "id": 76
     },
     {
       "type": "timeseries",
@@ -5445,9 +5928,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 151
+        "y": 160
       },
-      "id": 71
+      "id": 77
     },
     {
       "type": "row",
@@ -5458,9 +5941,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 159
+        "y": 168
       },
-      "id": 72
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5555,9 +6038,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 160
+        "y": 169
       },
-      "id": 73
+      "id": 79
     },
     {
       "type": "gauge",
@@ -5624,9 +6107,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 160
+        "y": 169
       },
-      "id": 74
+      "id": 80
     },
     {
       "type": "timeseries",
@@ -5721,9 +6204,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 160
+        "y": 169
       },
-      "id": 75
+      "id": 81
     },
     {
       "type": "row",
@@ -5734,9 +6217,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 168
+        "y": 177
       },
-      "id": 76
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -5819,9 +6302,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 169
+        "y": 178
       },
-      "id": 77
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -5904,9 +6387,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 169
+        "y": 178
       },
-      "id": 78
+      "id": 84
     },
     {
       "type": "timeseries",
@@ -5989,9 +6472,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 169
+        "y": 178
       },
-      "id": 79
+      "id": 85
     },
     {
       "type": "stat",
@@ -6061,9 +6544,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 177
+        "y": 186
       },
-      "id": 80
+      "id": 86
     },
     {
       "type": "timeseries",
@@ -6146,9 +6629,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 177
+        "y": 186
       },
-      "id": 81
+      "id": 87
     },
     {
       "type": "timeseries",
@@ -6231,9 +6714,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 177
+        "y": 186
       },
-      "id": 82
+      "id": 88
     },
     {
       "type": "timeseries",
@@ -6328,9 +6811,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 177
+        "y": 186
       },
-      "id": 83
+      "id": 89
     },
     {
       "type": "row",
@@ -6341,9 +6824,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 185
+        "y": 194
       },
-      "id": 84
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6438,9 +6921,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 186
+        "y": 195
       },
-      "id": 85
+      "id": 91
     },
     {
       "type": "timeseries",
@@ -6523,9 +7006,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 186
+        "y": 195
       },
-      "id": 86
+      "id": 92
     },
     {
       "type": "timeseries",
@@ -6620,9 +7103,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 186
+        "y": 195
       },
-      "id": 87
+      "id": 93
     },
     {
       "type": "timeseries",
@@ -6705,9 +7188,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 194
+        "y": 203
       },
-      "id": 88
+      "id": 94
     },
     {
       "type": "timeseries",
@@ -6802,9 +7285,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 194
+        "y": 203
       },
-      "id": 89
+      "id": 95
     },
     {
       "type": "row",
@@ -6815,9 +7298,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 202
+        "y": 211
       },
-      "id": 90
+      "id": 96
     },
     {
       "type": "timeseries",
@@ -6900,9 +7383,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 203
+        "y": 212
       },
-      "id": 91
+      "id": 97
     },
     {
       "type": "timeseries",
@@ -6985,9 +7468,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 203
+        "y": 212
       },
-      "id": 92
+      "id": 98
     },
     {
       "type": "timeseries",
@@ -7082,9 +7565,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 203
+        "y": 212
       },
-      "id": 93
+      "id": 99
     },
     {
       "type": "timeseries",
@@ -7167,9 +7650,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 211
+        "y": 220
       },
-      "id": 94
+      "id": 100
     },
     {
       "type": "timeseries",
@@ -7276,9 +7759,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 211
+        "y": 220
       },
-      "id": 95
+      "id": 101
     },
     {
       "type": "piechart",
@@ -7347,9 +7830,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 211
+        "y": 220
       },
-      "id": 96
+      "id": 102
     },
     {
       "type": "row",
@@ -7360,9 +7843,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 219
+        "y": 228
       },
-      "id": 97
+      "id": 103
     },
     {
       "type": "timeseries",
@@ -7445,9 +7928,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 220
+        "y": 229
       },
-      "id": 98
+      "id": 104
     },
     {
       "type": "timeseries",
@@ -7542,9 +8025,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 220
+        "y": 229
       },
-      "id": 99
+      "id": 105
     },
     {
       "type": "timeseries",
@@ -7639,9 +8122,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 220
+        "y": 229
       },
-      "id": 100
+      "id": 106
     },
     {
       "type": "row",
@@ -7652,9 +8135,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 228
+        "y": 237
       },
-      "id": 101
+      "id": 107
     },
     {
       "type": "timeseries",
@@ -7762,9 +8245,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 229
+        "y": 238
       },
-      "id": 102
+      "id": 108
     },
     {
       "type": "stat",
@@ -7829,9 +8312,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 229
+        "y": 238
       },
-      "id": 103
+      "id": 109
     },
     {
       "type": "stat",
@@ -7896,9 +8379,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 229
+        "y": 238
       },
-      "id": 104
+      "id": 110
     },
     {
       "type": "timeseries",
@@ -7993,9 +8476,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 229
+        "y": 238
       },
-      "id": 105
+      "id": 111
     },
     {
       "type": "timeseries",
@@ -8102,9 +8585,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 237
+        "y": 246
       },
-      "id": 106
+      "id": 112
     },
     {
       "type": "timeseries",
@@ -8215,9 +8698,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 237
+        "y": 246
       },
-      "id": 107
+      "id": 113
     },
     {
       "type": "timeseries",
@@ -8313,9 +8796,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 237
+        "y": 246
       },
-      "id": 108
+      "id": 114
     },
     {
       "type": "row",
@@ -8326,9 +8809,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 245
+        "y": 254
       },
-      "id": 109
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8411,9 +8894,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 246
+        "y": 255
       },
-      "id": 110
+      "id": 116
     },
     {
       "type": "timeseries",
@@ -8497,9 +8980,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 246
+        "y": 255
       },
-      "id": 111
+      "id": 117
     },
     {
       "type": "timeseries",
@@ -8583,9 +9066,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 246
+        "y": 255
       },
-      "id": 112
+      "id": 118
     },
     {
       "type": "row",
@@ -8596,9 +9079,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 254
+        "y": 263
       },
-      "id": 113
+      "id": 119
     },
     {
       "type": "stat",
@@ -8664,9 +9147,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 255
+        "y": 264
       },
-      "id": 114
+      "id": 120
     },
     {
       "type": "stat",
@@ -8732,9 +9215,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 255
+        "y": 264
       },
-      "id": 115
+      "id": 121
     },
     {
       "type": "timeseries",
@@ -8818,9 +9301,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 255
+        "y": 264
       },
-      "id": 116
+      "id": 122
     },
     {
       "type": "stat",
@@ -8886,9 +9369,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 255
+        "y": 264
       },
-      "id": 117
+      "id": 123
     },
     {
       "type": "row",
@@ -8899,9 +9382,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 263
+        "y": 272
       },
-      "id": 118
+      "id": 124
     },
     {
       "type": "stat",
@@ -8971,9 +9454,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 264
+        "y": 273
       },
-      "id": 119
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -9057,9 +9540,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 264
+        "y": 273
       },
-      "id": 120
+      "id": 126
     },
     {
       "type": "logs",
@@ -9098,9 +9581,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 264
+        "y": 273
       },
-      "id": 121
+      "id": 127
     },
     {
       "type": "row",
@@ -9111,9 +9594,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 272
+        "y": 281
       },
-      "id": 122
+      "id": 128
     },
     {
       "type": "timeseries",
@@ -9195,11 +9678,11 @@
       "description": "ok | retry_ok (first reply unusable, retry worked) | invalid | llm_error | asleep (Helios off) | error (bug \u2014 check logs) | interrupted.",
       "gridPos": {
         "h": 8,
-        "w": 3,
+        "w": 4,
         "x": 0,
-        "y": 273
+        "y": 282
       },
-      "id": 123
+      "id": 129
     },
     {
       "type": "timeseries",
@@ -9305,109 +9788,11 @@
       "description": "Whole-plan generation (thinking on, waits for chat to go idle first) and single-meal swaps. Long plans hold the one model slot.",
       "gridPos": {
         "h": 8,
-        "w": 3,
-        "x": 3,
-        "y": 273
+        "w": 4,
+        "x": 4,
+        "y": 282
       },
-      "id": 124
-    },
-    {
-      "type": "timeseries",
-      "title": "Brain Queue (llama-server)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(llamacpp:requests_deferred{job=\"llama-primary\"}[5m])",
-          "legendFormat": "deferred",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(llamacpp:requests_processing{job=\"llama-primary\"}[5m])",
-          "legendFormat": "processing",
-          "range": true,
-          "instant": false,
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "description": "Requests waiting for / using the single primary slot. 'deferred' > 0 means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
-      "gridPos": {
-        "h": 8,
-        "w": 3,
-        "x": 6,
-        "y": 273
-      },
-      "id": 125
+      "id": 130
     },
     {
       "type": "timeseries",
@@ -9501,11 +9886,11 @@
       "description": "Photo stock-takes (proposed/empty/failed/committed/discarded) and meal swaps.",
       "gridPos": {
         "h": 8,
-        "w": 3,
-        "x": 9,
-        "y": 273
+        "w": 4,
+        "x": 8,
+        "y": 282
       },
-      "id": 126
+      "id": 131
     },
     {
       "type": "logs",
@@ -9542,11 +9927,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 3,
+        "w": 4,
         "x": 12,
-        "y": 273
+        "y": 282
       },
-      "id": 127
+      "id": 132
     },
     {
       "type": "timeseries",
@@ -9628,11 +10013,11 @@
       "description": "How receipt lines were matched: matched_alias (a correction Jess remembered \u2014 should grow over time), matched_inventory, new, non_food.",
       "gridPos": {
         "h": 8,
-        "w": 3,
-        "x": 15,
-        "y": 273
+        "w": 4,
+        "x": 16,
+        "y": 282
       },
-      "id": 128
+      "id": 133
     },
     {
       "type": "timeseries",
@@ -9714,11 +10099,11 @@
       "description": "Photo stock-takes and receipts, end to end (all photos of a scan, one at a time).",
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 18,
-        "y": 273
+        "w": 4,
+        "x": 20,
+        "y": 282
       },
-      "id": 129
+      "id": 134
     },
     {
       "type": "timeseries",
@@ -9814,9 +10199,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 281
+        "y": 290
       },
-      "id": 130
+      "id": 135
     },
     {
       "type": "timeseries",
@@ -9924,9 +10309,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 281
+        "y": 290
       },
-      "id": 131
+      "id": 136
     },
     {
       "type": "stat",
@@ -9996,9 +10381,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 281
+        "y": 290
       },
-      "id": 132
+      "id": 137
     },
     {
       "type": "row",
@@ -10009,9 +10394,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 289
+        "y": 298
       },
-      "id": 133
+      "id": 138
     },
     {
       "type": "stat",
@@ -10072,9 +10457,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 290
+        "y": 299
       },
-      "id": 134
+      "id": 139
     },
     {
       "type": "timeseries",
@@ -10158,9 +10543,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 290
+        "y": 299
       },
-      "id": 135
+      "id": 140
     },
     {
       "type": "stat",
@@ -10221,9 +10606,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 290
+        "y": 299
       },
-      "id": 136
+      "id": 141
     },
     {
       "type": "timeseries",
@@ -10311,9 +10696,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 298
+        "y": 307
       },
-      "id": 137
+      "id": 142
     },
     {
       "type": "stat",
@@ -10379,9 +10764,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 298
+        "y": 307
       },
-      "id": 138
+      "id": 143
     },
     {
       "type": "stat",
@@ -10447,9 +10832,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 298
+        "y": 307
       },
-      "id": 139
+      "id": 144
     },
     {
       "type": "stat",
@@ -10515,9 +10900,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 306
+        "y": 315
       },
-      "id": 140
+      "id": 145
     },
     {
       "type": "timeseries",
@@ -10601,9 +10986,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 306
+        "y": 315
       },
-      "id": 141
+      "id": 146
     },
     {
       "type": "row",
@@ -10614,9 +10999,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 314
+        "y": 323
       },
-      "id": 142
+      "id": 147
     },
     {
       "type": "logs",
@@ -10655,9 +11040,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 315
+        "y": 324
       },
-      "id": 143
+      "id": 148
     },
     {
       "type": "logs",
@@ -10696,9 +11081,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 315
+        "y": 324
       },
-      "id": 144
+      "id": 149
     }
   ]
 }
