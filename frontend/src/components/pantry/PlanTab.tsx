@@ -60,6 +60,8 @@ export default function PlanTab({ shown }: { shown: boolean }) {
   const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Last "Ate one" + the notice it produced: Undo shows only next to that notice.
+  const [lastEaten, setLastEaten] = useState<{ id: number; notice: string } | null>(null);
   // The cook summary lands at the top; on a phone the button was far below.
   const noticeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -204,7 +206,11 @@ export default function PlanTab({ shown }: { shown: boolean }) {
     eat: (batchId) =>
       run(
         () => planApi.eat(batchId),
-        (r) => setNotice(`Enjoy! ${(r as { portions_left: number }).portions_left} left.`),
+        (r) => {
+          const msg = `Enjoy! ${(r as { portions_left: number }).portions_left} left.`;
+          setNotice(msg);
+          setLastEaten({ id: batchId, notice: msg });
+        },
       ),
   };
 
@@ -268,6 +274,30 @@ export default function PlanTab({ shown }: { shown: boolean }) {
           className="p-3 text-sm text-success border-success/30 flex items-start gap-2"
         >
           <span className="flex-1">{notice}</span>
+          {lastEaten && notice === lastEaten.notice && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-[40px]"
+              disabled={busy}
+              aria-label="Undo the portion just eaten"
+              onClick={() => {
+                const eaten = lastEaten;
+                setLastEaten(null);
+                run(
+                  () => planApi.uneat(eaten.id),
+                  (r) =>
+                    setNotice(
+                      (r as { portion_restored: boolean }).portion_restored
+                        ? 'Undone — the portion is back.'
+                        : 'Undone — meal log removed (that batch is gone, so the portion can’t go back).',
+                    ),
+                );
+              }}
+            >
+              Undo
+            </Button>
+          )}
           <Button icon size="sm" variant="ghost" onClick={() => setNotice(null)} aria-label="Dismiss">
             <X size={16} />
           </Button>

@@ -1137,6 +1137,22 @@ def vacuum_db() -> None:
     _vacuum_db(DB_PATH)
 
 
+def delete_selfcare_log(action: str, detail: str, since: str) -> Optional[str]:
+    """Delete the newest ``action``/``detail`` row logged at or after ``since``
+    (ISO time). Returns its ``logged_at``, or None when there was none — used to
+    undo a meal that was logged by mistake."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, logged_at FROM selfcare_log WHERE action = ? AND detail = ? AND logged_at >= ? "
+            "ORDER BY logged_at DESC, id DESC LIMIT 1",
+            (action, detail[:200], since),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM selfcare_log WHERE id = ?", (row["id"],))
+        return row["logged_at"]
+
+
 def get_selfcare_today(action: Optional[str] = None) -> List[Dict[str, Any]]:
     """Get today's selfcare log entries, optionally filtered by action."""
     today = datetime.now().strftime("%Y-%m-%d")

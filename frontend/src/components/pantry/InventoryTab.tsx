@@ -25,6 +25,8 @@ const LOCATION_LABEL: Record<PantryLocation, string> = {
   pantry: 'Pantry',
 };
 
+
+const EAT_TOAST = 'Enjoy! Logged one portion.';
 export default function InventoryTab({ onStartScan, shown }: { onStartScan: () => void; shown: boolean }) {
   const [items, setItems] = useState<PantryItem[] | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
@@ -35,6 +37,10 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [batches, setBatches] = useState<PrepBatch[]>([]);
+  // Last "Ate one" tapped here, so a mis-tap can be undone from the toast —
+  // the toast stays even when that was the last portion and the batch card is gone.
+  const [lastEaten, setLastEaten] = useState<{ id: number; name: string } | null>(null);
+  const showUndo = lastEaten !== null && toast === EAT_TOAST;
 
   const load = useCallback(async () => {
     try {
@@ -94,14 +100,14 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
     fn: () => Promise<unknown>,
     done: string,
     local: (prev: PrepBatch[]) => PrepBatch[],
-  ) => {
+  ): Promise<boolean> => {
     setBusyId(-batchId);
     try {
       await fn();
     } catch (e) {
       setError(friendlyError(e, 'Couldn’t update that batch.', { preferDetail: true }));
       setBusyId(null);
-      return;
+      return false;
     }
     setToast(done);
     try {
@@ -111,6 +117,7 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
     } finally {
       setBusyId(null);
     }
+    return true;
   };
 
   const visible = useMemo(
@@ -144,6 +151,27 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
       {toast && (
         <Card padding="none" className="p-3 text-sm text-success border-success/30 flex items-start gap-2">
           <span className="flex-1">{toast}</span>
+          {showUndo && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-[40px]"
+              disabled={busyId === -lastEaten.id}
+              aria-label={`Undo last portion of ${lastEaten.name}`}
+              onClick={async () => {
+                const eaten = lastEaten;
+                setLastEaten(null);
+                await batchAction(
+                  eaten.id,
+                  () => planApi.uneat(eaten.id),
+                  'Undone — meal log removed.',
+                  (prev) => prev.map((x) => (x.id === eaten.id ? { ...x, portions_left: x.portions_left + 1 } : x)),
+                );
+              }}
+            >
+              Undo
+            </Button>
+          )}
           <Button icon size="sm" variant="ghost" onClick={() => setToast(null)} aria-label="Dismiss">
             <X size={16} />
           </Button>
@@ -216,15 +244,16 @@ export default function InventoryTab({ onStartScan, shown }: { onStartScan: () =
                 variant="secondary"
                 className="min-h-[40px]"
                 disabled={busyId === -b.id || b.portions_left <= 0}
-                onClick={() =>
-                  batchAction(
+                onClick={async () => {
+                  const ok = await batchAction(
                     b.id,
                     () => planApi.eat(b.id),
-                    'Enjoy! Logged one portion.',
+                    EAT_TOAST,
                     (prev) =>
                       prev.map((x) => (x.id === b.id ? { ...x, portions_left: Math.max(0, x.portions_left - 1) } : x)),
-                  )
-                }
+                  );
+                  if (ok) setLastEaten({ id: b.id, name: b.recipe_name });
+                }}
               >
                 Ate one
               </Button>

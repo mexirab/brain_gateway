@@ -262,9 +262,10 @@ Needs `PANTRY_ENABLED=true`. Everything here also works from the dashboard's `/p
 | "I made the soup" | Marks the planned meal cooked and takes its ingredients out of stock |
 | "Made turkey tacos tonight with the ground turkey and tortillas" | Logs a meal that wasn't on the plan (one use of each item) |
 | "Had one of my prepped lunches" | Eats one portion (from the batch that goes off soonest) and logs the meal |
+| "I didn't actually eat that" | Puts the portion back and removes the meal log (within a day) |
 | "Skip tonight's dinner" / "Undo, I didn't cook that" | Skips a planned meal, or puts the ingredients back for the most recent cook |
 
-Fridge and pantry photos, receipts and barcodes are scanned on the `/pantry` page (photos need Helios awake). Eating a portion can't be undone yet.
+Fridge and pantry photos, receipts and barcodes are scanned on the `/pantry` page (photos need Helios awake).
 
 ---
 

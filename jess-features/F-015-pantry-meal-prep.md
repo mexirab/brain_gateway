@@ -360,9 +360,11 @@ Each phase is independently useful and shippable behind `PANTRY_ENABLED`.
 - **Scan cap race fixed:** `create_scan` counts + inserts in one `BEGIN IMMEDIATE` (`MAX_OPEN_SCANS=3` → 429) — the Phase 3 pentest low finding.
 - **Routes:** `POST /plan/entry/{id}/cooked|uncook|skip`, `GET /prep`, `POST /prep/{id}/eat|finish`. `GET /plan/{id}` returns `batches`.
 - **Metrics:** `bgw_pantry_cook_events_total{slot,source}`, `bgw_pantry_portions_eaten_total{source}`, `bgw_pantry_decay_total{kind}`, `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}`, `bgw_pantry_reminder_done_total{result}`; three panels in the "Pantry & Meal Plan" row. No alerts.
-- **Known limits:** eating a portion can't be undone; a mistaken chat "ate" calms that day's meal nudges.
+- **Known limits:** a mistaken chat "ate" calms that day's meal nudges until undone (see un-eat below).
 
-**Post-Phase 4 — "Cooked something else" (off-plan meals):** Phase 4 only tracked planned meals. `pantry_consumption.cook_other` / `undo_other` (48 h) take one use of each named/ticked item (staples untouched) and log a meal; new table `pantry_cooks`, ledger `ref_type` `cook_other`. `meal_plan` gains `slot: other` + `ingredients`/`dish`; routes `POST/GET /cooked-other`, `POST /cooked-other/{id}/undo`; dashboard card at the bottom of the Meal plan tab (no LLM, works with Helios asleep). Same items again within 10 min → 409. Undo doesn't remove the selfcare meal log. Detail: `docs/PANTRY.md` → Consumption tracking.
+**Post-Phase 4 — "Cooked something else" (off-plan meals):** Phase 4 only tracked planned meals. `pantry_consumption.cook_other` / `undo_other` (48 h) take one use of each named/ticked item (staples untouched) and log a meal; new table `pantry_cooks`, ledger `ref_type` `cook_other`. `meal_plan` gains `slot: other` + `ingredients`/`dish`; routes `POST/GET /cooked-other`, `POST /cooked-other/{id}/undo`; dashboard card at the bottom of the Meal plan tab (no LLM, works with Helios asleep). Same items again within 10 min → 409. Detail: `docs/PANTRY.md` → Consumption tracking.
+
+**Post-Phase 4 — un-eat + undo removes the meal log:** `pantry_consumption.uneat_portion` undoes the newest "Ate one" of the last 24 h (`meal_plan` action `uneat`, `POST /prep/{id}/uneat`, Undo button in the dashboard "Enjoy!" message): deletes that meal's selfcare log, re-plans the lunch it ticked, and restores the portion unless the batch expired or was finished since. `undo_cook` (dinner) and `undo_other` now delete their meal log too (`state_store.delete_selfcare_log`, `selfcare_manager.unrecord_meal_logged`). Detail: `docs/PANTRY.md` → Consumption tracking.
 
 ## Open questions (decide at build time)
 

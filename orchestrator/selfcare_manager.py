@@ -146,6 +146,25 @@ def record_meal_logged(label: str = "a meal") -> None:
     logger.info("[SELFCARE] Meal logged", extra={"component": "selfcare"})
 
 
+def refresh_last_meal() -> None:
+    """Recompute the meal nudge gate from selfcare_log (after a row was removed)."""
+    from orchestrator.state_store import get_last_selfcare
+
+    _state.last_meal_reported = get_last_selfcare("meal")
+
+
+def unrecord_meal_logged(label: str, since: str) -> bool:
+    """Undo ``record_meal_logged(label)``: delete its row and recompute the
+    meal nudge gate from what's left. False when nothing matched."""
+    from orchestrator.state_store import delete_selfcare_log
+
+    if delete_selfcare_log("meal", label, since) is None:
+        return False
+    refresh_last_meal()
+    logger.info("[SELFCARE] Meal log removed", extra={"component": "selfcare"})
+    return True
+
+
 def record_medication_logged(label: str = "medication") -> None:
     """Advance the medication nudge gate.
 
