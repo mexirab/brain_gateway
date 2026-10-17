@@ -180,6 +180,17 @@ scrape_configs:
           node: 'jupiter'
           tier: 'app'
 
+      # Dashboard (Next.js). /login is public (no auth) and served by the app
+      # itself, so a 200 proves the server renders pages. Probed by container
+      # name over frontend-probe-net (the frontend may publish on 127.0.0.1
+      # only). It does NOT cover the Tailscale Serve hop or the publish
+      # address. No tier label, so AppDown doesn't double up. FrontendDown
+      # keys on service=frontend.
+      - targets: ['http://brain-frontend:3001/login']
+        labels:
+          service: 'frontend'
+          node: 'jupiter'
+
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

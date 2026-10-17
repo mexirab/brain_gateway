@@ -58,7 +58,13 @@ CATEGORIES = (
     "progress",
     "focus",
     "briefing",
+    "temperature",
 )
+
+# Categories added after the panel shipped. Left unset, they follow the
+# panel's `default` / `reminder` route (what they did before they had a row)
+# instead of jumping to the legacy env speaker.
+_INHERIT_PANEL_ROUTE = frozenset({"temperature"})
 
 _lock = threading.Lock()
 _cache: Optional[Dict[str, Any]] = None
@@ -88,7 +94,7 @@ def _legacy_fallback(category: str) -> str:
 def _build_defaults() -> Dict[str, Any]:
     """Build the default route map from current legacy fallbacks so an
     on-disk file written from the panel mirrors today's behavior."""
-    return {"routes": {cat: _legacy_fallback(cat) for cat in CATEGORIES}}
+    return {"routes": {cat: "" if cat in _INHERIT_PANEL_ROUTE else _legacy_fallback(cat) for cat in CATEGORIES}}
 
 
 _SPEAKER_ENTITY_RE = re.compile(r"media_player\.[a-z0-9_]+")

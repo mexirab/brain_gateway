@@ -7,27 +7,27 @@
 - Jess:
     - Dashboard:
         icon: mdi-brain
-        href: http://jupiter-amds.tail74fc4a.ts.net:3001/
+        href: https://jupiter-amds.tail74fc4a.ts.net/
         description: Your day — focus, meals, reminders, workouts
     - Chat:
         icon: mdi-chat
-        href: http://jupiter-amds.tail74fc4a.ts.net:3001/chat
+        href: https://jupiter-amds.tail74fc4a.ts.net/chat
         description: Conversation history
     - Finance:
         icon: mdi-finance
-        href: http://jupiter-amds.tail74fc4a.ts.net:3001/finance
+        href: https://jupiter-amds.tail74fc4a.ts.net/finance
         description: Actual Budget + XP
     - Shopping:
         icon: mdi-cart
-        href: http://jupiter-amds.tail74fc4a.ts.net:3001/shopping
+        href: https://jupiter-amds.tail74fc4a.ts.net/shopping
         description: Shopping list
     - Documents:
         icon: mdi-file-document-multiple
-        href: http://jupiter-amds.tail74fc4a.ts.net:3001/documents
+        href: https://jupiter-amds.tail74fc4a.ts.net/documents
         description: Document vault
     - Announcements:
         icon: mdi-bullhorn
-        href: http://jupiter-amds.tail74fc4a.ts.net:3001/announcements
+        href: https://jupiter-amds.tail74fc4a.ts.net/announcements
         description: TTS history
 
 - Home & Media:

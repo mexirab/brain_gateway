@@ -362,6 +362,19 @@ groups:
         annotations:
           summary: "Radicale (calendar server) is down"
           description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
+      - alert: FrontendDown
+        # The dashboard. The orchestrator can be healthy while the Next.js
+        # server is crashed or hung, and nothing else would say so; CI's
+        # post-deploy check only runs on deploys. Probed over the container
+        # network, so a green probe does NOT prove the https URL works
+        # (Tailscale Serve / publish address are not on the probe path).
+        expr: probe_success{service="frontend"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dashboard (frontend) is down"
+          description: "brain-frontend has failed its /login probe for 5 minutes, so the dashboard at https://jupiter-amds.tail74fc4a.ts.net is down (chat, settings, home controls). Jess's voice and Telegram are unaffected. Check `docker logs brain-frontend --tail 50`. Exited: `cd ~/gateway_nerves && docker compose up -d frontend`. Running but hung: `cd ~/gateway_nerves && docker compose up -d --force-recreate frontend`. If the frontend looks healthy, check the probe path: `curl -s 'http://localhost:9115/probe?module=http_2xx&target=http://brain-frontend:3001/login&debug=true' | tail -20` — 'no such host' means blackbox-exporter is off frontend-probe-net: `cd ~/gateway_nerves/monitoring && docker compose --env-file ../.env up -d blackbox-exporter`."
       - alert: ActualDown
         # Actual Budget (finance source of truth). Same shape as RadicaleDown:
         # AppDown is Grafana-only, BudgetSyncFailing only notices after ~6h, and

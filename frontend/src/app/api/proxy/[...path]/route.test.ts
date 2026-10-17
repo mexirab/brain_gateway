@@ -155,6 +155,78 @@ describe('responses', () => {
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe('Orchestrator unreachable');
   });
+
+  it('answers 504 when the orchestrator never starts responding', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      fetchMock.mockImplementation(
+        (_url: string, init: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          }),
+      );
+      const pending = GET(req('/api/proxy/api/tasks'), ctx(['api', 'tasks']));
+      // The session check is async; only advance once the upstream fetch started.
+      while (fetchMock.mock.calls.length === 0) await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const res = await pending;
+      expect(res.status).toBe(504);
+      expect((await res.json()).error).toBe('Orchestrator timed out');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels upstream quietly when the browser goes away', async () => {
+    fetchMock.mockImplementation(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    );
+    const client = new AbortController();
+    const r = new NextRequest('http://localhost:3001/api/proxy/api/tasks', { signal: client.signal });
+    r.cookies.set('brain_token', SESSION);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const pending = GET(r, ctx(['api', 'tasks']));
+      while (fetchMock.mock.calls.length === 0) await new Promise((res) => setImmediate(res));
+      client.abort();
+      const res = await pending;
+      expect(res.status).toBe(499);
+      expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+      const logged = [...warn.mock.calls, ...log.mock.calls].map((c) => String(c[0]));
+      expect(logged.some((l) => l.includes('unreachable'))).toBe(false);
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  it('does not cut a response off once headers have arrived', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let signal: AbortSignal | undefined;
+      fetchMock.mockImplementation(async (_url: string, init: { signal: AbortSignal }) => {
+        signal = init.signal;
+        return new Response('data: hi\n\n', { headers: { 'content-type': 'text/event-stream' } });
+      });
+      const res = await GET(req('/api/proxy/v1/chat/completions'), ctx(['v1', 'chat', 'completions']));
+      await vi.advanceTimersByTimeAsync(700_000);
+      expect(signal?.aborted).toBe(false);
+      expect(await res.text()).toBe('data: hi\n\n');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes an abort signal to the upstream fetch', async () => {
+    await GET(req('/api/proxy/api/tasks'), ctx(['api', 'tasks']));
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
 });
 
 describe('more responses', () => {
