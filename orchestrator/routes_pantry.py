@@ -396,6 +396,14 @@ async def pantry_prep_eat(batch_id: int) -> JSONResponse:
     return _result(await asyncio.to_thread(pantry_consumption.eat_portion, batch_id, "dashboard"))
 
 
+@router.post("/prep/{batch_id}/uneat")
+async def pantry_prep_uneat(batch_id: int) -> JSONResponse:
+    """Undo an "Ate one" from the last 24 h (portion back, meal log removed)."""
+    if _bad_id(batch_id):
+        return JSONResponse({"ok": False, "error": "batch not found"}, status_code=404)
+    return _result(await asyncio.to_thread(pantry_consumption.uneat_portion, batch_id))
+
+
 @router.post("/prep/{batch_id}/finish")
 async def pantry_prep_finish(batch_id: int) -> JSONResponse:
     if _bad_id(batch_id):

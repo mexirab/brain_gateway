@@ -337,6 +337,11 @@ export const planApi = {
       `/api/pantry/prep/${batchId}/eat`,
       json('POST'),
     ),
+  uneat: (batchId: number) =>
+    call<{ ok: boolean; recipe: string; portions_left: number; portion_restored: boolean }>(
+      `/api/pantry/prep/${batchId}/uneat`,
+      json('POST'),
+    ),
   finishBatch: (batchId: number) => call<{ ok: boolean }>(`/api/pantry/prep/${batchId}/finish`, json('POST')),
   cookedOther: (itemIds: number[], dish: string) =>
     call<OtherCookResult>('/api/pantry/cooked-other', json('POST', { item_ids: itemIds, dish })),

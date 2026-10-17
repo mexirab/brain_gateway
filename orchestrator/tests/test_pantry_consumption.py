@@ -516,7 +516,8 @@ class TestPortions:
         # Today's lunch is ticked first, not the earlier-inserted tomorrow one.
         assert entry(p["lunch_ids"][1])["status"] == "eaten"
         assert entry(p["lunch_ids"][0])["status"] == "planned"
-        assert meals == [f"portion:{bid}"]
+        # batch, portions left after this eat, the lunch entry it ticked
+        assert meals == [pc._portion_label(bid, 1, p["lunch_ids"][1])]
         assert metric(pc.PANTRY_PORTIONS_EATEN, source="chat") == before + 1
         res = pc.eat_portion(bid)
         assert res["portions_left"] == 0
@@ -1227,7 +1228,7 @@ class TestTool:
 
     async def test_unknown(self, tool):
         out = await tool({"action": "eat_everything"})
-        assert out.startswith("Unknown meal_plan action") and "cooked, uncook, ate or skip" in out
+        assert out.startswith("Unknown meal_plan action") and "cooked, uncook, ate, uneat or skip" in out
 
     async def test_disabled(self, tool, monkeypatch):
         from orchestrator import shared

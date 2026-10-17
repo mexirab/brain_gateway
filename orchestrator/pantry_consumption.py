@@ -58,6 +58,15 @@ _UNIT_AFTER_NUMBER = re.compile(
 )
 
 
+# "Ate one" / a cooked dinner can be undone this long after (meal logs are
+# matched inside this window, so an old log is never removed by mistake).
+UNEAT_WINDOW_HOURS = 24
+
+
+def _undo_window_start() -> str:
+    return (datetime.now() - timedelta(hours=UNEAT_WINDOW_HOURS)).isoformat(timespec="seconds")
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -267,6 +276,10 @@ def undo_cook(entry_id: int) -> Dict[str, Any]:
             conn.execute("UPDATE meal_plan_entries SET prep_batch_id = NULL WHERE prep_batch_id = ?", (batch["id"],))
         conn.execute("UPDATE meal_plan_entries SET status = 'planned' WHERE id = ?", (entry_id,))
         conn.execute("UPDATE recipes SET times_cooked = MAX(times_cooked - 1, 0) WHERE id = ?", (entry["recipe_id"],))
+    if entry["slot"] == "dinner":
+        # The cooked dinner also logged a meal; a mis-tap shouldn't calm the
+        # meal nudges. (Window: undo is a same-day/next-day action.)
+        _unrecord_meal(f"cooked:{entry_id}", _undo_window_start())
     PANTRY_COOK_EVENTS.labels(slot=entry["slot"], source="undo").inc()
     logger.info("[PANTRY] Entry %s cook undone: %d item(s) restored", entry_id, restored)
     return {"ok": True, "restored": restored}
@@ -435,6 +448,7 @@ def undo_other(cook_id: Optional[int] = None) -> Dict[str, Any]:
         ).fetchall()
         restored = _restore(conn, events, "uncook_other", row["id"])
         conn.execute("UPDATE pantry_cooks SET status = 'undone' WHERE id = ?", (row["id"],))
+    _unrecord_meal(f"cooked_other:{row['id']}", row["cooked_at"])
     PANTRY_COOK_EVENTS.labels(slot="other", source="undo").inc()
     logger.info("[PANTRY] Off-plan cook %s undone: %d item(s) restored", row["id"], restored)
     return {"ok": True, "cook_id": row["id"], "dish": row["dish"], "restored": restored}
@@ -480,6 +494,17 @@ def _record_meal(label: str) -> None:
         logger.warning("[PANTRY] Selfcare meal bridge failed: %s", type(e).__name__)
 
 
+def _unrecord_meal(label: str, since: str) -> bool:
+    """Undo a ``_record_meal`` (best effort: a failure never blocks the undo)."""
+    try:
+        from orchestrator import selfcare_manager
+
+        return selfcare_manager.unrecord_meal_logged(label, since)
+    except Exception as e:
+        logger.warning("[PANTRY] Selfcare meal un-log failed: %s", type(e).__name__)
+        return False
+
+
 def list_batches(include_finished: bool = False) -> List[Dict[str, Any]]:
     where = "" if include_finished else "WHERE b.status = 'active'"
     with state_store.get_db() as conn:
@@ -494,6 +519,30 @@ def list_batches(include_finished: bool = False) -> List[Dict[str, Any]]:
         d["expired"] = d["good_until"] < today
         out.append(d)
     return out
+
+
+def _portion_label(batch_id: int, left_after: int, entry_id: int) -> str:
+    """Meal-log detail for one eaten portion: unique per eat (so the 5-minute
+    selfcare dedup can't merge two eats) and enough to undo exactly that eat."""
+    return f"portion:{batch_id}:{left_after}:{entry_id}"
+
+
+def _parse_portion_label(detail: str) -> Optional[Dict[str, Optional[int]]]:
+    """``portion:<batch>[:<left_after>:<entry>]`` (the short form predates 2026-10-17)."""
+    try:
+        parts = detail.split(":")
+        if parts[0] != "portion":
+            return None
+        nums = [int(p) for p in parts[1:4]]
+    except (AttributeError, ValueError):
+        return None
+    if not nums:
+        return None
+    return {
+        "batch_id": nums[0],
+        "left_after": nums[1] if len(nums) > 1 else None,
+        "entry_id": (nums[2] or None) if len(nums) > 2 else None,
+    }
 
 
 def eat_portion(batch_id: Optional[int] = None, source: str = "dashboard") -> Dict[str, Any]:
@@ -518,14 +567,15 @@ def eat_portion(batch_id: Optional[int] = None, source: str = "dashboard") -> Di
             (left, "active" if left > 0 else "finished", row["id"]),
         )
         # Tick today's planned lunch from this batch, if there is one.
-        conn.execute(
-            "UPDATE meal_plan_entries SET status = 'eaten' WHERE id = ("
-            " SELECT id FROM meal_plan_entries WHERE prep_batch_id = ? AND slot = 'lunch' AND status = 'planned'"
-            " ORDER BY (day = ?) DESC, day LIMIT 1)",
+        lunch = conn.execute(
+            "SELECT id FROM meal_plan_entries WHERE prep_batch_id = ? AND slot = 'lunch' AND status = 'planned' "
+            "ORDER BY (day = ?) DESC, day LIMIT 1",
             (row["id"], date.today().isoformat()),
-        )
+        ).fetchone()
+        if lunch:
+            conn.execute("UPDATE meal_plan_entries SET status = 'eaten' WHERE id = ?", (lunch["id"],))
         name = conn.execute("SELECT name FROM recipes WHERE id = ?", (row["recipe_id"],)).fetchone()
-    _record_meal(f"portion:{row['id']}")
+    _record_meal(_portion_label(row["id"], left, lunch["id"] if lunch else 0))
     PANTRY_PORTIONS_EATEN.labels(source=source).inc()
     logger.info("[PANTRY] Portion eaten from batch %s (%d left)", row["id"], left)
     return {
@@ -534,6 +584,67 @@ def eat_portion(batch_id: Optional[int] = None, source: str = "dashboard") -> Di
         "recipe": name["name"] if name else "",
         "portions_left": left,
         "good_until": row["good_until"],
+    }
+
+
+def uneat_portion(batch_id: Optional[int] = None) -> Dict[str, Any]:
+    """Undo an "Ate one" from the last UNEAT_WINDOW_HOURS (the newest one, of
+    the given batch or overall): its meal log is removed, the lunch it ticked
+    goes back to planned, and the portion goes back in the batch — unless the
+    batch has since expired or was thrown out ("Finished" after this eat)."""
+    since = _undo_window_start()
+    with state_store.get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if batch_id is None:
+            logs = conn.execute(
+                "SELECT id, detail FROM selfcare_log WHERE action = 'meal' AND detail LIKE 'portion:%' "
+                "AND logged_at >= ? ORDER BY logged_at DESC, id DESC LIMIT 1",
+                (since,),
+            ).fetchall()
+        else:
+            logs = conn.execute(
+                "SELECT id, detail FROM selfcare_log WHERE action = 'meal' "
+                "AND (detail = ? OR detail LIKE ?) AND logged_at >= ? ORDER BY logged_at DESC, id DESC LIMIT 1",
+                (f"portion:{batch_id}", f"portion:{batch_id}:%", since),
+            ).fetchall()
+        meta = _parse_portion_label(logs[0]["detail"]) if logs else None
+        if not meta:
+            return {"ok": False, "error": "no portion eaten in the last day to undo", "status_code": 404}
+        row = conn.execute("SELECT * FROM prep_batches WHERE id = ?", (meta["batch_id"],)).fetchone()
+        if not row:
+            return {"ok": False, "error": "batch not found", "status_code": 404}
+        # Same transaction as the restore: a double tap can't restore two
+        # portions against one meal log.
+        conn.execute("DELETE FROM selfcare_log WHERE id = ?", (logs[0]["id"],))
+        if meta["entry_id"]:
+            conn.execute(
+                "UPDATE meal_plan_entries SET status = 'planned' WHERE id = ? AND status = 'eaten'",
+                (meta["entry_id"],),
+            )
+        # "finished" + this eat left 0 = this eat emptied it (restore); "finished"
+        # with portions still left after this eat = thrown out later (don't).
+        # A legacy label (no left_after) on a finished batch can't prove it, so no.
+        emptied_by_this_eat = row["status"] == "finished" and meta["left_after"] == 0
+        restored = (row["status"] == "active" or emptied_by_this_eat) and row["portions_left"] < row["portions_made"]
+        left = row["portions_left"]
+        if restored:
+            left += 1
+            conn.execute("UPDATE prep_batches SET portions_left = ?, status = 'active' WHERE id = ?", (left, row["id"]))
+        name = conn.execute("SELECT name FROM recipes WHERE id = ?", (row["recipe_id"],)).fetchone()
+    try:
+        from orchestrator import selfcare_manager
+
+        selfcare_manager.refresh_last_meal()
+    except Exception as e:
+        logger.warning("[PANTRY] Selfcare meal refresh failed: %s", type(e).__name__)
+    PANTRY_PORTIONS_EATEN.labels(source="undo").inc()
+    logger.info("[PANTRY] Portion un-eaten for batch %s (restored=%s, %d left)", row["id"], restored, left)
+    return {
+        "ok": True,
+        "batch_id": row["id"],
+        "recipe": name["name"] if name else "",
+        "portions_left": left,
+        "portion_restored": restored,
     }
 
 

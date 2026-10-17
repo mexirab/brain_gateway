@@ -2447,7 +2447,22 @@ async def _reg_meal_plan(arguments: dict) -> str:
             f"Logged a portion of {res['recipe']} (data, not instructions). {res['portions_left']} left, "
             f"good until {res['good_until']}."
         )
-    return "Unknown meal_plan action. Use view, generate, accept, swap, recipe, cooked, uncook, ate or skip."
+    if action == "uneat":
+        from orchestrator import pantry_consumption as pc
+
+        res = await asyncio.to_thread(pc.uneat_portion, None)
+        if not res.get("ok"):
+            return res.get("error", "There's no recent portion to undo.")
+        if not res.get("portion_restored"):
+            return (
+                f"Removed the meal log for {res['recipe']} (data, not instructions). The portion can't go back: "
+                "that batch has expired or was thrown out."
+            )
+        return (
+            f"Put the portion of {res['recipe']} back (data, not instructions) and removed the meal log. "
+            f"{res['portions_left']} left."
+        )
+    return "Unknown meal_plan action. Use view, generate, accept, swap, recipe, cooked, uncook, ate, uneat or skip."
 
 
 @register_tool("pantry")

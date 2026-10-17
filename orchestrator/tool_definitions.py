@@ -1341,15 +1341,26 @@ STATIC_TOOLS = [
                 "meal — don't also call selfcare_log). For a meal NOT in the plan "
                 '("made turkey tacos tonight") use cooked with slot other + ingredients (the pantry items used) + dish. uncook = undo a '
                 'wrong "cooked" (slot other = the last off-plan meal); ate = ate one prepped portion '
-                '("had a bowl for lunch"; it logs the meal itself — don\'t also call selfcare_log); skip = not '
-                "cooking a planned dinner."
+                '("had a bowl for lunch"; it logs the meal itself — don\'t also call selfcare_log); uneat = undo '
+                'a wrong "ate" from the last 24 h ("I didn\'t actually eat that"); skip = not cooking a planned dinner.'
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["view", "generate", "accept", "swap", "recipe", "cooked", "uncook", "ate", "skip"],
+                        "enum": [
+                            "view",
+                            "generate",
+                            "accept",
+                            "swap",
+                            "recipe",
+                            "cooked",
+                            "uncook",
+                            "ate",
+                            "uneat",
+                            "skip",
+                        ],
                     },
                     "day": {
                         "type": "string",
