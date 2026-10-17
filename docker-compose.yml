@@ -69,6 +69,12 @@ services:
         APP_GID: ${ORCHESTRATOR_GID:-1000}
     container_name: brain-orchestrator
     restart: unless-stopped
+    # Non-root (USER jess in the Dockerfile) needs no capabilities; no-new-
+    # privileges disables the setuid binaries left in the base image.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"

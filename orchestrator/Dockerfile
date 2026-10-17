@@ -19,8 +19,9 @@ COPY *.py /app/orchestrator/
 # need a one-time chown — see scripts/orchestrator_state_perms.sh.
 ARG APP_UID=1000
 ARG APP_GID=1000
-RUN groupadd --gid "${APP_GID}" jess \
-    && useradd --uid "${APP_UID}" --gid "${APP_GID}" --home-dir /home/jess --create-home --shell /usr/sbin/nologin jess
+RUN (getent group "${APP_GID}" >/dev/null || groupadd --gid "${APP_GID}" jess) \
+    && useradd --no-log-init --uid "${APP_UID}" --gid "${APP_GID}" --home-dir /home/jess --create-home \
+        --shell /usr/sbin/nologin jess
 
 # Pre-create every mount point the non-root user must own. Docker creates
 # missing mount points as root, and a fresh named volume copies the ownership
@@ -29,7 +30,7 @@ RUN groupadd --gid "${APP_GID}" jess \
 # (e.g. ${GATEWAY_ROOT_PATH}/data/routines.yaml:/app/config/routines.yaml:ro).
 RUN mkdir -p /app/config /app/data /app/credentials /tmp/brain_audio \
         /home/jess/.cache/huggingface /home/jess/.ssh /home/jess/.claude/projects \
-    && chown -R jess:jess /app/data /app/credentials /tmp/brain_audio /home/jess
+    && chown -R "${APP_UID}:${APP_GID}" /app/data /app/credentials /tmp/brain_audio /home/jess
 
 ENV HOME=/home/jess \
     HF_HOME=/home/jess/.cache/huggingface

@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
-# Make the orchestrator's writable bind-mounts owned by the uid/gid the
-# container runs as (non-root since the Dockerfile gained `USER jess`).
+# Make the orchestrator's writable mounts owned by the uid/gid the container
+# runs as (non-root since the Dockerfile gained `USER jess`).
 #
 # The container used to run as root, so everything it ever wrote on the host
 # (data/app DBs, the Chroma memory palace, hf_cache, RAG yaml, reminder audio)
 # is root-owned and the non-root container can't write it. Docker also creates
 # a missing bind-mount source as root, so fresh installs must pre-create them.
 #
-# Usage (from the repo root):
+# Usage (from anywhere; JESS_REPO_ROOT overrides the repo location):
 #   bash scripts/orchestrator_state_perms.sh            # dry run: report only
 #   bash scripts/orchestrator_state_perms.sh --apply    # mkdir + chown (sudo)
+#
+# The mount list comes from `docker compose config` — the same resolution
+# compose uses (.env, ${VAR} expansion, defaults) — so it can't drift from
+# docker-compose.yml. Writable bind mounts + named volumes are fixed;
+# read-only bind mounts are only checked for readability.
 #
 # UID/GID: ORCHESTRATOR_UID / ORCHESTRATOR_GID from .env, else the invoking
 # user (SUDO_UID when run under sudo), never 0. With --apply, missing values
 # are written to .env so the image build uses the same ids.
 #
-# Run --apply with the orchestrator STOPPED (or immediately before recreating
-# it), so the old root container isn't writing new root-owned files meanwhile.
+# On a host where the root container already ran: run --apply immediately
+# before the orchestrator is rebuilt as non-root, then once more after (files
+# the old container created in between). Rebuild after changing the ids:
+#   docker compose up -d --build --force-recreate orchestrator
 set -euo pipefail
 
 APPLY=0
@@ -28,85 +35,112 @@ ENV_FILE="${REPO_ROOT}/.env"
 # Read KEY from .env without sourcing it (values may contain spaces/quotes).
 env_get() {
     [ -f "${ENV_FILE}" ] || return 0
-    { grep -E "^$1=" "${ENV_FILE}" || true; } | tail -1 | cut -d= -f2- | sed -e 's/[[:space:]]*#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+    { grep -E "^$1=" "${ENV_FILE}" || true; } | tail -1 | cut -d= -f2- \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 
 uid="$(env_get ORCHESTRATOR_UID)"
 gid="$(env_get ORCHESTRATOR_GID)"
 [ -n "${uid}" ] || uid="${SUDO_UID:-$(id -u)}"
 [ -n "${gid}" ] || gid="${SUDO_GID:-$(id -g)}"
-if [ "${uid}" = "0" ] || [ "${gid}" = "0" ]; then
-    echo "Refusing uid/gid 0 — the point is a non-root container. Set ORCHESTRATOR_UID/GID in .env." >&2
+if ! [[ "${uid}" =~ ^[1-9][0-9]{0,9}$ && "${gid}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo "Refusing uid/gid '${uid}:${gid}' — must be a positive number (non-root). Fix ORCHESTRATOR_UID/GID in .env." >&2
     exit 1
 fi
 
-root_path="$(env_get GATEWAY_ROOT_PATH)"
-root_path="${root_path:-${REPO_ROOT}}"
-chroma="$(env_get CHROMA_HOST_PATH)"
-rag="$(env_get RAG_BASE)"
-docs="$(env_get DOCUMENTS_PATH)"
-# Relative defaults in docker-compose.yml resolve against the repo root.
-abs() { case "$1" in /*) echo "$1" ;; *) echo "${REPO_ROOT}/${1#./}" ;; esac; }
+# Refuse anything too close to / (a typo like RAG_BASE=/ must not hand the
+# whole tree to the container user).
+check_path() {
+    local p="$1"
+    case "${p}" in
+        / | /etc* | /usr* | /bin* | /sbin* | /lib* | /boot* | /var | /opt | /root* | /home | /proc* | /sys* | /dev*)
+            echo "Refusing to manage '${p}' — not a plausible orchestrator data dir." >&2; return 1 ;;
+    esac
+    if [ "${p}" = "${HOME}" ] || [ "$(tr -cd / <<<"${p}" | wc -c)" -lt 3 ]; then
+        echo "Refusing to manage '${p}' — too close to the filesystem root / a home dir." >&2; return 1
+    fi
+}
 
-# Writable bind-mount sources (docker-compose.yml `orchestrator:` volumes).
-dirs=(
-    "$(abs "${root_path}/data/app")"
-    "$(abs "${chroma:-./data/chroma}")"
-    "$(abs "${rag:-./data/rag}")"
-    "$(abs "${root_path}/data/hf_cache")"
-    "$(abs "${root_path}/credentials")"
-    "$(abs "${docs:-./data/documents}")"
-)
-
-# Named volume for reminder audio (project name = compose project).
-project="$(env_get COMPOSE_PROJECT_NAME)"
-project="${project:-$(basename "${REPO_ROOT}")}"
-audio_vol="${project}_brain-audio"
+# Mounts as resolved by compose: "<kind>\t<source>" lines, kind = rw | ro | vol.
+mounts="$(cd "${REPO_ROOT}" && docker compose config --format json orchestrator 2>/dev/null | python3 -c '
+import json, sys
+cfg = json.load(sys.stdin)
+names = {k: (v or {}).get("name") or k for k, v in (cfg.get("volumes") or {}).items()}
+for v in cfg["services"]["orchestrator"].get("volumes", []):
+    ro = v.get("read_only", False)
+    if v["type"] == "bind":
+        print(("ro" if ro else "rw") + "\t" + v["source"])
+    elif v["type"] == "volume" and not ro:
+        print("vol\t" + names.get(v["source"], v["source"]))
+')" || { echo "docker compose config failed — fix .env first." >&2; exit 1; }
 
 echo "Target owner: ${uid}:${gid}"
 SUDO=""
-[ "$(id -u)" = "0" ] || SUDO="sudo"
-
-for d in "${dirs[@]}"; do
-    if [ ! -e "${d}" ]; then
-        echo "MISSING  ${d}"
-        if [ "${APPLY}" = 1 ]; then
-            # As the invoking user first so new parent dirs (e.g. data/) aren't
-            # root-owned; sudo only if the parent isn't writable.
-            mkdir -p "${d}" 2>/dev/null || ${SUDO} mkdir -p "${d}"
-        fi
-    fi
-    if [ -e "${d}" ]; then
-        wrong="$(${SUDO} find "${d}" -xdev \( ! -uid "${uid}" -o ! -gid "${gid}" \) 2>/dev/null | wc -l)"
-        echo "$( [ "${wrong}" = 0 ] && echo OK || echo FIX ) ${wrong} path(s) not ${uid}:${gid} under ${d}"
-        if [ "${APPLY}" = 1 ] && [ "${wrong}" != 0 ]; then
-            ${SUDO} chown -R "${uid}:${gid}" "${d}"
-        fi
-    fi
-done
-
-if docker volume inspect "${audio_vol}" >/dev/null 2>&1; then
-    mp="$(docker volume inspect -f '{{.Mountpoint}}' "${audio_vol}")"
-    wrong="$(${SUDO} find "${mp}" -xdev \( ! -uid "${uid}" -o ! -gid "${gid}" \) 2>/dev/null | wc -l)"
-    echo "$( [ "${wrong}" = 0 ] && echo OK || echo FIX ) ${wrong} path(s) not ${uid}:${gid} in volume ${audio_vol}"
-    if [ "${APPLY}" = 1 ] && [ "${wrong}" != 0 ]; then
-        ${SUDO} chown -R "${uid}:${gid}" "${mp}"
-    fi
+if [ "$(id -u)" != "0" ]; then
+    # Dry run must not prompt; --apply may.
+    if [ "${APPLY}" = 1 ]; then SUDO="sudo"; elif sudo -n true 2>/dev/null; then SUDO="sudo -n"; fi
 fi
 
-# Files mounted read-only must still be readable by the container user.
-for f in .env user_profile.yaml data/routines.yaml data/palace.yaml; do
-    p="$(abs "${root_path}/${f}")"
-    [ -e "${p}" ] || continue
-    owner="$(stat -c '%u' "${p}")"
-    mode="$(stat -c '%a' "${p}")"
-    if [ "${owner}" != "${uid}" ] && [ "${mode: -1}" -lt 4 ]; then
-        echo "WARN     ${p} is owned by uid ${owner} with mode ${mode} — the container (uid ${uid}) can't read it"
-    fi
-done
+# Count entries not owned by uid:gid. A vanishing SQLite -journal/-wal file or
+# an unreadable subdir must not abort the report (set -e / pipefail).
+count_wrong() {
+    { ${SUDO} find "$1" -xdev \( ! -uid "${uid}" -o ! -gid "${gid}" \) 2>/dev/null || true; } | wc -l
+}
+# Same walk as the count: stay on this filesystem, never follow symlinks.
+fix_owner() {
+    ${SUDO} find "$1" -xdev \( ! -uid "${uid}" -o ! -gid "${gid}" \) -exec chown -h "${uid}:${gid}" {} + 2>/dev/null || true
+}
+
+status=0
+while IFS=$'\t' read -r kind src; do
+    [ -n "${kind}" ] || continue
+    case "${kind}" in
+        rw)
+            [ "${src}" = /dev/null ] && continue
+            check_path "${src}" || exit 1
+            if [ ! -e "${src}" ]; then
+                echo "MISSING  ${src}"
+                [ "${APPLY}" = 1 ] || { status=1; continue; }
+                # As the invoking user first so new parent dirs (e.g. data/)
+                # aren't root-owned; sudo only if the parent isn't writable.
+                mkdir -p "${src}" 2>/dev/null || ${SUDO} mkdir -p "${src}"
+            fi
+            wrong="$(count_wrong "${src}")"
+            echo "$([ "${wrong}" = 0 ] && echo OK || echo FIX) ${wrong} path(s) not ${uid}:${gid} under ${src}"
+            if [ "${wrong}" != 0 ]; then
+                if [ "${APPLY}" = 1 ]; then fix_owner "${src}"; else status=1; fi
+            fi
+            ;;
+        vol)
+            docker volume inspect "${src}" >/dev/null 2>&1 || continue  # created on first up, owned by jess
+            mp="$(docker volume inspect -f '{{.Mountpoint}}' "${src}")"
+            wrong="$(count_wrong "${mp}")"
+            echo "$([ "${wrong}" = 0 ] && echo OK || echo FIX) ${wrong} path(s) not ${uid}:${gid} in volume ${src}"
+            if [ "${wrong}" != 0 ]; then
+                if [ "${APPLY}" = 1 ]; then fix_owner "${mp}"; else status=1; fi
+            fi
+            ;;
+        ro)
+            [ "${src}" = /dev/null ] && continue
+            [ -e "${src}" ] || continue
+            read -r o g m < <(stat -c '%u %g %a' "${src}")
+            m="${m: -3}"
+            if [ "${o}" = "${uid}" ]; then bit="${m:0:1}"; elif [ "${g}" = "${gid}" ]; then bit="${m:1:1}"; else bit="${m:2:1}"; fi
+            if [ "${bit}" -lt 4 ]; then
+                echo "WARN     ${src} (owner ${o}:${g}, mode ${m}) isn't readable by ${uid}:${gid} — the container can't read it"
+                status=1
+            fi
+            ;;
+    esac
+done <<<"${mounts}"
+
+if [ -z "${SUDO}" ] && [ "$(id -u)" != "0" ] && [ "${APPLY}" = 0 ]; then
+    echo "(no passwordless sudo: counts only cover paths readable by $(id -un))"
+fi
 
 if [ "${APPLY}" = 1 ] && [ -f "${ENV_FILE}" ]; then
     # Write (or fill an empty `KEY=` line) so the image build uses these ids.
+    [ -z "$(tail -c1 "${ENV_FILE}")" ] || echo >> "${ENV_FILE}"
     for kv in "ORCHESTRATOR_UID=${uid}" "ORCHESTRATOR_GID=${gid}"; do
         key="${kv%%=*}"
         if [ -z "$(env_get "${key}")" ]; then
@@ -114,6 +148,8 @@ if [ "${APPLY}" = 1 ] && [ -f "${ENV_FILE}" ]; then
             echo "${kv}" >> "${ENV_FILE}"
         fi
     done
+    echo "Done."
+    exit 0
 fi
-
-[ "${APPLY}" = 1 ] && echo "Done." || echo "Dry run — re-run with --apply to fix."
+if [ "${status}" = 0 ]; then echo "All good."; else echo "Dry run — re-run with --apply to fix."; fi
+exit "${status}"
