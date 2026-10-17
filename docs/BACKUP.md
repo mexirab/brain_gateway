@@ -161,16 +161,14 @@ Verify: `curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api
 
 ## File ownership
 
-The orchestrator container runs as root, but the backup cron runs as the host
-user (uid 1000). Files the container writes via tmpfile + `os.replace` —
-`config_writer.atomic_write_yaml` (`selfcare_schedule.yaml`,
-`user_profile_overrides.yaml`, routines/speakers YAML),
-`routes_setup._atomic_write_json` (`setup_state.json`),
-`setup_env._atomic_write_overrides` (`setup_overrides.env`), and `auto_learn.key`
-creation — are fchown'd to the owner of their parent data dir via
-`config_writer.match_parent_owner(fd, parent)`. Before this, those files were
-root-owned and the backup skipped them. Files written before the fix may still
-be root-owned: `sudo chown 1000:1000` them once.
+The orchestrator container runs as non-root `jess` with uid/gid
+`ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` (default 1000, the installing user), so
+everything it writes under `data/app/` is owned by the same user the backup
+cron runs as. `config_writer.match_parent_owner` is a no-op by default (kept
+only for root-run deployments). Hosts that ran the old root container may
+still have root-owned files (including SQLite `*-wal`/`*-shm`/`*-journal`
+sidecars): `bash scripts/orchestrator_state_perms.sh` reports them, `--apply`
+chowns them.
 
 > **Test your restore.** A backup you've never restored is a hypothesis. Once a
 > quarter, extract the latest archive into a scratch dir and confirm the DBs

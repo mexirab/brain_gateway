@@ -134,6 +134,22 @@ These pages moved. If you bookmarked them, update:
 | (new) `docs/HARDWARE.md` | GPU tier matrix |
 | (new) `docs/DEV.md` | contributor / dev guide |
 
+## Non-root orchestrator (one-time)
+
+`brain-orchestrator` now runs as non-root user `jess` (uid/gid `ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` in `.env`, default 1000). State written by the old root container is root-owned and unwritable by it.
+
+```bash
+bash scripts/orchestrator_state_perms.sh            # dry run: lists mounts needing a fix (exit 1)
+bash scripts/orchestrator_state_perms.sh --apply    # chown mounts, record ids in .env (sudo)
+docker compose up -d --build --force-recreate orchestrator
+bash scripts/orchestrator_state_perms.sh --apply    # again: files the old container wrote meanwhile
+```
+
+- Check for root-owned SQLite sidecars (`*-wal`, `*-shm`, `*-journal`) — the second run catches them.
+- `.env` values pointing at `/root/...` must move to `/home/jess/...`: `MODEL_SSH_KEY`, `CLAUDE_PROJECTS_PATH`, `TRAINING_CORPUS_CC_DIR`.
+- A key mounted via `SSH_KEY_PATH` must be readable by `ORCHESTRATOR_UID`.
+- `docker exec brain-orchestrator …` now runs as `jess`; `pip install` goes to the user site.
+
 ---
 
 ## Rolling back

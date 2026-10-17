@@ -121,8 +121,9 @@ SQLITE_SIDECAR_SUFFIXES = (".db-wal", ".db-shm", ".sqlite3-wal", ".sqlite3-shm")
 # brain_state.db or the Fernet key is worse than a loud error). Everything else
 # (training corpus shards, setup_state.json, meal photos…) is best-effort: an
 # unreadable or vanished file is skipped with a warning, not fatal. The
-# orchestrator container runs as root and writes some data/app files root-owned,
-# so a host-user cron legitimately can't read every file.
+# orchestrator container now runs as non-root (ORCHESTRATOR_UID, default 1000),
+# but hosts that ran the old root container may still hold root-owned files a
+# host-user cron can't read (fix: scripts/orchestrator_state_perms.sh --apply).
 CRITICAL_NAMES = {"auto_learn.key"}
 CRITICAL_SUFFIXES = (".db", ".sqlite3")
 
