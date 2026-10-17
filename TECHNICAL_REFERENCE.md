@@ -411,7 +411,7 @@ Echo-injection defences in `unified_loop.py` (2026-10-02 security review: a `<to
 | `_filter_new_tool_calls()` | Drops calls already executed in earlier rounds, collapses identical `(name, args)` within a round, caps a round at `MAX_TOOL_CALLS_PER_ROUND = 5`. | `bgw_tool_calls_capped_total` |
 | `cloud_brain` message strip | Client-supplied `role: "system"` and `role: "tool"` messages are removed before the loop — the orchestrator is the only legitimate producer of tool results. Log: `[UNIFIED] Stripped N client system/tool message(s)`. | — |
 
-Known gaps (not fixed): no server-side confirmation gate for HA lock/alarm/cover services; announcement-ack inference still trusts the client transcript's assistant turns (API-token holders only); the `home_assistant` schema lists only the first 60 entities (sorted by entity_id) so scenes/media_players may be absent.
+Known gaps (not fixed): announcement-ack inference still trusts the client transcript's assistant turns (API-token holders only). HA unlock/cover-open have no confirmation flow, so the `home_assistant` tool refuses them outright (see below).
 
 ## Empty-Reply Handling
 
@@ -431,6 +431,22 @@ No post-terminal-tool round cap (by design): the old `max_rounds = round_num + 2
 ```json
 {"entity_id": "light.x", "service": "turn_on", "data": {"brightness": 128}}
 ```
+
+**Entity listing (schema description).** `tool_definitions.format_ha_entity_listing` lists every entity in `HA_LISTED_DOMAINS` (`light, switch, fan, climate, cover, scene, lock, media_player`), one line per domain: `light: light.kitchen, light.k1 (Kitchen Pendant), …`. Full entity_ids sorted by id; friendly name only when it adds information (NFKC-normalised, allow-listed characters, 32-char cap — names are device-owner-controlled text in the cache prefix). Depends only on ids + names, never state (prompt-cache prefix stability). Bounded by `HA_LISTING_BUDGET_CHARS = 6000`, shared round-robin across domains; overflow shows `(+N more not listed)`. Denied entities are not listed.
+
+**Handler checks (`tool_home_assistant`), in order** — every refusal ends "Nothing was changed.":
+
+| Check | Refusal |
+|-------|---------|
+| `entity_id` matches `[a-z_]+\.[a-z0-9_]{1,128}`, `service` matches `[a-z_]{1,64}`, `data` is an object | format error |
+| Domain in `HA_LISTED_DOMAINS` (alarm etc. not callable) | "the X domain can't be controlled from chat" |
+| Not denied: `HA_TOOL_DENY_ENTITIES` globs + the Helios plug object id in any domain (power goes through `helios_power` only) | "X can't be controlled from chat" |
+| Service in `_HA_ALLOWED_SERVICES[domain]` | cover/lock: "needs a confirmation step chat doesn't have yet"; others: "isn't available from chat" |
+| Entity exists in the cache; if not, TTL refresh capped at 3 s | unknown → up to 5 "Closest matches: …" (listed domains, not denied), metric `bgw_ha_unknown_entity_total`; HA unreachable → "couldn't reach Home Assistant" |
+
+Allowed services: light/switch `turn_on|turn_off|toggle`; fan adds `set_percentage|oscillate|set_preset_mode|set_direction`; climate `set_temperature|set_hvac_mode|set_fan_mode|set_preset_mode|turn_on|turn_off`; scene `turn_on`; media_player play/pause/stop/next/previous/volume/mute/on/off/`select_source|shuffle_set|repeat_set|join|unjoin|play_media`; cover `close_cover|stop_cover|close_cover_tilt|stop_cover_tilt` (no open); lock `lock` (no unlock).
+
+Re-targeting keys are stripped from `data` before the call: `entity_id, area_id, device_id, label_id, floor_id, target, entities, snapshot_entities, scene_id`.
 
 ### search_memory
 ```json

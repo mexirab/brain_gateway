@@ -1380,3 +1380,11 @@ PANTRY_REMINDER_DONE = Counter(
 )
 for _r in ("cooked", "already", "refused", "unlinked", "error"):
     PANTRY_REMINDER_DONE.labels(result=_r)
+
+
+# -- Home Assistant tool -------------------------------------------------------
+# The schema lists entities within a char budget; the model may guess an id.
+HA_UNKNOWN_ENTITY = Counter(
+    "bgw_ha_unknown_entity_total",
+    "home_assistant tool calls refused because the entity_id does not exist (closest matches returned)",
+)

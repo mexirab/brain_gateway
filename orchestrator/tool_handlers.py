@@ -25,6 +25,7 @@ from orchestrator.metrics import (
     GMAIL_API_CALLS,
     GMAIL_API_ERRORS,
     GMAIL_API_LATENCY,
+    HA_UNKNOWN_ENTITY,
     REMINDERS_DELIVERED,
     REMINDERS_FAILED,
     REMINDERS_MISSED,
@@ -57,6 +58,7 @@ from orchestrator.task_decomposition import (
     list_active_tasks,
     skip_step,
 )
+from orchestrator.tool_definitions import HA_LISTED_DOMAINS, ha_entity_token, ha_tool_denied
 from orchestrator.web_search import get_search_client
 
 logger = logging.getLogger(__name__)
@@ -133,10 +135,108 @@ def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
     return f"Unknown action: {action}"
 
 
+# Keys in `data` that would re-target a service call away from the checked
+# entity_id (call_service merges data over {"entity_id": ...}).
+_HA_TARGET_KEYS = (
+    "entity_id",
+    "area_id",
+    "device_id",
+    "label_id",
+    "floor_id",
+    "target",
+    "entities",
+    "snapshot_entities",
+    "scene_id",
+)
+# Services the chat tool may call, per domain. An allow-list, not a deny-list:
+# services like scene.apply / scene.create take their own entity map and
+# would bypass every check here.
+_HA_ALLOWED_SERVICES = {
+    "light": {"turn_on", "turn_off", "toggle"},
+    "switch": {"turn_on", "turn_off", "toggle"},
+    "fan": {"turn_on", "turn_off", "toggle", "set_percentage", "oscillate", "set_preset_mode", "set_direction"},
+    "climate": {"set_temperature", "set_hvac_mode", "set_fan_mode", "set_preset_mode", "turn_on", "turn_off"},
+    "scene": {"turn_on"},
+    "media_player": {
+        "play_media",
+        "media_play",
+        "media_pause",
+        "media_stop",
+        "media_next_track",
+        "media_previous_track",
+        "volume_set",
+        "volume_up",
+        "volume_down",
+        "volume_mute",
+        "turn_on",
+        "turn_off",
+        "select_source",
+        "shuffle_set",
+        "repeat_set",
+        "join",
+        "unjoin",
+    },
+    # Closing/locking only. Opening or unlocking needs a confirmation flow chat
+    # doesn't have yet (no such entities today — this guards the day one is added).
+    "cover": {"close_cover", "stop_cover", "close_cover_tilt", "stop_cover_tilt"},
+    "lock": {"lock"},
+}
+
+
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
     """Execute a Home Assistant service call directly."""
     if not entity_id or not service:
         return "Missing entity_id or service"
+    if not isinstance(entity_id, str) or not isinstance(service, str):
+        return "Failed: entity_id and service must be strings. Nothing was changed."
+    if data is not None and not isinstance(data, dict):
+        return 'Failed: data must be an object, e.g. {"brightness": 128}. Nothing was changed.'
+    # Validate before anything is logged or echoed (call_service re-checks).
+    if not re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id) or not re.fullmatch(r"[a-z_]{1,64}", service):
+        return "Failed: entity_id must look like 'light.kitchen' and service like 'turn_on'. Nothing was changed."
+
+    domain = entity_id.split(".", 1)[0]
+    if domain not in HA_LISTED_DOMAINS:
+        return f"Failed: the {domain} domain can't be controlled from chat. Nothing was changed."
+    if ha_tool_denied(entity_id):
+        logger.warning(f"[HA] Refused denied entity {entity_id}")
+        return f"Failed: {entity_id} can't be controlled from chat. Nothing was changed."
+    if service not in _HA_ALLOWED_SERVICES.get(domain, set()):
+        if domain in ("cover", "lock"):
+            return f"Failed: {domain}.{service} needs a confirmation step chat doesn't have yet. Nothing was changed."
+        return f"Failed: {domain}.{service} isn't available from chat. Nothing was changed."
+    data = {k: v for k, v in (data or {}).items() if k not in _HA_TARGET_KEYS}
+
+    # The tool schema lists entities within a size budget, so the model may
+    # guess an id. HA answers 200 for many services on a non-existent entity,
+    # which the model would report as done — catch unknown ids here and hand
+    # back the closest real ones instead.
+    if ha_client.get_entity(entity_id) is None:
+        # Picks up newly added entities, and fills an empty cache (HA was down
+        # at startup). TTL-bound; capped so a slow HA can't stall a voice turn.
+        try:
+            await asyncio.wait_for(ha_client.refresh_entities(), timeout=3)
+        except TimeoutError:
+            ha_client.last_refresh_ok = False
+        unknown = ha_client.get_entity(entity_id) is None
+        if unknown and (not ha_client.has_entities() or not ha_client.last_refresh_ok):
+            return "Failed: couldn't reach Home Assistant to check that entity. Nothing was changed."
+        if unknown:
+            HA_UNKNOWN_ENTITY.inc()
+            suggestions = [
+                e
+                for e in ha_client.suggest_entities(entity_id, limit=8)
+                if e.domain in HA_LISTED_DOMAINS and not ha_tool_denied(e.entity_id)
+            ][:5]
+            logger.info(f"[HA] Unknown {domain} entity_id, offered {len(suggestions)} suggestion(s)")
+            if not suggestions:
+                return f"Failed: no Home Assistant entity '{entity_id}' and nothing similar. Nothing was changed."
+            listed = ", ".join(ha_entity_token(e) for e in suggestions)
+            return (
+                f"Failed: no Home Assistant entity '{entity_id}'. Nothing was changed. "
+                f"Closest matches: {listed}. Call again with one of these entity_ids if it is what the user meant; "
+                "if it's ambiguous, ask the user."
+            )
 
     logger.info(
         f"[HA] Calling {service} on {entity_id} with data keys: {sorted(data or {})}",
