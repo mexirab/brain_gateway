@@ -372,6 +372,90 @@ def build() -> dict:
     row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Brain Server (llama-server)
+    # Scraped straight from llama-server's /metrics (Prometheus job
+    # llama-primary). Helios is power-tiered, so every series has long "no
+    # data" gaps and the counters reset on each wake — increase()/rate() handle
+    # the resets; ratios use sum() so a scrape gap doesn't divide by nothing.
+    # prompt_tokens_total counts only the tokens actually prefilled (cache hits
+    # are excluded), so the hit ratio is cached / (cached + prefilled).
+    r, y = row_divider("Brain Server (llama-server)", y)
+    panels.append(r)
+
+    cache_hit_1h = (
+        'sum(increase(llamacpp:prompt_tokens_cached_total{job="llama-primary"}[1h])) / '
+        '(sum(increase(llamacpp:prompt_tokens_cached_total{job="llama-primary"}[1h])) '
+        '+ sum(increase(llamacpp:prompt_tokens_total{job="llama-primary"}[1h])))'
+    )
+    mtp_accept_1h = (
+        'sum(increase(llamacpp:spec_decode_num_accepted_tokens_total{job="llama-primary"}[1h])) / '
+        'sum(increase(llamacpp:spec_decode_num_draft_tokens_total{job="llama-primary"}[1h]))'
+    )
+    llama_row = [
+        timeseries(
+            "Prompt Cache Hit Ratio (1h)",
+            [(cache_hit_1h, "hit ratio")],
+            unit="percentunit",
+            min_value=0,
+            max_value=1,
+            description="Share of prompt tokens served from llama-server's prompt cache instead of "
+            "re-prefilled. Expect ~0.9+ during a chat (static system prompt + tool schemas first). "
+            "A drop means something volatile moved above DYNAMIC_CONTEXT_MARKER in prompt_builder, "
+            "or the tool schemas stopped being byte-stable (e.g. HA entity list reordered). "
+            "Background jobs with different prompts lower it a little. No data = Helios asleep.",
+        ),
+        timeseries(
+            "Decode / Prefill Speed (tok/s)",
+            [
+                (
+                    'sum(rate(llamacpp:tokens_predicted_total{job="llama-primary"}[15m])) / '
+                    'sum(rate(llamacpp:tokens_predicted_seconds_total{job="llama-primary"}[15m]))',
+                    "decode",
+                ),
+                (
+                    'sum(rate(llamacpp:prompt_tokens_total{job="llama-primary"}[15m])) / '
+                    'sum(rate(llamacpp:prompt_seconds_total{job="llama-primary"}[15m]))',
+                    "prefill",
+                ),
+            ],
+            unit="none",
+            description="Tokens per second while actually generating (decode) and prefilling (prompt), "
+            "averaged over 15 min of busy time — idle time is excluded. Baseline on the 5090 with MTP: "
+            "~105-120 decode, ~2500 prefill. Decode well below that = MTP acceptance collapsed or the "
+            "model fell back to CPU (see BrainOnCPU).",
+        ),
+        timeseries(
+            "MTP Draft Acceptance (1h)",
+            [
+                (mtp_accept_1h, "accepted / drafted"),
+                (
+                    'sum by (position) (increase(llamacpp:spec_decode_num_accepted_tokens_per_pos_total{job="llama-primary"}[1h])) / '
+                    'scalar(sum(increase(llamacpp:spec_decode_num_drafts_total{job="llama-primary"}[1h])))',
+                    "pos {{position}}",
+                ),
+            ],
+            unit="percentunit",
+            min_value=0,
+            max_value=1,
+            description="Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2), overall "
+            "and per draft position. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
+            "repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever "
+            "is --spec-type none on the llama-server-primary unit.",
+        ),
+        timeseries(
+            "Brain Queue (llama-server)",
+            [
+                ('max_over_time(llamacpp:requests_deferred{job="llama-primary"}[5m])', "deferred"),
+                ('max_over_time(llamacpp:requests_processing{job="llama-primary"}[5m])', "processing"),
+            ],
+            unit="none",
+            description="Requests waiting for / using the single primary slot. 'deferred' > 0 "
+            "means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
+        ),
+    ]
+    row, y = grid_row(llama_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Helios Power Management
     r, y = row_divider("Helios Power Management", y)
     panels.append(r)
@@ -1300,16 +1384,6 @@ def build() -> dict:
             "single-meal swaps. Long plans hold the one model slot.",
         ),
         timeseries(
-            "Brain Queue (llama-server)",
-            [
-                ('max_over_time(llamacpp:requests_deferred{job="llama-primary"}[5m])', "deferred"),
-                ('max_over_time(llamacpp:requests_processing{job="llama-primary"}[5m])', "processing"),
-            ],
-            unit="none",
-            description="Requests waiting for / using the single primary slot. 'deferred' > 0 "
-            "means chat or a background job (plan, scan, auto-learn) waited. No data = Helios asleep.",
-        ),
-        timeseries(
             "Pantry Scans & Swaps (/d)",
             [
                 ("sum by (kind, result) (increase(bgw_pantry_scan_total[1d]))", "{{kind}} {{result}}"),
@@ -1343,7 +1417,7 @@ def build() -> dict:
             description="Photo stock-takes and receipts, end to end (all photos of a scan, one at a time).",
         ),
     ]
-    row, y = grid_row(pantry_row, y, heights=[8, 8, 8, 8, 8, 8, 8])
+    row, y = grid_row(pantry_row, y, heights=[8, 8, 8, 8, 8, 8])
     panels.extend(row)
 
     # Phase 4: consumption tracking. Weekly volume — no alerts.
