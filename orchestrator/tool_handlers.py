@@ -25,6 +25,7 @@ from orchestrator.metrics import (
     GMAIL_API_CALLS,
     GMAIL_API_ERRORS,
     GMAIL_API_LATENCY,
+    HA_UNKNOWN_ENTITY,
     REMINDERS_DELIVERED,
     REMINDERS_FAILED,
     REMINDERS_MISSED,
@@ -57,6 +58,7 @@ from orchestrator.task_decomposition import (
     list_active_tasks,
     skip_step,
 )
+from orchestrator.tool_definitions import _ha_entity_token
 from orchestrator.web_search import get_search_client
 
 logger = logging.getLogger(__name__)
@@ -137,6 +139,25 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
     """Execute a Home Assistant service call directly."""
     if not entity_id or not service:
         return "Missing entity_id or service"
+
+    # The tool schema lists entities within a size budget, so the model may
+    # guess an id. HA answers 200 for many services on a non-existent entity,
+    # which the model would report as done — catch unknown ids here and hand
+    # back the closest real ones instead. Only once the cache is loaded.
+    if ha_client.has_entities() and ha_client.get_entity(entity_id) is None:
+        await ha_client.refresh_entities()  # TTL-bound: picks up newly added entities
+        if ha_client.get_entity(entity_id) is None:
+            HA_UNKNOWN_ENTITY.inc()
+            suggestions = ha_client.suggest_entities(entity_id)
+            logger.info(f"[HA] Unknown entity_id {entity_id}, offered {len(suggestions)} suggestion(s)")
+            if not suggestions:
+                return f"Failed: no Home Assistant entity '{entity_id}' and nothing similar. Nothing was changed."
+            listed = ", ".join(_ha_entity_token(e) for e in suggestions)
+            return (
+                f"Failed: no Home Assistant entity '{entity_id}'. Nothing was changed. "
+                f"Closest matches: {listed}. Call again with one of these entity_ids if it is what the user meant; "
+                "if it's ambiguous, ask the user."
+            )
 
     logger.info(
         f"[HA] Calling {service} on {entity_id} with data keys: {sorted(data or {})}",

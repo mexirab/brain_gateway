@@ -287,6 +287,36 @@ class HomeAssistantClient:
         """Get all entities for a domain (light, switch, etc.)"""
         return self._entities_by_domain.get(domain, [])
 
+    def has_entities(self) -> bool:
+        """True once the entity cache has been populated."""
+        return bool(self._entities)
+
+    def get_entity(self, entity_id: str) -> Optional[Entity]:
+        return self._entities.get(entity_id)
+
+    def suggest_entities(self, entity_id: str, limit: int = 5) -> List[Entity]:
+        """Closest known controllable entities to a (wrong) entity_id.
+
+        Matches the requested object id against each entity's object id and
+        friendly name; entities in the requested domain rank first.
+        """
+        domain, _, object_id = entity_id.partition(".")
+        query = (object_id or entity_id).replace("_", " ").lower()
+        pool = [e for d, es in self._entities_by_domain.items() if d in self.CONTROLLABLE_DOMAINS for e in es]
+        if not pool or not query:
+            return []
+
+        def score(e: Entity) -> float:
+            names = (e.entity_id.split(".", 1)[-1].replace("_", " "), e.friendly_name.lower())
+            if HAS_RAPIDFUZZ:
+                best = max(fuzz.WRatio(query, n) for n in names)
+            else:
+                best = max(100.0 if (query in n or n in query) else 0.0 for n in names)
+            return best + (15 if e.domain == domain else 0)
+
+        ranked = sorted(pool, key=lambda e: (-score(e), e.entity_id))
+        return [e for e in ranked[:limit] if score(e) >= 50]
+
     def get_all_controllable(self) -> Dict[str, List[Entity]]:
         """Get all controllable entities grouped by domain."""
         return {
