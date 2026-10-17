@@ -20,10 +20,20 @@ groups:
       # receiver for exactly that reason, which meant a REAL node going down
       # (jupiter, helios, saturn) notified nobody at all. Excluding the known-dead
       # node is what makes paging on the rest safe.
-      # When uranus comes back: drop the node!= matcher. Do NOT instead re-point
-      # this at "null".
+      # When uranus comes back: drop the "uranus" alternative. Do NOT instead
+      # re-point this at "null".
+      #
+      # helios is EXCLUDED too, for a different reason: it is power-tiered — its
+      # smart plug is switched off most of the day on purpose, so node-exporter
+      # being down is its normal sleeping state. Including it paged every 4h from
+      # 2026-10-09 to 10-14 (vacation, plug off) — the same "always firing, so
+      # nobody reads it" trap as uranus. Helios outages are paged by the
+      # plug-aware HeliosPoweredButUnreachable in group helios_health instead
+      # (plug draws running-level power but the box doesn't answer), and
+      # HeliosUnreachablePlugBlind covers the case where the plug reads are
+      # stale or contradictory and so can't tell sleep from an outage.
       - alert: NodeDown
-        expr: up{job="node-exporter", node!="uranus"} == 0
+        expr: up{job="node-exporter", node!~"uranus|helios"} == 0
         for: 3m
         labels:
           severity: critical
@@ -41,7 +51,7 @@ groups:
           severity: info
         annotations:
           summary: "uranus (test box) is unreachable"
-          description: "Known-dead since 2026-07-04 and excluded from NodeDown paging. This exists so the box does not vanish from monitoring; if it is genuinely back, remove the node!=\"uranus\" matcher on NodeDown and delete this rule."
+          description: "Known-dead since 2026-07-04 and excluded from NodeDown paging. This exists so the box does not vanish from monitoring; if it is genuinely back, drop \"uranus\" from the NodeDown node!~ matcher and delete this rule."
 
       # -- Storage substrate ----------------------------------------------------
       # /mnt/logging is an EXTERNAL USB disk (WDC WD10EZEX, /dev/sde1) holding the
@@ -687,22 +697,68 @@ groups:
       # (idle ~120 W, off-but-plugged a few W) while node-exporter is down.
       # That is a hang or a dead NIC, not sleep — on 2026-10-16 the chipset NIC
       # died after IOMMU faults and the box sat powered and unreachable for 1.5 h.
-      # NodeDown pages for the same outage; this one says which kind it is.
-      # Needs fresh plug readings: HELIOS_PLUG_MONITOR_ENABLED (or
+      # NodeDown excludes helios (sleep would page it), so this is THE paging
+      # signal for a Helios outage. The bgw_helios_* selectors are pinned to
+      # job="orchestrator" (bearer-scraped) because the netdata job scrapes with
+      # honor_labels: true, so a stray series there could otherwise satisfy or
+      # muddle the on() joins. The [10m] freshness window MUST match
+      # HeliosUnreachablePlugBlind's: if this rule judged reads stale while that
+      # one judged them fresh, a flaky HA could leave a hung Helios unreported
+      # by both. Needs fresh plug readings: HELIOS_PLUG_MONITOR_ENABLED (or
       # HELIOS_WAKE_ENABLED) on the orchestrator, else it never fires.
       # bgw_helios_running is recomputed on every successful read and drops to 0
       # when the power sensor reads unavailable, so a stale watts gauge (sensor
       # dropped out while Helios was up) can't fake a "powered" reading.
       - alert: HeliosPoweredButUnreachable
         expr: |
-          bgw_helios_plug_watts > 60
-          and on() bgw_helios_running == 1
-          and on() increase(bgw_helios_status_total{result="ok"}[5m]) > 0
+          bgw_helios_plug_watts{job="orchestrator"} > 60
+          and on() bgw_helios_running{job="orchestrator"} == 1
+          and on() increase(bgw_helios_status_total{job="orchestrator", result="ok"}[10m]) > 0
           and on() up{job="node-exporter", node="helios"} == 0
         for: 5m
         labels:
-          severity: warning
+          severity: critical
           node: helios
         annotations:
           summary: "Helios is powered ({{ $value | printf \"%.0f\" }} W) but not reachable"
           description: "The smart plug shows Helios drawing running-level power, but its node exporter has not answered for 5+ minutes — hung, or its network card died (2026-10-16: chipset IOMMU faults). Plug in a monitor to look; a power-cycle via the plug recovers it."
+
+      # Helios is unreachable and the plug can't tell us whether that's sleep.
+      # Without this, a broken plug poll would silently hide a real outage now
+      # that NodeDown excludes helios. Silent only when the reads are fresh
+      # (an "ok" read in the last 10 min, same window as
+      # HeliosPoweredButUnreachable) AND coherent: either exactly the reading
+      # HeliosPoweredButUnreachable pages on (running and > 60 W) or
+      # standby-level watts (genuinely asleep). Fires when:
+      #   * no ok read in 10 min — poll disabled, HA down, orchestrator down
+      #     (unless: a missing counter series still fires);
+      #   * running == 0 but the watts gauge >= 30 — the power sensor or the
+      #     switch went unavailable, so the gauge is frozen at its last value;
+      #   * 30-60 W while unreachable (stuck in POST?) — "running" to
+      #     helios_power but below the paging threshold. 10 days of history
+      #     never read in that band (running: >= 121 W, off: <= 3 W).
+      # Blind spot: the watts gauge defaults to 0 and is only set when the
+      # sensor parses, and a switch reading "unavailable" maps to "asleep".
+      # So after an orchestrator restart, with the plug or its power sensor
+      # unavailable since, a hung Helios looks asleep and NEITHER alert fires
+      # (seen briefly 2026-10-17 04:02 after a host reboot). Closing it needs
+      # helios_power to export NaN / "unknown" for unreadable plug state.
+      # Quiet + 24h repeat: it means "the outage detector is blind", a
+      # config/HA fix, not a dead box.
+      - alert: HeliosUnreachablePlugBlind
+        expr: |
+          up{job="node-exporter", node="helios"} == 0
+          unless on() (
+            increase(bgw_helios_status_total{job="orchestrator", result="ok"}[10m]) > 0
+            and on() (
+              (bgw_helios_running{job="orchestrator"} == 1 and on() bgw_helios_plug_watts{job="orchestrator"} > 60)
+              or bgw_helios_plug_watts{job="orchestrator"} < 30
+            )
+          )
+        for: 30m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Helios is unreachable and its plug reading is stale or unknown"
+          description: "Helios's node exporter is down, but the smart-plug reads are missing (no successful read in 10 min) or contradictory (power sensor unavailable), so Jess can't tell whether Helios is asleep or hung. Check HELIOS_PLUG_MONITOR_ENABLED / HELIOS_WAKE_ENABLED on the orchestrator, the plug and its power sensor in Home Assistant, and `docker logs brain-orchestrator | grep HELIOS`."
