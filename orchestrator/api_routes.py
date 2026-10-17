@@ -24,6 +24,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from orchestrator import calendar_sources, shared
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
 from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_entity_allowed
+from orchestrator.ha_registry import entity_view, get_registry_meta
 from orchestrator.metrics import (
     FALLBACK_ONLINE,
     FOCUS_ACTIVE,
@@ -273,20 +274,26 @@ def list_models():
 async def list_ha_entities():
     """List the Home Assistant entities chat and the dashboard may control:
     listed domains only, denied entities (Helios plug, HA_TOOL_DENY_ENTITIES)
-    hidden — same policy as ha_guard.check_ha_call."""
-    await ha_client.refresh_entities()
+    and entities hidden in HA left out — same policy as ha_guard.check_ha_call.
+    Each entity carries its HA area and entity category (from the registries,
+    cached; null when unavailable) so the /home page can group by room."""
+    await ha_client.refresh_entities(max_age_seconds=3)
+    registry = await get_registry_meta(ha_client.url, ha_client.token)
 
     controllable = ha_client.get_all_controllable()
     shown = {
-        domain: [e for e in entities if ha_entity_allowed(e.entity_id)]
+        domain: [
+            e for e in entities if ha_entity_allowed(e.entity_id) and not registry.get(e.entity_id, {}).get("hidden")
+        ]
         for domain, entities in controllable.items()
         if domain in HA_LISTED_DOMAINS
     }
 
     return {
         "total": sum(len(v) for v in shown.values()),
+        "rooms_available": bool(registry),
         "controllable": {
-            domain: [{"entity_id": e.entity_id, "friendly_name": e.friendly_name, "state": e.state} for e in entities]
+            domain: [entity_view(e, registry.get(e.entity_id, {})) for e in entities]
             for domain, entities in shown.items()
             if entities
         },
@@ -311,6 +318,12 @@ async def execute_ha_command(body: HACommandRequest):
             call = f"{body.entity_id.split('.', 1)[0]}.{body.service}" if well_formed else "malformed"
             logger.warning(f"[HA] API command refused: {call}")
             return error_response(refusal, status_code=403)
+        # HA answers 200 for a service call on an entity it doesn't have, so an
+        # unknown id would read as success. Refresh once before giving up.
+        if ha_client.get_entity(body.entity_id) is None:
+            await ha_client.refresh_entities(force=True)
+            if ha_client.get_entity(body.entity_id) is None:
+                return error_response("Unknown entity", status_code=404)
         result = await ha_client.call_service(body.entity_id, body.service, data)
 
     if body.command is None and not result.success:

@@ -42,6 +42,11 @@ def _deny_defaults(monkeypatch):
     monkeypatch.setattr(shared, "FOCUS_AUDIO_COFFEE_URL", "", raising=False)
     monkeypatch.setattr(ha_guard.settings, "orchestrator_url", "http://10.0.0.248:8888")
 
+    async def _no_registry(url, token):
+        return {}
+
+    monkeypatch.setattr(api_routes, "get_registry_meta", _no_registry)
+
 
 class FakeHA:
     def __init__(self):

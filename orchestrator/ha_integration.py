@@ -246,13 +246,15 @@ class HomeAssistantClient:
             "Content-Type": "application/json",
         }
 
-    async def refresh_entities(self, force: bool = False) -> int:
+    async def refresh_entities(self, force: bool = False, max_age_seconds: Optional[float] = None) -> int:
         """
         Fetch all entities from Home Assistant and cache them.
-        Returns the number of entities loaded.
+        Returns the number of entities loaded. ``max_age_seconds`` overrides
+        the cache TTL for callers that show live state (dashboard /home).
         """
         # Check if cache is still valid
-        if not force and self._last_refresh and datetime.now() - self._last_refresh < self.cache_ttl:
+        ttl = self.cache_ttl if max_age_seconds is None else timedelta(seconds=max_age_seconds)
+        if not force and self._last_refresh and datetime.now() - self._last_refresh < ttl:
             return len(self._entities)
 
         try:

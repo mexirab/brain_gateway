@@ -89,10 +89,26 @@ export interface HAEntity {
   entity_id: string;
   friendly_name: string;
   state: string;
+  /** HA area (room) name; null when unassigned or the registry is unreachable. */
+  area?: string | null;
+  /** HA entity category: 'config' / 'diagnostic' are device settings, not devices. */
+  category?: string | null;
+  // light
+  supports_brightness?: boolean;
+  brightness?: number | null;
+  is_group?: boolean;
+  // media_player
+  volume?: number | null;
+  media_title?: string | null;
+  // climate
+  current_temperature?: number | null;
+  temperature?: number | null;
 }
 
 export interface HAEntitiesResponse {
   total: number;
+  /** False when HA's registries couldn't be read — no rooms, group by type. */
+  rooms_available?: boolean;
   controllable: Record<string, HAEntity[]>;
 }
 
