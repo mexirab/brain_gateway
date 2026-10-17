@@ -43,6 +43,7 @@ An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.ex
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `FRONTEND_BIND_ADDR` | `0.0.0.0` | Host interface the dashboard (`brain-frontend`, `SERVICE_FRONTEND_PORT`, default 3001) publishes on. LAN by default so a fresh install's `http://<lan-ip>:3001` works. Set `127.0.0.1` when the dashboard is served through Tailscale Serve HTTPS (Jupiter does) — plain `http://<host>:3001` then stops answering off-box. The blackbox probe uses `brain-frontend:3001` over `frontend-probe-net`, not this port. Apply with `docker compose up -d frontend`. |
 | `MODEL_BIND_ADDR` | `127.0.0.1` | Host interface the `vllm-primary` / `qwen-tts` / `parakeet-stt` published ports bind to. Loopback by default — the model APIs are unauthenticated and the orchestrator reaches them over the compose network. Set `0.0.0.0` for LAN access. |
 | `VLLM_MODEL` | `Lorbus/Qwen3.6-27B-int4-AutoRound` | HuggingFace repo id for the primary LLM, **or** an in-container path like `/models/Qwen3.8-27B-NVFP4` for weights staged by hand under `VLLM_MODELS_DIR`. 24GB tier → `Qwen/Qwen3-14B-Instruct-AWQ`; 32/48GB tier → the default. |
 | `VLLM_SERVED_NAME` | `qwen3.6-27b-int4` | `--served-model-name` exposed on the OpenAI-compatible API. Should match the orchestrator's `MODEL_NAME`. |

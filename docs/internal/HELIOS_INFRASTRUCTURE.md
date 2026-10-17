@@ -41,11 +41,12 @@ cd /opt/gateway_mvp/rag && python ingest_rag.py \
 
 Server closet temperature monitoring with dashboard widget, TTS alerts, and Grafana metrics.
 
-**Dashboard widget:** Shows closet temp, kitchen ambient, heat delta (+F), and estimated monthly AC cooling cost. Polls every 60s. Color-coded: green (<75F), yellow (75-80F), amber (80-85F), red (>85F).
+**Dashboard widget:** Shows closet temp, room ambient (`sensors.ambient`), heat delta (+F), and estimated monthly AC cooling cost. Polls every 60s. Colours, bar ticks and badge follow the warning/critical thresholds returned by `GET /api/temperatures` (same as the TTS alerts below): green below warning, warning band, critical band.
 
 **TTS alerts (every 10 min, `jobs_monitoring.check_closet_temperature`):**
 - Warning (`sensors.temperature.warning`): "Server closet is at X degrees. Getting warm." Held during /settings quiet hours until they end.
 - Critical (`sensors.temperature.critical`): "Server closet is dangerously hot. Check ventilation." Always speaks; also marks the warning as announced (no second "getting warm" while cooling).
+- Spoken on the `/settings` Speakers `temperature` route (unset → panel `default` → `reminder` route).
 - Re-arms when cooled below warning − 3°F (`TEMP_CLEAR_MARGIN_F`). Critical < warning is treated as warning.
 - A crossing only counts as announced if the announcement wasn't suppressed (sleep mode / voice session); otherwise it retries next run. State keys `temp:closet_warning` / `temp:closet_critical`.
 

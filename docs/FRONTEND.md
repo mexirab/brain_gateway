@@ -44,7 +44,7 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 - **Calendar card** -> shows merged phone+Google calendar events with source label
 - **Reminders card** -> pending reminders with complete action
 - **Focus timer card** -> current session with start/stop controls
-- **Temperature card** -> server closet vs kitchen ambient temp, heat delta, estimated cooling cost
+- **Temperature card** -> server closet vs room ambient temp (`sensors.ambient`; it read `kitchen` and always showed "--" before), heat delta, estimated cooling cost. Colours, bar ticks and badge follow `thresholds.{warning,critical}` from `GET /api/temperatures` (the same profile bands the closet announcements use; `src/lib/temp-band.ts`, falls back to 80/85 if absent). A sensor with no numeric reading shows "No reading"
 - **Progress card** -> today's stats (tasks completed, focus minutes, brain dumps), 7-day bar chart, active streaks with flame icons, weekly trend arrow. Polls `/api/progress/today`, `/api/progress/week`, `/api/progress/streaks` every 60s
 - **Announcement History card** -> recent TTS announcements with type color-coding, speaker name, success/failure icons, stats bar (success count, failures, fallbacks, avg latency). Polls `/api/announcements/history` and `/api/announcements/stats` every 30s
 - **Selfcare Today card** -> today's medication/meal/water/movement counts + last-seen-ever timestamps for each. Expandable rows show today's individual entries. Mounted between Reminders and Focus Timer. Polls `/api/selfcare/today` every 30s
@@ -177,7 +177,11 @@ Browser camera and microphone APIs (`getUserMedia`) only work in a secure contex
 tailscale serve --bg --https=443 http://localhost:3001   # → https://<host>.<tailnet>.ts.net
 ```
 
-Over plain `http://<lan-ip>:3001` the pantry barcode scanner falls back to decoding a photo of the barcode or typed digits. Barcode decode: `@zxing/browser` 0.1.5 + `@zxing/library` 0.21.3 (pinned; iOS Safari has no `BarcodeDetector`).
+On Jupiter the frontend publishes on `127.0.0.1:3001` only (`FRONTEND_BIND_ADDR=127.0.0.1`, see `docs/ENV_VARS.md`), so `https://jupiter-amds.tail74fc4a.ts.net` is the only way in and plain `http://<host>:3001` does not answer off-box. Fresh installs default to `0.0.0.0` (LAN).
+
+**Monitoring:** blackbox probes `http://brain-frontend:3001/login` over the dedicated `gateway_nerves_frontend-probe-net` network → quiet `FrontendDown` alert (5m). It does not cover the Tailscale Serve hop or the publish address. See `monitoring/README.md`.
+
+Over plain `http://<lan-ip>:3001` (default bind) the pantry barcode scanner falls back to decoding a photo of the barcode or typed digits. Barcode decode: `@zxing/browser` 0.1.5 + `@zxing/library` 0.21.3 (pinned; iOS Safari has no `BarcodeDetector`).
 
 ## API Proxy Notes
 
@@ -198,6 +202,8 @@ Upstream URLs are built only by `buildUpstreamUrl()` (`src/lib/proxy-url.ts`) �
 - JSON responses relay as JSON, unless upstream marked them `Content-Disposition: attachment` (then they download).
 - Successful non-JSON responses stream through. Inline only for raster images and audio; everything else gets `Content-Disposition: attachment` (`src/lib/content-disposition.ts`) + `Content-Security-Policy: sandbox` + `X-Content-Type-Options: nosniff` — document downloads work, and uploaded HTML/SVG can't execute as the dashboard origin.
 - Non-JSON error, unreadable JSON, or orchestrator unreachable → JSON `502`.
+- Headers timeout (`src/lib/proxy-timeout.ts`): no response headers within the budget → JSON `504 {"error":"Orchestrator timed out"}` + `[PROXY] Orchestrator timed out` warning. Budgets: 120 s default; 300 s for `api/meals/photo`, `api/finance/sync`, `api/finance/categories`, `api/self_audit/run`, `api/paperless/upload`; 600 s for `v1/chat/completions` (non-streaming reply sends headers only after the whole tool loop). The timer is cleared once headers arrive, so SSE streams and downloads are never cut. A slow budget must stay above the orchestrator's inner timeout, or a retry repeats work that finished anyway.
+- Client disconnect (tab closed / navigated away) aborts the upstream fetch (also cancels an in-flight SSE body) and returns `499` with no warning log.
 
 Binary responses forward the upstream `Cache-Control` only when it is `private`/`no-store` and not `public` (cookie-authed proxy — never let a shared cache store it). Used by the versioned exercise photos.
 
