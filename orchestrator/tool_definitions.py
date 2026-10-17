@@ -60,7 +60,9 @@ def ha_entity_token(entity: Entity) -> str:
     name = unicodedata.normalize("NFKC", str(entity.friendly_name or ""))
     name = re.sub(r"[^A-Za-z0-9 '&./-]+", " ", name)
     name = " ".join(name.split())[:_HA_NAME_MAX].strip()
-    if not name or f"_{_ha_norm(name)}_" in f"_{object_id}_":
+    norm = _ha_norm(name)
+    # HA falls back to the entity_id when there is no friendly name.
+    if not name or norm == _ha_norm(entity.entity_id) or f"_{norm}_" in f"_{object_id}_":
         return entity.entity_id
     return f"{entity.entity_id} ({name})"
 
@@ -106,7 +108,10 @@ def format_ha_entity_listing(by_domain: Dict[str, List[Entity]], budget: int = H
                 used += cost
                 progress = True
 
+    # A budget too small for even the per-domain reserves: keep whole domain
+    # lines while they fit (in listing order) so the cap still holds.
     lines = []
+    total = 0
     for d, toks in tokens.items():
         parts = [f"{d}:"]
         if taken[d]:
@@ -114,7 +119,11 @@ def format_ha_entity_listing(by_domain: Dict[str, List[Entity]], budget: int = H
         hidden = len(toks) - taken[d]
         if hidden:
             parts.append(f"(+{hidden} more not listed)")
-        lines.append(" ".join(parts))
+        line = " ".join(parts)
+        if total + len(line) + (1 if lines else 0) > budget:
+            break
+        total += len(line) + (1 if lines else 0)
+        lines.append(line)
     return "\n".join(lines)
 
 
