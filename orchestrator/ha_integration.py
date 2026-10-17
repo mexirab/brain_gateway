@@ -569,6 +569,18 @@ class HomeAssistantClient:
         service = self._get_service_for_action(cmd.action, domain)
 
         if not service:
+            if cmd.action in ("unlock", "open_cover"):
+                # Deliberately unmapped (see _get_service_for_action) — count
+                # and word it like the guard's refusal.
+                HA_CALL_REFUSED.labels(path="nlp").inc()
+                logger.warning(f"[HA] Legacy command refused: {domain}.{cmd.action}")
+                return ExecutionResult(
+                    success=False,
+                    action=cmd.action,
+                    entity_id=entity.entity_id,
+                    message=f"Failed: {domain}.{cmd.action} needs a confirmation step chat doesn't have yet. "
+                    "Nothing was changed.",
+                )
             return ExecutionResult(
                 success=False,
                 action=cmd.action,

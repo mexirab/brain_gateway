@@ -12,7 +12,7 @@ import unicodedata
 from typing import Any, Dict, List
 
 from orchestrator import shared
-from orchestrator.ha_guard import HA_LISTED_DOMAINS, ha_tool_denied  # noqa: F401 — re-exported
+from orchestrator.ha_guard import HA_LISTED_DOMAINS, ha_tool_denied
 from orchestrator.ha_integration import Entity
 from orchestrator.shared import _HA_TOOL_CACHE_TTL, ha_client
 from orchestrator.voice_style import PRESETS as VOICE_PRESETS
@@ -139,7 +139,7 @@ SERVICES:
 - cover: close_cover, stop_cover (opening needs a confirmation step chat doesn't have)
 - lock: lock (unlocking needs a confirmation step chat doesn't have)
 - scene: turn_on
-- media_player: play_media (media_content_id: a media-source:// id, media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
+- media_player: play_media (media_content_id: media-source://media_source/... or media-source://radio_browser/..., media_content_type: "music"), media_pause, media_stop, volume_set (volume_level: 0.0-1.0)
 
 COLORS: rgb_color as [R,G,B]. BRIGHTNESS: 0-255 (50%=128).""",
             "parameters": {

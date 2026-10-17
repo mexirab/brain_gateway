@@ -172,6 +172,8 @@ class HACommandRequest(BaseModel):
             raise ValueError("send either 'command' or 'entity_id' + 'service' (+ 'data'), not both")
         if structured and (not self.entity_id or not self.service):
             raise ValueError("'entity_id' and 'service' are both required")
+        if self.data is not None and len(self.data) > 32:
+            raise ValueError("'data' has too many keys")
         return self
 
 

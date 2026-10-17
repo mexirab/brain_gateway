@@ -9,8 +9,8 @@ One policy, enforced in one place:
   which only the gated ``helios_power`` tool controls);
 - only allow-listed services per domain (no unlock, no cover open);
 - targeting keys stripped from ``data`` so a call can't re-aim at another entity;
-- ``media_player.play_media`` only plays media-source:// ids or the
-  orchestrator's own audio/stream URLs; ``media_player.join`` only groups
+- ``media_player.play_media`` only plays local-library / radio media-source
+  ids or the orchestrator's own audio/stream URLs (other data keys dropped); ``media_player.join`` only groups
   listed, non-denied media players.
 
 Internal callers (reminder announcements, focus audio, routines) go through
@@ -82,6 +82,14 @@ HA_ALLOWED_SERVICES = {
 _ENTITY_RE = re.compile(r"[a-z_]+\.[a-z0-9_]{1,128}")
 _SERVICE_RE = re.compile(r"[a-z_]{1,64}")
 _JOIN_MAX_MEMBERS = 16
+_MEDIA_SOURCES = ("media-source://media_source/", "media-source://radio_browser/")
+# play_media / join keep only these data keys: HA's play_media also takes a
+# nested `media` object (rewritten to the top level) and `extra` (Cast image
+# URLs the device fetches), either of which would bypass the URL check.
+_MEDIA_DATA_KEYS = {
+    "play_media": {"media_content_id", "media_content_type", "announce", "enqueue"},
+    "join": {"group_members"},
+}
 
 
 def ha_tool_denied(entity_id: str) -> bool:
@@ -93,7 +101,7 @@ def ha_tool_denied(entity_id: str) -> bool:
     patterns = [p.strip().lower() for p in (shared.HA_TOOL_DENY_ENTITIES or "").split(",") if p.strip()]
     if shared.HELIOS_PLUG_ENTITY:
         # Any domain: a switch_as_x / group wrapper keeps the object id.
-        patterns.append("*." + shared.HELIOS_PLUG_ENTITY.split(".", 1)[-1])
+        patterns.append("*." + shared.HELIOS_PLUG_ENTITY.split(".", 1)[-1].strip().lower())
     return any(fnmatch.fnmatchcase(entity_id, p) for p in patterns)
 
 
@@ -105,16 +113,18 @@ def ha_entity_allowed(entity_id: str) -> bool:
 
 
 def _allowed_media_url(media_id: str) -> bool:
-    """media-source:// ids (HA's own library, TTS, radio browser) plus the
+    """Local-library and radio media-source:// ids plus the
     URLs the orchestrator itself plays: its /api/audio/ clips and the
     configured focus streams. Anything else would turn a speaker into a
     fetcher of an arbitrary URL (HA does the GET, on the LAN)."""
     from orchestrator import shared
 
-    if media_id.startswith("media-source://"):
-        return True
     if any(c.isspace() for c in media_id) or ".." in media_id:
         return False
+    if media_id.startswith("media-source://"):
+        # Local media library + radio only. Not tts (speaks arbitrary text on
+        # any speaker, past the announcement DND gate) or camera feeds.
+        return media_id.startswith(_MEDIA_SOURCES)
     streams = {getattr(shared, "FOCUS_AUDIO_LOFI_URL", ""), getattr(shared, "FOCUS_AUDIO_COFFEE_URL", "")}
     if media_id in {s for s in streams if s}:
         return True
@@ -129,8 +139,9 @@ def _check_media_data(service: str, data: Dict[str, Any]) -> Optional[str]:
             return "Failed: play_media needs a media_content_id. Nothing was changed."
         if not _allowed_media_url(media_id):
             return (
-                "Failed: play_media can only play media-source:// items or Jess's own audio, "
-                "not an arbitrary URL. Nothing was changed."
+                "Failed: play_media can only play the media library (media-source://media_source/...), "
+                "radio (media-source://radio_browser/...) or Jess's own audio, not an arbitrary URL. "
+                "Nothing was changed."
             )
     elif service == "join":
         members = data.get("group_members")
@@ -182,6 +193,8 @@ def check_ha_call(entity_id: Any, service: Any, data: Any = None) -> Tuple[Optio
 
     clean = {k: v for k, v in (data or {}).items() if k not in HA_TARGET_KEYS}
     if domain == "media_player":
+        if service in _MEDIA_DATA_KEYS:
+            clean = {k: v for k, v in clean.items() if k in _MEDIA_DATA_KEYS[service]}
         refusal = _check_media_data(service, clean)
         if refusal:
             return refusal, {}

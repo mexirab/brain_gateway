@@ -113,7 +113,7 @@ class TestCheckHaCall:
         "media_id",
         [
             "media-source://radio_browser/abc",
-            "media-source://tts/cloud?message=hi",
+            "media-source://media_source/local/song.mp3",
             "https://stream.example/lofi.mp3",
             "http://10.0.0.248:8888/api/audio/abc123.wav",
         ],
@@ -136,6 +136,10 @@ class TestCheckHaCall:
             "http://10.0.0.248:8888/api/audiox/a.wav",
             "http://10.0.0.248:8888.evil.example/api/audio/a.wav",
             "file:///etc/passwd",
+            "media-source://tts/cloud?message=hi",
+            "media-source://camera/camera.front",
+            "media-source://",
+            "media-source://media_source/local/../../../etc/passwd",
             "https://stream.example/lofi.mp3?x=1",
             "",
             None,
@@ -148,6 +152,32 @@ class TestCheckHaCall:
             data["media_content_id"] = media_id
         refusal, _ = check_ha_call("media_player.living_room_speaker", "play_media", data)
         assert refusal and refusal.startswith("Failed:")
+
+    def test_play_media_drops_other_keys(self):
+        refusal, data = check_ha_call(
+            "media_player.living_room_speaker",
+            "play_media",
+            {
+                "media_content_id": "media-source://radio_browser/abc",
+                "media_content_type": "music",
+                "media": {"media_content_id": "http://attacker/x"},
+                "extra": {"thumb": "http://attacker/t.png"},
+                "announce": True,
+            },
+        )
+        assert refusal is None
+        assert set(data) == {"media_content_id", "media_content_type", "announce"}
+
+    def test_join_drops_other_keys(self):
+        refusal, data = check_ha_call(
+            "media_player.living_room_speaker", "join", {"group_members": ["media_player.k"], "x": 1}
+        )
+        assert refusal is None and data == {"group_members": ["media_player.k"]}
+
+    def test_mixed_case_helios_plug_still_denied(self, monkeypatch):
+        monkeypatch.setattr(shared, "HELIOS_PLUG_ENTITY", "switch.Helios_Test_Plug")
+        refusal, _ = check_ha_call(PLUG, "turn_off", {})
+        assert refusal and "can't be controlled" in refusal
 
     def test_play_media_ignores_unset_stream_url(self, monkeypatch):
         monkeypatch.setattr(ha_guard.settings, "orchestrator_url", "")
@@ -220,6 +250,16 @@ class TestLegacyNlpPath:
         assert not result.success
         assert fake.service_calls == []
 
+    async def test_unlock_counted_with_guard_wording(self, client):
+        from orchestrator.metrics import HA_CALL_REFUSED
+
+        c, fake = client
+        before = HA_CALL_REFUSED.labels(path="nlp")._value.get()
+        result = await c.execute_command("unlock the front door")
+        assert "confirmation step" in result.message
+        assert HA_CALL_REFUSED.labels(path="nlp")._value.get() == before + 1
+        assert fake.service_calls == []
+
     async def test_lock_still_works(self, client):
         c, fake = client
         result = await c.execute_command("lock the front door")
@@ -260,7 +300,7 @@ class TestRoutes:
         out = await api_routes.execute_ha_command(
             HACommandRequest(entity_id="light.kitchen", service="turn_on", data={"brightness": 10, "entity_id": PLUG})
         )
-        assert out["ok"] is True and out["success"] is True
+        assert out["ok"] is True and "success" not in out
         assert fake.service_calls == [("/api/services/light/turn_on", {"entity_id": "light.kitchen", "brightness": 10})]
 
     @pytest.mark.parametrize(
@@ -272,8 +312,25 @@ class TestRoutes:
         monkeypatch.setattr(api_routes, "ha_client", c)
         resp = await api_routes.execute_ha_command(HACommandRequest(entity_id=entity_id, service=service))
         assert resp.status_code == 403
-        assert json.loads(resp.body)["ok"] is False
+        body = json.loads(resp.body)
+        assert body["ok"] is False and body["error"].startswith("Failed:")
         assert fake.service_calls == []
+
+    async def test_structured_command_ha_failure_is_generic_502(self, client, monkeypatch):
+        c, fake = client
+
+        async def boom(*a, **k):
+            from orchestrator.ha_integration import ExecutionResult
+
+            return ExecutionResult(
+                success=False, action="x", entity_id="light.kitchen", message="HTTP 500: secret body"
+            )
+
+        monkeypatch.setattr(c, "call_service", boom)
+        monkeypatch.setattr(api_routes, "ha_client", c)
+        resp = await api_routes.execute_ha_command(HACommandRequest(entity_id="light.kitchen", service="turn_on"))
+        assert resp.status_code == 502
+        assert json.loads(resp.body) == {"ok": False, "error": "Home Assistant call failed"}
 
     async def test_text_command_refused(self, client, monkeypatch):
         c, fake = client
@@ -290,6 +347,7 @@ class TestRoutes:
             {"entity_id": "light.kitchen"},
             {"service": "turn_on"},
             {"command": ""},
+            {"entity_id": "light.kitchen", "service": "turn_on", "data": {f"k{i}": i for i in range(33)}},
         ],
     )
     def test_request_shape_validation(self, body):
