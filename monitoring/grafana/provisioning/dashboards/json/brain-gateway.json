@@ -3595,7 +3595,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
         "y": 92
       },
@@ -3692,8 +3692,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 6,
         "y": 92
       },
       "id": 47
@@ -3777,11 +3777,97 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 6,
+        "x": 12,
         "y": 92
       },
       "id": 48
+    },
+    {
+      "type": "timeseries",
+      "title": "HA: Unknown entity_id refusals (/1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_ha_unknown_entity_total[1h])) or vector(0)",
+          "legendFormat": "refused",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "home_assistant calls refused because the entity_id doesn't exist (the model guessed; closest matches were returned). Sustained non-zero = the schema listing is over its budget ('+N more not listed') or entities were renamed in HA.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 92
+      },
+      "id": 49
     },
     {
       "type": "row",
@@ -3794,7 +3880,7 @@
         "x": 0,
         "y": 100
       },
-      "id": 49
+      "id": 50
     },
     {
       "type": "timeseries",
@@ -3879,7 +3965,7 @@
         "x": 0,
         "y": 101
       },
-      "id": 50
+      "id": 51
     },
     {
       "type": "timeseries",
@@ -3976,7 +4062,7 @@
         "x": 6,
         "y": 101
       },
-      "id": 51
+      "id": 52
     },
     {
       "type": "stat",
@@ -4039,7 +4125,7 @@
         "x": 12,
         "y": 101
       },
-      "id": 52
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -4136,7 +4222,7 @@
         "x": 18,
         "y": 101
       },
-      "id": 53
+      "id": 54
     },
     {
       "type": "stat",
@@ -4215,7 +4301,7 @@
         "x": 0,
         "y": 109
       },
-      "id": 54
+      "id": 55
     },
     {
       "type": "timeseries",
@@ -4300,7 +4386,7 @@
         "x": 12,
         "y": 109
       },
-      "id": 55
+      "id": 56
     },
     {
       "type": "row",
@@ -4313,7 +4399,7 @@
         "x": 0,
         "y": 115
       },
-      "id": 56
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -4434,7 +4520,7 @@
         "x": 0,
         "y": 116
       },
-      "id": 57
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -4531,7 +4617,7 @@
         "x": 8,
         "y": 116
       },
-      "id": 58
+      "id": 59
     },
     {
       "type": "timeseries",
@@ -4628,7 +4714,7 @@
         "x": 16,
         "y": 116
       },
-      "id": 59
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4713,7 +4799,7 @@
         "x": 0,
         "y": 124
       },
-      "id": 60
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -4810,7 +4896,7 @@
         "x": 12,
         "y": 124
       },
-      "id": 61
+      "id": 62
     },
     {
       "type": "row",
@@ -4823,7 +4909,7 @@
         "x": 0,
         "y": 132
       },
-      "id": 62
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4908,7 +4994,7 @@
         "x": 0,
         "y": 133
       },
-      "id": 63
+      "id": 64
     },
     {
       "type": "timeseries",
@@ -4993,7 +5079,7 @@
         "x": 8,
         "y": 133
       },
-      "id": 64
+      "id": 65
     },
     {
       "type": "timeseries",
@@ -5090,7 +5176,7 @@
         "x": 16,
         "y": 133
       },
-      "id": 65
+      "id": 66
     },
     {
       "type": "row",
@@ -5103,7 +5189,7 @@
         "x": 0,
         "y": 141
       },
-      "id": 66
+      "id": 67
     },
     {
       "type": "timeseries",
@@ -5200,7 +5286,7 @@
         "x": 0,
         "y": 142
       },
-      "id": 67
+      "id": 68
     },
     {
       "type": "timeseries",
@@ -5297,7 +5383,7 @@
         "x": 8,
         "y": 142
       },
-      "id": 68
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -5382,7 +5468,7 @@
         "x": 16,
         "y": 142
       },
-      "id": 69
+      "id": 70
     },
     {
       "type": "row",
@@ -5395,7 +5481,7 @@
         "x": 0,
         "y": 150
       },
-      "id": 70
+      "id": 71
     },
     {
       "type": "stat",
@@ -5466,7 +5552,7 @@
         "x": 0,
         "y": 151
       },
-      "id": 71
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5576,7 +5662,7 @@
         "x": 8,
         "y": 151
       },
-      "id": 72
+      "id": 73
     },
     {
       "type": "timeseries",
@@ -5661,7 +5747,7 @@
         "x": 16,
         "y": 151
       },
-      "id": 73
+      "id": 74
     },
     {
       "type": "row",
@@ -5674,7 +5760,7 @@
         "x": 0,
         "y": 159
       },
-      "id": 74
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5759,7 +5845,7 @@
         "x": 0,
         "y": 160
       },
-      "id": 75
+      "id": 76
     },
     {
       "type": "timeseries",
@@ -5844,7 +5930,7 @@
         "x": 12,
         "y": 160
       },
-      "id": 76
+      "id": 77
     },
     {
       "type": "row",
@@ -5857,7 +5943,7 @@
         "x": 0,
         "y": 168
       },
-      "id": 77
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5954,7 +6040,7 @@
         "x": 0,
         "y": 169
       },
-      "id": 78
+      "id": 79
     },
     {
       "type": "gauge",
@@ -6023,7 +6109,7 @@
         "x": 8,
         "y": 169
       },
-      "id": 79
+      "id": 80
     },
     {
       "type": "timeseries",
@@ -6120,7 +6206,7 @@
         "x": 16,
         "y": 169
       },
-      "id": 80
+      "id": 81
     },
     {
       "type": "row",
@@ -6133,7 +6219,7 @@
         "x": 0,
         "y": 177
       },
-      "id": 81
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -6218,7 +6304,7 @@
         "x": 0,
         "y": 178
       },
-      "id": 82
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -6303,7 +6389,7 @@
         "x": 8,
         "y": 178
       },
-      "id": 83
+      "id": 84
     },
     {
       "type": "timeseries",
@@ -6388,7 +6474,7 @@
         "x": 16,
         "y": 178
       },
-      "id": 84
+      "id": 85
     },
     {
       "type": "stat",
@@ -6460,7 +6546,7 @@
         "x": 0,
         "y": 186
       },
-      "id": 85
+      "id": 86
     },
     {
       "type": "timeseries",
@@ -6545,7 +6631,7 @@
         "x": 6,
         "y": 186
       },
-      "id": 86
+      "id": 87
     },
     {
       "type": "timeseries",
@@ -6630,7 +6716,7 @@
         "x": 12,
         "y": 186
       },
-      "id": 87
+      "id": 88
     },
     {
       "type": "timeseries",
@@ -6727,7 +6813,7 @@
         "x": 18,
         "y": 186
       },
-      "id": 88
+      "id": 89
     },
     {
       "type": "row",
@@ -6740,7 +6826,7 @@
         "x": 0,
         "y": 194
       },
-      "id": 89
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6837,7 +6923,7 @@
         "x": 0,
         "y": 195
       },
-      "id": 90
+      "id": 91
     },
     {
       "type": "timeseries",
@@ -6922,7 +7008,7 @@
         "x": 8,
         "y": 195
       },
-      "id": 91
+      "id": 92
     },
     {
       "type": "timeseries",
@@ -7019,7 +7105,7 @@
         "x": 16,
         "y": 195
       },
-      "id": 92
+      "id": 93
     },
     {
       "type": "timeseries",
@@ -7104,7 +7190,7 @@
         "x": 0,
         "y": 203
       },
-      "id": 93
+      "id": 94
     },
     {
       "type": "timeseries",
@@ -7201,7 +7287,7 @@
         "x": 12,
         "y": 203
       },
-      "id": 94
+      "id": 95
     },
     {
       "type": "row",
@@ -7214,7 +7300,7 @@
         "x": 0,
         "y": 211
       },
-      "id": 95
+      "id": 96
     },
     {
       "type": "timeseries",
@@ -7299,7 +7385,7 @@
         "x": 0,
         "y": 212
       },
-      "id": 96
+      "id": 97
     },
     {
       "type": "timeseries",
@@ -7384,7 +7470,7 @@
         "x": 8,
         "y": 212
       },
-      "id": 97
+      "id": 98
     },
     {
       "type": "timeseries",
@@ -7481,7 +7567,7 @@
         "x": 16,
         "y": 212
       },
-      "id": 98
+      "id": 99
     },
     {
       "type": "timeseries",
@@ -7566,7 +7652,7 @@
         "x": 0,
         "y": 220
       },
-      "id": 99
+      "id": 100
     },
     {
       "type": "timeseries",
@@ -7675,7 +7761,7 @@
         "x": 8,
         "y": 220
       },
-      "id": 100
+      "id": 101
     },
     {
       "type": "piechart",
@@ -7746,7 +7832,7 @@
         "x": 16,
         "y": 220
       },
-      "id": 101
+      "id": 102
     },
     {
       "type": "row",
@@ -7759,7 +7845,7 @@
         "x": 0,
         "y": 228
       },
-      "id": 102
+      "id": 103
     },
     {
       "type": "timeseries",
@@ -7844,7 +7930,7 @@
         "x": 0,
         "y": 229
       },
-      "id": 103
+      "id": 104
     },
     {
       "type": "timeseries",
@@ -7941,7 +8027,7 @@
         "x": 8,
         "y": 229
       },
-      "id": 104
+      "id": 105
     },
     {
       "type": "timeseries",
@@ -8038,7 +8124,7 @@
         "x": 16,
         "y": 229
       },
-      "id": 105
+      "id": 106
     },
     {
       "type": "row",
@@ -8051,7 +8137,7 @@
         "x": 0,
         "y": 237
       },
-      "id": 106
+      "id": 107
     },
     {
       "type": "timeseries",
@@ -8161,7 +8247,7 @@
         "x": 0,
         "y": 238
       },
-      "id": 107
+      "id": 108
     },
     {
       "type": "stat",
@@ -8228,7 +8314,7 @@
         "x": 6,
         "y": 238
       },
-      "id": 108
+      "id": 109
     },
     {
       "type": "stat",
@@ -8295,7 +8381,7 @@
         "x": 12,
         "y": 238
       },
-      "id": 109
+      "id": 110
     },
     {
       "type": "timeseries",
@@ -8392,7 +8478,7 @@
         "x": 18,
         "y": 238
       },
-      "id": 110
+      "id": 111
     },
     {
       "type": "timeseries",
@@ -8501,7 +8587,7 @@
         "x": 0,
         "y": 246
       },
-      "id": 111
+      "id": 112
     },
     {
       "type": "timeseries",
@@ -8614,7 +8700,7 @@
         "x": 8,
         "y": 246
       },
-      "id": 112
+      "id": 113
     },
     {
       "type": "timeseries",
@@ -8712,7 +8798,7 @@
         "x": 16,
         "y": 246
       },
-      "id": 113
+      "id": 114
     },
     {
       "type": "row",
@@ -8725,7 +8811,7 @@
         "x": 0,
         "y": 254
       },
-      "id": 114
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8810,7 +8896,7 @@
         "x": 0,
         "y": 255
       },
-      "id": 115
+      "id": 116
     },
     {
       "type": "timeseries",
@@ -8896,7 +8982,7 @@
         "x": 8,
         "y": 255
       },
-      "id": 116
+      "id": 117
     },
     {
       "type": "timeseries",
@@ -8982,7 +9068,7 @@
         "x": 16,
         "y": 255
       },
-      "id": 117
+      "id": 118
     },
     {
       "type": "row",
@@ -8995,7 +9081,7 @@
         "x": 0,
         "y": 263
       },
-      "id": 118
+      "id": 119
     },
     {
       "type": "stat",
@@ -9063,7 +9149,7 @@
         "x": 0,
         "y": 264
       },
-      "id": 119
+      "id": 120
     },
     {
       "type": "stat",
@@ -9131,7 +9217,7 @@
         "x": 6,
         "y": 264
       },
-      "id": 120
+      "id": 121
     },
     {
       "type": "timeseries",
@@ -9217,7 +9303,7 @@
         "x": 12,
         "y": 264
       },
-      "id": 121
+      "id": 122
     },
     {
       "type": "stat",
@@ -9285,7 +9371,7 @@
         "x": 18,
         "y": 264
       },
-      "id": 122
+      "id": 123
     },
     {
       "type": "row",
@@ -9298,7 +9384,7 @@
         "x": 0,
         "y": 272
       },
-      "id": 123
+      "id": 124
     },
     {
       "type": "stat",
@@ -9370,7 +9456,7 @@
         "x": 0,
         "y": 273
       },
-      "id": 124
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -9456,7 +9542,7 @@
         "x": 8,
         "y": 273
       },
-      "id": 125
+      "id": 126
     },
     {
       "type": "logs",
@@ -9497,7 +9583,7 @@
         "x": 16,
         "y": 273
       },
-      "id": 126
+      "id": 127
     },
     {
       "type": "row",
@@ -9510,7 +9596,7 @@
         "x": 0,
         "y": 281
       },
-      "id": 127
+      "id": 128
     },
     {
       "type": "timeseries",
@@ -9596,7 +9682,7 @@
         "x": 0,
         "y": 282
       },
-      "id": 128
+      "id": 129
     },
     {
       "type": "timeseries",
@@ -9706,7 +9792,7 @@
         "x": 4,
         "y": 282
       },
-      "id": 129
+      "id": 130
     },
     {
       "type": "timeseries",
@@ -9804,7 +9890,7 @@
         "x": 8,
         "y": 282
       },
-      "id": 130
+      "id": 131
     },
     {
       "type": "logs",
@@ -9845,7 +9931,7 @@
         "x": 12,
         "y": 282
       },
-      "id": 131
+      "id": 132
     },
     {
       "type": "timeseries",
@@ -9931,7 +10017,7 @@
         "x": 16,
         "y": 282
       },
-      "id": 132
+      "id": 133
     },
     {
       "type": "timeseries",
@@ -10017,7 +10103,7 @@
         "x": 20,
         "y": 282
       },
-      "id": 133
+      "id": 134
     },
     {
       "type": "timeseries",
@@ -10115,7 +10201,7 @@
         "x": 0,
         "y": 290
       },
-      "id": 134
+      "id": 135
     },
     {
       "type": "timeseries",
@@ -10225,7 +10311,7 @@
         "x": 8,
         "y": 290
       },
-      "id": 135
+      "id": 136
     },
     {
       "type": "stat",
@@ -10297,7 +10383,7 @@
         "x": 16,
         "y": 290
       },
-      "id": 136
+      "id": 137
     },
     {
       "type": "row",
@@ -10310,7 +10396,7 @@
         "x": 0,
         "y": 298
       },
-      "id": 137
+      "id": 138
     },
     {
       "type": "stat",
@@ -10373,7 +10459,7 @@
         "x": 0,
         "y": 299
       },
-      "id": 138
+      "id": 139
     },
     {
       "type": "timeseries",
@@ -10459,7 +10545,7 @@
         "x": 8,
         "y": 299
       },
-      "id": 139
+      "id": 140
     },
     {
       "type": "stat",
@@ -10522,7 +10608,7 @@
         "x": 16,
         "y": 299
       },
-      "id": 140
+      "id": 141
     },
     {
       "type": "timeseries",
@@ -10612,7 +10698,7 @@
         "x": 0,
         "y": 307
       },
-      "id": 141
+      "id": 142
     },
     {
       "type": "stat",
@@ -10680,7 +10766,7 @@
         "x": 8,
         "y": 307
       },
-      "id": 142
+      "id": 143
     },
     {
       "type": "stat",
@@ -10748,7 +10834,7 @@
         "x": 16,
         "y": 307
       },
-      "id": 143
+      "id": 144
     },
     {
       "type": "stat",
@@ -10816,7 +10902,7 @@
         "x": 0,
         "y": 315
       },
-      "id": 144
+      "id": 145
     },
     {
       "type": "timeseries",
@@ -10902,7 +10988,7 @@
         "x": 12,
         "y": 315
       },
-      "id": 145
+      "id": 146
     },
     {
       "type": "row",
@@ -10915,7 +11001,7 @@
         "x": 0,
         "y": 323
       },
-      "id": 146
+      "id": 147
     },
     {
       "type": "logs",
@@ -10956,7 +11042,7 @@
         "x": 0,
         "y": 324
       },
-      "id": 147
+      "id": 148
     },
     {
       "type": "logs",
@@ -10997,7 +11083,7 @@
         "x": 12,
         "y": 324
       },
-      "id": 148
+      "id": 149
     }
   ]
 }

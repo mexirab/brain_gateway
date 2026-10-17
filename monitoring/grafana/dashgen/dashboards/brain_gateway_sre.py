@@ -619,8 +619,16 @@ def build() -> dict:
             unit="none",
             stack=True,
         ),
+        timeseries(
+            "HA: Unknown entity_id refusals (/1h)",
+            [("sum(increase(bgw_ha_unknown_entity_total[1h])) or vector(0)", "refused")],
+            unit="none",
+            description="home_assistant calls refused because the entity_id doesn't exist (the model guessed; "
+            "closest matches were returned). Sustained non-zero = the schema listing is over its budget "
+            "('+N more not listed') or entities were renamed in HA.",
+        ),
     ]
-    row, y = grid_row(tools_row, y, heights=[8, 8, 8])
+    row, y = grid_row(tools_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Memory (Palace + RAG)
