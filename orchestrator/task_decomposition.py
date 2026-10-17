@@ -96,7 +96,10 @@ Return format:
             shared.MODEL_NAME,
             messages,
             system=system_prompt,
-            timeout=60,
+            # 120s, not 30/60: llama-server runs a single slot, so this call
+            # queues behind any in-flight chat turn (requests_deferred). Matches
+            # auto_learn and the unified loop's per-call budget.
+            timeout=120,
         )
 
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")

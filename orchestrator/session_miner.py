@@ -204,11 +204,14 @@ async def _extract_insights(messages: List[str]) -> List[Dict]:
             shared.MODEL_URL,
             shared.MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
-            timeout=30,
+            # 120s, not 30/60: llama-server runs a single slot, so this call
+            # queues behind any in-flight chat turn (requests_deferred). Matches
+            # auto_learn and the unified loop's per-call budget.
+            timeout=120,
         )
         raw = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
     except Exception as e:
-        logger.warning("[SESSION_MINER] LLM extraction failed: %s", e)
+        logger.warning("[SESSION_MINER] LLM extraction failed: %r", e)
         return []
 
     return _parse_insights_json(raw)

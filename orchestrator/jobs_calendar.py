@@ -873,7 +873,10 @@ async def process_emails_for_events():
                     _LLM_URL,
                     _LLM_MODEL,
                     messages=[{"role": "user", "content": prompt}],
-                    timeout=30,
+                    # 120s, not 30/60: llama-server runs a single slot, so this call
+                    # queues behind any in-flight chat turn (requests_deferred). Matches
+                    # auto_learn and the unified loop's per-call budget.
+                    timeout=120,
                 )
                 raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
             except Exception as e:
