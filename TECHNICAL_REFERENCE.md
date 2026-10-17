@@ -46,7 +46,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | GET | `/api/palace/wings` | Palace wing structure |
 | GET | `/api/palace/wings/{wing}/rooms` | Rooms in a wing with memory counts |
 | GET | `/api/palace/stats` | Memory counts by wing |
-| POST | `/api/palace/mine` | Trigger Claude Code session mining |
+| POST | `/api/palace/mine` | Trigger Claude Code session mining. Single-flight: 409 while a run is in progress; 500 body is generic (detail in logs) |
 | POST | `/api/rag/ingest` | Force immediate re-ingest of source files (bypasses 2-min scheduler) |
 
 ### Chat History
@@ -121,7 +121,7 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 | GET | `/api/calendar/today` | Today's events from every source merged (`calendar_sources`: CalDAV + work Exchange push + Google) |
 | GET | `/api/calendar/range` | Merged events for `days` days from `start` (dashboard `/calendar` week view) |
 | GET/POST/PUT | `/api/calendar/sync` | Work-calendar (Exchange) push from the iPhone Shortcut (GET=status, POST/PUT=full snapshot) |
-| POST | `/api/email-to-calendar/run` | Manually trigger email-to-calendar extraction (dormant by default — see `EMAIL_TO_CALENDAR_ENABLED`); writes to CalDAV (else Google), skipped when nothing is writable |
+| POST | `/api/email-to-calendar/run` | Manually trigger email-to-calendar extraction (dormant by default — see `EMAIL_TO_CALENDAR_ENABLED`); writes to CalDAV (else Google), skipped when nothing is writable. An email is marked processed only after the model answers — a failed call is retried next run (query looks back 1 day) |
 
 **`GET /api/calendar/today`** → `{ok, events: [{id, title, start, end, location, description: null, all_day, calendar, source}], source: "merged"|"none", count, unavailable: [<source label>], web_url}`. `unavailable` lists sources that should have answered but failed (dashboard shows "Couldn't reach your X calendar"); `source: "none"` when no source answered; `web_url` = `CALENDAR_WEB_URL` or null.
 
