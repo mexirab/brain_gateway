@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     # -- Home Assistant (empty = disabled) ----------------------------------------
     ha_url: str = ""
     ha_token: str = ""
+    # Comma-separated entity ids / fnmatch globs the chat home_assistant tool
+    # may never call (e.g. "switch.router_*,switch.*_camera_enabled"). The
+    # Helios plug (helios_plug_entity) is always denied on top of this list —
+    # it is controlled only through the gated helios_power tool.
+    ha_tool_deny_entities: str = ""
 
     # -- Helios wake-on-demand (PT-C) --------------------------------------------
     # Power-tier the GPU box: Helios runs only the model layer (vLLM/TTS/STT) and

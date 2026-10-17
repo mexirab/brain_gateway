@@ -210,6 +210,8 @@ class HomeAssistantClient:
         self._entities: Dict[str, Entity] = {}
         self._entities_by_domain: Dict[str, List[Entity]] = {}
         self._last_refresh: Optional[datetime] = None
+        # False when the most recent refresh attempt failed (HA unreachable).
+        self.last_refresh_ok: bool = True
 
         # For fuzzy matching: friendly_name -> entity_id
         self._name_to_entity: Dict[str, str] = {}
@@ -252,6 +254,7 @@ class HomeAssistantClient:
             resp.raise_for_status()
             states = resp.json()
         except Exception as e:
+            self.last_refresh_ok = False
             print(f"[ha_integration] Error fetching entities: {e}")
             return len(self._entities)  # Return existing cache size
 
@@ -281,6 +284,7 @@ class HomeAssistantClient:
                     self._name_to_entity[base] = entity.entity_id
 
         self._last_refresh = datetime.now()
+        self.last_refresh_ok = True
         return len(self._entities)
 
     def get_entities_by_domain(self, domain: str) -> List[Entity]:
@@ -306,16 +310,17 @@ class HomeAssistantClient:
         if not pool or not query:
             return []
 
-        def score(e: Entity) -> float:
-            names = (e.entity_id.split(".", 1)[-1].replace("_", " "), e.friendly_name.lower())
+        def raw_score(e: Entity) -> float:
+            names = [n for n in (e.entity_id.split(".", 1)[-1].replace("_", " "), str(e.friendly_name).lower()) if n]
             if HAS_RAPIDFUZZ:
-                best = max(fuzz.WRatio(query, n) for n in names)
-            else:
-                best = max(100.0 if (query in n or n in query) else 0.0 for n in names)
-            return best + (15 if e.domain == domain else 0)
+                return max(fuzz.WRatio(query, n) for n in names)
+            return max(100.0 if (query in n or n in query) else 0.0 for n in names)
 
-        ranked = sorted(pool, key=lambda e: (-score(e), e.entity_id))
-        return [e for e in ranked[:limit] if score(e) >= 50]
+        # Filter on the raw similarity (a same-domain bonus must not let junk
+        # through), rank by similarity + bonus, deterministic tie-break.
+        scored = [(s, e) for e in pool if (s := raw_score(e)) >= 60]
+        scored.sort(key=lambda se: (-(se[0] + (15 if se[1].domain == domain else 0)), se[1].entity_id))
+        return [e for _, e in scored[:limit]]
 
     def get_all_controllable(self) -> Dict[str, List[Entity]]:
         """Get all controllable entities grouped by domain."""

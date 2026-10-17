@@ -58,7 +58,7 @@ from orchestrator.task_decomposition import (
     list_active_tasks,
     skip_step,
 )
-from orchestrator.tool_definitions import _ha_entity_token
+from orchestrator.tool_definitions import HA_LISTED_DOMAINS, ha_entity_token, ha_tool_denied
 from orchestrator.web_search import get_search_client
 
 logger = logging.getLogger(__name__)
@@ -135,24 +135,64 @@ def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
     return f"Unknown action: {action}"
 
 
+# Keys in `data` that would re-target a service call away from the checked
+# entity_id (call_service merges data over {"entity_id": ...}).
+_HA_TARGET_KEYS = ("entity_id", "area_id", "device_id", "label_id", "floor_id")
+# Services that open the house up. Refused from chat until a confirmation flow
+# exists (no such entities today; this is the guard for when one is added).
+_HA_CONFIRM_SERVICES = {
+    ("lock", "unlock"),
+    ("lock", "open"),
+    ("cover", "open_cover"),
+    ("alarm_control_panel", "alarm_disarm"),
+}
+
+
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
     """Execute a Home Assistant service call directly."""
     if not entity_id or not service:
         return "Missing entity_id or service"
+    # Validate before anything is logged or echoed (call_service re-checks).
+    if not re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id) or not re.fullmatch(r"[a-z_]{1,64}", service):
+        return "Failed: entity_id must look like 'light.kitchen' and service like 'turn_on'. Nothing was changed."
+
+    domain = entity_id.split(".", 1)[0]
+    if domain not in HA_LISTED_DOMAINS:
+        return f"Failed: the {domain} domain can't be controlled from chat. Nothing was changed."
+    if ha_tool_denied(entity_id):
+        logger.warning(f"[HA] Refused denied entity {entity_id}")
+        return f"Failed: {entity_id} can't be controlled from chat. Nothing was changed."
+    if (domain, service) in _HA_CONFIRM_SERVICES or (
+        domain == "alarm_control_panel" and service.startswith("alarm_disarm")
+    ):
+        return f"Failed: {domain}.{service} needs a confirmation step chat doesn't have yet. Nothing was changed."
+    data = {k: v for k, v in (data or {}).items() if k not in _HA_TARGET_KEYS}
 
     # The tool schema lists entities within a size budget, so the model may
     # guess an id. HA answers 200 for many services on a non-existent entity,
     # which the model would report as done — catch unknown ids here and hand
-    # back the closest real ones instead. Only once the cache is loaded.
-    if ha_client.has_entities() and ha_client.get_entity(entity_id) is None:
-        await ha_client.refresh_entities()  # TTL-bound: picks up newly added entities
-        if ha_client.get_entity(entity_id) is None:
+    # back the closest real ones instead.
+    if ha_client.get_entity(entity_id) is None:
+        # Picks up newly added entities, and fills an empty cache (HA was down
+        # at startup). TTL-bound; capped so a slow HA can't stall a voice turn.
+        try:
+            await asyncio.wait_for(ha_client.refresh_entities(), timeout=3)
+        except TimeoutError:
+            ha_client.last_refresh_ok = False
+        unknown = ha_client.get_entity(entity_id) is None
+        if unknown and (not ha_client.has_entities() or not ha_client.last_refresh_ok):
+            return "Failed: couldn't reach Home Assistant to check that entity. Nothing was changed."
+        if unknown:
             HA_UNKNOWN_ENTITY.inc()
-            suggestions = ha_client.suggest_entities(entity_id)
-            logger.info(f"[HA] Unknown entity_id {entity_id}, offered {len(suggestions)} suggestion(s)")
+            suggestions = [
+                e
+                for e in ha_client.suggest_entities(entity_id, limit=8)
+                if e.domain in HA_LISTED_DOMAINS and not ha_tool_denied(e.entity_id)
+            ][:5]
+            logger.info(f"[HA] Unknown {domain} entity_id, offered {len(suggestions)} suggestion(s)")
             if not suggestions:
                 return f"Failed: no Home Assistant entity '{entity_id}' and nothing similar. Nothing was changed."
-            listed = ", ".join(_ha_entity_token(e) for e in suggestions)
+            listed = ", ".join(ha_entity_token(e) for e in suggestions)
             return (
                 f"Failed: no Home Assistant entity '{entity_id}'. Nothing was changed. "
                 f"Closest matches: {listed}. Call again with one of these entity_ids if it is what the user meant; "
