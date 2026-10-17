@@ -1408,3 +1408,20 @@ HA_REGISTRY_FETCH = Counter(
 )
 for _r in ("ok", "error"):
     HA_REGISTRY_FETCH.labels(result=_r)
+# Entities in the last good registry read; 0 = never read, so the guard's
+# device-setting check runs on names only (ha_guard.device_setting_reason).
+HA_REGISTRY_ENTITIES = Gauge(
+    "bgw_ha_registry_entities",
+    "Entities in the last successful Home Assistant registry read (0 = never read)",
+)
+# Chat / NLP calls refused because the entity is a device setting. source:
+# registry (entity_category config/diagnostic), name (id word match), member
+# (scene/group containing one).
+HA_DEVICE_SETTING_REFUSED = Counter(
+    "bgw_ha_device_setting_refused_total",
+    "Home Assistant calls refused by the guard as device settings",
+    ["path", "source"],
+)
+for _p in ("tool", "nlp"):
+    for _s in ("registry", "name", "member"):
+        HA_DEVICE_SETTING_REFUSED.labels(path=_p, source=_s)

@@ -17,19 +17,20 @@ result (or ``{}``), and the page falls back to grouping by domain. The
 "hidden" flag only trims the listing — it is not an access control (chat and
 ``POST /api/ha/command`` can still target a hidden entity). The category IS:
 ``ha_guard`` refuses config / diagnostic entities on the chat and NLP paths
-(via ``cached_meta()``). Read-only —
+(via ``cached_meta()``, kept warm by ``ensure_fresh``). Read-only —
 nothing here writes to Home Assistant.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from orchestrator.metrics import HA_REGISTRY_FETCH
+from orchestrator.metrics import HA_REGISTRY_ENTITIES, HA_REGISTRY_FETCH
 
 if TYPE_CHECKING:
     from orchestrator.ha_integration import Entity
@@ -45,6 +46,7 @@ _cache: Dict[str, Dict[str, Any]] = {}
 _fetched_at: float = 0.0
 _failed_at: float = 0.0
 _lock = asyncio.Lock()
+_refresh_task: Optional[asyncio.Task] = None
 
 
 def _ws_url(http_url: str) -> Optional[str]:
@@ -127,9 +129,35 @@ async def get_registry_meta(http_url: str, token: str) -> Dict[str, Dict[str, An
             HA_REGISTRY_FETCH.labels(result="error").inc()
             logger.warning(f"[HA] Registry fetch failed ({type(e).__name__}); rooms unavailable, using last cache")
             return _cache
+        if meta != _cache:
+            # Categories changed: rebuild the chat tool schema, which hides
+            # device settings (ha_guard), instead of waiting out its TTL.
+            from orchestrator import shared
+
+            shared._ha_tool_cache = None
         _cache, _fetched_at, _failed_at = meta, time.monotonic(), 0.0
         HA_REGISTRY_FETCH.labels(result="ok").inc()
+        HA_REGISTRY_ENTITIES.set(len(meta))
         return _cache
+
+
+async def ensure_fresh(http_url: str, token: str, wait_seconds: float = 3.0) -> None:
+    """Keep the cache warm for ``ha_guard`` without stalling a chat / voice turn.
+
+    Starts one background ``get_registry_meta`` (a no-op while the cache is
+    fresh or in failure back-off). With a cache already in hand it returns at
+    once — the guard uses the last good result while the refresh runs. Only
+    with no cache at all does it wait, up to ``wait_seconds``; the fetch is
+    shielded, so a slow HA still finishes (or fails, backs off and is counted)
+    in the background. Never raises."""
+    global _refresh_task
+
+    if _refresh_task is None or _refresh_task.done():
+        _refresh_task = asyncio.create_task(get_registry_meta(http_url, token))
+    if _cache or _refresh_task.done():
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(asyncio.shield(_refresh_task), timeout=wait_seconds)
 
 
 def cached_meta() -> Dict[str, Dict[str, Any]]:
@@ -169,6 +197,6 @@ def entity_view(e: Entity, meta: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _reset_cache_for_tests() -> None:
-    global _cache, _fetched_at, _failed_at, _lock
-    _cache, _fetched_at, _failed_at = {}, 0.0, 0.0
+    global _cache, _fetched_at, _failed_at, _lock, _refresh_task
+    _cache, _fetched_at, _failed_at, _refresh_task = {}, 0.0, 0.0, None
     _lock = asyncio.Lock()
