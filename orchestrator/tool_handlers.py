@@ -18,6 +18,7 @@ from orchestrator.calendar_sources import get_calendar
 from orchestrator.data_manager import handle_get_data, handle_update_data
 from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
 from orchestrator.google_gmail import get_gmail_client
+from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_tool_denied
 from orchestrator.metrics import (
     CALENDAR_API_CALLS,
     CALENDAR_API_ERRORS,
@@ -25,6 +26,7 @@ from orchestrator.metrics import (
     GMAIL_API_CALLS,
     GMAIL_API_ERRORS,
     GMAIL_API_LATENCY,
+    HA_CALL_REFUSED,
     HA_UNKNOWN_ENTITY,
     REMINDERS_DELIVERED,
     REMINDERS_FAILED,
@@ -58,7 +60,7 @@ from orchestrator.task_decomposition import (
     list_active_tasks,
     skip_step,
 )
-from orchestrator.tool_definitions import HA_LISTED_DOMAINS, ha_entity_token, ha_tool_denied
+from orchestrator.tool_definitions import ha_entity_token
 from orchestrator.web_search import get_search_client
 
 logger = logging.getLogger(__name__)
@@ -135,77 +137,21 @@ def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
     return f"Unknown action: {action}"
 
 
-# Keys in `data` that would re-target a service call away from the checked
-# entity_id (call_service merges data over {"entity_id": ...}).
-_HA_TARGET_KEYS = (
-    "entity_id",
-    "area_id",
-    "device_id",
-    "label_id",
-    "floor_id",
-    "target",
-    "entities",
-    "snapshot_entities",
-    "scene_id",
-)
-# Services the chat tool may call, per domain. An allow-list, not a deny-list:
-# services like scene.apply / scene.create take their own entity map and
-# would bypass every check here.
-_HA_ALLOWED_SERVICES = {
-    "light": {"turn_on", "turn_off", "toggle"},
-    "switch": {"turn_on", "turn_off", "toggle"},
-    "fan": {"turn_on", "turn_off", "toggle", "set_percentage", "oscillate", "set_preset_mode", "set_direction"},
-    "climate": {"set_temperature", "set_hvac_mode", "set_fan_mode", "set_preset_mode", "turn_on", "turn_off"},
-    "scene": {"turn_on"},
-    "media_player": {
-        "play_media",
-        "media_play",
-        "media_pause",
-        "media_stop",
-        "media_next_track",
-        "media_previous_track",
-        "volume_set",
-        "volume_up",
-        "volume_down",
-        "volume_mute",
-        "turn_on",
-        "turn_off",
-        "select_source",
-        "shuffle_set",
-        "repeat_set",
-        "join",
-        "unjoin",
-    },
-    # Closing/locking only. Opening or unlocking needs a confirmation flow chat
-    # doesn't have yet (no such entities today — this guards the day one is added).
-    "cover": {"close_cover", "stop_cover", "close_cover_tilt", "stop_cover_tilt"},
-    "lock": {"lock"},
-}
-
-
 async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any] = None) -> str:
     """Execute a Home Assistant service call directly."""
-    if not entity_id or not service:
-        return "Missing entity_id or service"
-    if not isinstance(entity_id, str) or not isinstance(service, str):
-        return "Failed: entity_id and service must be strings. Nothing was changed."
-    if data is not None and not isinstance(data, dict):
-        return 'Failed: data must be an object, e.g. {"brightness": 128}. Nothing was changed.'
-    # Validate before anything is logged or echoed (call_service re-checks).
-    if not re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id) or not re.fullmatch(r"[a-z_]{1,64}", service):
-        return "Failed: entity_id must look like 'light.kitchen' and service like 'turn_on'. Nothing was changed."
-
+    # Domain, deny list, service allow-list, targeting keys, media args — the
+    # same guard the legacy NLP path and /api/ha/command use (ha_guard).
+    refusal, data = check_ha_call(entity_id, service, data)
+    if refusal:
+        HA_CALL_REFUSED.labels(path="tool").inc()
+        if (
+            isinstance(entity_id, str)
+            and re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id)
+            and ha_tool_denied(entity_id)
+        ):
+            logger.warning(f"[HA] Refused denied entity {entity_id}")
+        return refusal
     domain = entity_id.split(".", 1)[0]
-    if domain not in HA_LISTED_DOMAINS:
-        return f"Failed: the {domain} domain can't be controlled from chat. Nothing was changed."
-    if ha_tool_denied(entity_id):
-        logger.warning(f"[HA] Refused denied entity {entity_id}")
-        return f"Failed: {entity_id} can't be controlled from chat. Nothing was changed."
-    if service not in _HA_ALLOWED_SERVICES.get(domain, set()):
-        if domain in ("cover", "lock"):
-            return f"Failed: {domain}.{service} needs a confirmation step chat doesn't have yet. Nothing was changed."
-        return f"Failed: {domain}.{service} isn't available from chat. Nothing was changed."
-    data = {k: v for k, v in (data or {}).items() if k not in _HA_TARGET_KEYS}
 
     # The tool schema lists entities within a size budget, so the model may
     # guess an id. HA answers 200 for many services on a non-existent entity,

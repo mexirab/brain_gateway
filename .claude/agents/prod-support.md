@@ -36,8 +36,8 @@ curl -s http://localhost:8888/health | python3 -m json.tool
 # Prometheus metrics
 curl -s http://localhost:8888/metrics | head -20
 
-# HA entity count
-curl -s http://localhost:8888/api/ha/entities | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"total\"]} entities, {len(d[\"controllable\"])} domains')"
+# HA entity count (raw HA count; /api/ha/entities "total" counts only controllable, non-denied entities)
+curl -s http://localhost:8888/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('ha_entities'), 'HA entities')"
 
 # RAG stats
 curl -s http://localhost:8888/api/memory/stats | python3 -m json.tool
@@ -359,7 +359,8 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### "Home Assistant commands fail"
 1. Check HA connectivity: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.248:8123/api/`
 2. Check entity count in health endpoint — 0 entities = HA unreachable at startup
-3. Check entity exists: `curl -s http://localhost:8888/api/ha/entities | python3 -c "import sys,json; [print(e['entity_id']) for e in json.load(sys.stdin)['controllable'].get('light',[])]"`
+3. Check entity exists: `curl -s http://localhost:8888/api/ha/entities | python3 -c "import sys,json; [print(e['entity_id']) for e in json.load(sys.stdin)['controllable'].get('light',[])]"` — lists only listed-domain, non-denied entities; a denied (Helios plug, `HA_TOOL_DENY_ENTITIES`) or unlisted-domain (e.g. vacuum) entity won't appear, so check HA directly: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.248:8123/api/states/<entity_id>`
+4. Refused by the shared guard (`ha_guard.py`)? `bgw_ha_call_refused_total{path=tool|nlp|api}` + WARNING `[HA] Legacy command refused` / `[HA] API command refused`. unlock / open-cover / vacuum are refused by design (chat, fast path, `/api/ha/command`).
 
 ### "Reminders not firing"
 1. Check scheduler is running: health endpoint → `scheduler.running`

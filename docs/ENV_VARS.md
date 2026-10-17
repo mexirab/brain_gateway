@@ -283,7 +283,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 | Variable | Purpose |
 |----------|---------|
 | `HA_TOKEN` | Home Assistant long-lived access token |
-| `HA_TOOL_DENY_ENTITIES` | Comma-separated entity ids / `fnmatch` globs (lowercased) the chat `home_assistant` tool may never call or list, e.g. `switch.router_*,switch.*_camera_enabled`. Default empty. The Helios plug (`HELIOS_PLUG_ENTITY`, its object id in any domain) is always denied on top of this list. Recreate the orchestrator after changing. |
+| `HA_TOOL_DENY_ENTITIES` | Comma-separated entity ids / `fnmatch` globs (lowercased) no user/model-steerable HA call may target or list (`ha_guard.py`: chat `home_assistant` tool, fast-path/NLP commands, dashboard `/home` via `POST /api/ha/command`, and `GET /api/ha/entities`), e.g. `switch.router_*,switch.*_camera_enabled`. Default empty. The Helios plug (`HELIOS_PLUG_ENTITY`, its object id in any domain) is always denied on top of this list. Recreate the orchestrator after changing. |
 | `API_TOKEN` | Orchestrator API bearer auth (also required for `/metrics`, `/api/rag/ingest`, `/api/claude_code/turn`) |
 | `CHROMA_PERSIST` | ChromaDB persistence path |
 | `MIN_COS`, `TOP_K` | RAG retrieval params |

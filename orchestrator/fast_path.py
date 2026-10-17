@@ -219,7 +219,8 @@ async def try_fast_path(text: str, ha_client) -> FastPathResult:
 
     # 4. Check result
     if not result.success:
-        logger.info(f"[FAST-PATH] Execution failed, falling through: {result.message}")
+        # Not result.message: it can quote the user's text ("Could not understand command: ...").
+        logger.info(f"[FAST-PATH] Execution failed, falling through: action={result.action}")
         return FastPathResult(handled=False)
 
     # 5. Build confirmation
