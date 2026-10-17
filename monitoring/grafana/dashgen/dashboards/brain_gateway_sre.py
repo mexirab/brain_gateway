@@ -397,10 +397,12 @@ def build() -> dict:
             "Prompt Cache Hit Ratio (1h)",
             [(cache_hit_1h, "hit ratio")],
             unit="percentunit",
+            span_nulls=False,
             min_value=0,
             max_value=1,
             description="Share of prompt tokens served from llama-server's prompt cache instead of "
-            "re-prefilled. Expect ~0.9+ during a chat (static system prompt + tool schemas first). "
+            "re-prefilled. Typical 1h windows: ~0.8 with chat, ~0.5 when background jobs dominate; a single "
+            "conversation alone reaches ~0.9+. "
             "A drop means something volatile moved above DYNAMIC_CONTEXT_MARKER in prompt_builder, "
             "or the tool schemas stopped being byte-stable (e.g. HA entity list reordered). "
             "Background jobs with different prompts lower it a little. No data = Helios asleep.",
@@ -420,9 +422,10 @@ def build() -> dict:
                 ),
             ],
             unit="none",
+            span_nulls=False,
             description="Tokens per second while actually generating (decode) and prefilling (prompt), "
             "averaged over 15 min of busy time — idle time is excluded. Baseline on the 5090 with MTP: "
-            "~105-120 decode, ~2500 prefill. Decode well below that = MTP acceptance collapsed or the "
+            "~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the "
             "model fell back to CPU (see BrainOnCPU).",
         ),
         timeseries(
@@ -437,11 +440,13 @@ def build() -> dict:
                 ),
             ],
             unit="percentunit",
+            span_nulls=False,
             min_value=0,
             max_value=1,
             description="Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). "
-            "'pos N' = share of drafts whose Nth token (0-based) was accepted, so the overall line is not "
-            "the average of the two. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
+            "'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; "
+            "pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos "
+            "lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
             "repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever "
             "is --spec-type none on the llama-server-primary unit.",
         ),

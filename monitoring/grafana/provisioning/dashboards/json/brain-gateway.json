@@ -2441,7 +2441,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "gradientMode": "opacity",
-            "spanNulls": true,
+            "spanNulls": false,
             "showPoints": "never",
             "stacking": {
               "mode": "none",
@@ -2478,7 +2478,7 @@
           "sort": "desc"
         }
       },
-      "description": "Share of prompt tokens served from llama-server's prompt cache instead of re-prefilled. Expect ~0.9+ during a chat (static system prompt + tool schemas first). A drop means something volatile moved above DYNAMIC_CONTEXT_MARKER in prompt_builder, or the tool schemas stopped being byte-stable (e.g. HA entity list reordered). Background jobs with different prompts lower it a little. No data = Helios asleep.",
+      "description": "Share of prompt tokens served from llama-server's prompt cache instead of re-prefilled. Typical 1h windows: ~0.8 with chat, ~0.5 when background jobs dominate; a single conversation alone reaches ~0.9+. A drop means something volatile moved above DYNAMIC_CONTEXT_MARKER in prompt_builder, or the tool schemas stopped being byte-stable (e.g. HA entity list reordered). Background jobs with different prompts lower it a little. No data = Helios asleep.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -2541,7 +2541,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "gradientMode": "opacity",
-            "spanNulls": true,
+            "spanNulls": false,
             "showPoints": "never",
             "stacking": {
               "mode": "none",
@@ -2576,7 +2576,7 @@
           "sort": "desc"
         }
       },
-      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline on the 5090 with MTP: ~105-120 decode, ~2500 prefill. Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
+      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline on the 5090 with MTP: ~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -2639,7 +2639,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "gradientMode": "opacity",
-            "spanNulls": true,
+            "spanNulls": false,
             "showPoints": "never",
             "stacking": {
               "mode": "none",
@@ -2676,7 +2676,7 @@
           "sort": "desc"
         }
       },
-      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of drafts whose Nth token (0-based) was accepted, so the overall line is not the average of the two. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
+      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
       "gridPos": {
         "h": 8,
         "w": 6,
