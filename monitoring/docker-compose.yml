@@ -88,18 +88,70 @@ services:
     #   loki:3100 over gateway-net    — brain-orchestrator (SELF_AUDIT_LOKI_URL);
     #                                   containers can't reach Tailscale Serve on
     #                                   the host's own tailnet IP
-    # Helios promtail (LOKI_PUSH_URL, tailnet) is down since 2026-07; when it is
-    # fixed, forward the port tailnet-only with
-    # `tailscale serve --bg --tcp=3100 tcp://127.0.0.1:3100` (ideally ACL'd to Helios).
+    #   loki-push-gw:3101 on the LAN — Helios promtail, push-only, Helios IP only
     ports:
       - "127.0.0.1:${MONITORING_LOKI_PORT:-3100}:3100"
     volumes:
       - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      # Log-based alert rules (Helios hardware faults, brain CUDA failure).
+      # Directory mount: the ruler re-reads it every minute, and a directory
+      # mount survives git replacing the rule file's inode.
+      - ./loki/rules:/etc/loki/rules:ro
       - /mnt/logging/loki:/loki
     command: -config.file=/etc/loki/local-config.yaml
     networks:
       - monitoring-net
       - gateway-net
+      - loki-push-net
+
+  # ============================================
+  # LOKI PUSH GATEWAY - Helios → Loki, push only
+  # ============================================
+  # Loki has no auth, so it stays loopback-only. This nginx is the single
+  # off-box way in: POST /loki/api/v1/push, from Helios's IP AND with the
+  # LOKI_PUSH_TOKEN bearer token, rate-limited, on the LAN (not the tailnet —
+  # Helios's Tailscale login can lapse, and log shipping must survive that).
+  # Read/query/delete/rules never leave the host. Planted log lines are the
+  # residual risk (they reach the self-audit LLM). ufw is inactive on Jupiter,
+  # so the bind address, IP allow-list and token are the exposure controls.
+  loki-push-gw:
+    # Digest pinned 2026-10-17 (nginx 1.28.2 stable, unprivileged: uid 101).
+    # The only LAN-exposed listener in this stack — bump with the other pins.
+    image: nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8
+    container_name: loki-push-gw
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      # The entrypoint renders templates/ into conf.d at start; pid + temp
+      # paths live in /tmp for the unprivileged image. Both must be owned by
+      # uid 101 — a root-owned tmpfs makes envsubst skip the render and nginx
+      # starts with no server block (listens on nothing).
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+      - /tmp:uid=101,gid=101,mode=0755
+    environment:
+      # The one host allowed to push (an IP — nginx `allow` takes no hostnames).
+      # Unset → 127.0.0.1, i.e. nobody off-box: fail closed on other installs.
+      - HELIOS_IP=${NODE_HELIOS_IP:-127.0.0.1}
+      # Shared secret Helios promtail sends as a bearer token (same value in
+      # Helios's /opt/promtail-helios/.env). Unset/empty → every push is 403.
+      - LOKI_PUSH_TOKEN=${LOKI_PUSH_TOKEN:-}
+    ports:
+      # LAN bind only when NODE_JUPITER_IP is set (this deployment's .env);
+      # otherwise loopback, so a fresh install exposes nothing.
+      - "${NODE_JUPITER_IP:-127.0.0.1}:3101:3101"
+    volumes:
+      - ./loki-push-gw/templates:/etc/nginx/templates:ro
+    depends_on:
+      - loki
+    # Its own network with Loki only: an nginx compromise must not reach
+    # Alertmanager (unauthenticated silences), Prometheus, blackbox /probe or
+    # anything else on monitoring-net.
+    networks:
+      - loki-push-net
 
   # ============================================
   # PROMTAIL - Log Shipper (for Docker containers on Jupiter)
@@ -212,5 +264,8 @@ networks:
   gateway-net:
     name: gateway_nerves_gateway-net
     external: true
+  # loki-push-gw ↔ loki only (see loki-push-gw above).
+  loki-push-net:
+    driver: bridge
 
 # Data stored on /mnt/logging (sdb1 - 931GB HDD)

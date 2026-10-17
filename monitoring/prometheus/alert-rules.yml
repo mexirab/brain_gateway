@@ -600,3 +600,72 @@ groups:
         annotations:
           summary: "Routine auto-ended on a stuck step"
           description: "A routine step nudged past the cap and force-ended. Check the step skippable/auto_skip config."
+
+  # Helios (GPU model layer) health beyond "is it up". Helios is power-tiered,
+  # so these are written to stay quiet while it is deliberately asleep. The
+  # log-based twins (HeliosHardwareFault, BrainCudaInitFailed) are Loki ruler
+  # rules in monitoring/loki/rules/fake/helios.yml.
+  - name: helios_health
+    rules:
+      # Jess's brain is generating, but at CPU speed. Normal decode on the 5090
+      # is ~105-125 tok/s; CPU fallback measured ~6 tok/s on 2026-10-15 (driver
+      # swap under a loaded module). Ratio of the two llama.cpp counters = mean
+      # decode speed over the window. An idle brain gives 0/0 = NaN, and
+      # NaN < 30 is false, so no traffic floor is needed — a floor hid the
+      # 10-15 incident, where a CPU-bound brain produced only 7 tokens in 10 min
+      # before chat timed out. Backtest 2026-10-03..17: the only 10-min windows
+      # under 60 tok/s were that incident (6.8) and its restart (58).
+      # HeliosGpuDriverBroken below fires hours earlier, without traffic.
+      - alert: BrainOnCPU
+        expr: |
+          (
+            rate(llamacpp:tokens_predicted_total{job="llama-primary"}[15m])
+              / rate(llamacpp:tokens_predicted_seconds_total{job="llama-primary"}[15m])
+          ) < 30
+          and increase(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) >= 1
+        for: 2m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Jess's brain is generating at {{ $value | printf \"%.0f\" }} tok/s — likely on CPU"
+          description: "Mean decode speed over 10 min is far below the ~110 tok/s the RTX 5090 does. Check `nvidia-smi` and `journalctl -u llama-server-primary -b | grep -i cuda` on Helios; a driver/library mismatch is fixed by a reboot."
+
+      # nvidia-smi on Helios is failing while the box is up. Exit 18 is NVML's
+      # "driver/library version mismatch": on 2026-10-15 unattended-upgrades
+      # swapped the driver under the loaded kernel module, the brain restarted
+      # onto CPU, and this metric read 18 from 06:30 to 12:00 — 5.5 h before
+      # anyone noticed. No series while Helios sleeps, so sleep is silent.
+      - alert: HeliosGpuDriverBroken
+        expr: nvidia_smi_command_exit_code{job="gpu-exporter", node="helios"} != 0
+        for: 5m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "nvidia-smi on Helios exits {{ $value }} — GPUs unusable"
+          description: "The GPU exporter can't talk to the NVIDIA driver (18 = driver/library version mismatch, usually a driver package upgraded under the loaded module). The brain falls back to CPU (~6 tok/s) or fails to start. Fix: reboot Helios; check `apt-mark showhold` still holds the 580-server packages."
+
+      # Helios has power but isn't answering: plug draws running-level watts
+      # (idle ~120 W, off-but-plugged a few W) while node-exporter is down.
+      # That is a hang or a dead NIC, not sleep — on 2026-10-16 the chipset NIC
+      # died after IOMMU faults and the box sat powered and unreachable for 1.5 h.
+      # NodeDown pages for the same outage; this one says which kind it is.
+      # Needs fresh plug readings: HELIOS_PLUG_MONITOR_ENABLED (or
+      # HELIOS_WAKE_ENABLED) on the orchestrator, else it never fires.
+      # bgw_helios_running is recomputed on every successful read and drops to 0
+      # when the power sensor reads unavailable, so a stale watts gauge (sensor
+      # dropped out while Helios was up) can't fake a "powered" reading.
+      - alert: HeliosPoweredButUnreachable
+        expr: |
+          bgw_helios_plug_watts > 60
+          and on() bgw_helios_running == 1
+          and on() increase(bgw_helios_status_total{result="ok"}[5m]) > 0
+          and on() up{job="node-exporter", node="helios"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Helios is powered ({{ $value | printf \"%.0f\" }} W) but not reachable"
+          description: "The smart plug shows Helios drawing running-level power, but its node exporter has not answered for 5+ minutes — hung, or its network card died (2026-10-16: chipset IOMMU faults). Plug in a monitor to look; a power-cycle via the plug recovers it."

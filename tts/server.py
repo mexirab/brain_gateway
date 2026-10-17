@@ -552,7 +552,7 @@ async def text_to_speech_stream(request: TTSRequest):
                 )
                 yield await asyncio.to_thread(audio_to_pcm_bytes, audio_data)
             except Exception as e:
-                logger.error(f"Stream TTS failed for sentence '{sentence[:50]}': {e}")
+                logger.error(f"Stream TTS failed for a sentence of {len(sentence)} chars: {type(e).__name__}")
                 break
 
     return StreamingResponse(

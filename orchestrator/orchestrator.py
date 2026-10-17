@@ -1220,13 +1220,14 @@ async def _startup_logic():
 
     # Helios wake-on-demand (PT-C): keep bgw_helios_plug_watts / bgw_helios_running
     # fresh so dashboards + alerts can trust them. Without this the gauges only
-    # update when a human/LLM happens to query power state. Only when enabled —
-    # otherwise the HA call would be pointless (and the feature is default-OFF).
-    if shared.HELIOS_WAKE_ENABLED:
-        from orchestrator.helios_power import helios_power_status
+    # update when a human/LLM happens to query power state. Runs when wake OR the
+    # read-only plug monitor is enabled — HeliosPoweredButUnreachable needs fresh
+    # watts even while auto-wake is off (both are default-OFF).
+    if shared.HELIOS_WAKE_ENABLED or shared.HELIOS_PLUG_MONITOR_ENABLED:
+        from orchestrator.helios_power import poll_helios_power
 
         scheduler.add_job(
-            helios_power_status,
+            poll_helios_power,
             trigger="interval",
             seconds=60,
             id="helios_status_poll",

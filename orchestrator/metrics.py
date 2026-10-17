@@ -615,7 +615,8 @@ HELIOS_STATUS_TOTAL = Counter(
 HELIOS_PLUG_WATTS = Gauge(
     "bgw_helios_plug_watts",
     # Refreshed by the helios_status_poll scheduler job (every 60s when
-    # HELIOS_WAKE_ENABLED) plus any on-demand /api/helios/power read; only set
+    # HELIOS_WAKE_ENABLED or HELIOS_PLUG_MONITOR_ENABLED) plus any on-demand
+    # /api/helios/power read; only set
     # when watts parses, so it never reports a misleading 0 on a failed read.
     "Last-known Helios smart-plug power draw in watts (from HA sensor)",
 )

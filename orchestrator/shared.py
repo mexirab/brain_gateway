@@ -151,6 +151,8 @@ ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 
 # Helios wake-on-demand (PT-C) — gates the helios_power tool + auto-wake hook.
 HELIOS_WAKE_ENABLED = settings.helios_wake_enabled
+# Read-only plug polling for alerting; runs even while wake is off.
+HELIOS_PLUG_MONITOR_ENABLED = settings.helios_plug_monitor_enabled
 
 # ---------------------------------------------------------------------------
 # RAG / ChromaDB

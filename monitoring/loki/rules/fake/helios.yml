@@ -1,0 +1,62 @@
+# Loki ruler: log-based alerts for Helios (the GPU model layer).
+#
+# Evaluated by Loki's ruler every minute over the Helios journal stream that
+# monitoring/promtail/promtail-helios.yml ships; fired alerts go to the same
+# Alertmanager as Prometheus. Routing is an alertname ALLOW-LIST in
+# alertmanager.yml.template — a rule not named there notifies nobody.
+#
+# Limits worth knowing:
+#   * If the fault also kills Helios's NIC (as on 2026-10-16), the kernel lines
+#     can't be shipped until the network is back, and when promtail backfills
+#     them they keep their original timestamps — outside the [10m] window, so
+#     this rule does NOT fire late for that outage. HeliosPoweredButUnreachable
+#     (Prometheus) is the signal for that case; the lines are still in Loki for
+#     the post-mortem and the next self-audit.
+#   * Helios is power-tiered; no lines while it is asleep is normal, so these
+#     only ever fire on lines that exist (no "absent" rules here).
+groups:
+  - name: helios_logs
+    rules:
+      # Chipset/IOMMU trouble. On 2026-10-16 an AMD-Vi IO_PAGE_FAULT burst killed
+      # the chipset USB controller ("HC died"), then the Aquantia NIC two minutes
+      # later. Also catches GPU Xid errors, PCIe AER and machine-check errors.
+      - alert: HeliosHardwareFault
+        expr: |
+          sum by (host) (
+            count_over_time({host="helios", service="kernel"}
+              |~ "IO_PAGE_FAULT|HC died|host controller not responding|NVRM: Xid|PCIe Bus Error|Hardware Error" [10m])
+          ) > 0
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Helios kernel reported a hardware fault"
+          description: >-
+            {{ $value }} kernel fault line(s) in the last 10 min (IOMMU page fault, USB
+            controller death, GPU Xid, PCIe or machine-check error). On 2026-10-16 this
+            pattern preceded the NIC dropping off the network. Check on Helios:
+            journalctl -k -b | grep -E "IO_PAGE_FAULT|xhci|atlantic|Xid|AER". If the box
+            is still reachable, a planned reboot beats waiting for the NIC to die.
+
+      # The brain lost its GPU: llama-server came up (or restarted) without CUDA
+      # and is running on CPU at ~6 tok/s — chat times out. Happened 2026-10-15
+      # when unattended-upgrades swapped the NVIDIA driver under a loaded module.
+      # BrainOnCPU (Prometheus) is the throughput-based twin; this one fires at
+      # startup, before any chat traffic.
+      - alert: BrainCudaInitFailed
+        expr: |
+          sum by (host) (
+            count_over_time({host="helios", service="llama-server-primary"}
+              |~ "failed to initialize CUDA|no usable GPU found" [15m])
+          ) > 0
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Jess's brain started without the GPU"
+          description: >-
+            llama-server-primary logged a CUDA initialisation failure and is running on
+            CPU. Usual cause: NVIDIA driver/library version mismatch after a package
+            upgrade — check nvidia-smi on Helios; a reboot loads the matching module.
+            This line is written once per start, so the alert RESOLVES after 15 min
+            whatever the state — HeliosGpuDriverBroken tracks whether it is fixed.
