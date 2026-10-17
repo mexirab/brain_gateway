@@ -17,6 +17,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -27,6 +28,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from orchestrator.ha_guard import check_ha_call
+from orchestrator.ha_registry import get_registry_meta
 from orchestrator.metrics import HA_CALL_REFUSED
 
 logger = logging.getLogger(__name__)
@@ -654,7 +656,10 @@ class HomeAssistantClient:
             service_data["volume_level"] = cmd.value / 100
 
         # Same guard as the chat home_assistant tool: listed domain, not denied
-        # (Helios plug, HA_TOOL_DENY_ENTITIES), allow-listed service.
+        # (Helios plug, HA_TOOL_DENY_ENTITIES), not a device setting (camera
+        # enabled, motion detection, LEDs), allow-listed service.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(get_registry_meta(self.url, self.token), timeout=3)
         refusal, service_data = check_ha_call(entity.entity_id, service, service_data)
         if refusal:
             HA_CALL_REFUSED.labels(path="nlp").inc()

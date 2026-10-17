@@ -15,7 +15,9 @@ state, room, category and the few attributes the page's controls use).
 ``get_registry_meta()`` never raises: on any failure it returns the last good
 result (or ``{}``), and the page falls back to grouping by domain. The
 "hidden" flag only trims the listing — it is not an access control (chat and
-``POST /api/ha/command`` can still target a hidden entity). Read-only —
+``POST /api/ha/command`` can still target a hidden entity). The category IS:
+``ha_guard`` refuses config / diagnostic entities on the chat and NLP paths
+(via ``cached_meta()``). Read-only —
 nothing here writes to Home Assistant.
 """
 
@@ -128,6 +130,13 @@ async def get_registry_meta(http_url: str, token: str) -> Dict[str, Dict[str, An
         _cache, _fetched_at, _failed_at = meta, time.monotonic(), 0.0
         HA_REGISTRY_FETCH.labels(result="ok").inc()
         return _cache
+
+
+def cached_meta() -> Dict[str, Dict[str, Any]]:
+    """The last good registry result without fetching (``{}`` until the first
+    successful read). For sync callers — ``ha_guard`` and the tool-schema
+    listing; warm it with ``get_registry_meta`` first."""
+    return _cache
 
 
 def entity_view(e: Entity, meta: Dict[str, Any]) -> Dict[str, Any]:

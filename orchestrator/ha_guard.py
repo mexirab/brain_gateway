@@ -7,6 +7,12 @@ One policy, enforced in one place:
 - only the domains listed in the tool schema (``HA_LISTED_DOMAINS``);
 - never a denied entity (``HA_TOOL_DENY_ENTITIES`` globs + the Helios plug,
   which only the gated ``helios_power`` tool controls);
+- never a device-setting entity (HA entity_category ``config`` /
+  ``diagnostic`` — a camera's "camera enabled" switch, motion detection, a
+  plug's LED) from chat or the NLP path; only the signed-in dashboard
+  (``allow_device_settings=True``) may change those. When HA's registry can't
+  be read, ids naming camera/motion/privacy/detection/recording/LED are
+  treated as device settings (``ha_device_setting``);
 - only allow-listed services per domain (no unlock, no cover open);
 - targeting keys stripped from ``data`` so a call can't re-aim at another entity;
 - ``media_player.play_media`` only plays local-library / radio media-source
@@ -27,6 +33,7 @@ import fnmatch
 import re
 from typing import Any, Dict, Optional, Tuple
 
+from orchestrator import ha_registry
 from orchestrator.config import settings
 
 # Domains listed in the home_assistant tool schema, in listing order.
@@ -105,6 +112,50 @@ def ha_tool_denied(entity_id: str) -> bool:
     return any(fnmatch.fnmatchcase(entity_id, p) for p in patterns)
 
 
+# HA entity categories that mark a device's own settings / health, not the
+# thing it controls. Chat and the NLP path never touch these.
+DEVICE_SETTING_CATEGORIES = frozenset({"config", "diagnostic"})
+
+# Fail-safe when an entity has no registry entry (HA's registry unreadable, an
+# entity newer than the cache, or a YAML entity without a unique_id): an
+# object id containing one of these words is treated as a device setting.
+# Errs on refusing — a camera floodlight is refused too while the registry is
+# down; the dashboard can still switch it.
+_DEVICE_SETTING_WORDS = frozenset(
+    {
+        "camera",
+        "cam",
+        "motion",
+        "privacy",
+        "detection",
+        "detect",
+        "detector",
+        "record",
+        "recording",
+        "recordings",
+        "snapshot",
+        "snapshots",
+        "surveillance",
+        "led",
+        "leds",
+        "indicator",
+    }
+)
+
+
+def ha_device_setting(entity_id: str) -> bool:
+    """True for an entity that configures or reports on a device rather than
+    being the device: HA entity_category config / diagnostic (from the cached
+    registry, ``ha_registry.cached_meta``), or — with no registry entry — an
+    object id naming camera/motion/privacy/detection/recording/LED."""
+    meta = ha_registry.cached_meta().get(entity_id)
+    if meta is not None:
+        return meta.get("category") in DEVICE_SETTING_CATEGORIES
+    object_id = entity_id.split(".", 1)[-1].lower()
+    words = set(object_id.split("_"))
+    return bool(words & _DEVICE_SETTING_WORDS) or "status_light" in object_id
+
+
 def ha_entity_allowed(entity_id: str) -> bool:
     """Listed domain and not denied — what may be shown or targeted at all."""
     return (
@@ -161,8 +212,17 @@ def _check_media_data(service: str, data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def check_ha_call(entity_id: Any, service: Any, data: Any = None) -> Tuple[Optional[str], Dict[str, Any]]:
+def check_ha_call(
+    entity_id: Any, service: Any, data: Any = None, *, allow_device_settings: bool = False
+) -> Tuple[Optional[str], Dict[str, Any]]:
     """Validate one steerable HA service call.
+
+    ``allow_device_settings`` is True only for the structured dashboard call
+    (``POST /api/ha/command`` body — the signed-in owner's /home "Device
+    settings" card). Chat and the NLP path leave it False, so a prompt-injected
+    email or page can't make the model switch off a camera or its motion
+    detection. Callers should ``await ha_registry.get_registry_meta`` first so
+    the category check sees a warm cache.
 
     Returns ``(refusal, data)``: ``refusal`` is a user-facing "Failed: …
     Nothing was changed." string, or None when the call may proceed with the
@@ -183,6 +243,12 @@ def check_ha_call(entity_id: Any, service: Any, data: Any = None) -> Tuple[Optio
         return f"Failed: the {domain} domain can't be controlled from chat. Nothing was changed.", {}
     if ha_tool_denied(entity_id):
         return f"Failed: {entity_id} can't be controlled from chat. Nothing was changed.", {}
+    if not allow_device_settings and ha_device_setting(entity_id):
+        return (
+            f"Failed: {entity_id} is a device setting, which chat doesn't change. The owner can change it "
+            "on the dashboard's Home page under Device settings. Nothing was changed.",
+            {},
+        )
     if service not in HA_ALLOWED_SERVICES.get(domain, set()):
         if domain in ("cover", "lock"):
             return (

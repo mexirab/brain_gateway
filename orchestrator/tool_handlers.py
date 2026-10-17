@@ -18,7 +18,8 @@ from orchestrator.calendar_sources import get_calendar
 from orchestrator.data_manager import handle_get_data, handle_update_data
 from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
 from orchestrator.google_gmail import get_gmail_client
-from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_tool_denied
+from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_device_setting, ha_tool_denied
+from orchestrator.ha_registry import get_registry_meta
 from orchestrator.metrics import (
     CALENDAR_API_CALLS,
     CALENDAR_API_ERRORS,
@@ -141,13 +142,18 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
     """Execute a Home Assistant service call directly."""
     # Domain, deny list, service allow-list, targeting keys, media args — the
     # same guard the legacy NLP path and /api/ha/command use (ha_guard).
+    # Device-setting entities (camera enabled, motion detection, LEDs) are
+    # refused from chat; warm the registry cache the guard reads (cached,
+    # never raises, capped so a slow HA can't stall a voice turn).
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(get_registry_meta(ha_client.url, ha_client.token), timeout=3)
     refusal, data = check_ha_call(entity_id, service, data)
     if refusal:
         HA_CALL_REFUSED.labels(path="tool").inc()
         if (
             isinstance(entity_id, str)
             and re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id)
-            and ha_tool_denied(entity_id)
+            and (ha_tool_denied(entity_id) or ha_device_setting(entity_id))
         ):
             logger.warning(f"[HA] Refused denied entity {entity_id}")
         return refusal
@@ -172,7 +178,9 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
             suggestions = [
                 e
                 for e in ha_client.suggest_entities(entity_id, limit=8)
-                if e.domain in HA_LISTED_DOMAINS and not ha_tool_denied(e.entity_id)
+                if e.domain in HA_LISTED_DOMAINS
+                and not ha_tool_denied(e.entity_id)
+                and not ha_device_setting(e.entity_id)
             ][:5]
             logger.info(f"[HA] Unknown {domain} entity_id, offered {len(suggestions)} suggestion(s)")
             if not suggestions:
