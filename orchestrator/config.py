@@ -334,7 +334,7 @@ class Settings(BaseSettings):
     vision_model_url: str = ""
     vision_model_name: str = ""
     vision_max_image_size: int = 10 * 1024 * 1024
-    vision_timeout: int = 60
+    vision_timeout: int = 120  # single llama slot: a photo can queue behind chat
 
     # -- MemPalace ---------------------------------------------------------------
     palace_enabled: bool = True

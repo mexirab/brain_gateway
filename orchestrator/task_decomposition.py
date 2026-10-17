@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 from orchestrator import shared
 from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
+    BACKGROUND_LLM_ERRORS,
     TASK_DECOMP_ERRORS,
     TASK_DECOMP_STEPS_COMPLETED,
     TASK_DECOMP_STEPS_SKIPPED,
@@ -129,7 +130,8 @@ Return format:
         raw_steps = [{"description": task_text, "est_minutes": 30}]
     except Exception as e:
         TASK_DECOMP_ERRORS.inc()
-        logger.error("[TASK_DECOMP] Model call failed: %s", e)
+        BACKGROUND_LLM_ERRORS.labels(caller="task_decomp", error_type=type(e).__name__).inc()
+        logger.error("[TASK_DECOMP] Model call failed: %r", e)
         return "Sorry, I couldn't break that task down right now. Try again in a moment."
 
     # Build micro-steps with ADHD time buffer

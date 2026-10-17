@@ -20,6 +20,7 @@ from orchestrator.calendar_sources import get_calendar
 from orchestrator.calendar_types import SOURCE_EXCHANGE
 from orchestrator.google_gmail import get_gmail_client
 from orchestrator.metrics import (
+    BACKGROUND_LLM_ERRORS,
     CALENDAR_POLL_EVENTS_FOUND,
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
@@ -852,12 +853,12 @@ async def process_emails_for_events():
         created_count = 0
         created_keys: list = []  # (title_lower, date) of events created this run
         for msg in new_msgs:
-            state_store.mark_notified(f"e2c:{msg.id}")
             EMAIL_TO_CALENDAR_EMAILS_SCANNED.inc()
 
             # Skip very short emails (unlikely to contain event details)
             body = msg.body_text or msg.snippet
             if len(body) < 30:
+                state_store.mark_notified(f"e2c:{msg.id}")
                 continue
 
             # Ask model to extract events
@@ -880,9 +881,15 @@ async def process_emails_for_events():
                 )
                 raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
             except Exception as e:
+                # Not marked processed: the next run retries it (the Gmail query
+                # only looks back 1 day, so a persistently failing email ages out).
+                BACKGROUND_LLM_ERRORS.labels(caller="email_to_calendar", error_type=type(e).__name__).inc()
                 # log-safe: Gmail message id + exception, not the subject
                 logger.warning(f"[EMAIL_TO_CAL] LLM call failed for message {msg.id}: {type(e).__name__}: {e}")
                 continue
+            # Marked only once the model answered — a timeout or a sleeping
+            # Helios used to burn the whole batch permanently.
+            state_store.mark_notified(f"e2c:{msg.id}")
 
             # Parse JSON from response
             events = _parse_event_json(raw)
