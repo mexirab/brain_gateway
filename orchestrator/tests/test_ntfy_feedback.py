@@ -1062,3 +1062,26 @@ class TestSnoozeAfterDelivery:
         assert r.status_code == 200
         assert clean_scheduler.get_job("reminder_r1_retry") is None
         assert clean_scheduler.get_job("reminder_r1") is not None
+
+
+class TestRejectionLogSanitized:
+    """Unauthenticated reminder ids are logged capped + repr-escaped."""
+
+    @pytest.mark.parametrize("action", ["ack", "snooze"])
+    def test_bad_sig_long_id_with_newline_logs_repr(self, client, ntfy_on, tmp_db, caplog, action):
+        import logging
+        from urllib.parse import quote
+
+        evil_id = "abc\nFAKE LOG LINE " + "z" * 200
+        exp = int(time.time()) + 300
+        extra = "&minutes=10" if action == "snooze" else ""
+        with caplog.at_level(logging.WARNING, logger="orchestrator.api_routes"):
+            r = client.post(f"/api/reminder/{action}/{quote(evil_id, safe='')}?sig={'0' * 32}&exp={exp}{extra}")
+
+        assert r.status_code == 403
+        msgs = [rec.getMessage() for rec in caplog.records if "Rejected" in rec.getMessage()]
+        assert len(msgs) == 1
+        msg = msgs[0]
+        assert "\n" not in msg
+        assert repr(evil_id[:64]) in msg
+        assert "z" * 100 not in msg  # capped at 64 chars

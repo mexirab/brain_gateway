@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from zoneinfo import ZoneInfo
 
-from orchestrator import shared
+from orchestrator import job_heartbeat, shared
 from orchestrator.metrics import (
     WIND_DOWN_DIM_LAST_RUN,
     WIND_DOWN_LAST_RUN,
@@ -29,6 +29,10 @@ from orchestrator.reminder_manager import _announce_voice
 from orchestrator.shared import TIMEZONE, profile
 
 logger = logging.getLogger(__name__)
+
+# app_state keys for the wind-down heartbeats (see job_heartbeat).
+WIND_DOWN_HEARTBEAT_KEY = "heartbeat_wind_down_ts"
+WIND_DOWN_DIM_HEARTBEAT_KEY = "heartbeat_wind_down_dim_ts"
 
 
 def _configured_scenes() -> list[str]:
@@ -60,7 +64,7 @@ async def wind_down_dim():
     # leaves every Sleep Wind-Down panel green/empty. No stale alert watches
     # this — a lights rung that fails to dim is self-evident in the house — but
     # the dashboard panel needs a signal that separates "fired" from "acted".
-    WIND_DOWN_DIM_LAST_RUN.set_to_current_time()
+    job_heartbeat.stamp(WIND_DOWN_DIM_LAST_RUN, WIND_DOWN_DIM_HEARTBEAT_KEY)
 
     scenes = _configured_scenes()
     if not scenes:
@@ -93,7 +97,7 @@ async def wind_down_nudge():
     Same silent-skip rules as the evening briefing: DND and an active guided
     routine session both mean "don't talk right now".
     """
-    WIND_DOWN_LAST_RUN.set_to_current_time()
+    job_heartbeat.stamp(WIND_DOWN_LAST_RUN, WIND_DOWN_HEARTBEAT_KEY)
 
     try:
         if shared.DND_ACTIVE:

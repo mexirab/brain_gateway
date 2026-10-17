@@ -223,7 +223,7 @@ async def test_dim_heartbeat_stamped_on_normal_run(reset_shared):
     ):
         await jobs_winddown.wind_down_dim()
 
-    dim_hb.set_to_current_time.assert_called_once()
+    dim_hb.set.assert_called_once()
 
 
 @_skip_no_deps
@@ -244,7 +244,7 @@ async def test_dim_heartbeat_stamped_even_without_scene(reset_shared):
         await jobs_winddown.wind_down_dim()
 
     ha.call_service.assert_not_awaited()
-    dim_hb.set_to_current_time.assert_called_once()
+    dim_hb.set.assert_called_once()
 
 
 @_skip_no_deps
@@ -266,7 +266,7 @@ async def test_dim_heartbeat_stamped_even_under_dnd(reset_shared):
         await jobs_winddown.wind_down_dim()
 
     ha.call_service.assert_not_awaited()
-    dim_hb.set_to_current_time.assert_called_once()
+    dim_hb.set.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

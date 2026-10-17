@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from orchestrator import calendar_sources, shared, state_store
+from orchestrator import calendar_sources, job_heartbeat, shared, state_store
 from orchestrator.calendar_sources import get_calendar
 from orchestrator.calendar_types import SOURCE_EXCHANGE
 from orchestrator.google_gmail import get_gmail_client
@@ -32,6 +32,10 @@ from orchestrator.shared import TIMEZONE, profile
 from orchestrator.travel_time import get_travel_time, is_virtual_location, spoken_location
 
 logger = logging.getLogger(__name__)
+
+# app_state keys for the briefing heartbeats (see job_heartbeat).
+MORNING_BRIEFING_HEARTBEAT_KEY = "heartbeat_morning_briefing_ts"
+EVENING_BRIEFING_HEARTBEAT_KEY = "heartbeat_evening_briefing_ts"
 
 _LLM_URL = shared.MODEL_URL
 _LLM_MODEL = shared.MODEL_NAME
@@ -381,7 +385,7 @@ async def morning_briefing():
     # Dead-man's-switch heartbeat: proves the scheduler fired the daily job.
     # Stamped at entry (not after delivery) so the signal is "the job ran",
     # independent of whether there were events. Watched by MorningBriefingStale.
-    MORNING_BRIEFING_LAST_RUN.set_to_current_time()
+    job_heartbeat.stamp(MORNING_BRIEFING_LAST_RUN, MORNING_BRIEFING_HEARTBEAT_KEY)
 
     try:
         # Today's events from every calendar source, merged (personal CalDAV +
@@ -651,7 +655,7 @@ async def evening_briefing():
 
     # Dead-man's-switch heartbeat, same contract as the morning gauge:
     # stamped at entry so the signal is "the job ran". EveningBriefingStale.
-    EVENING_BRIEFING_LAST_RUN.set_to_current_time()
+    job_heartbeat.stamp(EVENING_BRIEFING_LAST_RUN, EVENING_BRIEFING_HEARTBEAT_KEY)
 
     try:
         events, cal_source, cal_note = await get_tomorrow_events(tz, log_tag="EVENING_BRIEFING")
