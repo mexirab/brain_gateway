@@ -68,7 +68,14 @@ def _get_cipher():
         if os.path.exists(_KEY_FILE):
             with open(_KEY_FILE, "rb") as f:
                 key = f.read().strip()
-            os.chmod(_KEY_FILE, 0o600)
+            try:
+                os.chmod(_KEY_FILE, 0o600)
+            except PermissionError:
+                # Readable but owned by another uid (e.g. still root-owned
+                # from the root-container era) — the key loaded fine.
+                logger.warning(
+                    "[AUTO_LEARN] Can't chmod the key file (not its owner); run scripts/orchestrator_state_perms.sh"
+                )
             logger.info("[AUTO_LEARN] Loaded encryption key from %s", _KEY_FILE)
         else:
             key = Fernet.generate_key()
@@ -76,8 +83,9 @@ def _get_cipher():
             with open(_KEY_FILE, "wb") as f:
                 os.fchmod(f.fileno(), 0o600)
                 f.write(key)
-                # Container runs as root; hand the key to the data dir's owner
-                # so the host backup (uid 1000) can read it.
+                # Only matters for a root-run container (default is non-root
+                # USER jess): hand the key to the data dir's owner so the
+                # host backup (uid 1000) can read it.
                 from orchestrator.config_writer import match_parent_owner
 
                 match_parent_owner(f.fileno(), os.path.dirname(_KEY_FILE))

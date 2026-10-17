@@ -47,8 +47,10 @@ def _redact(value: Any) -> Any:
 def match_parent_owner(fd: int, parent: str | Path) -> None:
     """Give the open file `fd` the uid/gid of directory `parent` (no-op unless root).
 
-    The orchestrator container runs as root, so every mkstemp-based atomic
-    write lands as root:root 0600 in the /app/data bind mount — unreadable to
+    No-op for the default non-root container (USER jess, same uid as the host
+    data owner); kept for root-run deployments. A root container's
+    mkstemp-based atomic writes land as root:root 0600 in the /app/data bind
+    mount — unreadable to
     the host's nightly backup (scripts/backup_state.py runs as the data
     dir's owner), which silently skipped these files. Called on the tmpfile
     before os.replace so the final file never exists root-owned. fchown on the

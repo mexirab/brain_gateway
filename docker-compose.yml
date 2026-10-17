@@ -62,8 +62,19 @@ services:
     build:
       context: ./orchestrator
       dockerfile: Dockerfile
+      args:
+        # Runtime uid/gid inside the container — must own the bind-mounted
+        # state below (scripts/orchestrator_state_perms.sh).
+        APP_UID: ${ORCHESTRATOR_UID:-1000}
+        APP_GID: ${ORCHESTRATOR_GID:-1000}
     container_name: brain-orchestrator
     restart: unless-stopped
+    # Non-root (USER jess in the Dockerfile) needs no capabilities; no-new-
+    # privileges disables the setuid binaries left in the base image.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     logging: *default-logging
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -77,8 +88,8 @@ services:
       # Mount RAG data for write access (medications, projects)
       - ${RAG_BASE:-./data/rag}:/rag:rw
       # Mount SSH keys for remote model server management (optional)
-      - ${SSH_KEY_PATH:-/dev/null}:/root/.ssh/id_ed25519:ro
-      - ${SSH_KNOWN_HOSTS:-/dev/null}:/root/.ssh/known_hosts:ro
+      - ${SSH_KEY_PATH:-/dev/null}:/home/jess/.ssh/id_ed25519:ro
+      - ${SSH_KNOWN_HOSTS:-/dev/null}:/home/jess/.ssh/known_hosts:ro
       # Mount Google OAuth2 credentials (rw needed for token refresh)
       - ${GATEWAY_ROOT_PATH:-.}/credentials:/app/credentials:rw
       # Persistent storage for reminder audio files
@@ -86,7 +97,7 @@ services:
       # HuggingFace model cache — persisted across restarts so the embedding
       # model (nomic-embed-text-v2-moe, ~1.8GB) doesn't re-download on every
       # boot. Bind mount for backup/inspection parity with the rest of data/.
-      - ${GATEWAY_ROOT_PATH:-.}/data/hf_cache:/root/.cache/huggingface:rw
+      - ${GATEWAY_ROOT_PATH:-.}/data/hf_cache:/home/jess/.cache/huggingface:rw
       # Application runtime state: progress.db, brain_state.db, finance.db,
       # auto_learn.key. Was previously the `finance-data` Docker-managed
       # named volume, which was fragile — `docker compose down -v` or
@@ -109,7 +120,7 @@ services:
       # has been working on for self-troubleshooting + code_agent context.
       # Host path is configurable; container path is fixed (matches
       # CLAUDE_PROJECTS_PATH env var in the environment block below).
-      - ${CLAUDE_PROJECTS_HOST_PATH:-/home/labadmin/.claude/projects}:/root/.claude/projects:ro
+      - ${CLAUDE_PROJECTS_HOST_PATH:-/home/labadmin/.claude/projects}:/home/jess/.claude/projects:ro
       # Open WebUI sqlite db (read-only) — nightly training-corpus drain job
       # snapshots user/assistant turns from OWUI into an append-only JSONL
       # under /app/data/training_corpus/. Sharing the named volume is safe
@@ -243,7 +254,7 @@ services:
       # Container-side path for Claude Code session files (matches the bind
       # mount target above). All session file lookups are constrained under
       # this root for security.
-      - CLAUDE_PROJECTS_PATH=/root/.claude/projects
+      - CLAUDE_PROJECTS_PATH=/home/jess/.claude/projects
       # CORS for frontend
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001}
       # Paperless-ngx bridge (F-012) — hand off files for OCR + tagging.

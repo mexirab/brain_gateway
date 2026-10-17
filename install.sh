@@ -462,7 +462,12 @@ stage_2() {
         info "Container images: ~30 GB. Model weights: ~40-50 GB. Both pulled once, cached after."
     fi
     cd "${REPO_ROOT}"
-    docker compose up -d
+    # The orchestrator runs as a non-root user: pre-create its bind-mount
+    # sources owned by this user (Docker would create them root-owned) and
+    # record ORCHESTRATOR_UID/GID in .env for the image build.
+    bash "${REPO_ROOT}/scripts/orchestrator_state_perms.sh" --apply
+    # --build: an existing image may have been built with other uid/gid args.
+    docker compose up -d --build
 
     # Health-wait — orchestrator + the three model containers if the profile is on.
     local services=( orchestrator )

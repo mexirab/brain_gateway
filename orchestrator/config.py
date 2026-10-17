@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     # -- SSH model server management (empty = disabled) --------------------------
     model_server_ip: str = ""
     model_ssh_user: str = ""
-    model_ssh_key: str = "/root/.ssh/id_ed25519"
+    model_ssh_key: str = "/home/jess/.ssh/id_ed25519"
     # Default to the live primary unit (llama-server-primary since 2026-10-02).
     # The bare `llama-server` unit is the disabled April-2026 Qwen3.5 checkout.
     model_start_cmd: str = "sudo systemctl start llama-server-primary"
@@ -473,7 +473,7 @@ class Settings(BaseSettings):
     training_corpus_dir: str = "/app/data/training_corpus"
     training_corpus_owui_db: str = "/app/owui_data/webui.db"
     training_corpus_state_db: str = "/app/data/brain_state.db"
-    training_corpus_cc_dir: str = "/root/.claude/projects/-opt-gateway-mvp"
+    training_corpus_cc_dir: str = "/home/jess/.claude/projects/-opt-gateway-mvp"
 
     # -- Self-audit (F-014) ------------------------------------------------------
     # Daily 7am job that queries Loki for the last 24h of error/warn logs across
