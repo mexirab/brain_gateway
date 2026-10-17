@@ -3742,6 +3742,170 @@
       "id": 48
     },
     {
+      "type": "stat",
+      "title": "Embedding Model Healthy (boot self-test)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "bgw_embedding_healthy",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "BROKEN"
+                },
+                "1": {
+                  "text": "OK"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 100
+      },
+      "id": 49
+    },
+    {
+      "type": "timeseries",
+      "title": "Embedding Errors by Caller (/1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (caller) (increase(bgw_embedding_errors_total[1h]))",
+          "legendFormat": "{{caller}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 100
+      },
+      "id": 50
+    },
+    {
       "type": "row",
       "title": "Auto-Learn",
       "collapsed": false,
@@ -3750,9 +3914,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 106
       },
-      "id": 49
+      "id": 51
     },
     {
       "type": "timeseries",
@@ -3871,9 +4035,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 101
+        "y": 107
       },
-      "id": 50
+      "id": 52
     },
     {
       "type": "timeseries",
@@ -3968,9 +4132,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 101
+        "y": 107
       },
-      "id": 51
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -4065,9 +4229,191 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 101
+        "y": 107
       },
-      "id": 52
+      "id": 54
+    },
+    {
+      "type": "timeseries",
+      "title": "Auto-Learn Runs by Outcome (/1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (increase(bgw_auto_learn_runs_total[1h]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 55
+    },
+    {
+      "type": "timeseries",
+      "title": "Auto-Learn Errors by Stage (/1h) + Re-arms",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (stage) (increase(bgw_auto_learn_errors_total[1h]))",
+          "legendFormat": "{{stage}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "increase(bgw_auto_learn_rearmed_total[1h])",
+          "legendFormat": "re-armed",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 115
+      },
+      "id": 56
     },
     {
       "type": "row",
@@ -4078,9 +4424,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 123
       },
-      "id": 53
+      "id": 57
     },
     {
       "type": "timeseries",
@@ -4163,9 +4509,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 110
+        "y": 124
       },
-      "id": 54
+      "id": 58
     },
     {
       "type": "timeseries",
@@ -4248,9 +4594,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 110
+        "y": 124
       },
-      "id": 55
+      "id": 59
     },
     {
       "type": "timeseries",
@@ -4345,9 +4691,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 110
+        "y": 124
       },
-      "id": 56
+      "id": 60
     },
     {
       "type": "row",
@@ -4358,9 +4704,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 118
+        "y": 132
       },
-      "id": 57
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -4455,9 +4801,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 119
+        "y": 133
       },
-      "id": 58
+      "id": 62
     },
     {
       "type": "timeseries",
@@ -4552,9 +4898,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 119
+        "y": 133
       },
-      "id": 59
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4637,9 +4983,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 119
+        "y": 133
       },
-      "id": 60
+      "id": 64
     },
     {
       "type": "row",
@@ -4650,9 +4996,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 127
+        "y": 141
       },
-      "id": 61
+      "id": 65
     },
     {
       "type": "stat",
@@ -4721,9 +5067,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 128
+        "y": 142
       },
-      "id": 62
+      "id": 66
     },
     {
       "type": "timeseries",
@@ -4831,9 +5177,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 128
+        "y": 142
       },
-      "id": 63
+      "id": 67
     },
     {
       "type": "timeseries",
@@ -4916,9 +5262,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 128
+        "y": 142
       },
-      "id": 64
+      "id": 68
     },
     {
       "type": "row",
@@ -4929,9 +5275,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 136
+        "y": 150
       },
-      "id": 65
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -5014,9 +5360,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 137
+        "y": 151
       },
-      "id": 66
+      "id": 70
     },
     {
       "type": "timeseries",
@@ -5099,9 +5445,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 137
+        "y": 151
       },
-      "id": 67
+      "id": 71
     },
     {
       "type": "row",
@@ -5112,9 +5458,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 145
+        "y": 159
       },
-      "id": 68
+      "id": 72
     },
     {
       "type": "timeseries",
@@ -5209,9 +5555,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 146
+        "y": 160
       },
-      "id": 69
+      "id": 73
     },
     {
       "type": "gauge",
@@ -5278,9 +5624,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 146
+        "y": 160
       },
-      "id": 70
+      "id": 74
     },
     {
       "type": "timeseries",
@@ -5375,9 +5721,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 146
+        "y": 160
       },
-      "id": 71
+      "id": 75
     },
     {
       "type": "row",
@@ -5388,9 +5734,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 154
+        "y": 168
       },
-      "id": 72
+      "id": 76
     },
     {
       "type": "timeseries",
@@ -5473,9 +5819,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 155
+        "y": 169
       },
-      "id": 73
+      "id": 77
     },
     {
       "type": "timeseries",
@@ -5558,9 +5904,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 155
+        "y": 169
       },
-      "id": 74
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5643,9 +5989,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 155
+        "y": 169
       },
-      "id": 75
+      "id": 79
     },
     {
       "type": "stat",
@@ -5715,9 +6061,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 163
+        "y": 177
       },
-      "id": 76
+      "id": 80
     },
     {
       "type": "timeseries",
@@ -5800,9 +6146,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 163
+        "y": 177
       },
-      "id": 77
+      "id": 81
     },
     {
       "type": "timeseries",
@@ -5885,9 +6231,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 163
+        "y": 177
       },
-      "id": 78
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -5982,9 +6328,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 163
+        "y": 177
       },
-      "id": 79
+      "id": 83
     },
     {
       "type": "row",
@@ -5995,9 +6341,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 171
+        "y": 185
       },
-      "id": 80
+      "id": 84
     },
     {
       "type": "timeseries",
@@ -6092,9 +6438,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 172
+        "y": 186
       },
-      "id": 81
+      "id": 85
     },
     {
       "type": "timeseries",
@@ -6177,9 +6523,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 172
+        "y": 186
       },
-      "id": 82
+      "id": 86
     },
     {
       "type": "timeseries",
@@ -6274,9 +6620,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 172
+        "y": 186
       },
-      "id": 83
+      "id": 87
     },
     {
       "type": "timeseries",
@@ -6359,9 +6705,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 180
+        "y": 194
       },
-      "id": 84
+      "id": 88
     },
     {
       "type": "timeseries",
@@ -6456,9 +6802,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 180
+        "y": 194
       },
-      "id": 85
+      "id": 89
     },
     {
       "type": "row",
@@ -6469,9 +6815,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 188
+        "y": 202
       },
-      "id": 86
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6554,9 +6900,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 189
+        "y": 203
       },
-      "id": 87
+      "id": 91
     },
     {
       "type": "timeseries",
@@ -6639,9 +6985,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 189
+        "y": 203
       },
-      "id": 88
+      "id": 92
     },
     {
       "type": "timeseries",
@@ -6736,9 +7082,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 189
+        "y": 203
       },
-      "id": 89
+      "id": 93
     },
     {
       "type": "timeseries",
@@ -6821,9 +7167,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 197
+        "y": 211
       },
-      "id": 90
+      "id": 94
     },
     {
       "type": "timeseries",
@@ -6930,9 +7276,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 197
+        "y": 211
       },
-      "id": 91
+      "id": 95
     },
     {
       "type": "piechart",
@@ -7001,9 +7347,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 197
+        "y": 211
       },
-      "id": 92
+      "id": 96
     },
     {
       "type": "row",
@@ -7014,9 +7360,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 205
+        "y": 219
       },
-      "id": 93
+      "id": 97
     },
     {
       "type": "timeseries",
@@ -7099,9 +7445,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 206
+        "y": 220
       },
-      "id": 94
+      "id": 98
     },
     {
       "type": "timeseries",
@@ -7196,9 +7542,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 206
+        "y": 220
       },
-      "id": 95
+      "id": 99
     },
     {
       "type": "timeseries",
@@ -7293,9 +7639,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 206
+        "y": 220
       },
-      "id": 96
+      "id": 100
     },
     {
       "type": "row",
@@ -7306,9 +7652,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 214
+        "y": 228
       },
-      "id": 97
+      "id": 101
     },
     {
       "type": "timeseries",
@@ -7416,9 +7762,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 215
+        "y": 229
       },
-      "id": 98
+      "id": 102
     },
     {
       "type": "stat",
@@ -7483,9 +7829,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 215
+        "y": 229
       },
-      "id": 99
+      "id": 103
     },
     {
       "type": "stat",
@@ -7550,9 +7896,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 215
+        "y": 229
       },
-      "id": 100
+      "id": 104
     },
     {
       "type": "timeseries",
@@ -7647,9 +7993,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 215
+        "y": 229
       },
-      "id": 101
+      "id": 105
     },
     {
       "type": "timeseries",
@@ -7756,9 +8102,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 223
+        "y": 237
       },
-      "id": 102
+      "id": 106
     },
     {
       "type": "timeseries",
@@ -7869,9 +8215,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 223
+        "y": 237
       },
-      "id": 103
+      "id": 107
     },
     {
       "type": "timeseries",
@@ -7967,9 +8313,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 223
+        "y": 237
       },
-      "id": 104
+      "id": 108
     },
     {
       "type": "row",
@@ -7980,9 +8326,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 231
+        "y": 245
       },
-      "id": 105
+      "id": 109
     },
     {
       "type": "timeseries",
@@ -8065,9 +8411,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 232
+        "y": 246
       },
-      "id": 106
+      "id": 110
     },
     {
       "type": "timeseries",
@@ -8151,9 +8497,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 232
+        "y": 246
       },
-      "id": 107
+      "id": 111
     },
     {
       "type": "timeseries",
@@ -8237,9 +8583,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 232
+        "y": 246
       },
-      "id": 108
+      "id": 112
     },
     {
       "type": "row",
@@ -8250,9 +8596,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 240
+        "y": 254
       },
-      "id": 109
+      "id": 113
     },
     {
       "type": "stat",
@@ -8318,9 +8664,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 241
+        "y": 255
       },
-      "id": 110
+      "id": 114
     },
     {
       "type": "stat",
@@ -8386,9 +8732,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 241
+        "y": 255
       },
-      "id": 111
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8472,9 +8818,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 241
+        "y": 255
       },
-      "id": 112
+      "id": 116
     },
     {
       "type": "stat",
@@ -8540,9 +8886,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 241
+        "y": 255
       },
-      "id": 113
+      "id": 117
     },
     {
       "type": "row",
@@ -8553,9 +8899,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 249
+        "y": 263
       },
-      "id": 114
+      "id": 118
     },
     {
       "type": "stat",
@@ -8625,9 +8971,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 250
+        "y": 264
       },
-      "id": 115
+      "id": 119
     },
     {
       "type": "timeseries",
@@ -8711,9 +9057,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 250
+        "y": 264
       },
-      "id": 116
+      "id": 120
     },
     {
       "type": "logs",
@@ -8752,9 +9098,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 250
+        "y": 264
       },
-      "id": 117
+      "id": 121
     },
     {
       "type": "row",
@@ -8765,9 +9111,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 258
+        "y": 272
       },
-      "id": 118
+      "id": 122
     },
     {
       "type": "timeseries",
@@ -8851,9 +9197,9 @@
         "h": 8,
         "w": 3,
         "x": 0,
-        "y": 259
+        "y": 273
       },
-      "id": 119
+      "id": 123
     },
     {
       "type": "timeseries",
@@ -8961,9 +9307,9 @@
         "h": 8,
         "w": 3,
         "x": 3,
-        "y": 259
+        "y": 273
       },
-      "id": 120
+      "id": 124
     },
     {
       "type": "timeseries",
@@ -9059,9 +9405,9 @@
         "h": 8,
         "w": 3,
         "x": 6,
-        "y": 259
+        "y": 273
       },
-      "id": 121
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -9157,9 +9503,9 @@
         "h": 8,
         "w": 3,
         "x": 9,
-        "y": 259
+        "y": 273
       },
-      "id": 122
+      "id": 126
     },
     {
       "type": "logs",
@@ -9198,9 +9544,9 @@
         "h": 8,
         "w": 3,
         "x": 12,
-        "y": 259
+        "y": 273
       },
-      "id": 123
+      "id": 127
     },
     {
       "type": "timeseries",
@@ -9284,9 +9630,9 @@
         "h": 8,
         "w": 3,
         "x": 15,
-        "y": 259
+        "y": 273
       },
-      "id": 124
+      "id": 128
     },
     {
       "type": "timeseries",
@@ -9370,9 +9716,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 259
+        "y": 273
       },
-      "id": 125
+      "id": 129
     },
     {
       "type": "timeseries",
@@ -9468,9 +9814,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 267
+        "y": 281
       },
-      "id": 126
+      "id": 130
     },
     {
       "type": "timeseries",
@@ -9578,9 +9924,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 267
+        "y": 281
       },
-      "id": 127
+      "id": 131
     },
     {
       "type": "stat",
@@ -9650,9 +9996,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 267
+        "y": 281
       },
-      "id": 128
+      "id": 132
     },
     {
       "type": "row",
@@ -9663,9 +10009,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 275
+        "y": 289
       },
-      "id": 129
+      "id": 133
     },
     {
       "type": "stat",
@@ -9726,9 +10072,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 276
+        "y": 290
       },
-      "id": 130
+      "id": 134
     },
     {
       "type": "timeseries",
@@ -9812,9 +10158,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 276
+        "y": 290
       },
-      "id": 131
+      "id": 135
     },
     {
       "type": "stat",
@@ -9875,9 +10221,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 276
+        "y": 290
       },
-      "id": 132
+      "id": 136
     },
     {
       "type": "timeseries",
@@ -9965,9 +10311,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 284
+        "y": 298
       },
-      "id": 133
+      "id": 137
     },
     {
       "type": "stat",
@@ -10033,9 +10379,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 284
+        "y": 298
       },
-      "id": 134
+      "id": 138
     },
     {
       "type": "stat",
@@ -10101,9 +10447,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 284
+        "y": 298
       },
-      "id": 135
+      "id": 139
     },
     {
       "type": "stat",
@@ -10169,9 +10515,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 292
+        "y": 306
       },
-      "id": 136
+      "id": 140
     },
     {
       "type": "timeseries",
@@ -10255,9 +10601,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 292
+        "y": 306
       },
-      "id": 137
+      "id": 141
     },
     {
       "type": "row",
@@ -10268,9 +10614,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 300
+        "y": 314
       },
-      "id": 138
+      "id": 142
     },
     {
       "type": "logs",
@@ -10309,9 +10655,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 301
+        "y": 315
       },
-      "id": 139
+      "id": 143
     },
     {
       "type": "logs",
@@ -10350,9 +10696,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 301
+        "y": 315
       },
-      "id": 140
+      "id": 144
     }
   ]
 }

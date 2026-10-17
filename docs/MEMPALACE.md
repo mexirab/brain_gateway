@@ -36,7 +36,9 @@ All palace vectors come from `nomic-ai/nomic-embed-text-v2-moe` (`EMBEDDING_MODE
 
 **Upgrading:** test the new SHAs (and any transformers bump) in a throwaway container — `encode()` must succeed and the log must not show "A new version of the following files was downloaded" — then change them together. Procedure also in the `embedding_pin.py` docstring.
 
-**Health:** startup self-test encodes one sentence (60 s timeout) → gauge `bgw_embedding_healthy` (1/0, log line `[EMBEDDING] Self-test OK|FAILED`). Paging alert `EmbeddingModelBroken` fires on `== 0` for 5 m. Gap: the self-test only runs at boot — there is no runtime error counter yet, so a failure that starts after startup is visible only as per-call errors in the logs.
+**Health:** startup self-test encodes one sentence (60 s timeout) → gauge `bgw_embedding_healthy` (1/0, log line `[EMBEDDING] Self-test OK|FAILED`). Paging alert `EmbeddingModelBroken` fires on `== 0` for 5 m (boot-only signal).
+
+**Runtime errors:** `shared.embedding_model` is wrapped in a pass-through `shared._CountingEmbedder`; every `encode()` failure increments `bgw_embedding_errors_total{caller}` (caller = calling module; known callers pre-initialised at 0) and re-raises. Alert `EmbeddingErrors`: `sum(increase(...[1h])) >= 3` for 10 m, `keep_firing_for: 2h` (doesn't resolve overnight just because memory is idle), quiet `pushover-quiet`. Inhibited by `EmbeddingModelBroken`. Grafana Memory row: "Embedding Model Healthy" + "Embedding Errors by Caller".
 
 **Outage 2026-10-02 → 2026-10-15:** transformers was unpinned; a rebuild pulled 5.18 and every encode failed with `'NomicBertModel' object has no attribute 'get_extended_attention_mask'`. Memory search, RAG context, palace writes and auto_learn all failed (auto_learn stored 0 facts) for ~12 days with no alert. Explicit "remember this" requests in that window were lost and cannot be recovered. The pinned load produces identical vectors to the pre-outage model, so existing memories remain compatible (no re-index needed).
 
@@ -83,8 +85,11 @@ Background fact extraction from chats (`orchestrator/auto_learn.py`; scheduling 
 | Cache | In-RAM, 20 conversations; overflow evicts (counted) |
 | Model asleep | Model unreachable at fire time → re-queue every 30 min, up to 16 attempts (~7.5 h), then drop |
 | Budget | 12000 chars: assistant replies shortened to 300 chars first, then the most recent text kept |
+| Re-arm | New turns during a running extraction re-cache the conversation, but APScheduler skips the re-armed job if it comes due mid-run (one instance per id). `_rearm_if_orphaned` (after every run) schedules a fresh job when the conversation is still cached and has none |
 
-**Metrics:** `bgw_auto_learn_extractions_total` (per conversation, not per turn), `bgw_auto_learn_dropped_total{reason=evicted|shutdown|model_unavailable}`, `bgw_auto_learn_deferred_total`. `shutdown` = pending conversations lost on restart/deploy; the count is persisted in `app_state` key `auto_learn_dropped_at_shutdown` and added to the counter at next startup. Grafana "Auto-Learn" row → "Extractions (per conversation) + Facts Stored". No alerts.
+**Metrics:** `bgw_auto_learn_extractions_total` (per conversation, not per turn), `bgw_auto_learn_dropped_total{reason=evicted|shutdown|model_unavailable}`, `bgw_auto_learn_deferred_total`. `shutdown` = pending conversations lost on restart/deploy; the count is persisted in `app_state` key `auto_learn_dropped_at_shutdown` and added to the counter at next startup. `bgw_auto_learn_runs_total{outcome=stored|duplicates_only|no_facts|opt_out|error}` (pre-initialised), `bgw_auto_learn_errors_total{stage=llm|empty|parse|dedup|store|pipeline}` (`empty` = model returned nothing — a hiccup, kept separate), `bgw_auto_learn_rearmed_total`. Grafana "Auto-Learn" row → "Extractions (per conversation) + Facts Stored", "Auto-Learn Runs by Outcome", "Auto-Learn Errors by Stage + Re-arms".
+
+**Alert `AutoLearnFailing`** (quiet `pushover-quiet`): ≥3 non-`empty` errors in 24 h AND no successful run (`stored|duplicates_only|no_facts`) in 24 h, for 30 m. Inhibited by `EmbeddingModelBroken` and `EmbeddingErrors` (dedup + store need embeddings).
 
 **Known limits:** pending conversations are RAM-only (lost on restart, counted as `shutdown`); a fallback-keyed conversation crossing midnight, or a conversation resumed after its job ran, is extracted again (fact dedup absorbs it).
 

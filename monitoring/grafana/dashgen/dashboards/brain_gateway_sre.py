@@ -580,6 +580,25 @@ def build() -> dict:
     row, y = grid_row(memory_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    embedding_row = [
+        stat(
+            "Embedding Model Healthy (boot self-test)",
+            "bgw_embedding_healthy",
+            thresholds=[(None, "red"), (1, "green")],
+            mappings=[{"options": {"0": {"text": "BROKEN"}, "1": {"text": "OK"}}, "type": "value"}],
+            graph_mode="none",
+        ),
+        timeseries(
+            # Runtime encode() failures; EmbeddingErrors fires at >= 3 in 1h.
+            "Embedding Errors by Caller (/1h)",
+            [("sum by (caller) (increase(bgw_embedding_errors_total[1h]))", "{{caller}}")],
+            unit="none",
+            stack=True,
+        ),
+    ]
+    row, y = grid_row(embedding_row, y, heights=[6, 6])
+    panels.extend(row)
+
     # -------------------------------------------------------- Auto-Learn
     r, y = row_divider("Auto-Learn", y)
     panels.append(r)
@@ -618,6 +637,26 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(autolearn_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    autolearn_health_row = [
+        timeseries(
+            # AutoLearnFailing: errors (minus empty) >= 3 in 24h with no good run.
+            "Auto-Learn Runs by Outcome (/1h)",
+            [("sum by (outcome) (increase(bgw_auto_learn_runs_total[1h]))", "{{outcome}}")],
+            unit="none",
+            stack=True,
+        ),
+        timeseries(
+            "Auto-Learn Errors by Stage (/1h) + Re-arms",
+            [
+                ("sum by (stage) (increase(bgw_auto_learn_errors_total[1h]))", "{{stage}}"),
+                ("increase(bgw_auto_learn_rearmed_total[1h])", "re-armed"),
+            ],
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(autolearn_health_row, y, heights=[8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Brain Dump

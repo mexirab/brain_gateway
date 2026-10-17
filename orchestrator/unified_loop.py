@@ -657,9 +657,10 @@ async def run_unified_tool_loop(
 
     # Iteration budget, separate from max_rounds: the empty-reply retry adds a
     # round instead of consuming one (an empty LAST round must not fall into
-    # the "Hit max tool rounds" apology). NOTE: the terminal-tool line below
-    # reassigns max_rounds, which never shortened the old range()-based loop;
-    # that (pre-existing) behaviour is deliberately preserved here.
+    # the "Hit max tool rounds" apology). Rounds after a terminal tool are NOT
+    # capped: the model is told not to call more tools, and a hard cap would
+    # turn a legitimate follow-up action ("set a reminder, then turn off the
+    # lights") into the apology. max_rounds still bounds the whole loop.
     round_limit = max_rounds
     round_num = -1
     while True:
@@ -1058,12 +1059,10 @@ async def run_unified_tool_loop(
                         "content": "The action(s) above are complete. Now respond naturally to the user's full request. Do NOT call any more tools.",
                     }
                 )
-            # Cap remaining rounds to 1 (just generate the response)
-            max_rounds = round_num + 2  # current round + 1 more
 
     # Hit max rounds
-    TOOL_ROUNDS.observe(max_rounds)
-    logger.warning("[%s] Hit max tool rounds (%d)", label, max_rounds)
+    TOOL_ROUNDS.observe(round_limit)
+    logger.warning("[%s] Hit max tool rounds (%d)", label, round_limit)
     return await _finalize(
         "I tried to complete that but ran into some complexity. Please try a simpler request.",
         already_streamed=False,

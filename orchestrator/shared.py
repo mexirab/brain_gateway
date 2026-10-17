@@ -8,6 +8,7 @@ Settings); this module re-exports constants for backward compatibility.
 
 import logging
 import os
+import sys
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -24,6 +25,7 @@ from orchestrator.embedding_pin import load_kwargs as embedding_load_kwargs
 from orchestrator.focus_state import FocusSession
 from orchestrator.ha_integration import HomeAssistantClient
 from orchestrator.llm_backend import LLMBackend, LLMConfig, create_backend
+from orchestrator.metrics import EMBEDDING_ERRORS
 from orchestrator.tts_backend import TTSBackend, TTSConfig, create_tts_backend
 from orchestrator.user_profile import get_profile
 
@@ -171,7 +173,37 @@ chroma = chromadb.PersistentClient(
     settings=ChromaSettings(anonymized_telemetry=False),
 )
 collection = chroma.get_or_create_collection(CHROMA_COLLECTION)
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, **embedding_load_kwargs(EMBEDDING_MODEL_NAME))
+
+
+class _CountingEmbedder:
+    """Pass-through around the SentenceTransformer that counts encode() failures.
+
+    Every memory feature calls ``shared.embedding_model.encode(...)`` (a dozen
+    call sites, some inside executor lambdas), so the count lives here instead
+    of at each caller. The exception is always re-raised unchanged; only the
+    calling module's name is recorded — never the text being encoded.
+    """
+
+    def __init__(self, model: SentenceTransformer) -> None:
+        self._model = model
+
+    def encode(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return self._model.encode(*args, **kwargs)
+        except Exception:
+            caller = sys._getframe(1).f_globals.get("__name__", "unknown")
+            EMBEDDING_ERRORS.labels(caller=caller.rsplit(".", 1)[-1]).inc()
+            raise
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_model":  # not set yet (copy/unpickle): don't recurse forever
+            raise AttributeError(name)
+        return getattr(self._model, name)
+
+
+embedding_model = _CountingEmbedder(
+    SentenceTransformer(EMBEDDING_MODEL_NAME, **embedding_load_kwargs(EMBEDDING_MODEL_NAME))
+)
 
 # ---------------------------------------------------------------------------
 # Agentic settings

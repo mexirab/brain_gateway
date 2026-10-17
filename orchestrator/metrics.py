@@ -627,6 +627,28 @@ EMBEDDING_HEALTHY = Gauge(
     "memory feature (search, RAG context, palace writes, auto_learn) depends on it.",
 )
 
+# Runtime counterpart to EMBEDDING_HEALTHY (which only checks once at boot): the
+# 2026-10-02 -> 10-15 outage broke every encode() for 12 days with no signal.
+# caller = the module that called encode() (bounded: a dozen orchestrator modules).
+EMBEDDING_ERRORS = Counter(
+    "bgw_embedding_errors_total",
+    "Embedding encode() calls that raised, by calling module",
+    ["caller"],
+)
+# Pre-initialised so increase() sees the first failure after a restart.
+for _caller in (
+    "auto_learn",
+    "brain_dump_manager",
+    "memory_manager",
+    "mempalace",
+    "orchestrator",
+    "prompt_builder",
+    "rag_ingest",
+    "routes_documents",
+    "tool_handlers",
+):
+    EMBEDDING_ERRORS.labels(caller=_caller)
+
 HELIOS_RUNNING = Gauge(
     "bgw_helios_running",
     "Whether Helios is inferred to be running from the plug state (1=running, "
@@ -824,6 +846,34 @@ for _reason in ("evicted", "shutdown", "model_unavailable"):
 AUTO_LEARN_DEFERRED = Counter(
     "bgw_auto_learn_deferred_total",
     "Auto-learn extractions postponed because the model was unreachable",
+)
+
+# Failures inside an extraction — without this a failed LLM call or a broken
+# store looked exactly like "the conversation had no facts".
+AUTO_LEARN_ERRORS = Counter(
+    "bgw_auto_learn_errors_total",
+    "Auto-learn failures by pipeline stage",
+    ["stage"],
+)
+for _stage in ("llm", "empty", "parse", "dedup", "store", "pipeline"):
+    AUTO_LEARN_ERRORS.labels(stage=_stage)
+
+# One per extraction run. Unlabelled-by-category on purpose: facts_stored_total
+# creates its category series lazily, so increase() misses the first store per
+# category after every restart and can't tell a working day from a broken one.
+AUTO_LEARN_RUNS = Counter(
+    "bgw_auto_learn_runs_total",
+    "Auto-learn extraction runs by outcome",
+    ["outcome"],
+)
+for _outcome in ("stored", "duplicates_only", "no_facts", "opt_out", "error"):
+    AUTO_LEARN_RUNS.labels(outcome=_outcome)
+
+# Conversations re-armed because they kept going while their extraction ran
+# (APScheduler skipped the re-armed job; see cloud_brain._rearm_if_orphaned).
+AUTO_LEARN_REARMED = Counter(
+    "bgw_auto_learn_rearmed_total",
+    "Auto-learn jobs re-armed after an orphaned snapshot",
 )
 
 AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
