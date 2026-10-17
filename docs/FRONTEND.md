@@ -94,7 +94,7 @@ Reads `GET /api/ha/entities` (allowed, non-denied, not hidden in HA); every cont
 | Switches / fans | Toggle rows |
 | Climate | Current temp + setpoint with −/+ (`set_temperature`) |
 | Covers / locks | Read-only (open/unlock refused by the guard anyway) |
-| Device settings | HA `config`/`diagnostic`-category entities, collapsed card |
+| Device settings | HA `config`/`diagnostic`-category entities, collapsed card. The only place they can be changed — chat and the NLP path refuse them (`ha_guard`, `allow_device_settings`) |
 | Unavailable | `unavailable`/`unknown` entities, collapsed card (never-activated scenes, state `unknown`, stay with the scenes) |
 
 - Optimistic updates with rollback on failure; plain-language per-control errors mapped from 401 / 403 (guard refusal) / 404 (unknown entity) / 502 (HA unreachable).

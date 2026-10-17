@@ -627,8 +627,30 @@ def build() -> dict:
             "closest matches were returned). Sustained non-zero = the schema listing is over its budget "
             "('+N more not listed') or entities were renamed in HA.",
         ),
+        timeseries(
+            "HA: Guard refusals (/1h)",
+            [
+                ("sum by (path) (increase(bgw_ha_call_refused_total[1h]))", "all {{path}}"),
+                (
+                    "sum by (path, source) (increase(bgw_ha_device_setting_refused_total[1h]))",
+                    "device setting {{path}} ({{source}})",
+                ),
+            ],
+            unit="none",
+            description="Steerable HA calls refused by ha_guard. 'device setting' = config/diagnostic entity "
+            "(registry), camera/motion/LED-style name (name) or a scene/group containing one (member) - "
+            "chat and the fast path can't change these; the dashboard can. A burst on path=tool can mean a "
+            "prompt-injection attempt.",
+        ),
+        stat(
+            "HA: Registry entities",
+            "bgw_ha_registry_entities",
+            unit="none",
+            description="Entities in the last good HA registry read (rooms + entity categories). 0 = never "
+            "read since start: the guard's device-setting check runs on entity names only.",
+        ),
     ]
-    row, y = grid_row(tools_row, y, heights=[8, 8, 8, 8])
+    row, y = grid_row(tools_row, y, heights=[8] * len(tools_row))
     panels.extend(row)
 
     # -------------------------------------------------------- Memory (Palace + RAG)

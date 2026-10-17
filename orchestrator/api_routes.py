@@ -310,7 +310,9 @@ async def execute_ha_command(body: HACommandRequest):
     if body.command is not None:
         result = await ha_client.execute_command(body.command)
     else:
-        refusal, data = check_ha_call(body.entity_id, body.service, body.data)
+        # The signed-in owner may change device settings (the /home "Device
+        # settings" card); chat and the NLP path may not.
+        refusal, data = check_ha_call(body.entity_id, body.service, body.data, allow_device_settings=True)
         if refusal:
             HA_CALL_REFUSED.labels(path="api").inc()
             # domain.service only once both are well-formed; never echo raw input.

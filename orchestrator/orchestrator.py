@@ -646,6 +646,11 @@ async def _startup_logic():
     logger.info("[orchestrator] Loading Home Assistant entities...")
     ha_client.set_http_client(_http)
     count = await ha_client.refresh_entities()
+    # Entity categories, so the first tool schema already hides device settings
+    # (ha_guard.ha_device_setting). Never raises; {} when HA's registry is unreadable.
+    from orchestrator.ha_registry import get_registry_meta
+
+    await get_registry_meta(ha_client.url, ha_client.token)
     shared._ha_tool_cache = None  # Invalidate cache after entity refresh
     shared._ha_tool_cache_time = 0.0
     logger.info(f"[orchestrator] Loaded {count} HA entities")

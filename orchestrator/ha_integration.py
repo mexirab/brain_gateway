@@ -26,8 +26,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from orchestrator.ha_guard import check_ha_call
-from orchestrator.metrics import HA_CALL_REFUSED
+from orchestrator.ha_guard import DEVICE_SETTING_REFUSAL, check_ha_call, device_setting_reason
+from orchestrator.ha_registry import ensure_fresh as ensure_ha_registry_fresh
+from orchestrator.metrics import HA_CALL_REFUSED, HA_DEVICE_SETTING_REFUSED
 
 logger = logging.getLogger(__name__)
 
@@ -654,11 +655,18 @@ class HomeAssistantClient:
             service_data["volume_level"] = cmd.value / 100
 
         # Same guard as the chat home_assistant tool: listed domain, not denied
-        # (Helios plug, HA_TOOL_DENY_ENTITIES), allow-listed service.
+        # (Helios plug, HA_TOOL_DENY_ENTITIES), not a device setting (camera
+        # enabled, motion detection, LEDs), allow-listed service.
+        await ensure_ha_registry_fresh(self.url, self.token)
         refusal, service_data = check_ha_call(entity.entity_id, service, service_data)
         if refusal:
             HA_CALL_REFUSED.labels(path="nlp").inc()
-            logger.warning(f"[HA] Legacy command refused: {domain}.{service}")
+            reason = device_setting_reason(entity.entity_id) if DEVICE_SETTING_REFUSAL in refusal else None
+            if reason:
+                HA_DEVICE_SETTING_REFUSED.labels(path="nlp", source=reason).inc()
+                logger.warning(f"[HA] Legacy command refused: {domain}.{service} device setting (source={reason})")
+            else:
+                logger.warning(f"[HA] Legacy command refused: {domain}.{service}")
             return ExecutionResult(
                 success=False,
                 action=cmd.action,

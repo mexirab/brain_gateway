@@ -18,7 +18,15 @@ from orchestrator.calendar_sources import get_calendar
 from orchestrator.data_manager import handle_get_data, handle_update_data
 from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
 from orchestrator.google_gmail import get_gmail_client
-from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_tool_denied
+from orchestrator.ha_guard import (
+    DEVICE_SETTING_REFUSAL,
+    HA_LISTED_DOMAINS,
+    check_ha_call,
+    device_setting_reason,
+    ha_device_setting,
+    ha_tool_denied,
+)
+from orchestrator.ha_registry import ensure_fresh as ensure_ha_registry_fresh
 from orchestrator.metrics import (
     CALENDAR_API_CALLS,
     CALENDAR_API_ERRORS,
@@ -27,6 +35,7 @@ from orchestrator.metrics import (
     GMAIL_API_ERRORS,
     GMAIL_API_LATENCY,
     HA_CALL_REFUSED,
+    HA_DEVICE_SETTING_REFUSED,
     HA_UNKNOWN_ENTITY,
     REMINDERS_DELIVERED,
     REMINDERS_FAILED,
@@ -141,15 +150,24 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
     """Execute a Home Assistant service call directly."""
     # Domain, deny list, service allow-list, targeting keys, media args — the
     # same guard the legacy NLP path and /api/ha/command use (ha_guard).
+    # Device-setting entities (camera enabled, motion detection, LEDs) are
+    # refused from chat; keep the registry cache the guard reads warm (never
+    # stalls the turn when a cache exists).
+    await ensure_ha_registry_fresh(ha_client.url, ha_client.token)
     refusal, data = check_ha_call(entity_id, service, data)
     if refusal:
         HA_CALL_REFUSED.labels(path="tool").inc()
-        if (
-            isinstance(entity_id, str)
-            and re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id)
-            and ha_tool_denied(entity_id)
-        ):
-            logger.warning(f"[HA] Refused denied entity {entity_id}")
+        well_formed = isinstance(entity_id, str) and re.fullmatch(r"[a-z_]+\.[a-z0-9_]{1,128}", entity_id)
+        reason = device_setting_reason(entity_id) if well_formed and DEVICE_SETTING_REFUSAL in refusal else None
+        if reason:
+            HA_DEVICE_SETTING_REFUSED.labels(path="tool", source=reason).inc()
+        # Only ids HA actually has: the model can pick any well-formed id, and
+        # WARNING lines reach the self-audit LLM.
+        if well_formed and ha_client.get_entity(entity_id) is not None:
+            if reason:
+                logger.warning(f"[HA] Refused device-setting entity {entity_id} (source={reason})")
+            elif ha_tool_denied(entity_id):
+                logger.warning(f"[HA] Refused denied entity {entity_id}")
         return refusal
     domain = entity_id.split(".", 1)[0]
 
@@ -172,7 +190,9 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
             suggestions = [
                 e
                 for e in ha_client.suggest_entities(entity_id, limit=8)
-                if e.domain in HA_LISTED_DOMAINS and not ha_tool_denied(e.entity_id)
+                if e.domain in HA_LISTED_DOMAINS
+                and not ha_tool_denied(e.entity_id)
+                and not ha_device_setting(e.entity_id)
             ][:5]
             logger.info(f"[HA] Unknown {domain} entity_id, offered {len(suggestions)} suggestion(s)")
             if not suggestions:

@@ -12,7 +12,7 @@ import unicodedata
 from typing import Any, Dict, List
 
 from orchestrator import shared
-from orchestrator.ha_guard import HA_LISTED_DOMAINS, ha_tool_denied
+from orchestrator.ha_guard import HA_LISTED_DOMAINS, ha_device_setting, ha_tool_denied
 from orchestrator.ha_integration import Entity
 from orchestrator.shared import _HA_TOOL_CACHE_TTL, ha_client
 from orchestrator.voice_style import PRESETS as VOICE_PRESETS
@@ -68,7 +68,9 @@ def format_ha_entity_listing(by_domain: Dict[str, List[Entity]], budget: int = H
         d: [
             ha_entity_token(e)
             for e in sorted(by_domain.get(d) or [], key=lambda ent: ent.entity_id)
-            if not ha_tool_denied(e.entity_id)
+            # Device settings (camera enabled, motion detection, LEDs) are
+            # refused from chat, so the model never sees them listed.
+            if not ha_tool_denied(e.entity_id) and not ha_device_setting(e.entity_id)
         ]
         for d in HA_LISTED_DOMAINS
     }

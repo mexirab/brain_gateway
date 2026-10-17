@@ -85,6 +85,30 @@ def _reset_announcement_routes_cache():
     announcement_routes._cache = None
 
 
+@pytest.fixture(autouse=True)
+def _no_ha_registry_network(monkeypatch):
+    """The HA guard warms ``ha_registry`` (a WebSocket read of HA's
+    registries) before every chat/NLP call. No test reaches a real HA: start
+    each test with an empty registry cache and a ``websockets.connect`` that
+    fails fast. Tests that exercise the registry patch ``connect`` themselves.
+    """
+    try:
+        import websockets
+
+        from orchestrator import ha_registry
+    except Exception:
+        yield
+        return
+
+    def _refuse(*a, **k):
+        raise OSError("no Home Assistant in tests")
+
+    monkeypatch.setattr(websockets, "connect", _refuse)
+    ha_registry._reset_cache_for_tests()
+    yield
+    ha_registry._reset_cache_for_tests()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _init_state_store_schema():
     """
