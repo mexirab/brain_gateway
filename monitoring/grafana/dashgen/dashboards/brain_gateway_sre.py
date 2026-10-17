@@ -376,7 +376,8 @@ def build() -> dict:
     # Scraped straight from llama-server's /metrics (Prometheus job
     # llama-primary). Helios is power-tiered, so every series has long "no
     # data" gaps and the counters reset on each wake — increase()/rate() handle
-    # the resets; ratios use sum() so a scrape gap doesn't divide by nothing.
+    # the resets; sum() collapses per-instance series. Idle windows are 0/0 =
+    # NaN and render as gaps, which is the honest picture.
     # prompt_tokens_total counts only the tokens actually prefilled (cache hits
     # are excluded), so the hit ratio is cached / (cached + prefilled).
     r, y = row_divider("Brain Server (llama-server)", y)
@@ -429,7 +430,8 @@ def build() -> dict:
             [
                 (mtp_accept_1h, "accepted / drafted"),
                 (
-                    'sum by (position) (increase(llamacpp:spec_decode_num_accepted_tokens_per_pos_total{job="llama-primary"}[1h])) / '
+                    "sum by (position) (increase(llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
+                    '{job="llama-primary"}[1h])) / '
                     'scalar(sum(increase(llamacpp:spec_decode_num_drafts_total{job="llama-primary"}[1h])))',
                     "pos {{position}}",
                 ),
@@ -437,8 +439,9 @@ def build() -> dict:
             unit="percentunit",
             min_value=0,
             max_value=1,
-            description="Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2), overall "
-            "and per draft position. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
+            description="Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). "
+            "'pos N' = share of drafts whose Nth token (0-based) was accepted, so the overall line is not "
+            "the average of the two. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
             "repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever "
             "is --spec-type none on the llama-server-primary unit.",
         ),

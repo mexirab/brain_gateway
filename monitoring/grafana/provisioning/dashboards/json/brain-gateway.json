@@ -2676,7 +2676,7 @@
           "sort": "desc"
         }
       },
-      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2), overall and per draft position. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
+      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of drafts whose Nth token (0-based) was accepted, so the overall line is not the average of the two. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
       "gridPos": {
         "h": 8,
         "w": 6,
