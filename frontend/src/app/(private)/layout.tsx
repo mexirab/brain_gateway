@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { CalendarDays, LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Refrigerator, Settings, ListTodo, Pill } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
+import SessionExpiredWatcher from '@/components/providers/SessionExpiredWatcher';
 import { SWRProvider } from '@/components/providers/SWRProvider';
 import { isAuthenticated } from '@/lib/auth';
 import { getFeatureFlags } from '@/lib/features.server';
@@ -74,6 +75,7 @@ export default async function PrivateLayout({
       {/* Main content — mobile pb clears the fixed MobileNav. If you change
           this padding, update .page-viewport in globals.css to match. */}
       <main className="flex-1 p-6 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-6 overflow-auto">
+        <SessionExpiredWatcher />
         <SWRProvider>{children}</SWRProvider>
       </main>
     </div>

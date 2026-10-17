@@ -1,6 +1,6 @@
 # Frontend Dashboard (ConvivialProphet.com)
 
-Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via the `brain_token` cookie, checked against `DASHBOARD_TOKEN` by `src/lib/dashboard-auth.ts` (see Auth below).
+Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth via the `brain_token` session cookie (derived from `DASHBOARD_TOKEN` by `src/lib/dashboard-auth.ts`; see Auth below).
 
 ## Pages
 
@@ -16,18 +16,26 @@ Next.js 14 + Tailwind dark theme dashboard. Docker on Jupiter (port 3001). Auth 
 | Meals | `/meals` | Private. Today's meals with running calorie total, manual log + photo-estimate flow, 7-day bar chart |
 | Pantry | `/pantry` | Private, gated on `pantry_enabled`. Tabs "What I have" (inventory by location, use/out/edit, "Still have these?" tray, add form with barcode scan), "Meal plan" (`PlanTab`: inline diet settings card `DietSettingsCard`; generate → poll → draft with warnings, missing-ingredient checklist where unticked = "already have", accept/discard, per-meal swap (one at a time), 👍/👎 ratings; active plan view) and "Stock-take" (kind picker Fridge/Freezer/Pantry/Receipt; 1–8 photos → poll → review checklist → commit. Receipt review: store · date · $total, printed text per line, "remembered" badge, restock "Add N"/"set back to full", grocery "ticks off …", location per new line, collapsible Not-food, sticky Save bar, "Nothing to add — discard"; duplicate-photo 409 offers "Open it" when the earlier scan is still open, else "Scan it anyway"). `?tab=scan` / `?tab=plan` deep-link. See `docs/PANTRY.md` |
 | Settings | `/settings` | Private. Four-panel settings UI (Identity & Tone, Selfcare Nudges, Quiet Hours, Recurring Reminders) with left-rail tab switcher. Each panel has a shared `SaveBar`; switching tabs while a panel is dirty triggers a confirm guard so unsaved edits aren't silently lost. Backed by `/api/config/*` via `lib/settings-api.ts` (typed client, mirrors `finance-api.ts` shape; goes through `/api/proxy` for bearer injection). |
+| Documents | `/documents` | Private. Document vault list; download/delete buttons always visible on phones (hover-only on desktop is gone), each with an `aria-label`. Downloads go through the proxy as attachments (see API Proxy Notes) |
 | Personal Facts | `/personal-facts` | Private. Read-only peek at the meds/projects/profile the model reads from the YAML source of truth (`GET /api/config/personal-facts`) |
 
 ## Auth
 
 - **Single token check:** `src/lib/dashboard-auth.ts` (`COOKIE_NAME`, `expectedDashboardToken()`, `isValidDashboardToken()`) — used by middleware, the `/api/proxy` route, `lib/auth.ts`, login/logout routes and the `(private)` layout. Don't re-read `DASHBOARD_TOKEN` anywhere else.
-- **Fail closed:** `DASHBOARD_TOKEN` unset, empty or `'changeme'` → nothing authenticates. `POST /api/auth/login` returns 503 with a fix-it message (400 on malformed JSON, 401 on wrong password). Compose passes `${DASHBOARD_TOKEN:-}` (no default).
+- **Session cookie ≠ password:** `brain_token` = HMAC-SHA256(key `DASHBOARD_TOKEN`, message `brain-gateway-dashboard-session-v1`), Web Crypto (Edge-safe), constant-time compare. Changing `DASHBOARD_TOKEN` (or bumping the `-v1` label) logs every browser out; the first deploy of this scheme logged out all pre-existing raw-password cookies once.
+- **Secure flag:** set when `x-forwarded-proto` is `https` (Tailscale Serve) or `COOKIE_SECURE=true` (`src/lib/secure-cookie.ts`). `COOKIE_SECURE` is not passed through `docker-compose.yml` today — add it to the frontend `environment:` to use it.
+- **Fail closed:** `DASHBOARD_TOKEN` unset, empty or `'changeme'` → nothing authenticates. `/login` (server page, `force-dynamic`) shows "not configured" up front; `POST /api/auth/login` returns 503 with a fix-it message (400 on malformed JSON, 401 on wrong password). Compose passes `${DASHBOARD_TOKEN:-}` (no default).
+- **Login form:** client component `src/app/login/LoginForm.tsx`; handles 403/429, error text is `role="alert"`. Logout is a plain form POST → `303` to `/login`.
+- **Login rate limit** (`src/lib/login-rate-limit.ts`, in-memory — `docker compose up -d --force-recreate frontend` clears it): attempt is reserved before the hash compare (parallel bursts can't bypass); 5 failures / 15 min per client (keyed on the LAST `X-Forwarded-For` hop — Tailscale Serve sets it to the real tailnet peer) and 30 failures / 15 min global (direct `:3001` can forge XFF); over limit → `429` + `Retry-After`. Successful logins never count against the global cap. Known trade-off: anyone who can reach `/login` can block NEW logins for 15 min; existing sessions are unaffected.
+- **CSRF guard** (`src/lib/same-origin.ts`): proxy writes (`POST/PUT/PATCH/DELETE`) and `POST /api/auth/login|logout` require `Sec-Fetch-Site: same-origin|none`, or — when that header is absent — an `Origin` matching the request host; otherwise `403`. Needed because `SameSite=Lax` treats every Jupiter port and every `*.ts.net` node as same-site. **Rule: orchestrator GET routes must stay side-effect-free** — the proxy does not CSRF-check GET.
+- **Expired session:** `src/components/providers/SessionExpiredWatcher.tsx` (mounted in the `(private)` layout) sends a page whose `/api/proxy` call returns 401 to `/login?redirect=<current path>`.
+- **Logging** (`src/lib/server-log.ts`): content-free JSON lines `{ts, level, logger:"frontend", msg}` for proxy 403/502 (`[PROXY] …`) and login 403/429/failed (`[AUTH] …`); route logged as its first two path segments only.
 - `(private)/layout.tsx` also redirects to `/login` server-side when the cookie is invalid (defense in depth for a page missing from the middleware lists; no `?redirect=` there). Private pages therefore render dynamically.
 - `src/middleware.ts` redirects requests without a valid `brain_token` cookie to `/login?redirect=<path+query>` (307) — the query is kept so deep links like `/pantry?tab=scan` survive re-login.
 - **Non-page paths:** `/avatar` (the chat avatar model) is also in both lists so the `.vrm` needs the cookie; it isn't a `(private)/` route, which `middleware.test.ts` allows.
 - **Adding a page under `(private)/`:** add it to BOTH `PROTECTED_PATHS` in `src/lib/protected-paths.ts` (shared by middleware + login page; `middleware.ts` re-exports it) and `config.matcher` in `src/middleware.ts` (matcher must be a static literal — Next can't derive it from the array). The `(private)` route group does not protect anything on its own.
 - **Login redirect:** `safeRedirect()` (`src/lib/protected-paths.ts`) honours `?redirect=` only if it parses (WHATWG URL) to a same-origin path under a protected route with no encoded `%2F`/`%5C`; anything else (`//host`, `javascript:`, unprotected paths) goes to `/dashboard`. Blocks open redirect / `javascript:` URLs on `/login`.
-- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect (with query preserved), a valid cookie passes. `src/lib/protected-paths.test.ts` covers `safeRedirect`. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`. `src/lib/dashboard-auth.test.ts` covers the placeholder/fail-closed rules.
+- `src/middleware.test.ts` (vitest) enforces this: every top-level `(private)/` route (nested route groups included) must be in both lists, the lists must match, anonymous/wrong-token requests redirect (with query preserved), a valid cookie passes. `src/lib/protected-paths.test.ts` covers `safeRedirect`. Runs in CI (`lint-frontend` job → `npm test`); locally `cd frontend && npm test`. `src/lib/dashboard-auth.test.ts` covers the placeholder/fail-closed rules and the derived cookie; `same-origin.test.ts`, `login-rate-limit.test.ts`, `content-disposition.test.ts`, `app/api/auth/{login,logout}/route.test.ts` cover the rest.
 
 ## Dashboard Widgets
 
@@ -91,7 +99,7 @@ The `/api/setup/*` backend endpoints (`status`, `hardware`, `complete`, `env`, `
 
 ## API Pattern
 
-All client-side API calls go through `/api/proxy` prefix -> Next.js auth middleware -> orchestrator `:8888`.
+All client-side API calls go through `/api/proxy` prefix -> Next.js auth middleware -> orchestrator `:8888`. Proxy behaviour (path allow-list, CSRF, response handling): see API Proxy Notes below.
 
 ## Deploy
 
@@ -160,7 +168,14 @@ Upstream URLs are built only by `buildUpstreamUrl()` (`src/lib/proxy-url.ts`) �
 - New orchestrator path roots need adding to `ALLOWED_ROOTS`.
 - Tests: `src/lib/proxy-url.test.ts`, `src/app/api/proxy/[...path]/route.test.ts` (refused paths never call `fetch`).
 
-The proxy `route.ts` now handles `PATCH` in addition to `GET/POST/PUT/DELETE`. Required by both workouts (modify plan) and meals (edit entry) endpoints.
+`route.ts` handles `GET/POST/PUT/PATCH/DELETE` through one `forward()`/`relay()` pair:
+
+- Cookie check, then CSRF guard on writes (see Auth) → `403`.
+- Upstream fetch uses `redirect: 'manual'`; any upstream 3xx → `502` (the bearer never follows a redirect).
+- Request bodies: text/JSON forwarded as text, everything else as raw bytes.
+- JSON responses relay as JSON, unless upstream marked them `Content-Disposition: attachment` (then they download).
+- Successful non-JSON responses stream through. Inline only for raster images and audio; everything else gets `Content-Disposition: attachment` (`src/lib/content-disposition.ts`) + `Content-Security-Policy: sandbox` + `X-Content-Type-Options: nosniff` — document downloads work, and uploaded HTML/SVG can't execute as the dashboard origin.
+- Non-JSON error, unreadable JSON, or orchestrator unreachable → JSON `502`.
 
 Binary responses forward the upstream `Cache-Control` only when it is `private`/`no-store` and not `public` (cookie-authed proxy — never let a shared cache store it). Used by the versioned exercise photos.
 

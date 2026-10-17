@@ -1,26 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { COOKIE_NAME, isValidDashboardToken } from '@/lib/dashboard-auth';
+import { COOKIE_NAME, isValidDashboardSession } from '@/lib/dashboard-auth';
+import { asAttachment } from '@/lib/content-disposition';
 import { buildUpstreamUrl } from '@/lib/proxy-url';
+import { isCrossSiteRequest } from '@/lib/same-origin';
+import { logEvent, routeLabel } from '@/lib/server-log';
 
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || 'http://localhost:8888';
 const API_TOKEN = process.env.API_TOKEN || '';
 
-function isAuthed(request: NextRequest): boolean {
-  return isValidDashboardToken(request.cookies.get(COOKIE_NAME)?.value);
+type Ctx = { params: Promise<{ path: string[] }> };
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+// Upstream types the browser may render inline on the dashboard origin. Anything
+// else (HTML, SVG, PDF, text from the document vault…) is forced to download, so
+// an uploaded file can never run script as the dashboard.
+const INLINE_SAFE = /^(image\/(png|jpe?g|gif|webp|avif)|audio\/[\w.+-]+)$/i;
+
+function jsonError(error: string, status: number): NextResponse {
+  return NextResponse.json({ error }, { status });
 }
 
-function badPath(): NextResponse {
-  return NextResponse.json({ error: 'Path not allowed' }, { status: 400 });
-}
-
-/** Return binary response directly instead of parsing as JSON. */
-function isBinaryResponse(res: Response): boolean {
-  const ct = res.headers.get('content-type') || '';
-  return ct.startsWith('audio/') || ct.startsWith('image/') || ct === 'application/octet-stream';
-}
-
-function binaryResponse(res: Response, ct: string): Response {
-  const headers: Record<string, string> = { 'Content-Type': ct };
+/** Stream a non-JSON upstream body back with only safe headers. */
+function passthrough(res: Response, contentType: string): Response {
+  const type = contentType.split(';')[0].trim();
+  const headers: Record<string, string> = {
+    'Content-Type': contentType,
+    'X-Content-Type-Options': 'nosniff',
+  };
+  const disposition = res.headers.get('content-disposition');
+  if (INLINE_SAFE.test(type)) {
+    if (disposition) headers['Content-Disposition'] = disposition;
+  } else {
+    headers['Content-Disposition'] = asAttachment(disposition);
+    headers['Content-Security-Policy'] = "sandbox; default-src 'none'";
+  }
   // Pass through upstream caching (versioned exercise photos), but only
   // browser-private directives: this is a cookie-authed proxy, never let a
   // shared cache in front of the dashboard store it.
@@ -31,145 +44,96 @@ function binaryResponse(res: Response, ct: string): Response {
   return new Response(res.body, { status: res.status, headers });
 }
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  if (!isAuthed(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+/** Turn the orchestrator's response into ours. */
+async function relay(res: Response, route: string, method: Method): Promise<Response> {
+  const bad = (reason: string, error: string, status = 502) => {
+    logEvent('warning', '[PROXY] Bad upstream response', { reason, route, method, upstream_status: res.status });
+    return jsonError(error, status);
+  };
+  if (res.status === 204) return new Response(null, { status: 204 });
+  // Never follow or forward a redirect: it could point anywhere, and the
+  // request that produced it carried the API token.
+  if (res.status >= 300 && res.status < 400) return bad('redirect', 'Unexpected redirect from orchestrator');
 
-  const { path } = await params;
-  const url = buildUpstreamUrl(path, request.nextUrl.search, ORCHESTRATOR_URL);
-  if (!url) return badPath();
-
-  const res = await fetch(url.toString(), {
-    headers: { 'Authorization': `Bearer ${API_TOKEN}` },
-  });
-
-  if (isBinaryResponse(res)) {
-    return binaryResponse(res, res.headers.get('content-type')!);
-  }
-
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
-}
-
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  if (!isAuthed(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const { path } = await params;
-  const url = buildUpstreamUrl(path, '', ORCHESTRATOR_URL);
-  if (!url) return badPath();
-
-  const contentType = request.headers.get('content-type') || 'application/json';
-
-  // Multipart form-data: forward raw bytes to preserve boundary
-  const body = contentType.includes('multipart/')
-    ? Buffer.from(await request.arrayBuffer())
-    : await request.text();
-
-  const res = await fetch(url.toString(), {
-    method: 'POST',
-    headers: { 'Content-Type': contentType, 'Authorization': `Bearer ${API_TOKEN}` },
-    body,
-  });
-
-  // Handle streaming responses (SSE from chat completions)
-  if (res.headers.get('content-type')?.includes('text/event-stream')) {
+  const contentType = res.headers.get('content-type') || '';
+  // Streaming chat completions (SSE)
+  if (contentType.includes('text/event-stream')) {
     return new Response(res.body, {
       status: res.status,
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   }
-
-  // Handle binary responses (TTS audio)
-  if (isBinaryResponse(res)) {
-    return binaryResponse(res, res.headers.get('content-type')!);
+  const isAttachment = /^\s*attachment\b/i.test(res.headers.get('content-disposition') ?? '');
+  if (contentType && (!contentType.includes('json') || (isAttachment && res.ok))) {
+    // A plain-text/HTML error page (crashed handler, proxy in between) is not
+    // a file: give the page a JSON error it can show.
+    if (!res.ok) {
+      return bad('non_json_error', `Orchestrator error (HTTP ${res.status})`, res.status >= 500 ? 502 : res.status);
+    }
+    return passthrough(res, contentType);
   }
 
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+  try {
+    return NextResponse.json(await res.json(), { status: res.status });
+  } catch {
+    return bad('unreadable_json', `Orchestrator sent an unreadable response (HTTP ${res.status})`);
+  }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  if (!isAuthed(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function forward(request: NextRequest, { params }: Ctx, method: Method): Promise<Response> {
+  if (!(await isValidDashboardSession(request.cookies.get(COOKIE_NAME)?.value))) {
+    return jsonError('Unauthorized', 401);
   }
-
   const { path } = await params;
-  const url = buildUpstreamUrl(path, '', ORCHESTRATOR_URL);
-  if (!url) return badPath();
-
-  const body = await request.text();
-  const contentType = request.headers.get('content-type') || 'application/json';
-
-  const res = await fetch(url.toString(), {
-    method: 'PUT',
-    headers: { 'Content-Type': contentType, 'Authorization': `Bearer ${API_TOKEN}` },
-    body,
-  });
-
-  if (res.status === 204) return new Response(null, { status: 204 });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
-}
-
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  if (!isAuthed(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const route = routeLabel(path);
+  if (method !== 'GET' && isCrossSiteRequest(request.headers)) {
+    logEvent('warning', '[PROXY] Cross-site write refused', {
+      route,
+      method,
+      sec_fetch_site: request.headers.get('sec-fetch-site'),
+      has_origin: request.headers.has('origin'),
+    });
+    return jsonError('Cross-site request refused', 403);
   }
 
-  const { path } = await params;
-  const url = buildUpstreamUrl(path, '', ORCHESTRATOR_URL);
-  if (!url) return badPath();
+  const search = method === 'GET' || method === 'DELETE' ? request.nextUrl.search : '';
+  const url = buildUpstreamUrl(path, search, ORCHESTRATOR_URL);
+  if (!url) return jsonError('Path not allowed', 400);
 
-  const body = await request.text();
-  const contentType = request.headers.get('content-type') || 'application/json';
-
-  const res = await fetch(url.toString(), {
-    method: 'PATCH',
-    headers: { 'Content-Type': contentType, 'Authorization': `Bearer ${API_TOKEN}` },
-    body,
-  });
-
-  if (res.status === 204) return new Response(null, { status: 204 });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  if (!isAuthed(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const headers: Record<string, string> = { Authorization: `Bearer ${API_TOKEN}` };
+  let body: BodyInit | undefined;
+  if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+    const contentType = request.headers.get('content-type') || 'application/json';
+    headers['Content-Type'] = contentType;
+    // JSON/text as text; anything else (multipart boundaries, raw audio…) as
+    // raw bytes, so a UTF-8 decode can't corrupt it.
+    body = /^(application\/json|text\/)/i.test(contentType)
+      ? await request.text()
+      : Buffer.from(await request.arrayBuffer());
   }
 
-  const { path } = await params;
-  const url = buildUpstreamUrl(path, request.nextUrl.search, ORCHESTRATOR_URL);
-  if (!url) return badPath();
-
-  const res = await fetch(url.toString(), {
-    method: 'DELETE',
-    headers: { 'Authorization': `Bearer ${API_TOKEN}` },
-  });
-  if (res.status === 204) return new Response(null, { status: 204 });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), { method, headers, body, redirect: 'manual' });
+  } catch (e) {
+    const code = (e as { cause?: { code?: unknown } })?.cause?.code;
+    logEvent('warning', '[PROXY] Orchestrator unreachable', {
+      route,
+      method,
+      code: typeof code === 'string' ? code : 'unknown',
+    });
+    return jsonError('Orchestrator unreachable', 502);
+  }
+  return relay(res, route, method);
 }
+
+export const GET = (request: NextRequest, ctx: Ctx) => forward(request, ctx, 'GET');
+export const POST = (request: NextRequest, ctx: Ctx) => forward(request, ctx, 'POST');
+export const PUT = (request: NextRequest, ctx: Ctx) => forward(request, ctx, 'PUT');
+export const PATCH = (request: NextRequest, ctx: Ctx) => forward(request, ctx, 'PATCH');
+export const DELETE = (request: NextRequest, ctx: Ctx) => forward(request, ctx, 'DELETE');
