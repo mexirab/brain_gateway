@@ -294,8 +294,9 @@ class CloudBrain:
         # mental-state data: never logged, only how many matched.
         logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%d", intent.mode, intent.intensity, len(intent.tags))
 
-        # Fast-path: simple device commands
-        if ha_client:
+        # Fast-path: simple device commands. Never on a photo turn — the
+        # question is about the photo, and the vision text already ran.
+        if ha_client and not routing_info.get("vision_images"):
             try:
                 fast_result = await self._try_fast_path(user_text, ha_client)
                 if fast_result.handled:

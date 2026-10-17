@@ -3,11 +3,10 @@ import { resizeImage } from './image-resize';
 /** The orchestrator's vision step reads at most 3 images per request. */
 export const MAX_CHAT_PHOTOS = 3;
 
-// The chat endpoint rejects bodies over 1 MB (MAX_BODY_SIZE). Base64 adds a
-// third: 3 photos at this cap are ~800 KB, leaving room for the history.
-// MAX_CHAT_BODY_BYTES is the send-time backstop for long conversations.
+// Small photos keep the request and the vision call fast: 3 at this cap are
+// ~800 KB of base64. (The orchestrator accepts chat bodies up to
+// DOCUMENT_MAX_SIZE_MB — /v1/chat/completions is in _LARGE_UPLOAD_PATHS.)
 const MAX_PHOTO_BYTES = 200_000;
-export const MAX_CHAT_BODY_BYTES = 990_000;
 
 // First pass keeps detail for reading labels/screens; the second only runs
 // for unusually busy photos that blow the byte cap.

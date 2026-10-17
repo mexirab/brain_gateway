@@ -7,8 +7,8 @@ import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, Square,
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
 import { friendlyError } from '@/lib/errors';
-import { MAX_CHAT_BODY_BYTES } from '@/lib/chat-photos';
-import type { ChatMessage, ChatContentPart, RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
+import { buildChatHistory, withPhotoMarker } from '@/lib/chat-history';
+import type { RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
 import MessageBubble from '@/components/chat/MessageBubble';
 import ChatInput, { type SendSource } from '@/components/chat/ChatInput';
 import ChatSidebar from '@/components/chat/ChatSidebar';
@@ -31,18 +31,6 @@ interface DisplayMessage {
   error?: boolean; // friendlyError placeholder — not worth speaking
   /** Photos shown in this bubble — this session only, never persisted. */
   images?: string[];
-}
-
-/**
- * Text stand-in for a message's photos, used in the saved conversation and in
- * the history resent on later turns. Photos go to the model only with the
- * turn they were attached to: the orchestrator runs vision on every image in
- * the request, so resending them would re-analyse old photos each turn.
- */
-function withPhotoMarker(text: string, photoCount: number): string {
-  if (!photoCount) return text;
-  const marker = photoCount === 1 ? '[Shared a photo]' : `[Shared ${photoCount} photos]`;
-  return text ? `${marker} ${text}` : marker;
 }
 
 // Screen-reader text for the always-mounted live region (a region mounted
@@ -269,7 +257,7 @@ export default function ChatPage() {
     // (otherwise `streaming` stays true and the input is dead).
     let convId: string;
     try {
-      convId = await ensureConversation(textForRecord);
+      convId = await ensureConversation(text || 'Photo');
     } catch (err) {
       setStreaming(false);
       streamingRef.current = false;
@@ -289,41 +277,18 @@ export default function ChatPage() {
     // Persist user message
     api.saveMessage(convId, 'user', textForRecord).catch(() => {});
 
-    // Use ref to avoid stale closure — messages may change between click and here
-    // Skip blank and error bubbles: an empty assistant turn in the history
-    // made the brain reply with nothing again (the server drops them too).
-    const chatHistory: ChatMessage[] = [
-      ...prior.filter((m) => !m.error && (m.content.trim() || m.images?.length)).map((m) => ({
+    // `prior` is the snapshot above (stale-closure safe).
+    const chatHistory = buildChatHistory(
+      prior.map((m) => ({
         role: m.role,
-        content: m.announcement
-          ? `[Jess announced - ${m.announcement.announcement_type}]: ${m.content}`
-          : withPhotoMarker(m.content, m.images?.length ?? 0),
+        content: m.content,
+        photoCount: m.images?.length,
+        announcementType: m.announcement?.announcement_type,
+        error: m.error,
       })),
-      {
-        role: 'user' as const,
-        content: images.length
-          ? [
-              ...(text ? [{ type: 'text', text } as ChatContentPart] : []),
-              ...images.map((url): ChatContentPart => ({ type: 'image_url', image_url: { url } })),
-            ]
-          : text,
-      },
-    ];
-
-    // Photos make the request big; past the orchestrator's body limit it would
-    // fail with a bare 413. Say what to do instead.
-    if (images.length && new Blob([JSON.stringify(chatHistory)]).size > MAX_CHAT_BODY_BYTES) {
-      setStreaming(false);
-      streamingRef.current = false;
-      const tooBig = 'That’s too much to send in one go — try fewer photos, or start a new chat.';
-      if (speakReply) { pushText(tooBig); endReply(); }
-      setMessages((prev) => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { ...updated[updated.length - 1], error: true, content: tooBig };
-        return updated;
-      });
-      return;
-    }
+      text,
+      images,
+    );
 
     let finalContent = '';
 
