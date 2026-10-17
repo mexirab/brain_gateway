@@ -131,15 +131,17 @@ export default function DocumentsPage() {
             </div>
             <a
               href={`/api/proxy/api/documents/${doc.id}/download`}
-              className="opacity-0 group-hover:opacity-100 text-content-muted hover:text-brand transition-opacity"
+              className="sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-content-muted hover:text-brand transition-opacity"
               title="Download"
+              aria-label={`Download ${doc.file_name}`}
             >
               <Download size={16} />
             </a>
             <button
               onClick={() => handleDelete(doc.id)}
-              className="opacity-0 group-hover:opacity-100 text-content-muted hover:text-danger transition-opacity"
+              className="sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-content-muted hover:text-danger transition-opacity"
               title="Delete"
+              aria-label={`Delete ${doc.file_name}`}
             >
               <Trash2 size={16} />
             </button>

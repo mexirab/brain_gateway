@@ -1,69 +1,9 @@
-'use client';
+import { Card } from '@/components/ui';
+import { expectedDashboardToken } from '@/lib/dashboard-auth';
+import LoginForm from './LoginForm';
 
-import { Suspense, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Button, Card } from '@/components/ui';
-import { safeRedirect } from '@/lib/protected-paths';
-
-function LoginForm() {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  // Untrusted query param: only ever a same-origin protected app path.
-  const redirect = safeRedirect(searchParams.get('redirect'));
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-
-      if (res.ok) {
-        router.push(redirect);
-        router.refresh();
-      } else if (res.status === 503) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || 'Login is not configured');
-      } else {
-        setError('Invalid password');
-      }
-    } catch {
-      setError('Connection error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="Password"
-        className="input px-4 py-3"
-        autoFocus
-      />
-      {error && <p className="text-danger text-sm">{error}</p>}
-      <Button
-        type="submit"
-        variant="primary"
-        disabled={loading || !password}
-        className="w-full py-3"
-      >
-        {loading ? 'Signing in...' : 'Sign In'}
-      </Button>
-    </form>
-  );
-}
+// Read DASHBOARD_TOKEN at request time, so "not configured" shows before anyone types.
+export const dynamic = 'force-dynamic';
 
 export default function LoginPage() {
   return (
@@ -73,9 +13,7 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold">Convivial Prophet</h1>
           <p className="text-content-secondary mt-1">Enter your password</p>
         </div>
-        <Suspense>
-          <LoginForm />
-        </Suspense>
+        <LoginForm configured={expectedDashboardToken() !== null} />
       </Card>
     </main>
   );
