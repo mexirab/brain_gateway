@@ -65,7 +65,8 @@ Helios and Jupiter each run their own promtail instance. Logs from both hosts la
 - **Labels:** `host=helios`, `job=systemd-journal`, `service` (unit name without `.service`; kernel lines → `service=kernel`), `level` (from journal priority; `err` → `error`, `crit|alert|emerg` → `critical`), `transport`.
 - **Level re-derivation:** journald stores the model units' stdout as info, so `level` is re-set from the line format (llama.cpp `E `/`W `, Python `[ERROR]`/`[WARNING]`, uvicorn `ERROR:`, `Traceback`). llama.cpp's fixed startup notices (no API key, Qwen-VL image-token hint, etc.) stay info.
 - **Drops:** `GET /health` lines, the old qwen-tts `Stream TTS failed for sentence` line (logged sentence text; fixed in `tts/server.py`, backstop for older deployed copies), lines over 2 KB.
-- **Rate limit:** `nut-*` streams capped (0.05/s, burst 20) so a UPS USB-link flap can't flood the self-audit window.
+- **No rate limit on `nut-*`:** a promtail `limit` stage dropped every UPS line during the startup backfill (2026-10-17), so it was removed. A UPS USB-link flap (~1800 warnings/h) is evidence worth keeping; the self-audit should query Helios separately rather than rely on one 5000-line window (**not done yet** — open follow-up; until then a long flap can push older errors out of the audit).
+- **No backslashes in match selectors:** `-config.expand-env=true` collapses `\\` to `\` before LogQL parses them, so `\S` fails as an invalid escape and promtail refuses to start. Use bracket classes (`[^ ]`, `[[]`, `[]]`).
 - **Backoff:** 30 retries, ≤5 min apart (rides out a ~2 h Jupiter outage). 4xx (gateway 403, Loki 400) are never retried — those lines are lost.
 - **Requires a persistent journal** on Helios (`/var/log/journal` must exist; a volatile `/run/log/journal`-only host ships nothing).
 - No personal content: these units log request shapes/timings only. Keep it that way (Loki keeps 30 d; the self-audit sends WARNING+ to the LLM + Pushover).
