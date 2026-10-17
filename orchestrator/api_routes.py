@@ -292,6 +292,8 @@ async def list_ha_entities():
     return {
         "total": sum(len(v) for v in shown.values()),
         "rooms_available": bool(registry),
+        # False when HA couldn't be reached just now: states are the last known.
+        "state_ok": ha_client.last_refresh_ok,
         "controllable": {
             domain: [entity_view(e, registry.get(e.entity_id, {})) for e in entities]
             for domain, entities in shown.items()
@@ -319,9 +321,12 @@ async def execute_ha_command(body: HACommandRequest):
             logger.warning(f"[HA] API command refused: {call}")
             return error_response(refusal, status_code=403)
         # HA answers 200 for a service call on an entity it doesn't have, so an
-        # unknown id would read as success. Refresh once before giving up.
+        # unknown id would read as success. Re-check against a state list at
+        # most 5 s old (a stream of bogus ids can't force a refresh each).
         if ha_client.get_entity(body.entity_id) is None:
-            await ha_client.refresh_entities(force=True)
+            await ha_client.refresh_entities(max_age_seconds=5)
+            if not ha_client.last_refresh_ok:
+                return error_response("Home Assistant call failed", status_code=502)
             if ha_client.get_entity(body.entity_id) is None:
                 return error_response("Unknown entity", status_code=404)
         result = await ha_client.call_service(body.entity_id, body.service, data)

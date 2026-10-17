@@ -59,8 +59,9 @@ export function sectionSize(s: Section): number {
   return s.lights.length + s.scenes.length + s.media.length + s.climate.length + s.switches.length + s.other.length;
 }
 
+/** Lights that are on, light groups excluded (a group is not another light). */
 export function lightsOn(s: Section): HAEntity[] {
-  return s.lights.filter((l) => l.state === 'on');
+  return s.lights.filter((l) => l.state === 'on' && !l.is_group);
 }
 
 /** Split entities into the page's sections. `mode='rooms'` groups by HA area
@@ -75,12 +76,12 @@ export function buildLayout(
 
   for (const entities of Object.values(controllable)) {
     for (const e of entities) {
-      if (e.category === 'config' || e.category === 'diagnostic') {
-        settings.push(e);
-        continue;
-      }
       if (isUnavailable(e)) {
         unavailable.push(e);
+        continue;
+      }
+      if (e.category === 'config' || e.category === 'diagnostic') {
+        settings.push(e);
         continue;
       }
       const key = mode === 'rooms' ? e.area || OTHER_ROOM : 'all';

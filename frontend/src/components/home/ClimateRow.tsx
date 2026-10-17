@@ -14,7 +14,7 @@ export default function ClimateRow({ entity }: { entity: HAEntity }) {
 
   const nudge = (delta: number) => {
     if (typeof target !== 'number') return;
-    const next = Math.round(target + delta);
+    const next = target + delta;
     run(entity, 'set_temperature', { temperature: next }, { temperature: next });
   };
 
@@ -25,7 +25,7 @@ export default function ClimateRow({ entity }: { entity: HAEntity }) {
       </span>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-white truncate">{entity.friendly_name}</p>
-        <p className={`text-xs ${error ? 'text-danger' : 'text-content-muted'}`}>
+        <p aria-live="polite" className={`text-xs ${error ? 'text-danger' : 'text-content-muted'}`}>
           {error ||
             [
               typeof entity.current_temperature === 'number' ? `Now ${entity.current_temperature}°` : null,
@@ -37,11 +37,11 @@ export default function ClimateRow({ entity }: { entity: HAEntity }) {
       </div>
       {typeof target === 'number' && (
         <div className="flex items-center gap-1.5">
-          <Button icon size="sm" variant="secondary" disabled={busy} onClick={() => nudge(-1)} aria-label="Lower target temperature">
+          <Button icon variant="secondary" className="min-h-[44px] min-w-[44px]" disabled={busy} onClick={() => nudge(-1)} aria-label={`Lower ${entity.friendly_name} target`}>
             <Minus size={14} />
           </Button>
           <span className="w-10 text-center text-sm font-semibold text-white tabular-nums">{target}°</span>
-          <Button icon size="sm" variant="secondary" disabled={busy} onClick={() => nudge(1)} aria-label="Raise target temperature">
+          <Button icon variant="secondary" className="min-h-[44px] min-w-[44px]" disabled={busy} onClick={() => nudge(1)} aria-label={`Raise ${entity.friendly_name} target`}>
             <Plus size={14} />
           </Button>
         </div>

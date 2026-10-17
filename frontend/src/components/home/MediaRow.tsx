@@ -12,6 +12,8 @@ const COMMIT_DELAY_MS = 300;
 export default function MediaRow({ entity }: { entity: HAEntity }) {
   const { run, errors, pending } = useHomeControls();
   const playing = entity.state === 'playing';
+  // Play only makes sense with something loaded (an idle Cast has nothing queued).
+  const canPlayPause = playing || entity.state === 'paused';
   const off = entity.state === 'off' || entity.state === 'standby';
   const [vol, setVol] = useState(() => Math.round((entity.volume ?? 0) * 100));
   const dragging = useRef(false);
@@ -21,18 +23,23 @@ export default function MediaRow({ entity }: { entity: HAEntity }) {
     if (!dragging.current && typeof entity.volume === 'number') setVol(Math.round(entity.volume * 100));
   }, [entity.volume]);
 
+  // Flush (not drop) a pending volume change if the row unmounts mid-debounce.
+  const commit = useRef<(() => void) | null>(null);
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
+    commit.current?.();
   }, []);
 
   const onSlide = (value: number) => {
     dragging.current = true;
     setVol(value);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
+    commit.current = () => {
+      commit.current = null;
       dragging.current = false;
       run(entity, 'volume_set', { volume_level: value / 100 }, { volume: value / 100 });
-    }, COMMIT_DELAY_MS);
+    };
+    timer.current = setTimeout(() => commit.current?.(), COMMIT_DELAY_MS);
   };
 
   const busy = pending[entity.entity_id];
@@ -47,12 +54,13 @@ export default function MediaRow({ entity }: { entity: HAEntity }) {
         </span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-white truncate">{entity.friendly_name}</p>
-          <p className={`text-xs truncate ${error ? 'text-danger' : 'text-content-muted'}`}>{status}</p>
+          <p aria-live="polite" className={`text-xs truncate ${error ? 'text-danger' : 'text-content-muted'}`}>{status}</p>
         </div>
-        {!off && (
+        {canPlayPause && (
           <Button
             icon
             variant="secondary"
+            className="min-h-[44px] min-w-[44px]"
             disabled={busy}
             onClick={() =>
               run(entity, playing ? 'media_pause' : 'media_play', undefined, { state: playing ? 'paused' : 'playing' })
@@ -65,6 +73,7 @@ export default function MediaRow({ entity }: { entity: HAEntity }) {
         <Button
           icon
           variant={off ? 'secondary' : 'ghost'}
+          className="min-h-[44px] min-w-[44px]"
           disabled={busy}
           onClick={() => run(entity, off ? 'turn_on' : 'turn_off', undefined, { state: off ? 'on' : 'off' })}
           aria-label={off ? `Turn on ${entity.friendly_name}` : `Turn off ${entity.friendly_name}`}

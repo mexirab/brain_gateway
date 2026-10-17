@@ -21,18 +21,24 @@ export default function LightTile({ entity, roomName }: { entity: HAEntity; room
     if (!dragging.current) setPct(brightnessPct(entity.brightness));
   }, [entity.brightness]);
 
+  // A pending slider value is sent, not dropped, if the tile unmounts
+  // (room collapsed, page left) inside the debounce window.
+  const commit = useRef<(() => void) | null>(null);
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
+    commit.current?.();
   }, []);
 
   const onSlide = (value: number) => {
     dragging.current = true;
     setPct(value);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
+    commit.current = () => {
+      commit.current = null;
       dragging.current = false;
       run(entity, 'turn_on', { brightness_pct: value }, { state: 'on', brightness: Math.round((value / 100) * 255) });
-    }, COMMIT_DELAY_MS);
+    };
+    timer.current = setTimeout(() => commit.current?.(), COMMIT_DELAY_MS);
   };
 
   const toggle = () =>
@@ -52,7 +58,7 @@ export default function LightTile({ entity, roomName }: { entity: HAEntity; room
         onClick={toggle}
         disabled={pending[entity.entity_id]}
         aria-pressed={isOn}
-        className="flex items-center gap-2.5 w-full min-h-[52px] px-3 py-2.5 text-left disabled:opacity-60"
+        className="flex items-center gap-2.5 w-full min-h-[52px] px-3 py-2.5 text-left rounded-xl disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
       >
         <span
           className={`p-1.5 rounded-lg shrink-0 ${isOn ? 'bg-warning/20 text-warning' : 'bg-surface-overlay/60 text-content-muted'}`}
@@ -63,7 +69,7 @@ export default function LightTile({ entity, roomName }: { entity: HAEntity; room
           <span className="block text-sm font-medium text-white truncate" title={entity.friendly_name}>
             {stripRoom(entity.friendly_name, roomName)}
           </span>
-          <span className={`block text-xs ${error ? 'text-danger' : isOn ? 'text-warning' : 'text-content-muted'}`}>
+          <span aria-live="polite" className={`block text-xs ${error ? 'text-danger' : isOn ? 'text-warning' : 'text-content-muted'}`}>
             {error || (isOn ? (entity.supports_brightness ? `On · ${pct}%` : 'On') : 'Off')}
           </span>
         </span>

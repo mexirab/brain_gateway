@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Home, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Home, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { HAEntity } from '@/lib/types';
 import { buildLayout, commandErrorMessage } from '@/lib/home-groups';
@@ -39,6 +39,7 @@ function writeStored(key: string, value: unknown) {
 export default function HomePage() {
   const [controllable, setControllable] = useState<Record<string, HAEntity[]>>({});
   const [roomsAvailable, setRoomsAvailable] = useState(true);
+  const [stale, setStale] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [mode, setMode] = useState<Mode>('rooms');
@@ -47,6 +48,12 @@ export default function HomePage() {
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(0);
+  const fetching = useRef(false);
+  // Bumped by every command: a poll that started before a command must not
+  // overwrite that command's optimistic state when it lands.
+  const cmdSeq = useRef(0);
+  const mounted = useRef(true);
+  const errorTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
     setMode(readStored<Mode>(MODE_KEY, 'rooms'));
@@ -54,24 +61,36 @@ export default function HomePage() {
   }, []);
 
   const fetchEntities = useCallback((quiet = false) => {
+    // Background polls never overlap (a slow HA would otherwise stack them up).
+    if (quiet && fetching.current) return Promise.resolve();
+    fetching.current = true;
+    const seq = cmdSeq.current;
     if (!quiet) setLoading(true);
     return api
       .entities()
       .then((data) => {
-        // Don't overwrite optimistic state while a command is still in flight.
-        if (inFlight.current === 0) setControllable(data.controllable);
+        if (!mounted.current) return;
+        // Don't overwrite optimistic state from a command sent after this fetch began.
+        if (inFlight.current === 0 && seq === cmdSeq.current) setControllable(data.controllable);
         setRoomsAvailable(data.rooms_available !== false);
+        setStale(data.state_ok === false);
         setError(false);
       })
       .catch(() => {
+        if (!mounted.current) return;
+        // Once devices are on screen, any failed refresh shows the stale banner.
+        setStale(true);
         if (!quiet) setError(true);
       })
       .finally(() => {
-        if (!quiet) setLoading(false);
+        fetching.current = false;
+        if (!quiet && mounted.current) setLoading(false);
       });
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
+    const timers = errorTimers.current;
     fetchEntities();
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') fetchEntities(true);
@@ -83,7 +102,9 @@ export default function HomePage() {
     return () => {
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
+      mounted.current = false;
       if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+      Object.values(timers).forEach(clearTimeout);
     };
   }, [fetchEntities]);
 
@@ -102,26 +123,35 @@ export default function HomePage() {
     setPending((p) => ({ ...p, [id]: true }));
     if (patch) patchEntity(id, patch);
     inFlight.current += 1;
+    cmdSeq.current += 1;
     try {
       await api.haCommand(id, service, data);
       return true;
     } catch (err) {
+      if (!mounted.current) return false;
       if (patch) {
-        // Roll back only the fields we changed.
+        // Roll back only the fields we changed. Overlapping slider commits can
+        // roll back to an older value; the reconcile fetch corrects it.
         const revert = Object.fromEntries(
           Object.keys(patch).map((k) => [k, entity[k as keyof HAEntity]]),
         ) as Partial<HAEntity>;
         patchEntity(id, revert);
       }
       setErrors((e) => ({ ...e, [id]: commandErrorMessage(err) }));
-      setTimeout(() => setErrors(({ [id]: _drop, ...rest }) => rest), ERROR_MS);
+      clearTimeout(errorTimers.current[id]);
+      errorTimers.current[id] = setTimeout(() => {
+        delete errorTimers.current[id];
+        setErrors(({ [id]: _drop, ...rest }) => rest);
+      }, ERROR_MS);
       return false;
     } finally {
       inFlight.current -= 1;
-      setPending(({ [id]: _drop, ...rest }) => rest);
-      // Pick up what HA actually did (groups, scenes changing other lights).
-      if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
-      reconcileTimer.current = setTimeout(() => fetchEntities(true), RECONCILE_MS);
+      if (mounted.current) {
+        setPending(({ [id]: _drop, ...rest }) => rest);
+        // Pick up what HA actually did (groups, scenes changing other lights).
+        if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+        reconcileTimer.current = setTimeout(() => fetchEntities(true), RECONCILE_MS);
+      }
     }
   }, [fetchEntities]);
 
@@ -141,11 +171,9 @@ export default function HomePage() {
 
   const sectionKey = (name: string) => `${effectiveMode}:${name}`;
   const toggleOpen = (name: string) => {
-    setOpen((prev) => {
-      const next = { ...prev, [sectionKey(name)]: !prev[sectionKey(name)] };
-      writeStored(OPEN_KEY, next);
-      return next;
-    });
+    const next = { ...open, [sectionKey(name)]: !open[sectionKey(name)] };
+    setOpen(next);
+    writeStored(OPEN_KEY, next);
   };
 
   const hasAny = layout.sections.length + layout.settings.length + layout.unavailable.length > 0;
@@ -171,21 +199,31 @@ export default function HomePage() {
             onClick={() => fetchEntities()}
             disabled={loading}
             aria-label="Refresh"
+            className="min-h-[44px] min-w-[44px]"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </Button>
         </div>
 
+        {stale && hasAny && (
+          <div role="status" className="mb-4 flex items-center gap-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+            <AlertTriangle size={16} className="shrink-0" />
+            <span className="flex-1">Can’t reach Home Assistant right now — showing the last known state.</span>
+            <Button size="sm" variant="secondary" className="min-h-[44px]" onClick={() => fetchEntities()}>
+              Retry
+            </Button>
+          </div>
+        )}
+
         {roomsAvailable && hasAny && (
-          <div role="tablist" aria-label="Group by" className="inline-flex p-1 mb-4 rounded-xl bg-surface-raised/50 border border-line/30">
+          <div role="group" aria-label="Group by" className="inline-flex p-1 mb-4 rounded-xl bg-surface-raised/50 border border-line/30">
             {(['rooms', 'type'] as const).map((m) => (
               <button
                 key={m}
-                role="tab"
                 type="button"
-                aria-selected={mode === m}
+                aria-pressed={mode === m}
                 onClick={() => changeMode(m)}
-                className={`min-h-[36px] px-4 rounded-lg text-sm transition-colors ${
+                className={`min-h-[44px] px-5 rounded-lg text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
                   mode === m ? 'bg-brand/20 text-white font-medium' : 'text-content-muted hover:text-white'
                 }`}
               >

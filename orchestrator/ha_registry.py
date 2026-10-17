@@ -13,7 +13,9 @@ short-lived connection reads three registries and the result is cached:
 state, room, category and the few attributes the page's controls use).
 
 ``get_registry_meta()`` never raises: on any failure it returns the last good
-result (or ``{}``), and the page falls back to grouping by domain. Read-only —
+result (or ``{}``), and the page falls back to grouping by domain. The
+"hidden" flag only trims the listing — it is not an access control (chat and
+``POST /api/ha/command`` can still target a hidden entity). Read-only —
 nothing here writes to Home Assistant.
 """
 
@@ -23,9 +25,12 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from orchestrator.metrics import HA_REGISTRY_FETCH
+
+if TYPE_CHECKING:
+    from orchestrator.ha_integration import Entity
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +56,7 @@ def _ws_url(http_url: str) -> Optional[str]:
 async def _fetch(ws_url: str, token: str) -> Dict[str, Dict[str, Any]]:
     import websockets
 
-    async with websockets.connect(ws_url, max_size=_MAX_MESSAGE_BYTES, open_timeout=5) as ws:
+    async with websockets.connect(ws_url, max_size=_MAX_MESSAGE_BYTES, open_timeout=5, close_timeout=1) as ws:
         hello = json.loads(await ws.recv())
         if hello.get("type") != "auth_required":
             raise RuntimeError("unexpected_handshake")
@@ -111,6 +116,8 @@ async def get_registry_meta(http_url: str, token: str) -> Dict[str, Dict[str, An
         now = time.monotonic()
         if _fetched_at and now - _fetched_at < REGISTRY_TTL_SECONDS:
             return _cache
+        if _failed_at and now - _failed_at < FAILURE_RETRY_SECONDS:
+            return _cache
         try:
             meta = await asyncio.wait_for(_fetch(ws_url, token), timeout=FETCH_TIMEOUT_SECONDS)
         except Exception as e:
@@ -123,7 +130,7 @@ async def get_registry_meta(http_url: str, token: str) -> Dict[str, Dict[str, An
         return _cache
 
 
-def entity_view(e: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
+def entity_view(e: Entity, meta: Dict[str, Any]) -> Dict[str, Any]:
     """One entity as the dashboard /home page sees it: identity + state plus
     the few attributes its controls need (room, category, brightness, volume)."""
     attrs = e.attributes or {}
@@ -135,7 +142,8 @@ def entity_view(e: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
         "category": meta.get("category"),
     }
     if e.domain == "light":
-        modes = attrs.get("supported_color_modes") or []
+        modes = attrs.get("supported_color_modes")
+        modes = modes if isinstance(modes, list) else []
         out["supports_brightness"] = any(m != "onoff" for m in modes) if modes else "brightness" in attrs
         out["brightness"] = attrs.get("brightness") if isinstance(attrs.get("brightness"), int) else None
         out["is_group"] = isinstance(attrs.get("entity_id"), list)
@@ -152,5 +160,6 @@ def entity_view(e: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _reset_cache_for_tests() -> None:
-    global _cache, _fetched_at, _failed_at
+    global _cache, _fetched_at, _failed_at, _lock
     _cache, _fetched_at, _failed_at = {}, 0.0, 0.0
+    _lock = asyncio.Lock()

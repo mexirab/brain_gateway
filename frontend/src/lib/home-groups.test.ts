@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import type { HAEntity } from './types';
-import { brightnessPct, buildLayout, commandErrorMessage, isUnavailable, OTHER_ROOM, stripRoom } from './home-groups';
+import {
+  brightnessPct,
+  buildLayout,
+  commandErrorMessage,
+  isUnavailable,
+  lightsOn,
+  OTHER_ROOM,
+  stripRoom,
+} from './home-groups';
 
 const e = (entity_id: string, extra: Partial<HAEntity> = {}): HAEntity => ({
   entity_id,
@@ -88,5 +96,21 @@ describe('stripRoom', () => {
     expect(stripRoom('Office', 'Office')).toBe('Office');
     expect(stripRoom('Desk lamp', 'Office')).toBe('Desk lamp');
     expect(stripRoom('Desk lamp')).toBe('Desk lamp');
+  });
+});
+
+describe('lightsOn / unavailable config', () => {
+  it('excludes light groups from the on count', () => {
+    const layout = buildLayout(
+      { light: [e('light.a', { area: 'R', state: 'on' }), e('light.g', { area: 'R', state: 'on', is_group: true })] },
+      'rooms',
+    );
+    expect(lightsOn(layout.sections[0]).map((l) => l.entity_id)).toEqual(['light.a']);
+  });
+
+  it('puts an unavailable config switch under unavailable, not settings', () => {
+    const layout = buildLayout({ switch: [e('switch.cfg', { category: 'config', state: 'unavailable' })] }, 'rooms');
+    expect(layout.settings).toEqual([]);
+    expect(layout.unavailable.map((x) => x.entity_id)).toEqual(['switch.cfg']);
   });
 });

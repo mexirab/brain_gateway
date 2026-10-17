@@ -24,7 +24,7 @@ export default function CollapsedList({
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="flex items-center gap-2 w-full min-h-[48px] px-4 py-3 text-left"
+        className="flex items-center gap-2 w-full min-h-[48px] px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
       >
         {open ? <ChevronDown size={16} className="text-content-muted" /> : <ChevronRight size={16} className="text-content-muted" />}
         <span className="text-sm font-semibold text-content-secondary flex-1">{title}</span>

@@ -109,6 +109,8 @@ export interface HAEntitiesResponse {
   total: number;
   /** False when HA's registries couldn't be read — no rooms, group by type. */
   rooms_available?: boolean;
+  /** False when HA couldn't be reached just now — states are the last known. */
+  state_ok?: boolean;
   controllable: Record<string, HAEntity[]>;
 }
 

@@ -6,7 +6,10 @@
   hidden in HA left out, ``rooms_available``.
 """
 
+import asyncio
 import json
+import time
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -113,7 +116,7 @@ class TestRegistry:
     async def test_failure_keeps_last_good_and_backs_off(self, monkeypatch):
         _patch_ws(monkeypatch, FakeWS)
         good = await ha_registry.get_registry_meta("http://ha.test:8123", "tok")
-        monkeypatch.setattr(ha_registry, "_fetched_at", 1.0)  # force expiry
+        monkeypatch.setattr(ha_registry, "_fetched_at", time.monotonic() - ha_registry.REGISTRY_TTL_SECONDS - 1)
 
         def boom():
             raise OSError("refused")
@@ -214,8 +217,6 @@ class TestEntitiesRoute:
         _patch_ws(monkeypatch, FakeWS)
         await api_routes.list_ha_entities()
         first = ha._last_refresh
-        from datetime import timedelta
-
         ha._last_refresh = first - timedelta(seconds=10)
         await api_routes.list_ha_entities()
         assert ha._last_refresh > first
@@ -228,3 +229,88 @@ class TestCommandUnknownEntity:
         resp = await api_routes.execute_ha_command(HACommandRequest(entity_id="light.not_there", service="turn_on"))
         assert resp.status_code == 404
         assert json.loads(resp.body) == {"ok": False, "error": "Unknown entity"}
+
+
+class TestRefreshResilience:
+    @pytest.fixture
+    def counting_client(self):
+        state = {"calls": 0, "fail": False}
+
+        async def handler(request):
+            state["calls"] += 1
+            await asyncio.sleep(0.05)
+            if state["fail"]:
+                return httpx.Response(500)
+            return httpx.Response(200, json=STATES)
+
+        c = HomeAssistantClient(
+            url="http://ha.test:8123",
+            token="t",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        return c, state
+
+    async def test_concurrent_refreshes_share_one_fetch(self, counting_client):
+        c, state = counting_client
+        await asyncio.gather(*(c.refresh_entities(max_age_seconds=3) for _ in range(8)))
+        assert state["calls"] == 1
+
+    async def test_failure_backs_off(self, counting_client):
+        c, state = counting_client
+        state["fail"] = True
+        await c.refresh_entities(max_age_seconds=3)
+        await c.refresh_entities(max_age_seconds=3)
+        assert state["calls"] == 1 and c.last_refresh_ok is False
+        await c.refresh_entities(force=True)  # forced refresh ignores the back-off
+        assert state["calls"] == 2
+
+    async def test_entities_reports_stale_state(self, counting_client, monkeypatch):
+        c, state = counting_client
+        await c.refresh_entities(force=True)
+        state["fail"] = True
+        c._last_refresh -= timedelta(seconds=10)
+        monkeypatch.setattr(api_routes, "ha_client", c)
+        _patch_ws(monkeypatch, FakeWS)
+        out = await api_routes.list_ha_entities()
+        assert out["state_ok"] is False and out["total"] > 0  # last known states still served
+
+    async def test_unknown_entity_with_ha_down_is_502(self, counting_client, monkeypatch):
+        from orchestrator.schemas import HACommandRequest
+
+        c, state = counting_client
+        state["fail"] = True
+        monkeypatch.setattr(api_routes, "ha_client", c)
+        resp = await api_routes.execute_ha_command(HACommandRequest(entity_id="light.not_there", service="turn_on"))
+        assert resp.status_code == 502
+
+
+class TestRegistryFailureConcurrency:
+    async def test_waiters_on_the_lock_respect_the_backoff(self, monkeypatch):
+        calls = []
+
+        class SlowFail:
+            async def __aenter__(self):
+                calls.append(1)
+                await asyncio.sleep(0.05)
+                raise OSError("down")
+
+            async def __aexit__(self, *a):
+                return False
+
+        import websockets
+
+        monkeypatch.setattr(websockets, "connect", lambda url, **kw: SlowFail())
+        out = await asyncio.gather(*(ha_registry.get_registry_meta("http://ha.test:8123", "tok") for _ in range(5)))
+        assert out == [{}] * 5
+        assert len(calls) == 1
+
+    async def test_hung_ha_is_bounded_by_the_timeout(self, monkeypatch):
+        class Hang(FakeWS):
+            async def recv(self):
+                await asyncio.sleep(3600)
+
+        _patch_ws(monkeypatch, Hang)
+        monkeypatch.setattr(ha_registry, "FETCH_TIMEOUT_SECONDS", 0.1)
+        t0 = time.monotonic()
+        assert await ha_registry.get_registry_meta("http://ha.test:8123", "tok") == {}
+        assert time.monotonic() - t0 < 2

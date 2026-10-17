@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { Section } from '@/lib/home-groups';
 import { lightsOn, sectionSize } from '@/lib/home-groups';
@@ -22,10 +23,22 @@ interface SectionCardProps {
 /** One room (or one kind, in "by type" view): lights, scenes, media,
  *  switches, climate — in that order. */
 export default function SectionCard({ section, open, onToggleOpen, isRoom }: SectionCardProps) {
-  const { run } = useHomeControls();
+  const { run, pending } = useHomeControls();
   const on = lightsOn(section);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(0);
   // Every light that is on, groups included (turning a group off twice is harmless).
-  const allOff = () => Promise.all(on.map((l) => run(l, 'turn_off', undefined, { state: 'off' })));
+  const toTurnOff = section.lights.filter((l) => l.state === 'on');
+  const allOff = async () => {
+    setBusy(true);
+    setFailed(0);
+    const results = await Promise.all(toTurnOff.map((l) => run(l, 'turn_off', undefined, { state: 'off' })));
+    setBusy(false);
+    const n = results.filter((ok) => !ok).length;
+    setFailed(n);
+    if (n) setTimeout(() => setFailed(0), 5000);
+  };
+  const anyPending = section.lights.some((l) => pending[l.entity_id]);
 
   const summary = [
     section.lights.length > 0 ? (on.length ? `${on.length} on` : 'all off') : null,
@@ -41,14 +54,19 @@ export default function SectionCard({ section, open, onToggleOpen, isRoom }: Sec
           type="button"
           onClick={onToggleOpen}
           aria-expanded={open}
-          className="flex items-center gap-2 flex-1 min-w-0 min-h-[40px] text-left"
+          className="flex items-center gap-2 flex-1 min-w-0 min-h-[44px] text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
         >
           {open ? <ChevronDown size={16} className="text-content-muted shrink-0" /> : <ChevronRight size={16} className="text-content-muted shrink-0" />}
           <span className="text-base font-semibold text-white truncate">{section.name}</span>
           <span className="text-xs text-content-muted shrink-0">{summary || `${sectionSize(section)}`}</span>
         </button>
-        {isRoom && on.length > 0 && (
-          <Button size="sm" variant="secondary" onClick={allOff}>
+        {failed > 0 && (
+          <span role="status" className="text-xs text-danger shrink-0">
+            {failed} didn’t turn off
+          </span>
+        )}
+        {isRoom && toTurnOff.length > 0 && (
+          <Button size="sm" variant="secondary" className="min-h-[44px]" disabled={busy || anyPending} onClick={allOff}>
             Lights off
           </Button>
         )}
