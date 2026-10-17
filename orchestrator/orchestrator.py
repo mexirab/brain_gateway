@@ -45,6 +45,7 @@ from apscheduler.events import EVENT_JOB_MISSED
 
 from orchestrator import (
     calendar_sources,
+    job_heartbeat,
     shared,
     state_store,  # REST API routes (infrastructure endpoints)
 )
@@ -776,15 +777,14 @@ async def _startup_logic():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Morning briefing at {MORNING_BRIEFING_TIME}")
-            # NB: intentionally NOT seeding MORNING_BRIEFING_LAST_RUN here. The
-            # MorningBriefingStale alert already guards with
-            # `... and bgw_morning_briefing_last_run_timestamp_seconds > 0`, so the
-            # gauge's default 0 (No data) can't false-page before the first run.
-            # Seeding it to now() on every startup MASKED a genuinely-dead job
-            # during active-dev weeks — each deploy reset the clock so the gauge
-            # never aged past threshold. Unseeded, a dead job ages and fires, and
-            # the dashboard shows honest "No data" until the first real run
-            # (jobs_calendar sets it when the briefing actually fires).
+            # Seed the heartbeat from the PERSISTED last run (job_heartbeat), never
+            # now(): seeding now() masked a dead job during busy deploy weeks, and
+            # leaving it at 0 blinded MorningBriefingStale (which ignores 0) after
+            # every restart. 0 only until the first ever run.
+            from orchestrator.jobs_calendar import MORNING_BRIEFING_HEARTBEAT_KEY
+            from orchestrator.metrics import MORNING_BRIEFING_LAST_RUN
+
+            job_heartbeat.seed(MORNING_BRIEFING_LAST_RUN, MORNING_BRIEFING_HEARTBEAT_KEY)
 
         # Email-to-calendar autonomy: scan inbox, extract events via LLM,
         # auto-create calendar entries. Disabled by default — flip
@@ -820,10 +820,12 @@ async def _startup_logic():
                 replace_existing=True,
             )
             logger.info(f"[SCHEDULER] Evening briefing at {EVENING_BRIEFING_TIME}")
-            # NOT seeded — same rationale as the morning gauge above:
-            # EveningBriefingStale guards with `... > 0`, so no pre-first-run
-            # false page, and not re-seeding on every deploy stops masking a
-            # dead job. jobs_calendar sets it when the ritual actually fires.
+            # Seeded from the persisted last run — same rationale as the morning
+            # gauge above (never now(); 0 only until the first ever run).
+            from orchestrator.jobs_calendar import EVENING_BRIEFING_HEARTBEAT_KEY
+            from orchestrator.metrics import EVENING_BRIEFING_LAST_RUN
+
+            job_heartbeat.seed(EVENING_BRIEFING_LAST_RUN, EVENING_BRIEFING_HEARTBEAT_KEY)
         except Exception as e:
             logger.error(
                 f"[SCHEDULER] Evening briefing registration failed (EVENING_BRIEFING_TIME={EVENING_BRIEFING_TIME!r}): {e}"
@@ -865,18 +867,33 @@ async def _startup_logic():
                 f"[SCHEDULER] Wind-down ladder: dim at {rung_times[0]}, nudge at {rung_times[1]} "
                 f"(bedtime {shared.WIND_DOWN_BEDTIME}, scenes: {shared.WIND_DOWN_SCENE or 'none configured'})"
             )
-            # NOT seeding WIND_DOWN_LAST_RUN / WIND_DOWN_DIM_LAST_RUN here.
-            # WindDownNudgeStale guards with `... and
-            # bgw_wind_down_last_run_timestamp_seconds > 0`, so the default-0
-            # gauge is "No data", not a false page. Seeding to now() on every
-            # deploy masked a dead rung during active-dev weeks; unseeded, the
-            # gauge reflects the last real run (set in jobs_winddown) so a dropped
-            # rung ages past threshold and fires. The dim gauge has no alert — its
-            # dashboard panel just shows "No data" until the first real dim.
+            # Seed both rungs from the PERSISTED last run (job_heartbeat), never
+            # now() — same reasoning as the morning briefing. The dim gauge has no
+            # alert; its dashboard panel just needs the real last fire time.
+            from orchestrator.jobs_winddown import WIND_DOWN_DIM_HEARTBEAT_KEY, WIND_DOWN_HEARTBEAT_KEY
+            from orchestrator.metrics import WIND_DOWN_DIM_LAST_RUN, WIND_DOWN_LAST_RUN
+
+            job_heartbeat.seed(WIND_DOWN_LAST_RUN, WIND_DOWN_HEARTBEAT_KEY)
+            job_heartbeat.seed(WIND_DOWN_DIM_LAST_RUN, WIND_DOWN_DIM_HEARTBEAT_KEY)
         except Exception as e:
             logger.error(
                 f"[SCHEDULER] Wind-down registration failed (WIND_DOWN_BEDTIME={shared.WIND_DOWN_BEDTIME!r}): {e}"
             )
+
+    # Heartbeats of jobs that ended up NOT scheduled (disabled, calendar not
+    # configured, bad time): drop their stamps, so re-enabling later doesn't
+    # page on a days-old last run. (Scheduled ones were seeded above.)
+    from orchestrator.jobs_calendar import EVENING_BRIEFING_HEARTBEAT_KEY, MORNING_BRIEFING_HEARTBEAT_KEY
+    from orchestrator.jobs_winddown import WIND_DOWN_DIM_HEARTBEAT_KEY, WIND_DOWN_HEARTBEAT_KEY
+
+    for _job_id, _hb_key in (
+        ("morning_briefing", MORNING_BRIEFING_HEARTBEAT_KEY),
+        ("evening_briefing", EVENING_BRIEFING_HEARTBEAT_KEY),
+        ("wind_down_nudge", WIND_DOWN_HEARTBEAT_KEY),
+        ("wind_down_dim", WIND_DOWN_DIM_HEARTBEAT_KEY),
+    ):
+        if scheduler.get_job(_job_id) is None:
+            job_heartbeat.forget(_hb_key)
 
     # Initialize routine manager (F-006)
     if shared.ROUTINE_ENABLED:

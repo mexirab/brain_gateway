@@ -15,6 +15,9 @@ from orchestrator.shared import profile
 logger = logging.getLogger(__name__)
 
 
+_missing_sensor_warned: set[str] = set()
+
+
 async def check_closet_temperature():
     """Every 10 minutes: check closet temperature and alert if too hot.
 
@@ -31,6 +34,15 @@ async def check_closet_temperature():
             timeout=5.0,
         )
         if resp.status_code != 200:
+            if resp.status_code == 404 and profile.closet_temp_sensor not in _missing_sensor_warned:
+                # Once per process: a renamed/removed sensor otherwise made this
+                # job a silent no-op every 10 min while startup claimed it ran.
+                _missing_sensor_warned.add(profile.closet_temp_sensor)
+                logger.warning(
+                    "[TEMP] Closet sensor %s not found in Home Assistant — temperature alerts are off "
+                    "(set sensors.temperature.closet in user_profile.yaml)",
+                    profile.closet_temp_sensor,
+                )
             return
 
         raw_state = resp.json().get("state")

@@ -211,20 +211,24 @@ async def metrics_endpoint():
 
     # Scrape temperature sensors for Prometheus
     try:
-        for location, entity_id in [("closet", profile.closet_temp_sensor), ("ambient", profile.ambient_temp_sensor)]:
+        # Labels match check_closet_temperature and the dashboards ("kitchen" is
+        # the ambient sensor). Only real readings create a series — a missing
+        # sensor must show "No data", not 0°F.
+        readings = {}
+        for location, entity_id in [("closet", profile.closet_temp_sensor), ("kitchen", profile.ambient_temp_sensor)]:
             resp = await shared._http.get(
                 f"{HA_URL}/api/states/{entity_id}",
                 headers={"Authorization": f"Bearer {HA_TOKEN}"},
                 timeout=3.0,
             )
             if resp.status_code == 200:
-                temp = float(resp.json()["state"])
-                TEMPERATURE_GAUGE.labels(location=location).set(temp)
-        # Calculate delta
-        closet = TEMPERATURE_GAUGE.labels(location="closet")._value.get()
-        ambient = TEMPERATURE_GAUGE.labels(location="ambient")._value.get()
-        if closet and ambient:
-            TEMPERATURE_DELTA.set(closet - ambient)
+                try:
+                    readings[location] = float(resp.json()["state"])
+                except (TypeError, ValueError):
+                    continue  # "unavailable" / "unknown"
+                TEMPERATURE_GAUGE.labels(location=location).set(readings[location])
+        if "closet" in readings and "kitchen" in readings:
+            TEMPERATURE_DELTA.set(readings["closet"] - readings["kitchen"])
     except Exception:
         pass  # Don't let temp scrape failures break metrics
 
@@ -491,7 +495,7 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
         # spam WARNING for it. `bad_signature` stays WARNING — that's a
         # real security signal.
         log_fn = logger.info if err == "expired" else logger.warning
-        log_fn(f"[NTFY-ACK] Rejected {reminder_id}: {err}")
+        log_fn(f"[NTFY-ACK] Rejected {reminder_id[:64]!r}: {err}")  # unauthenticated input: capped + repr-escaped
         status = 410 if err == "expired" else 403
         headline = "Expired" if err == "expired" else "Invalid"
         subtext = (
@@ -639,7 +643,7 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
     if err:
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason=err).inc()
         log_fn = logger.info if err == "expired" else logger.warning
-        log_fn(f"[NTFY-SNOOZE] Rejected {reminder_id}: {err}")
+        log_fn(f"[NTFY-SNOOZE] Rejected {reminder_id[:64]!r}: {err}")  # unauthenticated input: capped + repr-escaped
         status = 410 if err == "expired" else 403
         headline = "Expired" if err == "expired" else "Invalid"
         subtext = "This link is older than 30 minutes." if err == "expired" else "Signature check failed."

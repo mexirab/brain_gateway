@@ -247,6 +247,27 @@ Program + locations are also editable in the dashboard under **Settings → Work
 
 ---
 
+## Pantry & meal prep (optional)
+
+Needs `PANTRY_ENABLED=true`. Everything here also works from the dashboard's `/pantry` page.
+
+| Say this | What happens |
+|----------|--------------|
+| "What's in the pantry?" | Lists what's in stock, plus any prepped portions |
+| "We're out of milk" | Marks it out and adds it to the grocery list |
+| "Add 2 cans of chickpeas" / "I used the last of the rice" | Updates the count or level |
+| "Make a meal plan for this week" | Builds a plan from what you have and your diet settings (takes about a minute) |
+| "Accept the plan" | Adds the missing ingredients to the grocery list and sets cooking reminders — only when you say so |
+| "Swap Wednesday's dinner" / "What's the recipe for tonight?" | Changes one meal, or reads its recipe |
+| "I made the soup" | Marks the planned meal cooked and takes its ingredients out of stock |
+| "Made turkey tacos tonight with the ground turkey and tortillas" | Logs a meal that wasn't on the plan (one use of each item) |
+| "Had one of my prepped lunches" | Eats one portion (from the batch that goes off soonest) and logs the meal |
+| "Skip tonight's dinner" / "Undo, I didn't cook that" | Skips a planned meal, or puts the ingredients back for the most recent cook |
+
+Fridge and pantry photos, receipts and barcodes are scanned on the `/pantry` page (photos need Helios awake). Eating a portion can't be undone yet.
+
+---
+
 ## Proactive features (automatic)
 
 | Feature | When |

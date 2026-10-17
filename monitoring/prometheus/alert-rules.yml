@@ -392,9 +392,12 @@ groups:
           summary: "Morning briefing has not fired in over a day"
           description: "Last briefing was {{ $value | humanizeDuration }} ago - should run daily; orchestrator/scheduler may be down."
       - alert: EveningBriefingStale
-        # 24.5h (not the morning's 26h): for a 21:30 job a 26h threshold turns
-        # true ~23:30 and pages at midnight; 24.5h fires at a civilized ~22:30.
-        expr: time() - bgw_evening_briefing_last_run_timestamp_seconds > 88200 and bgw_evening_briefing_last_run_timestamp_seconds > 0
+        # 25.5h (not the morning's 26h): for a 21:30 job a 26h threshold turns
+        # true ~23:30 and pages at midnight; 25.5h + for 30m pages ~23:30 the
+        # next night. Was 24.5h, which the 25h gap of the fall-back DST night
+        # crossed (harmless while restarts zeroed the gauge; the heartbeat is
+        # persisted across restarts since 2026-10-17).
+        expr: time() - bgw_evening_briefing_last_run_timestamp_seconds > 91800 and bgw_evening_briefing_last_run_timestamp_seconds > 0
         for: 30m
         labels:
           severity: warning

@@ -111,6 +111,9 @@ def patch_evening_deps():
             "telegram": patch("orchestrator.telegram_bot.fire_system_message"),
             "list_tasks": patch("orchestrator.state_store.list_tasks", return_value=open_tasks or []),
             "set_state": patch("orchestrator.state_store.set_app_state"),
+            # The run heartbeat also persists via set_app_state; keep it out of
+            # the parked-item assertions.
+            "heartbeat": patch("orchestrator.jobs_calendar.job_heartbeat.stamp"),
         }
         return mock_client, patches
 
