@@ -603,15 +603,13 @@ class TestDeviceSettings:
     def test_dashboard_flag_allows_name_matched_entity(self):
         assert check_ha_call("switch.porch_camera_enabled", "turn_on", allow_device_settings=True)[0] is None
 
-    def test_registry_change_invalidates_tool_schema(self, monkeypatch):
-        import asyncio
-
+    async def test_registry_change_invalidates_tool_schema(self, monkeypatch):
         async def fetch(url, token):
             return dict(REGISTRY)
 
         monkeypatch.setattr(ha_registry, "_fetch", fetch)
         monkeypatch.setattr(shared, "_ha_tool_cache", {"stale": True})
-        asyncio.get_event_loop().run_until_complete(ha_registry.get_registry_meta("http://ha.test:8123", "t"))
+        await ha_registry.get_registry_meta("http://ha.test:8123", "t")
         assert shared._ha_tool_cache is None
 
     def test_dashboard_flag_does_not_bypass_other_checks(self, registry):
@@ -769,3 +767,137 @@ class TestEnsureFresh:
         await ha_registry.ensure_fresh("http://ha.test:8123", "t")
         assert ha_registry.cached_meta() == REGISTRY
         assert HA_REGISTRY_ENTITIES._value.get() == len(REGISTRY)
+
+    async def test_concurrent_calls_start_one_fetch(self, monkeypatch):
+        import asyncio
+
+        calls = 0
+        release = asyncio.Event()
+
+        async def fetch(url, token):
+            nonlocal calls
+            calls += 1
+            await release.wait()
+            return dict(REGISTRY)
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        waiters = [
+            asyncio.create_task(ha_registry.ensure_fresh("http://ha.test:8123", "t", wait_seconds=2)) for _ in range(3)
+        ]
+        await asyncio.sleep(0.05)
+        release.set()
+        await asyncio.gather(*waiters)
+        assert calls == 1
+        assert ha_registry.cached_meta() == REGISTRY
+
+    async def test_failed_refresh_keeps_last_good_cache(self, monkeypatch):
+        async def boom(url, token):
+            raise RuntimeError("down")
+
+        monkeypatch.setattr(ha_registry, "_fetch", boom)
+        monkeypatch.setattr(ha_registry, "_cache", dict(REGISTRY))
+        await ha_registry.ensure_fresh("http://ha.test:8123", "t")
+        await ha_registry._refresh_task
+        assert ha_registry._failed_at > 0
+        # The guard keeps refusing from the last good registry read.
+        assert ha_guard.device_setting_reason("switch.porch_widget_toggle") == "registry"
+
+    @pytest.mark.parametrize("url,token", [("", "t"), ("ha.test:8123", "t"), ("http://ha.test:8123", "")])
+    async def test_unconfigured_never_fetches_or_raises(self, monkeypatch, url, token):
+        async def fetch(url, token):
+            raise AssertionError("must not fetch")
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        await ha_registry.ensure_fresh(url, token, wait_seconds=0.5)
+        await ha_registry._refresh_task
+        assert ha_registry.cached_meta() == {}
+
+    async def test_unchanged_registry_keeps_tool_schema_cache(self, monkeypatch):
+        async def fetch(url, token):
+            return dict(REGISTRY)
+
+        monkeypatch.setattr(ha_registry, "_fetch", fetch)
+        monkeypatch.setattr(ha_registry, "_cache", dict(REGISTRY))
+        monkeypatch.setattr(shared, "_ha_tool_cache", {"warm": True})
+        await ha_registry.get_registry_meta("http://ha.test:8123", "t")
+        assert ha_registry._fetched_at > 0
+        assert shared._ha_tool_cache == {"warm": True}
+
+
+class TestDeviceSettingMembers:
+    """The scene/group member check must degrade safely when the HA client
+    can't describe the entity."""
+
+    @staticmethod
+    def _client(ents):
+        class _Client:
+            def get_entity(self, entity_id):
+                return ents.get(entity_id)
+
+        return _Client()
+
+    def test_no_ha_client(self, monkeypatch, registry):
+        monkeypatch.setattr(shared, "ha_client", None)
+        assert ha_guard.device_setting_reason("scene.away") is None
+        assert check_ha_call("scene.away", "turn_on")[0] is None
+
+    def test_client_lacks_entity(self, monkeypatch, registry):
+        monkeypatch.setattr(shared, "ha_client", self._client({}))
+        assert ha_guard.device_setting_reason("scene.unknown") is None
+
+    @pytest.mark.parametrize(
+        "attrs",
+        [None, {}, {"entity_id": "switch.porch_widget_toggle"}, {"entity_id": [None, 3, {"x": 1}]}],
+    )
+    def test_malformed_member_attribute_ignored(self, monkeypatch, registry, attrs):
+        from orchestrator.ha_integration import Entity
+
+        monkeypatch.setattr(
+            shared, "ha_client", self._client({"scene.odd": Entity("scene.odd", "scene", "Odd", "x", attrs)})
+        )
+        assert ha_guard.device_setting_reason("scene.odd") is None
+
+    def test_member_caught_by_name_without_registry(self, monkeypatch):
+        from orchestrator.ha_integration import Entity
+
+        ents = {
+            # A light group (allowed domain) whose member is a status LED.
+            "light.porch_group": Entity(
+                "light.porch_group", "light", "Porch", "on", {"entity_id": ["light.desk_plug_status_light"]}
+            )
+        }
+        monkeypatch.setattr(shared, "ha_client", self._client(ents))
+        assert ha_guard.device_setting_reason("light.porch_group") == "member"
+        refusal, _ = check_ha_call("light.porch_group", "turn_off")
+        assert refusal and ha_guard.DEVICE_SETTING_REFUSAL in refusal
+        assert check_ha_call("light.porch_group", "turn_off", allow_device_settings=True)[0] is None
+
+    def test_member_check_is_one_level(self, monkeypatch, registry):
+        # A group of a scene that contains a device setting: only direct
+        # members are inspected (documents current behaviour).
+        from orchestrator.ha_integration import Entity
+
+        ents = {
+            "scene.away": Entity("scene.away", "scene", "Away", "x", {"entity_id": ["switch.porch_widget_toggle"]}),
+            "group.outer": Entity("group.outer", "group", "Outer", "on", {"entity_id": ["scene.away"]}),
+        }
+        monkeypatch.setattr(shared, "ha_client", self._client(ents))
+        assert ha_guard.device_setting_reason("scene.away") == "member"
+        assert ha_guard.device_setting_reason("group.outer") is None
+
+
+class TestDashboardListing:
+    async def test_entities_route_still_lists_device_settings_with_category(self, client, monkeypatch):
+        c, _ = client
+        monkeypatch.setattr(api_routes, "ha_client", c)
+
+        async def reg(url, token):
+            return dict(REGISTRY)
+
+        monkeypatch.setattr(api_routes, "get_registry_meta", reg)
+        out = await api_routes.list_ha_entities()
+        by_id = {e["entity_id"]: e for ents in out["controllable"].values() for e in ents}
+        # The /home "Device settings" card needs them; only chat hides them.
+        assert by_id["switch.porch_widget_toggle"]["category"] == "config"
+        assert "switch.porch_cam_power_save" in by_id
+        assert out["rooms_available"] is True
