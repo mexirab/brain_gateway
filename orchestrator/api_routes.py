@@ -22,9 +22,11 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from orchestrator import calendar_sources, shared
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
+from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_entity_allowed
 from orchestrator.metrics import (
     FALLBACK_ONLINE,
     FOCUS_ACTIVE,
+    HA_CALL_REFUSED,
     HELIOS_ONLINE,
     REMINDERS_PENDING,
     TEMPERATURE_DELTA,
@@ -267,32 +269,52 @@ def list_models():
 
 @router.get("/api/ha/entities")
 async def list_ha_entities():
-    """List all discovered Home Assistant entities (debug endpoint)."""
+    """List the Home Assistant entities chat and the dashboard may control:
+    listed domains only, denied entities (Helios plug, HA_TOOL_DENY_ENTITIES)
+    hidden — same policy as ha_guard.check_ha_call."""
     await ha_client.refresh_entities()
 
     controllable = ha_client.get_all_controllable()
+    shown = {
+        domain: [e for e in entities if ha_entity_allowed(e.entity_id)]
+        for domain, entities in controllable.items()
+        if domain in HA_LISTED_DOMAINS
+    }
 
     return {
-        "total": len(ha_client._entities),
+        "total": sum(len(v) for v in shown.values()),
         "controllable": {
             domain: [{"entity_id": e.entity_id, "friendly_name": e.friendly_name, "state": e.state} for e in entities]
-            for domain, entities in controllable.items()
+            for domain, entities in shown.items()
+            if entities
         },
     }
 
 
 @router.post("/api/ha/command")
 async def execute_ha_command(body: HACommandRequest):
-    """Execute a Home Assistant command directly (for testing)."""
-    result = await ha_client.execute_command(body.command)
+    """Run one Home Assistant command: natural-language ``command`` (testing)
+    or a structured ``entity_id`` + ``service`` call (dashboard /home controls).
+    Both are held to ha_guard.check_ha_call — the chat tool's policy."""
+    if body.command is not None:
+        result = await ha_client.execute_command(body.command)
+    else:
+        refusal, data = check_ha_call(body.entity_id, body.service, body.data)
+        if refusal:
+            HA_CALL_REFUSED.labels(path="api").inc()
+            return JSONResponse({"ok": False, "success": False, "message": refusal}, status_code=403)
+        result = await ha_client.call_service(body.entity_id, body.service, data)
 
-    return {
+    payload = {
         "ok": result.success,
+        "success": result.success,
         "action": result.action,
         "entity_id": result.entity_id,
         "message": result.message,
-        "details": result.details,
     }
+    if body.command is None and not result.success:
+        return JSONResponse(payload, status_code=502)
+    return payload
 
 
 @router.post("/api/memory/add")

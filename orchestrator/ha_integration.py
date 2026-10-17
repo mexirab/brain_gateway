@@ -17,6 +17,7 @@ Usage:
 """
 
 import asyncio
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -24,6 +25,11 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+from orchestrator.ha_guard import check_ha_call
+from orchestrator.metrics import HA_CALL_REFUSED
+
+logger = logging.getLogger(__name__)
 
 # Try to import rapidfuzz for better matching, fall back to simple matching
 try:
@@ -570,8 +576,9 @@ class HomeAssistantClient:
                 message=f"Unsupported action '{cmd.action}' for domain '{domain}'",
             )
 
-        # Build service data
-        service_data: Dict[str, Any] = {"entity_id": entity.entity_id}
+        # Build service data (entity_id is added after the guard, which strips
+        # targeting keys from data)
+        service_data: Dict[str, Any] = {}
 
         # Add value parameters based on action
         if cmd.action == "set_brightness" and cmd.value is not None:
@@ -607,6 +614,20 @@ class HomeAssistantClient:
         elif cmd.action == "set_volume" and cmd.value is not None:
             # HA uses 0-1 for volume
             service_data["volume_level"] = cmd.value / 100
+
+        # Same guard as the chat home_assistant tool: listed domain, not denied
+        # (Helios plug, HA_TOOL_DENY_ENTITIES), allow-listed service.
+        refusal, service_data = check_ha_call(entity.entity_id, service, service_data)
+        if refusal:
+            HA_CALL_REFUSED.labels(path="nlp").inc()
+            logger.warning(f"[HA] Legacy command refused: {domain}.{service}")
+            return ExecutionResult(
+                success=False,
+                action=cmd.action,
+                entity_id=entity.entity_id,
+                message=refusal,
+            )
+        service_data = {"entity_id": entity.entity_id, **service_data}
 
         # Make the API call
         try:
@@ -648,8 +669,8 @@ class HomeAssistantClient:
             "turn_off": "turn_off",
             "toggle": "toggle",
             "lock": "lock",
-            "unlock": "unlock",
-            "open_cover": "open_cover",
+            # No "unlock" / "open_cover": those need a confirmation flow this
+            # path doesn't have (check_ha_call refuses them too).
             "close_cover": "close_cover",
         }
 

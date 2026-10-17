@@ -8,7 +8,7 @@ import re
 from typing import Any, Optional
 
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator
+from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Standard response envelope
@@ -156,7 +156,23 @@ class MemoryAddRequest(BaseModel):
 
 
 class HACommandRequest(BaseModel):
-    command: str = Field(min_length=1)
+    """Either a natural-language ``command`` ("turn off the kitchen light") or a
+    structured ``entity_id`` + ``service`` (+ ``data``) call — the shape the
+    dashboard /home controls send. Both go through ha_guard.check_ha_call."""
+
+    command: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    entity_id: Optional[str] = Field(default=None, max_length=160)
+    service: Optional[str] = Field(default=None, max_length=64)
+    data: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _one_shape(self) -> "HACommandRequest":
+        structured = self.entity_id is not None or self.service is not None or self.data is not None
+        if (self.command is not None) == structured:
+            raise ValueError("send either 'command' or 'entity_id' + 'service' (+ 'data'), not both")
+        if structured and (not self.entity_id or not self.service):
+            raise ValueError("'entity_id' and 'service' are both required")
+        return self
 
 
 # ---------------------------------------------------------------------------
