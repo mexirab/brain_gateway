@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from ..dashboard import dashboard
 from ..layout import assign_ids, grid_row, row_divider
-from ..panels import TEMP_THRESHOLDS, bargauge, stat, timeseries
+from ..panels import CLOSET_TEMP_THRESHOLDS, TEMP_THRESHOLDS, bargauge, stat, timeseries
 
 
 def build() -> dict:
@@ -151,7 +151,7 @@ def build() -> dict:
                 ('bgw_temperature_fahrenheit{location="kitchen"}', "ambient"),
             ],
             unit="fahrenheit",
-            thresholds=TEMP_THRESHOLDS,
+            thresholds=CLOSET_TEMP_THRESHOLDS,
             fill=10,
         ),
         timeseries(

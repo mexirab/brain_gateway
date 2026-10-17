@@ -253,6 +253,29 @@ groups:
   - name: brain_gateway_informational
     interval: 60s
     rules:
+      - alert: ClosetTemperatureCritical
+        # Second channel for the closet job's spoken alert (which sleep mode or a
+        # dead speaker can silence). 95°F matches sensors.temperature.critical in
+        # the live user_profile.yaml — keep them together. The closet normally
+        # runs in the 80s, so only the critical level pages.
+        expr: bgw_temperature_fahrenheit{location="closet"} >= 95
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Server closet is at {{ $value | printf \"%.0f\" }}°F"
+          description: "The server closet has been at or above 95°F for 10 minutes. Check the closet door/airflow and the rack fans; shut down non-essential nodes (Saturn, Uranus) if it keeps climbing."
+      - alert: ClosetTemperatureSensorMissing
+        # The closet series is dropped whenever HA has no reading (sensor gone,
+        # renamed, battery dead), so absent() catches it. It read 0 for days in
+        # Oct 2026 with nothing firing.
+        expr: absent(bgw_temperature_fahrenheit{location="closet"})
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No closet temperature reading for 2 hours"
+          description: "Closet heat alerts are off. Check that HA has sensor.closet_temperature (the Nest puck by the rack, Starling Home Hub) and that user_profile.yaml sensors.temperature.closet points at it."
       - alert: AutoLearnFailing
         # auto_learn is silent by design (no user-visible output), so a broken
         # pipeline looked like "no facts" for weeks. Fires when extractions keep

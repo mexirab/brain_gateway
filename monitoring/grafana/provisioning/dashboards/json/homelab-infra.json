@@ -849,15 +849,15 @@
               },
               {
                 "color": "yellow",
-                "value": 75
+                "value": 87
               },
               {
                 "color": "orange",
-                "value": 80
+                "value": 90
               },
               {
                 "color": "red",
-                "value": 85
+                "value": 95
               }
             ]
           },

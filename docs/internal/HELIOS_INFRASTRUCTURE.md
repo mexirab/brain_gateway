@@ -43,20 +43,29 @@ Server closet temperature monitoring with dashboard widget, TTS alerts, and Graf
 
 **Dashboard widget:** Shows closet temp, kitchen ambient, heat delta (+F), and estimated monthly AC cooling cost. Polls every 60s. Color-coded: green (<75F), yellow (75-80F), amber (80-85F), red (>85F).
 
-**TTS alerts (every 10 min):**
-- 80F warning: "Server closet is at X degrees. Getting warm."
-- 85F critical: "Server closet is dangerously hot. Check ventilation."
-- Auto-clears when cooled below 78F (allows re-alerting on next heat-up)
+**TTS alerts (every 10 min, `jobs_monitoring.check_closet_temperature`):**
+- Warning (`sensors.temperature.warning`): "Server closet is at X degrees. Getting warm." Held during /settings quiet hours until they end.
+- Critical (`sensors.temperature.critical`): "Server closet is dangerously hot. Check ventilation." Always speaks; also marks the warning as announced (no second "getting warm" while cooling).
+- Re-arms when cooled below warning − 3°F (`TEMP_CLEAR_MARGIN_F`). Critical < warning is treated as warning.
+- A crossing only counts as announced if the announcement wasn't suppressed (sleep mode / voice session); otherwise it retries next run. State keys `temp:closet_warning` / `temp:closet_critical`.
 
 **Prometheus metrics:**
-- `bgw_temperature_fahrenheit{location="closet|kitchen"}` — sensor readings
-- `bgw_temperature_delta_fahrenheit` — closet minus kitchen delta
+- `bgw_temperature_fahrenheit{location="closet|kitchen"}` — sensor readings (ambient labelled `kitchen`); series dropped when HA has no reading
+- `bgw_temperature_delta_fahrenheit` — closet minus ambient delta
 
-**Config (env vars):**
-- `CLOSET_TEMP_WARNING` — warning threshold in F (default: 80)
-- `CLOSET_TEMP_CRITICAL` — critical threshold in F (default: 85)
+**Prometheus alerts:**
+- `ClosetTemperatureCritical` — closet ≥ 95°F for 10m, paging `pushover`. Hard-coded 95 matches the live profile critical; keep them together.
+- `ClosetTemperatureSensorMissing` — closet series absent for 2h, quiet `pushover-quiet`.
 
-**HA sensors used:** `sensor.closet_temperature`, `sensor.kitchen_temperature`
+**Grafana:** jess_glance "Closet Temp" + homelab_infra "Closet vs Ambient" use `CLOSET_TEMP_THRESHOLDS` (`dashgen/panels.py`): green / 87 yellow / 90 orange / 95 red.
+
+**Config:** thresholds live in `user_profile.yaml` → `sensors.temperature.warning` / `.critical` (defaults 80 / 85°F). Env overrides (applied by `user_profile._apply_env_overrides`):
+- `CLOSET_TEMP_WARNING` — overrides `sensors.temperature.warning`
+- `CLOSET_TEMP_CRITICAL` — overrides `sensors.temperature.critical`
+
+Live deployment runs 90 / 95 (the closet normally sits in the 80s).
+
+**HA sensors used:** `sensors.temperature.closet` (live: `sensor.closet_temperature`) and `sensors.temperature.ambient` (any room sensor) from `user_profile.yaml`.
 
 ## Helios GPU Drivers
 

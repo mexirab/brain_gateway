@@ -143,3 +143,115 @@ async def test_metrics_404_sensor_creates_no_series(fresh_temp_gauges):
 
     assert resp.status_code == 200
     assert _series(reg, "bgw_test_temperature_f") == {"kitchen": 70.0}
+
+
+# ---------------------------------------------------------------------------
+# jobs_monitoring.check_closet_temperature — thresholds come from the profile
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def closet_alerts(reset_warned):
+    """Run the closet job at a given temperature with 90/95 profile thresholds."""
+    from orchestrator import jobs_monitoring, shared, state_store
+
+    state_store.clear_notifications_by_prefix("temp:")
+    announce = AsyncMock(return_value={"success": True})
+
+    async def run(temp: float, *, quiet: bool = False, warning: float = 90.0, critical: float = 95.0):
+        http = MagicMock()
+        http.get = AsyncMock(return_value=_resp(200, str(temp)))
+        with (
+            patch.object(shared, "_http", http),
+            patch.object(jobs_monitoring, "_announce_voice", announce),
+            patch.object(jobs_monitoring, "_in_quiet_hours_now", return_value=quiet),
+            patch.object(jobs_monitoring.profile, "temp_warning", warning),
+            patch.object(jobs_monitoring.profile, "temp_critical", critical),
+        ):
+            await jobs_monitoring.check_closet_temperature()
+
+    yield run, announce
+    state_store.clear_notifications_by_prefix("temp:")
+
+
+async def test_normal_80s_closet_is_quiet(closet_alerts):
+    run, announce = closet_alerts
+    for t in (80.0, 85.0, 89.9):
+        await run(t)
+    announce.assert_not_awaited()
+
+
+async def test_warning_speaks_once_per_crossing(closet_alerts):
+    run, announce = closet_alerts
+    await run(91.0)
+    await run(92.0)
+    assert announce.await_count == 1
+    assert "91 degrees" in announce.await_args.args[0]
+
+
+async def test_critical_speaks(closet_alerts):
+    run, announce = closet_alerts
+    await run(96.0)
+    assert announce.await_count == 1
+    assert "dangerously hot" in announce.await_args.args[0]
+
+
+async def test_rearms_only_after_cooling_below_margin(closet_alerts):
+    from orchestrator import jobs_monitoring
+
+    run, announce = closet_alerts
+    await run(91.0)
+    await run(88.0)  # 90 - 3 = 87: not cool enough to re-arm
+    await run(91.0)
+    assert announce.await_count == 1
+    await run(90.0 - jobs_monitoring.TEMP_CLEAR_MARGIN_F - 0.1)  # cooled: re-armed
+    await run(91.0)
+    assert announce.await_count == 2
+
+
+async def test_critical_then_cooling_warns_only_once(closet_alerts):
+    run, announce = closet_alerts
+    await run(96.0)
+    await run(92.0)  # back in the warning band: no extra "getting warm"
+    assert announce.await_count == 1
+
+
+async def test_warning_held_during_quiet_hours_then_spoken(closet_alerts):
+    run, announce = closet_alerts
+    await run(91.0, quiet=True)
+    announce.assert_not_awaited()
+    await run(91.0)  # quiet hours over: the held warning goes out now
+    assert announce.await_count == 1
+
+
+async def test_critical_speaks_during_quiet_hours(closet_alerts):
+    run, announce = closet_alerts
+    await run(96.0, quiet=True)
+    assert announce.await_count == 1
+
+
+async def test_suppressed_announcement_is_retried(closet_alerts):
+    run, announce = closet_alerts
+    announce.return_value = {"success": True, "suppressed": True, "reason": "dnd_active"}
+    await run(91.0)
+    announce.return_value = {"success": True}
+    await run(91.0)
+    assert announce.await_count == 2  # the first one wasn't heard, so it wasn't "used up"
+
+
+async def test_inverted_thresholds_do_not_flap(closet_alerts):
+    run, announce = closet_alerts
+    for _ in range(4):  # critical 85 < warning 90: treated as 90/90
+        await run(86.0, warning=90.0, critical=85.0)
+    announce.assert_not_awaited()
+    await run(91.0, warning=90.0, critical=85.0)
+    await run(91.0, warning=90.0, critical=85.0)
+    assert announce.await_count == 1
+
+
+async def test_metrics_drops_closet_series_when_reading_stops(fresh_temp_gauges):
+    _temp, _delta, reg = fresh_temp_gauges
+    await _call_metrics(_http_by_sensor(_resp(200, "84.0"), _resp(200, "70.0")))
+    assert _series(reg, "bgw_test_temperature_f")["closet"] == 84.0
+    await _call_metrics(_http_by_sensor(_resp(404), _resp(200, "70.0")))
+    assert "closet" not in _series(reg, "bgw_test_temperature_f")  # not frozen at 84

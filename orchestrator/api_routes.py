@@ -227,6 +227,12 @@ async def metrics_endpoint():
                 except (TypeError, ValueError):
                     continue  # "unavailable" / "unknown"
                 TEMPERATURE_GAUGE.labels(location=location).set(readings[location])
+        # No reading this scrape: drop the series so it doesn't freeze at the
+        # last value (ClosetTemperatureSensorMissing keys on absent()).
+        for location in ("closet", "kitchen"):
+            if location not in readings:
+                with contextlib.suppress(KeyError):
+                    TEMPERATURE_GAUGE.remove(location)
         if "closet" in readings and "kitchen" in readings:
             TEMPERATURE_DELTA.set(readings["closet"] - readings["kitchen"])
     except Exception:

@@ -16,14 +16,36 @@ logger = logging.getLogger(__name__)
 
 
 _missing_sensor_warned: set[str] = set()
+# Hysteresis: alerts re-arm only after the closet cools this far below warning.
+TEMP_CLEAR_MARGIN_F = 3.0
 
 
-async def check_closet_temperature():
+def _in_quiet_hours_now() -> bool:
+    """The /settings quiet hours (selfcare_schedule.yaml), same rule as the selfcare nudges."""
+    try:
+        from orchestrator.selfcare_manager import _in_quiet_hours, _parse_time
+        from orchestrator.selfcare_schedule import is_quiet_day, quiet_hours
+
+        now = datetime.now(ZoneInfo(shared.TIMEZONE))
+        if not is_quiet_day(now.isoweekday()):
+            return False
+        qh = quiet_hours()
+        start = _parse_time(qh.get("start") or shared.QUIET_HOURS_START)
+        end = _parse_time(qh.get("end") or shared.QUIET_HOURS_END)
+        return _in_quiet_hours(now.time(), start, end)
+    except Exception as e:
+        logger.warning("[TEMP_ALERT] Quiet-hours check failed: %s", type(e).__name__)
+        return False
+
+
+async def check_closet_temperature() -> None:
     """Every 10 minutes: check closet temperature and alert if too hot.
 
-    Thresholds:
-    - 80 degrees F: warning (GPU heat building up)
-    - 85 degrees F: urgent (risk of thermal throttling)
+    Thresholds come from the profile (``sensors.temperature.warning`` /
+    ``.critical`` in user_profile.yaml, or CLOSET_TEMP_WARNING/_CRITICAL env
+    overrides): one spoken alert per crossing, re-armed once the closet cools
+    TEMP_CLEAR_MARGIN_F below the warning level. They used to be hard-coded at
+    80/85/78, so the profile values were ignored.
     """
     from orchestrator.shared import HA_TOKEN, HA_URL
 
@@ -69,26 +91,41 @@ async def check_closet_temperature():
         except Exception:
             pass
 
-        # Alert thresholds (only alert once per crossing, persisted via state_store)
-        if temp >= 85 and not state_store.is_notified("temp:closet_85"):
-            await _announce_voice(
+        # Alert thresholds (only alert once per crossing, persisted via state_store).
+        # A crossing counts as announced only if it was actually spoken: a
+        # suppressed one (sleep mode, voice session) is retried next run.
+        # Prometheus' ClosetTemperatureCritical pages as a second channel.
+        warning, critical = profile.temp_warning, profile.temp_critical
+        if critical < warning:  # swapped in the YAML/env: don't flap between bands
+            critical = warning
+        if temp >= critical and not state_store.is_notified("temp:closet_critical"):
+            result = await _announce_voice(
                 f"Warning! Server closet temperature is {temp:.0f} degrees. "
                 f"That's dangerously hot. Check the ventilation or shut down non-essential nodes.",
                 announcement_type="temperature",
             )
-            state_store.mark_notified("temp:closet_85")
-            logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — URGENT alert sent")
+            if not (result or {}).get("suppressed"):
+                # Both keys: cooling from critical through the warning band
+                # mustn't add a "getting warm" announcement on top.
+                state_store.mark_notified("temp:closet_critical")
+                state_store.mark_notified("temp:closet_warning")
+                logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — URGENT alert sent")
 
-        elif temp >= 80 and not state_store.is_notified("temp:closet_80"):
-            await _announce_voice(
+        elif temp >= warning and not state_store.is_notified("temp:closet_warning"):
+            if _in_quiet_hours_now():
+                # Warning level waits for morning; only critical speaks at night.
+                logger.info(f"[TEMP_ALERT] Closet at {temp}°F — warning held for quiet hours")
+                return
+            result = await _announce_voice(
                 f"Heads up {profile.user_name}. The server closet is at {temp:.0f} degrees. "
                 f"That's getting warm. You might want to check the airflow.",
                 announcement_type="temperature",
             )
-            state_store.mark_notified("temp:closet_80")
-            logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — warning alert sent")
+            if not (result or {}).get("suppressed"):
+                state_store.mark_notified("temp:closet_warning")
+                logger.warning(f"[TEMP_ALERT] Closet at {temp}°F — warning alert sent")
 
-        elif temp < 78:
+        elif temp < warning - TEMP_CLEAR_MARGIN_F:
             # Clear alerts when cooled down — allows re-alerting if it heats up again
             cleared = state_store.clear_notifications_by_prefix("temp:")
             if cleared:
