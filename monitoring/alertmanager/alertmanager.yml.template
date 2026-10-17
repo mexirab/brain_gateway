@@ -1,3 +1,16 @@
+# One embedding outage must not send three notices: the boot self-test
+# (EmbeddingModelBroken) explains runtime encode() failures, and either one
+# explains auto_learn failing (dedup + store need embeddings).
+inhibit_rules:
+  - source_matchers:
+      - alertname="EmbeddingModelBroken"
+    target_matchers:
+      - alertname=~"EmbeddingErrors|AutoLearnFailing"
+  - source_matchers:
+      - alertname="EmbeddingErrors"
+    target_matchers:
+      - alertname="AutoLearnFailing"
+
 route:
   receiver: "null"
   group_by: ["alertname"]
@@ -25,7 +38,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosPoweredButUnreachable"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosPoweredButUnreachable|AutoLearnFailing|EmbeddingErrors"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a

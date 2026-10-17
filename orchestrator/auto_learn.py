@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -28,9 +29,11 @@ from orchestrator import shared
 from orchestrator.metrics import (
     AUTO_LEARN_CATEGORY_BLOCKED,
     AUTO_LEARN_DUPLICATES_SKIPPED,
+    AUTO_LEARN_ERRORS,
     AUTO_LEARN_EXTRACTION_LATENCY,
     AUTO_LEARN_EXTRACTIONS_TOTAL,
     AUTO_LEARN_FACTS_STORED,
+    AUTO_LEARN_RUNS,
     AUTO_LEARN_SENSITIVE_FILTERED,
     PALACE_STORES_TOTAL,
 )
@@ -325,18 +328,33 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
             messages=[{"role": "user", "content": prompt}],
             timeout=120,
         )
-        raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+        raw = llm_resp.get("choices", [{}])[0].get("message", {}).get("content") or ""
     except Exception as e:
         # Include %r so exceptions with empty str() (httpx.ReadTimeout,
         # asyncio.CancelledError, etc.) don't come through as a bare
         # "failed: " line. exc_info attaches the traceback for any
         # unexpected failure mode.
         logger.warning("[AUTO_LEARN] LLM extraction call failed: %r", e, exc_info=True)
+        _record_error("llm")
         return []
 
     # Parse JSON from response (reuse pattern from background_jobs._parse_event_json)
+    if not raw.strip():
+        # The brain sometimes ends its turn with no content (known llama.cpp
+        # EOS-only reply). Counted apart from parse errors: it's a model hiccup,
+        # not a format problem.
+        _record_error("empty")
+        logger.warning("[AUTO_LEARN] Extraction returned an empty reply")
+        return []
+
     facts = _parse_facts_json(raw)
     if not facts:
+        if not _is_json_array(raw):
+            # The model answered, but not with the JSON array we asked for —
+            # a format failure, not "this conversation had no facts".
+            _record_error("parse")
+            logger.warning("[AUTO_LEARN] Extraction output was not a JSON array (%d chars)", len(raw or ""))
+            return []
         logger.info("[AUTO_LEARN] No facts extracted from conversation")
         return []
 
@@ -396,6 +414,28 @@ def _parse_facts_json(raw: str) -> List[Dict]:
     return []
 
 
+# Set by _record_error during one run_auto_learn call (same task, so the
+# context var is shared); tells the run's outcome apart from "no facts".
+_run_failed: ContextVar[bool] = ContextVar("auto_learn_run_failed", default=False)
+
+
+def _record_error(stage: str) -> None:
+    AUTO_LEARN_ERRORS.labels(stage=stage).inc()
+    _run_failed.set(True)
+
+
+def _is_json_array(raw: str) -> bool:
+    """True when ``raw`` holds a parseable JSON array (``[]`` included)."""
+    raw = (raw or "").strip()
+    start, end = raw.find("["), raw.rfind("]")
+    if start == -1 or end < start:
+        return False
+    try:
+        return isinstance(json.loads(raw[start : end + 1]), list)
+    except json.JSONDecodeError:
+        return False
+
+
 async def is_duplicate(fact_text: str) -> bool:
     """Check if a similar fact already exists in the auto-learned knowledge base."""
     try:
@@ -430,6 +470,7 @@ async def is_duplicate(fact_text: str) -> bool:
 
     except Exception as e:
         logger.warning("[AUTO_LEARN] Dedup check failed: %r", e)
+        _record_error("dedup")
 
     return False
 
@@ -462,9 +503,14 @@ async def store_fact(fact: Dict) -> Optional[str]:
     encrypted_text = encrypt_text(fact_text)
 
     # Embed the plaintext (in thread to avoid blocking event loop)
-    embedding = await asyncio.to_thread(
-        lambda: shared.embedding_model.encode(fact_text, normalize_embeddings=True).tolist()
-    )
+    try:
+        embedding = await asyncio.to_thread(
+            lambda: shared.embedding_model.encode(fact_text, normalize_embeddings=True).tolist()
+        )
+    except Exception as e:
+        logger.error("[AUTO_LEARN] Embedding for store failed: %s", type(e).__name__)
+        _record_error("store")
+        return None
 
     # Route to palace wing/room (gated by PALACE_ENABLED kill switch)
     wing, room = "", ""
@@ -495,6 +541,7 @@ async def store_fact(fact: Dict) -> Optional[str]:
         )
     except Exception as e:
         logger.error("[AUTO_LEARN] ChromaDB insert failed: %r", e, exc_info=True)
+        _record_error("store")
         return None
 
     # Optional markdown file
@@ -562,17 +609,20 @@ async def run_auto_learn(messages: List[Dict]):
     """
     t0 = time.time()
     AUTO_LEARN_EXTRACTIONS_TOTAL.inc()
+    token = _run_failed.set(False)
+    outcome = "error"
 
     try:
         # Check privacy opt-out
         if conversation_has_opt_out(messages):
             logger.info("[AUTO_LEARN] Skipping — user requested privacy opt-out")
+            outcome = "opt_out"
             return
 
         # Extract facts
         facts = await extract_facts(messages)
         if not facts:
-            AUTO_LEARN_EXTRACTION_LATENCY.observe(time.time() - t0)
+            outcome = "error" if _run_failed.get() else "no_facts"
             return
 
         stored_count = 0
@@ -594,6 +644,12 @@ async def run_auto_learn(messages: List[Dict]):
             if doc_id:
                 stored_count += 1
 
+        if _run_failed.get() and not stored_count:
+            outcome = "error"
+        elif stored_count:
+            outcome = "stored"
+        else:
+            outcome = "duplicates_only"
         logger.info(
             "[AUTO_LEARN] Pipeline complete: %d stored, %d duplicates skipped (%.1fs)",
             stored_count,
@@ -603,8 +659,11 @@ async def run_auto_learn(messages: List[Dict]):
 
     except Exception as e:
         logger.error("[AUTO_LEARN] Pipeline error: %s", e, exc_info=True)
+        _record_error("pipeline")
 
     finally:
+        AUTO_LEARN_RUNS.labels(outcome=outcome).inc()
+        _run_failed.reset(token)
         AUTO_LEARN_EXTRACTION_LATENCY.observe(time.time() - t0)
 
 

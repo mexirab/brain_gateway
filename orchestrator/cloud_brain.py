@@ -25,6 +25,7 @@ from orchestrator.metrics import (
     ACTIVE_REQUESTS,
     AUTO_LEARN_DEFERRED,
     AUTO_LEARN_DROPPED,
+    AUTO_LEARN_REARMED,
     CHAT_STREAM_OUTCOME,
     CHAT_TTFT,
     FAST_PATH_COUNT,
@@ -728,7 +729,38 @@ class CloudBrain:
             return
         messages = cache.pop(session_key, None)
         if messages:
-            await run_auto_learn(messages)
+            try:
+                await run_auto_learn(messages)
+            finally:
+                CloudBrain._rearm_if_orphaned(session_key)
+
+    @staticmethod
+    def _rearm_if_orphaned(session_key: str) -> None:
+        """Re-arm a conversation that kept going while its extraction ran.
+
+        New turns during the run re-cache the conversation and re-arm its job;
+        if that job came due while this one was still running, APScheduler
+        skipped it (one instance per job id) and the cached snapshot would sit
+        there with no job, never extracted.
+        """
+        if session_key not in shared._auto_learn_conversations:
+            return
+        job_id = f"auto_learn_{session_key}"
+        try:
+            if shared.scheduler.get_job(job_id) is not None:
+                return
+            shared.scheduler.add_job(
+                CloudBrain._run_auto_learn_job,
+                trigger="date",
+                run_date=datetime.now() + timedelta(minutes=shared.AUTO_LEARN_DELAY_MINUTES),
+                args=[session_key],
+                id=job_id,
+                replace_existing=True,
+            )
+            AUTO_LEARN_REARMED.inc()
+            logger.info("[AUTO_LEARN] Re-armed a conversation that continued during its extraction")
+        except Exception as e:
+            logger.warning("[AUTO_LEARN] Could not re-arm extraction: %s", type(e).__name__)
 
     def _stream_loop_response(
         self,
