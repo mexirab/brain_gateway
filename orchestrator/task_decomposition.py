@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 from orchestrator import shared
 from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
+    BACKGROUND_LLM_ERRORS,
     TASK_DECOMP_ERRORS,
     TASK_DECOMP_STEPS_COMPLETED,
     TASK_DECOMP_STEPS_SKIPPED,
@@ -96,7 +97,10 @@ Return format:
             shared.MODEL_NAME,
             messages,
             system=system_prompt,
-            timeout=60,
+            # 120s, not 30/60: llama-server runs a single slot, so this call
+            # queues behind any in-flight chat turn (requests_deferred). Matches
+            # auto_learn and the unified loop's per-call budget.
+            timeout=120,
         )
 
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -126,7 +130,8 @@ Return format:
         raw_steps = [{"description": task_text, "est_minutes": 30}]
     except Exception as e:
         TASK_DECOMP_ERRORS.inc()
-        logger.error("[TASK_DECOMP] Model call failed: %s", e)
+        BACKGROUND_LLM_ERRORS.labels(caller="task_decomp", error_type=type(e).__name__).inc()
+        logger.error("[TASK_DECOMP] Model call failed: %r", e)
         return "Sorry, I couldn't break that task down right now. Try again in a moment."
 
     # Build micro-steps with ADHD time buffer

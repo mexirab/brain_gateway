@@ -9,9 +9,10 @@ import glob
 import json
 import logging
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from orchestrator import shared
+from orchestrator.metrics import BACKGROUND_LLM_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,9 @@ async def mine_sessions(session_path: str = "") -> Dict:
 
             # Extract insights via LLM
             insights = await _extract_insights(messages)
+            if insights is None:
+                stats["errors"] += 1
+                continue
 
             for insight in insights:
                 palace = shared.get_palace()
@@ -188,8 +192,12 @@ def _detect_project(filepath: str) -> str:
     return ""
 
 
-async def _extract_insights(messages: List[str]) -> List[Dict]:
-    """Call the LLM to extract insights from session messages."""
+async def _extract_insights(messages: List[str]) -> Optional[List[Dict]]:
+    """Call the LLM to extract insights from session messages.
+
+    Returns None when the model call itself failed (so the caller counts it
+    as an error, not as "no insights"), else the parsed list (maybe empty).
+    """
     # Truncate messages to fit in context
     combined = "\n---\n".join(messages[:20])
     if len(combined) > 6000:
@@ -204,12 +212,16 @@ async def _extract_insights(messages: List[str]) -> List[Dict]:
             shared.MODEL_URL,
             shared.MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
-            timeout=30,
+            # 120s, not 30/60: llama-server runs a single slot, so this call
+            # queues behind any in-flight chat turn (requests_deferred). Matches
+            # auto_learn and the unified loop's per-call budget.
+            timeout=120,
         )
         raw = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
     except Exception as e:
-        logger.warning("[SESSION_MINER] LLM extraction failed: %s", e)
-        return []
+        BACKGROUND_LLM_ERRORS.labels(caller="session_miner", error_type=type(e).__name__).inc()
+        logger.warning("[SESSION_MINER] LLM extraction failed: %r", e)
+        return None
 
     return _parse_insights_json(raw)
 

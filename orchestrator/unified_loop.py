@@ -953,7 +953,7 @@ async def run_unified_tool_loop(
                     model_name,
                     messages,
                     system=system_prompt,
-                    timeout=60,
+                    timeout=120,  # same budget as a normal round (single llama slot)
                 )
                 LLM_CALL_COUNT.labels(model=model_name, purpose="unified_final").inc()
                 LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_final").observe(time.time() - _final_t0)

@@ -70,7 +70,7 @@ claude mcp add mempalace -- python3 /opt/gateway_mvp/scripts/mempalace_mcp_serve
 
 The palace can mine Claude Code session logs (the JSONL files in `~/.claude/projects/-opt-helios-gateway-mvp/`) for notable decisions, bug fixes, architectural choices, and user preferences. Mined insights are stored with `source="claude_code_mine"` metadata so they're distinguishable from other memory sources.
 
-Run manually via `POST /api/palace/mine` or the MCP tool `palace_mine_sessions`. Not currently on a scheduler — it's on-demand because mining is expensive (reads many sessions, calls the LLM for each).
+Run manually via `POST /api/palace/mine` or the MCP tool `palace_mine_sessions`. Not currently on a scheduler — it's on-demand because mining is expensive (reads many sessions, calls the LLM for each). Single-flight: a second request while a run is in progress gets 409. Each model call has a 120 s timeout (it queues behind chat on the single llama slot); a failed call counts in the returned `errors` and in `bgw_background_llm_errors_total{caller="session_miner"}`.
 
 ## Auto-learn
 

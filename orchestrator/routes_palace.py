@@ -1,5 +1,6 @@
 """MemPalace API routes."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -116,6 +117,11 @@ async def palace_stats():
     return JSONResponse(palace.room_stats())
 
 
+# One mining run at a time: it makes one model call per session file on the
+# single llama slot (up to 120 s each), so stacked requests would starve chat.
+_MINE_LOCK = asyncio.Lock()
+
+
 @router.post("/api/palace/mine")
 async def palace_mine(req: Request):
     """Trigger session mining for Claude Code sessions."""
@@ -123,13 +129,18 @@ async def palace_mine(req: Request):
     body = await req.json() if req.headers.get("content-type", "").startswith("application/json") else {}
     session_path = body.get("session_path", "")
 
-    try:
-        from orchestrator.session_miner import mine_sessions
+    if _MINE_LOCK.locked():
+        return JSONResponse({"ok": False, "error": "a mining run is already in progress"}, status_code=409)
+    async with _MINE_LOCK:
+        try:
+            from orchestrator.session_miner import mine_sessions
 
-        stats = await mine_sessions(session_path=session_path)
-        return JSONResponse({"ok": True, **stats})
-    except ImportError:
-        return JSONResponse({"ok": False, "error": "session_miner not available"}, status_code=501)
-    except Exception as e:
-        logger.error("[PALACE] Session mining failed: %s", e)
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+            stats = await mine_sessions(session_path=session_path)
+            return JSONResponse({"ok": True, **stats})
+        except ImportError:
+            return JSONResponse({"ok": False, "error": "session_miner not available"}, status_code=501)
+        except Exception as e:
+            logger.error("[PALACE] Session mining failed: %r", e)
+            return JSONResponse(
+                {"ok": False, "error": "session mining failed (see orchestrator logs)"}, status_code=500
+            )

@@ -938,6 +938,15 @@ TASK_DECOMP_ERRORS = Counter(
     "Task decomposition errors",
 )
 
+# Background / non-loop callers of the primary model (single llama slot, so a
+# call can queue behind chat and time out). error_type is the exception class
+# name (ReadTimeout, ConnectError, HTTPStatusError, ...) — a small, bounded set.
+BACKGROUND_LLM_ERRORS = Counter(
+    "bgw_background_llm_errors_total",
+    "Failed primary-model calls from background / non-loop callers",
+    ["caller", "error_type"],
+)
+
 # -- Progress Tracking -------------------------------------------------------
 # -- TTS Announcements -------------------------------------------------------
 TTS_ANNOUNCEMENTS_TOTAL = Counter(
