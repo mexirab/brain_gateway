@@ -74,6 +74,11 @@ for v in cfg["services"]["orchestrator"].get("volumes", []):
         print("vol\t" + names.get(v["source"], v["source"]))
 ')" || { echo "docker compose config failed — fix .env first." >&2; exit 1; }
 
+# Validate every writable path before touching any of them.
+while IFS=$'\t' read -r kind src; do
+    if [ "${kind}" = rw ] && [ "${src}" != /dev/null ]; then check_path "${src}" || exit 1; fi
+done <<<"${mounts}"
+
 echo "Target owner: ${uid}:${gid}"
 SUDO=""
 if [ "$(id -u)" != "0" ]; then
@@ -97,7 +102,6 @@ while IFS=$'\t' read -r kind src; do
     case "${kind}" in
         rw)
             [ "${src}" = /dev/null ] && continue
-            check_path "${src}" || exit 1
             if [ ! -e "${src}" ]; then
                 echo "MISSING  ${src}"
                 [ "${APPLY}" = 1 ] || { status=1; continue; }
