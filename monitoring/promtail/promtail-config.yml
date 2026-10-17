@@ -20,7 +20,9 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
     relabel_configs:
-      # Keep only relevant containers (brain-* and monitoring containers)
+      # Keep only relevant containers (brain-* and monitoring containers).
+      # Do NOT add loki-push-gw: its error log echoes attacker-chosen request
+      # URIs from any LAN host, and these lines reach the self-audit LLM.
       - source_labels: ['__meta_docker_container_name']
         regex: '/(brain-.*|open-webui.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
         action: keep

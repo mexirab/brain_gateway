@@ -6,6 +6,9 @@ auth_enabled: false
 server:
   http_listen_port: 3100
   grpc_listen_port: 9096
+  # The ruler logs ~4 info lines per rule per evaluation (~11k/day), which
+  # Jupiter's promtail ships straight back into Loki. Warnings and up only.
+  log_level: warn
 
 common:
   instance_addr: 127.0.0.1
@@ -13,7 +16,6 @@ common:
   storage:
     filesystem:
       chunks_directory: /loki/chunks
-      rules_directory: /loki/rules
   replication_factor: 1
   ring:
     kvstore:
@@ -37,7 +39,17 @@ schema_config:
         period: 24h
 
 ruler:
-  alertmanager_url: http://localhost:9093
+  # Log-based alerts (monitoring/loki/rules/fake/*.yml, mounted read-only;
+  # "fake" is the tenant id Loki uses when auth_enabled is false). Alerts go to
+  # the same Alertmanager as Prometheus, so routing lives in one place.
+  storage:
+    type: local
+    local:
+      directory: /etc/loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://alertmanager:9093
+  enable_alertmanager_v2: true
+  evaluation_interval: 1m
   # No auth on Loki: don't let callers write rules over HTTP.
   enable_api: false
 

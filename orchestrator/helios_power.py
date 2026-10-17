@@ -252,6 +252,31 @@ async def helios_power_status() -> Dict[str, Any]:
             "skipped": "disabled",
             "reason": "HELIOS_WAKE_ENABLED is false",
         }
+    return await _read_power_status()
+
+
+async def poll_helios_power() -> Dict[str, Any]:
+    """Scheduler entry point: refresh the plug gauges for alerting.
+
+    Runs when either wake-on-demand or read-only plug monitoring is enabled, so
+    bgw_helios_plug_watts stays fresh (HeliosPoweredButUnreachable needs it) even
+    while auto-wake is switched off. Read-only — never touches the plug.
+    """
+    from orchestrator.metrics import HELIOS_STATUS_TOTAL
+
+    if not (_settings.helios_wake_enabled or _settings.helios_plug_monitor_enabled):
+        HELIOS_STATUS_TOTAL.labels(result="disabled").inc()
+        return {
+            "ok": False,
+            "skipped": "disabled",
+            "reason": "HELIOS_WAKE_ENABLED and HELIOS_PLUG_MONITOR_ENABLED are false",
+        }
+    return await _read_power_status()
+
+
+async def _read_power_status() -> Dict[str, Any]:
+    """Read switch + power sensor from HA, update gauges. Caller has gated."""
+    from orchestrator.metrics import HELIOS_STATUS_TOTAL
 
     global _status_fail_count, _status_last_switch
 

@@ -1,0 +1,64 @@
+# Helios promtail — ships Helios's systemd journal (model units, UPS units,
+# kernel) to Loki on Jupiter.
+#
+# Its own compose project so Helios can run it without the main stack (Helios
+# runs the model layer as host systemd units, not compose). Deploy on Helios:
+#
+#   rsync -a monitoring/promtail/{docker-compose.helios.yml,promtail-helios.yml} \
+#       labadmin@helios:/opt/promtail-helios/
+#   ssh labadmin@helios 'cd /opt/promtail-helios && \
+#       docker compose -f docker-compose.helios.yml -p promtail-helios up -d'
+#
+# The push goes to loki-push-gw on Jupiter (LAN, push-only, Helios's IP + a
+# bearer token) — see monitoring/docker-compose.yml. Needs a .env next to this
+# file (chmod 600) with LOKI_PUSH_TOKEN=<same value as Jupiter's .env>; set
+# LOKI_PUSH_URL there too if Jupiter's address differs.
+#
+# Hardening:
+# - Image pinned by digest; bump deliberately. Promtail is end-of-life
+#   (successor: Grafana Alloy) — another reason it gets no Docker socket.
+# - No Docker socket: `:ro` on a socket doesn't restrict the Docker API, so it
+#   would mean root on Helios. All Helios services are systemd units now.
+# - cap_drop: ALL + no-new-privileges: promtail needs no capabilities to read
+#   root-owned journal files and POST HTTP.
+# - Own bridge network: a compromised promtail can't reach anything over
+#   Docker DNS; it only needs outbound to Jupiter via the host's routing.
+services:
+  promtail:
+    image: grafana/promtail:3.4.2@sha256:c6e9a987ca086cbfef945b8ebd708eb09f98b5e78bfb659e4e5a8b3bd604d11b
+    container_name: promtail-helios
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./promtail-helios.yml:/etc/promtail/config.yml:ro
+      # journal: scrape reads /var/log/journal directly, so the host needs a
+      # PERSISTENT journal (Ubuntu's default once /var/log/journal exists; a
+      # volatile /run/log/journal-only host ships nothing). /etc/machine-id is
+      # how the journal reader finds this host's journal directory.
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      # Positions file — persists across restarts so a restart doesn't resend
+      # (or skip) the journal window.
+      - promtail-helios-data:/var/lib/promtail
+    environment:
+      - LOKI_PUSH_URL=${LOKI_PUSH_URL:-http://10.0.0.248:3101/loki/api/v1/push}
+      - LOKI_PUSH_TOKEN=${LOKI_PUSH_TOKEN:?set LOKI_PUSH_TOKEN in .env next to this file}
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
+    networks:
+      - promtail-net
+
+networks:
+  promtail-net:
+    driver: bridge
+
+volumes:
+  promtail-helios-data:

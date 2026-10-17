@@ -106,7 +106,7 @@ Measured on the 5090: 106 prose / 122 code / 121 tool-call tok/s, ~2700 tok/s pr
 - **`--api-key` NOT enabled:** `auto_learn.py`, `jobs_calendar.py`, `vision_handler.py`, `meal_manager.py` call `MODEL_URL` with bare httpx and have no api-key plumbing. Network exposure is bounded by the unit's `IPAddressAllow` instead.
 - **Sandbox:** runs as nologin `llama` (`useradd -r -M -s /usr/sbin/nologin llama`), `ProtectSystem=strict`, `ProtectHome=tmpfs` with read-only binds of the binary dir + weights dir, `PrivateTmp`, `DevicePolicy=closed` + `DeviceAllow` for `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` (0666 nodes created by `nvidia-persistenced` at boot), empty capability set, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (host-firewall substitute — ufw is inactive on Helios). `systemd-analyze security llama-server-primary` → 3.1. Do NOT add `MemoryDenyWriteExecute` (CUDA JITs PTX into W+X pages) or `PrivateDevices=yes` (hides `/dev/nvidia*`).
 - **Rollback to vLLM NVFP4:** on Helios `sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary`; on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator`. The two units carry `Conflicts=` so they cannot both hold port 8080.
-- **Logs:** journal only. `promtail-helios` has been down since 2026-07-24 and the repo promtail config has no journal scrape, so nothing from this unit reaches Loki (see `monitoring/README.md`; the F-014 self-audit therefore sees no Helios logs).
+- **Logs:** journal, shipped to Loki by `promtail-helios`'s journald job (`{host="helios", service="llama-server-primary"}`; level re-derived from llama.cpp's `E`/`W` prefixes). See `monitoring/README.md` → Log Pipeline.
 
 ### `vllm-primary.service` — ROLLBACK unit (repo copy: `tts/vllm-primary.service`; live 2026-09-28 → 2026-10-02, now disabled)
 
@@ -162,8 +162,14 @@ Disabled units kept on disk: `vllm-primary.service` (rollback target), `llama-se
 cd monitoring && docker compose --env-file ../.env -p monitoring up -d
 ```
 
-Helios container logs are shipped to Loki on Jupiter via a promtail sidecar (`promtail-helios`) defined in the main `docker-compose.yml`. The push path uses Tailscale MagicDNS (`LOKI_PUSH_URL`). Jupiter Loki is published on `127.0.0.1` only (since 2026-10-16), so the push needs a tailnet forward on Jupiter: `tailscale serve --bg --tcp=3100 tcp://127.0.0.1:3100` — not configured while `promtail-helios` is down (since 2026-07-24). There is no LAN fallback any more.
+Helios's systemd journal (model units, `nut-*`, kernel) is shipped to Loki on Jupiter by `promtail-helios`, which runs from its own compose project `monitoring/promtail/docker-compose.helios.yml`, deployed to `/opt/promtail-helios` on Helios (needs a persistent journal). It pushes over the LAN to `loki-push-gw` on Jupiter `:3101` (push-only nginx; Helios IP + `LOKI_PUSH_TOKEN` bearer). Jupiter Loki stays `127.0.0.1`-only. Deploy:
 
-**Advanced profile gating:** `promtail` (Helios sidecar), `nebula-sync` (multi-Pi-hole replication), and `nut-exporter` (UPS metrics) are all behind `profiles: ["advanced"]` in `docker-compose.yml`. Default installs skip them; set `COMPOSE_PROFILES=advanced` in `.env` to bring them up. `LOKI_PUSH_URL`, `NODE_JUPITER_IP`, and `NODE_SATURN_IP` use soft `${VAR:-}` defaults so default installs don't fail compose validation.
+```bash
+rsync -a monitoring/promtail/{docker-compose.helios.yml,promtail-helios.yml} labadmin@helios:/opt/promtail-helios/
+# /opt/promtail-helios/.env on Helios, chmod 600: LOKI_PUSH_TOKEN=<same as Jupiter .env>
+ssh labadmin@helios 'cd /opt/promtail-helios && docker compose -f docker-compose.helios.yml -p promtail-helios up -d'
+```
+
+**Advanced profile gating:** `nebula-sync` (multi-Pi-hole replication) and `nut-exporter` (UPS metrics) are behind `profiles: ["advanced"]` in `docker-compose.yml`. Default installs skip them; set `COMPOSE_PROFILES=advanced` in `.env` to bring them up. `NODE_JUPITER_IP` and `NODE_SATURN_IP` use soft `${VAR:-}` defaults so default installs don't fail compose validation.
 
 See `monitoring/README.md` for full setup details including the two-promtail topology and LogQL examples.

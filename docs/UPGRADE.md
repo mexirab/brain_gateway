@@ -94,10 +94,10 @@ If no, the wizard is live at `/setup`. You can either:
 | Variable | Old default | New default | Action |
 |----------|-------------|-------------|--------|
 | `TTS_VOICE` | `jessica` | `default` | If you want to keep the personal cloned voice, add `TTS_VOICE=jessica` to `.env` |
-| `COMPOSE_PROFILES` | unset → all services started | unset → default profile only | If you relied on `nebula-sync` / `promtail` / `nut-exporter`, add `COMPOSE_PROFILES=advanced` |
+| `COMPOSE_PROFILES` | unset → all services started | unset → default profile only | If you relied on `nebula-sync` / `nut-exporter`, add `COMPOSE_PROFILES=advanced` |
 | `JESS_ADVANCED` | implicit `true` (no gate) | explicit `false` | If you use `code_agent` / `ask_expert` / `query_budget` / `finance_status` / `check_claude_activity`, add `JESS_ADVANCED=true` |
 | `NUT_EXPORTER_PASSWORD` | `:?` (hard-required) | `:-` (soft) | No action; just means fresh installs no longer fail compose validation |
-| `LOKI_PUSH_URL` | hard-required by `:?` | soft `:-` | If you use promtail, ensure `LOKI_PUSH_URL` is still set in `.env` |
+| `LOKI_PUSH_URL` | hard-required by `:?` | removed from main compose | The Helios promtail left the main `docker-compose.yml` (2026-10-17); it runs from `monitoring/promtail/docker-compose.helios.yml` with its own `.env` (`LOKI_PUSH_TOKEN`, optional `LOKI_PUSH_URL`). See `monitoring/README.md` → Deploy promtail on Helios |
 | `MODEL_URL` | `http://${NODE_HELIOS_IP}:${SERVICE_MODEL_PORT:-8080}/v1` | `http://vllm-primary:8000/v1` | If you run vLLM as a host systemd unit (Helios pattern), pin `MODEL_URL=http://<host-ip>:8080/v1` in your `.env`. Compose-managed `vllm-primary` just works with the new default. |
 | `MODEL_NAME` | `Qwen3.5-27B` | `qwen3.6-27b-int4` | Matches the post-Phase-3 `VLLM_SERVED_NAME`. If you point at a different model, set this to that model's served name. |
 | `TTS_URL` | `http://localhost:8002` | `http://qwen-tts:8002` | Pin to `http://localhost:8002` if TTS runs as a host systemd unit. |

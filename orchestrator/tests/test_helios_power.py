@@ -60,6 +60,26 @@ def helios_off(monkeypatch):
     from orchestrator.config import settings
 
     monkeypatch.setattr(settings, "helios_wake_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "helios_plug_monitor_enabled", False, raising=False)
+    helios_power.reset_debounce()
+    helios_power.reset_status_state()
+    yield settings
+    helios_power.reset_debounce()
+    helios_power.reset_status_state()
+
+
+@pytest.fixture
+def monitor_only(monkeypatch):
+    """Read-only plug monitoring ON, wake-on-demand OFF (the vacation-mode setup)."""
+    from orchestrator import helios_power
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "helios_wake_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "helios_plug_monitor_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "ha_url", _HA_URL, raising=False)
+    monkeypatch.setattr(settings, "ha_token", "test-token", raising=False)
+    monkeypatch.setattr(settings, "helios_plug_entity", _SWITCH, raising=False)
+    monkeypatch.setattr(settings, "helios_plug_power_sensor", _SENSOR, raising=False)
     helios_power.reset_debounce()
     helios_power.reset_status_state()
     yield settings
@@ -333,6 +353,198 @@ class TestPowerStatus:
 
 
 # ===========================================================================
+# poll_helios_power (scheduler entry point) + monitor-only gating
+# ===========================================================================
+
+
+def _mock_states(mock, switch: str, watts: str):
+    sw = mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": switch}))
+    pw = mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(200, json={"state": watts}))
+    return sw, pw
+
+
+class TestPollHeliosPower:
+    @pytest.mark.asyncio
+    async def test_monitor_only_reads_ha_and_sets_gauges(self, monitor_only):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS, HELIOS_RUNNING, HELIOS_STATUS_TOTAL
+
+        before = {r: _metric(HELIOS_STATUS_TOTAL, result=r) for r in ("ok", "error", "disabled")}
+        with respx.mock(base_url=_HA_URL) as mock:
+            sw, pw = _mock_states(mock, "on", "187.25")
+            result = await poll_helios_power()
+        assert sw.call_count == 1
+        assert pw.call_count == 1
+        assert sw.calls[0].request.headers["authorization"] == "Bearer test-token"
+        assert result["ok"] is True
+        assert result["switch"] == "on"
+        assert result["watts"] == 187.25
+        assert result["inferred"] == "running"
+        assert HELIOS_PLUG_WATTS._value.get() == 187.25
+        assert HELIOS_RUNNING._value.get() == 1
+        # Exactly one ok, nothing else counted
+        assert _metric(HELIOS_STATUS_TOTAL, result="ok") == before["ok"] + 1
+        assert _metric(HELIOS_STATUS_TOTAL, result="error") == before["error"]
+        assert _metric(HELIOS_STATUS_TOTAL, result="disabled") == before["disabled"]
+
+    @pytest.mark.asyncio
+    async def test_monitor_only_never_touches_the_plug(self, monitor_only):
+        """Polling is read-only: no switch service calls, only GET /api/states."""
+        from orchestrator.helios_power import poll_helios_power
+
+        with respx.mock(base_url=_HA_URL, assert_all_called=False) as mock:
+            _mock_states(mock, "off", "0")
+            turn_on = mock.post("/api/services/switch/turn_on").mock(return_value=Response(200, json=[]))
+            turn_off = mock.post("/api/services/switch/turn_off").mock(return_value=Response(200, json=[]))
+            result = await poll_helios_power()
+        assert result["inferred"] == "asleep"
+        assert not turn_on.called
+        assert not turn_off.called
+        assert all(c.request.method == "GET" for c in mock.calls)
+
+    @pytest.mark.asyncio
+    async def test_monitor_only_ha_error_counts_error_once(self, monitor_only):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_STATUS_TOTAL
+
+        before = {r: _metric(HELIOS_STATUS_TOTAL, result=r) for r in ("ok", "error", "disabled")}
+        with respx.mock(base_url=_HA_URL) as mock:
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("dns"))
+            result = await poll_helios_power()
+        assert result["ok"] is False
+        assert "ConnectError" in result["error"]
+        assert _metric(HELIOS_STATUS_TOTAL, result="error") == before["error"] + 1
+        assert _metric(HELIOS_STATUS_TOTAL, result="ok") == before["ok"]
+        assert _metric(HELIOS_STATUS_TOTAL, result="disabled") == before["disabled"]
+
+    @pytest.mark.asyncio
+    async def test_monitor_only_http_500_counts_error_once(self, monitor_only):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_STATUS_TOTAL
+
+        before_err = _metric(HELIOS_STATUS_TOTAL, result="error")
+        before_ok = _metric(HELIOS_STATUS_TOTAL, result="ok")
+        with respx.mock(base_url=_HA_URL, assert_all_called=False) as mock:
+            mock.get(f"/api/states/{_SWITCH}").mock(return_value=Response(200, json={"state": "on"}))
+            mock.get(f"/api/states/{_SENSOR}").mock(return_value=Response(500, text="boom"))
+            result = await poll_helios_power()
+        assert result["ok"] is False
+        assert _metric(HELIOS_STATUS_TOTAL, result="error") == before_err + 1
+        assert _metric(HELIOS_STATUS_TOTAL, result="ok") == before_ok
+
+    @pytest.mark.asyncio
+    async def test_both_flags_off_disabled_no_http(self, helios_off):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_STATUS_TOTAL
+
+        before = {r: _metric(HELIOS_STATUS_TOTAL, result=r) for r in ("ok", "error", "disabled")}
+        with respx.mock as mock:  # no routes — any HTTP would raise
+            result = await poll_helios_power()
+        assert mock.calls.call_count == 0
+        assert result["ok"] is False
+        assert result["skipped"] == "disabled"
+        assert _metric(HELIOS_STATUS_TOTAL, result="disabled") == before["disabled"] + 1
+        assert _metric(HELIOS_STATUS_TOTAL, result="ok") == before["ok"]
+        assert _metric(HELIOS_STATUS_TOTAL, result="error") == before["error"]
+
+    @pytest.mark.asyncio
+    async def test_wake_on_monitor_off_still_polls(self, helios_on):
+        """Pre-existing behavior: wake alone is enough for the poll to run."""
+        from orchestrator.helios_power import poll_helios_power
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "150")
+            result = await poll_helios_power()
+        assert result["ok"] is True
+        assert result["inferred"] == "running"
+
+    @pytest.mark.asyncio
+    async def test_running_drops_to_zero_when_sensor_unavailable(self, monitor_only):
+        """Freshness guard: switch ON but sensor 'unavailable' must NOT leave running=1.
+
+        The alert on bgw_helios_running relies on this; a stale 1 would mask a
+        dead power sensor. The watts gauge keeps its last value (no reading).
+        """
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS, HELIOS_RUNNING
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "210")
+            await poll_helios_power()
+        assert HELIOS_RUNNING._value.get() == 1
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "unavailable")
+            result = await poll_helios_power()
+        assert result["ok"] is True
+        assert result["watts"] is None
+        assert result["inferred"] == "unknown"
+        assert HELIOS_RUNNING._value.get() == 0
+        assert HELIOS_PLUG_WATTS._value.get() == 210  # not overwritten by a non-reading
+
+    @pytest.mark.asyncio
+    async def test_running_drops_to_zero_when_switch_unavailable(self, monitor_only):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_RUNNING
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "210")
+            await poll_helios_power()
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "unavailable", "unavailable")
+            result = await poll_helios_power()
+        assert result["inferred"] == "asleep"
+        assert HELIOS_RUNNING._value.get() == 0
+
+
+class TestMonitorOnlyKeepsUserSurfaceGated:
+    """Monitor-only must not expose plug status/control to the API or the LLM."""
+
+    @pytest.mark.asyncio
+    async def test_status_still_disabled(self, monitor_only):
+        from orchestrator.helios_power import helios_power_status
+        from orchestrator.metrics import HELIOS_STATUS_TOTAL
+
+        before = {r: _metric(HELIOS_STATUS_TOTAL, result=r) for r in ("ok", "error", "disabled")}
+        with respx.mock as mock:
+            result = await helios_power_status()
+        assert mock.calls.call_count == 0
+        assert result["ok"] is False
+        assert result["skipped"] == "disabled"
+        assert _metric(HELIOS_STATUS_TOTAL, result="disabled") == before["disabled"] + 1
+        assert _metric(HELIOS_STATUS_TOTAL, result="ok") == before["ok"]
+
+    @pytest.mark.asyncio
+    async def test_wake_and_sleep_still_disabled(self, monitor_only):
+        from orchestrator.helios_power import sleep_helios, wake_helios
+
+        with respx.mock as mock:
+            woke = await wake_helios()
+            slept = await sleep_helios()
+        assert mock.calls.call_count == 0
+        assert woke["skipped"] == "disabled"
+        assert slept["skipped"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_power_route_returns_409(self, monitor_only):
+        from orchestrator.api_routes import helios_power
+
+        with respx.mock:
+            resp = await helios_power()
+        assert resp.status_code == 409
+        assert json.loads(resp.body)["skipped"] == "disabled"
+
+    def test_tool_hidden_when_only_monitor_enabled(self, monkeypatch):
+        from orchestrator import shared
+        from orchestrator.tool_definitions import get_all_tools
+
+        monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", False, raising=False)
+        monkeypatch.setattr(shared, "HELIOS_PLUG_MONITOR_ENABLED", True, raising=False)
+        names = {t["function"]["name"] for t in get_all_tools()}
+        assert "helios_power" not in names
+
+
+# ===========================================================================
 # Status-poll log noise (transition-only logging while Helios sleeps)
 # ===========================================================================
 
@@ -550,6 +762,99 @@ class TestConfigValidator:
         with patch.dict(os.environ, env, clear=False):
             s = Settings()
         assert s.helios_wake_enabled is False
+
+    @staticmethod
+    def _monitor_env(**overrides):
+        env = {
+            "HELIOS_WAKE_ENABLED": "false",
+            "HELIOS_PLUG_MONITOR_ENABLED": "true",
+            "HA_URL": "http://ha.test:8123",
+            "HA_TOKEN": "tok",
+            "HELIOS_PLUG_ENTITY": _SWITCH,
+            "HELIOS_PLUG_POWER_SENSOR": _SENSOR,
+            "API_TOKEN": "x",
+            "PIHOLE_PASSWORD": "x",
+        }
+        env.update(overrides)
+        return env
+
+    def test_monitor_default_off(self):
+        from orchestrator.config import Settings
+
+        env = self._monitor_env()
+        env.pop("HELIOS_PLUG_MONITOR_ENABLED")
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("HELIOS_PLUG_MONITOR_ENABLED", None)
+            s = Settings()
+        assert s.helios_plug_monitor_enabled is False
+
+    def test_monitor_valid_config_stays_enabled(self):
+        from orchestrator.config import Settings
+
+        with patch.dict(os.environ, self._monitor_env(), clear=False):
+            s = Settings()
+        assert s.helios_plug_monitor_enabled is True
+        assert s.helios_wake_enabled is False
+
+    @pytest.mark.parametrize("missing", ["HA_URL", "HA_TOKEN"])
+    def test_monitor_without_ha_disables(self, missing, caplog):
+        import logging
+
+        from orchestrator.config import Settings
+
+        env = self._monitor_env(**{missing: ""})
+        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
+            s = Settings()
+        assert s.helios_plug_monitor_enabled is False
+        assert any("HELIOS_PLUG_MONITOR_ENABLED=true" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize(
+        "field,bad",
+        [
+            ("HELIOS_PLUG_ENTITY", "switch.bad id/with-slash"),
+            ("HELIOS_PLUG_POWER_SENSOR", "../../etc/passwd"),
+        ],
+    )
+    def test_monitor_bad_entity_disables_monitor(self, field, bad, caplog):
+        """Monitor alone (wake off) still triggers the entity-id check."""
+        import logging
+
+        from orchestrator.config import Settings
+
+        env = self._monitor_env(**{field: bad})
+        with patch.dict(os.environ, env, clear=False), caplog.at_level(logging.ERROR, logger="orchestrator.config"):
+            s = Settings()
+        assert s.helios_plug_monitor_enabled is False
+        assert s.helios_wake_enabled is False
+        assert any("not a valid" in r.getMessage() for r in caplog.records)
+
+    def test_bad_entity_disables_both_when_both_enabled(self):
+        from orchestrator.config import Settings
+
+        env = self._monitor_env(HELIOS_WAKE_ENABLED="true", HELIOS_PLUG_ENTITY="switch.bad id")
+        with patch.dict(os.environ, env, clear=False):
+            s = Settings()
+        assert s.helios_plug_monitor_enabled is False
+        assert s.helios_wake_enabled is False
+
+    def test_both_enabled_valid_config_stay_enabled(self):
+        from orchestrator.config import Settings
+
+        env = self._monitor_env(HELIOS_WAKE_ENABLED="true")
+        with patch.dict(os.environ, env, clear=False):
+            s = Settings()
+        assert s.helios_plug_monitor_enabled is True
+        assert s.helios_wake_enabled is True
+
+    def test_wake_and_monitor_without_ha_token_disable_both(self):
+        """Wake on + monitor on + no HA token → both off (each has its own HA guard)."""
+        from orchestrator.config import Settings
+
+        env = self._monitor_env(HELIOS_WAKE_ENABLED="true", HA_TOKEN="")
+        with patch.dict(os.environ, env, clear=False):
+            s = Settings()
+        assert s.helios_wake_enabled is False
+        assert s.helios_plug_monitor_enabled is False
 
 
 # ===========================================================================

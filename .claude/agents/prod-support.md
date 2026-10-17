@@ -351,7 +351,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### "Primary model unreachable"
 1. Is Helios awake? It is power-tiered — asleep is expected, not a failure (`GET /api/helios/power`, or the `helios_power` tool). The brain-asleep chat path auto-wakes it.
 2. `curl -s http://10.0.0.195:8080/v1/models` — llama-server responding? Loads in ~4 s warm / ~60 s cold after boot/restart (503 while loading).
-3. `ssh labadmin@10.0.0.195 "systemctl status llama-server-primary; journalctl -u llama-server-primary -n 100"` — journal only; promtail-helios is down and has no journal scrape, so Loki has nothing for this unit.
+3. `ssh labadmin@10.0.0.195 "systemctl status llama-server-primary; journalctl -u llama-server-primary -n 100"` — also in Loki as `{host="helios", service="llama-server-primary"}` (journald via promtail-helios → loki-push-gw), but only while Helios's network is up; ssh is the source of truth.
 4. `nvidia-smi` — GPU0 (RTX 5090) should hold only llama-server (~30 GB; up to 30.3 GB during a vision request). Anything else there (e.g. qwen-tts if its `gpu1.conf` drop-in went missing) will OOM it.
 5. Slow chat with the brain healthy: check `llamacpp:requests_deferred` (Prometheus job `llama-primary`) — `--parallel 1` means background jobs (auto_learn, session_miner, vision) queue behind chat.
 6. Garbled output / dropped tool calls: set `--spec-type none` in the unit first (disables MTP; `--enforce-eager` was a vLLM flag). Full rollback to the vLLM NVFP4 brain: `systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary` on Helios, `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator` on Jupiter. Never add `--verbose` / `--slot-save-path` (prompt text in logs).

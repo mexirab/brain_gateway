@@ -1,0 +1,66 @@
+# loki-push-gw: the only way into Loki from off-box.
+#
+# Loki has no auth and stays loopback-only on Jupiter. This gateway exposes one
+# thing on the LAN — POST /loki/api/v1/push — and requires BOTH:
+#   * the source IP is Helios (${HELIOS_IP}), and
+#   * the request carries "Authorization: Bearer <LOKI_PUSH_TOKEN>".
+# The IP alone isn't enough: Helios is asleep most of the day, so any LAN device
+# could claim its address, and while it is awake every process on it can push.
+# Pushed lines reach the daily self-audit LLM, so pushers are a trust boundary.
+# Plain http on the LAN — the token raises the bar from "claim an IP" to "claim
+# an IP and sniff the LAN", not to cryptographic auth.
+#
+# Rendered at container start by the image's envsubst step; only ${HELIOS_IP}
+# and ${LOKI_PUSH_TOKEN} are substituted (nginx's own $variables are left alone).
+
+# Promtail pushes about once a second; a backlog flush after an outage sends a
+# burst of 1 MiB batches. Anything far beyond that is abuse — Loki itself would
+# otherwise accept 10 MB/s, enough to fill /mnt/logging in about a day.
+limit_req_zone $binary_remote_addr zone=loki_push:1m rate=5r/s;
+
+server {
+    listen 3101;
+    server_tokens off;
+
+    # A promtail batch is ≤1 MiB by default; leave headroom for a backlog flush.
+    client_max_body_size 8m;
+
+    # One push per second from Helios — logging each would double the log
+    # volume for no information. Errors still go to the container log.
+    access_log off;
+
+    allow ${HELIOS_IP};
+    deny all;
+
+    # Resolve loki through Docker's DNS at request time, not once at startup:
+    # CI recreates Loki on its own when loki-config.yml changes, and a cached
+    # IP would 502 every push until this container was restarted too.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    set $loki_upstream http://loki:3100;
+
+    # Fail closed: an empty LOKI_PUSH_TOKEN would otherwise make
+    # "Bearer " a valid credential.
+    set $loki_push_token "${LOKI_PUSH_TOKEN}";
+
+    location = /loki/api/v1/push {
+        limit_except POST {
+            deny all;
+        }
+        limit_req zone=loki_push burst=50 nodelay;
+        if ($loki_push_token = "") {
+            return 403;
+        }
+        if ($http_authorization != "Bearer $loki_push_token") {
+            return 403;
+        }
+        proxy_pass $loki_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # Loki needs no credentials; don't forward ours.
+        proxy_set_header Authorization "";
+    }
+
+    location / {
+        return 404;
+    }
+}

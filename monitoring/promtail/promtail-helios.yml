@@ -1,10 +1,13 @@
 # Promtail Configuration — Helios node
-# Ships Docker container logs from Helios to Loki on Jupiter.
-# The monitoring stack (Loki/Grafana/Prometheus) runs on Jupiter; the existing
-# promtail-config.yml is Jupiter-local and only sees Jupiter's Docker socket.
-# This config is mounted into a promtail container that runs on Helios, so it
-# sees Helios's containers (brain-orchestrator, open-webui, redis, etc.) and
-# pushes them across the LAN to Jupiter's Loki.
+# Ships Helios's systemd journal (model units, UPS units, kernel) to Loki on
+# Jupiter. Runs from
+# monitoring/promtail/docker-compose.helios.yml (its own compose project).
+#
+# Why the journal matters: the model servers are host systemd units, and
+# hardware faults (IOMMU page faults, a dying USB controller or NIC, NVIDIA Xid)
+# only show up in the kernel log. Before 2026-10 none of it reached Loki, so the
+# self-audit and alerting were blind to Helios — a chipset IOMMU fault took the
+# box off the network on 2026-10-16 with no log trail outside Helios.
 #
 # Run with: -config.expand-env=true   (so ${LOKI_PUSH_URL} is interpolated)
 
@@ -13,78 +16,117 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  filename: /var/lib/promtail/positions.yaml
 
-# Plain http over Tailscale — the WireGuard tunnel authenticates and encrypts
-# the push without cert management. Needs the tailnet-only forward on Jupiter
-# (`tailscale serve --bg --tcp=3100 tcp://127.0.0.1:3100`; removed while this
-# sidecar is down). There is no LAN fallback: Loki is loopback-only on Jupiter.
+# Pushes over the LAN to loki-push-gw on Jupiter (nginx, push-only: Helios's IP
+# + bearer token). Loki itself stays loopback-only on Jupiter. Plain http on the
+# LAN: these lines carry no personal content (see the journal job below).
+#
+# No Docker job: everything Brain Gateway runs on Helios is a systemd unit now,
+# and a docker-socket mount would hand this container root on the host (`:ro`
+# doesn't restrict the Docker API). If containers come back, front the socket
+# with a read-only socket proxy rather than mounting it.
 clients:
-  - url: ${LOKI_PUSH_URL:-http://jupiter-amds.tail74fc4a.ts.net:3100/loki/api/v1/push}
+  - url: ${LOKI_PUSH_URL}
+    bearer_token: ${LOKI_PUSH_TOKEN}
+    # A batch that exhausts its retries is dropped and the journal cursor has
+    # already moved on. Default (10 retries, ≤5 min apart) gives up after ~8 min;
+    # this rides out a Jupiter reboot or monitoring upgrade of ~2 h. 4xx (403 from
+    # the gateway, 400 from Loki) are never retried — those lines are lost.
+    backoff_config:
+      min_period: 1s
+      max_period: 5m
+      max_retries: 30
 
 scrape_configs:
-  - job_name: docker
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
+  # -- systemd journal: model servers, UPS, kernel ---------------------------
+  # Allow-list, not a firehose: only the units Brain Gateway runs on Helios, the
+  # systemd lifecycle lines about them (UNIT=, e.g. "Main process exited"), and
+  # kernel messages. Checked 2026-10-17: these units log request shapes and
+  # timings only (llama-server without --verbose logs token counts; TTS logs
+  # `chars=N`; STT logs the request line) — no prompt, speech or transcript text.
+  # Keep it that way: Loki keeps 30 days and the self-audit sends WARNING+ lines
+  # to the LLM and Pushover.
+  - job_name: journal
+    journal:
+      # Backfill window on first start (and after a long outage).
+      max_age: 12h
+      path: /var/log/journal
+      labels:
+        job: systemd-journal
+        host: helios
     relabel_configs:
-      # Keep only Brain Gateway containers — skip noisy or irrelevant ones
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(brain-.*|open-webui.*|redis.*|searxng|wyoming-.*|model-server|nebula-sync|pihole)'
+      - source_labels: ['__journal__systemd_unit', '__journal_unit', '__journal__transport']
+        separator: ';'
+        regex: '((llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx|nut-server|nut-monitor|nut-driver@[^;]*)\.service;.*|[^;]*;(llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx|nut-server|nut-monitor|nut-driver@[^;]*)\.service;.*|[^;]*;[^;]*;kernel)'
         action: keep
-
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)'
-        target_label: 'container'
-
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
-        target_label: 'project'
-
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'service'
-
-      # Static label so dashboards can distinguish Helios vs Jupiter logs
-      - target_label: 'host'
-        replacement: 'helios'
-
+      # service = the unit name, from the unit's own lines or systemd's lines
+      # about it; kernel lines get service="kernel". The self-audit selects on
+      # {service=~".+"}, so every kept stream needs this label.
+      - source_labels: ['__journal__systemd_unit']
+        regex: '(.+)\.service'
+        target_label: service
+      - source_labels: ['__journal_unit']
+        regex: '(.+)\.service'
+        target_label: service
+      - source_labels: ['__journal__transport']
+        regex: 'kernel'
+        target_label: service
+        replacement: kernel
+      - source_labels: ['__journal__transport']
+        target_label: transport
+      # Journal priority → the level names the self-audit and alerts expect
+      # (it matches level=~"error|warning|warn|critical|fatal").
+      - source_labels: ['__journal_priority_keyword']
+        target_label: level
+      - source_labels: ['__journal_priority_keyword']
+        regex: 'err'
+        target_label: level
+        replacement: error
+      - source_labels: ['__journal_priority_keyword']
+        regex: '(crit|alert|emerg)'
+        target_label: level
+        replacement: critical
     pipeline_stages:
-      # Parse JSON logs from orchestrator's structured logging
-      - json:
-          expressions:
-            level: level
-            message: msg
-            timestamp: ts
-            request_id: request_id
-            component: component
-            tool_name: tool_name
-            mode: mode
-            intensity: intensity
-            model: model
-            entity_id: entity_id
-            error_type: error_type
-            latency_ms: latency_ms
-            result_count: result_count
+      # Health probes every 15 s from Jupiter's blackbox exporter are ~90% of the
+      # TTS/STT volume and say nothing a probe_success metric doesn't.
+      - drop:
+          expression: '"GET /health HTTP'
+      # Backstops for the no-personal-content rule. qwen-tts's streaming path
+      # logged the first 50 chars of the sentence it failed to speak (fixed in
+      # tts/server.py, but Helios runs whatever copy is deployed); and nothing
+      # these units should log is anywhere near 2 KB, so a line that long is
+      # more likely a dumped payload than a diagnostic.
+      - drop:
+          expression: 'Stream TTS failed for sentence'
+      - drop:
+          longer_than: 2048
+      # A UPS driver that loses its USB link (2026-10-16: the chipset USB
+      # controller died) logs ~1800 warnings an hour. Cap it so a burst can't
+      # crowd everything else out of the self-audit's 5000-line window.
+      - match:
+          selector: '{service=~"nut-.*"}'
+          stages:
+            - limit:
+                rate: 0.05
+                burst: 20
+                drop: true
+      # The model units write to stdout, which journald stores at priority 6
+      # (info) whatever the line says — so their own errors would arrive as
+      # level="info" and the self-audit (level=~"error|warning|...") would skip
+      # them. Re-derive the level from each format: llama.cpp prefixes
+      # "<ts> E|W ", Python logging "[ERROR]"/"[WARNING]", uvicorn "ERROR:".
+      - match:
+          selector: '{service=~"llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx"} |~ "^\\S+ E |\\[(ERROR|CRITICAL)\\]|^(ERROR|CRITICAL):|^Traceback "'
+          stages:
+            - static_labels:
+                level: error
+      # llama.cpp prints six fixed W notices on every start (no API key, the
+      # Qwen-VL image-token hint, reasoning preserved, future port change) —
+      # left at info so each wake doesn't hand the self-audit new "warnings".
+      - match:
+          selector: '{service=~"llama-server-primary|voxcpm-tts|qwen-tts|stt-onnx"} |~ "^\\S+ W |\\[WARNING\\]|^WARNING:" !~ "no API key is set|Qwen-VL models require|image-min-tokens|issues/16842|preserving reasoning|default port will be changed"'
+          stages:
+            - static_labels:
+                level: warning
 
-      # Only promote low-cardinality, bounded fields to stream labels.
-      # entity_id and request_id are intentionally NOT labels — entity_id can
-      # be any HA entity (hundreds) and request_id is unique per call, both
-      # would explode Loki's stream index. They remain available via
-      # `| json entity_id request_id` as line-level filters in LogQL.
-      - labels:
-          level:
-          component:
-          tool_name:
-          mode:
-          intensity:
-          model:
-          error_type:
-
-      # Fallback level detection for non-JSON containers.
-      # `source:` is omitted intentionally — promtail's regex stage defaults
-      # to matching the raw log line, which is what we want for containers
-      # whose output isn't JSON (redis, wyoming, nginx, etc.).
-      - regex:
-          expression: '(?i)(?P<level_fallback>error|warn|info|debug)'
-
-      - labels:
-          level_fallback:

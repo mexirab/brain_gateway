@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     # Debounce window: repeated chat attempts while Helios is booting must not
     # spam switch.turn_on. A wake within this many seconds of a prior wake no-ops.
     helios_wake_debounce_seconds: int = 300
+    # Read-only plug polling, independent of wake: keeps bgw_helios_plug_watts /
+    # bgw_helios_running fresh (60s job) for the HeliosPoweredButUnreachable alert
+    # even while auto-wake is switched off. Never turns the plug on or off.
+    helios_plug_monitor_enabled: bool = False
 
     # -- RAG / ChromaDB ----------------------------------------------------------
     chroma_persist: str = "/app/data/chroma"
@@ -620,11 +624,19 @@ class Settings(BaseSettings):
                 "through Home Assistant — set both to re-enable."
             )
             object.__setattr__(self, "helios_wake_enabled", False)
+        if self.helios_plug_monitor_enabled and (not self.ha_url or not self.ha_token):
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] HELIOS_PLUG_MONITOR_ENABLED=true but HA_URL or HA_TOKEN is "
+                "missing; disabling Helios plug monitoring."
+            )
+            object.__setattr__(self, "helios_plug_monitor_enabled", False)
         # Entity ids are interpolated into HA REST URLs (GET /api/states/{id}),
         # so validate their format defensively even though they come from
         # operator config — mirrors ha_integration.call_service. A malformed id
         # disables the feature rather than emitting a broken request at runtime.
-        if self.helios_wake_enabled:
+        if self.helios_wake_enabled or self.helios_plug_monitor_enabled:
             import logging
             import re
 
@@ -632,12 +644,13 @@ class Settings(BaseSettings):
             for field_name in ("helios_plug_entity", "helios_plug_power_sensor"):
                 if not _ENTITY_RE.match(getattr(self, field_name)):
                     logging.getLogger(__name__).error(
-                        "[CONFIG] HELIOS_WAKE_ENABLED=true but %s=%r is not a valid "
-                        "HA entity id (domain.object); disabling Helios wake-on-demand.",
+                        "[CONFIG] %s=%r is not a valid HA entity id (domain.object); "
+                        "disabling Helios wake-on-demand and plug monitoring.",
                         field_name.upper(),
                         getattr(self, field_name),
                     )
                     object.__setattr__(self, "helios_wake_enabled", False)
+                    object.__setattr__(self, "helios_plug_monitor_enabled", False)
                     break
         if self.helios_wake_debounce_seconds < 0:
             object.__setattr__(self, "helios_wake_debounce_seconds", 0)

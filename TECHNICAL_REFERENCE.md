@@ -175,7 +175,7 @@ All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, sk
 | POST | `/api/helios/sleep` | Power Helios off (`switch.turn_off` — a hard cut; safe, Helios is stateless). 200 `{ok:true, action:"sleep", entity}`. |
 | GET | `/api/helios/power` | Read plug switch state + power draw, infer running/asleep. 200 `{ok:true, switch:"on\|off\|unknown", watts:float\|null, inferred:"running\|asleep\|unknown", entity}`. |
 
-Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bgw_helios_sleep_total{result}` (`ok\|disabled\|error`), `bgw_helios_status_total{result}` (`ok\|disabled\|error`), `bgw_helios_plug_watts` gauge, `bgw_helios_running` gauge. The `helios_status_poll` scheduler job (60s, only when enabled) refreshes the gauges. Auto-wake also fires from the brain-asleep chat path (`cloud_brain._maybe_wake_helios`).
+Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bgw_helios_sleep_total{result}` (`ok\|disabled\|error`), `bgw_helios_status_total{result}` (`ok\|disabled\|error`), `bgw_helios_plug_watts` gauge, `bgw_helios_running` gauge. The `helios_status_poll` scheduler job (60s, when `HELIOS_WAKE_ENABLED` or `HELIOS_PLUG_MONITOR_ENABLED`) refreshes the gauges. Monitor-only mode (`HELIOS_PLUG_MONITOR_ENABLED=true`, wake off) polls read-only but these routes still return 409 — deliberate. Auto-wake also fires from the brain-asleep chat path (`cloud_brain._maybe_wake_helios`).
 
 ### Workouts
 

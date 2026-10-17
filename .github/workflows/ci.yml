@@ -182,7 +182,7 @@ jobs:
           # reloaded file would surprise-apply at the next unrelated restart.
           # Herestrings (not `echo |`) so grep -q can't SIGPIPE-skip a match
           # on a huge changeset under pipefail.
-          if grep -qE "^monitoring/(prometheus|alertmanager|blackbox)/|^monitoring/docker-compose\.yml$|^scripts/(generate-configs|reload-monitoring)\.sh$" <<<"$CHANGED"; then
+          if grep -qE "^monitoring/(prometheus|alertmanager|blackbox|loki|loki-push-gw)/|^monitoring/docker-compose\.yml$|^scripts/(generate-configs|reload-monitoring)\.sh$" <<<"$CHANGED"; then
             echo "::group::Re-rendering monitoring configs"
             bash scripts/generate-configs.sh
             echo "::endgroup::"
@@ -193,6 +193,34 @@ jobs:
             if grep -qE "^monitoring/docker-compose\.yml$" <<<"$CHANGED"; then
               echo "::group::Reconciling monitoring stack (compose)"
               docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d --remove-orphans
+              echo "::endgroup::"
+            fi
+
+            # Loki and the push gateway read their config only at start, and
+            # Loki's config is a single-file mount (pinned to the old inode
+            # after git replaces it), so a content change needs a recreate.
+            # Rule files under monitoring/loki/rules/ are a directory mount the
+            # ruler re-reads every minute — no restart for those.
+            if grep -qE "^monitoring/loki/loki-config\.yml$" <<<"$CHANGED"; then
+              echo "::group::Recreating Loki (config changed)"
+              docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d --force-recreate --no-deps loki
+              echo "::endgroup::"
+            fi
+            # `up -d` returns 0 even if Loki then crash-loops on a bad config;
+            # fail the deploy instead of going green with logging down.
+            if grep -qE "^monitoring/(loki|loki-push-gw)/|^monitoring/docker-compose\.yml$" <<<"$CHANGED"; then
+              echo "::group::Checking Loki + loki-push-gw health"
+              for i in $(seq 1 30); do curl -sf http://127.0.0.1:3100/ready >/dev/null && break; sleep 2; done
+              curl -sf http://127.0.0.1:3100/ready >/dev/null || { echo "Loki not ready after 60s"; docker logs --tail 30 loki; exit 1; }
+              # The gateway fails closed with no server block if its template
+              # didn't render (e.g. tmpfs not writable) — check it rendered.
+              docker exec loki-push-gw nginx -T 2>/dev/null | grep -q "location = /loki/api/v1/push" \
+                || { echo "loki-push-gw has no push location"; docker logs --tail 30 loki-push-gw; exit 1; }
+              echo "::endgroup::"
+            fi
+            if grep -qE "^monitoring/loki-push-gw/" <<<"$CHANGED"; then
+              echo "::group::Recreating loki-push-gw (template changed)"
+              docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up -d --force-recreate --no-deps loki-push-gw
               echo "::endgroup::"
             fi
 

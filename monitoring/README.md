@@ -28,7 +28,8 @@ docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up
 | Alertmanager | 9093 (127.0.0.1 only) | Alert routing → Pushover |
 | Loki | 3100 (127.0.0.1 only; containers use `loki:3100`) | Logs |
 | Promtail (Jupiter) | - | Log shipper — Jupiter-local containers (Grafana, Prometheus, Loki, Conjure, etc.) |
-| Promtail (Helios) | 9080 (internal only) | Log shipper — Helios Docker containers → Loki on Jupiter via tailnet |
+| Promtail (Helios) | 9080 (internal only) | Log shipper — Helios systemd journal → `loki-push-gw` on Jupiter (own compose project on Helios, `/opt/promtail-helios`) |
+| loki-push-gw | 3101 (`${NODE_JUPITER_IP}`, LAN; loopback if unset) | Push-only nginx in front of Loki for Helios promtail (Helios IP + bearer token) |
 | Node Exporter | 9100 | System metrics |
 | Blackbox | 9115 (127.0.0.1 only) | HTTP probes |
 
@@ -54,13 +55,48 @@ Helios and Jupiter each run their own promtail instance. Logs from both hosts la
 | Promtail | Scrapes | Pushes to | `host` label |
 |----------|---------|-----------|--------------|
 | Jupiter (monitoring stack) | Jupiter Docker socket + journal | local Loki | (Jupiter default, no static override) |
-| Helios (`promtail-helios` sidecar in `docker-compose.yml`) | Helios Docker socket | Loki on Jupiter via `LOKI_PUSH_URL` over Tailscale MagicDNS | `host=helios` (static) |
+| Helios (`promtail-helios`, own compose project `monitoring/promtail/docker-compose.helios.yml`, deployed to `/opt/promtail-helios`) | Helios systemd journal only (no Docker job, no Docker socket) | `loki-push-gw` on Jupiter (`LOKI_PUSH_URL`, default `http://10.0.0.248:3101/loki/api/v1/push`, LAN, bearer `LOKI_PUSH_TOKEN`) | `host=helios` (static) |
 
-**Loki reachability:** loopback-only publish. Grafana + Jupiter promtail reach it as `loki:3100` over `monitoring-net`; the orchestrator reaches it as `loki:3100` over `gateway-net` (`SELF_AUDIT_LOKI_URL=http://loki:3100` — containers can't reach Tailscale Serve on the host's own tailnet IP). No tailnet forward for 3100 exists while `promtail-helios` is down (since 2026-07); when fixing it, restore the push path with `tailscale serve --bg --tcp=3100 tcp://127.0.0.1:3100` on Jupiter (ideally ACL'd to Helios). Loki has no auth, so the delete API (`deletion_mode: disabled`) and ruler API (`enable_api: false`) are off — an open delete API could wipe error streams and make the self-audit report a false "all clean".
+**Loki reachability:** loopback-only publish. Grafana + Jupiter promtail reach it as `loki:3100` over `monitoring-net`; the orchestrator reaches it as `loki:3100` over `gateway-net` (`SELF_AUDIT_LOKI_URL=http://loki:3100` — containers can't reach Tailscale Serve on the host's own tailnet IP). The only off-box path in is `loki-push-gw` (below); there is no tailnet forward of 3100. Loki has no auth, so the delete API (`deletion_mode: disabled`) and ruler API (`enable_api: false`) are off — an open delete API could wipe error streams and make the self-audit report a false "all clean".
 
-Use `host=helios` in LogQL to isolate Helios-origin streams. Loki stream labels set by the Helios promtail: `container`, `host`, `project`, `service`. Extracted JSON fields available via `| json`: `level`, `component`, `tool_name`, `mode`, `intensity`, `model`, `error_type`. `entity_id` and `request_id` are intentionally not labels (cardinality); query them via `| json entity_id request_id`.
+### Helios journal job (`promtail/promtail-helios.yml`)
 
-**Both promtails share the same security posture:** image pinned by digest (`grafana/promtail:3.4.2@sha256:c6e9a987…`), `cap_drop: [ALL]`, `security_opt: no-new-privileges:true`, `-config.expand-env=true`. When updating the image, pin both to the new digest; don't use a floating tag. The Helios sidecar also runs on an isolated `promtail-net` Docker network — cannot reach `gateway-net` services (orchestrator, redis, open-webui) via Docker DNS.
+- **Allow-list:** units `llama-server-primary`, `voxcpm-tts`, `qwen-tts`, `stt-onnx`, `nut-*`; systemd's own lines about those units (`UNIT=`); kernel messages.
+- **Labels:** `host=helios`, `job=systemd-journal`, `service` (unit name without `.service`; kernel lines → `service=kernel`), `level` (from journal priority; `err` → `error`, `crit|alert|emerg` → `critical`), `transport`.
+- **Level re-derivation:** journald stores the model units' stdout as info, so `level` is re-set from the line format (llama.cpp `E `/`W `, Python `[ERROR]`/`[WARNING]`, uvicorn `ERROR:`, `Traceback`). llama.cpp's fixed startup notices (no API key, Qwen-VL image-token hint, etc.) stay info.
+- **Drops:** `GET /health` lines, the old qwen-tts `Stream TTS failed for sentence` line (logged sentence text; fixed in `tts/server.py`, backstop for older deployed copies), lines over 2 KB.
+- **Rate limit:** `nut-*` streams capped (0.05/s, burst 20) so a UPS USB-link flap can't flood the self-audit window.
+- **Backoff:** 30 retries, ≤5 min apart (rides out a ~2 h Jupiter outage). 4xx (gateway 403, Loki 400) are never retried — those lines are lost.
+- **Requires a persistent journal** on Helios (`/var/log/journal` must exist; a volatile `/run/log/journal`-only host ships nothing).
+- No personal content: these units log request shapes/timings only. Keep it that way (Loki keeps 30 d; the self-audit sends WARNING+ to the LLM + Pushover).
+
+### loki-push-gw (Jupiter)
+
+`nginxinc/nginx-unprivileged:1.28` (digest-pinned) in `monitoring/docker-compose.yml`, template `loki-push-gw/templates/default.conf.template`.
+
+- Published on `${NODE_JUPITER_IP:-127.0.0.1}:3101` — LAN only when `NODE_JUPITER_IP` is set.
+- Allows only `POST /loki/api/v1/push`, only from `${NODE_HELIOS_IP:-127.0.0.1}`, only with `Authorization: Bearer ${LOKI_PUSH_TOKEN}`. Empty token → every push is 403. Everything else 404/403.
+- Rate-limited (5 r/s, burst 50), 8 MiB body cap, access log off.
+- Own network `loki-push-net` (Loki only) — cannot reach Alertmanager, Prometheus or blackbox.
+- Not in the Jupiter promtail keep-regex on purpose (its error log echoes attacker-chosen URIs).
+- Residual risk: plain http on the LAN; planted lines would reach the self-audit LLM.
+
+### Deploy promtail on Helios
+
+```bash
+# From the repo on Jupiter
+rsync -a monitoring/promtail/{docker-compose.helios.yml,promtail-helios.yml} \
+    labadmin@helios:/opt/promtail-helios/
+# On Helios: /opt/promtail-helios/.env (chmod 600) with
+#   LOKI_PUSH_TOKEN=<same value as Jupiter .env>
+#   LOKI_PUSH_URL=...   (only if Jupiter's address differs from the default)
+ssh labadmin@helios 'cd /opt/promtail-helios && \
+    docker compose -f docker-compose.helios.yml -p promtail-helios up -d'
+```
+
+Jupiter `.env` needs `LOKI_PUSH_TOKEN` and `NODE_HELIOS_IP` (gateway allow-list) — then `docker compose --env-file ../.env up -d loki-push-gw` from `monitoring/`. Check: `{host="helios"}` in Grafana Explore.
+
+**Both promtails share the same security posture:** image pinned by digest (`grafana/promtail:3.4.2@sha256:c6e9a987…`), `cap_drop: [ALL]`, `security_opt: no-new-privileges:true`, `-config.expand-env=true`. When updating the image, pin both to the new digest; don't use a floating tag. The Helios promtail also runs read-only on an isolated `promtail-net` network and has no Docker socket (`:ro` doesn't restrict the Docker API — it would mean root on Helios).
 
 **Radicale is excluded from Loki on purpose** — the Jupiter promtail keep-regex doesn't match the `radicale` container (request lines carry paths, client IPs and login usernames). Don't widen the regex; use `docker logs radicale`. See `docs/CALENDAR.md`.
 
@@ -69,8 +105,10 @@ Use `host=helios` in LogQL to isolate Helios-origin streams. Loki stream labels 
 ## Loki Queries
 
 ```
-{container="brain-orchestrator"}                          # All Helios orchestrator logs
-{container="brain-orchestrator", host="helios"}           # Same, scoped to Helios origin
+{container="brain-orchestrator"}                          # All orchestrator logs (Jupiter)
+{host="helios", service="llama-server-primary"}           # Brain (llama.cpp) journal
+{host="helios", service="kernel"}                         # Helios kernel log
+{host="helios", level=~"error|critical"}                  # Helios errors
 {container="brain-orchestrator"} |~ "tool_call"          # Tool calls
 {container="brain-orchestrator"} | json | level="error"  # Errors (lowercase; orchestrator emits lowercase levels)
 ```
@@ -94,13 +132,13 @@ Before reloading, `reload-monitoring.sh` also **fails if `alertmanager.yml` or `
 
 **`.env` is sourced with bash:** `generate-configs.sh` `source`s `.env`, so any value containing a space must be quoted (e.g. `ACTUAL_BUDGET_FILE='My Budget'`) — an unquoted one aborts the render (the 2026-10-02 failure above).
 
-**CI deploys this automatically:** on merge to main, changed files under `monitoring/prometheus/`, `monitoring/alertmanager/`, `monitoring/blackbox/`, `monitoring/docker-compose.yml`, or `scripts/{generate-configs,reload-monitoring}.sh` trigger render → compose `up -d --remove-orphans` (only if the compose file changed) → reload + verify.
+**CI deploys this automatically:** on merge to main, changed files under `monitoring/prometheus/`, `monitoring/alertmanager/`, `monitoring/blackbox/`, `monitoring/loki/`, `monitoring/loki-push-gw/`, `monitoring/docker-compose.yml`, or `scripts/{generate-configs,reload-monitoring}.sh` trigger render → compose `up -d --remove-orphans` (only if the compose file changed) → reload + verify. A `loki/loki-config.yml` change force-recreates `loki`; a `loki-push-gw/` change force-recreates `loki-push-gw`; rule files need no restart. The job fails if Loki `/ready` doesn't answer within 60 s or the gateway's push location didn't render.
 
 **Directory mounts, not single-file mounts:** prometheus, alertmanager and blackbox-exporter mount `./prometheus`, `./alertmanager` and `./blackbox` as directories. A single-file bind mount is pinned to the inode at container start, and `git pull` / most editors replace files with new inodes — the container keeps reading the pre-edit file while `/-/reload` reports success (bit us 2026-07-06 with an invisible `alert-rules.yml` edit, and again 2026-10-15 when PR #83's new `http_2xx_http10` blackbox module stayed unloaded — and `blackbox-http10` DOWN — until a manual restart). Directory mounts resolve inner files by path on every access. Same reason `generate-configs.sh` truncates renders in place — never `rm`/`mv` a rendered config.
 
 ## Alertmanager
 
-Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes alerts to Pushover in two tiers by alertname **allow-list** (the `severity` label routes nothing; a rule not named in a matcher falls through to the `null` receiver and notifies nobody): paging alerts (e.g. `OrchestratorDown`, the briefing/backup staleness alerts, mount-missing alerts, `EmbeddingModelBroken`) hit the `pushover` receiver (priority 1), while non-paging alerts (`WindDownNudgeStale`, `JessBackupOffboxFailing` (matches `jess_(ha_|calendar_|actual_)?backup_offbox_success` — state, HA, calendar and Actual Budget backups), `RadicaleDown`, `ActualDown`, `CalendarSourceFailing`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `BudgetSyncFailing`, `SelfAuditStale`, `SelfAuditFailing` — see the matcher in `alertmanager/alertmanager.yml.template`) route to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). `AnnouncementSpeakerUnavailable` (per-`speaker` `increase(bgw_announcement_speaker_unavailable_total[24h]) > 0`, `for: 15m` — HA reports a routed speaker `unavailable`, so announcements skip it) has its own route: `pushover-quiet` with `repeat_interval: 24h` (a dead speaker stays dead for days and is hit all day; the default 4h repeat would nag several times daily). See `docs/VOICE_AND_TTS.md` → Speaker liveness. `ExchangeCalendarSyncStale` has the same `pushover-quiet` + `repeat_interval: 24h` route (the fix is the owner's iPhone Shortcut). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
+Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes alerts to Pushover in two tiers by alertname **allow-list** (the `severity` label routes nothing; a rule not named in a matcher falls through to the `null` receiver and notifies nobody): paging alerts (e.g. `OrchestratorDown`, the briefing/backup staleness alerts, mount-missing alerts, `EmbeddingModelBroken`) hit the `pushover` receiver (priority 1), while non-paging alerts (`WindDownNudgeStale`, `JessBackupOffboxFailing` (matches `jess_(ha_|calendar_|actual_)?backup_offbox_success` — state, HA, calendar and Actual Budget backups), `RadicaleDown`, `ActualDown`, `CalendarSourceFailing`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `BudgetSyncFailing`, `SelfAuditStale`, `SelfAuditFailing`, `HeliosHardwareFault`, `BrainCudaInitFailed`, `BrainOnCPU`, `HeliosGpuDriverBroken`, `HeliosPoweredButUnreachable` — see the matcher in `alertmanager/alertmanager.yml.template`) route to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). `AnnouncementSpeakerUnavailable` (per-`speaker` `increase(bgw_announcement_speaker_unavailable_total[24h]) > 0`, `for: 15m` — HA reports a routed speaker `unavailable`, so announcements skip it) has its own route: `pushover-quiet` with `repeat_interval: 24h` (a dead speaker stays dead for days and is hit all day; the default 4h repeat would nag several times daily). See `docs/VOICE_AND_TTS.md` → Speaker liveness. `ExchangeCalendarSyncStale` has the same `pushover-quiet` + `repeat_interval: 24h` route (the fix is the owner's iPhone Shortcut). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
 
 `EmbeddingModelBroken` (`bgw_embedding_healthy == 0` for 5m, set by the orchestrator's startup embedding self-test) pages because a broken embedding model silently takes out all memory (search, RAG context, palace writes, auto_learn) — it went unnoticed for ~12 days in Oct 2026. Startup-only signal; see `docs/MEMPALACE.md` → Embedding model.
 
@@ -123,15 +161,32 @@ Configured in `prometheus/prometheus.yml.template`. After editing, render + relo
 - **Actual Budget** blackbox probe (`service=actual`, `http://actual-budget:5006/health` over `monitoring-net`): drives `ActualDown` (quiet, 5m). The Actual backup has its own paging `JessActualBackupStale` (textfile metrics `jess_actual_backup_{success_timestamp_seconds,offbox_success,files}`). See `docs/BACKUP.md` → Actual Budget.
 - **Calendar sources (orchestrator metrics, PR #83 — not deployed):** `CalendarSourceFailing` (quiet; replaces the dead Google-only `CalendarPollingFailed`) fires when `bgw_calendar_source_fetch_total{source=~"caldav|google",result=~"error|timeout"}` increases >6 in 1h for 15m — catches what the probe can't (401 after a password change, REPORT errors). `ExchangeCalendarSyncStale` (deadmans group, quiet, daily repeat) fires when `bgw_phone_calendar_last_sync_timestamp_seconds` is >26h old (+30m `for`); silent while 0 (work Shortcut never synced, or only the retired legacy push). Grafana row **"Calendar Sources"** (`brain_gateway_sre.py`): reads by source/result, success ratio, read latency p95, work-sync age, iPhone push rejections by reason, writes by target/result, Radicale probe. The older Google-era panels are renamed "Calendar tools: check/create …".
 - **`tts-voxcpm`** blackbox probe: `http://<helios>:8004/health` (VoxCPM2, `tts/voxcpm-tts.service`; `/health` 503s when no voice is usable). `TTSDown` now matches `probe_success{service=~"tts|tts-voxcpm"}` — both Qwen3-TTS (:8002) and VoxCPM2 alert while both run; whichever `TTS_URL` points at is the live voice. Port hardcoded (no `SERVICE_*` template var). See `docs/VOICE_AND_TTS.md` → VoxCPM2 TTS server.
-- **Known gap:** `promtail-helios` has been down since 2026-07-24 and the repo copy of `promtail/promtail-helios.yml` has no systemd-journal scrape, so `journalctl -u llama-server-primary` is the only place the brain's logs exist. Self-audit (F-014) sees no Helios logs until that sidecar is restored with a journal job.
+
+## Loki Ruler (log-based alerts)
+
+Enabled in `loki/loki-config.yml`: local rule storage from `loki/rules/fake/` (`fake` = tenant id when `auth_enabled: false`), mounted read-only as a directory (re-read every minute — no restart for rule edits), `evaluation_interval: 1m`, alerts to `http://alertmanager:9093`, `enable_api: false`, Loki `log_level: warn` (the ruler is chatty at info). Ruler alerts route through the same Alertmanager allow-list but do **not** appear in Prometheus `ALERTS` and are not checked by `reload-monitoring.sh`.
+
+## Helios Health Alerts
+
+All route to `pushover-quiet`. Written to stay silent while Helios is deliberately asleep.
+
+| Alert | Source | Fires when | First check |
+|-------|--------|-----------|-------------|
+| `HeliosHardwareFault` | Loki ruler (`loki/rules/fake/helios.yml`) | Kernel line matching IO_PAGE_FAULT / HC died / host controller not responding / NVRM Xid / PCIe AER / Hardware Error (MCE) in 10 min | `journalctl -k -b \| grep -E "IO_PAGE_FAULT\|xhci\|atlantic\|Xid\|AER"`; plan a reboot before the NIC dies. Backfilled lines after a NIC outage keep old timestamps and won't fire it — `HeliosPoweredButUnreachable` covers that |
+| `BrainCudaInitFailed` | Loki ruler | `llama-server-primary` logged a CUDA init failure in 15 min. Auto-resolves after 15 min regardless of state | `nvidia-smi` on Helios; reboot loads the matching module. `HeliosGpuDriverBroken` tracks whether it's fixed |
+| `BrainOnCPU` | Prometheus `helios_health` | Mean decode < 30 tok/s over 15 m (normal ~105–125) | `nvidia-smi`; `journalctl -u llama-server-primary -b \| grep -i cuda`; reboot |
+| `HeliosGpuDriverBroken` | Prometheus `helios_health` | `nvidia_smi_command_exit_code{node="helios"} != 0` for 5 m (18 = driver/library mismatch, seen 2026-10-15) | Reboot Helios; check `apt-mark showhold` still holds the 580-server packages |
+| `HeliosPoweredButUnreachable` | Prometheus `helios_health` | Plug > 60 W, `bgw_helios_running == 1`, fresh plug reads, Helios node-exporter down, for 5 m | Hang or dead NIC — attach a monitor; power-cycle via the plug. Needs `HELIOS_PLUG_MONITOR_ENABLED` (or `HELIOS_WAKE_ENABLED`) on the orchestrator, else never fires |
 
 ## Architecture
 
 ```
 Jupiter: Grafana ← Prometheus ← Loki ←── Promtail (Jupiter-local containers)
-                        ↑                   ↑
-         node_exporter + gpu_exporter       └── Promtail sidecar on Helios
-              on all GPU nodes                    (pushes over Tailscale MagicDNS)
+                        ↑              ↑ │
+         node_exporter + gpu_exporter  │ └── ruler ──> Alertmanager
+              on all GPU nodes         └── loki-push-gw :3101 (LAN, Helios IP + token)
+                                              ↑
+                                         Promtail on Helios (journald)
 
          Prometheus ── alerts ──> Alertmanager (127.0.0.1:9093) ──> Pushover
 ```
