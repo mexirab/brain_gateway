@@ -15,7 +15,7 @@ Both sources are used by the `check_claude_activity` Jess tool and the
 code_agent prompt builder.
 
 **Security model:** all file reads are constrained to a single configured
-root (`CLAUDE_PROJECTS_PATH`, defaults to `/root/.claude/projects` inside
+root (`CLAUDE_PROJECTS_PATH`, defaults to `/home/jess/.claude/projects` inside
 the container). Any caller-supplied path — from a Stop hook, tool call,
 or REST endpoint — is rejected if it does not resolve (via `os.path.realpath`)
 under that root. The hook's `transcript_path` field is never trusted
@@ -66,7 +66,7 @@ def _claude_projects_root() -> str:
     conventional container mount point. This is the ONLY trusted root —
     all session file reads must resolve under this path.
     """
-    return os.environ.get("CLAUDE_PROJECTS_PATH", "/root/.claude/projects")
+    return os.environ.get("CLAUDE_PROJECTS_PATH", "/home/jess/.claude/projects")
 
 
 def _resolve_under_root(path: str) -> Optional[str]:

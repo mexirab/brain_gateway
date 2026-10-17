@@ -28,7 +28,7 @@ Registered in `orchestrator/orchestrator.py` alongside the RAG file watcher:
 |--------|----------------|------------|
 | `owui` | `TRAINING_CORPUS_OWUI_DB` = `/app/owui_data/webui.db` | `SELECT id, chat FROM chat`; walks `messages` or `history.messages`; accepts role ∈ {user, assistant}; joins list-of-parts content with spaces |
 | `state_store` | `TRAINING_CORPUS_STATE_DB` = `/app/data/brain_state.db` | `SELECT conversation_id, role, content, created_at FROM chat_messages`; role ∈ {user, assistant} |
-| `cc_session` | `TRAINING_CORPUS_CC_DIR` = `/root/.claude/projects/-opt-helios-gateway-mvp` | Walks `*.jsonl` sessions; user-only for v1; `_cc_extract_text()` drops `tool_result` parts, keeps `text` parts |
+| `cc_session` | `TRAINING_CORPUS_CC_DIR` = `/home/jess/.claude/projects/-opt-gateway-mvp` | Walks `*.jsonl` sessions; user-only for v1; `_cc_extract_text()` drops `tool_result` parts, keeps `text` parts |
 
 Output dir is `TRAINING_CORPUS_DIR` = `/app/data/training_corpus`.
 

@@ -357,7 +357,7 @@ Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](h
 | `TRAINING_CORPUS_DIR` | `/app/data/training_corpus` | Output dir for monthly `YYYY-MM.jsonl` archives. Append-only. |
 | `TRAINING_CORPUS_OWUI_DB` | `/app/owui_data/webui.db` | Open WebUI sqlite db read read-only via `open-webui-data:/app/owui_data:ro` mount. |
 | `TRAINING_CORPUS_STATE_DB` | `/app/data/brain_state.db` | state_store sqlite db; drains `chat_messages`. |
-| `TRAINING_CORPUS_CC_DIR` | `/root/.claude/projects/-opt-gateway-mvp` | Claude Code session jsonls; user-turn extraction only. |
+| `TRAINING_CORPUS_CC_DIR` | `/home/jess/.claude/projects/-opt-gateway-mvp` | Claude Code session jsonls; user-turn extraction only. |
 
 ## Paperless bridge (F-012)
 
