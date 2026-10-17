@@ -314,3 +314,161 @@ class TestRegistryFailureConcurrency:
         t0 = time.monotonic()
         assert await ha_registry.get_registry_meta("http://ha.test:8123", "tok") == {}
         assert time.monotonic() - t0 < 2
+
+
+def _ent(entity_id, attrs, state="on"):
+    from orchestrator.ha_integration import Entity
+
+    return Entity.from_ha_state({"entity_id": entity_id, "state": state, "attributes": attrs})
+
+
+class TestEntityViewEdgeCases:
+    def test_light_without_color_modes_uses_brightness_attribute(self):
+        out = ha_registry.entity_view(_ent("light.a", {"brightness": 200}), {})
+        assert out["supports_brightness"] is True and out["brightness"] == 200
+
+    def test_light_without_color_modes_or_brightness_is_onoff(self):
+        out = ha_registry.entity_view(_ent("light.a", {}, state="off"), {})
+        assert out["supports_brightness"] is False
+        assert out["brightness"] is None and out["is_group"] is False
+
+    def test_non_list_color_modes_falls_back_to_brightness_attribute(self):
+        with_b = ha_registry.entity_view(_ent("light.a", {"supported_color_modes": "brightness", "brightness": 5}), {})
+        without_b = ha_registry.entity_view(_ent("light.b", {"supported_color_modes": "brightness"}), {})
+        assert with_b["supports_brightness"] is True
+        assert without_b["supports_brightness"] is False
+
+    def test_onoff_only_light_ignores_stray_brightness_attribute(self):
+        out = ha_registry.entity_view(_ent("light.a", {"supported_color_modes": ["onoff"], "brightness": 255}), {})
+        assert out["supports_brightness"] is False
+
+    def test_off_light_brightness_none_and_non_int_dropped(self):
+        off = ha_registry.entity_view(
+            _ent("light.a", {"supported_color_modes": ["brightness"], "brightness": None}, state="off"), {}
+        )
+        bad = ha_registry.entity_view(_ent("light.b", {"supported_color_modes": ["xy"], "brightness": "128"}), {})
+        assert off["brightness"] is None and off["supports_brightness"] is True
+        assert bad["brightness"] is None
+
+    def test_group_flag_requires_list_of_members(self):
+        out = ha_registry.entity_view(_ent("light.a", {"entity_id": "light.b"}), {})
+        assert out["is_group"] is False
+
+    def test_media_player_missing_and_bad_attributes(self):
+        out = ha_registry.entity_view(_ent("media_player.a", {"volume_level": "loud", "media_title": 42}), {})
+        assert out["volume"] is None and out["media_title"] is None
+        empty = ha_registry.entity_view(_ent("media_player.b", {}, state="off"), {})
+        assert empty["volume"] is None and empty["media_title"] is None
+
+    def test_media_volume_zero_is_kept(self):
+        out = ha_registry.entity_view(_ent("media_player.a", {"volume_level": 0}), {})
+        assert out["volume"] == 0
+
+    def test_climate_missing_or_non_numeric_temps(self):
+        out = ha_registry.entity_view(_ent("climate.a", {"current_temperature": "warm"}, state="off"), {})
+        assert out["current_temperature"] is None and out["temperature"] is None
+
+    def test_other_domains_get_only_base_fields(self):
+        out = ha_registry.entity_view(_ent("switch.a", {"brightness": 10, "volume_level": 0.5}), {"area": "Room A"})
+        assert set(out) == {"entity_id", "friendly_name", "state", "area", "category"}
+        assert out["area"] == "Room A" and out["category"] is None
+
+    def test_none_attributes_do_not_crash(self):
+        from orchestrator.ha_integration import Entity
+
+        e = Entity(entity_id="light.a", domain="light", friendly_name="A", state="on", attributes=None)
+        out = ha_registry.entity_view(e, {})
+        assert out["supports_brightness"] is False and out["brightness"] is None
+
+
+class TestRegistryRecovery:
+    async def test_success_after_backoff_expires_replaces_cache(self, monkeypatch):
+        def boom():
+            raise OSError("refused")
+
+        _patch_ws(monkeypatch, boom)
+        assert await ha_registry.get_registry_meta("http://ha.test:8123", "tok") == {}
+        monkeypatch.setattr(ha_registry, "_failed_at", time.monotonic() - ha_registry.FAILURE_RETRY_SECONDS - 1)
+
+        calls = _patch_ws(monkeypatch, FakeWS)
+        before = HA_REGISTRY_FETCH.labels(result="ok")._value.get()
+        meta = await ha_registry.get_registry_meta("http://ha.test:8123", "tok")
+        assert len(calls) == 1 and meta["light.desk"]["area"] == "Office"
+        assert ha_registry._failed_at == 0.0
+        assert HA_REGISTRY_FETCH.labels(result="ok")._value.get() == before + 1
+
+    async def test_cache_expiry_triggers_refetch(self, monkeypatch):
+        calls = _patch_ws(monkeypatch, FakeWS)
+        await ha_registry.get_registry_meta("http://ha.test:8123", "tok")
+        monkeypatch.setattr(ha_registry, "_fetched_at", time.monotonic() - ha_registry.REGISTRY_TTL_SECONDS - 1)
+        await ha_registry.get_registry_meta("http://ha.test:8123", "tok")
+        assert len(calls) == 2
+
+    async def test_non_http_url_never_connects(self, monkeypatch):
+        calls = _patch_ws(monkeypatch, FakeWS)
+        assert await ha_registry.get_registry_meta("ha.test:8123", "tok") == {}
+        assert await ha_registry.get_registry_meta("", "tok") == {}
+        assert calls == []
+
+
+class TestRefreshCacheSemantics:
+    @pytest.fixture
+    def counting_client(self):
+        state = {"calls": 0, "fail": False}
+
+        async def handler(request):
+            state["calls"] += 1
+            if state["fail"]:
+                return httpx.Response(500)
+            return httpx.Response(200, json=STATES)
+
+        c = HomeAssistantClient(
+            url="http://ha.test:8123",
+            token="t",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        return c, state
+
+    async def test_default_path_honours_cache_ttl(self, counting_client):
+        """Chat callers (no max_age) still get the 5-min cache, not a fetch per turn."""
+        c, state = counting_client
+        await c.refresh_entities()
+        c._last_refresh -= timedelta(seconds=60)
+        await c.refresh_entities()
+        assert state["calls"] == 1
+        c._last_refresh -= c.cache_ttl
+        await c.refresh_entities()
+        assert state["calls"] == 2
+
+    async def test_max_age_overrides_ttl(self, counting_client):
+        c, state = counting_client
+        await c.refresh_entities()
+        c._last_refresh -= timedelta(seconds=10)
+        await c.refresh_entities(max_age_seconds=5)
+        assert state["calls"] == 2
+
+    async def test_successful_refresh_clears_backoff(self, counting_client):
+        c, state = counting_client
+        state["fail"] = True
+        await c.refresh_entities(max_age_seconds=3)
+        assert c._last_failure is not None and c.last_refresh_ok is False
+        state["fail"] = False
+        n = await c.refresh_entities(force=True)
+        assert n == len(STATES)
+        assert c._last_failure is None and c.last_refresh_ok is True
+
+    async def test_backoff_expires(self, counting_client):
+        c, state = counting_client
+        state["fail"] = True
+        await c.refresh_entities(max_age_seconds=3)
+        c._last_failure -= c.FAILURE_BACKOFF + timedelta(seconds=1)
+        state["fail"] = False
+        await c.refresh_entities(max_age_seconds=3)
+        assert state["calls"] == 2 and c.last_refresh_ok is True
+
+    async def test_failure_keeps_cached_entities(self, counting_client):
+        c, state = counting_client
+        n = await c.refresh_entities()
+        state["fail"] = True
+        assert await c.refresh_entities(force=True) == n
+        assert c.get_entity("light.desk") is not None
