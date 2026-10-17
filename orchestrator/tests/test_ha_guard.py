@@ -353,3 +353,142 @@ class TestRoutes:
     def test_request_shape_validation(self, body):
         with pytest.raises(ValueError):
             HACommandRequest(**body)
+
+    async def test_structured_refusal_counted_on_api_path(self, client, monkeypatch):
+        from orchestrator.metrics import HA_CALL_REFUSED
+
+        c, _ = client
+        monkeypatch.setattr(api_routes, "ha_client", c)
+        before = HA_CALL_REFUSED.labels(path="api")._value.get()
+        await api_routes.execute_ha_command(HACommandRequest(entity_id=PLUG, service="turn_off"))
+        assert HA_CALL_REFUSED.labels(path="api")._value.get() == before + 1
+
+    async def test_structured_play_media_arbitrary_url_refused(self, client, monkeypatch):
+        c, fake = client
+        monkeypatch.setattr(api_routes, "ha_client", c)
+        resp = await api_routes.execute_ha_command(
+            HACommandRequest(
+                entity_id="media_player.living_room_speaker",
+                service="play_media",
+                data={"media_content_id": "http://10.0.0.1/admin", "media_content_type": "music"},
+            )
+        )
+        assert resp.status_code == 403
+        assert fake.service_calls == []
+
+    async def test_text_command_allowed_shape(self, client, monkeypatch):
+        c, fake = client
+        monkeypatch.setattr(api_routes, "ha_client", c)
+        out = await api_routes.execute_ha_command(HACommandRequest(command="turn on the kitchen"))
+        assert out["ok"] is True
+        assert set(out) == {"ok", "action", "entity_id", "message"}
+        assert fake.service_calls == [("/api/services/light/turn_on", {"entity_id": "light.kitchen"})]
+
+
+# ---------------------------------------------------------------------------
+# Chat tool path (tool_handlers.tool_home_assistant)
+# ---------------------------------------------------------------------------
+
+
+class TestToolPath:
+    @pytest.fixture
+    def tool_client(self, client, monkeypatch):
+        from orchestrator import tool_handlers
+
+        c, fake = client
+        monkeypatch.setattr(tool_handlers, "ha_client", c)
+        return tool_handlers, fake
+
+    async def test_refusal_counted_on_tool_path_only(self, tool_client):
+        from orchestrator.metrics import HA_CALL_REFUSED
+
+        th, fake = tool_client
+        before = {p: HA_CALL_REFUSED.labels(path=p)._value.get() for p in ("tool", "nlp", "api")}
+        out = await th.tool_home_assistant("lock.front_door", "unlock")
+        assert "confirmation step" in out
+        after = {p: HA_CALL_REFUSED.labels(path=p)._value.get() for p in ("tool", "nlp", "api")}
+        assert after == {**before, "tool": before["tool"] + 1}
+        assert fake.service_calls == []
+
+    async def test_play_media_drops_bypass_keys_end_to_end(self, tool_client):
+        th, fake = tool_client
+        await th.tool_home_assistant(
+            "media_player.living_room_speaker",
+            "play_media",
+            {
+                "media_content_id": "media-source://radio_browser/abc",
+                "media_content_type": "music",
+                "media": {"media_content_id": "http://attacker/x"},
+                "extra": {"thumb": "http://attacker/t.png"},
+                "entity_id": PLUG,
+            },
+        )
+        assert len(fake.service_calls) == 1
+        path, body = fake.service_calls[0]
+        assert path == "/api/services/media_player/play_media"
+        assert body == {
+            "entity_id": "media_player.living_room_speaker",
+            "media_content_id": "media-source://radio_browser/abc",
+            "media_content_type": "music",
+        }
+
+    async def test_play_media_arbitrary_url_never_reaches_ha(self, tool_client):
+        th, fake = tool_client
+        out = await th.tool_home_assistant(
+            "media_player.living_room_speaker",
+            "play_media",
+            {"media_content_id": "https://evil.example/x.mp3", "media_content_type": "music"},
+        )
+        assert out.startswith("Failed:")
+        assert fake.service_calls == []
+
+    async def test_join_with_denied_member_never_reaches_ha(self, tool_client):
+        th, fake = tool_client
+        out = await th.tool_home_assistant(
+            "media_player.living_room_speaker", "join", {"group_members": ["media_player.blocked_speaker"]}
+        )
+        assert out.startswith("Failed:")
+        assert fake.service_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Fast path (fast_path.try_fast_path) on top of the guarded NLP path
+# ---------------------------------------------------------------------------
+
+
+class TestFastPath:
+    @pytest.mark.parametrize("text", ["turn off helios plug", "unlock the front door", "turn on robo"])
+    async def test_guard_refusal_falls_through(self, client, text):
+        from orchestrator.fast_path import is_fast_path_eligible, try_fast_path
+
+        c, fake = client
+        # Must actually get as far as the guard, not be filtered out earlier.
+        assert is_fast_path_eligible(text) and c.parse_command(text)
+        result = await try_fast_path(text, c)
+        assert result.handled is False
+        assert result.response_text == ""
+        assert fake.service_calls == []
+
+    async def test_allowed_command_handled(self, client):
+        from orchestrator.fast_path import try_fast_path
+
+        c, fake = client
+        result = await try_fast_path("turn on the kitchen", c)
+        assert result.handled is True
+        assert fake.service_calls == [("/api/services/light/turn_on", {"entity_id": "light.kitchen"})]
+
+    async def test_failure_log_does_not_carry_result_message(self, client, caplog):
+        """The fall-through log must not include result.message (it can quote
+        the user's text or the guard's refusal)."""
+        import logging
+
+        from orchestrator.fast_path import try_fast_path
+
+        c, _ = client
+        with caplog.at_level(logging.INFO, logger="orchestrator.fast_path"):
+            result = await try_fast_path("turn on zzqxsecretthing", c)
+        assert c.parse_command("turn on zzqxsecretthing")
+        assert result.handled is False
+        fell = [r.getMessage() for r in caplog.records if "falling through" in r.getMessage()]
+        assert fell, "expected a fall-through log line"
+        assert all("zzqxsecretthing" not in m and "Could not" not in m for m in fell)
