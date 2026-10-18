@@ -38,7 +38,7 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 ## TTS Pacing
 
-Voice clone (personal reference on the live deployment; configurable elsewhere) runs through Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002). (VoxCPM2 on :8004 is built as its replacement — see VoxCPM2 TTS server below; the pacing notes here are Qwen-specific.) The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Two pacing controls:
+Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002) is the rollback TTS; the live orchestrator voice is VoxCPM2 on :8004 (see VoxCPM2 TTS server below). The pacing notes here are Qwen-specific. The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Two pacing controls:
 
 1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
 2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery
@@ -67,7 +67,7 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 
 ## VoxCPM2 TTS server (port 8004)
 
-Second TTS server on Helios, built to replace Qwen3-TTS (:8002) as the live voice. **Status: running-ready on Helios, orchestrator NOT cut over** (`TTS_URL` on Jupiter still points at :8002). Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
+Second TTS server on Helios, replacing Qwen3-TTS (:8002) as the live voice. **Status: cut over** — Jupiter `.env` has `TTS_URL=http://10.0.0.195:8004`; `qwen-tts` on :8002 stays running as rollback. Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
 
 | Property | Value |
 |----------|-------|
@@ -88,7 +88,7 @@ Second TTS server on Helios, built to replace Qwen3-TTS (:8002) as the live voic
 
 Env vars: `VOXCPM_*` — `docs/ENV_VARS.md` → TTS.
 
-**Cutover (operator, on Jupiter; Helios must be awake):**
+**Cutover (done; operator steps for reference, on Jupiter; Helios must be awake):**
 ```bash
 cp .env .env.bak-qwen-tts
 # set TTS_URL=http://10.0.0.195:8004 in .env
@@ -106,7 +106,7 @@ ssh labadmin@10.0.0.195 'journalctl -u voxcpm-tts -f'
 
 ## Voice style
 
-How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voice_style.py` and sent to the TTS as a style note. Qwen3-TTS accepts and ignores it, so it is harmless before cutover.
+How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voice_style.py` and sent to the TTS as a style note. Qwen3-TTS accepts and ignores it, so it is harmless on the :8002 rollback.
 
 **Presets** (the only phrases that ever reach the TTS — never free text from the user, model or content): `auto` (no note), `calm`, `gentle`, `soothing`, `quiet`, `warm`, `thoughtful`, `encouraging`, `upbeat`, `proud`, `energetic`, `firm`, plus acting tones `excited`, `sad`, `angry`, `scared`, `whisper`, `sultry`, `sarcastic` (`ACTING_PRESETS`) — 19 keys incl. `auto`. The tool's `style` enum is built from `PRESETS` (minus `auto`).
 

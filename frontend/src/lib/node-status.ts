@@ -10,7 +10,8 @@ import type { ServicesResponse } from './types';
  *                   currently healthy (e.g. Helios powered down between calls).
  * - `offline`     — always-on node whose services are configured but unhealthy,
  *                   or a known-unreachable box.
- * - `unknown`     — status not yet known (services data not loaded / unreachable).
+ * - `unknown`     — status not yet known (services data not loaded / unreachable),
+ *                   or no orchestrator-probed service runs on the node.
  */
 export type NodeStatus = 'online' | 'asleep' | 'offline' | 'unknown';
 
@@ -44,6 +45,10 @@ export function nodeStatus(
 
   // No live data yet → don't claim anything.
   if (!services) return INFO.unknown;
+
+  // Nothing the orchestrator probes runs on this node (e.g. Saturn, now just
+  // a backup target) → we genuinely don't know, so don't fake "online".
+  if (node.serviceKeys.length === 0) return INFO.unknown;
 
   const infos = node.serviceKeys
     .map((k) => services.services[k])

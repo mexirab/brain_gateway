@@ -15,7 +15,9 @@ Design:
   - Content-addressed dedup: sha1(source|session|role|whitespace-normalized
     text). Safe to re-run any time, safe across backfills and schema churn.
   - One file per month so old data stays readable but the hot file is small.
-  - Graceful: any missing source is skipped with a warning, not an error.
+  - Graceful: a missing source is skipped, logged once per process at INFO
+    (Open WebUI is stopped on the live deployment, so its db is normally
+    absent — a nightly WARNING would just be self-audit noise).
   - Secret-aware: records matching any secret/ciphertext pattern are dropped
     before they hit disk. Partial redaction is NOT done — adjacent context
     can re-identify a leaked secret, so we drop the whole record.
@@ -28,6 +30,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 from contextlib import closing
@@ -51,6 +54,15 @@ MAX_JSON_BLOB_BYTES = 5_000_000  # per-row blob ceiling for sqlite reads
 MAX_CC_LINE_BYTES = 2_000_000  # per-line ceiling for jsonl reads
 OVERSIZE_RUN_WARN = 10_000  # nightly-drain new-records anomaly threshold
 SQLITE_READ_TIMEOUT_SEC = 30
+
+# Claude Code names a project's session dir after its absolute path with
+# separators replaced by "-". This is the live checkout
+# (/home/labadmin/gateway_nerves); TRAINING_CORPUS_CC_DIR overrides it.
+CC_PROJECT_SLUG = "-home-labadmin-gateway-nerves"
+DEFAULT_CLAUDE_PROJECTS_PATH = "/home/jess/.claude/projects"
+
+# Sources already reported missing in this process (log once, not nightly).
+_reported_missing: set[str] = set()
 
 # System-reminder / tool-dump prefixes that identify wholesale harness noise.
 # Previous implementation dropped anything starting with ``<`` or ``[``, which
@@ -164,6 +176,35 @@ def _open_sqlite_ro(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _skip_missing(source: str, path: Path) -> None:
+    """Log a missing source once per process; later runs stay quiet.
+
+    OWUI + Claude Code dirs are optional (INFO). brain_state.db is always
+    expected on a real deployment, so its absence is a WARNING (still once).
+    """
+    key = f"{source}:{path}"
+    if key in _reported_missing:
+        logger.debug("[training_corpus] %s source still absent at %s — skipped", source, path)
+        return
+    _reported_missing.add(key)
+    level = logging.WARNING if source == "state_store" else logging.INFO
+    logger.log(level, "[training_corpus] %s source not present at %s — skipped", source, path)
+
+
+def _source_present(source: str, path: Path) -> None:
+    """Re-arm the once-only log if a source comes back (so a later loss is reported)."""
+    _reported_missing.discard(f"{source}:{path}")
+
+
+def default_cc_dir() -> Path:
+    """Claude Code session dir: TRAINING_CORPUS_CC_DIR, else derived from
+    CLAUDE_PROJECTS_PATH (the container-side mount of ~/.claude/projects)."""
+    if settings.training_corpus_cc_dir:
+        return Path(settings.training_corpus_cc_dir)
+    root = os.environ.get("CLAUDE_PROJECTS_PATH") or DEFAULT_CLAUDE_PROJECTS_PATH
+    return Path(root) / CC_PROJECT_SLUG
+
+
 # ---------------------------------------------------------------------------
 # Source extractors — each yields Record objects
 # ---------------------------------------------------------------------------
@@ -172,8 +213,9 @@ def _open_sqlite_ro(db_path: Path) -> sqlite3.Connection:
 def drain_owui(db_path: Path) -> Iterator[Record]:
     """Extract user + assistant turns from every OWUI conversation."""
     if not db_path.exists():
-        logger.warning("[training_corpus] owui db missing at %s — skipping", db_path)
+        _skip_missing("owui", db_path)
         return
+    _source_present("owui", db_path)
     try:
         with closing(_open_sqlite_ro(db_path)) as conn:
             # Stream row-by-row; OWUI chat blobs can be multi-MB per row.
@@ -223,8 +265,9 @@ def drain_owui(db_path: Path) -> Iterator[Record]:
 def drain_state_store(db_path: Path) -> Iterator[Record]:
     """Extract user + assistant turns from brain_state.chat_messages."""
     if not db_path.exists():
-        logger.warning("[training_corpus] state_store db missing at %s — skipping", db_path)
+        _skip_missing("state_store", db_path)
         return
+    _source_present("state_store", db_path)
     try:
         with closing(_open_sqlite_ro(db_path)) as conn:
             cursor = conn.execute(
@@ -276,8 +319,9 @@ def drain_cc_sessions(root: Path) -> Iterator[Record]:
     technical work — useful later but a trivial extension.
     """
     if not root.exists():
-        logger.warning("[training_corpus] cc dir missing at %s — skipping", root)
+        _skip_missing("cc_session", root)
         return
+    _source_present("cc_session", root)
     for fp in sorted(root.glob("*.jsonl")):
         session_id = f"cc:{fp.stem}"
         try:
@@ -370,7 +414,7 @@ def run_drain(
     out_dir = out_dir or Path(settings.training_corpus_dir)
     owui_db = owui_db or Path(settings.training_corpus_owui_db)
     state_db = state_db or Path(settings.training_corpus_state_db)
-    cc_dir = cc_dir or Path(settings.training_corpus_cc_dir)
+    cc_dir = cc_dir or default_cc_dir()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     existing = _load_existing_ids(out_dir)

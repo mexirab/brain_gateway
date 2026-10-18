@@ -124,7 +124,9 @@ services:
       # Open WebUI sqlite db (read-only) — nightly training-corpus drain job
       # snapshots user/assistant turns from OWUI into an append-only JSONL
       # under /app/data/training_corpus/. Sharing the named volume is safe
-      # because the drain only reads; OWUI owns all writes.
+      # because the drain only reads; OWUI owns all writes. With OWUI stopped
+      # the volume is empty and the drain logs the source as skipped once.
+      # Claude Code sessions are read from CLAUDE_PROJECTS_PATH (mount above).
       - open-webui-data:/app/owui_data:ro
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/gateway_mvp:ro

@@ -29,19 +29,23 @@ def test_config_field_defaults_point_at_jess_home():
 
     fields = Settings.model_fields
     assert fields["model_ssh_key"].default == "/home/jess/.ssh/id_ed25519"
-    assert fields["training_corpus_cc_dir"].default.startswith("/home/jess/.claude/projects/")
+    # Empty = derived from CLAUDE_PROJECTS_PATH (see jobs_training_corpus.default_cc_dir).
+    assert fields["training_corpus_cc_dir"].default == ""
 
 
 def test_settings_instance_defaults_without_env(monkeypatch):
     """With the env vars unset, a fresh Settings resolves to /home/jess paths."""
+    from orchestrator import jobs_training_corpus as tc
     from orchestrator.config import Settings
 
-    for var in ("MODEL_SSH_KEY", "TRAINING_CORPUS_CC_DIR"):
+    for var in ("MODEL_SSH_KEY", "TRAINING_CORPUS_CC_DIR", "CLAUDE_PROJECTS_PATH"):
         monkeypatch.delenv(var, raising=False)
     s = Settings()
     assert s.model_ssh_key == "/home/jess/.ssh/id_ed25519"
-    assert s.training_corpus_cc_dir.startswith("/home/jess/")
-    assert "/root" not in s.training_corpus_cc_dir
+    monkeypatch.setattr(tc, "settings", s)
+    cc_dir = str(tc.default_cc_dir())
+    assert cc_dir.startswith("/home/jess/.claude/projects/")
+    assert "/root" not in cc_dir
 
 
 def test_no_settings_default_mentions_root_home():

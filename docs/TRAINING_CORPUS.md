@@ -11,7 +11,7 @@ Capture every conversation turn the orchestrator ever sees in a single normalize
 | Path | What |
 |------|------|
 | `orchestrator/jobs_training_corpus.py` | Extractors, dedup, write path, `run_drain()` + `drain_training_corpus()` |
-| `orchestrator/tests/test_training_corpus_drain.py` | 24 tests — extractors, secret filter, noise filter, dedup, oversize guard, malformed JSON |
+| `orchestrator/tests/test_training_corpus_drain.py` | 31 tests — extractors, secret filter, noise filter, dedup, oversize guard, malformed JSON, missing-source logging, cc dir default |
 | `/app/data/training_corpus/YYYY-MM.jsonl` | Output, one file per month, line-buffered append |
 | `bgw_training_corpus_records_total{source}` | Prometheus counter; source ∈ `owui`, `state_store`, `cc_session` |
 
@@ -28,9 +28,13 @@ Registered in `orchestrator/orchestrator.py` alongside the RAG file watcher:
 |--------|----------------|------------|
 | `owui` | `TRAINING_CORPUS_OWUI_DB` = `/app/owui_data/webui.db` | `SELECT id, chat FROM chat`; walks `messages` or `history.messages`; accepts role ∈ {user, assistant}; joins list-of-parts content with spaces |
 | `state_store` | `TRAINING_CORPUS_STATE_DB` = `/app/data/brain_state.db` | `SELECT conversation_id, role, content, created_at FROM chat_messages`; role ∈ {user, assistant} |
-| `cc_session` | `TRAINING_CORPUS_CC_DIR` = `/home/jess/.claude/projects/-opt-gateway-mvp` | Walks `*.jsonl` sessions; user-only for v1; `_cc_extract_text()` drops `tool_result` parts, keeps `text` parts |
+| `cc_session` | `TRAINING_CORPUS_CC_DIR` = empty → `$CLAUDE_PROJECTS_PATH/-home-labadmin-gateway-nerves` (fallback root `/home/jess/.claude/projects`; `default_cc_dir()`) | Walks `*.jsonl` sessions in that one dir; user-only for v1; `_cc_extract_text()` drops `tool_result` parts, keeps `text` parts. Worktree session dirs (`…--claude-worktrees-*`) are separate project dirs and are NOT drained. The slug is hard-coded to the live checkout path — other install paths must set the env var. |
 
 Output dir is `TRAINING_CORPUS_DIR` = `/app/data/training_corpus`.
+
+**Missing sources:** a source whose db/dir doesn't exist is skipped and logged once per process — INFO for `owui` and `cc_session`, WARNING for `state_store` (always expected). Later runs stay quiet (DEBUG). If the source reappears and later disappears again, it is reported again. Open WebUI is stopped on the live deployment, so the `owui` skip line is normal.
+
+**Claude Code source is now live (behaviour change):** the old default `/home/jess/.claude/projects/-opt-gateway-mvp` never existed on Jupiter, so 0 `cc_session` records were ever collected. With `JESS_ADVANCED` on (live), the new default points at the real session dir: expect roughly 700 `cc_session` records on the first drain after deploy. Those prompts (owner's Claude Code user turns, secret-filtered) are archived forever (no retention) and copied off-box to Saturn by the nightly backup. To keep the source off, set `TRAINING_CORPUS_CC_DIR` to a path that doesn't exist.
 
 The OWUI db is shared into the orchestrator container via a read-only mount on the `open-webui-data` named docker volume:
 

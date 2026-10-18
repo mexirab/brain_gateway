@@ -50,19 +50,22 @@ describe('nodeStatus', () => {
     expect(info.status).toBe('online');
   });
 
-  it('marks an always-on node (Saturn) OFFLINE when its services are down', () => {
-    const info = nodeStatus(
-      SATURN,
-      services({ vision: { healthy: false }, expert: { healthy: false } }),
-    );
+  it('marks an always-on node OFFLINE when its services are down', () => {
+    const node = { power: 'always-on' as const, serviceKeys: ['vision'] };
+    const info = nodeStatus(node, services({ vision: { healthy: false } }));
     expect(info.status).toBe('offline');
     expect(info.tone).toBe('danger');
   });
 
-  it('marks Saturn ONLINE when vision is healthy', () => {
-    expect(
-      nodeStatus(SATURN, services({ vision: { healthy: true } })).status,
-    ).toBe('online');
+  it('marks Saturn UNKNOWN — nothing the orchestrator probes runs there', () => {
+    // Vision moved to the Helios brain; Saturn is only a backup target now.
+    expect(SATURN.serviceKeys).toHaveLength(0);
+    expect(nodeStatus(SATURN, services({ vision: { healthy: true } })).status).toBe('unknown');
+  });
+
+  it('counts vision as a Helios service (served by the brain)', () => {
+    expect(HELIOS.serviceKeys).toContain('vision');
+    expect(nodeStatus(HELIOS, services({ vision: { healthy: true } })).status).toBe('online');
   });
 
   it('reflects HA health for Jupiter (HA runs on Jupiter)', () => {

@@ -1,6 +1,6 @@
 ---
 name: unit-test
-description: Writes and runs pytest tests for Brain Gateway (async, mocked externals). Invoke after code-reviewer for any new/modified function, tool handler, route, or background job. Tests run inside the brain-orchestrator Docker container (deps live there). Reports PASS/FAIL counts and coverage gaps.
+description: Writes and runs pytest tests for Brain Gateway (async, mocked externals). Invoke after code-reviewer for any new/modified function, tool handler, route, or background job. Tests run in a throwaway container from the orchestrator image, never inside the live brain-orchestrator container. Reports PASS/FAIL counts and coverage gaps.
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 
@@ -13,7 +13,7 @@ After code changes pass code review. Trigger with `/test` or as part of the post
 ## Test Infrastructure
 
 - **Framework**: pytest with `asyncio_mode = auto`
-- **Config**: `orchestrator/pytest.ini`
+- **Config**: there is no `pytest.ini`, and the repo-root `pyproject.toml` (which sets `asyncio_mode = "auto"`) is NOT mounted into the test container — so always pass `-o asyncio_mode=auto` on the command line (see Running tests)
 - **Tests dir**: `orchestrator/tests/`
 - **Fixtures**: `orchestrator/tests/conftest.py` (tmp_db, mode_router)
 - **Existing tests** (27 files, verify on disk with `ls orchestrator/tests/` before claiming something is missing):
@@ -59,27 +59,28 @@ Routes are split by domain — `routes_chat.py`, `routes_calendar.py`, `routes_d
 
 ## Running tests
 
-Tests run **inside the `brain-orchestrator` container** — dependencies (httpx, chromadb, Pydantic Settings, etc.) live there, not in the host venv. Don't try to run `pytest` on the host unless you've explicitly installed all the deps.
+Tests run in a **throwaway container** built from the `gateway_nerves-orchestrator` image (deps live there, not in the host venv). Never `docker exec` pip/pytest inside the LIVE `brain-orchestrator` container — it serves real traffic, and installing packages or copying tests into it changes production.
+
+Before you start:
+
+1. **Run from the session's worktree**, not the live checkout (`/home/labadmin/gateway_nerves` — CI deploys from it). `cd` into the worktree you were given so `$PWD` mounts your code.
+2. **Check memory first:** `free -g`. Jupiter has 31 GB shared with Home Assistant, monitoring and Immich. If `available` is under ~8 GB, wait or ask before starting.
+3. **One test container at a time.** Jupiter hard-froze on 2026-10-16 with several heavy containers running at once. Don't start a second run (or run files in parallel) until the first exits.
+4. **Never kill/stop/rm containers you didn't start.** `--rm` cleans up your own; if a run hangs, stop only that container by the name you gave it.
 
 ```bash
-# First-time: install pytest in the container (if not already baked in) and copy tests
-docker exec brain-orchestrator pip install pytest pytest-asyncio -q
-docker cp orchestrator/tests brain-orchestrator:/app/tests
+# All tests (from the worktree root). No pytest.ini, pyproject.toml not mounted → asyncio_mode on the CLI.
+docker run --rm -m 6g --name unit-test-$$ \
+  -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -w /app \
+  gateway_nerves-orchestrator \
+  sh -c "pip install -q pytest pytest-asyncio respx && python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q"
 
-# All tests
-docker exec brain-orchestrator python -m pytest tests/ -v
-
-# Single file
-docker exec brain-orchestrator python -m pytest tests/test_mode_router.py -v
-
-# Single test
-docker exec brain-orchestrator python -m pytest tests/test_mode_router.py::test_explainer_mode -v
-
-# With coverage (if pytest-cov installed in the container)
-docker exec brain-orchestrator python -m pytest tests/ -v --cov=. --cov-report=term-missing
+# Single file / single test: swap the target
+#   ... orchestrator/tests/test_mode_router.py -q
+#   ... orchestrator/tests/test_mode_router.py::test_explainer_mode -q
 ```
 
-After editing test files on the host, either `docker cp orchestrator/tests brain-orchestrator:/app/tests` again, or rebuild the orchestrator image if tests are baked in: `docker compose up -d --build orchestrator`.
+The mounts are read-only and the container is discarded, so edited tests are picked up on the next run — no `docker cp`, no image rebuild. If the image is missing or stale (new requirement), say so and ask before running `docker compose build orchestrator`.
 
 ## Output format
 

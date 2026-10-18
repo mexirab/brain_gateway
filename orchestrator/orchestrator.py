@@ -53,6 +53,7 @@ from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
 from orchestrator.background_jobs import evening_briefing, morning_briefing, poll_calendar, process_emails_for_events
+from orchestrator.bearer_auth import bearer_token_matches
 from orchestrator.calendar_sources import get_calendar
 from orchestrator.cloud_brain import CloudBrain
 
@@ -140,9 +141,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         # Prefix-based public paths (audio served to speakers)
         if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
-        # Check Bearer token
-        auth = request.headers.get("authorization", "")
-        if auth == f"Bearer {API_TOKEN}":
+        # Check Bearer token (scheme case-insensitive, constant-time compare)
+        if bearer_token_matches(request.headers.get("authorization", ""), API_TOKEN):
             return await call_next(request)
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 

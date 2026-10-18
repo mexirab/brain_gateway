@@ -181,28 +181,47 @@ Build it once in the Shortcuts app:
 1. **New Shortcut, named "Sync work calendar to Jess":**
    1. **Find Calendar Events** where *Calendar* is your Exchange calendar and
       *Start Date* is in the next 14 days. Sort by Start Date, no limit.
-   2. **Repeat with Each** item. Inside the loop, add a **Dictionary** with:
+   2. **Repeat with Each** item. Inside the loop, build **one Dictionary per
+      event**:
       - `title` = Repeat Item's Title
       - `start` = Start Date
       - `end` = End Date
       - `location` = Location
       - `all_day` = Is All Day
 
-      Then **Add to Variable** `events`.
+      Then **Add to Variable** `events`, and pick **that Dictionary** as the
+      input, not the Repeat Item. The Repeat Item is a raw calendar event, not
+      the fields above, so the server finds no readable start time and rejects
+      the sync with 422.
    3. After the loop: **Dictionary** with `source` = `exchange` and `events` =
-      the `events` variable. The `source` key is required: a push without it
-      is treated as the retired legacy push and ignored.
+      the `events` variable. Set the `events` value's type to **List**, not
+      Dictionary. As a Dictionary it is sent as one object instead of an array,
+      and the server rejects it with 400 (`single_event`).
+      The `source` key is required: a push without it is treated as the
+      retired legacy push and ignored.
    4. **Get Contents of URL**:
       - URL: `https://jupiter-amds.tail74fc4a.ts.net:8443/api/calendar/sync`
       - Method: POST
       - Request body: JSON, set to that dictionary
-      - Header: `Authorization: Bearer <API_TOKEN>`
+      - Header: `Authorization` = `Bearer <API_TOKEN>`, with a capital **B** and
+        one space before the token. Paste the token from `.env` on the phone
+        only. Never put it in a note, screenshot, or this repo, and never
+        share or export the Shortcut: a shared copy includes the header
+        value. This is the full `API_TOKEN` (it can do everything, including
+        Home Assistant control), not a calendar-only token.
 2. **Post once, after the loop.** The server replaces the whole snapshot on every
    post, so posting inside the loop would keep only the last event. It rejects a
    single-event body with 400 to catch that mistake.
-3. **Automation tab → Time of Day.** Run it daily (every day, not just weekdays)
-   at 07:00, 11:00, 15:00 and 19:00, with **Run Immediately** and notifications
-   off. The stale alert allows 26 h, so a missed weekend run doesn't page.
+3. **Automation tab → App → Calendar → Is Opened.** Run the Shortcut whenever
+   you open the Calendar app, with **Run Immediately** on and notifications off.
+   An earlier version ran at fixed times (07:00 etc.), but iOS skips time-based
+   automations while the phone is locked, so syncs were silently missed.
+   Opening Calendar means the phone is unlocked, so the run happens.
+   The stale threshold stays at 26 h (`PHONE_CALENDAR_MAX_AGE_HOURS`, alert
+   `ExchangeCalendarSyncStale`). If you don't open Calendar for more than a day,
+   for example over a weekend, you'll get one quiet notice, and Jess will say she
+   couldn't reach the work calendar until the next sync. Open Calendar once to
+   clear it.
 4. **Check it works:** the POST response says `"used": true`.
    `GET /api/calendar/sync` (same auth) shows `"source": "exchange"` and a recent
    `last_sync`, and asking Jess "what's on my calendar

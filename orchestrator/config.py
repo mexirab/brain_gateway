@@ -471,9 +471,13 @@ class Settings(BaseSettings):
     # Claude Code sessions to append-only monthly JSONL files. See
     # orchestrator/jobs_training_corpus.py.
     training_corpus_dir: str = "/app/data/training_corpus"
+    # Open WebUI is stopped on the live deployment, so this db is usually
+    # absent — the drain logs "skipped" once and moves on.
     training_corpus_owui_db: str = "/app/owui_data/webui.db"
     training_corpus_state_db: str = "/app/data/brain_state.db"
-    training_corpus_cc_dir: str = "/home/jess/.claude/projects/-opt-gateway-mvp"
+    # Empty = <CLAUDE_PROJECTS_PATH>/-home-labadmin-gateway-nerves (the Claude
+    # Code slug of the live checkout). Set explicitly for other install paths.
+    training_corpus_cc_dir: str = ""
 
     # -- Self-audit (F-014) ------------------------------------------------------
     # Daily 7am job that queries Loki for the last 24h of error/warn logs across
