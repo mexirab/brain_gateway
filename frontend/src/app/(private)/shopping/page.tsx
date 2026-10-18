@@ -13,17 +13,19 @@ import { api } from '@/lib/api';
 import { Card, Button, ErrorState, Skeleton } from '@/components/ui';
 import { friendlyError } from '@/lib/errors';
 import { useShopping } from '@/lib/hooks';
+import { splitShopping } from '@/lib/shopping';
 
 export default function ShoppingPage() {
   const [newItem, setNewItem] = useState('');
   const [listName, setListName] = useState('grocery');
   const [filter, setFilter] = useState<string | null>(null);
-  const [showChecked, setShowChecked] = useState(false);
   const [adding, setAdding] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { data: items = [], error: loadError, isLoading, mutate } = useShopping(showChecked);
+  // Always fetch bought items too: they stay visible under "Bought" so a
+  // mis-tap in the store is one tap to undo.
+  const { data: items = [], error: loadError, isLoading, mutate } = useShopping(true);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,7 +83,7 @@ export default function ShoppingPage() {
       await api.clearCheckedItems(filter || undefined);
       mutate();
     } catch (err) {
-      setActionError(friendlyError(err, 'Couldn’t clear checked items.'));
+      setActionError(friendlyError(err, 'Couldn’t clear bought items.'));
     }
   };
 
@@ -90,8 +92,7 @@ export default function ShoppingPage() {
   const filtered = filter
     ? items.filter((it) => it.list_name === filter)
     : items;
-  const unchecked = filtered.filter((it) => !it.checked);
-  const checked = filtered.filter((it) => it.checked);
+  const { toBuy: unchecked, bought: checked } = splitShopping(filtered);
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -161,15 +162,6 @@ export default function ShoppingPage() {
               {name}
             </button>
           ))}
-          <label className="ml-auto flex items-center gap-2 text-xs text-content-muted cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showChecked}
-              onChange={(e) => setShowChecked(e.target.checked)}
-              className="rounded border-line-strong"
-            />
-            Show checked
-          </label>
         </div>
       )}
 
@@ -202,11 +194,15 @@ export default function ShoppingPage() {
             >
               <button
                 onClick={() => handleCheck(it.id, Boolean(it.checked))}
+                aria-label={`Mark ${it.item} as bought`}
                 className="w-6 h-6 rounded-md border-2 border-line-strong hover:border-success flex items-center justify-center transition-colors shrink-0"
               >
                 {/* empty checkbox */}
               </button>
-              <span className="flex-1 text-content-primary">{it.item}</span>
+              <span className="flex-1 min-w-0 text-content-primary">
+                {it.item}
+                {it.amount && <span className="ml-2 text-sm text-content-muted tabular-nums">{it.amount}</span>}
+              </span>
               {it.list_name !== 'grocery' && (
                 <span className="text-[10px] text-content-muted capitalize px-2 py-0.5 rounded-full border border-line-subtle">
                   {it.list_name}
@@ -221,32 +217,34 @@ export default function ShoppingPage() {
             </Card>
           ))}
 
-          {/* Checked items */}
-          {showChecked && checked.length > 0 && (
+          {/* Bought items: tap the tick to move one back up */}
+          {checked.length > 0 && (
             <>
-              <div className="flex items-center justify-between pt-4">
-                <span className="text-xs text-content-muted uppercase tracking-wider">
-                  Checked ({checked.length})
-                </span>
+              <div className="flex items-center justify-between pt-6 border-t border-line-subtle">
+                <h2 className="text-sm font-semibold text-content-secondary uppercase tracking-wider">
+                  Bought ({checked.length})
+                </h2>
                 <Button variant="danger" size="sm" onClick={handleClearChecked}>
                   <Trash2 size={12} />
-                  Clear checked
+                  Clear bought
                 </Button>
               </div>
               {checked.map((it) => (
                 <Card
                   key={it.id}
                   padding="none"
-                  className="p-3 flex items-center gap-3 opacity-50 group"
+                  className="p-3 flex items-center gap-3 opacity-60 group"
                 >
                   <button
                     onClick={() => handleCheck(it.id, true)}
+                    aria-label={`Move ${it.item} back to the list`}
                     className="w-6 h-6 rounded-md border-2 border-success/50 bg-success/20 flex items-center justify-center transition-colors shrink-0"
                   >
                     <Check size={14} className="text-success" />
                   </button>
-                  <span className="flex-1 text-content-secondary line-through">
+                  <span className="flex-1 min-w-0 text-content-secondary line-through">
                     {it.item}
+                    {it.amount && <span className="ml-2 text-sm tabular-nums">{it.amount}</span>}
                   </span>
                   {it.list_name !== 'grocery' && (
                     <span className="text-[10px] text-content-muted capitalize px-2 py-0.5 rounded-full border border-line-subtle">
