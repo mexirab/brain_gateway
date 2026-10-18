@@ -17,6 +17,8 @@ describe('upstreamTimeoutMs', () => {
     [['api', 'finance', 'categories']],
     [['api', 'self_audit', 'run']],
     [['api', 'paperless', 'upload']],
+    [['api', 'documents']],
+    [['api', 'documents', 'suggest-name']],
   ])('%j gets the slow budget', (path) => {
     expect(upstreamTimeoutMs(path)).toBe(SLOW_UPSTREAM_TIMEOUT_MS);
   });

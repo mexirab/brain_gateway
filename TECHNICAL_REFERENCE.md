@@ -294,6 +294,34 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 
 Metrics: `bgw_pantry_scan_total{kind,result}`, `bgw_pantry_scan_latency_seconds{kind,result}`, `bgw_pantry_receipt_lines_total{result}`, `bgw_pantry_events_total{kind,source}`, `bgw_barcode_lookup_total{result}`, `bgw_meal_plan_generated_total{result}`, `bgw_meal_plan_latency_seconds`, `bgw_meal_plan_swap_total{result}`, `bgw_meal_plan_swap_latency_seconds`, `bgw_pantry_cook_events_total{slot,source}` (slot `prep|dinner|other`), `bgw_pantry_portions_eaten_total{source}`, `bgw_pantry_decay_total{kind}`, `bgw_pantry_decay_last_run_timestamp_seconds`, `bgw_pantry_fridge_check_nudge_total{result}`, `bgw_pantry_reminder_done_total{result}`.
 
+### Document Vault
+
+All bearer-gated (`orchestrator/routes_documents.py`).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/documents` | List documents |
+| GET | `/api/documents/categories` | Vault categories |
+| GET | `/api/documents/{doc_id}` | Document metadata |
+| POST | `/api/documents` | Multipart upload + save. OCR (Tesseract), embeddings and the Chroma add run in worker threads (no event-loop stall) |
+| POST | `/api/documents/suggest-name` | Photo → suggested `title` + `category` (see below). Stateless — nothing saved |
+| PUT | `/api/documents/{doc_id}` | Update metadata |
+| DELETE | `/api/documents/{doc_id}` | Delete document + its RAG chunks |
+| GET | `/api/documents/{doc_id}/download` | Original file (attachment) |
+| GET | `/api/documents/{doc_id}/text` | Extracted text |
+
+**`POST /api/documents/suggest-name`** — multipart `file`, JPEG/PNG/WebP only (magic-byte check). Body cap: middleware `_PATH_UPLOAD_LIMITS` 16 MB (Content-Length required → 411), handler cap `min(15 MB, VISION_MAX_IMAGE_SIZE)`. Bad input → HTTP 400 `{ok:false, error}`; everything else HTTP 200:
+
+| Response | Meaning |
+|----------|---------|
+| `{ok:true, title, category}` | Title sanitized (control chars/markup stripped, ≤80 chars); category coerced to a vault category |
+| `{ok:false, reason:"busy"}` | Another suggestion is running (one at a time, `asyncio.Lock`) |
+| `{ok:false, reason:"vision_unavailable"}` | `check_vision_health` failed (Helios asleep) — fails fast, does NOT wake Helios |
+| `{ok:false, reason:"timeout"}` | `analyze_image(thinking=False)` exceeded its 60 s budget |
+| `{ok:false, reason:"vision_error"\|"unreadable"}` | Vision call failed / reply not parseable |
+
+Logs result, bytes and latency only. Metric `bgw_document_name_suggest_total{result}` (`ok|vision_off|timeout|vision_error|unparseable|busy|bad_image`); Grafana panel "Document Photo Name Suggestions (1h)" (Vision/Web Search/TTS row). No alert by design.
+
 ### Paperless Bridge (F-012)
 
 | Method | Path | Purpose |

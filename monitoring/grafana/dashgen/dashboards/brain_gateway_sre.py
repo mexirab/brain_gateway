@@ -1074,6 +1074,12 @@ def build() -> dict:
             stack=True,
         ),
         timeseries(
+            "Document Photo Name Suggestions (1h)",
+            [("sum by (result) (increase(bgw_document_name_suggest_total[1h]))", "{{result}}")],
+            unit="none",
+            stack=True,
+        ),
+        timeseries(
             "Vision Latency p95 + Image Size p95",
             [
                 (
@@ -1095,7 +1101,7 @@ def build() -> dict:
             unit="none",
         ),
     ]
-    row, y = grid_row(vwstts_row_1, y, heights=[8, 8, 8])
+    row, y = grid_row(vwstts_row_1, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     vwstts_row_2 = [

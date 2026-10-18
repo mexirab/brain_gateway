@@ -164,8 +164,13 @@ _LARGE_UPLOAD_PATHS = {
 }
 
 
+# Upload routes with their own cap (below MAX_UPLOAD_SIZE) so an oversized body is
+# refused on Content-Length instead of being spooled to disk first.
+_PATH_UPLOAD_LIMITS = {"/api/documents/suggest-name": 16 * 1024 * 1024}
+
+
 # Upload routes that refuse chunked (length-less) bodies.
-_LENGTH_REQUIRED_PATHS = {"/api/pantry/scan"}
+_LENGTH_REQUIRED_PATHS = {"/api/pantry/scan", "/api/documents/suggest-name"}
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -179,7 +184,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"error": "Content-Length required"}, status_code=411)
         if content_length:
             path = request.url.path
-            limit = MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE
+            limit = _PATH_UPLOAD_LIMITS.get(path) or (MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE)
             try:
                 if int(content_length) > limit:
                     return JSONResponse(

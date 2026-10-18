@@ -185,6 +185,14 @@ export const api = {
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
     return res.json() as Promise<VaultDocument>;
   },
+  /** Vision-read title + category for a document photo; ok:false = let the user type. */
+  suggestDocumentName: async (photo: Blob, signal?: AbortSignal) => {
+    const form = new FormData();
+    form.append('file', photo, 'photo.jpg');
+    const res = await fetch(`${PROXY}/api/documents/suggest-name`, { method: 'POST', body: form, signal });
+    if (!res.ok) throw new Error(`Suggestion failed: ${res.status}`);
+    return res.json() as Promise<{ ok: boolean; title?: string; category?: string; reason?: string }>;
+  },
   updateDocument: (id: string, updates: Partial<VaultDocument>) =>
     fetcher<{ ok: boolean }>(`/api/documents/${id}`, {
       method: 'PUT',

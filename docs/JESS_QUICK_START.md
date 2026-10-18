@@ -212,6 +212,7 @@ Styles: calm, gentle, soothing, quiet, warm, thoughtful, encouraging, upbeat, pr
 |----------|--------------|
 | "Save this as a doc: meeting notes from..." | Stored in `document_vault` (text-based, semantically searchable) |
 | "Read me the lease summary" | Pulls from `document_vault` |
+| Dashboard → Documents → Upload → "Take photo" | Photographs a paper document; Jess suggests a title + category (when Helios is awake), you edit and Save |
 | Drop a PDF in the inbox + "Save the lease for OCR" | Pushed to Paperless-ngx for OCR + auto-tagging (requires the wizard's Paperless integration) |
 
 ---
