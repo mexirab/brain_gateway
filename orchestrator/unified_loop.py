@@ -522,15 +522,34 @@ _MOVEMENT_PATTERNS = re.compile(
 )
 
 
+# Vision output that cloud_brain._process_vision appends to a photo turn.
+# It describes the photo (text read off a letter, a screen...) — never the
+# user's own words, so it must not drive intent routing or selfcare logging.
+_IMAGE_ANALYSIS_RE = re.compile(r"\[Image \d+ Analysis\].*", re.DOTALL)
+
+
 def _last_user_text(messages: list) -> str:
-    """Extract the last user message text."""
+    """Extract the last user message's own text.
+
+    A multi-part turn (photo + optional text) yields its text parts — possibly
+    "" for a photo-only turn — and never falls back to an older turn: that
+    re-ran the previous message's fast-path device command on a photo send.
+    """
     for msg in reversed(messages):
-        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
-            text = msg["content"]
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            return " ".join(
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
+            ).strip()
+        if isinstance(content, str):
             # Skip Open WebUI auto-generated prompts (tags, follow-ups, titles)
-            if text.startswith("### Task:"):
+            if content.startswith("### Task:"):
                 continue
-            return text
+            return _IMAGE_ANALYSIS_RE.sub("", content).strip()
     return ""
 
 

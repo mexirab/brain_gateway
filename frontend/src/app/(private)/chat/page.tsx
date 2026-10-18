@@ -7,7 +7,8 @@ import { MessageSquare, Volume2, VolumeX, PanelLeftClose, PanelLeftOpen, Square,
 import { streamChat } from '@/lib/chat';
 import { api } from '@/lib/api';
 import { friendlyError } from '@/lib/errors';
-import type { ChatMessage, RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
+import { buildChatHistory, withPhotoMarker } from '@/lib/chat-history';
+import type { RoutingInfo, AnnouncementEntry, Conversation } from '@/lib/types';
 import MessageBubble from '@/components/chat/MessageBubble';
 import ChatInput, { type SendSource } from '@/components/chat/ChatInput';
 import ChatSidebar from '@/components/chat/ChatSidebar';
@@ -28,6 +29,8 @@ interface DisplayMessage {
   announcement?: AnnouncementEntry;
   saved?: boolean; // already persisted to DB
   error?: boolean; // friendlyError placeholder — not worth speaking
+  /** Photos shown in this bubble — this session only, never persisted. */
+  images?: string[];
 }
 
 // Screen-reader text for the always-mounted live region (a region mounted
@@ -225,13 +228,16 @@ export default function ChatPage() {
     }
   }, [annHistory]);
 
-  const handleSend = async (text: string, source: SendSource) => {
+  const handleSend = async (text: string, source: SendSource, images: string[] = []) => {
     // Snapshot the history BEFORE adding this turn: messagesRef is synced by
     // an effect, and after the await below it can already contain the new
     // user message + empty placeholder (first message of a new chat) — which
     // sent the question twice with a blank assistant turn between them.
     const prior = messagesRef.current;
-    const userMsg: DisplayMessage = { uid: nextUid(), role: 'user', content: text };
+    const userMsg: DisplayMessage = {
+      uid: nextUid(), role: 'user', content: text, ...(images.length ? { images } : {}),
+    };
+    const textForRecord = withPhotoMarker(text, images.length);
     const assistantMsg: DisplayMessage = { uid: nextUid(), role: 'assistant', content: '' };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -251,7 +257,7 @@ export default function ChatPage() {
     // (otherwise `streaming` stays true and the input is dead).
     let convId: string;
     try {
-      convId = await ensureConversation(text);
+      convId = await ensureConversation(text || 'Photo');
     } catch (err) {
       setStreaming(false);
       streamingRef.current = false;
@@ -269,20 +275,20 @@ export default function ChatPage() {
     }
 
     // Persist user message
-    api.saveMessage(convId, 'user', text).catch(() => {});
+    api.saveMessage(convId, 'user', textForRecord).catch(() => {});
 
-    // Use ref to avoid stale closure — messages may change between click and here
-    // Skip blank and error bubbles: an empty assistant turn in the history
-    // made the brain reply with nothing again (the server drops them too).
-    const chatHistory: ChatMessage[] = [
-      ...prior.filter((m) => !m.error && m.content.trim()).map((m) => ({
+    // `prior` is the snapshot above (stale-closure safe).
+    const chatHistory = buildChatHistory(
+      prior.map((m) => ({
         role: m.role,
-        content: m.announcement
-          ? `[Jess announced - ${m.announcement.announcement_type}]: ${m.content}`
-          : m.content,
+        content: m.content,
+        photoCount: m.images?.length,
+        announcementType: m.announcement?.announcement_type,
+        error: m.error,
       })),
-      { role: 'user' as const, content: text },
-    ];
+      text,
+      images,
+    );
 
     let finalContent = '';
 
@@ -477,6 +483,7 @@ export default function ChatPage() {
               key={msg.uid}
               role={msg.role}
               content={msg.content}
+              images={msg.images}
               routing={msg.routing}
               announcement={msg.announcement}
               isStreaming={streaming && i === messages.length - 1 && msg.role === 'assistant'}

@@ -26,6 +26,8 @@ interface MessageBubbleProps {
   routing?: RoutingInfo;
   announcement?: AnnouncementEntry;
   isStreaming?: boolean;
+  /** Photos sent with this message (data URIs; current session only). */
+  images?: string[];
   /** Speech status for THIS message (undefined when it isn't the one speaking). */
   speechStatus?: SpeechStatus;
   /** Speak this message. Must be wired to a tap (iOS audio unlock). */
@@ -49,6 +51,7 @@ export default function MessageBubble({
   routing,
   announcement,
   isStreaming,
+  images,
   speechStatus,
   onSpeak,
 }: MessageBubbleProps) {
@@ -78,6 +81,20 @@ export default function MessageBubble({
       )}
 
       <div className={`max-w-[80%] space-y-1 ${isUser ? 'items-end' : 'items-start'}`}>
+        {images && images.length > 0 && (
+          <div className={`flex flex-wrap gap-2 ${isUser ? 'justify-end' : ''}`}>
+            {images.map((src, i) => (
+              // eslint-disable-next-line @next/next/no-img-element -- data URI, nothing to optimise
+              <img
+                key={i}
+                src={src}
+                alt={`Photo ${i + 1} you sent`}
+                className="h-32 max-w-full rounded-xl object-cover border border-line/30"
+              />
+            ))}
+          </div>
+        )}
+        {(content || !images?.length) && (
         <div
           className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
             isUser
@@ -92,6 +109,7 @@ export default function MessageBubble({
             <span className="inline-block w-1.5 h-4 bg-brand rounded-full ml-0.5 animate-pulse" />
           )}
         </div>
+        )}
         {isAnnouncement && (
           <span className="text-[10px] text-content-muted px-1">
             {announcement.announcement_type}
