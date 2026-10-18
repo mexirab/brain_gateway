@@ -121,7 +121,8 @@ def _handle_shopping_list(arguments: Dict[str, Any]) -> str:
             return f"Your {list_name} list is empty."
         lines = [f"Your {list_name} list ({len(items)} items):"]
         for it in items:
-            lines.append(f"  - {it['item']} (id: {it['id']})")
+            amount = f" — {it['amount']}" if it.get("amount") else ""
+            lines.append(f"  - {it['item']}{amount} (id: {it['id']})")
         return "\n".join(lines)
 
     elif action in ("check", "uncheck", "remove"):

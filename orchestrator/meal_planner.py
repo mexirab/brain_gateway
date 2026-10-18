@@ -41,6 +41,7 @@ from rapidfuzz import fuzz
 
 from orchestrator import diet_profiles, shared, state_store
 from orchestrator import pantry_manager as pm
+from orchestrator.grocery_amounts import combine_amounts
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
     LLM_CALL_COUNT,
@@ -160,7 +161,10 @@ def _norm_recipe(raw: Any, med_names: Optional[List[str]] = None) -> Optional[Di
         if not item or key in seen:
             continue
         seen.add(key)
-        ingredients.append({"item": item, "amount": _clean_text(ing.get("amount"), 40)})
+        amount = _clean_text(ing.get("amount"), 40)
+        if amount and _mentions_any(amount, med_names or []):
+            amount = ""  # same scrub as steps: it ends up on the grocery list
+        ingredients.append({"item": item, "amount": amount})
     steps = [s for s in (_clean_text(x, 240) for x in raw_steps[:MAX_STEPS] if isinstance(x, str)) if s]
     steps = [s for s in steps if not _mentions_any(s, med_names or [])]
     if not name or not ingredients or not steps:
@@ -867,10 +871,13 @@ def get_plan(plan_id: int) -> Optional[Dict[str, Any]]:
             ):
                 batches[str(b["id"])] = dict(b)
     missing: Dict[str, str] = {}
+    amounts: Dict[str, List[str]] = {}
     for rec in recipes.values():
         for ing in rec["ingredients"]:
             if not ing["have"]:
-                missing.setdefault(pm._norm(ing["item"]), ing["item"])
+                key = pm._norm(ing["item"])
+                missing.setdefault(key, ing["item"])
+                amounts.setdefault(key, []).append(ing.get("amount") or "")
     return {
         "id": p["id"],
         "week_start": p["week_start"],
@@ -886,6 +893,8 @@ def get_plan(plan_id: int) -> Optional[Dict[str, Any]]:
         "recipes": {str(k): v for k, v in recipes.items()},
         "batches": batches,
         "missing": sorted(missing.values(), key=str.lower),
+        # Name → total to buy across the week's recipes ("" if none given).
+        "missing_amounts": {name: combine_amounts(amounts[key]) for key, name in missing.items()},
     }
 
 
@@ -931,14 +940,24 @@ def current_plans() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _add_missing_to_grocery(names: List[str]) -> int:
-    existing = {pm._norm(i.get("item", "")) for i in state_store.get_shopping_list("grocery")}
+def _add_missing_to_grocery(names: List[str], amounts: Optional[Dict[str, str]] = None) -> int:
+    """Add what's not already on the (unbought part of the) grocery list, with
+    how much to buy. ``amounts`` maps item name → the plan's week total; an item
+    already listed gets its amount refreshed to that total (left over from an
+    older plan, or changed by a swap). Only plan-computed totals are written —
+    amounts can't be edited by hand, so there is nothing to clobber."""
+    by_key = {pm._norm(k): v for k, v in (amounts or {}).items() if v}
+    existing = {pm._norm(i.get("item", "")): i for i in state_store.get_shopping_list("grocery")}
     added = 0
     for n in names:
-        if pm._norm(n) not in existing:
-            state_store.add_shopping_item(n, "grocery")
-            existing.add(pm._norm(n))
+        key = pm._norm(n)
+        amount = by_key.get(key, "")
+        if key not in existing:
+            existing[key] = state_store.add_shopping_item(n, "grocery", amount=amount)
             added += 1
+        elif amount and existing[key].get("amount") != amount:
+            state_store.set_shopping_amount(existing[key]["id"], amount)
+            existing[key]["amount"] = amount
     return added
 
 
@@ -1047,7 +1066,7 @@ def accept_plan(plan_id: int, already_have: Optional[List[Any]] = None) -> Dict[
             # Not a staple: a perishable marked "have" must still be able to run out.
             if pm._norm(m) in have_keys and pm.add_item(m, location="pantry", source="manual").get("ok"):
                 stocked += 1
-        added = _add_missing_to_grocery(to_buy)
+        added = _add_missing_to_grocery(to_buy, plan.get("missing_amounts"))
         reminder_ids = _schedule_reminders(plan, diet_profiles.load())
         _set_plan(plan_id, reminder_ids=json.dumps(reminder_ids))
     logger.info(
@@ -1222,7 +1241,12 @@ async def _swap_entry(entry_id: int) -> Dict[str, Any]:
                 # Keep the grocery list and reminders in step with the change.
                 updated = get_plan(entry["plan_id"])
                 new = updated["recipes"].get(str(rid), {})
-                added = _add_missing_to_grocery([i["item"] for i in new.get("ingredients", []) if not i["have"]])
+                # Week totals from the updated plan, so an item the new recipe
+                # shares with another meal shows the combined amount.
+                added = _add_missing_to_grocery(
+                    [i["item"] for i in new.get("ingredients", []) if not i["have"]],
+                    updated.get("missing_amounts"),
+                )
                 _reschedule(updated)
             return {"ok": True, "added_to_list": added}
 
@@ -1304,7 +1328,8 @@ def plan_summary() -> str:
     if lunch_days:
         lines.append(f"- Lunches {', '.join(lunch_days)}: the batch prep")
     if p["missing"]:
-        lines.append("Need to buy: " + ", ".join(p["missing"]))
+        amounts = p.get("missing_amounts") or {}
+        lines.append("Need to buy: " + ", ".join(f"{m} ({amounts[m]})" if amounts.get(m) else m for m in p["missing"]))
     for w in p["warnings"]:
         lines.append(f"Note: {w}")
     return "\n".join(lines)[:7500]

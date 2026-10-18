@@ -257,6 +257,8 @@ export interface ShoppingItem {
   checked: number;
   added_at: string;
   checked_at: string | null;
+  /** How much to buy ("1.5 lb"), totalled from the meal plan; null if not set. */
+  amount?: string | null;
 }
 
 // Task backlog (durable to-do list)

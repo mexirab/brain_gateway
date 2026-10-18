@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS shopping_list (
     list_name TEXT NOT NULL DEFAULT 'grocery',
     checked INTEGER NOT NULL DEFAULT 0,
     added_at TEXT NOT NULL,
-    checked_at TEXT
+    checked_at TEXT,
+    amount TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_shopping_list_name ON shopping_list(list_name);
@@ -509,6 +510,8 @@ def init_db():
             ("workout_programs", "deload_every_weeks", "INTEGER NOT NULL DEFAULT 6"),
             # F-015 phase 4: lunch entries point at the cooked batch they eat from.
             ("meal_plan_entries", "prep_batch_id", "INTEGER"),
+            # How much to buy ("1.5 lb"), totalled from the meal plan's recipes.
+            ("shopping_list", "amount", "TEXT"),
         ]
         for table, col_name, col_def in _workout_migrations:
             cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -1175,12 +1178,19 @@ def get_selfcare_today(action: Optional[str] = None) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def add_shopping_item(item: str, list_name: str = "grocery") -> Dict[str, Any]:
+def add_shopping_item(item: str, list_name: str = "grocery", amount: Optional[str] = None) -> Dict[str, Any]:
     """Add an item to a shopping list. Returns the created item."""
     with get_db() as conn:
         cursor = conn.execute(
-            "INSERT INTO shopping_list (item, list_name, added_at) VALUES (?, ?, ?)",
-            (item[:200], list_name[:50], datetime.now().isoformat()),
+            "INSERT INTO shopping_list (item, list_name, added_at, amount) VALUES (?, ?, ?, ?)",
+            # One line each: a newline in a name would fake extra rows in the
+            # list the shopping_list tool shows the model.
+            (
+                " ".join(item.split())[:200],
+                " ".join(list_name.split())[:50],
+                datetime.now().isoformat(),
+                " ".join((amount or "").split())[:80] or None,
+            ),
         )
         row = conn.execute("SELECT * FROM shopping_list WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return dict(row)
@@ -1201,6 +1211,16 @@ def get_shopping_list(list_name: Optional[str] = None, include_checked: bool = F
     with get_db() as conn:
         rows = conn.execute(f"SELECT * FROM shopping_list{where} ORDER BY {order}", params).fetchall()
     return [dict(r) for r in rows]
+
+
+def set_shopping_amount(item_id: int, amount: Optional[str]) -> bool:
+    """Set (or clear, with None/"") how much of an item to buy."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE shopping_list SET amount = ? WHERE id = ?",
+            ((amount or "")[:80] or None, item_id),
+        )
+        return cursor.rowcount > 0
 
 
 def check_shopping_item(item_id: int, checked: bool = True) -> bool:
