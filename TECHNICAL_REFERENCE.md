@@ -168,12 +168,14 @@ On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/shopping?list_name=&include_checked=` | Get shopping list items |
-| POST | `/api/shopping` | Add item: `{item, list_name}` |
+| GET | `/api/shopping?list_name=&include_checked=` | Get shopping list items: `[{id, item, list_name, checked, added_at, checked_at, amount}]` |
+| POST | `/api/shopping` | Add item: `{item, list_name}` (item whitespace collapsed to one line, ≤200 chars). 400 on non-JSON / non-object body or blank item |
 | POST | `/api/shopping/{id}/check` | Check off item |
 | POST | `/api/shopping/{id}/uncheck` | Uncheck item |
 | DELETE | `/api/shopping/checked?list_name=` | Clear all checked items |
 | DELETE | `/api/shopping/{id}` | Delete item |
+
+`shopping_list` table: `id, item, list_name, checked, added_at, checked_at, amount` (`amount` nullable TEXT ≤80 chars, added by startup migration). `amount` is written only by the meal planner (week total from `grocery_amounts.combine_amounts`, see `docs/PANTRY.md` → Accept); no route sets it. The `shopping_list` tool's `list` output shows it (`- milk — 1 1/2 lb (id: 3)`).
 
 ### Vision
 
@@ -274,7 +276,7 @@ Mounted only when `PANTRY_ENABLED=true` (otherwise 404). Bearer-gated. Errors: `
 | PUT | `/api/pantry/diet` | Partial update (`reminders` and `fridge_check` merged key-wise) → `{ok, settings, rescheduled_plans}` (active plans' reminders moved when reminder settings changed). 400 on invalid value or non-object body |
 | GET | `/api/pantry/plan` | `{active, draft}` — `active` = accepted plan covering today, else next upcoming; `draft` = newest `generating`/`draft`, else a `failed` attempt from the last 2 days. Each a plan object or null |
 | POST | `/api/pantry/plan/generate` | 202 `{ok, plan_id, week_start}` (runs in background — poll `GET /plan/{id}`). 409 one already generating (`plan_id`), 400 nothing to plan (both counts 0), 503 brain asleep (wakes Helios if `HELIOS_WAKE_ENABLED`) |
-| GET | `/api/pantry/plan/{id}` | Plan: `{id, week_start, status, profile, profile_label, notes, warnings[], error, created_at, accepted_at, entries[{id, plan_id, day, slot, recipe_id, mode, portions, status, prep_batch_id}], recipes{id: {name, minutes, ingredients[{item, amount, have}], steps, est_*, rating, ...}}, batches{id: {id, portions_made, portions_left, good_until, status}}, missing[]}`. `have`/`missing` computed live vs inventory |
+| GET | `/api/pantry/plan/{id}` | Plan: `{id, week_start, status, profile, profile_label, notes, warnings[], error, created_at, accepted_at, entries[{id, plan_id, day, slot, recipe_id, mode, portions, status, prep_batch_id}], recipes{id: {name, minutes, ingredients[{item, amount, have}], steps, est_*, rating, ...}}, batches{id: {id, portions_made, portions_left, good_until, status}}, missing[], missing_amounts{name: total}}`. `have`/`missing` computed live vs inventory; `missing_amounts` = week total per missing item (`""` if no recipe gave one) |
 | POST | `/api/pantry/plan/{id}/accept` | `{already_have?: [str]}` (≤100) → `{ok, added_to_list, added_to_pantry, reminders}`. 409 unless `draft`, 400 bad `already_have` |
 | POST | `/api/pantry/plan/{id}/discard` | `draft`/`failed`/`active` (or `generating` >10 min) → `discarded`; pending reminders cancelled. 409 otherwise |
 | POST | `/api/pantry/plan/entry/{id}/swap` | Replace one recipe (draft/active plan) → `{ok, added_to_list, plan}`. 404 unknown entry, 409 busy / plan not editable / already changed / entry not `planned`, 502 LLM error or unusable reply, 503 brain asleep |

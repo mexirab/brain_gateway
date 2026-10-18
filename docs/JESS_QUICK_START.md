@@ -156,6 +156,8 @@ For ADHD use, **the assistant never gives you a list when one answer will do.** 
 | "Check off milk" / "I got the milk" | Marks complete without deleting |
 | "Clear the checked items" | Cleans up what you've already got |
 
+On the dashboard's Shopping page, ticked items move to "Bought" (tap one to put it back; an Undo bar shows for a few seconds). Items added from an accepted meal plan show how much to buy ("1 1/2 lb").
+
 Multiple lists work — "Add batteries to the hardware list," etc.
 
 ---
@@ -257,7 +259,7 @@ Needs `PANTRY_ENABLED=true`. Everything here also works from the dashboard's `/p
 | "We're out of milk" | Marks it out and adds it to the grocery list |
 | "Add 2 cans of chickpeas" / "I used the last of the rice" | Updates the count or level |
 | "Make a meal plan for this week" | Builds a plan from what you have and your diet settings (takes about a minute) |
-| "Accept the plan" | Adds the missing ingredients to the grocery list and sets cooking reminders — only when you say so |
+| "Accept the plan" | Adds the missing ingredients (with how much to buy for the week) to the grocery list and sets cooking reminders — only when you say so |
 | "Swap Wednesday's dinner" / "What's the recipe for tonight?" | Changes one meal, or reads its recipe |
 | "I made the soup" | Marks the planned meal cooked and takes its ingredients out of stock |
 | "Made turkey tacos tonight with the ground turkey and tortillas" | Logs a meal that wasn't on the plan (one use of each item) |
