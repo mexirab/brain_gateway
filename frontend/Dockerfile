@@ -11,6 +11,9 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
+# Listen on every interface: Docker sets HOSTNAME to the container id, which
+# resolves to only one IP when the container is on several networks.
+ENV HOSTNAME=0.0.0.0
 
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static

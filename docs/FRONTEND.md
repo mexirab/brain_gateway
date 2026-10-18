@@ -144,6 +144,8 @@ docker compose up -d --build --force-recreate frontend
 
 **Note:** `npm run build` on host does NOT update the Docker container. Must rebuild the Docker image.
 
+- The container must listen on all interfaces (`HOSTNAME=0.0.0.0`, set in both `frontend/Dockerfile` and `docker-compose.yml`). It is on two networks (`gateway-net` + `frontend-probe-net`), and Next.js standalone otherwise binds to the container-id hostname, which resolves to only one of them — a deploy on 2026-10-18 left the dashboard unreachable that way. The CI health check retries both services for ~40 s on `127.0.0.1` and fails the deploy if either stays down.
+
 ## Key Files
 
 - `frontend/src/components/architecture/SystemDiagram.tsx` — Interactive animated SVG system architecture diagram
