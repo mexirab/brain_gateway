@@ -25,6 +25,7 @@ from orchestrator.metrics import (
     TOOL_ROUNDS,
 )
 from orchestrator.shared import MAX_TOOL_ROUNDS
+from orchestrator.vision_handler import PHOTO_BLOCK_RE
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +526,7 @@ _MOVEMENT_PATTERNS = re.compile(
 # Vision output that cloud_brain._process_vision appends to a photo turn.
 # It describes the photo (text read off a letter, a screen...) — never the
 # user's own words, so it must not drive intent routing or selfcare logging.
-_IMAGE_ANALYSIS_RE = re.compile(r"\[Image \d+ Analysis\].*", re.DOTALL)
+_IMAGE_ANALYSIS_RE = PHOTO_BLOCK_RE
 
 
 def _last_user_text(messages: list) -> str:

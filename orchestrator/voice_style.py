@@ -361,7 +361,7 @@ def clear_one_reply_style() -> None:
 # message before the model runs and sets the one-reply style itself, mapping
 # onto the same fixed PRESETS. Lasting changes ("from now on") stay with the
 # voice_style tool. Inputs composed by a relay rather than typed/spoken by the
-# user (Telegram's "[I sent you a photo…]" + vision description) are skipped.
+# user (Telegram's "[I sent you a photo.]" + framed PHOTO CONTENT block) are skipped.
 
 # (preset, word pattern) — first match wins, so specific phrases come first.
 _TONE_WORDS: tuple[tuple[str, str], ...] = (

@@ -703,12 +703,42 @@ async def _handle_photo_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[
         await _send_text(client, chat_id, "I couldn't download that photo — try sending it again.", kind="system")
         return
 
-    try:
-        from orchestrator.vision_handler import analyze_image
+    from orchestrator.vision_handler import (
+        analyze_image,
+        check_vision_health,
+        frame_photo_description,
+        is_vision_failure,
+    )
 
+    # Probe first: with Helios asleep analyze_image would wait out VISION_TIMEOUT.
+    if not await check_vision_health():
+        _done("vision_unreachable")
+        woke = False
+        from orchestrator import shared
+
+        if shared.HELIOS_WAKE_ENABLED:
+            from orchestrator import helios_power
+
+            woke = bool((await helios_power.wake_helios()).get("ok"))
+        await _send_text(
+            client,
+            chat_id,
+            "💤 My eyes (GPU) are asleep"
+            + (
+                " — waking them now. Send the photo again in a couple of minutes."
+                if woke
+                else ", so I can't look at that photo yet. Send it again once I'm back."
+            ),
+            kind="system",
+        )
+        return
+
+    try:
         data_uri = f"data:{mime};base64,{base64.b64encode(img).decode('ascii')}"
         description = await analyze_image(
-            data_uri, "Describe this image in detail, including any visible text transcribed verbatim."
+            data_uri,
+            "Describe this image in detail, including any visible text transcribed verbatim.",
+            thinking=False,  # reasoning can eat the whole budget on a busy photo
         )
     except Exception as e:
         logger.error("[TELEGRAM] Vision analysis failed: %s: %s", type(e).__name__, _redact(str(e)))
@@ -716,18 +746,21 @@ async def _handle_photo_impl(client: httpx.AsyncClient, chat_id: str, msg: Dict[
         await _send_text(client, chat_id, "I couldn't make sense of that photo just now — try again.", kind="system")
         return
 
-    # analyze_image signals failure by RETURNING a bracketed sentinel string
+    # analyze_image signals failure by RETURNING one of its failure sentences
     # (e.g. "[Vision model timed out...]"), never by raising — so an empty check
     # alone would forward that error text into Jess as if it were a real caption.
     description = (description or "").strip()
-    if not description or (description.startswith("[") and description.endswith("]")):
+    if is_vision_failure(description):
         _done("vision_failed")
         await _send_text(client, chat_id, "I couldn't make sense of that photo just now — try again.", kind="system")
         return
 
     caption = (msg.get("caption") or "").strip()
     note = f"\n\nMy note with the photo: {caption}" if caption else ""
-    jess_input = f"[I sent you a photo. Here is what image analysis reports it shows:]\n{description}{note}"
+    # The framed block goes LAST: intent routing and auto-learn strip from the
+    # first photo block to the end of the turn (vision_handler.PHOTO_BLOCK_RE).
+    # The leading "[" keeps voice_style.detect_tone_request off relay-composed text.
+    jess_input = f"[I sent you a photo.]{note}\n\n{frame_photo_description(1, description)}"
     reply = await _relay_locked(client, chat_id, jess_input)
     TELEGRAM_MEDIA_TOTAL.labels(kind="photo", result="ok").inc()
     TELEGRAM_UPDATE_TOTAL.labels(kind="photo", result="ok").inc()

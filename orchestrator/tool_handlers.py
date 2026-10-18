@@ -1154,7 +1154,7 @@ async def tool_analyze_image(query: str) -> str:
     image_data = shared._vision_image_cache[last_key]
 
     logger.info("[VISION_TOOL] Re-analyzing cached image (%d-char query)", len(query))
-    return await analyze_image(image_data, query)
+    return await analyze_image(image_data, query, thinking=False)
 
 
 def _handle_document_vault(arguments: Dict[str, Any]) -> str:

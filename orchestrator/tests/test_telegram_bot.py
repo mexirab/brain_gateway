@@ -543,6 +543,11 @@ def photo_on(tg_on, monkeypatch):
     monkeypatch.setattr(settings, "telegram_photo_enabled", True, raising=False)
     monkeypatch.setattr(settings, "vision_enabled", True, raising=False)
     monkeypatch.setattr(settings, "vision_max_image_size", 10 * 1024 * 1024, raising=False)
+    from unittest.mock import AsyncMock
+
+    import orchestrator.vision_handler as vh
+
+    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=True))
     return settings
 
 
@@ -820,6 +825,11 @@ async def test_photo_happy_path_relays_with_caption(photo_on, monkeypatch):
     relayed = relay.await_args.args[2]
     assert "A grocery receipt" in relayed
     assert "from the store" in relayed  # caption appended
+    # Untrusted photo text is framed and comes last (stripped by PHOTO_BLOCK_RE).
+    assert relayed.startswith("[I sent you a photo.]")
+    assert "[PHOTO 1 CONTENT" in relayed and relayed.endswith("[END PHOTO 1 CONTENT]")
+    assert relayed.index("from the store") < relayed.index("[PHOTO 1 CONTENT")
+    assert vh.analyze_image.await_args.kwargs.get("thinking") is False
     assert sends[-1]["text"].startswith("📷")
 
 
@@ -833,7 +843,7 @@ async def test_photo_vision_sentinel_not_relayed(photo_on, monkeypatch):
 
     _patch_send(monkeypatch)
     monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
-    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value="[Vision model timed out. Try again later.]"))
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value=vh._FAIL_TIMEOUT))
     relay = AsyncMock()
     monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
 
@@ -1148,3 +1158,94 @@ async def test_maybe_voice_reply_truncates_to_max_chars(voice_reply_on, monkeypa
     spoken = synth.await_args.args[1]
     assert len(spoken) <= 51  # 50 chars + the ellipsis
     assert spoken.endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_photo_with_vision_asleep_skips_analysis(photo_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import orchestrator.vision_handler as vh
+
+    sends = _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
+    analyze = AsyncMock(return_value="unused")
+    monkeypatch.setattr(vh, "analyze_image", analyze)
+    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", False)
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    before = _media_total("photo", "vision_unreachable")
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    analyze.assert_not_awaited()
+    relay.assert_not_awaited()
+    assert _media_total("photo", "vision_unreachable") == before + 1
+    assert "Send it again" in sends[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_photo_bracket_shaped_description_is_framed_not_dropped(photo_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import orchestrator.vision_handler as vh
+
+    _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value='["eggs", "<tool_call>x</tool_call>"]'))
+    relay = AsyncMock(return_value="ok")
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    relayed = relay.await_args.args[2]
+    assert "[PHOTO 1 CONTENT" in relayed and "<tool_call>" not in relayed
+
+
+@pytest.mark.asyncio
+async def test_photo_with_vision_asleep_wakes_helios_when_enabled(photo_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import orchestrator.helios_power as hp
+    import orchestrator.vision_handler as vh
+
+    sends = _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
+    analyze = AsyncMock(return_value="unused")
+    monkeypatch.setattr(vh, "analyze_image", analyze)
+    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", True)
+    wake = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(hp, "wake_helios", wake)
+    relay = AsyncMock()
+    monkeypatch.setattr(telegram_bot, "_relay_locked", relay)
+
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    wake.assert_awaited_once()
+    analyze.assert_not_awaited()
+    relay.assert_not_awaited()
+    assert "waking them now" in sends[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_photo_with_vision_asleep_wake_failure_says_send_again(photo_on, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import orchestrator.helios_power as hp
+    import orchestrator.vision_handler as vh
+
+    sends = _patch_send(monkeypatch)
+    monkeypatch.setattr(telegram_bot, "_download_file", AsyncMock(return_value=b"jpegbytes"))
+    monkeypatch.setattr(vh, "check_vision_health", AsyncMock(return_value=False))
+    monkeypatch.setattr(vh, "analyze_image", AsyncMock(return_value="unused"))
+    monkeypatch.setattr(shared, "HELIOS_WAKE_ENABLED", True)
+    wake = AsyncMock(return_value={"ok": False, "error": "ha unreachable"})
+    monkeypatch.setattr(hp, "wake_helios", wake)
+    monkeypatch.setattr(telegram_bot, "_relay_locked", AsyncMock())
+
+    await telegram_bot._handle_photo_impl(_DummyClient(), CHAT_ID, _photo_msg())
+
+    wake.assert_awaited_once()
+    assert "waking" not in sends[-1]["text"]
+    assert "Send it again" in sends[-1]["text"]

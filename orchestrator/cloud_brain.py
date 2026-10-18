@@ -11,7 +11,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import re
 import time
 import uuid
 from contextvars import ContextVar
@@ -38,6 +37,7 @@ from orchestrator.metrics import (
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
+from orchestrator.vision_handler import PHOTO_BLOCK_RE
 from orchestrator.voice_style import apply_tone_request, record_reply_style
 
 logger = logging.getLogger(__name__)
@@ -122,7 +122,8 @@ def _is_empty_assistant(m: dict) -> bool:
 # Set per request by the chat endpoint from ChatRequest.conversation_id.
 conversation_id_var: ContextVar[Optional[str]] = ContextVar("conversation_id", default=None)
 
-_IMAGE_ANALYSIS_RE = re.compile(r"\[Image \d+ Analysis\].*", re.DOTALL)
+# Photo-analysis blocks appended to a user turn (one definition, shared).
+_IMAGE_ANALYSIS_RE = PHOTO_BLOCK_RE
 
 
 def _user_texts(messages: List[Dict]) -> List[str]:
@@ -142,6 +143,35 @@ def _user_texts(messages: List[Dict]) -> List[str]:
 _AUTO_LEARN_MAX_MESSAGES = 200  # merged-window cap per cached conversation
 _AUTO_LEARN_RETRY_MINUTES = 30  # brain unreachable at fire time → try again
 _AUTO_LEARN_MAX_ATTEMPTS = 16  # 15 retries ≈ 7.5h (Helios asleep overnight)
+
+
+def _strip_photo_content(m: Dict) -> Dict:
+    """Copy of a message with photo-analysis text replaced by a `[photo]` marker.
+
+    What a photo shows (a letter, a screen, someone else's note) is untrusted
+    content, not facts about the user — it must never reach auto-learn and
+    become long-term memory. Image parts (vision off / not processed) become
+    the marker too, so no base64 is cached either.
+    """
+    c = m.get("content")
+    if isinstance(c, str):
+        if not _IMAGE_ANALYSIS_RE.search(c):
+            return m
+        own = _IMAGE_ANALYSIS_RE.sub("", c).strip()
+        return {**m, "content": f"{own}\n\n[photo]" if own else "[photo]"}
+    if isinstance(c, list):
+        parts = []
+        for p in c:
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") == "text" and isinstance(p.get("text"), str):
+                t = _IMAGE_ANALYSIS_RE.sub("", p["text"]).strip()
+                if t:
+                    parts.append(t)
+            elif p.get("type") == "image_url":
+                parts.append("[photo]")
+        return {**m, "content": "\n\n".join(parts)}
+    return m
 
 
 def _message_key(m: Dict) -> tuple:
@@ -552,13 +582,23 @@ class CloudBrain:
     async def _process_vision(self, messages: List[Dict], routing_info: Dict) -> List[Dict]:
         """Detect images in messages, analyze via vision model, replace with text descriptions.
 
-        Images are sent to the dedicated vision model on Saturn. The text description
-        replaces the image content so Helios can reason about it with tools.
+        Images go to the vision model (VISION_MODEL_URL — the Helios brain on the
+        live deployment). Each description is neutralized and framed as untrusted
+        PHOTO CONTENT, then replaces the image so the text-only loop can use it.
+        If the vision model is unreachable no analysis is attempted (no
+        VISION_TIMEOUT wait); the turn carries a NOT ANALYZED note instead.
         """
         if not shared.VISION_ENABLED:
             return messages
 
-        from orchestrator.vision_handler import analyze_image, extract_images_from_messages
+        from orchestrator.metrics import VISION_REQUEST_COUNT
+        from orchestrator.vision_handler import (
+            UNREACHABLE_PLACEHOLDER,
+            analyze_image,
+            check_vision_health,
+            extract_images_from_messages,
+            frame_photo_description,
+        )
 
         images = extract_images_from_messages(messages)
         if not images:
@@ -566,6 +606,15 @@ class CloudBrain:
 
         logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
         routing_info["vision_images"] = len(images)
+
+        # Probe first: with Helios asleep each analyze_image call would wait out
+        # VISION_TIMEOUT before the brain-asleep reply (and its wake) ever ran.
+        vision_up = await check_vision_health()
+        if not vision_up:
+            routing_info["vision_skipped"] = "unreachable"
+            # Expected while Helios sleeps: INFO, and counted (no analyze_image call).
+            VISION_REQUEST_COUNT.labels(status="skipped_unreachable").inc(len(images))
+            logger.info("[VISION] Vision model unreachable — skipping %d image(s)", len(images))
 
         # Process images and collect descriptions per message index
         processed_msgs = [m.copy() for m in messages]
@@ -576,15 +625,23 @@ class CloudBrain:
             prompt = img_info["text"] or "Describe this image in detail, including any text visible."
             image_url = img_info["image_url"]
 
-            # Cache the image for follow-up tool calls (key from image data, not prompt)
-            cache_key = hashlib.sha256(image_url[:200].encode()).hexdigest()[:12]
+            # Cache the image for follow-up analyze_image tool calls. Key from
+            # the WHOLE data URI: canvas JPEGs share their first ~200 chars.
+            # Re-insert so the newest image is last (the tool reads the last).
+            cache_key = hashlib.sha256(image_url.encode()).hexdigest()[:16]
+            shared._vision_image_cache.pop(cache_key, None)
             shared._vision_image_cache[cache_key] = image_url
             # Cap cache at 5 entries
             while len(shared._vision_image_cache) > 5:
                 oldest = next(iter(shared._vision_image_cache))
                 shared._vision_image_cache.pop(oldest, None)
 
-            description = await analyze_image(image_url, prompt)
+            if vision_up:
+                # thinking=False: on a busy photo the brain can spend the whole
+                # token budget reasoning and return nothing (seen on pantry scans).
+                description = await analyze_image(image_url, prompt, thinking=False)
+            else:
+                description = UNREACHABLE_PLACEHOLDER
             descriptions_by_idx.setdefault(idx, []).append(description)
 
         # Replace multipart content with all image descriptions for that message
@@ -594,7 +651,7 @@ class CloudBrain:
                 if img["msg_index"] == idx and img["text"]:
                     original_text = img["text"]
                     break
-            analysis_parts = [f"[Image {i + 1} Analysis]\n{d}" for i, d in enumerate(descs)]
+            analysis_parts = [frame_photo_description(i + 1, d) for i, d in enumerate(descs)]
             replacement = "\n\n".join(analysis_parts)
             if original_text:
                 replacement = f"{original_text}\n\n{replacement}"
@@ -635,7 +692,9 @@ class CloudBrain:
             cid = conversation_id_var.get()
             run_at = datetime.now() + timedelta(minutes=shared.AUTO_LEARN_DELAY_MINUTES)
             cache = shared._auto_learn_conversations
-            snapshot = list(messages)  # never alias a list the caller may mutate later
+            # Never alias a list the caller may mutate later; photo text never
+            # reaches long-term memory (and keys/comparisons use the same view).
+            snapshot = [_strip_photo_content(m) for m in messages]
 
             if cid:
                 # The client told us which conversation this is: one key for
@@ -651,11 +710,11 @@ class CloudBrain:
                 # DIFFERENT conversation that opens the same way, and the cached
                 # one is extracted separately. (An edited last turn looks the
                 # same; extracting it twice beats losing a real conversation.)
-                user_texts = _user_texts(messages)
+                user_texts = _user_texts(snapshot)
                 first_user = user_texts[0][:100] if user_texts else ""
                 session_key = hashlib.sha256(f"{first_user}:{datetime.now().date()}".encode()).hexdigest()[:16]
                 prev = cache.get(session_key)
-                if prev is not None and not _continues_conversation(prev, messages):
+                if prev is not None and not _continues_conversation(prev, snapshot):
                     flushed_key = f"{session_key}-{uuid.uuid4().hex[:6]}"
                     cache[flushed_key] = prev
                     shared.scheduler.add_job(
@@ -1003,6 +1062,8 @@ class CloudBrain:
                 "Your reminders, calendar, and nudges keep running in the background. "
                 "Once the model is back up, try again."
             )
+        if routing_info.get("vision_skipped"):
+            message += "\n\nI couldn't look at your photo while it's down — please send it again once I'm back."
         routing_info["mode"] = "brain_asleep"
         model = self._model_name or "brain-asleep"
         if stream:

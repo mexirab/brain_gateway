@@ -443,7 +443,7 @@ Two-way capture + reminder channel. A dedicated long-polling task inside the orc
 | `TELEGRAM_VOICE_REPLY_ENABLED` | `true` | Speak Jess's reply back to a voice note (TTS on Helios via `TTS_URL` → `sendVoice` MP3). Voice input only — text messages stay text-only. Needs `TTS_URL` configured. |
 | `TELEGRAM_VOICE_REPLY_MAX_CHARS` | `1200` | Cap the portion of the reply that gets synthesized to speech. |
 
-Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_latency_seconds{kind}`, `bgw_telegram_update_total{kind,result}` (`kind` includes `voice`\|`photo`), `bgw_telegram_callback_total{action,result}`, `bgw_telegram_media_total{kind,result}` (voice/photo processing outcomes + `voice_reply` outbound TTS reply: `ok`\|`tts_failed`\|`send_failed`).
+Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_latency_seconds{kind}`, `bgw_telegram_update_total{kind,result}` (`kind` includes `voice`\|`photo`), `bgw_telegram_callback_total{action,result}`, `bgw_telegram_media_total{kind,result}` (voice/photo processing outcomes — photo `vision_unreachable` = Helios asleep, not analyzed — + `voice_reply` outbound TTS reply: `ok`\|`tts_failed`\|`send_failed`).
 
 ## Self-audit (F-014)
 
