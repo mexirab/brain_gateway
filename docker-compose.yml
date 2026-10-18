@@ -591,6 +591,11 @@ services:
       - ORCHESTRATOR_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
+      # Next.js standalone listens on $HOSTNAME, which Docker sets to the
+      # container id. With two networks that resolves to ONE of the two IPs,
+      # so the published port (or the probe) could hit the other one and get
+      # connection reset — the dashboard went dark after a deploy 2026-10-18.
+      - HOSTNAME=0.0.0.0
     depends_on:
       - orchestrator
     networks:
