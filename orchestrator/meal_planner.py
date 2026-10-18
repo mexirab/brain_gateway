@@ -161,7 +161,10 @@ def _norm_recipe(raw: Any, med_names: Optional[List[str]] = None) -> Optional[Di
         if not item or key in seen:
             continue
         seen.add(key)
-        ingredients.append({"item": item, "amount": _clean_text(ing.get("amount"), 40)})
+        amount = _clean_text(ing.get("amount"), 40)
+        if amount and _mentions_any(amount, med_names or []):
+            amount = ""  # same scrub as steps: it ends up on the grocery list
+        ingredients.append({"item": item, "amount": amount})
     steps = [s for s in (_clean_text(x, 240) for x in raw_steps[:MAX_STEPS] if isinstance(x, str)) if s]
     steps = [s for s in steps if not _mentions_any(s, med_names or [])]
     if not name or not ingredients or not steps:
@@ -939,18 +942,20 @@ def current_plans() -> Dict[str, Any]:
 
 def _add_missing_to_grocery(names: List[str], amounts: Optional[Dict[str, str]] = None) -> int:
     """Add what's not already on the (unbought part of the) grocery list, with
-    how much to buy. An item already listed without an amount gets one; an
-    existing amount is left alone (the user may have edited it)."""
-    amounts = amounts or {}
+    how much to buy. ``amounts`` maps item name → the plan's week total; an item
+    already listed gets its amount refreshed to that total (left over from an
+    older plan, or changed by a swap). Only plan-computed totals are written —
+    amounts can't be edited by hand, so there is nothing to clobber."""
+    by_key = {pm._norm(k): v for k, v in (amounts or {}).items() if v}
     existing = {pm._norm(i.get("item", "")): i for i in state_store.get_shopping_list("grocery")}
     added = 0
     for n in names:
         key = pm._norm(n)
-        amount = amounts.get(n) or ""
+        amount = by_key.get(key, "")
         if key not in existing:
             existing[key] = state_store.add_shopping_item(n, "grocery", amount=amount)
             added += 1
-        elif amount and not existing[key].get("amount"):
+        elif amount and existing[key].get("amount") != amount:
             state_store.set_shopping_amount(existing[key]["id"], amount)
             existing[key]["amount"] = amount
     return added
@@ -1236,9 +1241,11 @@ async def _swap_entry(entry_id: int) -> Dict[str, Any]:
                 # Keep the grocery list and reminders in step with the change.
                 updated = get_plan(entry["plan_id"])
                 new = updated["recipes"].get(str(rid), {})
-                need = [i for i in new.get("ingredients", []) if not i["have"]]
+                # Week totals from the updated plan, so an item the new recipe
+                # shares with another meal shows the combined amount.
                 added = _add_missing_to_grocery(
-                    [i["item"] for i in need], {i["item"]: combine_amounts([i.get("amount")]) for i in need}
+                    [i["item"] for i in new.get("ingredients", []) if not i["have"]],
+                    updated.get("missing_amounts"),
                 )
                 _reschedule(updated)
             return {"ok": True, "added_to_list": added}

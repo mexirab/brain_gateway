@@ -63,6 +63,8 @@ _UNITS["loaves"] = ("loaf", "loaves")
 _VULGAR = {"½": "1/2", "¼": "1/4", "¾": "3/4", "⅓": "1/3", "⅔": "2/3", "⅛": "1/8"}
 _QTY = r"(\d+\s+\d+/\d+|\d+/\d+|\d+(?:\.\d+)?|\.\d+)"
 _AMOUNT_RE = re.compile(rf"^{_QTY}\s*([a-z]+)?\.?$")
+_NUMBERISH = re.compile(r"^[\d\s./]+$")
+_MARKUP = re.compile(r"[<>{}\[\]\\`|\x00-\x1f\x7f]")
 
 
 def _parse(amount: str) -> Optional[Tuple[Fraction, str]]:
@@ -90,17 +92,29 @@ def _parse(amount: str) -> Optional[Tuple[Fraction, str]]:
     return qty, (_UNITS[unit_text][0] if unit_text else "")
 
 
+_PLURAL: Dict[str, Optional[str]] = {c: p for c, p in _UNITS.values()}
+_NICE_DENOMINATORS = (2, 3, 4, 8)
+
+
 def _fmt_qty(qty: Fraction) -> str:
+    """Kitchen-style: 1/3 and 1 1/2 for halves, thirds, quarters and eighths;
+    otherwise up to two decimals."""
     if qty.denominator == 1:
         return str(qty.numerator)
+    if qty.denominator in _NICE_DENOMINATORS:
+        whole, rest = divmod(qty.numerator, qty.denominator)
+        frac = f"{rest}/{qty.denominator}"
+        return f"{whole} {frac}" if whole else frac
+    if qty < Fraction(1, 100):
+        return "<0.01"
     return f"{float(qty):.2f}".rstrip("0").rstrip(".")
 
 
 def _fmt(qty: Fraction, unit: str) -> str:
     if not unit:
         return _fmt_qty(qty)
-    plural = next((p for c, p in _UNITS.values() if c == unit), None)
-    word = plural if plural and qty != 1 else unit
+    plural = _PLURAL.get(unit)
+    word = plural if plural and qty > 1 else unit
     return f"{_fmt_qty(qty)} {word}"
 
 
@@ -121,7 +135,11 @@ def combine_amounts(amounts: Iterable[Optional[str]]) -> str:
                 order.append(key)
             totals[key] += qty
         else:
-            text = " ".join(a.split())[:40]
+            # Same characters meal_planner._clean_text drops: no markup can ride
+            # along into the tool output / plan summary the model reads.
+            text = " ".join(_MARKUP.sub(" ", a).split())[:40]
+            if not text or _NUMBERISH.match(text):
+                continue  # empty, or a number that didn't parse ("0", "1/0"): nothing useful to show
             key = f"r:{text.lower()}"
             if key not in raw:
                 raw[key] = text

@@ -24,8 +24,13 @@ async def add_shopping(req: Request):
     """Add an item to the shopping list."""
     from orchestrator.state_store import add_shopping_item
 
-    body = await req.json()
-    item = str(body.get("item", "")).strip()[:200]
+    try:
+        body = await req.json()
+    except ValueError:
+        return JSONResponse({"error": "Body must be JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Body must be a JSON object"}, status_code=400)
+    item = " ".join(str(body.get("item", "")).split())[:200]
     list_name = str(body.get("list_name", "grocery")).strip()[:50]
     if not item:
         return JSONResponse({"error": "Item is required"}, status_code=400)

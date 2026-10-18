@@ -1183,7 +1183,14 @@ def add_shopping_item(item: str, list_name: str = "grocery", amount: Optional[st
     with get_db() as conn:
         cursor = conn.execute(
             "INSERT INTO shopping_list (item, list_name, added_at, amount) VALUES (?, ?, ?, ?)",
-            (item[:200], list_name[:50], datetime.now().isoformat(), (amount or "")[:80] or None),
+            # One line each: a newline in a name would fake extra rows in the
+            # list the shopping_list tool shows the model.
+            (
+                " ".join(item.split())[:200],
+                " ".join(list_name.split())[:50],
+                datetime.now().isoformat(),
+                " ".join((amount or "").split())[:80] or None,
+            ),
         )
         row = conn.execute("SELECT * FROM shopping_list WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return dict(row)
