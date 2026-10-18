@@ -225,7 +225,7 @@ async def openai_audio_transcriptions(
     file: UploadFile = File(...),
     model: str = "whisper-1",
 ):
-    """OpenAI-compatible STT endpoint for OWUI to point at.
+    """OpenAI-compatible STT endpoint for any OpenAI-style client.
 
     Sets the voice beacon before proxying to Whisper so the next chat
     request within VOICE_FLAG_WINDOW_SEC is tagged as a voice turn.
@@ -276,7 +276,7 @@ def _prepend_silence_wav(wav_bytes: bytes, ms: int) -> bytes:
 
 @router.post("/v1/audio/speech")
 async def openai_audio_speech(request: Request):
-    """OpenAI-compatible TTS endpoint for OWUI to point at.
+    """OpenAI-compatible TTS endpoint for any OpenAI-style client.
 
     Proxies to the real Qwen3-TTS server and prepends ~150ms of silence to
     WAV responses so the browser's audio buffer and the TTS prosody model

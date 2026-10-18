@@ -237,7 +237,7 @@ async def _announce_voice(
         return {"success": True, "suppressed": True, "reason": "dnd_active"}
 
     # Mid-conversation guard — if the user is in an active voice session with
-    # Jess (OWUI mic or HA Assist), suppress the announcement. Firing an
+    # Jess (dashboard call mode, STT proxy or HA Assist), suppress the announcement. Firing an
     # announcement over the house speakers while the user is talking to Jess
     # in the browser both (a) confuses the user — two Jesses, different rooms,
     # crosstalk — and (b) piles onto Qwen3-TTS, which is already handling
@@ -617,8 +617,8 @@ if _raw_webui_url and not WEBUI_URL:
 async def _send_notification(text: str) -> Dict[str, Any]:
     """Send a mobile push notification to all configured phones via HA Companion App.
 
-    Includes a deep link to Open WebUI so tapping the notification opens the
-    chat interface. Works with both iOS and Android Companion Apps.
+    Includes WEBUI_URL (if set, e.g. the dashboard) as a deep link so tapping
+    the notification opens it. Works with both iOS and Android Companion Apps.
     Fans out to all services in MOBILE_NOTIFY_SERVICES concurrently.
     """
     headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}

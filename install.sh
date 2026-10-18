@@ -126,7 +126,7 @@ stage_1_nerves() {
     echo
     say "About to install:"
     echo "    - Docker engine + docker-compose-v2 (apt: docker.io, docker-compose-v2)"
-    echo "    - The orchestrator + frontend + support services (Redis, SearXNG, Open WebUI)"
+    echo "    - The orchestrator + frontend + support services (Redis, SearXNG)"
     echo
     echo "    No GPU driver and no local model layer — the LLM/TTS/STT live on a separate"
     echo "    GPU 'brain' box. This node stays up 24/7 serving reminders, calendar, nudges"

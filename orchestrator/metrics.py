@@ -1058,7 +1058,7 @@ PALACE_MEMORIES_TOTAL = Gauge(
 TRAINING_CORPUS_RECORDS = Counter(
     "bgw_training_corpus_records_total",
     "New records appended to the training corpus by the nightly drain",
-    ["source"],  # owui | state_store | cc_session
+    ["source"],  # state_store | cc_session
 )
 
 # -- Expert Model (Qwen3-32B Thinking on Saturn 3090) -----------------------

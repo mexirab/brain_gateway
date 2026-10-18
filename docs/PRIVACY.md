@@ -86,8 +86,7 @@ Brain Gateway listens on these ports by default:
 
 | Port | Service | Access |
 |------|---------|--------|
-| 80 / 443 | Open WebUI (chat UI) | LAN |
-| 3001 | Dashboard frontend | LAN by default; loopback with `FRONTEND_BIND_ADDR=127.0.0.1` (serve it via Tailscale Serve HTTPS) |
+| 3001 | Dashboard frontend (incl. chat UI) | LAN by default; loopback with `FRONTEND_BIND_ADDR=127.0.0.1` (serve it via Tailscale Serve HTTPS) |
 | 8888 | Orchestrator API | LAN, bearer-token gated |
 | 8080 / 8002 / 8003 | Model layer (vLLM / TTS / STT) | **Loopback only** (`127.0.0.1`) by default |
 | 10300 / 10301 | Wyoming bridges (HA voice pipeline) | LAN |

@@ -1,6 +1,6 @@
 """First-chat welcome message generator.
 
-When a user opens Open WebUI for the first time on a fresh install, the
+When a user opens the dashboard chat for the first time on a fresh install, the
 orchestrator prepends a one-time welcome before the assistant's response.
 This module is the pure formatter for that welcome — it takes the
 assistant's configuration and the set of integrations the user has already
@@ -19,7 +19,7 @@ identity (`/api/config/identity`), but a future write path or compromised
 operator could put markdown / HTML-injection payloads there. We strip
 markdown control characters at format time so the welcome can't be
 weaponized — defense in depth on top of whatever the chat client's
-renderer (Open WebUI etc.) sanitizes.
+renderer sanitizes.
 """
 
 from __future__ import annotations

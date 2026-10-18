@@ -97,9 +97,9 @@ Or say **"Goodnight"** and deal with it tomorrow.
 
 ## When nothing works
 
-- **Dashboard:** http://helios.tail74fc4a.ts.net:3001
+- **Dashboard:** https://jupiter-amds.tail74fc4a.ts.net
 - **Diagnose:** Say *"Check system health"* or *"Is everything working?"*
-- **Reset conversation:** Start a fresh chat in Open WebUI
+- **Reset conversation:** Start a new chat on the dashboard (`/chat`)
 
 ---
 

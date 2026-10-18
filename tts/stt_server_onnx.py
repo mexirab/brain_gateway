@@ -3,8 +3,8 @@ Parakeet STT FastAPI Server (ONNX / CPU) for Brain Gateway
 ==========================================================
 Drop-in replacement for stt_server_parakeet.py that runs the SAME NVIDIA
 Parakeet-TDT-0.6B weights via ONNX Runtime on CPU (onnx-asr) instead of NeMo.
-Same API surface, so the Wyoming bridge, orchestrator proxy, Open WebUI STT
-client and Telegram voice path keep working unchanged.
+Same API surface, so the Wyoming bridge, orchestrator proxy, dashboard
+chat and Telegram voice path keep working unchanged.
 
 Why: NeMo's runtime balloons a 0.6B model to ~6.3 GB VRAM, which no longer fits
 alongside the 27B LLM + TTS on the single 32 GB GPU. ONNX Runtime on CPU uses

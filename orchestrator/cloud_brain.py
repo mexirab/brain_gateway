@@ -664,7 +664,7 @@ class CloudBrain:
         logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
 
         # Strip any remaining base64/image content from ALL messages before sending to text-only LLM
-        # Open WebUI resends full conversation history including old images
+        # Clients may resend full conversation history including old images
         for i, msg in enumerate(processed_msgs):
             content = msg.get("content")
             if isinstance(content, list):
@@ -705,7 +705,7 @@ class CloudBrain:
                 if prev is not None and not _continues_conversation(prev, snapshot):
                     snapshot = _merge_window(prev, snapshot) or snapshot
             else:
-                # Fallback (HA Assist, OWUI): opening message + date. A turn
+                # Fallback (HA Assist, other clients): opening message + date. A turn
                 # that doesn't continue the cached conversation is treated as a
                 # DIFFERENT conversation that opens the same way, and the cached
                 # one is extracted separately. (An edited last turn looks the

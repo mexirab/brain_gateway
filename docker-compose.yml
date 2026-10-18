@@ -16,48 +16,6 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    restart: unless-stopped
-    logging: *default-logging
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "${SERVICE_WEBUI_PORT:-80}:8080"
-    volumes:
-      - open-webui-data:/app/backend/data
-    environment:
-      - WEBUI_AUTH=False
-      - WEBUI_NAME=${WEBUI_NAME:-Brain Gateway}
-      # Route Open WebUI OpenAI-compatible calls through the orchestrator
-      - OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
-      - OPENAI_API_KEY=${API_TOKEN:?API_TOKEN must be set in .env}
-      - REDIS_URL=redis://redis:6379/0
-      # TTS configuration — routed through the orchestrator so responses get a
-      # ~150ms silence pre-roll (kills per-sentence first-word stutter) and
-      # synthesis latency shows up in bgw_voice_tts_seconds
-      - AUDIO_TTS_ENGINE=openai
-      - AUDIO_TTS_OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
-      - AUDIO_TTS_OPENAI_API_KEY=${API_TOKEN:?API_TOKEN must be set in .env}
-      - AUDIO_TTS_VOICE=${TTS_VOICE:-jessica}
-      - AUDIO_TTS_SPLIT_ON=sentence
-      # STT configuration — routed through the orchestrator so voice-mic turns
-      # get tagged for the voice-pipeline histogram (beacon set in routes_vision)
-      - AUDIO_STT_ENGINE=openai
-      - AUDIO_STT_OPENAI_API_BASE_URL=http://orchestrator:${SERVICE_ORCHESTRATOR_PORT:-8888}/v1
-      - AUDIO_STT_OPENAI_API_KEY=${API_TOKEN:?API_TOKEN must be set in .env}
-      - AUDIO_STT_MODEL=whisper-1
-      # Disable auto title generation — it fires a full LLM call after every
-      # turn (~15s on Qwen3.5-27B) and can queue behind the next voice turn.
-      - ENABLE_TITLE_GENERATION=false
-      - ENABLE_TAGS_GENERATION=false
-    depends_on:
-      - orchestrator
-      - redis
-    networks:
-      - gateway-net
-
   orchestrator:
     build:
       context: ./orchestrator
@@ -121,13 +79,6 @@ services:
       # Host path is configurable; container path is fixed (matches
       # CLAUDE_PROJECTS_PATH env var in the environment block below).
       - ${CLAUDE_PROJECTS_HOST_PATH:-/home/labadmin/.claude/projects}:/home/jess/.claude/projects:ro
-      # Open WebUI sqlite db (read-only) — nightly training-corpus drain job
-      # snapshots user/assistant turns from OWUI into an append-only JSONL
-      # under /app/data/training_corpus/. Sharing the named volume is safe
-      # because the drain only reads; OWUI owns all writes. With OWUI stopped
-      # the volume is empty and the drain logs the source as skipped once.
-      # Claude Code sessions are read from CLAUDE_PROJECTS_PATH (mount above).
-      - open-webui-data:/app/owui_data:ro
       # Codebase access for code_agent (read-only by default)
       - ${GATEWAY_ROOT_PATH:-.}:/opt/gateway_mvp:ro
     environment:
@@ -167,8 +118,8 @@ services:
       # TTS (empty = disabled)
       - TTS_URL=${TTS_URL:-}
       - TTS_VOICE=${TTS_VOICE:-jessica}
-      # STT — used by /v1/audio/transcriptions to proxy OWUI mic audio to
-      # Whisper while setting the voice beacon for pipeline metrics
+      # STT — dashboard /api/stt/transcribe, Telegram voice notes, and the
+      # OpenAI-compatible /v1/audio/transcriptions proxy
       - STT_URL=${STT_URL:-}
       # Callback URL (used for HA notifications pointing back to orchestrator)
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://localhost:${SERVICE_ORCHESTRATOR_PORT:-8888}}
@@ -211,7 +162,7 @@ services:
       - ACTUAL_SYNC_INTERVAL=${ACTUAL_SYNC_INTERVAL:-30}
       - ACTUAL_SYNC_MONTHS=${ACTUAL_SYNC_MONTHS:-3}
       - ACTUAL_FUN_MONEY_CATEGORY=${ACTUAL_FUN_MONEY_CATEGORY:-Fun Money}
-      # Open WebUI deep link (for notification tap → chat)
+      # URL an HA Companion push opens on tap (e.g. the dashboard); empty = none
       - WEBUI_URL=${WEBUI_URL:-}
       # API authentication
       - API_TOKEN=${API_TOKEN:?API_TOKEN must be set in .env}
@@ -674,7 +625,6 @@ networks:
     driver: bridge
 
 volumes:
-  open-webui-data:
   redis-data:
   brain-audio:
   searxng-data:

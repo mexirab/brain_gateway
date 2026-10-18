@@ -4,6 +4,28 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Open WebUI retired (2026-10-18)
+
+Branch `chore/retire-open-webui`. The dashboard `/chat` (frontend :3001) is the chat UI; Open WebUI is removed from the product.
+
+### Removed
+
+- `open-webui` compose service, `open-webui-data` volume and the orchestrator's `open-webui-data:/app/owui_data:ro` mount.
+- Training-corpus `owui` source (`drain_owui`, `MAX_JSON_BLOB_BYTES`, `TRAINING_CORPUS_OWUI_DB`). Sources are now `state_store` + `cc_session`; `run_drain()` returns `{"state_store": N, "cc_session": N}`. Records already on disk keep `source="owui"` and still dedup. `bgw_training_corpus_records_total{source}` no longer gets `owui`.
+- `.env.example` `SERVICE_WEBUI_PORT` + `WEBUI_NAME`; unwired `Caddyfile` + `nginx/default.conf`; homepage tile; promtail `open-webui` container regex.
+
+### Kept
+
+- Bearer-gated OpenAI-compatible `/v1/audio/transcriptions` + `/v1/audio/speech` (generic now).
+- `WEBUI_URL` — now the URL an HA Companion push opens on tap (e.g. the dashboard); empty = none.
+- `scripts/build_embedding_corpus.py --webui-db` (offline; can read an archived `webui.db`).
+
+### Ops
+
+- Live OWUI container + image on Helios removed 2026-10-18; old chat history archived off-box to Saturn.
+
+---
+
 ## [Unreleased] — Actual Budget replaces YNAB (2026-10-02)
 
 Branch `feat/actual-budget`. Finance (Financial Quest Board) now syncs read-only from a self-hosted Actual Budget server; the YNAB integration is removed.

@@ -1,5 +1,5 @@
 [Unit]
-Description=Brain Gateway Stack (Open WebUI + Orchestrator)
+Description=Brain Gateway Stack (Orchestrator + Frontend)
 Requires=docker.service
 After=docker.service
 

@@ -4,20 +4,20 @@
 
 `stt_server_parakeet.py` is a drop-in replacement for the Whisper STT server
 (`stt_server.py`) that uses NVIDIA Parakeet TDT V3 via NeMo. It binds the same
-port (`8003`) and exposes the same three endpoints, so Open WebUI and the
-Wyoming bridge need no config changes.
+port (`8003`) and exposes the same three endpoints, so the orchestrator
+(`STT_URL`) and the Wyoming bridge need no config changes.
 
 **Expected wins:** ~10× faster (RTFx >2000), lower WER (6.32% vs Whisper
 medium's 7.44%), sub-200ms streaming. Frees real VRAM headroom on Helios GPU1
 (RTX PRO 5000), which is shared with TTS (and, until its 2026-10-16 retirement, the code agent).
 
-**Trade-off:** Parakeet is English-only. ATOM Echo and Open WebUI usage in this
+**Trade-off:** Parakeet is English-only. ATOM Echo and dashboard voice usage in this
 deployment is English, so this is acceptable.
 
 **Cutover gap:** stopping Whisper and waiting for Parakeet's lifespan to bind
 port 8003 takes up to a minute on a warm cache (longer on cold). ATOM Echo
-retries; Open WebUI users who hit record during the window will see a transient
-error.
+retries; dashboard `/chat` users who hit record during the window will see a
+transient error.
 
 ## One-time install (Helios host)
 
@@ -99,7 +99,7 @@ journalctl -u parakeet-stt -n 100 --no-pager
 
 Then test interactively:
 - Trigger an ATOM Echo voice command via Home Assistant.
-- Record + submit a clip in Open WebUI.
+- Record + submit a clip from the dashboard `/chat` mic.
 
 ## Rollback
 

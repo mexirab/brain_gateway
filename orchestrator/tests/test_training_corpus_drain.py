@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from orchestrator.jobs_training_corpus import (
     _fingerprint,
     drain_cc_sessions,
-    drain_owui,
     drain_state_store,
     run_drain,
 )
@@ -21,23 +20,6 @@ from orchestrator.jobs_training_corpus import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-def _make_owui_db(path: Path, conversations: list[dict]) -> None:
-    conn = sqlite3.connect(str(path))
-    conn.execute(
-        "CREATE TABLE chat (id VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255), "
-        "title TEXT, archived INTEGER, created_at DATETIME, updated_at DATETIME, "
-        "chat JSON, meta JSON)"
-    )
-    for conv in conversations:
-        conn.execute(
-            "INSERT INTO chat (id, user_id, title, archived, created_at, updated_at, chat, meta) "
-            "VALUES (?, 'u', ?, 0, '2026-04-15', '2026-04-15', ?, '{}')",
-            (conv["id"], conv.get("title", "t"), json.dumps(conv["chat"])),
-        )
-    conn.commit()
-    conn.close()
 
 
 def _make_state_db(path: Path, rows: list[tuple]) -> None:
@@ -60,81 +42,6 @@ def _make_cc_jsonl(path: Path, entries: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry) + "\n")
-
-
-# ---------------------------------------------------------------------------
-# drain_owui
-# ---------------------------------------------------------------------------
-
-
-class TestDrainOwui:
-    def test_missing_db_yields_nothing(self, tmp_path):
-        assert list(drain_owui(tmp_path / "nope.db")) == []
-
-    def test_extracts_user_and_assistant_turns(self, tmp_path):
-        db = tmp_path / "webui.db"
-        _make_owui_db(
-            db,
-            [
-                {
-                    "id": "c1",
-                    "chat": {
-                        "messages": [
-                            {"role": "user", "content": "hello jess", "timestamp": 1775000000},
-                            {"role": "assistant", "content": "hi nadim", "timestamp": 1775000001},
-                        ],
-                    },
-                }
-            ],
-        )
-        records = list(drain_owui(db))
-        assert len(records) == 2
-        assert {r.role for r in records} == {"user", "assistant"}
-        assert all(r.source == "owui" for r in records)
-        assert all(r.session_id == "owui:c1" for r in records)
-        # Timestamps converted from unix epoch
-        assert all("2026" in r.ts or "2025" in r.ts for r in records)
-
-    def test_falls_back_to_history_messages(self, tmp_path):
-        db = tmp_path / "webui.db"
-        _make_owui_db(
-            db,
-            [
-                {
-                    "id": "c2",
-                    "chat": {
-                        "history": {
-                            "messages": {
-                                "m1": {"role": "user", "content": "from history", "timestamp": 1775000000},
-                            },
-                        },
-                    },
-                }
-            ],
-        )
-        records = list(drain_owui(db))
-        assert len(records) == 1
-        assert records[0].text == "from history"
-
-    def test_skips_short_content(self, tmp_path):
-        db = tmp_path / "webui.db"
-        _make_owui_db(
-            db,
-            [
-                {"id": "c3", "chat": {"messages": [{"role": "user", "content": "a"}]}},
-            ],
-        )
-        assert list(drain_owui(db)) == []
-
-    def test_skips_non_user_assistant_roles(self, tmp_path):
-        db = tmp_path / "webui.db"
-        _make_owui_db(
-            db,
-            [
-                {"id": "c4", "chat": {"messages": [{"role": "system", "content": "ignored system prompt"}]}},
-            ],
-        )
-        assert list(drain_owui(db)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -295,56 +202,18 @@ class TestSecretFilter:
         )
         assert list(drain_cc_sessions(cc)) == []
 
-    def test_bearer_token_dropped_in_owui(self, tmp_path):
-        db = tmp_path / "webui.db"
-        _make_owui_db(
+    def test_bearer_token_dropped_in_state_store(self, tmp_path):
+        db = tmp_path / "state.db"
+        _make_state_db(
             db,
             [
-                {
-                    "id": "c1",
-                    "chat": {
-                        "messages": [
-                            {"role": "user", "content": "Authorization: Bearer eyJhbGc1234567890abcdefghij.foobar.baz"},
-                            {"role": "user", "content": "actually fine message"},
-                        ]
-                    },
-                },
+                ("c1", "user", "Authorization: Bearer eyJhbGc1234567890abcdefghij.foobar.baz", "2026-04-15T10:00:00"),
+                ("c1", "user", "actually fine message", "2026-04-15T10:00:01"),
             ],
         )
-        records = list(drain_owui(db))
+        records = list(drain_state_store(db))
         assert len(records) == 1
         assert "fine message" in records[0].text
-
-
-class TestOwuiListContent:
-    """OWUI multimodal messages put content in a list of parts."""
-
-    def test_list_of_parts_joined(self, tmp_path):
-        db = tmp_path / "webui.db"
-        _make_owui_db(
-            db,
-            [
-                {
-                    "id": "c1",
-                    "chat": {
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": "first part"},
-                                    {"type": "image", "url": "..."},
-                                    {"type": "text", "text": "second part"},
-                                ],
-                            },
-                        ]
-                    },
-                },
-            ],
-        )
-        records = list(drain_owui(db))
-        assert len(records) == 1
-        assert "first part" in records[0].text
-        assert "second part" in records[0].text
 
 
 class TestSameTextCrossSource:
@@ -352,26 +221,26 @@ class TestSameTextCrossSource:
 
     def test_cross_source_not_deduped(self, tmp_path):
         out = tmp_path / "training_corpus"
-        owui = tmp_path / "webui.db"
         state = tmp_path / "state.db"
-        no_cc = tmp_path / "nope"
+        cc = tmp_path / "cc"
+        cc.mkdir()
 
-        _make_owui_db(
-            owui,
-            [
-                {"id": "c1", "chat": {"messages": [{"role": "user", "content": "same exact question"}]}},
-            ],
-        )
         _make_state_db(
             state,
             [
                 ("conv1", "user", "same exact question", "2026-04-15T10:00:00"),
             ],
         )
+        _make_cc_jsonl(
+            cc / "s.jsonl",
+            [
+                {"type": "user", "message": {"role": "user", "content": "same exact question"}},
+            ],
+        )
 
-        counts = run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=no_cc)
-        assert counts["owui"] == 1
+        counts = run_drain(out_dir=out, state_db=state, cc_dir=cc)
         assert counts["state_store"] == 1
+        assert counts["cc_session"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -381,30 +250,16 @@ class TestSameTextCrossSource:
 
 class TestRunDrain:
     def _setup(self, tmp_path):
-        owui = tmp_path / "webui.db"
         state = tmp_path / "state.db"
         cc = tmp_path / "cc"
         out = tmp_path / "training_corpus"
         cc.mkdir()
 
-        _make_owui_db(
-            owui,
-            [
-                {
-                    "id": "c1",
-                    "chat": {
-                        "messages": [
-                            {"role": "user", "content": "owui question one"},
-                            {"role": "assistant", "content": "owui answer one"},
-                        ]
-                    },
-                },
-            ],
-        )
         _make_state_db(
             state,
             [
                 ("ss1", "user", "state store question", "2026-04-15T10:00:00"),
+                ("ss1", "assistant", "state store answer", "2026-04-15T10:00:01"),
             ],
         )
         _make_cc_jsonl(
@@ -413,18 +268,18 @@ class TestRunDrain:
                 {"type": "user", "message": {"role": "user", "content": "claude code question"}},
             ],
         )
-        return out, owui, state, cc
+        return out, state, cc
 
     def test_writes_all_sources_once(self, tmp_path):
-        out, owui, state, cc = self._setup(tmp_path)
-        counts = run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=cc)
-        assert counts == {"owui": 2, "state_store": 1, "cc_session": 1}
+        out, state, cc = self._setup(tmp_path)
+        counts = run_drain(out_dir=out, state_db=state, cc_dir=cc)
+        assert counts == {"state_store": 2, "cc_session": 1}
 
-        # Monthly file should exist with 4 lines
+        # Monthly file should exist with 3 lines
         files = list(out.glob("*.jsonl"))
         assert len(files) == 1
         lines = files[0].read_text().strip().split("\n")
-        assert len(lines) == 4
+        assert len(lines) == 3
 
         # Every record has required fields
         for line in lines:
@@ -432,19 +287,19 @@ class TestRunDrain:
             assert set(rec.keys()) == {"id", "ts", "source", "session_id", "role", "text"}
 
     def test_second_run_is_idempotent(self, tmp_path):
-        out, owui, state, cc = self._setup(tmp_path)
-        run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=cc)
-        counts2 = run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=cc)
+        out, state, cc = self._setup(tmp_path)
+        run_drain(out_dir=out, state_db=state, cc_dir=cc)
+        counts2 = run_drain(out_dir=out, state_db=state, cc_dir=cc)
         # No new records on re-run
-        assert counts2 == {"owui": 0, "state_store": 0, "cc_session": 0}
-        # File still has just 4 lines
+        assert counts2 == {"state_store": 0, "cc_session": 0}
+        # File still has just 3 lines
         files = list(out.glob("*.jsonl"))
         lines = files[0].read_text().strip().split("\n")
-        assert len(lines) == 4
+        assert len(lines) == 3
 
     def test_new_turn_appended_on_later_run(self, tmp_path):
-        out, owui, state, cc = self._setup(tmp_path)
-        run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=cc)
+        out, state, cc = self._setup(tmp_path)
+        run_drain(out_dir=out, state_db=state, cc_dir=cc)
 
         # Add a new state_store message and re-run
         conn = sqlite3.connect(str(state))
@@ -455,18 +310,17 @@ class TestRunDrain:
         conn.commit()
         conn.close()
 
-        counts2 = run_drain(out_dir=out, owui_db=owui, state_db=state, cc_dir=cc)
+        counts2 = run_drain(out_dir=out, state_db=state, cc_dir=cc)
         assert counts2["state_store"] == 1
-        assert counts2["owui"] == 0
+        assert counts2["cc_session"] == 0
 
     def test_dedup_uses_content_hash(self, tmp_path):
-        out, _, state, _ = self._setup(tmp_path)
-        # No OWUI or CC — state_store only
-        no_owui = tmp_path / "nope1.db"
+        out, state, _ = self._setup(tmp_path)
+        # No CC — state_store only
         no_cc = tmp_path / "nope2"
 
         # Run, then duplicate the exact same content with whitespace differences
-        run_drain(out_dir=out, owui_db=no_owui, state_db=state, cc_dir=no_cc)
+        run_drain(out_dir=out, state_db=state, cc_dir=no_cc)
         conn = sqlite3.connect(str(state))
         conn.execute(
             "INSERT INTO chat_messages (conversation_id, role, content, created_at) "
@@ -474,18 +328,18 @@ class TestRunDrain:
         )
         conn.commit()
         conn.close()
-        counts2 = run_drain(out_dir=out, owui_db=no_owui, state_db=state, cc_dir=no_cc)
+        counts2 = run_drain(out_dir=out, state_db=state, cc_dir=no_cc)
         assert counts2["state_store"] == 0  # whitespace-normalised dupe
 
 
 class TestFingerprint:
     def test_stable_across_whitespace(self):
-        a = _fingerprint("owui", "s1", "user", "Hello World")
-        b = _fingerprint("owui", "s1", "user", "hello  world")
+        a = _fingerprint("state_store", "s1", "user", "Hello World")
+        b = _fingerprint("state_store", "s1", "user", "hello  world")
         assert a == b
 
     def test_differs_by_source(self):
-        a = _fingerprint("owui", "s1", "user", "hi")
+        a = _fingerprint("cc_session", "s1", "user", "hi")
         b = _fingerprint("state_store", "s1", "user", "hi")
         assert a != b
 
@@ -529,7 +383,7 @@ class TestDefaultsAndMissingSources:
 
         assert "-opt-gateway-mvp" not in Settings.model_fields["training_corpus_cc_dir"].default
 
-    def test_missing_sources_logged_once_at_info_not_warning(self, tmp_path, monkeypatch, caplog):
+    def test_missing_sources_logged_once_cc_info_state_warning(self, tmp_path, monkeypatch, caplog):
         import logging
 
         from orchestrator import jobs_training_corpus as tc
@@ -538,7 +392,6 @@ class TestDefaultsAndMissingSources:
         out = tmp_path / "out"
         kwargs = dict(
             out_dir=out,
-            owui_db=tmp_path / "absent-webui.db",
             state_db=tmp_path / "absent-state.db",
             cc_dir=tmp_path / "absent-cc",
         )
@@ -547,9 +400,9 @@ class TestDefaultsAndMissingSources:
             run_drain(**kwargs)
 
         skipped = [r for r in caplog.records if r.levelno >= logging.INFO and "skipped" in r.getMessage()]
-        # Once each across two runs. owui + cc are optional → INFO; a missing
+        # Once each across two runs. cc is optional → INFO; a missing
         # brain_state.db is a real fault → WARNING.
-        assert len(skipped) == 3
+        assert len(skipped) == 2
         warnings = [r for r in skipped if r.levelno >= logging.WARNING]
         assert len(warnings) == 1 and "state_store" in warnings[0].getMessage()
 
@@ -567,3 +420,33 @@ class TestDefaultsAndMissingSources:
             cc.rmdir()
             list(drain_cc_sessions(cc))  # missing again → logged again
         assert len([r for r in caplog.records if "skipped" in r.getMessage()]) == 2
+
+
+class TestOpenWebuiRetired:
+    def test_legacy_owui_records_kept_and_deduped(self, tmp_path):
+        out = tmp_path / "training_corpus"
+        out.mkdir()
+        state = tmp_path / "state.db"
+        _make_state_db(state, [("ss1", "user", "state store question", "2026-04-15T10:00:00")])
+        legacy_id = _fingerprint("owui", "owui:c1", "user", "old chat turn")
+        legacy = {
+            "id": legacy_id,
+            "ts": "2026-04-01T00:00:00+00:00",
+            "source": "owui",
+            "session_id": "owui:c1",
+            "role": "user",
+            "text": "old chat turn",
+        }
+        legacy_file = out / "2026-04.jsonl"
+        legacy_file.write_text(json.dumps(legacy) + "\n")
+
+        counts = run_drain(out_dir=out, state_db=state, cc_dir=tmp_path / "nope")
+        assert counts == {"state_store": 1, "cc_session": 0}
+        assert json.loads(legacy_file.read_text().strip())["source"] == "owui"
+
+    def test_no_owui_source_or_setting(self):
+        from orchestrator import jobs_training_corpus as tc
+        from orchestrator.config import Settings
+
+        assert not hasattr(tc, "drain_owui")
+        assert "training_corpus_owui_db" not in Settings.model_fields
