@@ -4,7 +4,7 @@ The meal planner's recipes carry free-text amounts ("1 lb", "2 cans",
 "1/2 cup"). When several recipes in a week need the same item, the grocery
 list should show the total. The arithmetic happens here, in code, never in
 the model: amounts in the same unit are summed ("1 lb" + "1/2 lb" →
-"1.5 lb"); anything else is kept as written and joined with " + "
+"1 1/2 lb"); anything else is kept as written and joined with " + "
 ("1 lb + 8 oz", "2 cans + a handful"), so nothing is silently dropped.
 """
 
