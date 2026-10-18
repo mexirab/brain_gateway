@@ -3,17 +3,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui';
 import { useHealth, useServices } from '@/lib/hooks';
-import { parsePrimaryModel } from '@/lib/model-name';
 import type { ServicesResponse } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type NodeId =
-  | 'user' | 'echo' | 'wake' | 'stt' | 'frontend'
-  | 'orchestrator' | 'router' | 'brain'
+  | 'user' | 'echo' | 'stt' | 'frontend'
+  | 'orchestrator' | 'router' | 'plug' | 'brain' | 'vision'
   | 'ha' | 'memory' | 'calendar' | 'email' | 'web' | 'focus' | 'finance'
-  | 'tts' | 'speakers'
-  | 'bg_calendar' | 'bg_email' | 'bg_morning' | 'bg_travel';
+  | 'tts' | 'speakers' | 'push'
+  | 'monitoring' | 'backups'
+  | 'bg_calendar' | 'bg_travel' | 'bg_reminders' | 'bg_selfcare'
+  | 'bg_morning' | 'bg_evening' | 'bg_winddown';
 
 interface DiagramNode {
   id: NodeId;
@@ -33,6 +34,8 @@ interface DiagramNode {
    * independent of the decorative flow animation.
    */
   service?: string;
+  /** Wired up but switched off on this deployment — drawn dimmed + dashed. */
+  disabled?: boolean;
 }
 
 interface FlowEdge {
@@ -50,57 +53,125 @@ interface FlowPath {
 }
 
 // ── Node definitions ─────────────────────────────────────────────────────────
+//
+// Ground truth: CLAUDE.md "Cluster" + "Services" tables and the scheduler
+// registrations in orchestrator/orchestrator.py. Times shown are the defaults
+// (MORNING_BRIEFING_TIME, EVENING_BRIEFING_TIME, WIND_DOWN_BEDTIME).
 
 const NODES: DiagramNode[] = [
   // Input layer
   { id: 'user', label: 'You', sub: 'Voice or Text', x: 330, y: 30, w: 120, h: 56, color: '#fbbf24', glow: '#fbbf24', icon: '🎤', group: 'input' },
-  { id: 'echo', label: 'ATOM Echo', sub: 'Wake Word', x: 140, y: 115, w: 130, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '📡', group: 'input' },
-  { id: 'frontend', label: 'Frontend', sub: 'Next.js · Jupiter', x: 510, y: 115, w: 140, h: 52, color: '#84838f', glow: '#84838f', icon: '🌐', group: 'input' },
+  // HA Assist voice path (ATOM Echo → Wyoming) is off: HA's conversation agent
+  // still points at the old orchestrator host. Shown so it isn't forgotten.
+  { id: 'echo', label: 'ATOM Echo', sub: 'Voice · disabled', x: 140, y: 115, w: 130, h: 52, color: '#84838f', glow: '#84838f', icon: '📡', group: 'input', disabled: true },
+  { id: 'frontend', label: 'Dashboard', sub: 'Next.js · HTTPS · Jupiter', x: 510, y: 115, w: 150, h: 52, color: '#84838f', glow: '#84838f', icon: '🌐', group: 'input' },
 
   // Processing layer
-  { id: 'stt', label: 'Whisper STT', sub: 'Speech → Text · Helios', x: 140, y: 205, w: 130, h: 52, color: '#a78bfa', glow: '#a78bfa', icon: '👂', group: 'processing', service: 'stt' },
+  { id: 'stt', label: 'Parakeet STT', sub: 'TDT v2 · ONNX CPU · Helios', x: 130, y: 205, w: 150, h: 52, color: '#a78bfa', glow: '#a78bfa', icon: '👂', group: 'processing', service: 'stt' },
   { id: 'orchestrator', label: 'Orchestrator', sub: 'Unified loop · Jupiter', x: 320, y: 205, w: 160, h: 60, color: '#6f63ff', glow: '#6f63ff', icon: '🧠', group: 'processing' },
   { id: 'router', label: 'Mode Router', sub: 'Intent + Emotion', x: 520, y: 205, w: 140, h: 52, color: '#6f63ff', glow: '#6f63ff', icon: '🎯', group: 'processing' },
 
-  // AI layer (unified v7 — single brain model on Helios, wake-on-demand)
-  { id: 'brain', label: 'Brain', sub: 'Primary LLM · Helios', x: 320, y: 320, w: 160, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai', service: 'model' },
+  // AI layer — Helios is power-tiered: asleep most of the time, woken by an
+  // HA-controlled smart plug when a chat needs the brain.
+  { id: 'plug', label: 'Smart Plug', sub: 'via HA · wakes Helios', x: 110, y: 320, w: 150, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔌', group: 'ai' },
+  { id: 'brain', label: 'Qwen3.8 TURBO', sub: 'llama.cpp · RTX 5090 · Helios', x: 300, y: 318, w: 200, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai', service: 'model' },
+  { id: 'vision', label: 'Vision', sub: 'Served by the brain', x: 530, y: 320, w: 130, h: 52, color: '#34d399', glow: '#34d399', icon: '👁️', group: 'ai', service: 'vision' },
 
-  // Tools layer (2 rows of 4 to fit width)
-  { id: 'ha', label: 'Home', sub: 'Lights · Switches', x: 50, y: 425, w: 105, h: 46, color: '#34d3e0', glow: '#34d3e0', icon: '🏠', group: 'tools', service: 'ha' },
-  { id: 'memory', label: 'Memory', sub: 'RAG Docs', x: 168, y: 425, w: 105, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '🧩', group: 'tools' },
-  { id: 'calendar', label: 'Calendar', sub: 'Google Cal', x: 286, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📅', group: 'tools' },
-  { id: 'email', label: 'Email', sub: 'Gmail', x: 404, y: 425, w: 105, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📧', group: 'tools' },
-  { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 522, y: 425, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '🔍', group: 'tools', service: 'searxng' },
-  { id: 'focus', label: 'Focus', sub: 'Pomodoro', x: 168, y: 480, w: 105, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🎯', group: 'tools' },
-  { id: 'finance', label: 'Finance', sub: 'Actual', x: 286, y: 480, w: 105, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
+  // Tools layer (two rows)
+  { id: 'ha', label: 'Home Assistant', sub: 'Jupiter · :8123', x: 30, y: 425, w: 132, h: 46, color: '#34d3e0', glow: '#34d3e0', icon: '🏠', group: 'tools', service: 'ha' },
+  { id: 'memory', label: 'Memory', sub: 'MemPalace', x: 170, y: 425, w: 116, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '🧩', group: 'tools' },
+  { id: 'calendar', label: 'Calendar', sub: 'Radicale CalDAV', x: 294, y: 425, w: 116, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📅', group: 'tools' },
+  { id: 'email', label: 'Email', sub: 'Gmail · read-only', x: 418, y: 425, w: 116, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📧', group: 'tools' },
+  { id: 'web', label: 'Web Search', sub: 'SearXNG', x: 542, y: 425, w: 120, h: 46, color: '#34d399', glow: '#34d399', icon: '🔍', group: 'tools', service: 'searxng' },
+  { id: 'focus', label: 'Focus', sub: 'Pomodoro', x: 170, y: 480, w: 116, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🎯', group: 'tools' },
+  { id: 'finance', label: 'Actual Budget', sub: 'Finance · read-only', x: 294, y: 480, w: 116, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
 
   // Output layer
-  { id: 'tts', label: 'Jessica TTS', sub: 'Voice Clone · Helios', x: 180, y: 565, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
-  { id: 'speakers', label: 'All Speakers', sub: 'Google Home Group', x: 420, y: 565, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔊', group: 'output' },
+  { id: 'tts', label: 'Jessica TTS', sub: 'Voice clone · Helios', x: 30, y: 575, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
+  { id: 'speakers', label: 'Speakers', sub: 'Google Home / Cast', x: 230, y: 575, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔊', group: 'output' },
+  { id: 'push', label: 'Phone Push', sub: 'Pushover · ntfy', x: 420, y: 575, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '📱', group: 'output' },
+
+  // Infrastructure (Jupiter)
+  { id: 'monitoring', label: 'Monitoring', sub: 'Prometheus · Grafana · Loki', x: 30, y: 670, w: 200, h: 48, color: '#84838f', glow: '#84838f', icon: '📈', group: 'infra' },
+  { id: 'backups', label: 'Nightly Backups', sub: 'Jupiter → Saturn', x: 260, y: 670, w: 190, h: 48, color: '#84838f', glow: '#84838f', icon: '💾', group: 'infra' },
 
   // Background jobs (right side)
-  { id: 'bg_calendar', label: 'Calendar Poll', sub: 'Every 15 min', x: 700, y: 115, w: 140, h: 46, color: '#fb7185', glow: '#fb7185', icon: '⏰', group: 'background' },
-  { id: 'bg_travel', label: 'Travel Time', sub: 'Google Maps API', x: 700, y: 172, w: 140, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🚗', group: 'background' },
-  { id: 'bg_email', label: 'Email Poll', sub: 'Every 30 min', x: 700, y: 229, w: 140, h: 46, color: '#fb7185', glow: '#fb7185', icon: '📬', group: 'background' },
-  { id: 'bg_morning', label: 'Morning Brief', sub: '7:00 AM Daily', x: 700, y: 286, w: 140, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '☀️', group: 'background' },
+  { id: 'bg_calendar', label: 'Calendar Poll', sub: 'Every 5 min', x: 700, y: 115, w: 150, h: 46, color: '#fb7185', glow: '#fb7185', icon: '⏰', group: 'background' },
+  { id: 'bg_travel', label: 'Travel Time', sub: 'Google Maps API', x: 700, y: 169, w: 150, h: 46, color: '#fbbf24', glow: '#fbbf24', icon: '🚗', group: 'background' },
+  { id: 'bg_reminders', label: 'Reminders', sub: 'Voice + phone push', x: 700, y: 223, w: 150, h: 46, color: '#fb7185', glow: '#fb7185', icon: '🔔', group: 'background' },
+  { id: 'bg_selfcare', label: 'Self-care Nudges', sub: 'Every 15 min', x: 700, y: 277, w: 150, h: 46, color: '#34d3e0', glow: '#34d3e0', icon: '💧', group: 'background' },
+  { id: 'bg_morning', label: 'Morning Brief', sub: '07:00 daily', x: 700, y: 331, w: 150, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '☀️', group: 'background' },
+  { id: 'bg_evening', label: 'Evening Brief', sub: '21:30 daily', x: 700, y: 385, w: 150, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '🌙', group: 'background' },
+  { id: 'bg_winddown', label: 'Wind-down', sub: 'Before 22:30 bedtime', x: 700, y: 439, w: 150, h: 46, color: '#a78bfa', glow: '#a78bfa', icon: '😴', group: 'background' },
 ];
 
 // ── Flow paths (animated sequences) ──────────────────────────────────────────
 
 const FLOWS: FlowPath[] = [
   {
-    name: '🎤 Voice Command',
-    description: '"Hey Jess, turn on the bedroom lights to blue"',
+    name: '🎙️ Voice Command',
+    description: 'Tap the dashboard mic: "turn on the bedroom lights"',
     color: '#fbbf24',
     edges: [
-      { from: 'user', to: 'echo', label: '"Hey Jess..."' },
-      { from: 'echo', to: 'stt', label: 'Audio stream' },
-      { from: 'stt', to: 'orchestrator', label: 'Transcribed text' },
-      { from: 'orchestrator', to: 'brain', label: 'Tool call' },
+      { from: 'user', to: 'frontend', label: 'Mic' },
+      { from: 'frontend', to: 'orchestrator', label: 'Audio' },
+      { from: 'orchestrator', to: 'stt', label: 'Transcribe' },
+      { from: 'stt', to: 'orchestrator', label: 'Text' },
+      { from: 'orchestrator', to: 'brain', label: 'Message + tools' },
       { from: 'brain', to: 'ha', label: 'Turn on lights' },
-      { from: 'ha', to: 'brain', label: 'Success' },
-      { from: 'brain', to: 'tts', label: '"Lights are blue"' },
-      { from: 'tts', to: 'speakers', label: 'Audio' },
+      { from: 'ha', to: 'brain', label: 'Done' },
+      { from: 'brain', to: 'tts', label: '"Lights are on"' },
+      { from: 'tts', to: 'frontend', label: 'Spoken reply' },
+    ],
+  },
+  {
+    name: '😴 Waking the Brain',
+    description: 'Helios sleeps most of the time — with wake-on-demand on, a chat powers it on',
+    color: '#34d399',
+    edges: [
+      { from: 'user', to: 'frontend', label: 'Message' },
+      { from: 'frontend', to: 'orchestrator', label: 'Chat' },
+      { from: 'orchestrator', to: 'ha', label: 'Wake Helios' },
+      { from: 'ha', to: 'plug', label: 'Plug on' },
+      { from: 'plug', to: 'brain', label: 'Helios boots' },
+      { from: 'orchestrator', to: 'frontend', label: '"Waking up…"' },
+    ],
+  },
+  {
+    name: '💬 Chat Question',
+    description: '"Jess, what pattern do I fall into when I feel rejected?"',
+    color: '#6f63ff',
+    edges: [
+      { from: 'user', to: 'frontend', label: 'Type or speak' },
+      { from: 'frontend', to: 'orchestrator', label: 'Message' },
+      { from: 'orchestrator', to: 'router', label: 'Classify' },
+      { from: 'router', to: 'brain', label: 'Mirror mode' },
+      { from: 'brain', to: 'memory', label: 'Search memory' },
+      { from: 'memory', to: 'brain', label: 'Memories' },
+      { from: 'brain', to: 'frontend', label: 'Personalized response' },
+    ],
+  },
+  {
+    name: '📷 Photo',
+    description: 'Share a photo — the brain itself does the vision',
+    color: '#34d399',
+    edges: [
+      { from: 'user', to: 'frontend', label: 'Photo' },
+      { from: 'frontend', to: 'orchestrator', label: 'Upload' },
+      { from: 'orchestrator', to: 'vision', label: 'Analyze image' },
+      { from: 'vision', to: 'frontend', label: 'Description' },
+    ],
+  },
+  {
+    name: '🔔 Reminders & Nudges',
+    description: 'Spoken on the speakers, with Done / Snooze on your phone',
+    color: '#fb7185',
+    edges: [
+      { from: 'bg_reminders', to: 'tts', label: '"Time to…"' },
+      { from: 'tts', to: 'speakers', label: 'Announce' },
+      { from: 'bg_reminders', to: 'push', label: 'Done / Snooze' },
+      { from: 'push', to: 'orchestrator', label: 'Tap Done' },
+      { from: 'bg_selfcare', to: 'tts', label: '"Had water?"' },
     ],
   },
   {
@@ -115,18 +186,8 @@ const FLOWS: FlowPath[] = [
     ],
   },
   {
-    name: '📧 Email Alert',
-    description: 'New email from your boss — announced on speakers',
-    color: '#fb7185',
-    edges: [
-      { from: 'bg_email', to: 'email', label: 'Check inbox' },
-      { from: 'email', to: 'tts', label: '"New email from..."' },
-      { from: 'tts', to: 'speakers', label: 'Announce' },
-    ],
-  },
-  {
     name: '☀️ Morning Briefing',
-    description: '7:00 AM — Today\'s events, reminders, and weather',
+    description: "07:00 — today's events and weather, spoken in the bedroom",
     color: '#a78bfa',
     edges: [
       { from: 'bg_morning', to: 'calendar', label: "Today's events" },
@@ -135,17 +196,28 @@ const FLOWS: FlowPath[] = [
     ],
   },
   {
-    name: '💬 Chat Question',
-    description: '"Jess, what pattern do I fall into when I feel rejected?"',
-    color: '#34d399',
+    name: '🌙 Evening & Wind-down',
+    description: '21:30 shutdown ritual, then lights dim and a screens-away nudge',
+    color: '#a78bfa',
     edges: [
-      { from: 'user', to: 'frontend', label: 'Type or speak' },
-      { from: 'frontend', to: 'orchestrator', label: 'Message' },
-      { from: 'orchestrator', to: 'router', label: 'Classify' },
-      { from: 'router', to: 'brain', label: 'Mirror mode' },
-      { from: 'brain', to: 'memory', label: 'RAG query' },
-      { from: 'memory', to: 'brain', label: 'Pattern docs' },
-      { from: 'brain', to: 'frontend', label: 'Personalized response' },
+      { from: 'bg_evening', to: 'calendar', label: "Tomorrow's first event" },
+      { from: 'calendar', to: 'tts', label: 'Leave-by + meds check' },
+      { from: 'tts', to: 'speakers', label: 'Announce' },
+      { from: 'bg_winddown', to: 'ha', label: 'Dim scene' },
+      { from: 'bg_winddown', to: 'tts', label: '"Screens away"' },
+    ],
+  },
+  {
+    name: '🛡️ Ops & Backups',
+    description: 'Metrics, logs and alerts on Jupiter; state copied to Saturn nightly',
+    color: '#84838f',
+    edges: [
+      { from: 'orchestrator', to: 'monitoring', label: 'Metrics + logs' },
+      { from: 'monitoring', to: 'push', label: 'Alert (Pushover)' },
+      { from: 'orchestrator', to: 'backups', label: 'DBs + memory' },
+      { from: 'finance', to: 'backups', label: 'Budget' },
+      { from: 'calendar', to: 'backups', label: 'Calendars' },
+      { from: 'ha', to: 'backups', label: 'HA config' },
     ],
   },
 ];
@@ -160,24 +232,34 @@ function nodeCenter(n: DiagramNode): [number, number] {
   return [n.x + n.w / 2, n.y + n.h / 2];
 }
 
-function edgePath(from: DiagramNode, to: DiagramNode): string {
+// Quadratic-curve control point for an edge (slight curve; the offset flips
+// with direction, so A→B and B→A don't share a path or a label spot).
+function edgeCurve(from: DiagramNode, to: DiagramNode) {
   const [x1, y1] = nodeCenter(from);
   const [x2, y2] = nodeCenter(to);
   const mx = (x1 + x2) / 2;
   const my = (y1 + y2) / 2;
-  // Slight curve
   const dx = x2 - x1;
   const dy = y2 - y1;
-  const cx = mx - dy * 0.12;
-  const cy = my + dx * 0.12;
+  return { x1, y1, x2, y2, mx, my, cx: mx - dy * 0.12, cy: my + dx * 0.12 };
+}
+
+function edgePath(from: DiagramNode, to: DiagramNode): string {
+  const { x1, y1, x2, y2, cx, cy } = edgeCurve(from, to);
   return `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`;
+}
+
+// Point on the drawn curve at t=0.5: B(0.5) = (M + C) / 2.
+function edgeLabelPoint(from: DiagramNode, to: DiagramNode): [number, number] {
+  const { mx, my, cx, cy } = edgeCurve(from, to);
+  return [(mx + cx) / 2, (my + cy) / 2];
 }
 
 // LIVE health dot color for a service-backed node, from /api/services.
 // Returns null when the node isn't service-backed or health is unknown, so we
-// don't render a misleading dot. Helios services (model/tts/stt) report as
+// don't render a misleading dot. Helios services (model/vision/tts/stt) report as
 // amber ("configured but not healthy" = asleep) rather than red.
-const HELIOS_SERVICES = new Set(['model', 'tts', 'stt']);
+const HELIOS_SERVICES = new Set(['model', 'vision', 'tts', 'stt']);
 
 function serviceDotColor(
   node: DiagramNode,
@@ -198,16 +280,14 @@ export default function SystemDiagram() {
   const [isPlaying, setIsPlaying] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<NodeId | null>(null);
 
-  // Live data — real model name, RAG doc count, and per-service health.
+  // Live data — memory count and per-service health.
   const { data: health } = useHealth();
   const { data: services } = useServices();
-  const brainModel = parsePrimaryModel(health?.primary);
   const ragDocs = health?.rag_docs;
 
   // Live sublabel overrides keyed by node id (empty until data loads).
   const liveSub: Partial<Record<NodeId, string>> = {
-    brain: `${brainModel} · Helios`,
-    ...(ragDocs != null ? { memory: `${ragDocs} RAG Docs` } : {}),
+    ...(ragDocs != null ? { memory: `MemPalace · ${ragDocs}` } : {}),
   };
 
   const flow = FLOWS[activeFlow];
@@ -247,7 +327,7 @@ export default function SystemDiagram() {
   }
 
   const svgWidth = 880;
-  const svgHeight = 640;
+  const svgHeight = 740;
 
   return (
     <Card padding="none" className="p-4 md:p-6">
@@ -259,7 +339,7 @@ export default function SystemDiagram() {
       </p>
 
       {/* Live-status legend — the dots on service-backed nodes are real health */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 text-[11px] text-content-muted">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[11px] text-content-muted">
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full" style={{ background: '#34d399' }} /> Live
         </span>
@@ -269,7 +349,13 @@ export default function SystemDiagram() {
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full" style={{ background: '#fb7185' }} /> Down
         </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-3 h-2 rounded-sm border border-dashed border-content-muted" /> Disabled
+        </span>
       </div>
+      <p className="text-[11px] text-content-muted mb-4">
+        Not shown: the code agent (retired) and the expert model (deprecated).
+      </p>
 
       {/* Flow selector pills */}
       <div className="flex flex-wrap gap-2 mb-4">
@@ -308,7 +394,9 @@ export default function SystemDiagram() {
         <svg
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           className="w-full min-w-[800px]"
-          style={{ maxHeight: '560px' }}
+          style={{ maxHeight: '740px' }}
+          role="img"
+          aria-label={`System diagram: ${flow.name} — ${flow.description}`}
         >
           <defs>
             {/* Glow filters for each node color */}
@@ -340,13 +428,14 @@ export default function SystemDiagram() {
           {/* Group labels */}
           <text x="20" y="20" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Input</text>
           <text x="20" y="199" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Processing</text>
-          <text x="20" y="314" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">AI Model</text>
+          <text x="20" y="310" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">AI Model · Helios (asleep until needed)</text>
           <text x="20" y="420" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Tools</text>
-          <text x="20" y="560" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Output</text>
+          <text x="20" y="568" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Output</text>
+          <text x="20" y="663" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Infrastructure · Jupiter</text>
           <text x="688" y="104" className="fill-content-muted text-[10px] font-bold uppercase tracking-widest">Background</text>
 
           {/* Background region for background jobs */}
-          <rect x="688" y="108" width="164" height="236" rx="12"
+          <rect x="688" y="108" width="174" height="386" rx="12"
             fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.09)" strokeDasharray="4 4" />
 
           {/* Edges (draw all potential edges dimly, active ones brightly) */}
@@ -383,27 +472,6 @@ export default function SystemDiagram() {
                     <animate attributeName="stroke-dashoffset" from="28" to="0" dur="0.8s" repeatCount="indefinite" />
                   </path>
                 )}
-                {/* Edge label */}
-                {isActive && edge.label && (
-                  <g>
-                    {(() => {
-                      const [x1, y1] = nodeCenter(fromNode);
-                      const [x2, y2] = nodeCenter(toNode);
-                      const lx = (x1 + x2) / 2;
-                      const ly = (y1 + y2) / 2 - 8;
-                      return (
-                        <>
-                          <rect x={lx - edge.label.length * 3.2} y={ly - 9} width={edge.label.length * 6.4} height={16}
-                            rx="4" fill="#14151fd9" stroke={flow.color + '40'} strokeWidth={0.5} />
-                          <text x={lx} y={ly + 3} textAnchor="middle"
-                            className="text-[9px]" fill={flow.color} opacity={isCurrentStep ? 1 : 0.7}>
-                            {edge.label}
-                          </text>
-                        </>
-                      );
-                    })()}
-                  </g>
-                )}
               </g>
             );
           })}
@@ -422,6 +490,7 @@ export default function SystemDiagram() {
                 onMouseEnter={() => setHoveredNode(node.id)}
                 onMouseLeave={() => setHoveredNode(null)}
                 className="cursor-pointer"
+                opacity={node.disabled && !lit ? 0.5 : 1}
               >
                 {/* Glow pulse when active */}
                 {lit && (
@@ -444,8 +513,9 @@ export default function SystemDiagram() {
                   width={node.w} height={node.h}
                   rx="10"
                   fill={lit ? node.color + '25' : '#14151fe6'}
-                  stroke={lit ? node.color : 'rgba(255,255,255,0.09)'}
+                  stroke={lit ? node.color : node.disabled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.09)'}
                   strokeWidth={lit ? 1.5 : 0.5}
+                  strokeDasharray={node.disabled ? '4 3' : undefined}
                   className="transition-all duration-300"
                 />
 
@@ -492,6 +562,23 @@ export default function SystemDiagram() {
                     )}
                   </circle>
                 )}
+              </g>
+            );
+          })}
+
+          {/* Edge labels — drawn after the nodes so a label over a node stays readable */}
+          {flow.edges.map((edge, i) => {
+            if (!activeEdges.has(i) || !edge.label) return null;
+            const [lx, mid] = edgeLabelPoint(getNode(edge.from), getNode(edge.to));
+            const ly = mid - 8;
+            return (
+              <g key={`label-${i}`}>
+                <rect x={lx - edge.label.length * 3.2} y={ly - 9} width={edge.label.length * 6.4} height={16}
+                  rx="4" fill="#14151fd9" stroke={flow.color + '40'} strokeWidth={0.5} />
+                <text x={lx} y={ly + 3} textAnchor="middle"
+                  className="text-[9px]" fill={flow.color} opacity={i === activeStep ? 1 : 0.7}>
+                  {edge.label}
+                </text>
               </g>
             );
           })}

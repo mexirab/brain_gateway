@@ -19,16 +19,16 @@ export default function ArchitecturePage() {
   const nodeCount = CLUSTER_NODES.length;
   const gpuCount = CLUSTER_NODES.filter((n) => n.gpu).length;
 
-  // Tools + RAG docs come from live /health when reachable, else genericized.
+  // Tools + memory count come from live /health when reachable, else genericized.
   const toolCount = health?.tools?.length;
   const ragDocs = health?.rag_docs;
   const modelName = parsePrimaryModel(health?.primary);
 
   const stats = [
     { icon: Server, label: 'Nodes', value: String(nodeCount) },
-    { icon: Cpu, label: 'GPUs', value: String(gpuCount) },
+    { icon: Cpu, label: 'GPU nodes', value: String(gpuCount) },
     { icon: Wrench, label: 'Tools', value: toolCount != null ? String(toolCount) : '—' },
-    { icon: FileText, label: 'RAG Docs', value: ragDocs != null ? String(ragDocs) : '—' },
+    { icon: FileText, label: 'Memories', value: ragDocs != null ? String(ragDocs) : '—' },
   ];
 
   return (

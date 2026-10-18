@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from orchestrator import calendar_sources, shared
+from orchestrator.bearer_auth import bearer_token_matches
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
 from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_entity_allowed
 from orchestrator.ha_registry import entity_view, get_registry_meta
@@ -127,9 +128,11 @@ router.include_router(paperless_router)
 async def health(req: Request):
     """Health check endpoint. Minimal response without auth, full details with auth."""
     # Minimal response for unauthenticated requests (monitoring, uptime checks)
-    api_token = os.environ.get("API_TOKEN", "")
-    auth = req.headers.get("authorization", "")
-    if auth != f"Bearer {api_token}":
+    # Same token source as BearerAuthMiddleware (settings also sees the
+    # setup_env overlay, which os.environ may not).
+    from orchestrator.config import settings
+
+    if not bearer_token_matches(req.headers.get("authorization", ""), settings.api_token):
         return {"ok": True, "version": "7.0", "architecture": "unified"}
 
     # Full health details for authenticated requests

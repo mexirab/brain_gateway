@@ -4,7 +4,7 @@ API specs and schemas for implementation.
 
 ## API Endpoints
 
-All orchestrator endpoints live on port 8888. Many endpoints require `Authorization: Bearer $API_TOKEN` when `API_TOKEN` is set in `.env` — if you get a 401, that's why.
+All orchestrator endpoints live on port 8888. Many endpoints require `Authorization: Bearer $API_TOKEN` when `API_TOKEN` is set in `.env` — if you get a 401, that's why. The check (`orchestrator/bearer_auth.py` `bearer_token_matches`, shared by `BearerAuthMiddleware` and the `/health` detail gate) accepts the scheme in any case (`bearer`/`Bearer`, RFC 7235), compares the token in constant time, and never matches an empty `API_TOKEN`. `/health` reads the token from `settings.api_token` (includes the setup-wizard overlay), same as the middleware.
 
 ### Core
 

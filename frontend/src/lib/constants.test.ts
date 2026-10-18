@@ -40,6 +40,18 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(byId.uranus.serviceKeys).toHaveLength(0);
   });
 
+  it('reflects the current model layer (llama.cpp brain, Parakeet STT)', () => {
+    const svc = byId.helios.services.join(' ');
+    expect(svc).toMatch(/llama\.cpp/);
+    expect(svc).toMatch(/Parakeet/);
+    expect(svc).not.toMatch(/vLLM|Whisper/);
+  });
+
+  it('keeps Saturn as a backup target only (no vision/expert probes)', () => {
+    expect(byId.saturn.serviceKeys).toHaveLength(0);
+    expect(byId.saturn.services.join(' ')).toMatch(/backup/i);
+  });
+
   it('does not hard-code a stale model name or RAG doc count', () => {
     const blob = JSON.stringify(CLUSTER_NODES);
     expect(blob).not.toMatch(/Qwen3\.5-27B/);

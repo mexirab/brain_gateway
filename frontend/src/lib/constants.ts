@@ -28,8 +28,8 @@ export interface ClusterNode {
   power: NodePower;
   /**
    * Keys from the orchestrator `/api/services` summary that physically run on
-   * this node. Used to derive LIVE status. Empty = no probe-able service maps
-   * to this node (status is inferred from `power` + orchestrator reachability).
+   * this node. Used to derive LIVE status. Empty = nothing the orchestrator
+   * probes runs here, so status is `unknown` (or `offline` if unreachable).
    */
   serviceKeys: readonly string[];
 }
@@ -47,13 +47,14 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     name: 'Jupiter',
     ip: '10.0.0.248',
     gpu: null,
-    role: 'Always-on gateway: orchestrator, frontend, monitoring & Home Assistant',
+    role: 'Always-on hub: orchestrator, dashboard, Home Assistant, budget, calendar & monitoring',
     services: [
       'Orchestrator :8888',
-      'Frontend :3001',
-      'Grafana :3000',
-      'Prometheus / Loki / Alertmanager',
+      'Dashboard (HTTPS via Tailscale)',
       'Home Assistant :8123',
+      'Actual Budget',
+      'Radicale CalDAV',
+      'Grafana / Prometheus / Loki / Alertmanager',
     ],
     power: 'always-on',
     // Orchestrator + HA both live here. HA is probe-able via /api/services.
@@ -63,29 +64,30 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     id: 'helios',
     name: 'Helios',
     ip: '10.0.0.195',
-    gpu: 'RTX 5090',
-    role: 'Primary LLM + TTS/STT — wake-on-demand (asleep by default)',
+    gpu: 'RTX 5090 + RTX PRO 5000',
+    role: 'GPU model layer — asleep most of the time, woken by an HA smart plug',
     services: [
-      'Primary LLM (vLLM)',
-      'TTS',
-      'Whisper STT',
+      'Brain: Qwen3.8 TURBO on llama.cpp (RTX 5090) — also does vision',
+      'TTS: voice clone (RTX PRO 5000)',
+      'STT: Parakeet TDT v2, int8 ONNX on CPU',
     ],
     power: 'wake-on-demand',
-    serviceKeys: ['model', 'tts', 'stt'],
+    serviceKeys: ['model', 'vision', 'tts', 'stt'],
   },
   {
     id: 'saturn',
     name: 'Saturn',
     ip: '10.0.0.58',
-    gpu: null,
-    role: 'Vision + expert/reasoner models; off-box backup target',
+    gpu: 'RTX 3080 + RTX 3090',
+    role: 'Off-box nightly backup target (no runtime services)',
     services: [
-      'Qwen3VL-8B-Instruct :8010 (vision)',
-      'Expert / reasoner :8084',
-      'Backup target',
+      'Nightly backups: Jess state, HA config, calendars, budget',
+      'Expert model :8084 — deprecated',
     ],
     power: 'always-on',
-    serviceKeys: ['vision', 'expert'],
+    // Nothing the orchestrator probes runs here any more (vision moved to the
+    // Helios brain), so status is "unknown" rather than a guessed "online".
+    serviceKeys: [],
   },
   {
     id: 'uranus',
@@ -100,10 +102,10 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
 ] as const;
 
 export const CAPABILITIES = [
-  { icon: 'Mic', label: 'Voice Control', desc: '"Hey Jess" wake word' },
-  { icon: 'Timer', label: 'Focus Timer', desc: 'Pomodoro + site blocking' },
+  { icon: 'Mic', label: 'Voice Chat', desc: 'Dashboard mic + spoken replies' },
+  { icon: 'Timer', label: 'Focus Timer', desc: 'Pomodoro + body doubling' },
   { icon: 'Calendar', label: 'Calendar', desc: 'Proactive scheduling' },
   { icon: 'Home', label: 'Smart Home', desc: 'Lights, climate, scenes' },
-  { icon: 'Brain', label: 'Memory', desc: 'Personal knowledge base (RAG)' },
+  { icon: 'Brain', label: 'Memory', desc: 'MemPalace — learns as you chat' },
   { icon: 'Search', label: 'Web Search', desc: 'Real-time answers' },
 ] as const;

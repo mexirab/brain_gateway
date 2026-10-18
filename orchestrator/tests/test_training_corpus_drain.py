@@ -488,3 +488,82 @@ class TestFingerprint:
         a = _fingerprint("owui", "s1", "user", "hi")
         b = _fingerprint("state_store", "s1", "user", "hi")
         assert a != b
+
+
+# ---------------------------------------------------------------------------
+# Defaults + missing-source logging
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultsAndMissingSources:
+    def test_cc_dir_derived_from_claude_projects_path(self, monkeypatch):
+        from orchestrator import jobs_training_corpus as tc
+
+        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "")
+        monkeypatch.setenv("CLAUDE_PROJECTS_PATH", "/mnt/cc-projects")
+        assert tc.default_cc_dir() == Path("/mnt/cc-projects/-home-labadmin-gateway-nerves")
+
+    def test_cc_dir_falls_back_to_jess_home(self, monkeypatch):
+        from orchestrator import jobs_training_corpus as tc
+
+        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "")
+        monkeypatch.delenv("CLAUDE_PROJECTS_PATH", raising=False)
+        assert tc.default_cc_dir() == Path("/home/jess/.claude/projects/-home-labadmin-gateway-nerves")
+
+    def test_empty_claude_projects_path_falls_back(self, monkeypatch):
+        from orchestrator import jobs_training_corpus as tc
+
+        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "")
+        monkeypatch.setenv("CLAUDE_PROJECTS_PATH", "")
+        assert tc.default_cc_dir() == Path("/home/jess/.claude/projects/-home-labadmin-gateway-nerves")
+
+    def test_explicit_cc_dir_wins(self, monkeypatch):
+        from orchestrator import jobs_training_corpus as tc
+
+        monkeypatch.setattr(tc.settings, "training_corpus_cc_dir", "/custom/cc")
+        monkeypatch.setenv("CLAUDE_PROJECTS_PATH", "/mnt/cc-projects")
+        assert tc.default_cc_dir() == Path("/custom/cc")
+
+    def test_no_helios_era_slug_in_defaults(self):
+        from orchestrator.config import Settings
+
+        assert "-opt-gateway-mvp" not in Settings.model_fields["training_corpus_cc_dir"].default
+
+    def test_missing_sources_logged_once_at_info_not_warning(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from orchestrator import jobs_training_corpus as tc
+
+        monkeypatch.setattr(tc, "_reported_missing", set())
+        out = tmp_path / "out"
+        kwargs = dict(
+            out_dir=out,
+            owui_db=tmp_path / "absent-webui.db",
+            state_db=tmp_path / "absent-state.db",
+            cc_dir=tmp_path / "absent-cc",
+        )
+        with caplog.at_level(logging.DEBUG, logger="orchestrator.jobs_training_corpus"):
+            run_drain(**kwargs)
+            run_drain(**kwargs)
+
+        skipped = [r for r in caplog.records if r.levelno >= logging.INFO and "skipped" in r.getMessage()]
+        # Once each across two runs. owui + cc are optional → INFO; a missing
+        # brain_state.db is a real fault → WARNING.
+        assert len(skipped) == 3
+        warnings = [r for r in skipped if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1 and "state_store" in warnings[0].getMessage()
+
+    def test_source_that_returns_then_vanishes_is_reported_again(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from orchestrator import jobs_training_corpus as tc
+
+        monkeypatch.setattr(tc, "_reported_missing", set())
+        cc = tmp_path / "cc"
+        with caplog.at_level(logging.INFO, logger="orchestrator.jobs_training_corpus"):
+            list(drain_cc_sessions(cc))  # missing → logged
+            cc.mkdir()
+            list(drain_cc_sessions(cc))  # present → re-armed
+            cc.rmdir()
+            list(drain_cc_sessions(cc))  # missing again → logged again
+        assert len([r for r in caplog.records if "skipped" in r.getMessage()]) == 2

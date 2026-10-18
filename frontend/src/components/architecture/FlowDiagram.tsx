@@ -6,7 +6,7 @@ import { useHealth } from '@/lib/hooks';
 import { parsePrimaryModel } from '@/lib/model-name';
 
 const TOOLS = [
-  'Home Assistant', 'Memory (RAG)', 'Reminders',
+  'Home Assistant', 'Memory (MemPalace)', 'Reminders',
   'Focus Timer', 'Web Search', 'Calendar',
   'Email', 'Finance',
 ];
