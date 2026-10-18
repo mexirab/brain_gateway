@@ -238,4 +238,11 @@ jobs:
           set -eu
           sleep 5
           curl -sSf http://localhost:8888/health > /dev/null && echo "orchestrator healthy"
-          curl -sSf -o /dev/null http://localhost:3001 && echo "frontend reachable"
+          # A just-recreated frontend can take a few seconds to listen; retry
+          # briefly so only a real outage fails the deploy.
+          for i in 1 2 3 4 5 6; do
+            curl -sSf -o /dev/null http://127.0.0.1:3001 && { echo "frontend reachable"; exit 0; }
+            sleep 5
+          done
+          echo "::error::frontend not reachable on 127.0.0.1:3001 after 30 s"
+          exit 1
