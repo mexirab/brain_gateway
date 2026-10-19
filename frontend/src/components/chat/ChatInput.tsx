@@ -76,6 +76,9 @@ export default function ChatInput({
             prev.length < MAX_CHAT_PHOTOS ? [...prev, { id: ++photoIdCounter, uri }] : prev
           ));
         } catch (err) {
+          // Error type only (never photo content) — visible in Safari's Web
+          // Inspector when diagnosing a decode failure on a real phone.
+          console.warn('[chat-photo] prepare failed:', err instanceof Error ? err.name : typeof err);
           setPhotoError(err instanceof PhotoTooLargeError
             ? 'That photo is too detailed to send. Try a closer or simpler shot.'
             : 'Couldn’t open that photo on this device. Pick another one, or take a new one.');

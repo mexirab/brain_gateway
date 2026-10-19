@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// A plain function, not vi.fn(): Vitest 2's spy tracking reports a rejection
-// it observed on a returned promise even when the caller handles it.
+// A plain function keeps the call tracking explicit (passes tried, in order).
 type Resize = (file: Blob, maxSide: number, quality: number) => Promise<Blob>;
 let impl: Resize;
 let calls: Array<[number, number]> = [];
