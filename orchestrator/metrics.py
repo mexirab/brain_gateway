@@ -447,7 +447,7 @@ NTFY_CALLBACK_REJECTED_TOTAL = Counter(
 # callback resolves the reminder (not on replays or retries).
 REMINDER_ACK_LATENCY = Histogram(
     "bgw_reminder_ack_latency_seconds",
-    "Time between reminder trigger_time and user acknowledgement via ntfy",
+    "Time between reminder trigger_time and user acknowledgement (any channel: ntfy/pushover, telegram, dashboard)",
     buckets=[5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200],
 )
 
@@ -1441,3 +1441,37 @@ DOCUMENT_NAME_SUGGEST = Counter(
 )
 for _r in ("ok", "vision_off", "timeout", "vision_error", "unparseable", "busy", "bad_image"):
     DOCUMENT_NAME_SUGGEST.labels(result=_r)
+
+# Dashboard inbox (Done/Snooze cards in /chat — orchestrator/inbox.py).
+# kind: reminder | selfcare
+INBOX_ITEMS_TOTAL = Counter(
+    "bgw_inbox_items_total",
+    "Items added to the dashboard inbox",
+    ["kind"],
+)
+# resolution: done | snoozed | dismissed | superseded
+# via: dashboard | telegram | ntfy (also Pushover taps — same HMAC route) |
+#      logged (selfcare logged another way) | redelivered | renudged
+INBOX_RESOLVED_TOTAL = Counter(
+    "bgw_inbox_resolved_total",
+    "Dashboard inbox items resolved",
+    ["kind", "resolution", "via"],
+)
+for _k in ("reminder", "selfcare"):
+    INBOX_ITEMS_TOTAL.labels(kind=_k)
+    INBOX_RESOLVED_TOTAL.labels(kind=_k, resolution="done", via="dashboard")
+
+# Web Push (orchestrator/webpush_manager.py).
+# result: ok | gone (404/410, row deleted) | auth (401/403 — VAPID key changed) |
+#         http_4xx | http_5xx | timeout | redirect (refused) | error | no_subscribers
+WEBPUSH_SEND_TOTAL = Counter(
+    "bgw_webpush_send_total",
+    "Web Push sends, one per subscription (no_subscribers = nothing to send to)",
+    ["result"],
+)
+for _r in ("ok", "gone", "auth", "http_4xx", "http_5xx", "timeout", "redirect", "error", "no_subscribers"):
+    WEBPUSH_SEND_TOTAL.labels(result=_r)
+WEBPUSH_SUBSCRIPTIONS = Gauge(
+    "bgw_webpush_subscriptions",
+    "Devices currently subscribed to Web Push",
+)

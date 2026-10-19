@@ -32,6 +32,7 @@ const POLL = {
   shopping: 10_000,
   tasks: 15_000,
   financeSnapshot: 60_000,
+  inbox: 15_000,
 } as const;
 
 // ---- Dashboard cards -------------------------------------------------------
@@ -159,4 +160,12 @@ export function useTasks(status: 'open' | 'done' | 'dropped' = 'open', config?: 
     refreshInterval: POLL.tasks,
     ...config,
   });
+}
+
+// ---- Dashboard inbox (chat tray + nav badge share one cache key) ----------
+
+export const INBOX_KEY = 'inbox';
+
+export function useInbox(config?: SWRConfiguration) {
+  return useSWR(INBOX_KEY, () => api.inbox(), { refreshInterval: POLL.inbox, ...config });
 }

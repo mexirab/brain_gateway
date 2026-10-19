@@ -445,6 +445,31 @@ CREATE TABLE IF NOT EXISTS pantry_aliases (
     updated_at TEXT NOT NULL
 );
 
+-- Dashboard inbox: delivered reminders + selfcare nudges waiting for a
+-- Done/Snooze tap in /chat (orchestrator/inbox.py). kind = reminder|selfcare;
+-- ref = reminder id or selfcare kind. Unresolved = resolved_at IS NULL.
+CREATE TABLE IF NOT EXISTS inbox_items (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution TEXT,
+    resolved_via TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbox_open ON inbox_items(resolved_at, created_at);
+
+-- Web Push subscriptions (orchestrator/webpush_manager.py), one per device.
+CREATE TABLE IF NOT EXISTS webpush_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_ok_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS barcode_cache (
     barcode TEXT PRIMARY KEY,
     name TEXT,

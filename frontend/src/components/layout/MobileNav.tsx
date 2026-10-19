@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { isNavItemEnabled, type FeatureFlags } from '@/lib/features';
+import ChatNavBadge from './ChatNavBadge';
 
 interface NavItem {
   href: string;
@@ -110,7 +111,10 @@ export default function MobileNav({ flags }: { flags: FeatureFlags }) {
                   className="absolute top-0 left-3 right-3 h-0.5 rounded-b bg-brand-500"
                 />
               )}
-              <Icon size={20} aria-hidden />
+              <span className="relative">
+                <Icon size={20} aria-hidden />
+                {href === '/chat' && <ChatNavBadge className="absolute -top-1.5 -right-2.5" />}
+              </span>
               <span className="text-[10px] leading-tight truncate max-w-full px-1">{label}</span>
             </Link>
           );

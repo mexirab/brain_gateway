@@ -15,6 +15,7 @@ import ChatSidebar from '@/components/chat/ChatSidebar';
 import useTTSPlayback from '@/hooks/useTTSPlayback';
 import useVoiceCall from '@/hooks/useVoiceCall';
 import VoiceCallBar from '@/components/chat/VoiceCallBar';
+import InboxTray from '@/components/chat/InboxTray';
 import type { AvatarMode } from '@/components/chat/JessAvatar';
 
 // three.js + the VRM loader only download when the avatar is switched on.
@@ -463,6 +464,9 @@ export default function ChatPage() {
             <JessAvatar mode={avatarMode} />
           </div>
         )}
+
+        {/* Reminders + self-care nudges waiting for Done / Snooze */}
+        <InboxTray />
 
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 px-4 pb-4">

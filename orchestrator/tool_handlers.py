@@ -727,7 +727,22 @@ async def deliver_reminder_job(
                 exc_info=True,
             )
 
-        # ntfy/pushover/telegram are detached fire-and-forget tasks, so their
+        # Dashboard inbox card (Done/Snooze in /chat). Adding it also fires
+        # Web Push to subscribed devices. A failure only costs the card.
+        webpush_ok = False
+        try:
+            from orchestrator import inbox, webpush_manager
+
+            inbox.notify(await asyncio.to_thread(inbox.add_reminder_item, reminder_id, text))
+            webpush_ok = webpush_manager.has_subscribers()
+        except Exception as inbox_err:
+            logger.error(
+                f"[REMINDER] inbox add failed for {reminder_id}: {type(inbox_err).__name__}",
+                extra={"component": "reminder"},
+                exc_info=True,
+            )
+
+        # ntfy/pushover/telegram/web push are detached fire-and-forget tasks, so their
         # outcome is unknowable here; count the phone channel as delivered if
         # the HA Companion push succeeded or at least one push channel is
         # enabled and was dispatched. Before this, the HA result was discarded
@@ -735,7 +750,13 @@ async def deliver_reminder_job(
         # still marked completed ("delivered into the void").
         from orchestrator.config import settings as _settings
 
-        phone_ok = ha_push_ok or _settings.ntfy_enabled or _settings.pushover_enabled or _settings.telegram_enabled
+        phone_ok = (
+            ha_push_ok
+            or webpush_ok
+            or _settings.ntfy_enabled
+            or _settings.pushover_enabled
+            or _settings.telegram_enabled
+        )
         if not phone_ok:
             logger.error(
                 f"[REMINDER] Phone delivery FAILED for {reminder_id}: {notif.get('error') or notif.get('errors')}",

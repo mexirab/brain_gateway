@@ -815,9 +815,9 @@ async def _strip_buttons(client: httpx.AsyncClient, cb: Dict[str, Any], suffix: 
 
 
 async def _handle_callback(client: httpx.AsyncClient, cb: Dict[str, Any]) -> None:
-    """Replicates api_routes.ntfy_ack_reminder / ntfy_snooze_reminder minus
-    the HTTP+HMAC layer — the allowlist check is the auth boundary here."""
-    from orchestrator import shared, state_store
+    """Done/Snooze/selfcare button taps. Ack and snooze run through
+    reminder_actions (shared with the ntfy routes + dashboard inbox); the
+    chat allowlist check is the auth boundary here."""
     from orchestrator.metrics import TELEGRAM_CALLBACK_TOTAL, TELEGRAM_UPDATE_TOTAL
 
     callback_id = str(cb.get("id", ""))
@@ -833,115 +833,44 @@ async def _handle_callback(client: httpx.AsyncClient, cb: Dict[str, Any]) -> Non
     action = parts[0] if parts else ""
 
     if action == "ack" and len(parts) == 2:
-        reminder_id = parts[1]
-        result = state_store.mark_reminder_acked(reminder_id, via="telegram")
-        if result is None:
+        from orchestrator import reminder_actions
+
+        outcome = await reminder_actions.ack_reminder(parts[1], via="telegram")
+        if outcome["status"] == "not_found":
             TELEGRAM_CALLBACK_TOTAL.labels(action="ack", result="not_found").inc()
             await _answer_callback(client, callback_id, "That reminder no longer exists.")
             return
-        if result.get("already_acked"):
+        if outcome["status"] == "already_acked":
             TELEGRAM_CALLBACK_TOTAL.labels(action="ack", result="already").inc()
             await _answer_callback(client, callback_id, "✓ Already done")
             return
-
-        # Cancel any pending TTS-failure retry, same as the ntfy ack route.
-        scheduler = shared.scheduler
-        retry_job_id = f"reminder_{reminder_id}_retry"
-        try:
-            if scheduler and scheduler.get_job(retry_job_id):
-                scheduler.remove_job(retry_job_id)
-        except Exception as job_err:
-            logger.warning(f"[TELEGRAM-ACK] Failed to cancel retry job: {job_err}")
-
-        # Selfcare bridge — identical inference to the ntfy route.
-        text = result.get("text", "") or ""
-        try:
-            from orchestrator.reminder_manager import selfcare_action_for_reminder
-
-            sc_action = selfcare_action_for_reminder(result)
-            try:  # Done on a meal-plan cooking reminder = "cooked it" (F-015 phase 4)
-                from orchestrator.pantry_consumption import on_reminder_done
-
-                await asyncio.to_thread(on_reminder_done, result)
-            except Exception as pantry_err:
-                logger.error("[TELEGRAM-ACK] Pantry cook hook failed: %s", type(pantry_err).__name__, exc_info=True)
-            if sc_action:
-                from orchestrator import selfcare_manager
-
-                label = f"reminder:{text[:80]}"
-                if sc_action == "medication":
-                    selfcare_manager.record_medication_logged(label)
-                elif sc_action == "meal":
-                    selfcare_manager.record_meal_logged(label)
-                elif sc_action == "water":
-                    selfcare_manager.record_hydration_logged(label)
-                elif sc_action == "movement":
-                    selfcare_manager.record_movement_logged(label)
-        except Exception as bridge_err:
-            logger.error(f"[TELEGRAM-ACK] Selfcare bridge failed for {reminder_id}: {bridge_err}", exc_info=True)
-
         TELEGRAM_CALLBACK_TOTAL.labels(action="ack", result="ok").inc()
-        logger.info(f"[TELEGRAM-ACK] {reminder_id} acked")
         await _answer_callback(client, callback_id, "✓ Done")
         await _strip_buttons(client, cb, "✓ Done")
         return
 
     if action == "snooze" and len(parts) == 3:
-        reminder_id = parts[1]
+        from orchestrator import reminder_actions
+
         try:
-            minutes = max(1, min(120, int(parts[2])))
+            minutes = int(parts[2])
         except ValueError:
             minutes = _settings.telegram_snooze_minutes
-
-        reminder = state_store.get_reminder(reminder_id)
-        if reminder is None:
+        outcome = await reminder_actions.snooze_reminder(parts[1], minutes, via="telegram")
+        if outcome["status"] == "not_found":
             TELEGRAM_CALLBACK_TOTAL.labels(action="snooze", result="not_found").inc()
             await _answer_callback(client, callback_id, "That reminder no longer exists.")
             return
-        current = reminder.get("snooze_count") or 0
-        if current >= _settings.ntfy_max_snooze_count:
+        if outcome["status"] == "limit":
             TELEGRAM_CALLBACK_TOTAL.labels(action="snooze", result="limit").inc()
-            await _answer_callback(client, callback_id, f"Snooze limit reached ({current}).")
+            await _answer_callback(client, callback_id, f"Snooze limit reached ({outcome['snooze_count']}).")
             return
-
-        from datetime import datetime, timedelta
-        from zoneinfo import ZoneInfo
-
-        from orchestrator import shared as _shared
-        from orchestrator.tool_handlers import deliver_reminder_job
-
-        run_at = datetime.now(ZoneInfo(_shared.TIMEZONE)) + timedelta(minutes=minutes)
-        scheduler = _shared.scheduler
-        try:
-            scheduler.add_job(
-                deliver_reminder_job,
-                trigger="date",
-                run_date=run_at,
-                args=[reminder_id],
-                id=f"reminder_{reminder_id}",
-                replace_existing=True,
-            )
-        except Exception as sch_err:
-            logger.error(f"[TELEGRAM-SNOOZE] Reschedule failed for {reminder_id}: {sch_err}", exc_info=True)
+        if outcome["status"] != "ok":
             TELEGRAM_CALLBACK_TOTAL.labels(action="snooze", result="error").inc()
             await _answer_callback(client, callback_id, "Couldn't snooze — rescheduling failed.")
             return
-
-        # Same reset semantics as the ntfy snooze route: delivery marked the
-        # reminder completed, and deliver_reminder_job skips non-pending.
-        state_store.reopen_reminder(reminder_id)
-
-        retry_job_id = f"reminder_{reminder_id}_retry"
-        try:
-            if scheduler.get_job(retry_job_id):
-                scheduler.remove_job(retry_job_id)
-        except Exception:
-            pass
-
-        new_count = state_store.increment_snooze_count(reminder_id)
         TELEGRAM_CALLBACK_TOTAL.labels(action="snooze", result="ok").inc()
-        fire_time = run_at.strftime("%-I:%M %p")
-        logger.info(f"[TELEGRAM-SNOOZE] {reminder_id} snoozed {minutes}m (count={new_count})")
+        fire_time = outcome["run_at"].strftime("%-I:%M %p")
         await _answer_callback(client, callback_id, f"\U0001f4a4 Snoozed until {fire_time}")
         await _strip_buttons(client, cb, f"\U0001f4a4 Snoozed until {fire_time}")
         return
@@ -959,15 +888,7 @@ async def _handle_callback(client: httpx.AsyncClient, cb: Dict[str, Any]) -> Non
         try:
             from orchestrator import selfcare_manager
 
-            label = f"telegram:{kind} nudge"
-            if kind == "medication":
-                selfcare_manager.record_medication_logged(label)
-            elif kind == "meal":
-                selfcare_manager.record_meal_logged(label)
-            elif kind == "water":
-                selfcare_manager.record_hydration_logged(label)
-            elif kind == "movement":
-                selfcare_manager.record_movement_logged(label)
+            selfcare_manager.record_selfcare(kind, f"telegram:{kind} nudge")
         except Exception as sc_err:
             logger.error(f"[TELEGRAM-SC] Selfcare log failed for {kind}: {sc_err}", exc_info=True)
             TELEGRAM_CALLBACK_TOTAL.labels(action="selfcare", result="error").inc()

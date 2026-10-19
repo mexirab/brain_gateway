@@ -8770,6 +8770,18 @@
           "range": true,
           "instant": false,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(bgw_webpush_send_total{result=\"ok\"}[1h])) * 3600",
+          "legendFormat": "web push",
+          "range": true,
+          "instant": false,
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -8879,6 +8891,18 @@
           "range": true,
           "instant": false,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(bgw_webpush_send_total{result=~\"auth|http_4xx|http_5xx|timeout|redirect|error\"}[1h])) * 3600",
+          "legendFormat": "web push fail",
+          "range": true,
+          "instant": false,
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -9049,7 +9073,7 @@
     },
     {
       "type": "row",
-      "title": "Telegram Bot",
+      "title": "Dashboard Inbox & Web Push",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -9059,6 +9083,342 @@
         "y": 254
       },
       "id": 118
+    },
+    {
+      "type": "stat",
+      "title": "Web Push Devices",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max(bgw_webpush_subscriptions)",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Devices subscribed via Settings \u2192 Notifications. 0 with WEBPUSH_ENABLED=false is expected.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 255
+      },
+      "id": 119
+    },
+    {
+      "type": "timeseries",
+      "title": "Inbox Cards Added (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind) (increase(bgw_inbox_items_total[6h]))",
+          "legendFormat": "{{kind}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 255
+      },
+      "id": 120
+    },
+    {
+      "type": "timeseries",
+      "title": "Inbox Cards Resolved by (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (via, resolution) (increase(bgw_inbox_resolved_total[6h]))",
+          "legendFormat": "{{via}} / {{resolution}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 255
+      },
+      "id": 121
+    },
+    {
+      "type": "timeseries",
+      "title": "Web Push Sends by Result (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_webpush_send_total[6h]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 255
+      },
+      "id": 122
+    },
+    {
+      "type": "row",
+      "title": "Telegram Bot",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 263
+      },
+      "id": 123
     },
     {
       "type": "timeseries",
@@ -9141,9 +9501,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 255
+        "y": 264
       },
-      "id": 119
+      "id": 124
     },
     {
       "type": "timeseries",
@@ -9227,9 +9587,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 255
+        "y": 264
       },
-      "id": 120
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -9313,9 +9673,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 255
+        "y": 264
       },
-      "id": 121
+      "id": 126
     },
     {
       "type": "row",
@@ -9326,9 +9686,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 263
+        "y": 272
       },
-      "id": 122
+      "id": 127
     },
     {
       "type": "stat",
@@ -9394,9 +9754,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 264
+        "y": 273
       },
-      "id": 123
+      "id": 128
     },
     {
       "type": "stat",
@@ -9462,9 +9822,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 264
+        "y": 273
       },
-      "id": 124
+      "id": 129
     },
     {
       "type": "timeseries",
@@ -9548,9 +9908,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 264
+        "y": 273
       },
-      "id": 125
+      "id": 130
     },
     {
       "type": "stat",
@@ -9616,9 +9976,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 264
+        "y": 273
       },
-      "id": 126
+      "id": 131
     },
     {
       "type": "row",
@@ -9629,9 +9989,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 272
+        "y": 281
       },
-      "id": 127
+      "id": 132
     },
     {
       "type": "stat",
@@ -9701,9 +10061,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 273
+        "y": 282
       },
-      "id": 128
+      "id": 133
     },
     {
       "type": "timeseries",
@@ -9787,9 +10147,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 273
+        "y": 282
       },
-      "id": 129
+      "id": 134
     },
     {
       "type": "logs",
@@ -9828,9 +10188,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 273
+        "y": 282
       },
-      "id": 130
+      "id": 135
     },
     {
       "type": "row",
@@ -9841,9 +10201,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 281
+        "y": 290
       },
-      "id": 131
+      "id": 136
     },
     {
       "type": "timeseries",
@@ -9927,9 +10287,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 282
+        "y": 291
       },
-      "id": 132
+      "id": 137
     },
     {
       "type": "timeseries",
@@ -10037,9 +10397,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 282
+        "y": 291
       },
-      "id": 133
+      "id": 138
     },
     {
       "type": "timeseries",
@@ -10135,9 +10495,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 282
+        "y": 291
       },
-      "id": 134
+      "id": 139
     },
     {
       "type": "logs",
@@ -10176,9 +10536,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 282
+        "y": 291
       },
-      "id": 135
+      "id": 140
     },
     {
       "type": "timeseries",
@@ -10262,9 +10622,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 282
+        "y": 291
       },
-      "id": 136
+      "id": 141
     },
     {
       "type": "timeseries",
@@ -10348,9 +10708,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 282
+        "y": 291
       },
-      "id": 137
+      "id": 142
     },
     {
       "type": "timeseries",
@@ -10446,9 +10806,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 290
+        "y": 299
       },
-      "id": 138
+      "id": 143
     },
     {
       "type": "timeseries",
@@ -10556,9 +10916,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 290
+        "y": 299
       },
-      "id": 139
+      "id": 144
     },
     {
       "type": "stat",
@@ -10628,9 +10988,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 290
+        "y": 299
       },
-      "id": 140
+      "id": 145
     },
     {
       "type": "row",
@@ -10641,9 +11001,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 298
+        "y": 307
       },
-      "id": 141
+      "id": 146
     },
     {
       "type": "stat",
@@ -10704,9 +11064,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 299
+        "y": 308
       },
-      "id": 142
+      "id": 147
     },
     {
       "type": "timeseries",
@@ -10790,9 +11150,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 299
+        "y": 308
       },
-      "id": 143
+      "id": 148
     },
     {
       "type": "stat",
@@ -10853,9 +11213,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 299
+        "y": 308
       },
-      "id": 144
+      "id": 149
     },
     {
       "type": "timeseries",
@@ -10943,9 +11303,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 307
+        "y": 316
       },
-      "id": 145
+      "id": 150
     },
     {
       "type": "stat",
@@ -11011,9 +11371,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 307
+        "y": 316
       },
-      "id": 146
+      "id": 151
     },
     {
       "type": "stat",
@@ -11079,9 +11439,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 307
+        "y": 316
       },
-      "id": 147
+      "id": 152
     },
     {
       "type": "stat",
@@ -11147,9 +11507,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 315
+        "y": 324
       },
-      "id": 148
+      "id": 153
     },
     {
       "type": "timeseries",
@@ -11233,9 +11593,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 315
+        "y": 324
       },
-      "id": 149
+      "id": 154
     },
     {
       "type": "row",
@@ -11246,9 +11606,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 323
+        "y": 332
       },
-      "id": 150
+      "id": 155
     },
     {
       "type": "logs",
@@ -11287,9 +11647,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 324
+        "y": 333
       },
-      "id": 151
+      "id": 156
     },
     {
       "type": "logs",
@@ -11328,9 +11688,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 324
+        "y": 333
       },
-      "id": 152
+      "id": 157
     }
   ]
 }

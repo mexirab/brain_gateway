@@ -143,6 +143,7 @@ def record_meal_logged(label: str = "a meal") -> None:
     _state.last_meal_reported = datetime.now()
     save_selfcare_log("meal", label)
     SELFCARE_LOGGED.labels(action="meal").inc()
+    _resolve_inbox("meal")
     logger.info("[SELFCARE] Meal logged", extra={"component": "selfcare"})
 
 
@@ -183,6 +184,7 @@ def record_medication_logged(label: str = "medication") -> None:
     _expand_med_confirmation(label, now)
     save_selfcare_log("medication", label)
     SELFCARE_LOGGED.labels(action="medication").inc()
+    _resolve_inbox("medication")
     logger.info("[SELFCARE] Med logged", extra={"component": "selfcare"})
 
 
@@ -193,6 +195,7 @@ def record_hydration_logged(label: str = "water") -> None:
     _state.last_hydration_nudge = datetime.now()
     save_selfcare_log("water", label)
     SELFCARE_LOGGED.labels(action="water").inc()
+    _resolve_inbox("water")
     logger.info(f"[SELFCARE] Hydration logged ({label.split(':', 1)[0]})", extra={"component": "selfcare"})
 
 
@@ -210,7 +213,37 @@ def record_movement_logged(label: str = "movement") -> None:
     _state.sitting_since = now
     save_selfcare_log("movement", label)
     SELFCARE_LOGGED.labels(action="movement").inc()
+    _resolve_inbox("movement")
     logger.info(f"[SELFCARE] Movement logged ({label.split(':', 1)[0]})", extra={"component": "selfcare"})
+
+
+def record_selfcare(kind: str, label: str) -> bool:
+    """Dispatch to the matching record_*_logged helper. False for an unknown kind.
+
+    Shared by every one-tap Done path (reminder ack bridge, Telegram nudge
+    button, dashboard inbox) so the kind → recorder mapping lives in one place.
+    """
+    recorder = {
+        "medication": record_medication_logged,
+        "meal": record_meal_logged,
+        "water": record_hydration_logged,
+        "movement": record_movement_logged,
+    }.get(kind)
+    if recorder is None:
+        return False
+    recorder(label)
+    return True
+
+
+def _resolve_inbox(kind: str) -> None:
+    """Clear any pending dashboard inbox card for this selfcare kind — the user
+    has logged it some other way (voice, Telegram, routine). Never raises."""
+    try:
+        from orchestrator import inbox
+
+        inbox.resolve_selfcare(kind, resolution="done", via="logged")
+    except Exception as e:
+        logger.warning("[SELFCARE] Inbox resolve failed: %s", type(e).__name__)
 
 
 def mark_selfcare_from_routine_step(step) -> None:
@@ -224,15 +257,7 @@ def mark_selfcare_from_routine_step(step) -> None:
     action = _infer_selfcare_action(step)
     if action is None:
         return
-    label = f"routine:{getattr(step, 'id', '?')}"
-    if action == "medication":
-        record_medication_logged(label)
-    elif action == "meal":
-        record_meal_logged(label)
-    elif action == "water":
-        record_hydration_logged(label)
-    elif action == "movement":
-        record_movement_logged(label)
+    record_selfcare(action, f"routine:{getattr(step, 'id', '?')}")
 
 
 def _infer_selfcare_action(step) -> Optional[str]:
@@ -298,6 +323,10 @@ async def log_selfcare(action: str, detail: Optional[str] = None) -> str:
 
     else:
         return f"Unknown action: {action}"
+
+    # record_meal_logged already cleared a meal card; the other branches
+    # write directly, so clear theirs here (idempotent either way).
+    await asyncio.to_thread(_resolve_inbox, action)
 
     # Bridge: if an active routine is waiting on a step that matches this
     # selfcare action, advance it. Fire-and-forget so the routine's own TTS
@@ -380,7 +409,8 @@ async def check_selfcare() -> None:
 
 
 async def _dispatch_nudge(kind: str, nudge: str) -> None:
-    """Deliver one nudge across channels: TTS + HA companion push + Telegram.
+    """Deliver one nudge across channels: TTS + HA companion push + Telegram +
+    dashboard inbox (Web Push).
 
     Selfcare nudges never pass through deliver_reminder_job, so the reminder
     push channels (F-011 ntfy / F-013 Pushover / Telegram reminders) don't
@@ -398,6 +428,13 @@ async def _dispatch_nudge(kind: str, nudge: str) -> None:
         fire_selfcare_nudge(kind, nudge)
     except Exception as tg_err:
         logger.warning(f"[SELFCARE] Telegram nudge dispatch failed: {tg_err}")
+    # Dashboard inbox card with a one-tap Done (also fires Web Push).
+    try:
+        from orchestrator import inbox
+
+        inbox.notify(await asyncio.to_thread(inbox.add_selfcare_item, kind, nudge))
+    except Exception as inbox_err:
+        logger.warning("[SELFCARE] Inbox add failed: %s", type(inbox_err).__name__)
     logger.info(f"[SELFCARE] Nudge ({kind}, {len(nudge)} chars)", extra={"component": "selfcare"})
 
 

@@ -36,6 +36,11 @@ prometheus-client>=0.21,<1.0
 # Encryption
 cryptography>=44.0,<45.0
 
+# Web Push (self-hosted VAPID sender for dashboard notifications).
+# py-vapid pinned: 1.9.6 wants a newer cryptography than the pin above.
+pywebpush==2.0.3
+py-vapid==1.9.2
+
 # Document processing
 PyMuPDF>=1.25,<2.0
 pytesseract>=0.3,<1.0

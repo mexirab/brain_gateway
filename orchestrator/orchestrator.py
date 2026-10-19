@@ -572,6 +572,18 @@ async def _startup_logic():
     state_store.clear_stale_notifications(older_than_hours=48)
     state_store.cleanup_old_announcements(keep_days=30)
     state_store.cleanup_old_selfcare(keep_days=90)
+    try:
+        from orchestrator import inbox
+
+        inbox.cleanup_old()
+    except Exception as e:
+        logger.error("[INBOX] Startup cleanup failed: %s", type(e).__name__, exc_info=True)
+    try:
+        from orchestrator import webpush_manager
+
+        webpush_manager.init()
+    except Exception as e:
+        logger.error("[WEBPUSH] Startup init failed: %s", type(e).__name__, exc_info=True)
 
     # Pantry (F-015): a scan mid-vision when the process died can't resume —
     # flip it to failed so the review page offers Retry instead of spinning.
@@ -1204,6 +1216,30 @@ async def _startup_logic():
         replace_existing=True,
     )
     logger.info(f"[SCHEDULER] Recurring reminder expansion every {EXPANSION_WINDOW_MINUTES}m")
+
+    # Dashboard inbox + Web Push housekeeping (startup also runs the inbox
+    # prune, but the process can stay up for months).
+    def _inbox_housekeeping() -> None:
+        from orchestrator import inbox, webpush_manager
+
+        try:
+            inbox.cleanup_old()
+        except Exception as e:
+            logger.error("[INBOX] Cleanup failed: %s", type(e).__name__, exc_info=True)
+        try:
+            webpush_manager.prune_stale_subscriptions()
+        except Exception as e:
+            logger.error("[WEBPUSH] Subscription prune failed: %s", type(e).__name__, exc_info=True)
+
+    scheduler.add_job(
+        _inbox_housekeeping,
+        trigger="cron",
+        hour=4,
+        minute=25,
+        id="inbox_housekeeping",
+        name="Inbox + Web Push housekeeping",
+        replace_existing=True,
+    )
 
     # Pantry (F-015): daily cleanup of review photos left by failed/abandoned
     # scans — they are photos of the inside of the home.
