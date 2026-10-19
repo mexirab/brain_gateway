@@ -78,7 +78,7 @@ export default function ChatInput({
         } catch (err) {
           setPhotoError(err instanceof PhotoTooLargeError
             ? 'That photo is too detailed to send. Try a closer or simpler shot.'
-            : 'Couldn’t open that photo on this device. Try taking it again or pick another.');
+            : 'Couldn’t open that photo on this device. Pick another one, or take a new one.');
         }
       }
     } finally {
@@ -251,7 +251,7 @@ export default function ChatInput({
         )}
       </div>
       {photoError && (
-        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-xs text-danger">
+        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-sm text-danger">
           <span>{photoError}</span>
           <button
             onClick={() => setPhotoError(null)}
