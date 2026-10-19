@@ -15,14 +15,14 @@ import logging
 import math
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from orchestrator import calendar_sources, shared
+from orchestrator import calendar_sources, reminder_actions, shared
 from orchestrator.bearer_auth import bearer_token_matches
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
 from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_entity_allowed
@@ -42,6 +42,7 @@ from orchestrator.reminder_manager import _announce_voice, list_pending_reminder
 from orchestrator.routes_calendar import router as calendar_router
 from orchestrator.routes_chat import router as chat_router
 from orchestrator.routes_documents import router as documents_router
+from orchestrator.routes_inbox import router as inbox_router
 from orchestrator.routes_meals import router as meals_router
 from orchestrator.routes_palace import router as palace_router
 from orchestrator.routes_pantry import router as pantry_router
@@ -49,6 +50,7 @@ from orchestrator.routes_paperless import router as paperless_router
 from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_tasks import router as tasks_router
 from orchestrator.routes_vision import router as vision_router
+from orchestrator.routes_webpush import router as webpush_router
 from orchestrator.routes_workout import router as workout_router
 from orchestrator.schemas import (
     AnnounceRequest,
@@ -108,6 +110,8 @@ def _fire_and_forget(coro) -> None:
 router.include_router(calendar_router)
 router.include_router(chat_router)
 router.include_router(documents_router)
+router.include_router(inbox_router)
+router.include_router(webpush_router)
 router.include_router(shopping_router)
 router.include_router(tasks_router)
 router.include_router(vision_router)
@@ -507,31 +511,12 @@ def _callback_response(
 # taps → Safari opens the URL, which is a GET). HMAC verification gates
 # state mutation identically for both; the response shape differs — JSON
 # for POST (machine callers), HTML for GET (browser).
-async def _pantry_reminder_done(reminder) -> None:
-    """Done on a meal-plan cooking reminder = "cooked it" (F-015 phase 4).
-    Off the event loop: the cook is a BEGIN IMMEDIATE + fuzzy matching."""
-    try:
-        from orchestrator.pantry_consumption import on_reminder_done
-
-        await _asyncio.to_thread(on_reminder_done, reminder)
-    except Exception as e:  # the ack itself must still succeed
-        logger.error("[NTFY-ACK] Pantry cook hook failed: %s", type(e).__name__, exc_info=True)
-
-
 @router.api_route("/api/reminder/ack/{reminder_id}", methods=["GET", "POST"])
 async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", exp: int = 0):
     """Ack a reminder from an ntfy (POST) or Pushover (GET) action. HMAC-gated, no bearer."""
-    from orchestrator import state_store as _ss
     from orchestrator.config import settings
-    from orchestrator.metrics import (
-        NTFY_ACK_TOTAL,
-        NTFY_CALLBACK_REJECTED_TOTAL,
-        REMINDER_ACK_LATENCY,
-    )
-    from orchestrator.reminder_manager import (
-        selfcare_action_for_reminder,
-        verify_callback_signature,
-    )
+    from orchestrator.metrics import NTFY_ACK_TOTAL, NTFY_CALLBACK_REJECTED_TOTAL
+    from orchestrator.reminder_manager import verify_callback_signature
 
     # Feature-flag gate: the callback surface should outlive EITHER the ntfy
     # push channel OR the pushover channel, since both send signed URLs that
@@ -571,8 +556,8 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
             html_subtext=subtext,
         )
 
-    result = _ss.mark_reminder_acked(reminder_id, via="ntfy")
-    if result is None:
+    outcome = await reminder_actions.ack_reminder(reminder_id, via="ntfy")
+    if outcome["status"] == "not_found":
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="not_found").inc()
         return _callback_response(
             request,
@@ -582,9 +567,8 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
             html_subtext="That reminder doesn't exist.",
         )
 
-    if result.get("already_acked"):
-        # Idempotent replay — don't re-fire the selfcare bridge, don't double-count.
-        logger.info(f"[NTFY-ACK] {reminder_id} already acked; idempotent replay")
+    if outcome["status"] == "already_acked":
+        # Idempotent replay — the helper re-fires nothing; don't double-count.
         return _callback_response(
             request,
             {"ok": True, "already_acked": True, "reminder_id": reminder_id},
@@ -592,54 +576,9 @@ async def ntfy_ack_reminder(request: Request, reminder_id: str, sig: str = "", e
             html_subtext="You've acknowledged this one already.",
         )
 
-    # Cancel any pending retry job the TTS-failure path might have scheduled.
-    retry_job_id = f"reminder_{reminder_id}_retry"
-    if scheduler.get_job(retry_job_id):
-        try:
-            scheduler.remove_job(retry_job_id)
-            logger.info(f"[NTFY-ACK] Cancelled retry job for {reminder_id}")
-        except Exception as job_err:
-            logger.warning(f"[NTFY-ACK] Failed to cancel retry job: {job_err}")
-
-    # Observe ack latency: trigger_time → now, so we can see how long it
-    # typically takes the user to respond to an ntfy push.
-    try:
-        trig = result.get("trigger_time")
-        if trig:
-            trigger_dt = datetime.fromisoformat(trig)
-            elapsed = (datetime.now() - trigger_dt).total_seconds()
-            if elapsed >= 0:
-                REMINDER_ACK_LATENCY.observe(elapsed)
-    except Exception:
-        pass
-
-    text = result.get("text", "") or ""
-    action = selfcare_action_for_reminder(result)
+    text = outcome["reminder"].get("text", "") or ""
+    action = outcome["action"]
     NTFY_ACK_TOTAL.labels(inferred_action=action or "none").inc()
-    await _pantry_reminder_done(result)
-
-    if action:
-        try:
-            from orchestrator import selfcare_manager
-
-            label = f"reminder:{text[:80]}"
-            if action == "medication":
-                selfcare_manager.record_medication_logged(label)
-            elif action == "meal":
-                selfcare_manager.record_meal_logged(label)
-            elif action == "water":
-                selfcare_manager.record_hydration_logged(label)
-            elif action == "movement":
-                selfcare_manager.record_movement_logged(label)
-            logger.info(f"[NTFY-ACK] {reminder_id} acked, selfcare={action}")
-        except Exception as bridge_err:
-            # Bridge failure is loud (same philosophy as selfcare_manager's
-            # routine bridge): the ack still stands, but somebody needs to fix
-            # the handler.
-            logger.error(
-                f"[NTFY-ACK] Selfcare bridge failed for {reminder_id}: {bridge_err}",
-                exc_info=True,
-            )
 
     # Visible-confirmation side-channel (F-011 follow-up). Fire-and-forget
     # so a slow/down ntfy server doesn't stretch the ack response time.
@@ -674,9 +613,6 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
     `NTFY_MAX_SNOOZE_COUNT`. HTML response on GET so a Safari tap on a
     Pushover link lands on a readable confirmation page.
     """
-    from zoneinfo import ZoneInfo
-
-    from orchestrator import state_store as _ss
     from orchestrator.config import settings
     from orchestrator.metrics import NTFY_CALLBACK_REJECTED_TOTAL, NTFY_SNOOZE_TOTAL
     from orchestrator.reminder_manager import verify_callback_signature
@@ -715,8 +651,8 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
             html_subtext=subtext,
         )
 
-    reminder = _ss.get_reminder(reminder_id)
-    if reminder is None:
+    outcome = await reminder_actions.snooze_reminder(reminder_id, minutes, via="ntfy")
+    if outcome["status"] == "not_found":
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="not_found").inc()
         return _callback_response(
             request,
@@ -725,9 +661,8 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
             html_headline="Not found",
             html_subtext="That reminder doesn't exist.",
         )
-
-    current = reminder.get("snooze_count") or 0
-    if current >= settings.ntfy_max_snooze_count:
+    if outcome["status"] == "limit":
+        current = outcome["snooze_count"]
         NTFY_CALLBACK_REJECTED_TOTAL.labels(reason="over_snoozed").inc()
         return _callback_response(
             request,
@@ -736,20 +671,7 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
             html_headline="Snooze limit reached",
             html_subtext=f"You've snoozed this {current} times already.",
         )
-
-    run_at = datetime.now(ZoneInfo(shared.TIMEZONE)) + timedelta(minutes=minutes)
-    job_id = f"reminder_{reminder_id}"
-    try:
-        scheduler.add_job(
-            deliver_reminder_job,
-            trigger="date",
-            run_date=run_at,
-            args=[reminder_id],
-            id=job_id,
-            replace_existing=True,
-        )
-    except Exception as sch_err:
-        logger.error(f"[NTFY-SNOOZE] Reschedule failed for {reminder_id}: {sch_err}", exc_info=True)
+    if outcome["status"] != "ok":
         return _callback_response(
             request,
             {"ok": False, "error": "reschedule_failed"},
@@ -758,24 +680,9 @@ async def ntfy_snooze_reminder(request: Request, reminder_id: str, sig: str = ""
             html_subtext="Something went wrong rescheduling. Check back later.",
         )
 
-    # Delivery already marked this reminder 'completed', and
-    # deliver_reminder_job skips anything non-pending — without this reset the
-    # snoozed job fires into the guard and the reminder never comes back
-    # (while the user holds a "Snoozed until 3:10" confirmation).
-    _ss.reopen_reminder(reminder_id)
-
-    # The snooze supersedes any pending TTS-failure retry; kill it so the
-    # reminder doesn't fire twice (once at +2min from the retry, once at the
-    # snoozed time).
-    retry_job_id = f"reminder_{reminder_id}_retry"
-    if scheduler.get_job(retry_job_id):
-        with contextlib.suppress(Exception):
-            scheduler.remove_job(retry_job_id)
-            logger.info(f"[NTFY-SNOOZE] Cancelled pending retry job for {reminder_id}")
-
-    new_count = _ss.increment_snooze_count(reminder_id)
+    run_at = outcome["run_at"]
+    new_count = outcome["snooze_count"]
     NTFY_SNOOZE_TOTAL.inc()
-    logger.info(f"[NTFY-SNOOZE] {reminder_id} snoozed {minutes}m (count={new_count})")
 
     # Visible-confirmation side-channel (F-011 + F-013). Fire-and-forget on both.
     from orchestrator.pushover_manager import deliver_pushover_confirm

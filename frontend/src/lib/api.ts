@@ -33,6 +33,9 @@ import type {
   SelfcareTodayResponse,
   ServicesResponse,
   CalendarRangeResponse,
+  InboxResponse,
+  InboxActionResult,
+  WebPushInfo,
 } from './types';
 
 const PROXY = '/api/proxy';
@@ -41,6 +44,21 @@ async function fetcher<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${PROXY}${path}`, init);
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
   return res.json();
+}
+
+/** POST that returns the JSON body even on 4xx, so callers can show
+ *  "snooze limit reached" instead of a generic failure. */
+async function inboxPost(path: string, body: object): Promise<InboxActionResult> {
+  const res = await fetch(`${PROXY}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  try {
+    return (await res.json()) as InboxActionResult;
+  } catch {
+    return { ok: false, error: `http_${res.status}` };
+  }
 }
 
 // Server-side fetcher (uses internal Docker URL)
@@ -306,4 +324,24 @@ export const api = {
     }
     return res.json() as Promise<MealPhotoEstimate>;
   },
+  // Dashboard inbox (reminder + selfcare cards with Done / Snooze)
+  inbox: () => fetcher<InboxResponse>('/api/inbox'),
+  inboxAction: (id: string, action: 'done' | 'snooze' | 'dismiss', minutes?: number) =>
+    inboxPost(`/api/inbox/${encodeURIComponent(id)}/${action}`, minutes ? { minutes } : {}),
+  // Web Push
+  webPushInfo: () => fetcher<WebPushInfo>('/api/webpush/public-key'),
+  webPushSubscribe: (sub: PushSubscriptionJSON) =>
+    fetcher<{ ok: boolean; devices: number }>('/api/webpush/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sub),
+    }),
+  webPushUnsubscribe: (endpoint: string) =>
+    fetcher<{ ok: boolean; devices: number }>('/api/webpush/unsubscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    }),
+  webPushTest: () =>
+    fetcher<{ ok: boolean; sent: number; failed: number }>('/api/webpush/test', { method: 'POST' }),
 };

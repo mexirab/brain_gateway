@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell, AudioLines } from 'lucide-react';
+import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell, AudioLines, Bell } from 'lucide-react';
 import IdentityPanel from '@/components/settings/IdentityPanel';
 import SelfcarePanel from '@/components/settings/SelfcarePanel';
 import QuietHoursPanel from '@/components/settings/QuietHoursPanel';
@@ -10,6 +10,7 @@ import RoutinesPanel from '@/components/settings/RoutinesPanel';
 import SpeakersPanel from '@/components/settings/SpeakersPanel';
 import VoiceStylePanel from '@/components/settings/VoiceStylePanel';
 import WorkoutsPanel from '@/components/settings/WorkoutsPanel';
+import NotificationsPanel from '@/components/settings/NotificationsPanel';
 import type { LucideIcon } from 'lucide-react';
 
 // Exported so each panel imports the same union — adding another panel
@@ -22,7 +23,8 @@ export type PanelKey =
   | 'speakers'
   | 'voice'
   | 'recurring'
-  | 'workouts';
+  | 'workouts'
+  | 'notifications';
 
 interface Tab {
   key: PanelKey;
@@ -40,6 +42,7 @@ const TABS: Tab[] = [
   { key: 'voice', label: 'Voice Style', icon: AudioLines, description: 'How Jess sounds in each situation' },
   { key: 'recurring', label: 'Recurring Reminders', icon: Repeat, description: 'Schedules + cron rules' },
   { key: 'workouts', label: 'Workouts', icon: Dumbbell, description: 'Program + gym equipment' },
+  { key: 'notifications', label: 'Notifications', icon: Bell, description: 'Lock-screen alerts on this device' },
 ];
 
 // Each panel calls `registerDirty(panelKey, isDirty)` in an effect so the
@@ -60,6 +63,7 @@ export default function SettingsPage() {
     voice: false,
     recurring: false,
     workouts: false,
+    notifications: false,
   });
   // Hide the Workouts tab when the feature is off. Fail-open (show it) if the
   // flags can't be read — the panel itself handles the disabled 404.
@@ -139,6 +143,7 @@ export default function SettingsPage() {
           {active === 'voice' && <VoiceStylePanel registerDirty={registerDirty} />}
           {active === 'recurring' && <RecurringRemindersPanel registerDirty={registerDirty} />}
           {active === 'workouts' && <WorkoutsPanel registerDirty={registerDirty} />}
+          {active === 'notifications' && <NotificationsPanel />}
         </section>
       </div>
     </div>

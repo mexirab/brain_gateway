@@ -11,7 +11,8 @@ export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
   icons: {
     icon: '/icons/icon.svg',
-    apple: '/icons/icon.svg',
+    // iOS ignores SVG touch icons; the PNG is what the home-screen app shows.
+    apple: '/icons/apple-touch-icon.png',
   },
   appleWebApp: {
     capable: true,

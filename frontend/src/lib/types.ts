@@ -556,3 +556,35 @@ export interface SelfcareTodayResponse {
   today_date: string;
   actions: Record<SelfcareAction, SelfcareActionState>;
 }
+
+// ---- Dashboard inbox (Done / Snooze cards in /chat) ---------------------
+export type InboxKind = 'reminder' | 'selfcare';
+
+export interface InboxItem {
+  id: string;
+  kind: InboxKind;
+  /** reminder id, or the selfcare kind (medication | meal | water | movement). */
+  ref: string;
+  text: string;
+  created_at: string;
+}
+
+export interface InboxResponse {
+  items: InboxItem[];
+}
+
+export interface InboxActionResult {
+  ok: boolean;
+  error?: string;
+  logged?: string | null;
+  already_resolved?: boolean;
+  rescheduled_for?: string;
+  snooze_count?: number;
+}
+
+// ---- Web Push --------------------------------------------------------------
+export interface WebPushInfo {
+  enabled: boolean;
+  public_key: string | null;
+  devices: number;
+}

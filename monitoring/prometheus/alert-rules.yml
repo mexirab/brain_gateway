@@ -498,6 +498,18 @@ groups:
         annotations:
           summary: "Actual Budget sync has not succeeded in 6h"
           description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
+      - alert: WebPushFailing
+        # Web Push counts as phone delivery while a device is recently healthy,
+        # so a push service that started rejecting us (VAPID key replaced →
+        # "auth", or outages) would otherwise mark reminders delivered into the
+        # void. Silent when nothing was sent (feature off / no devices).
+        expr: (sum(increase(bgw_webpush_send_total{result=~"auth|http_4xx|http_5xx|timeout|redirect|error"}[6h])) > 0) unless (sum(increase(bgw_webpush_send_total{result="ok"}[6h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Web Push to phones has not succeeded in 6h"
+          description: "Every dashboard Web Push send in the last 6h failed, so reminders may not be reaching the phone lock screen. Check `docker logs brain-orchestrator | grep '\\[WEBPUSH\\]'`. result=auth means the VAPID key (WEBPUSH_KEY_PATH) changed — re-enable notifications on each device from Settings → Notifications."
       - alert: AnnouncementSpeakerUnavailable
         # HA 200s play_media on an `unavailable` Cast entity, so before
         # 2026-10-02 a dead speaker logged as a delivered announcement and the

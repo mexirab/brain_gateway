@@ -1246,9 +1246,9 @@ class TestAckHook:
     async def test_runs_off_the_event_loop(self, monkeypatch):
         import inspect
 
-        from orchestrator import api_routes, pantry_consumption
+        from orchestrator import pantry_consumption, reminder_actions
 
-        assert inspect.iscoroutinefunction(api_routes._pantry_reminder_done)
+        assert inspect.iscoroutinefunction(reminder_actions._pantry_done)
         seen = {}
 
         def fake(reminder):
@@ -1257,14 +1257,14 @@ class TestAckHook:
             return "cooked"
 
         monkeypatch.setattr(pantry_consumption, "on_reminder_done", fake)
-        await api_routes._pantry_reminder_done({"id": "mp-abc"})
+        await reminder_actions._pantry_done({"id": "mp-abc"})
         assert seen["reminder"] == {"id": "mp-abc"}
         assert seen["thread"] != threading.get_ident()
 
     async def test_swallows_exceptions(self, monkeypatch):
-        from orchestrator import api_routes, pantry_consumption
+        from orchestrator import pantry_consumption, reminder_actions
 
         mock = MagicMock(side_effect=RuntimeError("boom"))
         monkeypatch.setattr(pantry_consumption, "on_reminder_done", mock)
-        assert await api_routes._pantry_reminder_done({"id": "mp-abc"}) is None
+        assert await reminder_actions._pantry_done({"id": "mp-abc"}) is None
         mock.assert_called_once()

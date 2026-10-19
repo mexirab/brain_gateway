@@ -397,6 +397,17 @@ class Settings(BaseSettings):
     pushover_api_url: str = "https://api.pushover.net/1/messages.json"
     pushover_upload_timeout_seconds: int = 10
 
+    # -- Web Push (dashboard notifications) -------------------------------------
+    # Self-hosted VAPID sender: the orchestrator encrypts each notification and
+    # posts it straight to the browser's push service (Apple/Google/Mozilla
+    # relay it, but can't read it). Devices subscribe from /settings →
+    # Notifications. Key is generated on first start at webpush_key_path.
+    webpush_enabled: bool = False
+    webpush_subject: str = ""  # mailto:you@example.com or https://your-dashboard — push services require one
+    webpush_key_path: str = "/app/data/webpush_vapid.pem"
+    webpush_show_text: bool = True  # false = generic "Reminder waiting" on the lockscreen
+    webpush_ttl_seconds: int = 3600  # push service keeps an undelivered notification this long
+
     # -- Telegram bot ------------------------------------------------------------
     # Two-way capture + reminder channel: a long-polling background task
     # relays inbound text through /v1/chat/completions (full Jess, tools
@@ -545,6 +556,25 @@ class Settings(BaseSettings):
             object.__setattr__(self, "pushover_default_priority", -2)
         elif self.pushover_default_priority > 2:
             object.__setattr__(self, "pushover_default_priority", 2)
+        return self
+
+    @model_validator(mode="after")
+    def validate_webpush_config(self) -> "Settings":
+        """Auto-disable Web Push without a valid VAPID subject. Log + disable,
+        never raise — optional feature must not block startup."""
+        subject = self.webpush_subject.strip()
+        if self.webpush_enabled and not (
+            (subject.startswith("mailto:") and "@" in subject) or subject.startswith("https://")
+        ):
+            import logging
+
+            logging.getLogger(__name__).error(
+                "[CONFIG] WEBPUSH_ENABLED=true but WEBPUSH_SUBJECT is not a mailto: or https:// "
+                "URL; disabling Web Push."
+            )
+            object.__setattr__(self, "webpush_enabled", False)
+        if self.webpush_ttl_seconds < 60:
+            object.__setattr__(self, "webpush_ttl_seconds", 60)
         return self
 
     @model_validator(mode="after")

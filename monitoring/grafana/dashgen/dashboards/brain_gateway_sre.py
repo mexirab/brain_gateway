@@ -1222,6 +1222,7 @@ def build() -> dict:
                 ('sum(rate(bgw_ntfy_push_total{result="ok",kind="reminder"}[1h])) * 3600', "ntfy"),
                 ('sum(rate(bgw_pushover_push_total{result="ok",kind="reminder"}[1h])) * 3600', "pushover"),
                 ('sum(rate(bgw_telegram_send_total{result="ok",kind="reminder"}[1h])) * 3600', "telegram"),
+                ('sum(rate(bgw_webpush_send_total{result="ok"}[1h])) * 3600', "web push"),
             ],
             unit="none",
         ),
@@ -1231,6 +1232,10 @@ def build() -> dict:
                 ('sum(rate(bgw_ntfy_push_total{result="fail"}[1h])) * 3600', "ntfy fail"),
                 ('sum(rate(bgw_pushover_push_total{result="fail"}[1h])) * 3600', "pushover fail"),
                 ('sum(rate(bgw_telegram_send_total{result="fail"}[1h])) * 3600', "telegram fail"),
+                (
+                    'sum(rate(bgw_webpush_send_total{result=~"auth|http_4xx|http_5xx|timeout|redirect|error"}[1h])) * 3600',
+                    "web push fail",
+                ),
             ],
             unit="none",
             thresholds=[(0, "green"), (1, "red")],
@@ -1252,6 +1257,40 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(trust_channels_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------- Dashboard Inbox & Web Push
+    # Reminders + selfcare nudges become Done/Snooze cards in /chat, pushed to
+    # phones via self-hosted Web Push. "Resolved by" shows WHERE cards get
+    # cleared (dashboard tap vs telegram vs logged by voice); a card count that
+    # climbs with no dashboard resolutions means nobody is seeing the tray.
+    # Web Push "auth" = the VAPID key changed — devices must re-enable.
+    r, y = row_divider("Dashboard Inbox & Web Push", y)
+    panels.append(r)
+    inbox_row = [
+        stat(
+            "Web Push Devices",
+            "max(bgw_webpush_subscriptions)",
+            thresholds=[(None, "yellow"), (1, "green")],
+            description="Devices subscribed via Settings → Notifications. 0 with WEBPUSH_ENABLED=false is expected.",
+        ),
+        timeseries(
+            "Inbox Cards Added (6h)",
+            [("sum by (kind) (increase(bgw_inbox_items_total[6h]))", "{{kind}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Inbox Cards Resolved by (6h)",
+            [("sum by (via, resolution) (increase(bgw_inbox_resolved_total[6h]))", "{{via}} / {{resolution}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Web Push Sends by Result (6h)",
+            [("sum by (result) (increase(bgw_webpush_send_total[6h]))", "{{result}}")],
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(inbox_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Telegram Bot

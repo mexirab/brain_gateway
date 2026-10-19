@@ -2,7 +2,9 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { CalendarDays, LayoutDashboard, MessageSquare, Home, LogOut, Coins, Network, Volume2, ShoppingCart, FileText, Dumbbell, UtensilsCrossed, Refrigerator, Settings, ListTodo, Pill } from 'lucide-react';
 import MobileNav from '@/components/layout/MobileNav';
+import ChatNavBadge from '@/components/layout/ChatNavBadge';
 import SessionExpiredWatcher from '@/components/providers/SessionExpiredWatcher';
+import ServiceWorkerRegistrar from '@/components/providers/ServiceWorkerRegistrar';
 import { SWRProvider } from '@/components/providers/SWRProvider';
 import { isAuthenticated } from '@/lib/auth';
 import { getFeatureFlags } from '@/lib/features.server';
@@ -40,6 +42,9 @@ export default async function PrivateLayout({
   const navItems = NAV_ITEMS.filter(({ href }) => isNavItemEnabled(href, flags));
 
   return (
+    // SWRProvider wraps the nav too, so the Chat badge gets the app's
+    // bounded retry/dedupe defaults, not SWR's unlimited retries.
+    <SWRProvider>
     <div className="min-h-screen supports-[height:100dvh]:min-h-dvh flex">
       {/* Sidebar — hidden on mobile, shown on md+ */}
       <aside className="hidden md:flex flex-col w-56 bg-surface-raised border-r border-line-subtle p-4">
@@ -55,6 +60,7 @@ export default async function PrivateLayout({
             >
               <Icon size={18} />
               {label}
+              {href === '/chat' && <ChatNavBadge className="ml-auto" />}
             </Link>
           ))}
         </nav>
@@ -76,8 +82,10 @@ export default async function PrivateLayout({
           this padding, update .page-viewport in globals.css to match. */}
       <main className="flex-1 p-6 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-6 overflow-auto">
         <SessionExpiredWatcher />
-        <SWRProvider>{children}</SWRProvider>
+        <ServiceWorkerRegistrar />
+        {children}
       </main>
     </div>
+    </SWRProvider>
   );
 }
