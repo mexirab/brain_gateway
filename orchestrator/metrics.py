@@ -1425,3 +1425,19 @@ HA_DEVICE_SETTING_REFUSED = Counter(
 for _p in ("tool", "nlp"):
     for _s in ("registry", "name", "member"):
         HA_DEVICE_SETTING_REFUSED.labels(path=_p, source=_s)
+
+# ---------------------------------------------------------------------------
+# Document vault — photo name suggestion (routes_documents)
+# ---------------------------------------------------------------------------
+
+DOCUMENT_NAME_SUGGEST = Counter(
+    "bgw_document_name_suggest_total",
+    "Document photo title/category suggestions by outcome.",
+    # result: ok | vision_off (disabled or brain unreachable) | timeout |
+    #         vision_error (vision server error / image refused) |
+    #         unparseable (model reply had no usable JSON/title) |
+    #         busy (another photo is being read) | bad_image (not JPEG/PNG/WebP or too big)
+    ["result"],
+)
+for _r in ("ok", "vision_off", "timeout", "vision_error", "unparseable", "busy", "bad_image"):
+    DOCUMENT_NAME_SUGGEST.labels(result=_r)

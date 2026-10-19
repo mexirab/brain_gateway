@@ -23,6 +23,8 @@ const SLOW_PATHS = new Set([
   'api/finance/categories', // same Actual snapshot
   'api/self_audit/run', // Loki queries + one LLM call
   'api/paperless/upload', // up to 100 MB upload, then Paperless
+  'api/documents', // upload (POST) waits for Tesseract OCR + embedding of the whole file
+  'api/documents/suggest-name', // vision read, 60 s inner budget behind chat
 ]);
 
 export function upstreamTimeoutMs(path: string[]): number {
