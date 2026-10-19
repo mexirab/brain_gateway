@@ -4,6 +4,7 @@
 **Status:** Done
 **Depends on:** F-002 (time nudges), F-008 (selfcare nudges), ntfy server on Jupiter
 **Blocks:** None
+**Since 2026-10:** the ack/snooze logic lives in `orchestrator/reminder_actions.py` (shared with Telegram + the dashboard inbox); a self-hosted alternative channel is the dashboard inbox + Web Push — see `docs/FRONTEND.md` → Dashboard Inbox + Web Push.
 
 ---
 

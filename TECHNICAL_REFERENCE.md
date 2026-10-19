@@ -115,6 +115,34 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 **Pushover push metrics (F-013).** `bgw_pushover_push_total{result,kind,reason}` counter + `bgw_pushover_push_latency_seconds{kind}` histogram. `kind` ∈ `{reminder, confirm}` (same split as ntfy). `reason` ∈ `{ok, http_4xx, http_5xx, timeout, connect_error, other, disabled, missing_user_key, missing_app_token, missing_credentials}` — lets Grafana distinguish "Pushover token revoked" (http_4xx) from "Pushover down" (http_5xx / connect_error / timeout) from "user turned feature off" (disabled). Reminder text is HTML-escaped via `html.escape(text, quote=False)` before embedding in the Pushover HTML body (prompt-injection defense — reminder text comes from the LLM via `set_reminder` and would otherwise render as tappable `<a href>`). Error bodies run through a credential-regex-strip before being logged.
 
+**Shared ack/snooze.** The HMAC routes, the Telegram Done/Snooze buttons and the dashboard inbox all call `orchestrator/reminder_actions.py` (`ack_reminder` / `snooze_reminder`, snooze clamped 1–120 min, retry-job cancellation, selfcare bridge, matching inbox card resolved). Log prefix `[REMINDER] ... via=<channel>`. `bgw_reminder_ack_latency_seconds` counts acks from every channel.
+
+### Dashboard Inbox
+
+Bearer-gated; the dashboard calls them through `/api/proxy`. Backed by `orchestrator/inbox.py` + `routes_inbox.py`. Cards are created by `deliver_reminder_job` (phone branch — voice-only reminders get none) and `selfcare_manager._dispatch_nudge` (all four kinds); a newer card for the same reminder / selfcare kind supersedes the old. Any resolution elsewhere (ntfy/Pushover/Telegram ack or snooze, selfcare logged by voice/routine/Telegram) clears the card.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/inbox` | Open cards from the last 24 h, newest first (max 20): `{ok, items:[{id, kind, ref, text, created_at}]}`. `kind` = `reminder` (ref = reminder id) \| `selfcare` (ref = `medication\|meal\|water\|movement`). Side-effect-free. |
+| POST | `/api/inbox/{id}/done` | Reminder → ack (`{ok, logged}`); selfcare → logs it via `selfcare_manager.record_selfcare`. |
+| POST | `/api/inbox/{id}/snooze` | Body `{minutes}` (default 15, clamped 1–120). Reminders only. → `{ok, rescheduled_for, minutes, snooze_count}`. |
+| POST | `/api/inbox/{id}/dismiss` | Hide the card without logging anything. |
+
+Errors: `bad_id` 400 (id must be 32 hex), `not_found` 404, `reminder_gone` 404 (card closed as dismissed), `not_snoozable` 400 (selfcare), `bad_minutes` / `bad_body` 400, `max_snoozes_reached` 409 (`NTFY_MAX_SNOOZE_COUNT`), `log_failed` / `reschedule_failed` 500. An already-closed card returns 200 `{ok: true, already_resolved: true}`.
+
+### Web Push
+
+Bearer-gated, via `/api/proxy`. `orchestrator/webpush_manager.py` + `routes_webpush.py`; env `WEBPUSH_*` (`docs/ENV_VARS.md`).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/webpush/public-key` | `{ok, enabled, public_key, devices}` (VAPID application server key; `enabled:false` when off). Side-effect-free — the key is created at startup. |
+| POST | `/api/webpush/subscribe` | Browser `PushSubscription` JSON (`endpoint`, `keys.p256dh`, `keys.auth`) → `{ok, devices}`. 409 `disabled` / `too_many_devices` (20); 400 `bad_endpoint` / `push_service_not_allowed` / `bad_keys`. |
+| POST | `/api/webpush/unsubscribe` | `{endpoint}` → `{ok, removed, devices}`. |
+| POST | `/api/webpush/test` | Test notification to every device → `{ok, sent, failed}` (`ok` = at least one sent). |
+
+**Send path.** Each new inbox card fires `fire_inbox_push` (fire-and-forget, max 4 concurrent sends, 10 s timeout); the notification opens `/chat`. Endpoints are allow-listed to Apple / FCM / Mozilla / WNS push hosts (https, port 443, no userinfo/backslash/whitespace, `urllib3` and `urlsplit` must agree on the host), rechecked at send time; redirects are refused. Medication nudges always use a generic lock-screen body; other text is shown unless `WEBPUSH_SHOW_TEXT=false`. 404/410 from the push service deletes the subscription (`result="gone"`). Web Push counts as phone delivery in `deliver_reminder_job` only while a device succeeded (or subscribed) within the last 14 days; subscriptions with no success for 30 days are pruned by the daily `inbox_housekeeping` job (04:25, also deletes inbox rows older than 30 days; startup runs the inbox prune too). Metrics: `bgw_webpush_send_total{result}` (`ok|gone|auth|http_4xx|http_5xx|timeout|redirect|error|no_subscribers`), `bgw_webpush_subscriptions`, `bgw_inbox_items_total{kind}`, `bgw_inbox_resolved_total{kind,resolution,via}`.
+
 ### Selfcare
 
 | Method | Path | Purpose |
@@ -856,6 +884,13 @@ Created unconditionally by `SCHEMA_SQL`. Timestamps ISO 8601 local.
 | `prep_batches` | `id`, `plan_id`, `entry_id`, `recipe_id`, `cooked_at`, `portions_made`, `portions_left`, `good_until` (cook date + 4 days), `location` (default `fridge`), `status` (`active\|finished\|expired\|undone`). Index on `status` |
 | `pantry_cooks` | Off-plan meals: `id`, `dish` (allowlist-cleaned, may be empty), `source` (`dashboard\|chat`), `cooked_at`, `status` (`active\|undone`). Deductions are `pantry_events` with `ref_type` `cook_other` |
 | `meal_plan_reminders` | `reminder_id` PK (`mp-` id), `entry_id`. Links a cooking reminder to its plan entry so a Done tap = cooked; rows deleted when the reminder is cancelled or its entry swapped |
+
+### Dashboard inbox + Web Push tables
+
+| Table | Columns / notes |
+|-------|-----------------|
+| `inbox_items` | `id` (32 hex), `kind` (`reminder\|selfcare`), `ref` (reminder id or selfcare kind), `text` (≤500 chars), `created_at`, `resolved_at` (NULL = open), `resolution` (`done\|snoozed\|dismissed\|superseded`), `resolved_via` (`dashboard`, `ntfy`, `telegram`, `logged`, `redelivered`, …). Index `(resolved_at, created_at)`. Rows deleted after 30 days |
+| `webpush_subscriptions` | `endpoint` PK, `p256dh`, `auth`, `created_at`, `last_ok_at`. One row per device, max 20 |
 
 ## SQLite Schema (`finance.db`)
 

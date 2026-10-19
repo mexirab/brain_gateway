@@ -10,6 +10,7 @@ HuggingFace model cache, which re-downloads on demand). The genuinely
 | `data/app/progress.db` | streaks, XP, event history | ❌ no |
 | `data/app/finance.db` | budget/finance state | ❌ no |
 | `data/app/auto_learn.key` | **Fernet key that decrypts learned personal facts** | ❌ **no — losing it bricks every encrypted memory, even though the ciphertext survives** |
+| `data/app/webpush_vapid.pem` | VAPID private key for dashboard Web Push (`WEBPUSH_KEY_PATH`, 0600). Critical file — an unreadable copy fails the run | ⚠️ a new key is auto-created, but every subscribed device stops receiving pushes until re-enabled in Settings → Notifications. The archive (and its plaintext Saturn copy) holds it unencrypted — anyone with the archive can sign pushes to subscribed devices |
 | live Chroma store (`CHROMA_HOST_PATH`, archived as `chroma/`) | RAG / mempalace vector store, incl. auto-learned facts | ⚠️ RAG docs re-ingestable; auto-learned facts are ❌ not |
 | `data/app/` subdirs | self-audits, budget summaries, imports, meal photos, paperless inbox, training corpus, documents | ❌ no |
 | `credentials/` | Google OAuth token + client secret | ⚠️ re-auth possible but painful |
@@ -110,7 +111,7 @@ tar tzf backups/jess-state-20260704-033000.tar.gz | head
 # restore into place (this overwrites current state — be sure)
 tar xzf backups/jess-state-20260704-033000.tar.gz -C .
 
-chmod 600 data/app/auto_learn.key credentials/*.json   # tar preserves mode, but confirm
+chmod 600 data/app/auto_learn.key data/app/webpush_vapid.pem credentials/*.json   # tar preserves mode, but confirm
 docker compose start orchestrator
 ```
 

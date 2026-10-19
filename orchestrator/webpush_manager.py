@@ -181,7 +181,7 @@ def endpoint_error(endpoint: Any) -> Optional[str]:
 
 
 def _key_ok(value: Any, min_len: int, max_len: int) -> bool:
-    return isinstance(value, str) and min_len <= len(value) <= max_len and bool(_B64URL_RE.match(value))
+    return isinstance(value, str) and min_len <= len(value) <= max_len and bool(_B64URL_RE.fullmatch(value))
 
 
 def parse_subscription(body: Any) -> tuple[Optional[Dict[str, str]], Optional[str]]:
