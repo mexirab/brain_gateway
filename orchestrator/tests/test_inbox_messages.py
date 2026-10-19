@@ -185,24 +185,24 @@ class TestMirrorMessage:
         from orchestrator import jobs_calendar
 
         with patch("orchestrator.telegram_bot.fire_system_message") as tg:
-            await jobs_calendar._mirror_message("evening_briefing", "🌙 wrap-up")
+            await jobs_calendar._mirror_message("evening_briefing", "wrap-up", "🌙 wrap-up")
         tg.assert_called_once_with("🌙 wrap-up")
         items = inbox.list_pending()
-        assert len(items) == 1 and items[0]["ref"] == "evening_briefing" and items[0]["text"] == "🌙 wrap-up"
+        assert len(items) == 1 and items[0]["ref"] == "evening_briefing" and items[0]["text"] == "wrap-up"
 
     async def test_inbox_failure_still_sends_telegram(self, tmp_db, monkeypatch):
         from orchestrator import jobs_calendar
 
         monkeypatch.setattr(inbox, "post_message", AsyncMock(side_effect=RuntimeError("x")))
         with patch("orchestrator.telegram_bot.fire_system_message") as tg:
-            await jobs_calendar._mirror_message("morning_briefing", "brief")
+            await jobs_calendar._mirror_message("morning_briefing", "brief", "☀️ brief")
         tg.assert_called_once()
 
     async def test_telegram_failure_still_posts_card(self, tmp_db, no_webpush):
         from orchestrator import jobs_calendar
 
         with patch("orchestrator.telegram_bot.fire_system_message", side_effect=RuntimeError("no loop")):
-            await jobs_calendar._mirror_message("morning_briefing", "brief")
+            await jobs_calendar._mirror_message("morning_briefing", "brief", "☀️ brief")
         assert [i["ref"] for i in inbox.list_pending()] == ["morning_briefing"]
 
     async def test_telegram_disabled_card_still_posted(self, tmp_db, no_webpush, monkeypatch):
@@ -210,7 +210,7 @@ class TestMirrorMessage:
         from orchestrator import jobs_calendar
 
         monkeypatch.setattr(settings, "telegram_enabled", False, raising=False)
-        await jobs_calendar._mirror_message("missed_recap", "• one")
+        await jobs_calendar._mirror_message("missed_recap", "• one", "⚠️ • one")
         await asyncio.sleep(0)  # let the no-op telegram task run
         assert [i["ref"] for i in inbox.list_pending()] == ["missed_recap"]
 
