@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Mic, Loader2, AudioLines, ImagePlus, X } from 'lucide-react';
 import useVoiceRecorder from '@/hooks/useVoiceRecorder';
-import { preparePhoto, MAX_CHAT_PHOTOS } from '@/lib/chat-photos';
+import { preparePhoto, MAX_CHAT_PHOTOS, PhotoTooLargeError } from '@/lib/chat-photos';
 
 export type SendSource = 'text' | 'voice';
 
@@ -75,8 +75,10 @@ export default function ChatInput({
           setPhotos((prev) => (
             prev.length < MAX_CHAT_PHOTOS ? [...prev, { id: ++photoIdCounter, uri }] : prev
           ));
-        } catch {
-          setPhotoError('Couldn’t read that photo. Try a different one.');
+        } catch (err) {
+          setPhotoError(err instanceof PhotoTooLargeError
+            ? 'That photo is too detailed to send. Try a closer or simpler shot.'
+            : 'Couldn’t open that photo on this device. Try taking it again or pick another.');
         }
       }
     } finally {

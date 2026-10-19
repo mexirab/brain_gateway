@@ -108,7 +108,7 @@ Files: `frontend/src/app/(private)/home/page.tsx`, `frontend/src/components/home
 
 The ImagePlus button in the chat input opens the photo picker (on iPhone: Take Photo / Photo Library — no `capture` attribute, so both are offered). Up to 3 photos per message (the orchestrator's `MAX_IMAGES_PER_REQUEST`).
 
-- **On the device:** `lib/chat-photos.ts` `preparePhoto` re-encodes each photo one at a time via `lib/image-resize.ts` — 1280px JPEG q0.8, falling back to 1024px q0.65, max 200 KB. Re-encoding strips EXIF/GPS; a photo the browser can't decode is refused, never sent as the original.
+- **On the device:** `lib/chat-photos.ts` `preparePhoto` re-encodes each photo one at a time via `lib/image-resize.ts` — 1280px JPEG q0.8, falling back to 1024px q0.65, max 1.5 MB per photo (a busy 12 MP shot at 1280px is often 300–600 KB; 200 KB rejected real iPhone photos). Re-encoding strips EXIF/GPS; a photo the browser can't decode is refused, never sent as the original.
 - **Wire format:** the current turn is sent as OpenAI parts (`text` + `image_url` data URIs) to `/v1/chat/completions`; `cloud_brain._process_vision` describes each photo on the Helios brain (`VISION_*`) and replaces the parts with text before the loop. No new backend route.
 - **Sent once:** earlier turns and the saved conversation carry a `[Shared a photo]` / `[Shared N photos]` marker (`lib/chat-history.ts`), never the image — the orchestrator would otherwise re-analyse every old photo each turn. Thumbnails show in the bubble for the current page session only.
 - **Photo turns skip the HA fast-path** and `_last_user_text` returns only the turn's own text (never the previous message's, never the `[Image N Analysis]` text) — `orchestrator/tests/test_photo_turn_routing.py`.
