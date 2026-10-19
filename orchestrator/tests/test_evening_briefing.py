@@ -49,9 +49,13 @@ def _skip_without_deps():
 
 
 @pytest.fixture
-def reset_shared():
-    """Reset the shared state evening_briefing reads: phone cache, DND, focus."""
+def reset_shared(tmp_db, monkeypatch):
+    """Reset the shared state evening_briefing reads: phone cache, DND, focus.
+    Also points the inbox mirror at tmp_db with Web Push off."""
     from orchestrator import shared
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "webpush_enabled", False, raising=False)
 
     orig_events = shared._phone_calendar_events
     orig_time = shared._phone_calendar_sync_time
@@ -410,6 +414,64 @@ async def test_telegram_mirror_fires(reset_shared, patch_evening_deps):
     mocks = await _run_evening(patches)
     mocks["telegram"].assert_called_once()
     assert mocks["telegram"].call_args.args[0].startswith("🌙 ")
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_evening_posts_inbox_card_matching_telegram(reset_shared, patch_evening_deps):
+    """The card carries the spoken text without the emoji; Telegram keeps the
+    🌙 prefix. One card, kind message, ref evening_briefing."""
+    from orchestrator import inbox
+
+    _, patches = patch_evening_deps(open_tasks=[{"text": "sort the mail"}])
+    mocks = await _run_evening(patches)
+
+    spoken = _spoken(mocks)
+    cards = inbox.list_pending()
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["kind"] == "message" and card["ref"] == "evening_briefing"
+    assert card["text"] == spoken
+    assert not card["text"].startswith("🌙")
+    assert "sort the mail" in card["text"]  # parked item reaches the card
+    mocks["telegram"].assert_called_once_with(f"🌙 {spoken}")
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_evening_card_posted_even_when_tts_fails(reset_shared, patch_evening_deps):
+    from orchestrator import inbox
+
+    _, patches = patch_evening_deps(announce_result={"success": False, "error": "tts down"})
+    await _run_evening(patches)
+    assert [c["ref"] for c in inbox.list_pending()] == ["evening_briefing"]
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_evening_dnd_posts_no_card(reset_shared, patch_evening_deps):
+    from orchestrator import inbox
+
+    reset_shared.DND_ACTIVE = True
+    _, patches = patch_evening_deps()
+    mocks = await _run_evening(patches)
+    assert inbox.list_pending() == []
+    mocks["telegram"].assert_not_called()
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_second_evening_supersedes_first_card(reset_shared, patch_evening_deps):
+    from orchestrator import inbox
+
+    _, patches = patch_evening_deps()
+    await _run_evening(patches)
+    first = inbox.list_pending()[0]["id"]
+    _, patches = patch_evening_deps()
+    await _run_evening(patches)
+    pending = inbox.list_pending()
+    assert len(pending) == 1 and pending[0]["id"] != first
+    assert inbox.get_item(first)["resolution"] == "superseded"
 
 
 # ---------------------------------------------------------------------------
