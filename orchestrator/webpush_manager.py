@@ -362,7 +362,14 @@ async def send_to_all(title: str, body: str, url: str = "/chat", tag: Optional[s
     return counts
 
 
-_GENERIC_BODY = {"reminder": "Reminder waiting", "selfcare": "Check-in waiting"}
+_GENERIC_BODY = {"reminder": "Reminder waiting", "selfcare": "Check-in waiting", "message": "Message from Jess"}
+# kind="message" cards always use these (never the text, whatever
+# WEBPUSH_SHOW_TEXT says): a briefing names meds and calendar events.
+_MESSAGE_BODY = {
+    "morning_briefing": "Morning briefing ready",
+    "evening_briefing": "Evening wrap-up ready",
+    "missed_recap": "Some reminders didn't reach you",
+}
 
 
 def fire_inbox_push(item: Dict[str, Any]) -> None:
@@ -374,7 +381,9 @@ def fire_inbox_push(item: Dict[str, Any]) -> None:
         return
     # Medication nudges name the drug — never put that on a lock screen.
     private = item.get("kind") == "selfcare" and item.get("ref") == "medication"
-    if settings.webpush_show_text and not private:
+    if item.get("kind") == "message":
+        body = _MESSAGE_BODY.get(item.get("ref"), _GENERIC_BODY["message"])
+    elif settings.webpush_show_text and not private:
         body = item.get("text")
     else:
         body = _GENERIC_BODY.get(item.get("kind"), "Jess")

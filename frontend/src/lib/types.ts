@@ -558,12 +558,14 @@ export interface SelfcareTodayResponse {
 }
 
 // ---- Dashboard inbox (Done / Snooze cards in /chat) ---------------------
-export type InboxKind = 'reminder' | 'selfcare';
+/** `message` = informational (briefing digest, missed-reminder recap): Dismiss only. */
+export type InboxKind = 'reminder' | 'selfcare' | 'message';
 
 export interface InboxItem {
   id: string;
   kind: InboxKind;
-  /** reminder id, or the selfcare kind (medication | meal | water | movement). */
+  /** reminder id, the selfcare kind (medication | meal | water | movement),
+   *  or the message kind (morning_briefing | evening_briefing | missed_recap). */
   ref: string;
   text: string;
   created_at: string;

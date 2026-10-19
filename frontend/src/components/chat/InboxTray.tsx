@@ -2,7 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { useSWRConfig } from 'swr';
-import { AlarmClock, Check, Footprints, GlassWater, Pill, UtensilsCrossed, X, Clock } from 'lucide-react';
+import {
+  AlarmClock,
+  AlertTriangle,
+  Check,
+  Clock,
+  Footprints,
+  GlassWater,
+  Moon,
+  Pill,
+  Sun,
+  UtensilsCrossed,
+  X,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api } from '@/lib/api';
 import { INBOX_KEY, useInbox } from '@/lib/hooks';
@@ -17,8 +29,16 @@ const SELFCARE_ICONS: Record<string, LucideIcon> = {
   movement: Footprints,
 };
 
+const MESSAGE_ICONS: Record<string, LucideIcon> = {
+  morning_briefing: Sun,
+  evening_briefing: Moon,
+  missed_recap: AlertTriangle,
+};
+
 function iconFor(item: InboxItem): LucideIcon {
-  return item.kind === 'reminder' ? AlarmClock : SELFCARE_ICONS[item.ref] ?? AlarmClock;
+  if (item.kind === 'reminder') return AlarmClock;
+  if (item.kind === 'message') return MESSAGE_ICONS[item.ref] ?? AlarmClock;
+  return SELFCARE_ICONS[item.ref] ?? AlarmClock;
 }
 
 function timeLabel(iso: string): string {
@@ -36,7 +56,9 @@ const ERROR_TEXT: Record<string, string> = {
 
 /**
  * Reminders and self-care nudges waiting for a tap — the dashboard's
- * replacement for the Telegram Done / Snooze buttons. Shares the `inbox`
+ * replacement for the Telegram Done / Snooze buttons. Briefing digests and
+ * the missed-reminder recap land here too (kind `message`): read, then
+ * "Got it" (dismiss) — there is nothing to log. Shares the `inbox`
  * SWR key with the nav badge, so a tap here clears the badge too.
  */
 export default function InboxTray() {
@@ -105,6 +127,29 @@ export default function InboxTray() {
       {items.map((item) => {
         const Icon = iconFor(item);
         const disabled = busy === item.id;
+        if (item.kind === 'message') {
+          return (
+            <div
+              key={item.id}
+              className="flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border border-brand/30 bg-brand/10 px-3 py-2"
+            >
+              <Icon size={18} className="text-brand shrink-0 mt-0.5" aria-hidden />
+              <p className="flex-1 min-w-[10rem] text-sm text-content-primary break-words whitespace-pre-line">
+                {item.text}
+                <span className="ml-2 text-xs text-content-muted">{timeLabel(item.created_at)}</span>
+              </p>
+              <button
+                type="button"
+                onClick={() => act(item, 'dismiss')}
+                disabled={disabled}
+                className={`${btn} shrink-0 bg-surface-overlay/40 text-content-secondary hover:text-content-primary`}
+              >
+                <Check size={16} aria-hidden />
+                Got it
+              </button>
+            </div>
+          );
+        }
         return (
           <div
             key={item.id}

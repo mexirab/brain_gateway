@@ -2,7 +2,9 @@
 
 The self-hosted replacement for the Telegram Done/Snooze buttons. Every
 delivered reminder and every selfcare nudge becomes one row in
-``inbox_items``; the dashboard chat tray lists the unresolved ones and
+``inbox_items``, and so do the informational system messages that used to be
+Telegram-only (kind ``message``: morning/evening briefing digests and the
+missed-reminder recap — Dismiss only, no Done/Snooze); the dashboard chat tray lists the unresolved ones and
 resolves them through ``routes_inbox``.
 
 Resolution is shared across channels: an ack from ntfy/Pushover/Telegram
@@ -16,6 +18,7 @@ Callers wrap them in try/except: a failed insert only costs the card, never
 the reminder. Logs carry ids/kinds/lengths only.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -26,8 +29,12 @@ from orchestrator.state_store import get_db
 
 logger = logging.getLogger(__name__)
 
-KINDS = ("reminder", "selfcare")
+KINDS = ("reminder", "selfcare", "message")
 SELFCARE_KINDS = ("medication", "meal", "water", "movement")
+# Informational cards (kind "message"); the ref names which one. Each ref also
+# picks the generic lock-screen text in webpush_manager — briefings carry med
+# and calendar text, so a message body is never shown on a lock screen.
+MESSAGE_REFS = ("morning_briefing", "evening_briefing", "missed_recap")
 RESOLUTIONS = ("done", "snoozed", "dismissed", "superseded")
 
 # Cards older than this drop out of the tray: a day-old "drink water" isn't
@@ -35,6 +42,9 @@ RESOLUTIONS = ("done", "snoozed", "dismissed", "superseded")
 PENDING_WINDOW_HOURS = 24
 KEEP_DAYS = 30
 _MAX_TEXT = 500
+# A briefing digest (weather + events + meds + parked item) runs longer than a
+# reminder; the tray scrolls.
+_MAX_MESSAGE_TEXT = 2000
 
 
 def _now() -> str:
@@ -42,11 +52,12 @@ def _now() -> str:
 
 
 def _add(kind: str, ref: str, text: str) -> Dict[str, Any]:
+    cap = _MAX_MESSAGE_TEXT if kind == "message" else _MAX_TEXT
     item = {
         "id": uuid.uuid4().hex,
         "kind": kind,
         "ref": ref,
-        "text": (text or "")[:_MAX_TEXT],
+        "text": (text or "")[:cap],
         "created_at": _now(),
     }
     with get_db() as conn:
@@ -99,6 +110,26 @@ def add_selfcare_item(kind: str, text: str) -> Optional[Dict[str, Any]]:
         return None
     _resolve_where("kind = 'selfcare' AND ref = ?", (kind,), "selfcare", "superseded", "renudged")
     return _add("selfcare", kind, text)
+
+
+def add_message_item(ref: str, text: str) -> Optional[Dict[str, Any]]:
+    """An informational message (briefing digest, missed-reminder recap).
+    Today's briefing supersedes yesterday's unread one of the same ref."""
+    if ref not in MESSAGE_REFS or not (text or "").strip():
+        return None
+    _resolve_where("kind = 'message' AND ref = ?", (ref,), "message", "superseded", "renewed")
+    return _add("message", ref, text)
+
+
+async def post_message(ref: str, text: str) -> Optional[Dict[str, Any]]:
+    """Add a message card and Web Push it. For async jobs; never raises."""
+    try:
+        item = await asyncio.to_thread(add_message_item, ref, text)
+    except Exception as e:
+        logger.warning("[INBOX] Message card %s failed: %s", ref, type(e).__name__)
+        return None
+    notify(item)
+    return item
 
 
 def resolve_reminder(reminder_id: str, resolution: str, via: str) -> int:
