@@ -373,6 +373,31 @@ def build_missed_recap(undelivered: list) -> str:
     return sentence
 
 
+async def _mirror_message(ref: str, text: str, telegram_text: str) -> None:
+    """Send a briefing/recap off the speakers: a dashboard inbox card (+ Web
+    Push, generic lock-screen text) and Telegram. Both always — the inbox is
+    the primary phone channel, Telegram is optional and no-ops when off.
+    ``text`` is the card copy (no emoji — the tray shows a per-ref icon);
+    ``telegram_text`` keeps the emoji-prefixed Telegram format.
+    Never raises; a failed mirror must not sink the briefing."""
+    try:
+        from orchestrator import inbox
+
+        # Sleep mode: the card waits in the tray, but the phone doesn't buzz
+        # (the 07:00 recap can fire before the user is up).
+        await inbox.post_message(ref, text, push=not shared.DND_ACTIVE)
+    except Exception as e:
+        logger.warning("[BRIEFING] Inbox mirror (%s) failed: %s", ref, type(e).__name__)
+    try:
+        from orchestrator.telegram_bot import fire_system_message
+
+        # Fire-and-forget with a strong task ref (a bare create_task can be
+        # GC'd mid-flight); no-ops when the bot is disabled.
+        fire_system_message(telegram_text)
+    except Exception as e:
+        logger.warning("[BRIEFING] Telegram mirror (%s) failed: %s", ref, type(e).__name__)
+
+
 async def morning_briefing():
     """Morning announcement: today's events from all calendars via TTS.
 
@@ -517,16 +542,11 @@ async def morning_briefing():
         if undelivered:
             recap = build_missed_recap(undelivered)
             parts.append(recap)
-            # Mirror the recap to Telegram so it's actionable away from the
-            # speakers. Fire-and-forget with a strong task ref (a bare
-            # create_task can be GC'd mid-flight); no-ops when the bot is off.
-            try:
-                from orchestrator.telegram_bot import fire_system_message
-
-                lines = "\n".join(f"• {r['text']}" for r in undelivered[:10])
-                fire_system_message(f"⚠️ Reminders that didn't reach you in the last day:\n{lines}")
-            except Exception as tg_err:
-                logger.warning(f"[MORNING_BRIEFING] Telegram recap dispatch failed: {tg_err}")
+            # Mirror the recap off the speakers so it's actionable: a dashboard
+            # inbox card + Web Push, and Telegram (no-ops when the bot is off).
+            lines = "\n".join(f"• {r['text']}" for r in undelivered[:10])
+            recap_text = f"Reminders that didn't reach you in the last day:\n{lines}"
+            await _mirror_message("missed_recap", recap_text, f"⚠️ {recap_text}")
 
         # Don't talk over a guided routine (the morning routine also fires at
         # 07:00): Cast play_media replaces whatever is playing, so the briefing
@@ -534,23 +554,22 @@ async def morning_briefing():
         # evening_briefing, plus a routine due in the next couple of minutes.
         # NOTE the routine does NOT speak weather/events/parked item/recap
         # (include_calendar_summary is parsed but unused), so on skip days that
-        # content reaches the user only via the Telegram mirror below. The
+        # content reaches the user only via the mirror below. The
         # parked item stays parked (only a spoken announce clears it).
         # Yield first: when both jobs fire in the same scheduler pass, the
         # routine task may not have run yet (and APScheduler has already moved
         # its next_run_time to tomorrow). On the phone-cache/no-weather path
-        # this function has no other await before here.
+        # with no missed-reminder recap this function has no other await
+        # before here (the recap mirror above also yields — harmless).
         await asyncio.sleep(1)
         if _routine_active_or_imminent():
-            logger.info("[MORNING_BRIEFING] Routine active/imminent — skipping announce, mirrored to Telegram")
+            logger.info("[MORNING_BRIEFING] Routine active/imminent — skipping announce, mirrored to inbox/Telegram")
             MORNING_BRIEFING_OUTCOME_TOTAL.labels(outcome="skipped_routine").inc()
-            try:
-                from orchestrator.telegram_bot import fire_system_message
-
-                # The missed-reminder recap was already mirrored on its own above.
-                fire_system_message(f"☀️ {' '.join(p for p in parts if p is not recap)}")
-            except Exception as tg_err:
-                logger.warning(f"[MORNING_BRIEFING] Telegram dispatch failed: {tg_err}")
+            # The missed-reminder recap was already mirrored on its own above.
+            digest = [p for p in parts if p is not recap]
+            # One line per part on the card (readable in the tray); Telegram
+            # keeps its single-paragraph format.
+            await _mirror_message("morning_briefing", "\n".join(digest), f"☀️ {' '.join(digest)}")
             return
 
         # `min_volume` floors the speaker at MORNING_BRIEFING_MIN_VOLUME
@@ -761,15 +780,9 @@ async def evening_briefing():
 
         result = await _announce_voice(text, speaker=None, announcement_type="briefing")
 
-        # Mirror to Telegram so the ritual also lands away from the speakers
+        # Mirror so the ritual also lands away from the speakers
         # (complementary channel — fires even when TTS failed).
-        # Fire-and-forget with a strong task ref; no-ops when the bot is off.
-        try:
-            from orchestrator.telegram_bot import fire_system_message
-
-            fire_system_message(f"🌙 {text}")
-        except Exception as tg_err:
-            logger.warning(f"[EVENING_BRIEFING] Telegram dispatch failed: {tg_err}")
+        await _mirror_message("evening_briefing", text, f"🌙 {text}")
 
         # Honest outcome in the summary line — "Delivered" must not appear
         # when TTS actually failed or was suppressed mid-voice-session.

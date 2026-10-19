@@ -2,7 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { useSWRConfig } from 'swr';
-import { AlarmClock, Check, Footprints, GlassWater, Pill, UtensilsCrossed, X, Clock } from 'lucide-react';
+import {
+  AlarmClock,
+  AlertTriangle,
+  Check,
+  Clock,
+  Footprints,
+  GlassWater,
+  Moon,
+  Pill,
+  Sun,
+  UtensilsCrossed,
+  X,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api } from '@/lib/api';
 import { INBOX_KEY, useInbox } from '@/lib/hooks';
@@ -17,8 +29,16 @@ const SELFCARE_ICONS: Record<string, LucideIcon> = {
   movement: Footprints,
 };
 
+const MESSAGE_ICONS: Record<string, LucideIcon> = {
+  morning_briefing: Sun,
+  evening_briefing: Moon,
+  missed_recap: AlertTriangle,
+};
+
 function iconFor(item: InboxItem): LucideIcon {
-  return item.kind === 'reminder' ? AlarmClock : SELFCARE_ICONS[item.ref] ?? AlarmClock;
+  if (item.kind === 'reminder') return AlarmClock;
+  if (item.kind === 'message') return MESSAGE_ICONS[item.ref] ?? AlarmClock;
+  return SELFCARE_ICONS[item.ref] ?? AlarmClock;
 }
 
 function timeLabel(iso: string): string {
@@ -29,6 +49,13 @@ function timeLabel(iso: string): string {
   return d.toDateString() === new Date().toDateString() ? time : `Yesterday ${time}`;
 }
 
+/** Actionable cards (Done/Snooze) first, then informational ones; each group
+ *  keeps the server's newest-first order. A long briefing must not push the
+ *  07:00 med reminder below the fold. */
+function actionableFirst(items: InboxItem[]): InboxItem[] {
+  return [...items.filter((i) => i.kind !== 'message'), ...items.filter((i) => i.kind === 'message')];
+}
+
 const ERROR_TEXT: Record<string, string> = {
   max_snoozes_reached: 'Snooze limit reached for this one.',
   reminder_gone: 'That reminder no longer exists.',
@@ -36,7 +63,9 @@ const ERROR_TEXT: Record<string, string> = {
 
 /**
  * Reminders and self-care nudges waiting for a tap — the dashboard's
- * replacement for the Telegram Done / Snooze buttons. Shares the `inbox`
+ * replacement for the Telegram Done / Snooze buttons. Briefing digests and
+ * the missed-reminder recap land here too (kind `message`): read, then
+ * "Got it" (dismiss) — there is nothing to log. Shares the `inbox`
  * SWR key with the nav badge, so a tap here clears the badge too.
  */
 export default function InboxTray() {
@@ -44,6 +73,7 @@ export default function InboxTray() {
   const { mutate } = useSWRConfig();
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   // A notification tap (service worker) or a push while the app is open
   // means there is something new — refetch instead of waiting for the poll.
@@ -62,7 +92,7 @@ export default function InboxTray() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const items = data?.items ?? [];
+  const items = actionableFirst(data?.items ?? []);
   if (items.length === 0 && !toast && !error) return null;
 
   async function act(item: InboxItem, action: 'done' | 'snooze' | 'dismiss') {
@@ -78,6 +108,8 @@ export default function InboxTray() {
       if (res.ok) {
         if (action === 'done') setToast('✓ Logged');
         else if (action === 'snooze') setToast(`💤 Snoozed ${SNOOZE_MINUTES} min`);
+      } else if (res.error === 'not_found') {
+        // Pruned/gone server-side: the card is stale, nothing to retry.
       } else {
         if (res.error !== 'reminder_gone') await restore();
         setToast(ERROR_TEXT[res.error ?? ''] ?? 'Couldn’t save that — try again.');
@@ -105,6 +137,59 @@ export default function InboxTray() {
       {items.map((item) => {
         const Icon = iconFor(item);
         const disabled = busy === item.id;
+        if (item.kind === 'message') {
+          // Informational: read, then "Got it". Full-width text with the
+          // button below it (where reading ends); long digests clamp.
+          const warn = item.ref === 'missed_recap';
+          const open = expanded.has(item.id);
+          const long = item.text.length > 220 || item.text.split('\n').length > 4;
+          return (
+            <div
+              key={item.id}
+              className={`rounded-xl border px-3 py-2 ${warn ? 'border-warning/30 bg-warning/10' : 'border-brand/30 bg-brand/10'}`}
+            >
+              <div className="flex items-start gap-3">
+                <Icon size={18} className={`${warn ? 'text-warning' : 'text-brand'} shrink-0 mt-0.5`} aria-hidden />
+                <div className="flex-1 min-w-0">
+                  <p
+                    className={`text-sm text-content-primary break-words whitespace-pre-line ${long && !open ? 'line-clamp-4' : ''}`}
+                  >
+                    {item.text}
+                  </p>
+                  <span className="block mt-1 text-xs text-content-muted">{timeLabel(item.created_at)}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-1.5 mt-1">
+                {long && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpanded((cur) => {
+                        const next = new Set(cur);
+                        if (open) next.delete(item.id);
+                        else next.add(item.id);
+                        return next;
+                      })
+                    }
+                    aria-expanded={open}
+                    className={`${btn} text-content-secondary hover:text-content-primary`}
+                  >
+                    {open ? 'Show less' : 'Show more'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => act(item, 'dismiss')}
+                  disabled={disabled}
+                  className={`${btn} bg-surface-overlay/40 text-content-secondary hover:text-content-primary`}
+                >
+                  <Check size={16} aria-hidden />
+                  Got it
+                </button>
+              </div>
+            </div>
+          );
+        }
         return (
           <div
             key={item.id}

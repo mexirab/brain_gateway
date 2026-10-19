@@ -2,10 +2,12 @@
 
 import { useInbox } from '@/lib/hooks';
 
-/** Count of reminders / nudges waiting in the chat tray. Renders nothing at 0. */
+/** Count of reminders / nudges waiting in the chat tray. Renders nothing at 0.
+ *  Briefing digests (kind `message`) don't count — one sits there most of the
+ *  day and an always-on badge gets ignored. The missed-reminder recap does. */
 export default function ChatNavBadge({ className = '' }: { className?: string }) {
   const { data } = useInbox();
-  const n = data?.items.length ?? 0;
+  const n = (data?.items ?? []).filter((i) => i.kind !== 'message' || i.ref === 'missed_recap').length;
   if (n === 0) return null;
   return (
     <span

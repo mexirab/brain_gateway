@@ -52,6 +52,10 @@ async def inbox_done(item_id: str):
     if err:
         return err
 
+    if item["kind"] == "message":
+        # Informational card: nothing to log — the tray only offers Dismiss.
+        return JSONResponse({"ok": False, "error": "not_actionable"}, status_code=400)
+
     if item["kind"] == "reminder":
         outcome = await reminder_actions.ack_reminder(item["ref"], via=_VIA)
         if outcome["status"] == "not_found":

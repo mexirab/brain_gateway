@@ -245,15 +245,18 @@ def _job(job_id, seconds_ahead):
 
 
 @pytest.fixture
-def briefing_env(reset_phone_cache, monkeypatch):
+def briefing_env(reset_phone_cache, tmp_db, monkeypatch):
     """Isolate morning_briefing from disk/HA/Telegram. Phone cache empty and
     Google unconfigured -> 'calendar is clear'. Exposes mocks for assertions;
     `parked` / `undelivered` are mutable so each test can seed them."""
     from types import SimpleNamespace
 
     from orchestrator import jobs_calendar
+    from orchestrator.config import settings
 
     monkeypatch.setattr(jobs_calendar.shared, "DND_ACTIVE", False, raising=False)
+    # Briefings mirror into the dashboard inbox (tmp_db); never Web Push here.
+    monkeypatch.setattr(settings, "webpush_enabled", False, raising=False)
     env = SimpleNamespace(
         parked=None,
         undelivered=[],
@@ -381,6 +384,83 @@ async def test_skip_day_recap_only_in_warning_mirror(briefing_env):
     assert recap not in sun[0]
     assert "water the plants" not in sun[0]
     assert "Good morning" in sun[0]
+
+
+@_skip_no_deps
+async def test_skip_day_mirrors_recap_and_digest_to_inbox(briefing_env):
+    """Routine-skip day with a missed recap: two inbox cards (missed_recap +
+    morning_briefing). Card copy has no emoji prefix and the digest is one
+    line per part; the Telegram text keeps its emoji + one-paragraph format."""
+    from orchestrator import inbox, jobs_calendar, routine_manager
+
+    briefing_env.parked = "the library book"
+    briefing_env.undelivered = [
+        {"text": "water the plants", "status": "missed"},
+        {"text": "call the office", "status": "failed"},
+    ]
+    with patch.object(routine_manager, "_active_session", _session()):
+        await jobs_calendar.morning_briefing()
+
+    cards = {c["ref"]: c for c in inbox.list_pending()}
+    assert set(cards) == {"missed_recap", "morning_briefing"}
+    assert all(c["kind"] == "message" for c in cards.values())
+
+    recap_card = cards["missed_recap"]["text"]
+    assert recap_card == "Reminders that didn't reach you in the last day:\n• water the plants\n• call the office"
+
+    digest_card = cards["morning_briefing"]["text"]
+    assert not digest_card.startswith(("☀️", "⚠️"))
+    lines = digest_card.split("\n")
+    assert len(lines) >= 2  # newline-joined parts, not one paragraph
+    assert lines[0].startswith("Good morning")
+    assert any("the library book" in ln for ln in lines)
+    assert "water the plants" not in digest_card  # recap has its own card
+
+    # Telegram format unchanged: emoji-prefixed, digest space-joined.
+    msgs = [c.args[0] for c in briefing_env.fire.call_args_list]
+    assert msgs[0] == f"⚠️ {recap_card}"
+    assert msgs[1] == "☀️ " + " ".join(lines)
+    assert "\n" not in msgs[1]
+
+
+@_skip_no_deps
+async def test_spoken_day_posts_only_recap_card(briefing_env):
+    """Briefing spoken: the digest is not mirrored (no morning_briefing card),
+    but the missed recap still gets its card."""
+    from orchestrator import inbox, jobs_calendar
+
+    briefing_env.undelivered = [{"text": "water the plants", "status": "missed"}]
+    await jobs_calendar.morning_briefing()
+
+    briefing_env.voice.assert_awaited_once()
+    assert [c["ref"] for c in inbox.list_pending()] == ["missed_recap"]
+
+
+@_skip_no_deps
+async def test_skip_day_without_recap_posts_only_digest(briefing_env):
+    from orchestrator import inbox, jobs_calendar, routine_manager
+
+    with patch.object(routine_manager, "_active_session", _session()):
+        await jobs_calendar.morning_briefing()
+
+    assert [c["ref"] for c in inbox.list_pending()] == ["morning_briefing"]
+    briefing_env.fire.assert_called_once()
+
+
+@_skip_no_deps
+async def test_skip_day_under_dnd_posts_cards_without_push(briefing_env, monkeypatch):
+    """Sleep mode at 07:00: cards wait in the tray, the phone isn't buzzed."""
+    from orchestrator import inbox, jobs_calendar, routine_manager
+
+    monkeypatch.setattr(jobs_calendar.shared, "DND_ACTIVE", True)
+    notify = MagicMock()
+    monkeypatch.setattr(inbox, "notify", notify)
+    briefing_env.undelivered = [{"text": "water the plants", "status": "missed"}]
+    with patch.object(routine_manager, "_active_session", _session()):
+        await jobs_calendar.morning_briefing()
+
+    assert {c["ref"] for c in inbox.list_pending()} == {"missed_recap", "morning_briefing"}
+    notify.assert_not_called()
 
 
 @_skip_no_deps

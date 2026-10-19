@@ -1443,7 +1443,7 @@ for _r in ("ok", "vision_off", "timeout", "vision_error", "unparseable", "busy",
     DOCUMENT_NAME_SUGGEST.labels(result=_r)
 
 # Dashboard inbox (Done/Snooze cards in /chat — orchestrator/inbox.py).
-# kind: reminder | selfcare
+# kind: reminder | selfcare | message (briefing digests / missed-reminder recap)
 INBOX_ITEMS_TOTAL = Counter(
     "bgw_inbox_items_total",
     "Items added to the dashboard inbox",
@@ -1451,7 +1451,8 @@ INBOX_ITEMS_TOTAL = Counter(
 )
 # resolution: done | snoozed | dismissed | superseded
 # via: dashboard | telegram | ntfy (also Pushover taps — same HMAC route) |
-#      logged (selfcare logged another way) | redelivered | renudged
+#      logged (selfcare logged another way) | redelivered | renudged |
+#      renewed (message card replaced by the next briefing of the same ref)
 INBOX_RESOLVED_TOTAL = Counter(
     "bgw_inbox_resolved_total",
     "Dashboard inbox items resolved",
@@ -1460,6 +1461,10 @@ INBOX_RESOLVED_TOTAL = Counter(
 for _k in ("reminder", "selfcare"):
     INBOX_ITEMS_TOTAL.labels(kind=_k)
     INBOX_RESOLVED_TOTAL.labels(kind=_k, resolution="done", via="dashboard")
+# kind="message" (briefings / missed-reminder recap) is dismiss-only.
+INBOX_ITEMS_TOTAL.labels(kind="message")
+INBOX_RESOLVED_TOTAL.labels(kind="message", resolution="dismissed", via="dashboard")
+INBOX_RESOLVED_TOTAL.labels(kind="message", resolution="superseded", via="renewed")
 
 # Web Push (orchestrator/webpush_manager.py).
 # result: ok | gone (404/410, row deleted) | auth (401/403 — VAPID key changed) |
