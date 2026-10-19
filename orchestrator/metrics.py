@@ -224,6 +224,19 @@ EVENING_BRIEFING_LAST_RUN = Gauge(
     "Unix timestamp the evening briefing job last fired",
 )
 
+# Evening counterpart of the outcome counter. The evening routine (21:00)
+# usually still runs at 21:30, so "skipped_routine" (spoken announce skipped,
+# digest mirrored to the inbox/Telegram) is expected on routine nights;
+# "skipped_dnd" parks silently with no mirror; "error" = the job crashed
+# (the heartbeat still stamps, so this is the only metric that shows it).
+EVENING_BRIEFING_OUTCOME_TOTAL = Counter(
+    "bgw_evening_briefing_outcome_total",
+    "Evening briefing outcomes",
+    ["outcome"],  # spoken | skipped_routine | skipped_dnd | suppressed | failed | error
+)
+for _outcome in ("spoken", "skipped_routine", "skipped_dnd", "suppressed", "failed", "error"):
+    EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome=_outcome)
+
 # Wind-down ladder T-30 nudge heartbeat. Watched by WindDownNudgeStale
 # (warning → quiet Pushover, non-paging). The nudge is a spoken prompt, so a
 # dropped rung is invisible by omission — and the feature targets exactly the

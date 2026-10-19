@@ -25,6 +25,7 @@ from orchestrator.metrics import (
     EMAIL_TO_CALENDAR_EMAILS_SCANNED,
     EMAIL_TO_CALENDAR_EVENTS_CREATED,
     EVENING_BRIEFING_LAST_RUN,
+    EVENING_BRIEFING_OUTCOME_TOTAL,
     MORNING_BRIEFING_LAST_RUN,
     MORNING_BRIEFING_OUTCOME_TOTAL,
 )
@@ -764,19 +765,26 @@ async def evening_briefing():
         # phone buzz. The morning briefing still offers the parked item back.
         if shared.DND_ACTIVE:
             logger.info("[EVENING_BRIEFING] DND active — parked silently, skipping announce")
+            EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome="skipped_dnd").inc()
             return
 
-        # Same silent treatment if a guided routine walkthrough is mid-flight
-        # (the evening routine auto-triggers at 21:00 and covers meds +
-        # tomorrow's calendar itself) — don't talk over its step nudges.
+        # A guided routine walkthrough mid-flight (the evening routine
+        # auto-triggers at 21:00): don't talk over its step nudges. The routine
+        # does NOT speak the parked item or tomorrow's leave-by time, so on
+        # these nights the digest reaches the user only via the mirror —
+        # same as morning_briefing's skipped_routine path.
+        routine_active = False
         try:
             from orchestrator import routine_manager
 
-            if routine_manager._active_session is not None:
-                logger.info("[EVENING_BRIEFING] Routine session active — parked silently, skipping announce")
-                return
-        except Exception:
-            pass
+            routine_active = routine_manager._active_session is not None
+        except Exception as e:
+            logger.warning("[EVENING_BRIEFING] Routine check failed: %s", type(e).__name__)
+        if routine_active:
+            EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome="skipped_routine").inc()
+            await _mirror_message("evening_briefing", text, f"🌙 {text}")
+            logger.info("[EVENING_BRIEFING] Routine session active — skipped announce, mirrored to inbox/Telegram")
+            return
 
         result = await _announce_voice(text, speaker=None, announcement_type="briefing")
 
@@ -788,17 +796,21 @@ async def evening_briefing():
         # when TTS actually failed or was suppressed mid-voice-session.
         if result.get("suppressed"):
             outcome = f"suppressed({result.get('reason', '?')})"
+            EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome="suppressed").inc()
         elif result.get("success"):
             outcome = "delivered"
+            EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome="spoken").inc()
         else:
             outcome = f"failed({result.get('error', '?')})"
+            EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome="failed").inc()
         logger.info(
             f"[EVENING_BRIEFING] {outcome}: source={cal_source}, {len(events)} tomorrow events, "
             f"meds={'n/a' if meds is None else meds['confirmed']}, parked={'yes' if parked else 'no'}"
         )
 
     except Exception as e:
-        logger.error(f"[EVENING_BRIEFING] Error: {e}")
+        EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome="error").inc()
+        logger.error("[EVENING_BRIEFING] Error: %s", type(e).__name__)
 
 
 _EVENT_EXTRACTION_PROMPT = """\
