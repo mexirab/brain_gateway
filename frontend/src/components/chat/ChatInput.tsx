@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Mic, Loader2, AudioLines, ImagePlus, X } from 'lucide-react';
 import useVoiceRecorder from '@/hooks/useVoiceRecorder';
-import { preparePhoto, MAX_CHAT_PHOTOS } from '@/lib/chat-photos';
+import { preparePhoto, MAX_CHAT_PHOTOS, PhotoTooLargeError } from '@/lib/chat-photos';
 
 export type SendSource = 'text' | 'voice';
 
@@ -75,8 +75,13 @@ export default function ChatInput({
           setPhotos((prev) => (
             prev.length < MAX_CHAT_PHOTOS ? [...prev, { id: ++photoIdCounter, uri }] : prev
           ));
-        } catch {
-          setPhotoError('Couldn’t read that photo. Try a different one.');
+        } catch (err) {
+          // Error type only (never photo content) — visible in Safari's Web
+          // Inspector when diagnosing a decode failure on a real phone.
+          console.warn('[chat-photo] prepare failed:', err instanceof Error ? err.name : typeof err);
+          setPhotoError(err instanceof PhotoTooLargeError
+            ? 'That photo is too detailed to send. Try a closer or simpler shot.'
+            : 'Couldn’t open that photo on this device. Pick another one, or take a new one.');
         }
       }
     } finally {
@@ -249,7 +254,7 @@ export default function ChatInput({
         )}
       </div>
       {photoError && (
-        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-xs text-danger">
+        <div role="alert" className="flex items-center justify-between gap-2 mt-2 px-3 py-1 rounded-lg bg-surface-overlay/40 text-sm text-danger">
           <span>{photoError}</span>
           <button
             onClick={() => setPhotoError(null)}
