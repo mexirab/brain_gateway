@@ -121,14 +121,16 @@ def add_message_item(ref: str, text: str) -> Optional[Dict[str, Any]]:
     return _add("message", ref, text)
 
 
-async def post_message(ref: str, text: str) -> Optional[Dict[str, Any]]:
-    """Add a message card and Web Push it. For async jobs; never raises."""
+async def post_message(ref: str, text: str, push: bool = True) -> Optional[Dict[str, Any]]:
+    """Add a message card and (unless ``push`` is False) Web Push it. For
+    async jobs; never raises."""
     try:
         item = await asyncio.to_thread(add_message_item, ref, text)
     except Exception as e:
         logger.warning("[INBOX] Message card %s failed: %s", ref, type(e).__name__)
         return None
-    notify(item)
+    if push:
+        notify(item)
     return item
 
 

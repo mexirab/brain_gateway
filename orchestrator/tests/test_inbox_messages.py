@@ -76,6 +76,13 @@ class TestPostMessage:
         item = await inbox.post_message("missed_recap", "• thing")
         assert item is not None and seen == [item]
 
+    async def test_push_false_skips_notify(self, tmp_db, monkeypatch):
+        notify = MagicMock()
+        monkeypatch.setattr(inbox, "notify", notify)
+        item = await inbox.post_message("missed_recap", "• thing", push=False)
+        assert item is not None
+        notify.assert_not_called()
+
     async def test_db_failure_never_raises(self, tmp_db, monkeypatch):
         def _boom(*a, **kw):
             raise RuntimeError("db locked")
@@ -189,6 +196,18 @@ class TestMirrorMessage:
         tg.assert_called_once_with("🌙 wrap-up")
         items = inbox.list_pending()
         assert len(items) == 1 and items[0]["ref"] == "evening_briefing" and items[0]["text"] == "wrap-up"
+
+    @pytest.mark.parametrize("dnd,pushed", [(False, True), (True, False)])
+    async def test_dnd_posts_card_without_push(self, tmp_db, monkeypatch, dnd, pushed):
+        from orchestrator import jobs_calendar
+
+        monkeypatch.setattr(shared, "DND_ACTIVE", dnd)
+        notify = MagicMock()
+        monkeypatch.setattr(inbox, "notify", notify)
+        with patch("orchestrator.telegram_bot.fire_system_message"):
+            await jobs_calendar._mirror_message("missed_recap", "• one", "⚠️ • one")
+        assert [i["ref"] for i in inbox.list_pending()] == ["missed_recap"]
+        assert notify.called is pushed
 
     async def test_inbox_failure_still_sends_telegram(self, tmp_db, monkeypatch):
         from orchestrator import jobs_calendar

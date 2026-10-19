@@ -383,7 +383,9 @@ async def _mirror_message(ref: str, text: str, telegram_text: str) -> None:
     try:
         from orchestrator import inbox
 
-        await inbox.post_message(ref, text)
+        # Sleep mode: the card waits in the tray, but the phone doesn't buzz
+        # (the 07:00 recap can fire before the user is up).
+        await inbox.post_message(ref, text, push=not shared.DND_ACTIVE)
     except Exception as e:
         logger.warning("[BRIEFING] Inbox mirror (%s) failed: %s", ref, type(e).__name__)
     try:

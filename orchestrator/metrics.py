@@ -1464,6 +1464,7 @@ for _k in ("reminder", "selfcare"):
 # kind="message" (briefings / missed-reminder recap) is dismiss-only.
 INBOX_ITEMS_TOTAL.labels(kind="message")
 INBOX_RESOLVED_TOTAL.labels(kind="message", resolution="dismissed", via="dashboard")
+INBOX_RESOLVED_TOTAL.labels(kind="message", resolution="superseded", via="renewed")
 
 # Web Push (orchestrator/webpush_manager.py).
 # result: ok | gone (404/410, row deleted) | auth (401/403 — VAPID key changed) |
