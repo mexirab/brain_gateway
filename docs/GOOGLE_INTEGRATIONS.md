@@ -31,6 +31,8 @@ Google Calendar via OAuth2 — one of the sources merged by `orchestrator/calend
 - Morning briefing: 7:00 AM on bedroom pair, announces today's events + pending reminders via TTS
   - **Routine gate:** if a guided routine is active (not paused, < 3h old) or a routine trigger fires within 120s (checked after a 1s yield, to catch the same-slot 07:00 case), the spoken briefing is skipped and its text is posted as a dashboard inbox card (`morning_briefing`) and mirrored to Telegram (if on) instead; the parked item stays parked. With the default 07:00 morning routine this means the briefing reaches the user only via the inbox/Telegram daily — see `jess-features/F-006-routine-scaffolding.md` → Routine vs morning briefing.
   - Metric: `bgw_morning_briefing_outcome_total{outcome=spoken|skipped_routine|suppressed|failed}` (pre-seeded at 0)
+- Evening briefing (default 21:30): during an active routine the speech is skipped and the digest goes to the inbox card + Telegram; under DND it parks silently, no card
+  - Metric: `bgw_evening_briefing_outcome_total{outcome=spoken|skipped_routine|skipped_dnd|suppressed|failed|error}` (pre-seeded at 0; `error` = job crashed; no Grafana panel or alert for either briefing counter)
 
 **Config (env vars):**
 - `CALENDAR_POLL_INTERVAL` — minutes between polls (default: 5, defensive parsing with fallback)

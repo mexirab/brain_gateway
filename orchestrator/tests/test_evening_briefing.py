@@ -8,7 +8,8 @@ Covers:
 - Parking one unfinished thing: active focus task wins over backlog; top open
   backlog task otherwise; persisted via state_store.set_app_state.
 - Evening meds line (confirmed vs. unconfirmed).
-- DND: parks silently, no announce, no Telegram mirror.
+- DND: parks silently, no announce, no mirror.
+- Active routine: parks, no announce, digest mirrored (inbox card + Telegram).
 - Morning pickup: parked item announced, cleared only on successful announce.
 
 Runs inside the brain-orchestrator container (full deps available). Skips
@@ -383,12 +384,34 @@ async def test_dnd_parks_silently(reset_shared, patch_evening_deps, caplog):
     assert any("DND active" in r.getMessage() for r in caplog.records)
 
 
+def _outcome(label):
+    from orchestrator.metrics import EVENING_BRIEFING_OUTCOME_TOTAL
+
+    return EVENING_BRIEFING_OUTCOME_TOTAL.labels(outcome=label)._value.get()
+
+
+_OUTCOMES = ("spoken", "skipped_routine", "skipped_dnd", "suppressed", "failed", "error")
+
+
+def _all_outcomes():
+    return {label: _outcome(label) for label in _OUTCOMES}
+
+
+def _assert_counted_once(before, label):
+    after = _all_outcomes()
+    deltas = {k: after[k] - before[k] for k in _OUTCOMES}
+    assert deltas == {k: (1 if k == label else 0) for k in _OUTCOMES}
+
+
 @_skip_no_deps
 @pytest.mark.asyncio
-async def test_active_routine_parks_silently(reset_shared, patch_evening_deps, caplog):
-    """A guided routine walkthrough mid-flight -> park, but don't talk over it."""
-    from orchestrator import routine_manager
+async def test_active_routine_skips_announce_but_mirrors(reset_shared, patch_evening_deps, caplog):
+    """A guided routine walkthrough mid-flight -> park, don't talk over it, but
+    still mirror the digest off the speakers (the routine never speaks the
+    parked item or the leave-by time). Counted as skipped_routine."""
+    from orchestrator import inbox, routine_manager
 
+    before = _all_outcomes()
     _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}])
     with (
         patch.object(routine_manager, "_active_session", MagicMock()),
@@ -398,8 +421,116 @@ async def test_active_routine_parks_silently(reset_shared, patch_evening_deps, c
 
     mocks["set_state"].assert_called_once_with("parked_item", "email the landlord")
     mocks["voice"].assert_not_awaited()
-    mocks["telegram"].assert_not_called()
+    cards = inbox.list_pending()
+    assert [(c["kind"], c["ref"]) for c in cards] == [("message", "evening_briefing")]
+    assert "email the landlord" in cards[0]["text"]
+    mocks["telegram"].assert_called_once_with(f"🌙 {cards[0]['text']}")
+    _assert_counted_once(before, "skipped_routine")
     assert any("Routine session active" in r.getMessage() for r in caplog.records)
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_dnd_wins_over_active_routine(reset_shared, patch_evening_deps):
+    """Goodnight said AND a routine still mid-flight -> DND's silent park wins:
+    no announce, no inbox card, no Telegram, counted as skipped_dnd only."""
+    from orchestrator import inbox, routine_manager
+
+    reset_shared.DND_ACTIVE = True
+    before = _all_outcomes()
+    _, patches = patch_evening_deps(open_tasks=[{"text": "email the landlord"}])
+    with patch.object(routine_manager, "_active_session", MagicMock()):
+        mocks = await _run_evening(patches)
+
+    mocks["set_state"].assert_called_once_with("parked_item", "email the landlord")
+    mocks["voice"].assert_not_awaited()
+    assert inbox.list_pending() == []
+    mocks["telegram"].assert_not_called()
+    _assert_counted_once(before, "skipped_dnd")
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_routine_mirror_inbox_failure_still_telegrams_and_counts_once(reset_shared, patch_evening_deps):
+    """On the routine path the mirror is the ONLY delivery: a broken inbox must
+    not stop the Telegram copy, and must not also count as an error."""
+    from orchestrator import inbox, routine_manager
+
+    before = _all_outcomes()
+    _, patches = patch_evening_deps()
+    with (
+        patch.object(routine_manager, "_active_session", MagicMock()),
+        patch.object(inbox, "post_message", AsyncMock(side_effect=RuntimeError("db locked"))),
+    ):
+        mocks = await _run_evening(patches)
+
+    mocks["voice"].assert_not_awaited()
+    mocks["telegram"].assert_called_once()
+    assert mocks["telegram"].call_args.args[0].startswith("🌙 ")
+    _assert_counted_once(before, "skipped_routine")
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_dnd_counts_skipped_dnd(reset_shared, patch_evening_deps):
+    reset_shared.DND_ACTIVE = True
+    before = _all_outcomes()
+    _, patches = patch_evening_deps()
+    await _run_evening(patches)
+    _assert_counted_once(before, "skipped_dnd")
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result,label",
+    [
+        ({"success": True}, "spoken"),
+        ({"success": True, "suppressed": True, "reason": "voice_session"}, "suppressed"),
+        ({"success": False, "error": "tts down"}, "failed"),
+    ],
+)
+async def test_announce_outcome_counted(reset_shared, patch_evening_deps, result, label):
+    before = _all_outcomes()
+    _, patches = patch_evening_deps(announce_result=result)
+    await _run_evening(patches)
+    _assert_counted_once(before, label)
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_routine_check_failure_still_speaks(reset_shared, patch_evening_deps, caplog):
+    """A broken routine check fails open (speaks) and logs only the type name."""
+    import sys
+
+    class _Broken:
+        @property
+        def _active_session(self):
+            raise RuntimeError("secret detail")
+
+    before = _all_outcomes()
+    _, patches = patch_evening_deps()
+    with (
+        patch.dict(sys.modules, {"orchestrator.routine_manager": _Broken()}),
+        patch("orchestrator.routine_manager", _Broken(), create=True),
+        caplog.at_level(logging.WARNING, logger="orchestrator.jobs_calendar"),
+    ):
+        mocks = await _run_evening(patches)
+
+    mocks["voice"].assert_awaited_once()
+    _assert_counted_once(before, "spoken")
+    warn = [r.getMessage() for r in caplog.records if "Routine check failed" in r.getMessage()]
+    assert warn == ["[EVENING_BRIEFING] Routine check failed: RuntimeError"]
+
+
+@_skip_no_deps
+@pytest.mark.asyncio
+async def test_crash_counted_as_error(reset_shared, patch_evening_deps):
+    before = _all_outcomes()
+    _, patches = patch_evening_deps()
+    with patch("orchestrator.jobs_calendar.get_tomorrow_events", AsyncMock(side_effect=ValueError("x"))):
+        await _run_evening(patches)
+    _assert_counted_once(before, "error")
 
 
 # ---------------------------------------------------------------------------
