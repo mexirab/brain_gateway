@@ -206,7 +206,15 @@ else
     am_template="${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml.template"
     am_token_file="${PROJECT_DIR}/monitoring/alertmanager/self_audit_webhook_token"
     am_tmp_template=""
-    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:-}" ]]; then
+    # Only when the orchestrator will accept it: investigate on (else every
+    # delivery is a 409 and Alertmanager re-sends each group_interval) and a
+    # token config.py won't discard (< 24 chars -> 401s nobody counts).
+    investigate="${SELF_AUDIT_INVESTIGATE:-false}"
+    investigate="${investigate,,}"
+    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:-}" && ${#SELF_AUDIT_WEBHOOK_TOKEN} -lt 24 ]]; then
+        echo -e "  ${YELLOW}WARN${NC}: SELF_AUDIT_WEBHOOK_TOKEN is shorter than 24 chars — the orchestrator ignores it; webhook not rendered"
+    fi
+    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:-}" && ${#SELF_AUDIT_WEBHOOK_TOKEN} -ge 24 && "$investigate" =~ ^(true|1|yes|on)$ ]]; then
         printf '%s' "$SELF_AUDIT_WEBHOOK_TOKEN" > "$am_token_file"
         chmod 644 "$am_token_file"
         echo -e "  ${GREEN}OK${NC}: self-investigator webhook token -> $(basename "$am_token_file")"
@@ -214,7 +222,7 @@ else
         am_tmp_template="$(mktemp)"
         sed '/# BEGIN self-investigator/,/# END self-investigator/d' "$am_template" > "$am_tmp_template"
         am_template="$am_tmp_template"
-        echo -e "  ${YELLOW}SKIP${NC}: self-investigator webhook (SELF_AUDIT_WEBHOOK_TOKEN not set in .env)"
+        echo -e "  ${YELLOW}SKIP${NC}: self-investigator webhook (needs SELF_AUDIT_WEBHOOK_TOKEN >= 24 chars and SELF_AUDIT_INVESTIGATE=true in .env)"
     fi
     am_rc=0
     render_template \

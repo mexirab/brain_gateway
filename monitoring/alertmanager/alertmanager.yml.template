@@ -25,7 +25,7 @@ route:
     # route below still matches. Keep the list in sync with ALERT_TRIGGERS in
     # orchestrator/routes_self_audit.py (the orchestrator ignores the rest).
     - matchers:
-        - alertname=~"HeliosHardwareFault|BrainOnCPU|BrainCudaInitFailed|HeliosGpuDriverBroken|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|EmbeddingErrors|AutoLearnFailing|SchedulerJobsMissed|HeliosLogsSilent"
+        - alertname=~"HeliosHardwareFault|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|EmbeddingErrors|AutoLearnFailing|SchedulerJobsMissed|HeliosLogsSilent"
       receiver: "self-investigator"
       continue: true
     # END self-investigator
@@ -51,7 +51,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a

@@ -115,8 +115,6 @@ _ALLOWED_COMMANDS = frozenset(
         "wc",
         "stat",
         "find",
-        "awk",
-        "sed",
         "echo",
         "tr",
         "lsof",
@@ -129,6 +127,16 @@ _ALLOWED_COMMANDS = frozenset(
 _ALLOWED_SUBCOMMANDS: dict[str, set[str]] = {
     "systemctl": {"status", "restart", "reload", "is-active", "is-enabled", "show", "list-units", "list-jobs", "cat"},
     "docker": {"logs", "ps", "compose", "stats", "inspect", "image"},
+}
+# Second-level subcommands (docker compose down -v / docker image prune
+# would otherwise pass as "docker compose" / "docker image").
+_ALLOWED_NESTED: dict[tuple[str, str], set[str]] = {
+    ("docker", "compose"): {"logs", "ps", "config", "top", "restart"},
+    ("docker", "image"): {"ls", "inspect"},
+}
+# Arguments that turn an allow-listed reader into a writer / executor.
+_DENIED_ARGS: dict[str, frozenset[str]] = {
+    "find": frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}),
 }
 
 _DANGEROUS_PATTERNS = re.compile(
@@ -150,39 +158,20 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def _check_suggestion(suggestion_text: str) -> tuple[bool, str]:
-    """Return ``(allowed, reason)``. Reason is empty when allowed.
-
-    Expects a string like ``INVESTIGATE: journalctl -u foo --since '1h ago'``.
-    Anything that fails parsing, leaves the allow-list, or trips the
-    dangerous-pattern regex returns ``False``.
-    """
-    line = unicodedata.normalize("NFKC", suggestion_text).strip()
-
-    m = re.match(r"^(INVESTIGATE|FIX):\s*(.+)$", line, re.IGNORECASE)
-    if not m:
-        return False, "missing INVESTIGATE/FIX prefix"
-    cmd = m.group(2).strip()
-
-    if _DANGEROUS_PATTERNS.search(cmd):
-        return False, "shell-injection or destructive pattern"
-
-    try:
-        tokens = shlex.split(cmd)
-    except ValueError:
-        return False, "unparseable shell command"
-    if not tokens:
-        return False, "empty command"
-
-    # Strip benign wrappers
+def _check_argv(tokens: list[str]) -> tuple[bool, str]:
+    """One pipeline stage: wrappers stripped, head + subcommands allow-listed."""
     while tokens and tokens[0] in ("sudo", "nice", "ionice", "time"):
         tokens = tokens[1:]
     if not tokens:
-        return False, "wrapper without command"
+        return False, "empty pipeline stage"
 
     head = tokens[0].rsplit("/", 1)[-1]  # /usr/bin/foo -> foo
     if head not in _ALLOWED_COMMANDS:
         return False, f"command not allow-listed: {head}"
+    denied = _DENIED_ARGS.get(head, frozenset())
+    for tok in tokens[1:]:
+        if tok in denied:
+            return False, f"argument not allowed: {head} {tok}"
 
     subs = _ALLOWED_SUBCOMMANDS.get(head)
     if subs:
@@ -194,7 +183,63 @@ def _check_suggestion(suggestion_text: str) -> tuple[bool, str]:
         sub = tokens[idx]
         if sub not in subs:
             return False, f"subcommand not allow-listed: {head} {sub}"
+        nested = _ALLOWED_NESTED.get((head, sub))
+        if nested is not None:
+            idx += 1
+            while idx < len(tokens) and tokens[idx].startswith("-"):
+                idx += 1
+            if idx >= len(tokens) or tokens[idx] not in nested:
+                return False, f"subcommand not allow-listed: {head} {sub} {tokens[idx] if idx < len(tokens) else ''}"
+    return True, ""
 
+
+def _check_suggestion(suggestion_text: str) -> tuple[bool, str]:
+    """Return ``(allowed, reason)``. Reason is empty when allowed.
+
+    Expects a string like ``INVESTIGATE: journalctl -u foo --since '1h ago'``.
+    Anything that fails parsing, leaves the allow-list, or trips the
+    dangerous-pattern regex returns ``False``.
+    """
+    line = unicodedata.normalize("NFKC", suggestion_text).strip()
+
+    m = re.match(r"^`?(INVESTIGATE|FIX):\s*(.+?)`?$", line, re.IGNORECASE)
+    if not m:
+        return False, "missing INVESTIGATE/FIX prefix"
+    # Models wrap commands in inline code: `cmd`. Backticks anywhere else
+    # stay (and fail the head check / dangerous patterns).
+    cmd = m.group(2).strip()
+    if cmd.startswith("`"):
+        cmd = cmd[1:]
+    if cmd.endswith("`"):
+        cmd = cmd[:-1]
+    cmd = cmd.strip()
+
+    if _DANGEROUS_PATTERNS.search(cmd):
+        return False, "shell-injection or destructive pattern"
+
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        return False, "unparseable shell command"
+    if not tokens:
+        return False, "empty command"
+
+    # Pipelines are fine (`journalctl ... | tail -50`) but EVERY stage must
+    # pass; any other shell operator (; && || & > < parentheses) is refused.
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok == "|":
+            segments.append([])
+        elif tok and all(ch in "();<>|&" for ch in tok):
+            return False, f"shell operator not allowed: {tok}"
+        else:
+            segments[-1].append(tok)
+    for seg in segments:
+        ok, reason = _check_argv(seg)
+        if not ok:
+            return False, reason
     return True, ""
 
 
@@ -212,7 +257,9 @@ def _parse_streams(data: Any, end: datetime) -> list[dict[str, Any]] | None:
         if not isinstance(stream, dict):
             continue
         labels = stream.get("stream") or {}
-        service = labels.get("container") or labels.get("service") or labels.get("unit") or "unknown"
+        # `service` first: every promtail stream carries it, and the per-group
+        # counts are keyed on it too, so report + clusters name things alike.
+        service = labels.get("service") or labels.get("container") or labels.get("unit") or "unknown"
         service = str(service).lstrip("/")
         level = labels.get("level", "unknown")
         for entry in stream.get("values") or []:
@@ -361,6 +408,7 @@ async def _loki_alive(loki_url: str, lookback_hours: int, timeout_sec: int = 10)
 
 HELIOS_BRAIN_LOG_SELECTOR = '{host="helios", service="llama-server-primary"}'
 HELIOS_SILENCE_WINDOW = "30m"
+_silence_check_state = {"failing": False}
 
 
 async def check_helios_log_silence(timeout_sec: int = 15) -> None:
@@ -378,8 +426,15 @@ async def check_helios_log_silence(timeout_sec: int = 15) -> None:
             lines = sum(int(float(row["value"][1])) for row in result)
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
         HELIOS_LOG_CHECK_TOTAL.labels(result="error").inc()
-        logger.warning("[SELF_AUDIT] Helios log-silence check failed: %s", type(e).__name__)
+        # WARNING on the first failure only (every 5 min would be 288 lines a
+        # day); HeliosLogCheckFailing alerts on the counter.
+        level = logging.DEBUG if _silence_check_state["failing"] else logging.WARNING
+        logger.log(level, "[SELF_AUDIT] Helios log-silence check failed: %s", type(e).__name__)
+        _silence_check_state["failing"] = True
         return
+    if _silence_check_state["failing"]:
+        logger.info("[SELF_AUDIT] Helios log-silence check recovered")
+    _silence_check_state["failing"] = False
     silent = lines == 0
     HELIOS_LOGS_SILENT.set(1 if silent else 0)
     HELIOS_LOG_CHECK_TOTAL.labels(result="silent" if silent else "lines").inc()
@@ -437,7 +492,8 @@ def _bucket_logs(entries: list[dict[str, Any]], max_clusters: int) -> list[dict[
 
 UNTRUSTED_OPEN = "BEGIN UNTRUSTED LOG DATA"
 UNTRUSTED_CLOSE = "END UNTRUSTED LOG DATA"
-_FRAME_TOKEN_RE = re.compile(r"\b(BEGIN|END)(\s+)UNTRUSTED", re.IGNORECASE)
+# Separator may be anything non-alphanumeric or nothing ("END_UNTRUSTED", "ENDUNTRUSTED").
+_FRAME_TOKEN_RE = re.compile(r"(BEGIN|END)([\W_]*)UNTRUSTED", re.IGNORECASE)
 # Zero-width / bidi format characters (same set as vision_handler).
 _FORMAT_CHARS_RE = re.compile("[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
 
@@ -489,7 +545,7 @@ For each cluster, output a markdown section in EXACTLY this format:
 Where:
 - SEVERITY in {{CRITICAL, HIGH, MEDIUM, LOW}} -- your judgment based on user impact
 - prefix in {{INVESTIGATE, FIX}} -- INVESTIGATE for read-only diagnostic, FIX only for confident read-only or service-level restart
-- The shell command MUST be a single command using ONLY: journalctl, systemctl status/restart/reload/show/cat, docker logs/ps/compose/stats/inspect, ls, cat, tail, head, grep, ss, top, htop, ps, df, du, free, uptime, find, awk, sed, lsof, nvidia-smi, wc, stat
+- The shell command MUST be a single command using ONLY: journalctl, systemctl status/restart/reload/show/cat, docker logs/ps/stats/inspect, docker compose logs/ps/config/top/restart, ls, cat, tail, head, grep, ss, top, htop, ps, df, du, free, uptime, find, lsof, nvidia-smi, wc, stat
 - NO `rm`, `dd`, `mkfs`, `chmod`, `chown`, `kill`, `iptables`, `nft`, `tee`, `chattr`, `mount`, `umount`, `passwd`, `useradd`, `crontab`, `at`, `nc`, `curl`, `wget`, `sh`, `bash`, `python`, `eval`, `base64 -d`, `>`, `|sh`, `$(...)`, backticks. If you would suggest one of these, downgrade to INVESTIGATE.
 - Prefer `journalctl -u <unit> --since '24h ago' | tail -50` or `docker logs <container> --tail 50` for INVESTIGATE.
 - Use `systemctl restart <unit>` or `docker compose restart <service>` for service-level FIX.
@@ -559,7 +615,13 @@ def _build_audit_prompt(
 # --- Diagnosis sanitization -------------------------------------------------
 
 
-_SUGGESTION_LINE_RE = re.compile(r"^(?P<prefix>\s*-?\s*\*\*Suggestion\*\*:\s*)(?P<payload>.+)$")
+# Both "**Suggestion**:" and "**Suggestion:**" — the prompt asks for the
+# latter, and until 2026-10-20 only the former matched, so a model following
+# the format skipped the allow-list entirely. Case-insensitive, bold optional.
+_SUGGESTION_LINE_RE = re.compile(
+    r"^(?P<prefix>\s*[-*]?\s*(?:\*\*)?Suggestion(?:\*\*)?\s*:\s*(?:\*\*)?\s*)(?P<payload>.+)$",
+    re.IGNORECASE,
+)
 # Loosened: don't require severity word at end-of-line (model often appends
 # punctuation or annotations like "(N times)").
 _SEVERITY_HEADER_RE = re.compile(
@@ -588,7 +650,13 @@ def _sanitize_diagnosis(diagnosis: str) -> str:
                 f"{m.group('prefix')}[REJECTED-AUTO: {reason}] "
                 f"(original suggestion redacted; ask Claude what to investigate)"
             )
-    return "\n".join(out_lines)
+    # A suggested diff is model output steered by log text: label it so it is
+    # never applied without a human reading it (fix PRs are a later step).
+    return _DIFF_FENCE_RE.sub(DIFF_BANNER + "\n" + r"\g<0>", "\n".join(out_lines))
+
+
+DIFF_BANNER = "> Suggested diff: UNREVIEWED, possibly influenced by log content. Read it before applying anything."
+_DIFF_FENCE_RE = re.compile(r"^```diff\b", re.MULTILINE)
 
 
 def _redact_secrets(text: str) -> str:
@@ -723,8 +791,14 @@ async def _push_digest(
     if title_suffix:
         title += f" {title_suffix}"
 
+    problems = _source_problems(groups)
     if total == 0 and top_cluster is None:
-        body = f"All clean ({lookback_hours}h scan, no errors)"
+        # Never "All clean" when a source returned nothing: that source is a
+        # blind spot, not a clean one.
+        if problems and "No data" in problems:
+            body = f"No errors in the sources that answered ({lookback_hours}h scan)"
+        else:
+            body = f"All clean ({lookback_hours}h scan, no errors)"
     elif total == 0:
         body = "No diagnosis (log digest only)"
         body += f"\nTop: {defang_untrusted(top_cluster['service'])[:40]} · {top_cluster['count']}x"
@@ -734,7 +808,6 @@ async def _push_digest(
             body += f"\nTop: {defang_untrusted(top_cluster['service'])[:40]} · {top_cluster['count']}x"
     if note:
         body += f"\n{note}"
-    problems = _source_problems(groups)
     if problems:
         body += f"\n{problems}"
     if report_filename:
@@ -846,14 +919,19 @@ async def _ask_jess(*, prompt: str, timeout_sec: int) -> str | None:
     return (resp.get("choices") or [{}])[0].get("message", {}).get("content")
 
 
-async def run_self_audit(trigger: str = "daily", alert: dict[str, Any] | None = None) -> dict[str, Any]:
+async def run_self_audit(
+    trigger: str = "daily", alert: dict[str, Any] | None = None, wait_for_lock: bool = False
+) -> dict[str, Any]:
     """Execute a self-audit. Never raises.
 
     ``trigger`` is ``daily`` (cron / manual run) or ``alert`` (Alertmanager
     webhook; ``alert`` carries ``alertname`` + untrusted labels/annotations
     and needs SELF_AUDIT_INVESTIGATE). Returns a dict with ``result`` in
     ``{ok, partial, failed, skipped, busy}``. ``busy`` means another audit
-    is already in flight (manual + cron + alert share one lock).
+    is already in flight (manual + cron + alert share one lock); the cron
+    passes ``wait_for_lock=True`` so a long alert run delays, rather than
+    drops, the daily audit. ``bgw_self_audit_runs_total`` (and SelfAuditFailing)
+    counts daily runs only; alert runs have bgw_self_investigator_runs_total.
     """
     if not (settings.self_audit_enabled and settings.jess_advanced):
         SELF_AUDIT_RUNS_TOTAL.labels(result="skipped").inc()
@@ -864,8 +942,16 @@ async def run_self_audit(trigger: str = "daily", alert: dict[str, Any] | None = 
         return {"result": "skipped", "reason": "SELF_AUDIT_INVESTIGATE=false"}
 
     if _AUDIT_LOCK.locked():
-        logger.warning("[SELF_AUDIT] Refusing concurrent run — audit already in flight")
-        return {"result": "busy", "reason": "another audit is running"}
+        if not wait_for_lock:
+            logger.warning("[SELF_AUDIT] Refusing concurrent run — audit already in flight")
+            return {"result": "busy", "reason": "another audit is running"}
+        logger.info("[SELF_AUDIT] Waiting for the audit already in flight")
+        try:
+            await asyncio.wait_for(_AUDIT_LOCK.acquire(), timeout=LOCK_WAIT_S)
+        except TimeoutError:
+            logger.warning("[SELF_AUDIT] Gave up waiting for the audit in flight")
+            return {"result": "busy", "reason": "another audit is running"}
+        _AUDIT_LOCK.release()
 
     async with _AUDIT_LOCK:
         out = await _run_self_audit_locked(trigger, alert or {})
@@ -876,6 +962,7 @@ async def run_self_audit(trigger: str = "daily", alert: dict[str, Any] | None = 
 
 
 LAST_RUN_STATE_KEY = "self_audit_last_run_ts"
+LOCK_WAIT_S = 45 * 60
 
 
 async def _stamp_last_run() -> None:
@@ -904,6 +991,12 @@ def forget_last_run() -> None:
 _ZERO_COUNTS = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
 
 
+def _count_run(trigger: str, result: str) -> None:
+    """bgw_self_audit_runs_total (SelfAuditFailing) tracks the DAILY audit."""
+    if trigger == "daily":
+        SELF_AUDIT_RUNS_TOTAL.labels(result=result).inc()
+
+
 async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[str, Any]:
     start = time.monotonic()
     started_at = _now_utc()
@@ -923,6 +1016,11 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
     # Distinguish unreachable Loki from genuinely-clean week (prod-support #6).
     if not transport_ok:
         logger.error("[SELF_AUDIT] Loki transport failed — refusing to claim 'clean'")
+        if trigger != "daily":
+            # The daily run reports Loki outages; alert runs must not add up
+            # to six more CRITICAL pushes a day for the same outage.
+            SELF_AUDIT_LATENCY.observe(time.monotonic() - start)
+            return {"result": "failed", "reason": "loki_unreachable"}
         await _push_digest(
             severity_counts={"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0},
             top_cluster={"service": "loki", "count": 1},
@@ -931,7 +1029,7 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
             title=title,
             title_suffix="· LOKI UNREACHABLE",
         )
-        SELF_AUDIT_RUNS_TOTAL.labels(result="failed").inc()
+        _count_run(trigger, "failed")
         SELF_AUDIT_LATENCY.observe(time.monotonic() - start)
         return {"result": "failed", "reason": "loki_unreachable"}
 
@@ -949,12 +1047,13 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
                 title=title,
                 title_suffix="· LOKI EMPTY",
             )
-            SELF_AUDIT_RUNS_TOTAL.labels(result="failed").inc()
+            _count_run(trigger, "failed")
             SELF_AUDIT_LATENCY.observe(time.monotonic() - start)
             return {"result": "failed", "reason": "loki_probe_empty"}
 
         if trigger == "daily":
             logger.info("[SELF_AUDIT] No error/warn entries in lookback window")
+            blind = [g["name"] for g in groups if not g.get("ok")]
             await _push_digest(
                 severity_counts=dict(_ZERO_COUNTS),
                 top_cluster=None,
@@ -963,9 +1062,11 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
                 title=title,
                 groups=groups,
             )
-            SELF_AUDIT_RUNS_TOTAL.labels(result="ok").inc()
+            # A source that didn't answer is a blind spot, not a clean one.
+            tag = "partial" if blind else "ok"
+            _count_run(trigger, tag)
             SELF_AUDIT_LATENCY.observe(time.monotonic() - start)
-            return {"result": "ok", "clusters": 0}
+            return {"result": tag, "clusters": 0, **({"reason": "sources_failed"} if blind else {})}
         # Alert trigger with no error lines: the alert itself is the lead.
 
     clusters = _bucket_logs(entries, settings.self_audit_max_clusters)
@@ -994,11 +1095,15 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
     if raw_diagnosis:
         from orchestrator.self_investigator import verify_citations
 
-        diagnosis = verify_citations(_sanitize_diagnosis(raw_diagnosis))
+        # verify_citations stats/reads repo files: keep it off the event loop.
+        diagnosis = await asyncio.to_thread(verify_citations, _sanitize_diagnosis(raw_diagnosis))
         result_tag = "ok"
     else:
         diagnosis = ""
         result_tag = "partial"
+    if any(not g.get("ok") for g in groups):
+        result_tag = "partial"
+        reason = reason or "sources_failed"
 
     severity_counts = _count_severities(diagnosis) if diagnosis else {}
     if diagnosis and not any(severity_counts.values()):
@@ -1051,7 +1156,7 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
             )
         )
 
-    SELF_AUDIT_RUNS_TOTAL.labels(result=result_tag).inc()
+    _count_run(trigger, result_tag)
     SELF_AUDIT_LATENCY.observe(time.monotonic() - start)
 
     logger.info(

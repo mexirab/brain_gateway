@@ -1,7 +1,8 @@
 # Self-investigator (self-monitoring step 2) — design
 
-**Status:** DRAFT for owner approval. Written 2026-10-17, rebased on main and revised
-2026-10-20 (main at `34ddc74`, PRs #101–#126). Nothing below is built yet.
+**Status:** APPROVED by the owner 2026-10-20 (all six recommendations in §3) and BUILT on
+branch `claude/youthful-cohen-a99ebd`. §7 lists where the build differs from this design,
+mostly as a result of the review pipeline and the live drills.
 **Replaces:** the single no-tools LLM call in `orchestrator/jobs_self_audit.py` (F-014).
 **Does not include:** writing fixes or opening PRs (step 3), or running any repair (step 4).
 
@@ -236,3 +237,55 @@ Checks:
   the right `file:line`.
 - A webhook drill: send a fake firing alert with `amtool`. The report should land and
   Pushover should arrive; a second trigger within 6 h should be rate-limited.
+
+## 7. As built: differences from the design above (2026-10-20)
+
+- **HeliosLogsSilent** fires on "brain generating, no llama-server lines", not on
+  "Helios up, no lines". Backtest: the Helios journal is silent for 30+ min whenever the
+  brain is idle, but every 30-min window with prompt traffic had at least 8
+  `llama-server-primary` lines. Gauge `bgw_helios_logs_silent` covers
+  `{host="helios", service="llama-server-primary"}` over 30 min; the alert ANDs it with
+  `increase(llamacpp:tokens_predicted_total[30m]) >= 1`, `for: 15m`. No Helios-side
+  change is needed. A companion alert, `HeliosLogCheckFailing`, fires when the check
+  itself can't reach Loki. Loki had no alert of its own.
+- **grep is substring-only.** Regex was dropped after review: CPython's `re` holds
+  the GIL while backtracking, so one pathological pattern froze the whole orchestrator
+  (verified). Substring search is linear, and total bytes scanned are capped too.
+- **Trigger list** drops `BrainOnCPU`, `BrainCudaInitFailed` and
+  `HeliosGpuDriverBroken`: on a CPU-speed brain (about 6 tok/s) an investigation only
+  times out while holding the degraded slot.
+- **Alert runs are gentler.** They wait for the slot to be idle for 3 min (up to 30 min),
+  then run with at most 6 rounds and 300 s. "Idle" now also reads llama-server's own
+  `llamacpp:requests_processing`, because `bgw_active_requests` drops before a
+  streaming reply finishes. Per-call timeouts are clipped to the run's deadline, with
+  90 s reserved for the forced final report.
+- **Honesty about blind spots.** A source group whose query failed makes the run
+  `partial` (`reason=sources_failed`), and the digest never says "All clean" while a
+  source didn't answer. Only daily runs feed `bgw_self_audit_runs_total` /
+  SelfAuditFailing. Alert runs don't push Loki-outage digests. The 07:00 cron waits for
+  an in-flight alert run instead of being dropped.
+- **Suggested-command allow-list tightened** (it predates this work):
+  - every stage of a `|` pipeline is checked, not just the first;
+  - any other shell operator is refused, including redirects to /tmp;
+  - `awk` and `sed` were removed;
+  - `find -delete/-exec/-ok/-fprint*` are refused;
+  - `docker compose` is limited to logs/ps/config/top/restart and `docker image` to ls/inspect.
+
+  Suggested diffs get an "UNREVIEWED, possibly influenced by log content" banner.
+- **Path tool hardening.** `docs/internal/` is denied (it holds the security backlog),
+  and "missing" and "denied" paths return the same message, so the model can't probe
+  for the existence of key files.
+- **Webhook receiver** is rendered only when `SELF_AUDIT_WEBHOOK_TOKEN` is at least 24
+  chars AND `SELF_AUDIT_INVESTIGATE=true`. Otherwise every delivery would be a 409 or
+  401 that Alertmanager re-sends each group interval.
+
+### Known limits, not fixed here
+
+- Loki still holds personal log text written before PR #81 (30-day retention, gone by
+  about mid-November). `loki_query` can read it and the model could quote it into the
+  on-disk report; it never reaches mempalace, Pushover or the inbox.
+- Mempalace entries written by the OLD audit (`source="self_audit"`, model prose) are
+  still there and reachable from chat. A one-off purge is suggested in the PR.
+- The frame markers are advisory. The real boundary is that every tool is read-only.
+- No Grafana panels yet (dashgen follow-up). The alerts carry the signal.
+- `run_tests` in an offline sandbox is the agreed follow-up (decision 3).

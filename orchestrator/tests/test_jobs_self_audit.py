@@ -162,11 +162,14 @@ class TestCheckSuggestion:
         ok, _ = _check_suggestion("FIX: echo hi > /etc/passwd")
         assert ok is False
 
-    def test_redirect_write_to_tmp_allowed(self):
+    def test_redirects_rejected_even_to_tmp(self):
+        # Since the investigator (2026-10): any shell operator except `|` is
+        # refused. A suggestion is a read-only command to paste; it never
+        # needs a redirect.
         from orchestrator.jobs_self_audit import _check_suggestion
 
         ok, reason = _check_suggestion("FIX: echo hi > /tmp/x")
-        assert ok is True, f"unexpected reject: {reason}"
+        assert ok is False and "operator" in reason
 
     def test_nc_listener_rejected(self):
         from orchestrator.jobs_self_audit import _check_suggestion

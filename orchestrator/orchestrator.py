@@ -1156,6 +1156,9 @@ async def _startup_logic():
             trigger="cron",
             hour=shared.SELF_AUDIT_HOUR_UTC,
             minute=0,
+            # An alert-triggered investigation may hold the audit lock: wait
+            # for it instead of dropping the day's audit.
+            kwargs={"wait_for_lock": True},
             id="self_audit_daily",
             name="Daily self-audit",
             replace_existing=True,
@@ -1170,6 +1173,9 @@ async def _startup_logic():
             check_helios_log_silence,
             trigger="interval",
             minutes=5,
+            # First check 30 s after start: the gauge defaults to 0, so waiting
+            # the full interval would blank an ongoing HeliosLogsSilent per deploy.
+            next_run_time=datetime.now(scheduler.timezone) + timedelta(seconds=30),
             id="helios_log_silence_check",
             name="Helios log-silence check",
             replace_existing=True,

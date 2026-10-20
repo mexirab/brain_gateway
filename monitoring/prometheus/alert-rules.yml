@@ -725,6 +725,20 @@ groups:
           summary: "Helios logs stopped reaching Loki while the brain is working"
           description: "llama-server on Helios generated tokens in the last 30 min, but Loki has no llama-server-primary lines from Helios. promtail-helios (on Helios: `docker ps` / `docker logs promtail-helios` in /opt/promtail-helios) or loki-push-gw on Jupiter (`docker logs loki-push-gw`) is likely down, so Helios errors are invisible to the self-audit and the Loki ruler."
 
+      # The orchestrator can't run the Helios log-silence check (Loki down, or
+      # the loki:3100 path from the orchestrator broken). While this fires,
+      # HeliosLogsSilent is blind (its gauge keeps the last value) — and Loki
+      # has no alert of its own, so this is also the "Loki is unreachable from
+      # the orchestrator" signal. 5 failed checks in 30 min = sustained.
+      - alert: HeliosLogCheckFailing
+        expr: increase(bgw_helios_log_check_total{job="orchestrator", result="error"}[30m]) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The orchestrator can't query Loki for the Helios log check"
+          description: "bgw_helios_log_check_total{result=\"error\"} keeps rising, so HeliosLogsSilent can't see anything and the next self-audit will likely report Loki unreachable. Check `docker ps --filter name=loki`, `docker logs loki --tail 50`, and that SELF_AUDIT_LOKI_URL (http://loki:3100) resolves from brain-orchestrator."
+
       # Jess's brain is generating, but at CPU speed. Normal decode on the 5090
       # is ~105-125 tok/s; CPU fallback measured ~6 tok/s on 2026-10-15 (driver
       # swap under a loaded module). Ratio of the two llama.cpp counters = mean

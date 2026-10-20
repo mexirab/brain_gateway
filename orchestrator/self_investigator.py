@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -66,6 +67,7 @@ MAX_READ_LINES = 300
 DEFAULT_READ_LINES = 150
 MAX_GREP_MATCHES = 100
 MAX_GREP_FILES = 4000
+MAX_GREP_BYTES = 40_000_000
 MAX_PATTERN_CHARS = 200
 MAX_LIST_ENTRIES = 200
 MAX_FILE_BYTES = 2_000_000
@@ -73,6 +75,14 @@ MAX_LOKI_LINES = 200
 MAX_LOKI_HOURS = 24
 MAX_LOKI_QUERY_CHARS = 500
 ROUND_TIMEOUT_S = 120  # background LLM budget (single llama slot)
+MIN_ROUND_TIMEOUT_S = 20
+FINAL_RESERVE_S = 90  # wall time kept back for the forced final report
+# Alert runs happen while the owner is around: smaller budget, and only after
+# the brain has been idle for a while.
+ALERT_MAX_ROUNDS = 6
+ALERT_MAX_SECONDS = 300
+ALERT_QUIET_S = 180
+ALERT_QUIET_MAX_WAIT_S = 1800
 ROUND_MAX_TOKENS = 4096
 CHAT_IDLE_WAIT_S = 60
 
@@ -104,6 +114,9 @@ _DENY_NAMES = frozenset(
 _DENY_NAME_RE = re.compile(r"(^\.env|secret|token|credential|password|htpasswd|\.key$|\.pem$)", re.IGNORECASE)
 
 
+_NOT_READABLE = "no such file, or not in the readable allow-list"
+
+
 class PathDenied(Exception):
     """A path outside the allow-list (message is safe to show the model)."""
 
@@ -122,6 +135,9 @@ def _allowed_rel(rel: PurePosixPath, *, is_dir: bool) -> bool:
     if not is_dir and (name in _DENY_NAMES or _DENY_NAME_RE.search(name)):
         return False
     rel_s = rel.as_posix()
+    # Untracked maintainer notes (security backlog etc.) stay out of the prompt.
+    if rel_s == "docs/internal" or rel_s.startswith("docs/internal/"):
+        return False
     if len(parts) == 1 and not is_dir:
         return name in _ALLOWED_TOP_FILES
     for d in _ALLOWED_DIRS:
@@ -158,11 +174,13 @@ def resolve_repo_path(path: str) -> tuple[Path, PurePosixPath]:
         raise PathDenied("path is outside the repository") from None
     if resolved_rel.as_posix() == ".":
         resolved_rel = PurePosixPath()
+    # One message for "missing" and "not allowed": a distinct "no such file"
+    # would tell the model whether a denied path (a key file) exists.
     if not full.exists():
-        raise PathDenied("no such file or directory")
+        raise PathDenied(_NOT_READABLE)
     is_dir = full.is_dir()
     if not (_allowed_rel(requested, is_dir=is_dir) and _allowed_rel(resolved_rel, is_dir=is_dir)):
-        raise PathDenied("path is not in the readable allow-list")
+        raise PathDenied(_NOT_READABLE)
     return full, resolved_rel
 
 
@@ -207,7 +225,7 @@ def _read_file(path: str, start_line: int = 1, end_line: int | None = None) -> s
     return f"{rel.as_posix()} lines {start}-{end}:\n{body}{more}"
 
 
-def _iter_files(full: Path, rel: PurePosixPath):
+def _iter_files(full: Path, rel: PurePosixPath) -> Iterator[tuple[Path, PurePosixPath]]:
     if full.is_file():
         yield full, rel
         return
@@ -225,39 +243,32 @@ def _iter_files(full: Path, rel: PurePosixPath):
                 yield f, f_rel
 
 
-def _grep(pattern: str, path: str = "", regex: bool = False) -> str:
+def _grep(pattern: str, path: str = "") -> str:
+    """Plain substring search. Deliberately no regex: CPython's ``re`` holds
+    the GIL while backtracking, so one catastrophic model-chosen pattern
+    (``(a+)+$``) would freeze the whole orchestrator — a thread timeout can't
+    stop it. Substring search is linear; total bytes scanned are capped too."""
     pattern = str(pattern or "")
     if not pattern:
         raise PathDenied("empty pattern")
     if len(pattern) > MAX_PATTERN_CHARS:
         raise PathDenied(f"pattern longer than {MAX_PATTERN_CHARS} characters")
-    if regex:
-        try:
-            rx = re.compile(pattern)
-        except re.error:
-            raise PathDenied("invalid regular expression") from None
-
-        def match(line: str) -> bool:
-            return bool(rx.search(line[:1000]))
-    else:
-
-        def match(line: str) -> bool:
-            return pattern in line
-
     full, rel = resolve_repo_path(path)
     hits: list[str] = []
-    scanned = 0
+    scanned_files = 0
+    scanned_bytes = 0
     for f, f_rel in _iter_files(full, rel):
-        scanned += 1
-        if scanned > MAX_GREP_FILES:
-            hits.append("… (stopped: too many files; narrow the path)")
+        scanned_files += 1
+        if scanned_files > MAX_GREP_FILES or scanned_bytes > MAX_GREP_BYTES:
+            hits.append("… (stopped: searched too much; narrow the path)")
             break
         try:
             lines = _read_lines(f)
         except (OSError, PathDenied):
             continue
+        scanned_bytes += sum(len(line) for line in lines)
         for n, line in enumerate(lines, 1):
-            if match(line):
+            if pattern in line:
                 hits.append(f"{f_rel.as_posix()}:{n}: {line.strip()[:200]}")
                 if len(hits) >= MAX_GREP_MATCHES:
                     hits.append("… (match limit reached; narrow the search)")
@@ -299,6 +310,13 @@ async def _loki_query(query: str, hours: int = 1, limit: int = 50) -> str:
         result = (resp.json().get("data") or {}).get("result") or []
     except (ValueError, AttributeError):
         return "Loki returned an unreadable response"
+    try:
+        return _format_loki(result, is_metric, limit)
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return "Loki returned an unexpected shape"
+
+
+def _format_loki(result: Any, is_metric: bool, limit: int) -> str:
     lines: list[str] = []
     if is_metric:
         for row in result[:50]:
@@ -354,14 +372,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "grep",
-            "description": "Search repository files for text (plain substring unless regex=true). "
+            "description": "Search repository files for a plain text substring (case-sensitive, no regex). "
             "Returns path:line: text, at most 100 matches.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
                     "path": {"type": "string", "description": "Repo-relative file or folder; empty = whole repo"},
-                    "regex": {"type": "boolean"},
                 },
                 "required": ["pattern"],
             },
@@ -403,23 +420,20 @@ async def run_tool(name: str, args: dict[str, Any]) -> str:
                 _read_file, str(args.get("path") or ""), args.get("start_line") or 1, args.get("end_line")
             )
         elif name == "grep":
-            text = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _grep, str(args.get("pattern") or ""), str(args.get("path") or ""), bool(args.get("regex"))
-                ),
-                timeout=30,
-            )
+            text = await asyncio.to_thread(_grep, str(args.get("pattern") or ""), str(args.get("path") or ""))
         else:
             text = await _loki_query(str(args.get("query") or ""), args.get("hours") or 1, args.get("limit") or 50)
         result = "ok"
     except PathDenied as e:
         text, result = f"Refused: {e}", "denied"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, ArithmeticError):  # ArithmeticError: int(float("inf")) from JSON Infinity
         text, result = "Refused: bad arguments", "denied"
-    except TimeoutError:
-        text, result = "The search took too long; narrow the path or pattern.", "error"
     except OSError as e:
         text, result = f"Could not read ({type(e).__name__})", "error"
+    except Exception as e:  # never raise into the loop: one bad tool result must not end the run
+        # log-safe: name is one of the four allow-listed tool names
+        logger.warning("[INVESTIGATOR] tool %s failed: %s", name, type(e).__name__)
+        text, result = f"Tool failed ({type(e).__name__})", "error"
     SELF_INVESTIGATOR_TOOL_CALLS_TOTAL.labels(tool=name, result=result).inc()
     text = _redact_secrets(text)
     if len(text) > MAX_RESULT_CHARS:
@@ -476,22 +490,68 @@ async def brain_ready() -> bool:
         return False
 
 
-async def _wait_for_idle_chat() -> None:
-    """Let any chat request in flight finish first (bounded): the investigator
-    shares the single llama slot with interactive chat."""
-    deadline = time.monotonic() + CHAT_IDLE_WAIT_S
+async def _slot_busy() -> bool:
+    """True if chat (or anything) is using the brain right now.
+
+    ``bgw_active_requests`` alone misses streaming chat (the gauge drops when
+    the StreamingResponse is returned, before tokens flow), so also ask
+    llama-server itself: ``llamacpp:requests_processing`` on its /metrics.
+    If that can't be read, fall back to the gauge alone.
+    """
+    try:
+        if ACTIVE_REQUESTS._value.get() > 0:
+            return True
+    except Exception:
+        pass
+    client = shared._http
+    if client is None:
+        return False
+    base = shared.MODEL_URL.rstrip("/")
+    base = base[: -len("/v1")] if base.endswith("/v1") else base
+    try:
+        r = await client.get(base + "/metrics", timeout=3.0)
+        if r.status_code != 200:
+            return False
+        for line in r.text.splitlines():
+            if line.startswith("llamacpp:requests_processing"):
+                return float(line.rsplit(" ", 1)[-1]) > 0
+    except Exception:
+        return False
+    return False
+
+
+async def _wait_for_idle_chat(max_wait_s: float = CHAT_IDLE_WAIT_S) -> None:
+    """Let chat in flight finish first (bounded): the investigator shares the
+    single llama slot with interactive chat."""
+    deadline = time.monotonic() + max_wait_s
     while time.monotonic() < deadline:
-        try:
-            if ACTIVE_REQUESTS._value.get() <= 0:
-                return
-        except Exception:
+        if not await _slot_busy():
             return
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(2.0)
+
+
+async def _wait_for_quiet_period(quiet_s: float, max_wait_s: float) -> bool:
+    """Alert runs: alerts like EmptyRepliesReachingUsers fire mid-conversation,
+    so don't start until the slot has been idle for ``quiet_s`` (polling every
+    15 s), giving up after ``max_wait_s``. Returns False if it never got quiet."""
+    deadline = time.monotonic() + max_wait_s
+    quiet_since: float | None = None
+    while time.monotonic() < deadline:
+        if await _slot_busy():
+            quiet_since = None
+        else:
+            quiet_since = quiet_since or time.monotonic()
+            if time.monotonic() - quiet_since >= quiet_s:
+                return True
+        await asyncio.sleep(15.0)
+    return False
 
 
 # --- Prompt ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = f"""You are the on-call engineer for Brain Gateway ("Jess"), a personal AI assistant: a FastAPI orchestrator plus dashboard, monitoring and Home Assistant on an always-on hub (Jupiter), and a GPU box (Helios) that sleeps most of the day and runs the LLM (llama.cpp), TTS and STT as systemd units.
+
+Deployment facts: on Jupiter everything runs in Docker (the orchestrator is the container brain-orchestrator, compose service orchestrator; Loki, Prometheus, Grafana, Alertmanager are containers too). On Helios the model servers are systemd units: llama-server-primary (the LLM), voxcpm-tts / qwen-tts (TTS), stt-onnx (STT), nut-* (UPS). Use docker commands for Jupiter services and journalctl/systemctl for Helios units.
 
 You are investigating a problem with READ-ONLY tools: list_dir, read_file and grep over the repository, and loki_query over the logs. You cannot change anything, run commands or open URLs. Repository paths are relative to the repo root (the orchestrator's Python code is under orchestrator/; inside its container that is /app/orchestrator/).
 
@@ -515,7 +575,7 @@ Optionally, after a section, a suggested fix as a unified diff in a ```diff bloc
 Rules:
 - SEVERITY is one of CRITICAL, HIGH, MEDIUM, LOW, by user impact.
 - Cite only file:line locations you actually read; uncited guesses must say "unconfirmed".
-- The shell command MUST be a single command using ONLY: journalctl, systemctl status/restart/reload/show/cat, docker logs/ps/compose/stats/inspect, ls, cat, tail, head, grep, ss, top, ps, df, du, free, uptime, find, awk, sed, lsof, nvidia-smi, wc, stat. No rm, dd, kill, chmod, curl, wget, sh, bash, python, eval, redirects, $(...) or backticks. FIX only for a confident service-level restart.
+- The shell command MUST be a single command using ONLY: journalctl, systemctl status/restart/reload/show/cat, docker logs/ps/stats/inspect, docker compose logs/ps/config/top/restart, ls, cat, tail, head, grep, ss, top, ps, df, du, free, uptime, find, lsof, nvidia-smi, wc, stat. No rm, dd, kill, chmod, curl, wget, sh, bash, python, eval, redirects, $(...) or backticks. FIX only for a confident service-level restart.
 - End with EXACTLY one line: **Overall:** <C> critical, <H> high, <M> medium, <L> low
 """
 
@@ -571,17 +631,17 @@ def _parse_args(raw: Any) -> dict[str, Any] | None:
     return val if isinstance(val, dict) else None
 
 
-async def _call(messages: list[dict[str, Any]], *, with_tools: bool) -> dict[str, Any] | None:
+async def _call(messages: list[dict[str, Any]], *, with_tools: bool, timeout_s: float) -> dict[str, Any] | None:
     from orchestrator.orchestrator import call_model
 
-    await _wait_for_idle_chat()
+    await _wait_for_idle_chat(min(CHAT_IDLE_WAIT_S, max(5.0, timeout_s / 4)))
     try:
         resp = await call_model(
             shared.MODEL_URL,
             shared.MODEL_NAME,
             messages=messages,
             tools=TOOL_SCHEMAS if with_tools else None,
-            timeout=ROUND_TIMEOUT_S,
+            timeout=int(max(MIN_ROUND_TIMEOUT_S, min(ROUND_TIMEOUT_S, timeout_s))),
             extra_body={"max_tokens": ROUND_MAX_TOKENS, "temperature": 0.6},
         )
     except Exception as e:
@@ -624,9 +684,18 @@ async def investigate(
             ),
         },
     ]
-    deadline = t0 + settings.self_audit_investigate_max_seconds
+    max_seconds = settings.self_audit_investigate_max_seconds
     max_rounds = settings.self_audit_investigate_max_rounds
     max_calls = settings.self_audit_investigate_max_tool_calls
+    if trigger_label == "alert":
+        max_seconds = min(max_seconds, ALERT_MAX_SECONDS)
+        max_rounds = min(max_rounds, ALERT_MAX_ROUNDS)
+        if not await _wait_for_quiet_period(ALERT_QUIET_S, ALERT_QUIET_MAX_WAIT_S):
+            logger.info("[INVESTIGATOR] Brain never went quiet — investigating anyway with the alert budget")
+    t_start = time.monotonic()
+    # The loop stops FINAL_RESERVE_S early so the forced final report fits.
+    loop_deadline = t_start + max(60, max_seconds - FINAL_RESERVE_S)
+    hard_deadline = t_start + max_seconds
     calls_used = 0
     rounds = 0
     seen: set[str] = set()
@@ -634,9 +703,9 @@ async def investigate(
     result = "budget"
 
     try:
-        while rounds < max_rounds and calls_used < max_calls and time.monotonic() < deadline:
+        while rounds < max_rounds and calls_used < max_calls and time.monotonic() < loop_deadline:
             rounds += 1
-            msg = await _call(messages, with_tools=True)
+            msg = await _call(messages, with_tools=True, timeout_s=loop_deadline - time.monotonic())
             if msg is None:
                 result = "error"
                 break
@@ -646,6 +715,9 @@ async def investigate(
                 result = "ok" if report.strip() else "error"
                 break
             kept = calls[:MAX_CALLS_PER_ROUND]
+            for i, call in enumerate(kept):
+                if isinstance(call, dict) and not call.get("id"):
+                    call["id"] = f"call_{rounds}_{i}"
             for _extra in calls[MAX_CALLS_PER_ROUND:]:
                 SELF_INVESTIGATOR_TOOL_CALLS_TOTAL.labels(tool="unknown", result="capped").inc()
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": kept})
@@ -687,7 +759,9 @@ async def investigate(
                     "required format, using only what you have found. No more tool calls.",
                 }
             )
-            msg = await _call(messages, with_tools=False)
+            msg = await _call(
+                messages, with_tools=False, timeout_s=max(MIN_ROUND_TIMEOUT_S, hard_deadline - time.monotonic())
+            )
             report = (msg or {}).get("content") or None
             if not report:
                 result = "error"

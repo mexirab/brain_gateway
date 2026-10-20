@@ -41,12 +41,13 @@ router = APIRouter()
 # Alerts worth an investigation: Helios/brain health and Jess-health signals
 # the investigator can actually look into from logs + code. Paging "box is
 # down" alerts (OrchestratorDown, NodeDown, backups) are left out on purpose.
+#
+# Not BrainOnCPU / BrainCudaInitFailed / HeliosGpuDriverBroken: the brain is
+# on CPU (~6 tok/s) or about to be, so an investigation would only time out
+# while occupying the degraded slot. Those need a human (usually a reboot).
 ALERT_TRIGGERS = frozenset(
     {
         "HeliosHardwareFault",
-        "BrainOnCPU",
-        "BrainCudaInitFailed",
-        "HeliosGpuDriverBroken",
         "ChatStreamTruncating",
         "EmptyRepliesReachingUsers",
         "ToolCallsSilentlyDropped",
@@ -88,12 +89,21 @@ def _capped_map(value: Any) -> dict[str, str]:
 
 def _result(result: str, status: int, **extra: Any) -> JSONResponse:
     SELF_AUDIT_ALERT_TRIGGER_TOTAL.labels(result=result).inc()
-    return JSONResponse({"result": result, **extra}, status_code=status)
+    return JSONResponse({"ok": status < 400, "result": result, **extra}, status_code=status)
 
 
 @router.post("/api/self_audit/alert", response_model=None)
-async def self_audit_alert(request: Request):
-    """Alertmanager webhook -> background read-only investigation."""
+async def self_audit_alert(request: Request) -> JSONResponse:
+    """Alertmanager webhook -> background read-only investigation.
+
+    The body is parsed by hand rather than with a Pydantic model on purpose:
+    it's an untrusted, loosely-shaped payload, and every field we keep is
+    capped explicitly below.
+
+    Known narrow race: if the cron takes the audit lock between the busy check
+    and the task start, the task returns "busy" after the cooldown was spent.
+    Alertmanager's 4 h repeat retries it later.
+    """
     if not (settings.self_audit_enabled and settings.jess_advanced and settings.self_audit_investigate):
         return _result("disabled", 409)
 
