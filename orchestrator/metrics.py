@@ -1014,7 +1014,9 @@ PROGRESS_STREAK_MILESTONES = Counter(
 VISION_REQUEST_COUNT = Counter(
     "bgw_vision_requests_total",
     "Vision model analysis requests",
-    ["status"],  # success, error, disabled
+    # success | empty | timeout | connect_error | http_error | error | disabled | skipped_unreachable
+    # | rejected_mime | rejected_empty | rejected_corrupt | rejected_size
+    ["status"],
 )
 
 VISION_REQUEST_LATENCY = Histogram(
