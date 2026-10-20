@@ -780,17 +780,21 @@ groups:
       # standby-level watts (genuinely asleep). Fires when:
       #   * no ok read in 10 min — poll disabled, HA down, orchestrator down
       #     (unless: a missing counter series still fires);
-      #   * running == 0 but the watts gauge >= 30 — the power sensor or the
-      #     switch went unavailable, so the gauge is frozen at its last value;
+      #   * running == 0 but the watts gauge >= 30 — the switch reads
+      #     unavailable while the power sensor still reports a draw;
       #   * 30-60 W while unreachable (stuck in POST?) — "running" to
       #     helios_power but below the paging threshold. 10 days of history
       #     never read in that band (running: >= 121 W, off: <= 3 W).
-      # Blind spot: the watts gauge defaults to 0 and is only set when the
-      # sensor parses, and a switch reading "unavailable" maps to "asleep".
-      # So after an orchestrator restart, with the plug or its power sensor
-      # unavailable since, a hung Helios looks asleep and NEITHER alert fires
-      # (seen briefly 2026-10-17 04:02 after a host reboot). Closing it needs
-      # helios_power to export NaN / "unknown" for unreadable plug state.
+      #   * the power sensor or switch reads unavailable/unknown — helios_power
+      #     exports the watts gauge as NaN (also its value before the first
+      #     read after a restart) and inferred="unknown" (running == 0). NaN
+      #     fails both `< 30` and `> 60`, so an unreadable plug lands here
+      #     instead of making a hung Helios look asleep (the 2026-10-17 04:02
+      #     post-reboot blind spot). A switch reading "off" exports 0 W even
+      #     with the sensor unavailable — an open relay can't power a hung box.
+      # Remaining gap: a power sensor stuck at a stale standby number while the
+      # box is actually up and hung — HA marks offline plugs unavailable, so
+      # this needs a misbehaving integration, not just an offline plug.
       # Quiet + 24h repeat: it means "the outage detector is blind", a
       # config/HA fix, not a dead box.
       - alert: HeliosUnreachablePlugBlind

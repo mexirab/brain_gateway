@@ -2913,7 +2913,19 @@
               }
             ]
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "unreadable",
+                  "color": "orange",
+                  "index": 0
+                }
+              }
+            }
+          ],
           "color": {
             "mode": "thresholds"
           }
@@ -2934,6 +2946,7 @@
           "values": false
         }
       },
+      "description": "Smart-plug draw from HA. 'unreadable' = the power sensor is unavailable, so asleep vs hung can't be told apart (HeliosUnreachablePlugBlind covers it).",
       "gridPos": {
         "h": 8,
         "w": 6,

@@ -17,6 +17,7 @@ as test_pushover_bridge). Mocks HTTP via respx so no real HA calls leak.
 from __future__ import annotations
 
 import json
+import math
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -463,7 +464,8 @@ class TestPollHeliosPower:
         """Freshness guard: switch ON but sensor 'unavailable' must NOT leave running=1.
 
         The alert on bgw_helios_running relies on this; a stale 1 would mask a
-        dead power sensor. The watts gauge keeps its last value (no reading).
+        dead power sensor. The watts gauge goes NaN, not its last value, so the
+        alerts can't read a stale number as "running" or "asleep".
         """
         from orchestrator.helios_power import poll_helios_power
         from orchestrator.metrics import HELIOS_PLUG_WATTS, HELIOS_RUNNING
@@ -480,7 +482,7 @@ class TestPollHeliosPower:
         assert result["watts"] is None
         assert result["inferred"] == "unknown"
         assert HELIOS_RUNNING._value.get() == 0
-        assert HELIOS_PLUG_WATTS._value.get() == 210  # not overwritten by a non-reading
+        assert math.isnan(HELIOS_PLUG_WATTS._value.get())
 
     @pytest.mark.asyncio
     async def test_running_drops_to_zero_when_switch_unavailable(self, monitor_only):
@@ -493,8 +495,152 @@ class TestPollHeliosPower:
         with respx.mock(base_url=_HA_URL) as mock:
             _mock_states(mock, "unavailable", "unavailable")
             result = await poll_helios_power()
-        assert result["inferred"] == "asleep"
+        # Unavailable is not "off": the plug can't say whether Helios sleeps.
+        assert result["inferred"] == "unknown"
         assert HELIOS_RUNNING._value.get() == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("switch", ["unavailable", "unknown", ""])
+    async def test_unreadable_switch_is_unknown_even_with_low_watts(self, monitor_only, switch):
+        from orchestrator.helios_power import poll_helios_power
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, switch, "2.0")
+            result = await poll_helios_power()
+        assert result["inferred"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_switch_off_still_asleep(self, monitor_only):
+        from orchestrator.helios_power import poll_helios_power
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "off", "unavailable")
+            result = await poll_helios_power()
+        assert result["inferred"] == "asleep"
+        # An open relay draws 0 W — keep HeliosUnreachablePlugBlind quiet.
+        from orchestrator.metrics import HELIOS_PLUG_WATTS
+
+        assert HELIOS_PLUG_WATTS._value.get() == 0.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["unavailable", "unknown", "", "n/a", None, "nan", "inf", "-inf"])
+    async def test_watts_gauge_nan_when_sensor_unreadable(self, monitor_only, raw):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "150")
+            await poll_helios_power()
+        assert HELIOS_PLUG_WATTS._value.get() == 150
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", raw)
+            result = await poll_helios_power()
+        assert result["watts"] is None
+        assert math.isnan(HELIOS_PLUG_WATTS._value.get())
+
+    @pytest.mark.asyncio
+    async def test_watts_gauge_recovers_from_nan(self, monitor_only):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "unavailable")
+            await poll_helios_power()
+        assert math.isnan(HELIOS_PLUG_WATTS._value.get())
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "off", "1.5")
+            await poll_helios_power()
+        assert HELIOS_PLUG_WATTS._value.get() == 1.5
+
+    @pytest.mark.asyncio
+    async def test_ha_request_error_leaves_watts_gauge_untouched(self, monitor_only):
+        """A failed HA request is covered by the status_total{ok} freshness check."""
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "150")
+            await poll_helios_power()
+        with respx.mock(base_url=_HA_URL) as mock:
+            mock.get(f"/api/states/{_SWITCH}").mock(side_effect=httpx.ConnectError("boom"))
+            result = await poll_helios_power()
+        assert result["ok"] is False
+        assert HELIOS_PLUG_WATTS._value.get() == 150
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["inf", "1e400"])
+    async def test_infinite_watts_never_reads_as_running(self, monitor_only, raw):
+        """float('inf') >= threshold — it must be dropped before the running check."""
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_RUNNING
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", "150")
+            await poll_helios_power()
+        assert HELIOS_RUNNING._value.get() == 1
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "on", raw)
+            result = await poll_helios_power()
+        assert result["inferred"] == "unknown"
+        assert HELIOS_RUNNING._value.get() == 0
+
+    @pytest.mark.asyncio
+    async def test_both_unreadable_exports_nan_not_zero(self, monitor_only):
+        """Only a definite "off" earns the 0 W shortcut; an unavailable switch must not."""
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "unavailable", "unavailable")
+            await poll_helios_power()
+        assert math.isnan(HELIOS_PLUG_WATTS._value.get())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["nan", "inf", "garbage"])
+    async def test_switch_off_with_nonfinite_sensor_exports_zero(self, monitor_only, raw):
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "off", raw)
+            result = await poll_helios_power()
+        assert result["inferred"] == "asleep"
+        assert HELIOS_PLUG_WATTS._value.get() == 0.0
+
+    @pytest.mark.asyncio
+    async def test_unavailable_switch_with_live_draw_keeps_watts(self, monitor_only):
+        """The "running == 0 but watts >= 30" alert branch needs the real reading."""
+        from orchestrator.helios_power import poll_helios_power
+        from orchestrator.metrics import HELIOS_PLUG_WATTS, HELIOS_RUNNING
+
+        with respx.mock(base_url=_HA_URL) as mock:
+            _mock_states(mock, "unavailable", "180.5")
+            result = await poll_helios_power()
+        assert result["inferred"] == "unknown"
+        assert HELIOS_RUNNING._value.get() == 0
+        assert HELIOS_PLUG_WATTS._value.get() == 180.5
+
+
+def test_watts_gauge_starts_as_nan_in_a_fresh_process():
+    """A fresh orchestrator must not export 0 W (read by the alerts as asleep)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from prometheus_client import generate_latest; import orchestrator.metrics; "
+            "print(generate_latest().decode())",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert "\nbgw_helios_plug_watts NaN\n" in out.stdout
 
 
 class TestMonitorOnlyKeepsUserSurfaceGated:

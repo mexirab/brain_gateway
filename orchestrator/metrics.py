@@ -629,10 +629,13 @@ HELIOS_PLUG_WATTS = Gauge(
     "bgw_helios_plug_watts",
     # Refreshed by the helios_status_poll scheduler job (every 60s when
     # HELIOS_WAKE_ENABLED or HELIOS_PLUG_MONITOR_ENABLED) plus any on-demand
-    # /api/helios/power read; only set
-    # when watts parses, so it never reports a misleading 0 on a failed read.
-    "Last-known Helios smart-plug power draw in watts (from HA sensor)",
+    # /api/helios/power read. NaN when the power sensor is unavailable/unparseable
+    # and before the first read, so it never reports a misleading 0 W (which the
+    # Helios alerts would read as "asleep"). A failed HA request leaves it as-is;
+    # the alerts catch that via bgw_helios_status_total{result="ok"} going flat.
+    "Helios smart-plug power draw in watts (from HA sensor); NaN when unreadable",
 )
+HELIOS_PLUG_WATTS.set(float("nan"))
 
 EMBEDDING_HEALTHY = Gauge(
     "bgw_embedding_healthy",
