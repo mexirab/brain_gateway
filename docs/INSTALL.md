@@ -213,8 +213,7 @@ docker compose up -d
 
 This pulls + starts the **default** profile:
 - `brain-orchestrator` — FastAPI app, port 8888
-- `brain-frontend` — Next.js dashboard, port 3001
-- `open-webui` — chat UI, port 80/443
+- `brain-frontend` — Next.js dashboard + chat UI (`/chat`), port 3001
 - `redis`, `chromadb`, `searxng`, `wyoming-whisper`, `wyoming-jessica-tts`
 
 It does **not** start (these are opt-in):

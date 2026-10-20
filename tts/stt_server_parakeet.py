@@ -2,7 +2,7 @@
 Parakeet STT FastAPI Server for Brain Gateway
 ==============================================
 Drop-in replacement for stt_server.py (Whisper) using NVIDIA Parakeet TDT V3
-via NeMo. Preserves the same API surface so Open WebUI's OpenAI STT client and
+via NeMo. Preserves the same API surface so the orchestrator's STT proxy and
 the Wyoming bridge keep working unchanged.
 
 Endpoints (identical to the Whisper server):

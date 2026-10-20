@@ -7,7 +7,7 @@ This is the contributor / hacker doc. End users installing Brain Gateway should 
 ## Architecture in 30 seconds
 
 ```
-User → Open WebUI (or any OpenAI client) → Orchestrator → Unified agentic loop
+User → Dashboard /chat (or any OpenAI client) → Orchestrator → Unified agentic loop
                                                                 │
                                                                 ├─► Primary LLM (vLLM, Qwen3.6-27B INT4)
                                                                 ├─► ChromaDB (mempalace memory)

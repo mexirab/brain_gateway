@@ -24,7 +24,7 @@ scrape_configs:
       # Do NOT add loki-push-gw: its error log echoes attacker-chosen request
       # URIs from any LAN host, and these lines reach the self-audit LLM.
       - source_labels: ['__meta_docker_container_name']
-        regex: '/(brain-.*|open-webui.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
+        regex: '/(brain-.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
         action: keep
 
       # Extract container name as label

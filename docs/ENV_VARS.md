@@ -23,7 +23,7 @@ These keys are written by `install.sh` Stage 2 onto a fresh box. Hand-installs (
 | `JESS_ADVANCED` | `false` | Master gate for owner-specific surface cut from the default shippable build. Two effects: (1) exposes 5 advanced tools to the LLM — `code_agent`, `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity` — via `tool_definitions.get_all_tools()` filtering; (2) registers two background jobs in `orchestrator.py` startup — the F-014 self-audit (additionally gated by `SELF_AUDIT_ENABLED`) and the nightly training-corpus drain (privacy hazard for fresh installs — collects user conversations). Handlers / job functions stay imported, just unregistered when off. Flip to `true` in `.env` for the development stack. |
 | `WORKOUTS_ENABLED` | `false` | Gates the optional **Workouts** feature (adaptive gym plan generation + set logging). Off by default in the shippable build. When `true`: exposes the `generate_workout` / `workout_setup` / `log_set` / `workout_status` / `modify_workout` tools to the LLM (`tool_definitions.get_all_tools()`), mounts the `/api/workouts/*` routes (`api_routes.py`), and surfaces the dashboard Workouts page/nav + the Settings → Workouts tab. Off → tools hidden, routes 404, handlers early-return. Core `selfcare_log` (incl. movement) is independent and stays on. The exercises catalog still seeds at startup (upsert) so the feature is instant-on when flipped. After changing it: `docker compose up -d --force-recreate orchestrator`. See `docs/WORKOUTS_AND_MEALS.md`. |
 | `MEALS_ENABLED` | `false` | Gates the optional **Meals** feature (calorie/photo meal logging — `log_meal` tool + `/api/meals/*` routes). Off by default; same gating shape as `WORKOUTS_ENABLED`. NOTE: core self-care meal tracking via `selfcare_log` is unaffected and stays on regardless — this only gates the calorie-tracking surface. |
-| `COMPOSE_PROFILES` | _empty_ | Native Docker Compose profile selector. Comma-separated for multiple profiles. Two valid values: `advanced` brings up the operator/owner-specific services — `nebula-sync` (Pi-hole multi-instance config sync), `nut-exporter` (UPS metrics, requires NUT on host); `models` brings up the model layer — `vllm-primary` + `qwen-tts` + `parakeet-stt` (see Model layer below). Default-empty leaves only the core stack: orchestrator + open-webui + redis + searxng + frontend + the two wyoming bridges. Independent of `JESS_ADVANCED` — that gates application-level features; this gates compose-service startup. |
+| `COMPOSE_PROFILES` | _empty_ | Native Docker Compose profile selector. Comma-separated for multiple profiles. Two valid values: `advanced` brings up the operator/owner-specific services — `nebula-sync` (Pi-hole multi-instance config sync), `nut-exporter` (UPS metrics, requires NUT on host); `models` brings up the model layer — `vllm-primary` + `qwen-tts` + `parakeet-stt` (see Model layer below). Default-empty leaves only the core stack: orchestrator + redis + searxng + frontend + the two wyoming bridges. Independent of `JESS_ADVANCED` — that gates application-level features; this gates compose-service startup. |
 
 ## Setup wizard overrides file
 
@@ -275,7 +275,7 @@ Morning briefing includes weather forecast from the National Weather Service API
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `WEBUI_URL` | (empty) | Deep link URL for notifications (opens Open WebUI on tap) |
+| `WEBUI_URL` | (empty) | URL an HA Companion push opens on tap (e.g. the dashboard). Empty = no tap action |
 
 ## Brain Gateway Core
 
@@ -358,7 +358,6 @@ Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](h
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `TRAINING_CORPUS_DIR` | `/app/data/training_corpus` | Output dir for monthly `YYYY-MM.jsonl` archives. Append-only. |
-| `TRAINING_CORPUS_OWUI_DB` | `/app/owui_data/webui.db` | Open WebUI sqlite db read read-only via `open-webui-data:/app/owui_data:ro` mount. Normally absent on the live deployment (OWUI stopped) — logged "skipped" once per process. |
 | `TRAINING_CORPUS_STATE_DB` | `/app/data/brain_state.db` | state_store sqlite db; drains `chat_messages`. |
 | `TRAINING_CORPUS_CC_DIR` | (empty) | Claude Code session jsonls; user-turn extraction only. Empty = `$CLAUDE_PROJECTS_PATH/-home-labadmin-gateway-nerves` (fallback `/home/jess/.claude/projects/...`). The slug is the live checkout's path — set this explicitly for any other install path. Worktree session dirs (`…--claude-worktrees-*`) are not drained. |
 

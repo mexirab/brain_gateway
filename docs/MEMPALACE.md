@@ -80,7 +80,7 @@ Background fact extraction from chats (`orchestrator/auto_learn.py`; scheduling 
 |---|---|
 | Granularity | ONE extraction per conversation: APScheduler date job `auto_learn_<16hex>`, re-armed (`replace_existing`) every turn, fires `AUTO_LEARN_DELAY_MINUTES` after the last turn |
 | Key (with `conversation_id`) | Request field on `/v1/chat/completions` (dashboard `dashboard:<uuid>`, Telegram `telegram:<chat_id>:<start ts>`). Rolling windows (Telegram sends the last N messages) are merged onto the cached history by overlap, capped at 200 messages; no overlap (edited history) → replace |
-| Key (fallback) | Clients without an id (HA Assist, OWUI): first user message (`[Image N Analysis]` text stripped) + date. A turn that doesn't prefix-continue the cached conversation flushes the cached one to its own job |
+| Key (fallback) | Clients without an id (HA Assist): first user message (`[Image N Analysis]` text stripped) + date. A turn that doesn't prefix-continue the cached conversation flushes the cached one to its own job |
 | Streaming | Schedules the client transcript, not the loop-mutated message list |
 | Cache | In-RAM, 20 conversations; overflow evicts (counted) |
 | Model asleep | Model unreachable at fire time → re-queue every 30 min, up to 16 attempts (~7.5 h), then drop |

@@ -38,10 +38,9 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 ## TTS Pacing
 
-Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002) is the rollback TTS; the live orchestrator voice is VoxCPM2 on :8004 (see VoxCPM2 TTS server below). The pacing notes here are Qwen-specific. The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Two pacing controls:
+Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002) is the rollback TTS; the live orchestrator voice is VoxCPM2 on :8004 (see VoxCPM2 TTS server below). The pacing notes here are Qwen-specific. The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Pacing control:
 
-1. **Open WebUI split:** `AUDIO_TTS_SPLIT_ON=paragraph` — splits on `\n\n` for balanced chunks
-2. **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery
+- **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery
 
 ```bash
 # Restart TTS after pacing changes
@@ -196,7 +195,7 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 
 ## Hands-free call mode
 
-Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers aloud, she listens again. Builds on Dashboard chat voice replies above.
+Continuous voice conversation in `/chat`: speak, Jess answers aloud, she listens again. Builds on Dashboard chat voice replies above.
 
 **Start:** the AudioLines button next to the mic — one tap creates the `AudioContext` inside the tap (iOS), opens the mic with `echoCancellation`/`noiseSuppression`/`autoGainControl`, and takes a screen wake lock. `components/chat/VoiceCallBar.tsx` replaces the input while in a call (phase label, Interrupt, End; focus moves to End, and back to the call button afterwards).
 
@@ -231,7 +230,7 @@ Open-WebUI-style continuous voice conversation in `/chat`: speak, Jess answers a
 - Energy VAD can't tell the user from other people: anything transcribed is sent as the user's message. Steady TV-like noise is discarded; conversation in the room is not.
 - Interrupt waits for the text stream to finish before listening again.
 - A full-budget (1200-char) reply runs ~75–90 s of speech; Interrupt is a tap, not barge-in. Voice turns are normally short (the orchestrator adds a conciseness hint for voice).
-- The OWUI-only `/v1/audio/transcriptions` route still returns an unhandled 500 on STT failure.
+- The OpenAI-compatible `/v1/audio/transcriptions` route (not used by `/chat`) still returns an unhandled 500 on STT failure.
 
 ## Reminder Voice Retry
 
@@ -248,7 +247,7 @@ A failed re-arm does not strand the reminder `pending`: speakers are dropped if 
 
 ## HTTP STT Server (port 8003)
 
-Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT used by Open WebUI's browser mic and any orchestrator-side transcription via `STT_URL=http://host.docker.internal:8003`.
+Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT behind the orchestrator's `/api/stt/transcribe` + `/v1/audio/transcriptions` routes and any orchestrator-side transcription via `STT_URL=http://host.docker.internal:8003`.
 
 **Live engine:** `stt-onnx.service` — NVIDIA Parakeet TDT 0.6b **v2**, int8, ONNX Runtime on **CPU**. Same port and same endpoints (`/health`, `/transcribe`, `/v1/audio/transcriptions`). Source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service` (deployed on Helios as `/home/labadmin/stt_server_onnx.py`).
 

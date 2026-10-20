@@ -6,7 +6,6 @@ appends new records to an append-only monthly JSONL at
 ``<training_corpus_dir>/YYYY-MM.jsonl``.
 
 Sources:
-  - Open WebUI sqlite db (``training_corpus_owui_db``)
   - state_store ``chat_messages`` (``training_corpus_state_db``)
   - Claude Code session jsonls (``training_corpus_cc_dir``)
 
@@ -15,9 +14,11 @@ Design:
   - Content-addressed dedup: sha1(source|session|role|whitespace-normalized
     text). Safe to re-run any time, safe across backfills and schema churn.
   - One file per month so old data stays readable but the hot file is small.
-  - Graceful: a missing source is skipped, logged once per process at INFO
-    (Open WebUI is stopped on the live deployment, so its db is normally
-    absent — a nightly WARNING would just be self-audit noise).
+  - Graceful: a missing source is skipped, logged once per process (INFO
+    for the optional Claude Code dir — a nightly WARNING would just be
+    self-audit noise; WARNING for brain_state.db).
+  - Open WebUI was a source until it was retired (2026-10-18); its records
+    already in the corpus keep ``source="owui"``.
   - Secret-aware: records matching any secret/ciphertext pattern are dropped
     before they hit disk. Partial redaction is NOT done — adjacent context
     can re-identify a leaked secret, so we drop the whole record.
@@ -50,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 MIN_LEN = 2
 MAX_RECORD_CHARS = 50_000  # drop any single turn >50 KB
-MAX_JSON_BLOB_BYTES = 5_000_000  # per-row blob ceiling for sqlite reads
 MAX_CC_LINE_BYTES = 2_000_000  # per-line ceiling for jsonl reads
 OVERSIZE_RUN_WARN = 10_000  # nightly-drain new-records anomaly threshold
 SQLITE_READ_TIMEOUT_SEC = 30
@@ -108,7 +108,7 @@ SECRET_PATTERNS = (
 class Record:
     id: str
     ts: str  # ISO8601, best-effort — sources without timestamps use drain time
-    source: str  # "owui" | "state_store" | "cc_session"
+    source: str  # "state_store" | "cc_session" (legacy records: "owui")
     session_id: str
     role: str  # "user" | "assistant"
     text: str
@@ -162,10 +162,9 @@ def _parse_ts(value: Any) -> str:
 def _open_sqlite_ro(db_path: Path) -> sqlite3.Connection:
     """Open a sqlite file strictly read-only, WAL-friendly, with a timeout.
 
-    Using the URI form with ``mode=ro`` lets us safely mount the OWUI
-    database (which may be in WAL mode and written-to by another container)
-    without risking a write-lock upgrade or an error-on-open when the
-    filesystem mount is ``:ro``.
+    Using the URI form with ``mode=ro`` lets us read brain_state.db (WAL
+    mode, written by the live orchestrator) without risking a write-lock
+    upgrade.
     """
     conn = sqlite3.connect(
         f"file:{db_path}?mode=ro",
@@ -179,7 +178,7 @@ def _open_sqlite_ro(db_path: Path) -> sqlite3.Connection:
 def _skip_missing(source: str, path: Path) -> None:
     """Log a missing source once per process; later runs stay quiet.
 
-    OWUI + Claude Code dirs are optional (INFO). brain_state.db is always
+    The Claude Code dir is optional (INFO). brain_state.db is always
     expected on a real deployment, so its absence is a WARNING (still once).
     """
     key = f"{source}:{path}"
@@ -208,58 +207,6 @@ def default_cc_dir() -> Path:
 # ---------------------------------------------------------------------------
 # Source extractors — each yields Record objects
 # ---------------------------------------------------------------------------
-
-
-def drain_owui(db_path: Path) -> Iterator[Record]:
-    """Extract user + assistant turns from every OWUI conversation."""
-    if not db_path.exists():
-        _skip_missing("owui", db_path)
-        return
-    _source_present("owui", db_path)
-    try:
-        with closing(_open_sqlite_ro(db_path)) as conn:
-            # Stream row-by-row; OWUI chat blobs can be multi-MB per row.
-            for chat_id, blob in conn.execute("SELECT id, chat FROM chat"):
-                if isinstance(blob, (str, bytes)) and len(blob) > MAX_JSON_BLOB_BYTES:
-                    logger.warning(
-                        "[training_corpus] owui row %s oversized (%d bytes) — skipping",
-                        chat_id,
-                        len(blob),
-                    )
-                    continue
-                try:
-                    doc = json.loads(blob) if isinstance(blob, (str, bytes)) else {}
-                except (TypeError, json.JSONDecodeError):
-                    continue
-
-                messages: list = doc.get("messages") or []
-                if not messages and isinstance(doc.get("history"), dict):
-                    messages = list(doc["history"].get("messages", {}).values())
-
-                for msg in messages:
-                    if not isinstance(msg, dict):
-                        continue
-                    role = msg.get("role")
-                    if role not in {"user", "assistant"}:
-                        continue
-                    content = msg.get("content")
-                    if isinstance(content, list):
-                        content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
-                    if not _accept(content):
-                        continue
-                    text = content.strip()
-                    ts = _parse_ts(msg.get("timestamp"))
-                    session_id = f"owui:{chat_id}"
-                    yield Record(
-                        id=_fingerprint("owui", session_id, role, text),
-                        ts=ts,
-                        source="owui",
-                        session_id=session_id,
-                        role=role,
-                        text=text,
-                    )
-    except sqlite3.Error as e:
-        logger.warning("[training_corpus] owui read failed (%s): %s", db_path, e)
 
 
 def drain_state_store(db_path: Path) -> Iterator[Record]:
@@ -395,24 +342,20 @@ def _load_existing_ids(out_dir: Path) -> set[str]:
 
 
 def _iter_all_sources(
-    owui_db: Path,
     state_db: Path,
     cc_dir: Path,
 ) -> Iterable[Record]:
-    yield from drain_owui(owui_db)
     yield from drain_state_store(state_db)
     yield from drain_cc_sessions(cc_dir)
 
 
 def run_drain(
     out_dir: Path | None = None,
-    owui_db: Path | None = None,
     state_db: Path | None = None,
     cc_dir: Path | None = None,
 ) -> dict[str, int]:
     """Synchronous drain. Returns per-source new-record counts."""
     out_dir = out_dir or Path(settings.training_corpus_dir)
-    owui_db = owui_db or Path(settings.training_corpus_owui_db)
     state_db = state_db or Path(settings.training_corpus_state_db)
     cc_dir = cc_dir or default_cc_dir()
 
@@ -420,7 +363,7 @@ def run_drain(
     existing = _load_existing_ids(out_dir)
     target = _monthly_file(out_dir)
 
-    counts: dict[str, int] = {"owui": 0, "state_store": 0, "cc_session": 0}
+    counts: dict[str, int] = {"state_store": 0, "cc_session": 0}
     new_ids_this_run: set[str] = set()
 
     # buffering=1 gives line-buffered writes so a crash mid-run preserves
@@ -428,7 +371,7 @@ def run_drain(
     # archive that will never be recovered from source state once the source
     # sqlite / jsonl is rotated.
     with target.open("a", encoding="utf-8", buffering=1) as f:
-        for rec in _iter_all_sources(owui_db, state_db, cc_dir):
+        for rec in _iter_all_sources(state_db, cc_dir):
             if rec.id in existing or rec.id in new_ids_this_run:
                 continue
             new_ids_this_run.add(rec.id)
@@ -439,9 +382,8 @@ def run_drain(
     total = sum(counts.values())
     # log-safe: output file name (YYYY-MM.jsonl)
     logger.info(
-        "[training_corpus] drain complete: %d new records (owui=%d state_store=%d cc=%d) → %s",
+        "[training_corpus] drain complete: %d new records (state_store=%d cc=%d) → %s",
         total,
-        counts["owui"],
         counts["state_store"],
         counts["cc_session"],
         target.name,

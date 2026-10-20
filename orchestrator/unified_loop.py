@@ -547,7 +547,8 @@ def _last_user_text(messages: list) -> str:
                 if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
             ).strip()
         if isinstance(content, str):
-            # Skip Open WebUI auto-generated prompts (tags, follow-ups, titles)
+            # Skip chat-UI auto-generated prompts (tags, follow-ups, titles —
+            # the "### Task:" format Open WebUI used before it was retired)
             if content.startswith("### Task:"):
                 continue
             return _IMAGE_ANALYSIS_RE.sub("", content).strip()

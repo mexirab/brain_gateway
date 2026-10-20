@@ -229,23 +229,9 @@ A shell script (`scripts/morning_briefing.sh`) handles morning briefings:
 /opt/gateway_mvp/scripts/morning_briefing.sh
 ```
 
-### Open WebUI Integration
+### OpenAI-compatible clients
 
-Configure Open WebUI to use TTS/STT in `docker-compose.yml`:
-
-```yaml
-environment:
-  # TTS
-  - AUDIO_TTS_ENGINE=openai
-  - AUDIO_TTS_OPENAI_API_BASE_URL=http://10.0.0.195:8002/v1
-  - AUDIO_TTS_OPENAI_API_KEY=local
-  - AUDIO_TTS_VOICE=default
-  # STT
-  - AUDIO_STT_ENGINE=openai
-  - AUDIO_STT_OPENAI_API_BASE_URL=http://10.0.0.195:8003/v1
-  - AUDIO_STT_OPENAI_API_KEY=local
-  - AUDIO_STT_MODEL=whisper-1
-```
+The dashboard `/chat` uses the orchestrator's `/api/tts/synthesize` + `/api/stt/transcribe`. Other OpenAI-style clients can use the orchestrator's bearer-gated `/v1/audio/speech` + `/v1/audio/transcriptions` (proxied to `TTS_URL` / `STT_URL`). Open WebUI was retired 2026-10-18.
 
 ## Troubleshooting
 

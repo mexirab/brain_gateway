@@ -409,7 +409,7 @@ async def chat_completions(req: Request):
     # --- Voice-mode detection ---
     # Two signals, both set is_voice=True:
     #   1) HA Assist pipeline — identified by client IP or "You are 'Al'" prefix
-    #   2) OWUI mic — our /v1/audio/transcriptions proxy sets a consume-on-read
+    #   2) OpenAI-style STT client — our /v1/audio/transcriptions proxy sets a consume-on-read
     #      flag; the next chat request within VOICE_FLAG_WINDOW_SEC is voice.
     is_voice = False
     client_ip = req.client.host if req.client else ""
@@ -446,7 +446,7 @@ async def chat_completions(req: Request):
         body["messages"] = [{"role": "user", "content": user_text}]
     elif shared.consume_voice_flag():
         is_voice = True
-        logger.info("[CHAT] Detected OWUI mic voice turn (STT beacon consumed)")
+        logger.info("[CHAT] Detected STT-proxy voice turn (beacon consumed)")
 
     # Update the sticky voice-activity timestamp (used by reminder_manager to
     # suppress announcements mid-conversation). Covers HA Assist too — its
@@ -1152,7 +1152,7 @@ async def _startup_logic():
         logger.info(f"[SCHEDULER] Self-audit daily at {shared.SELF_AUDIT_HOUR_UTC:02d}:00 {shared.TIMEZONE}")
 
     # Training corpus drain: nightly at 02:30 — appends new user/assistant
-    # turns from OWUI + state_store + Claude Code sessions to monthly JSONL
+    # turns from state_store + Claude Code sessions to monthly JSONL
     # files under /app/data/training_corpus/. Append-only, content-addressed
     # dedup, no retention cap. Backs future fine-tuning runs.
     # Gated by JESS_ADVANCED — collects user conversation data, privacy hazard

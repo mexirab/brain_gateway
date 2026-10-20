@@ -229,7 +229,7 @@ def build() -> dict:
     tts_desc = (
         "Successful TTS round-trips to the TTS server at TTS_URL on Helios (VoxCPM2 :8004 or Qwen3-TTS :8002), from the "
         "dashboard chat's /api/tts/synthesize (one call per spoken sentence) and "
-        "the /v1/audio/speech proxy (OWUI, stopped). Failures are NOT in this "
+        "the OpenAI-compatible /v1/audio/speech proxy. Failures are NOT in this "
         "histogram — see Dashboard TTS Outcomes. Excludes browser playback. Both "
         "paths prepend ~150ms of silence against first-word stutter (TTS_SILENCE_PAD_MS)."
     )
@@ -1546,7 +1546,7 @@ def build() -> dict:
     bg_desc = (
         "Nightly training-corpus drain: in-process counter only — records "
         "written by the out-of-process manual backfill are not counted here. "
-        "A flat-zero series on days you used Jess via OWUI / voice means the "
+        "A flat-zero series on days you used Jess via the dashboard / voice means the "
         "drain broke; investigate via the logs row."
     )
     background_row = [

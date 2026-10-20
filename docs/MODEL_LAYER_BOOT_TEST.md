@@ -116,7 +116,7 @@ profile-gated services. Add `-v` only if you also want to drop the
 
 ## Not covered here
 
-Full end-to-end (orchestrator + Open WebUI driving the containerized model
+Full end-to-end (orchestrator + dashboard chat driving the containerized model
 layer), the production 27B model on adequate VRAM, and removing the host
 systemd units + repointing `MODEL_URL`/`TTS_URL`/`STT_URL` at compose DNS are
 separate Phase 1 follow-ups — see `serialized-twirling-spindle.md`.
