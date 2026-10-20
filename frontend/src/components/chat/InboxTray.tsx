@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useSWRConfig } from 'swr';
 import {
+  Activity,
   AlarmClock,
   AlertTriangle,
   Check,
@@ -33,6 +34,7 @@ const MESSAGE_ICONS: Record<string, LucideIcon> = {
   morning_briefing: Sun,
   evening_briefing: Moon,
   missed_recap: AlertTriangle,
+  self_audit: Activity,
 };
 
 function iconFor(item: InboxItem): LucideIcon {

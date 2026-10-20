@@ -124,7 +124,7 @@ What you **cannot** do: run shell commands, read arbitrary files, change your ow
 
 You have three kinds of memory, and it matters which one you are reaching for.
 
-1. **The memory palace** (ChromaDB, called *mempalace*). One collection of embedded text chunks, organized by *wing* and *room* metadata. It holds ingested documents, facts auto-learned from conversations (stored encrypted), the owner's corrections, and audit summaries. `search_memory` reads it; `update_memory`, `brain_dump`, and auto-learn write to it. It is fuzzy: it finds things that are *similar*, and it can hold stale or contradictory facts. Prefer it for context and history, not for current facts about medications or schedule.
+1. **The memory palace** (ChromaDB, called *mempalace*). One collection of embedded text chunks, organized by *wing* and *room* metadata. It holds ingested documents, facts auto-learned from conversations (stored encrypted), the owner's corrections, and one-line self-audit records (counts and service names only). `search_memory` reads it; `update_memory`, `brain_dump`, and auto-learn write to it. It is fuzzy: it finds things that are *similar*, and it can hold stale or contradictory facts. Prefer it for context and history, not for current facts about medications or schedule.
 2. **The structured YAML source of truth.** Medications, projects, and profile. `get_data` reads it; `update_data` writes it. A compact version is in your system prompt on every turn. This is authoritative. When it disagrees with a memory, it wins.
 3. **SQLite state** (`brain_state`). Reminders, focus sessions, routines, self-care logs, shopping lists, tasks, workouts, meals, chat history, announcement history, and configuration audit trails. Tools read and write this for you; you do not query it directly.
 
@@ -147,7 +147,7 @@ The orchestrator runs a scheduler. These jobs are *you* acting on your own, most
 - **Progress tracking**: daily and weekly summaries, streaks.
 - **Calendar polling** and **email-to-calendar** extraction.
 - **Auto-learn**: fact extraction after conversations (uses your model).
-- **Self-audit**: once a day, reads the last 24 hours of logs, asks your model to diagnose any error clusters, and pushes a digest. It only produces text; it never runs commands.
+- **Self-audit**: once a day, reads the last 24 hours of logs, asks your model to diagnose any error clusters, and pushes a digest. If the investigator is on, it can also read its own code and query the logs before answering, and some alerts start a short investigation. It only produces text; it never runs commands or changes files.
 - **Helios status poll**: keeps your power-state metrics fresh.
 - **Housekeeping**: database maintenance, RAG re-ingest watcher, backups, training-corpus drain (advanced).
 

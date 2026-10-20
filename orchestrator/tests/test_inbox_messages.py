@@ -37,6 +37,15 @@ class TestAddMessageItem:
         assert item["kind"] == "message" and item["ref"] == "morning_briefing"
         assert inbox.list_pending()[0]["id"] == item["id"]
 
+    def test_self_audit_ref_accepted_and_superseded(self, tmp_db):
+        """The self-audit digest posts under ref "self_audit"; an unlisted ref
+        would silently drop the card. Each audit replaces the previous one."""
+        old = inbox.add_message_item("self_audit", "2 high")
+        new = inbox.add_message_item("self_audit", "All clean")
+        assert old is not None and new is not None
+        assert inbox.get_item(old["id"])["resolution"] == "superseded"
+        assert [i["id"] for i in inbox.list_pending()] == [new["id"]]
+
     @pytest.mark.parametrize("ref", ["", "reminder", "sneaky", "medication"])
     def test_unknown_ref_ignored(self, tmp_db, ref):
         assert inbox.add_message_item(ref, "text") is None
@@ -125,6 +134,7 @@ async def _drain():
         ("morning_briefing", "Morning briefing ready"),
         ("evening_briefing", "Evening wrap-up ready"),
         ("missed_recap", "Some reminders didn't reach you"),
+        ("self_audit", "Jess system check ready"),
         ("unknown_ref", "Message from Jess"),
     ],
 )

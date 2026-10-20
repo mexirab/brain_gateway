@@ -47,6 +47,7 @@ from orchestrator.routes_meals import router as meals_router
 from orchestrator.routes_palace import router as palace_router
 from orchestrator.routes_pantry import router as pantry_router
 from orchestrator.routes_paperless import router as paperless_router
+from orchestrator.routes_self_audit import router as self_audit_router
 from orchestrator.routes_shopping import router as shopping_router
 from orchestrator.routes_tasks import router as tasks_router
 from orchestrator.routes_vision import router as vision_router
@@ -116,6 +117,7 @@ router.include_router(shopping_router)
 router.include_router(tasks_router)
 router.include_router(vision_router)
 router.include_router(palace_router)
+router.include_router(self_audit_router)
 # Optional feature areas — only mount when enabled (default OFF in the shippable
 # build). With the flag off the tool schemas are hidden too (tool_definitions),
 # so neither the model nor the dashboard can reach these routes.

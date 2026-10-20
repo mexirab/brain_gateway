@@ -446,7 +446,7 @@ Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_laten
 
 ## Self-audit (F-014)
 
-Daily 7am scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki for the last-24h error/warn logs across every service promtail ships (`{service=~".+", level=~"error|warning|warn|critical|fatal"}` — the orchestrator, the Jupiter stack, and Helios's model-unit + kernel journal when `promtail-helios` is deployed), asks Jess to diagnose each cluster (single `call_model` pass, no tool loop), saves a markdown report under `/app/data/self_audits/YYYY-MM-DD.md`, and pushes a one-line digest via Pushover. Read-only by design — Jess emits text only, the orchestrator never executes her output. Three-layer safety: allow-list filter on Jess's suggested shell commands, dangerous-pattern regex, secret-pattern filter on both disk report and mempalace summary. Concurrency lock prevents manual + cron collision. Loki-unreachable is distinguished from a clean week (upfront probe + explicit `result="failed"` digest, never a green "all clean" lie). Summary indexed into mempalace under wing=`system`, room=`audit`. Default-OFF. Alerting (`SelfAuditStale`, `SelfAuditFailing`): see `jess-features/F-014-self-audit.md` → Metrics.
+Daily 7am scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki for the last-24h error/warn logs, one query per source group (`orchestrator` / `jupiter_other` / `helios` / `ups`, each capped at `SELF_AUDIT_LOKI_LIMIT_PER_GROUP` lines, plus exact counts from a metric query; truncation is reported), clusters them, and has Jess diagnose them: a single no-tools `call_model` pass by default, or the read-only investigator (`orchestrator/self_investigator.py` — `list_dir`/`read_file`/`grep` over the read-only repo + `loki_query`) when `SELF_AUDIT_INVESTIGATE=true`. Saves a markdown report under `/app/data/self_audits/YYYY-MM-DD.md` (alert runs: `YYYY-MM-DD-HHMM-alert-<Name>.md`) and pushes a one-line digest to Pushover + the dashboard inbox. Read-only by design — the orchestrator never executes model output. Log text reaches the model defanged and framed as untrusted; suggested commands pass an allow-list + dangerous-pattern + secret filter. Mempalace gets a facts-only line built by code (never model prose). A failed source group makes the run `partial` and suppresses "All clean". Alertmanager can also start an investigation via `POST /api/self_audit/alert` (`TECHNICAL_REFERENCE.md` → Self-Audit). Default-OFF; needs `JESS_ADVANCED=true`. Alerting + metrics: `jess-features/F-014-self-audit.md`.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -457,7 +457,15 @@ Daily 7am scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki fo
 | `SELF_AUDIT_PROM_URL` | _empty (optional)_ | **Not read by any code yet** (reserved for a planned weekly review). Jupiter Prometheus is loopback-only, so a container would need a network path to it first. Removed from the live `.env`. |
 | `SELF_AUDIT_MAX_CLUSTERS` | `30` | Max number of `(service, first-80-chars-of-message)` clusters kept after frequency-bucketing before sending to Jess. |
 | `SELF_AUDIT_OUTPUT_DIR` | `/app/data/self_audits` | Directory for `YYYY-MM-DD.md` markdown reports. Host-mounted via the existing `/app/data` bind. |
-| `SELF_AUDIT_LLM_TIMEOUT_SEC` | `120` | Per-call timeout for the diagnose-each-cluster `call_model` invocation. |
+| `SELF_AUDIT_LLM_TIMEOUT_SEC` | `120` | Per-call timeout for the diagnose-each-cluster `call_model` invocation (no-investigator path). |
+| `SELF_AUDIT_LOKI_LIMIT_PER_GROUP` | `1500` | Lines sampled per Loki source group (clamped 50–5000). A group that hits it is reported as truncated (`bgw_self_audit_truncated_total{group}`); counts stay exact. |
+| `SELF_AUDIT_INVESTIGATE` | `false` | Turn on the read-only investigator (tool loop) for daily runs and enable `POST /api/self_audit/alert`. Needs Helios awake; never wakes it (asleep → deterministic digest). |
+| `SELF_AUDIT_REPO_PATH` | `/opt/gateway_mvp` | Read-only repo mount the investigator's file tools read, behind a path allow-list (`.env`, `data/`, `credentials/`, token files, rendered configs, `docs/internal/` denied). |
+| `SELF_AUDIT_INVESTIGATE_MAX_ROUNDS` | `12` | Max model rounds per daily investigation (clamped 2–30). Alert runs use 6. |
+| `SELF_AUDIT_INVESTIGATE_MAX_TOOL_CALLS` | `30` | Max tool calls per investigation (clamped 1–80). |
+| `SELF_AUDIT_INVESTIGATE_MAX_SECONDS` | `600` | Wall-time budget per daily investigation (clamped 60–1800). Alert runs use 300 s. |
+| `SELF_AUDIT_WEBHOOK_TOKEN` | _empty_ | Scoped bearer Alertmanager uses for `POST /api/self_audit/alert` — accepted on that exact path only. < 24 chars is discarded at startup (even with the audit off). `scripts/generate-configs.sh` writes it to `monitoring/alertmanager/self_audit_webhook_token` and renders the receiver only when it is ≥ 24 chars and `SELF_AUDIT_INVESTIGATE=true`. |
+| `SELF_AUDIT_ALERT_LOOKBACK_HOURS` | `3` | Loki window for alert-triggered runs (clamped 1–24). |
 
 ## Monitoring
 

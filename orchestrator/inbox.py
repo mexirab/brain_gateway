@@ -34,7 +34,7 @@ SELFCARE_KINDS = ("medication", "meal", "water", "movement")
 # Informational cards (kind "message"); the ref names which one. Each ref also
 # picks the generic lock-screen text in webpush_manager — briefings carry med
 # and calendar text, so a message body is never shown on a lock screen.
-MESSAGE_REFS = ("morning_briefing", "evening_briefing", "missed_recap")
+MESSAGE_REFS = ("morning_briefing", "evening_briefing", "missed_recap", "self_audit")
 RESOLUTIONS = ("done", "snoozed", "dismissed", "superseded")
 
 # Cards older than this drop out of the tray: a day-old "drink water" isn't

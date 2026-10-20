@@ -44,6 +44,13 @@ def audit_on(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "self_audit_max_clusters", 10, raising=False)
     monkeypatch.setattr(settings, "self_audit_output_dir", str(tmp_path), raising=False)
     monkeypatch.setattr(settings, "self_audit_llm_timeout_sec", 30, raising=False)
+    monkeypatch.setattr(settings, "self_audit_loki_limit_per_group", 1500, raising=False)
+    monkeypatch.setattr(settings, "self_audit_investigate", False, raising=False)
+    # Exact per-group counts are a separate metric query (/loki/api/v1/query);
+    # the run tests here mock only query_range, so stub the count to "n/a".
+    from orchestrator import jobs_self_audit
+
+    monkeypatch.setattr(jobs_self_audit, "_count_group", AsyncMock(return_value=None))
     return settings
 
 
@@ -155,11 +162,14 @@ class TestCheckSuggestion:
         ok, _ = _check_suggestion("FIX: echo hi > /etc/passwd")
         assert ok is False
 
-    def test_redirect_write_to_tmp_allowed(self):
+    def test_redirects_rejected_even_to_tmp(self):
+        # Since the investigator (2026-10): any shell operator except `|` is
+        # refused. A suggestion is a read-only command to paste; it never
+        # needs a redirect.
         from orchestrator.jobs_self_audit import _check_suggestion
 
         ok, reason = _check_suggestion("FIX: echo hi > /tmp/x")
-        assert ok is True, f"unexpected reject: {reason}"
+        assert ok is False and "operator" in reason
 
     def test_nc_listener_rejected(self):
         from orchestrator.jobs_self_audit import _check_suggestion
@@ -671,7 +681,7 @@ class TestRunSelfAudit:
 
         assert result["result"] == "failed"
         assert result["reason"] == "loki_probe_empty"
-        assert route.call_count == 2  # error fetch + alive probe
+        assert route.call_count == 5  # 4 group fetches + alive probe
         assert cm.await_count == 0
         assert mock_pushover.await_count == 1
         assert "LOKI EMPTY" in mock_pushover.await_args.kwargs["title"]
@@ -695,7 +705,7 @@ class TestRunSelfAudit:
 
         assert result["result"] == "ok"
         assert result["clusters"] == 0
-        assert route.call_count == 2  # error fetch + alive probe
+        assert route.call_count == 5  # 4 group fetches + alive probe
         # No LLM call when there's nothing to diagnose.
         assert cm.await_count == 0
         assert mock_pushover.await_count == 1
@@ -770,25 +780,93 @@ class TestRunSelfAudit:
 
 
 class TestLokiQueries:
-    def test_error_query_uses_service_label_not_host(self):
-        from orchestrator.jobs_self_audit import _LOKI_ERROR_QUERY
+    def test_groups_cover_every_source_once(self):
+        from orchestrator.jobs_self_audit import _LOKI_GROUPS, LOKI_GROUP_NAMES
 
-        assert 'host="helios"' not in _LOKI_ERROR_QUERY
-        assert 'service=~".+"' in _LOKI_ERROR_QUERY
-        # promtail normalizes to "warning" — must be matched.
-        assert "warning" in _LOKI_ERROR_QUERY.split("level=~")[1]
+        assert LOKI_GROUP_NAMES == ("orchestrator", "jupiter_other", "helios", "ups")
+        sel = dict(_LOKI_GROUPS)
+        # Jupiter streams carry no host label; Helios ones do.
+        assert 'host=""' in sel["jupiter_other"]
+        assert 'service!="orchestrator"' in sel["jupiter_other"]
+        assert 'host="helios"' in sel["helios"] and 'service!~"nut-.*"' in sel["helios"]
+        assert 'host="helios"' in sel["ups"] and 'service=~"nut-.*"' in sel["ups"]
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_fetch_errors_sends_error_query(self):
-        from orchestrator.jobs_self_audit import _LOKI_ERROR_QUERY, _fetch_loki_errors
+    async def test_fetch_errors_sends_one_query_per_group(self):
+        from orchestrator.jobs_self_audit import _LOKI_GROUPS, _fetch_loki_errors, _group_selector
 
         route = respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
             return_value=Response(200, json=_loki_query_range_response([]))
         )
-        await _fetch_loki_errors(loki_url=_LOKI_URL, lookback_hours=24)
-        assert route.call_count == 1
-        assert route.calls.last.request.url.params["query"] == _LOKI_ERROR_QUERY
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(
+            return_value=Response(200, json={"data": {"resultType": "vector", "result": []}})
+        )
+        entries, ok, groups = await _fetch_loki_errors(loki_url=_LOKI_URL, lookback_hours=24, limit=10)
+        assert ok is True and entries == []
+        sent = [c.request.url.params["query"] for c in route.calls]
+        assert sent == [_group_selector(m) for _, m in _LOKI_GROUPS]
+        for q in sent:
+            assert "warning" in q.split("level=~")[1]
+        assert all(c.request.url.params["limit"] == "10" for c in route.calls)
+        assert [g["total"] for g in groups] == [0, 0, 0, 0]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_truncated_group_is_flagged_and_counted(self):
+        from prometheus_client import REGISTRY
+
+        from orchestrator.jobs_self_audit import _fetch_loki_errors, _group_selector
+
+        ups_sel = _group_selector('host="helios", service=~"nut-.*"')
+
+        def handler(request: httpx.Request) -> Response:
+            if request.url.params["query"] == ups_sel:
+                return Response(200, json=_loki_query_range_response(_entries_with_one_cluster(5)))
+            return Response(200, json=_loki_query_range_response([]))
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(side_effect=handler)
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(
+            return_value=Response(
+                200,
+                json={"data": {"result": [{"metric": {"service": "nut-monitor"}, "value": [0, "1843"]}]}},
+            )
+        )
+        before = REGISTRY.get_sample_value("bgw_self_audit_truncated_total", {"group": "ups"}) or 0
+        entries, ok, groups = await _fetch_loki_errors(loki_url=_LOKI_URL, lookback_hours=24, limit=5)
+        g = {x["name"]: x for x in groups}
+        assert g["ups"]["truncated"] is True and g["ups"]["sampled"] == 5
+        assert g["ups"]["total"] == 1843
+        assert g["orchestrator"]["truncated"] is False
+        assert REGISTRY.get_sample_value("bgw_self_audit_truncated_total", {"group": "ups"}) == before + 1
+        assert len(entries) == 5
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_one_failed_group_is_reported_not_fatal(self):
+        from orchestrator.jobs_self_audit import _fetch_loki_errors, format_sources
+
+        def handler(request: httpx.Request) -> Response:
+            if 'host="helios", service!~' in request.url.params["query"]:
+                return Response(500)
+            return Response(200, json=_loki_query_range_response([]))
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(side_effect=handler)
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(side_effect=httpx.ConnectError("x"))
+        _entries, ok, groups = await _fetch_loki_errors(loki_url=_LOKI_URL, lookback_hours=24)
+        assert ok is True
+        assert [g["ok"] for g in groups] == [True, True, False, True]
+        assert all(g["total"] is None for g in groups)  # count query failed: n/a, not 0
+        assert "helios: QUERY FAILED" in format_sources(groups)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_all_groups_failed_is_transport_failure(self):
+        from orchestrator.jobs_self_audit import _fetch_loki_errors
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(side_effect=httpx.ConnectError("x"))
+        _entries, ok, _groups = await _fetch_loki_errors(loki_url=_LOKI_URL, lookback_hours=24)
+        assert ok is False
 
 
 class TestLokiAlive:

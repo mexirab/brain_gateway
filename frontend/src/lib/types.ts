@@ -565,7 +565,7 @@ export interface InboxItem {
   id: string;
   kind: InboxKind;
   /** reminder id, the selfcare kind (medication | meal | water | movement),
-   *  or the message kind (morning_briefing | evening_briefing | missed_recap). */
+   *  or the message kind (morning_briefing | evening_briefing | missed_recap | self_audit). */
   ref: string;
   text: string;
   created_at: string;
