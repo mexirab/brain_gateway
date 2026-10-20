@@ -490,6 +490,19 @@ def build() -> dict:
             "Helios Plug Power",
             "bgw_helios_plug_watts",
             unit="watt",
+            # The gauge is NaN when HA can't read the power sensor; the stat's
+            # lastNotNull reducer drops NaN to null, so match both.
+            mappings=[
+                {
+                    "type": "special",
+                    "options": {
+                        "match": "null+nan",
+                        "result": {"text": "unreadable", "color": "orange", "index": 0},
+                    },
+                }
+            ],
+            description="Smart-plug draw from HA. 'unreadable' = the power sensor is unavailable, "
+            "so asleep vs hung can't be told apart (HeliosUnreachablePlugBlind covers it).",
         ),
         timeseries(
             "Model Server Start/Stop (1h)",

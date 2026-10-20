@@ -25,6 +25,7 @@ disabled the functions no-op with a clear reason.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Dict, Optional
 
@@ -311,10 +312,15 @@ async def _read_power_status() -> Dict[str, Any]:
             watts = float(raw_watts)
     except (TypeError, ValueError):
         watts = None
+    if watts is not None and not math.isfinite(watts):
+        watts = None  # float() accepts "nan"/"inf"; "inf" would read as running
 
-    if switch != "on":
+    # Only a definite "off" means asleep. "unavailable"/"unknown" (plug offline,
+    # HA restarting) says nothing about Helios, so it must not look like sleep —
+    # HeliosUnreachablePlugBlind relies on that to flag the blind window.
+    if switch == "off":
         inferred = "asleep"
-    elif watts is None:
+    elif switch != "on" or watts is None:
         inferred = "unknown"
     elif watts >= _RUNNING_WATTS_THRESHOLD:
         inferred = "running"
@@ -323,8 +329,16 @@ async def _read_power_status() -> Dict[str, Any]:
 
     from orchestrator.metrics import HELIOS_PLUG_WATTS, HELIOS_RUNNING
 
+    # NaN (not the last value, not 0) when the sensor can't be read: NaN fails
+    # both `< 30` (asleep) and `> 60` (running) in the Helios alerts, so an
+    # unreadable plug trips HeliosUnreachablePlugBlind instead of hiding a hung box.
+    # Exception: a relay that reports "off" is drawing nothing, whatever the sensor says.
     if watts is not None:
         HELIOS_PLUG_WATTS.set(watts)
+    elif switch == "off":
+        HELIOS_PLUG_WATTS.set(0.0)
+    else:
+        HELIOS_PLUG_WATTS.set(float("nan"))
     HELIOS_RUNNING.set(1 if inferred == "running" else 0)
     HELIOS_STATUS_TOTAL.labels(result="ok").inc()
 
