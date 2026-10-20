@@ -540,7 +540,8 @@ async def _wait_for_quiet_period(quiet_s: float, max_wait_s: float) -> bool:
         if await _slot_busy():
             quiet_since = None
         else:
-            quiet_since = quiet_since or time.monotonic()
+            if quiet_since is None:
+                quiet_since = time.monotonic()
             if time.monotonic() - quiet_since >= quiet_s:
                 return True
         await asyncio.sleep(15.0)

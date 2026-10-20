@@ -19,7 +19,8 @@ route:
   repeat_interval: 4h
   routes:
     # BEGIN self-investigator — generate-configs.sh strips this block (and the
-    # receiver below) when SELF_AUDIT_WEBHOOK_TOKEN is unset in .env.
+    # receiver below) unless .env has SELF_AUDIT_WEBHOOK_TOKEN (>= 24 chars) AND
+    # SELF_AUDIT_INVESTIGATE=true.
     # Copies these alerts to the orchestrator's read-only investigator
     # (POST /api/self_audit/alert); `continue: true` so the normal Pushover
     # route below still matches. Keep the list in sync with ALERT_TRIGGERS in

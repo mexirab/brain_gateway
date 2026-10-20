@@ -158,3 +158,62 @@ class TestPiholeUrlList:
     def test_not_set_returns_empty(self):
         s = self._make_settings()
         assert s.pihole_url_list == []
+
+
+class TestSelfAuditInvestigatorConfig:
+    """validate_self_audit_config: clamps for the investigator/webhook settings
+    and the short-webhook-token drop (generate-configs.sh mirrors the 24-char
+    rule, so the two must agree)."""
+
+    def _make_settings(self, env_overrides):
+        env = {
+            "MODEL_URL": "http://localhost:8080/v1",
+            "MODEL_NAME": "m",
+            "SELF_AUDIT_ENABLED": "true",
+            "SELF_AUDIT_LOKI_URL": "http://loki:3100",
+        }
+        env.update(env_overrides)
+        # Instantiate Settings directly — no module reload, so the shared
+        # `settings` singleton other tests hold is never replaced. Importing
+        # as orchestrator.config also works in the image layout, where a bare
+        # `import config` resolves to the /app/config directory.
+        from orchestrator.config import Settings
+
+        with patch.dict(os.environ, env, clear=True):
+            return Settings(_env_file=None)
+
+    def test_defaults_are_inside_the_clamps(self):
+        s = self._make_settings({})
+        assert s.self_audit_investigate is False
+        assert s.self_audit_loki_limit_per_group == 1500
+        assert s.self_audit_alert_lookback_hours == 3
+        assert s.self_audit_investigate_max_rounds == 12
+        assert s.self_audit_investigate_max_tool_calls == 30
+        assert s.self_audit_investigate_max_seconds == 600
+        assert s.self_audit_webhook_token == ""
+
+    @pytest.mark.parametrize(
+        "env_key,attr,low_in,low_out,high_in,high_out",
+        [
+            ("SELF_AUDIT_LOKI_LIMIT_PER_GROUP", "self_audit_loki_limit_per_group", "1", 50, "99999", 5000),
+            ("SELF_AUDIT_ALERT_LOOKBACK_HOURS", "self_audit_alert_lookback_hours", "0", 1, "100", 24),
+            ("SELF_AUDIT_INVESTIGATE_MAX_ROUNDS", "self_audit_investigate_max_rounds", "-3", 2, "500", 30),
+            ("SELF_AUDIT_INVESTIGATE_MAX_TOOL_CALLS", "self_audit_investigate_max_tool_calls", "0", 1, "1000", 80),
+            ("SELF_AUDIT_INVESTIGATE_MAX_SECONDS", "self_audit_investigate_max_seconds", "5", 60, "86400", 1800),
+        ],
+    )
+    def test_clamps(self, env_key, attr, low_in, low_out, high_in, high_out):
+        assert getattr(self._make_settings({env_key: low_in}), attr) == low_out
+        assert getattr(self._make_settings({env_key: high_in}), attr) == high_out
+
+    def test_in_range_value_is_kept(self):
+        s = self._make_settings({"SELF_AUDIT_INVESTIGATE_MAX_SECONDS": "900"})
+        assert s.self_audit_investigate_max_seconds == 900
+
+    def test_short_webhook_token_is_dropped(self):
+        s = self._make_settings({"SELF_AUDIT_WEBHOOK_TOKEN": "x" * 23})
+        assert s.self_audit_webhook_token == ""
+
+    def test_webhook_token_of_24_chars_is_kept(self):
+        s = self._make_settings({"SELF_AUDIT_WEBHOOK_TOKEN": "x" * 24})
+        assert s.self_audit_webhook_token == "x" * 24

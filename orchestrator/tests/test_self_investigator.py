@@ -1029,3 +1029,174 @@ class TestSuggestionLineFormats:
 
         line = "- **Suggestion:** INVESTIGATE: `docker logs brain-orchestrator --tail 50`"
         assert _sanitize_diagnosis(line) == line
+
+
+# ===========================================================================
+# Slot-sharing waits (fake clock: no real sleeping)
+# ===========================================================================
+
+
+class _FakeClock:
+    """Stands in for the module's ``time`` and ``asyncio`` names. Starts well
+    above 0 so ``quiet_since or now`` never sees a falsy timestamp."""
+
+    def __init__(self, start: float = 1000.0):
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, s: float) -> None:
+        self.sleeps.append(s)
+        self.now += s
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestrator import self_investigator
+
+    clock = _FakeClock()
+    monkeypatch.setattr(self_investigator, "time", SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(self_investigator, "asyncio", SimpleNamespace(sleep=clock.sleep))
+    return clock
+
+
+def _busy_sequence(monkeypatch, states):
+    from orchestrator import self_investigator
+
+    it = iter(states)
+    mock = AsyncMock(side_effect=lambda: next(it))
+    monkeypatch.setattr(self_investigator, "_slot_busy", mock)
+    return mock
+
+
+class TestQuietPeriod:
+    @pytest.mark.asyncio
+    async def test_idle_slot_returns_after_quiet_window(self, fake_clock, monkeypatch):
+        from orchestrator.self_investigator import _wait_for_quiet_period
+
+        busy = _busy_sequence(monkeypatch, [False] * 10)
+        assert await _wait_for_quiet_period(30, 600) is True
+        # idle at 0, 15, 30 s -> quiet for 30 s on the third poll
+        assert busy.await_count == 3 and fake_clock.now == 1030
+
+    @pytest.mark.asyncio
+    async def test_busy_poll_resets_the_quiet_window(self, fake_clock, monkeypatch):
+        from orchestrator.self_investigator import _wait_for_quiet_period
+
+        # idle, idle, BUSY, then idle: the window restarts at the first idle
+        # after the busy poll (t=45) and completes at t=75. Without the reset
+        # it would return at t=45 (45 s since the first idle).
+        busy = _busy_sequence(monkeypatch, [False, False, True] + [False] * 10)
+        assert await _wait_for_quiet_period(30, 600) is True
+        assert fake_clock.now == 1075 and busy.await_count == 6
+
+    @pytest.mark.asyncio
+    async def test_never_quiet_gives_up_at_max_wait(self, fake_clock, monkeypatch):
+        from orchestrator.self_investigator import _wait_for_quiet_period
+
+        _busy_sequence(monkeypatch, [True] * 1000)
+        assert await _wait_for_quiet_period(30, 120) is False
+        assert fake_clock.now - 1000 >= 120
+        assert len(fake_clock.sleeps) == 8  # 120 s / 15 s polls, bounded
+
+    @pytest.mark.asyncio
+    async def test_flapping_slot_never_counts_as_quiet(self, fake_clock, monkeypatch):
+        from orchestrator.self_investigator import _wait_for_quiet_period
+
+        _busy_sequence(monkeypatch, [False, True] * 500)
+        assert await _wait_for_quiet_period(30, 300) is False
+
+    @pytest.mark.asyncio
+    async def test_idle_chat_wait_is_bounded(self, fake_clock, monkeypatch):
+        from orchestrator.self_investigator import _wait_for_idle_chat
+
+        _busy_sequence(monkeypatch, [True] * 1000)
+        await _wait_for_idle_chat(10)
+        assert fake_clock.now - 1000 >= 10 and len(fake_clock.sleeps) == 5
+
+    @pytest.mark.asyncio
+    async def test_idle_chat_returns_immediately_when_idle(self, fake_clock, monkeypatch):
+        from orchestrator.self_investigator import _wait_for_idle_chat
+
+        _busy_sequence(monkeypatch, [False])
+        await _wait_for_idle_chat(60)
+        assert fake_clock.sleeps == []
+
+
+class TestQuietPeriodInInvestigate:
+    @pytest.mark.asyncio
+    async def test_alert_run_proceeds_when_never_quiet(self, fake_repo, audit_on, brain_up, monkeypatch):
+        from orchestrator import self_investigator
+
+        monkeypatch.setattr(self_investigator, "_wait_for_quiet_period", AsyncMock(return_value=False))
+        cm = AsyncMock(side_effect=[_msg(_FINAL)])
+        with patch("orchestrator.orchestrator.call_model", new=cm):
+            out = await self_investigator.investigate(
+                clusters=[], groups=None, lookback_hours=3, trigger="alert", alert={"alertname": "EmbeddingErrors"}
+            )
+        assert out["result"] == "ok" and cm.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_daily_run_does_not_wait_for_quiet(self, fake_repo, audit_on, brain_up):
+        from orchestrator import self_investigator
+
+        with patch("orchestrator.orchestrator.call_model", new=AsyncMock(side_effect=[_msg(_FINAL)])):
+            await self_investigator.investigate(clusters=[], groups=None, lookback_hours=24)
+        self_investigator._wait_for_quiet_period.assert_not_awaited()
+
+
+# ===========================================================================
+# Webhook payload shape edge cases
+# ===========================================================================
+
+
+class TestWebhookPayloadShapes:
+    def test_non_dict_alerts_are_skipped_not_500(self, client):
+        good = _payload(("EmptyRepliesReachingUsers", "firing"))["alerts"][0]
+        body = {"alerts": ["string", None, 42, ["list"], good]}
+        r = _post(client, body)
+        assert r.status_code == 202 and r.json()["alertname"] == "EmptyRepliesReachingUsers"
+
+    @pytest.mark.parametrize(
+        "alert",
+        [
+            {"status": "firing", "labels": "alertname=EmptyRepliesReachingUsers"},
+            {"status": "firing", "labels": None},
+            {"status": "firing"},
+            {"status": "firing", "labels": {"alertname": ["EmptyRepliesReachingUsers"]}},
+            {"status": "FIRING", "labels": {"alertname": "EmptyRepliesReachingUsers"}},
+        ],
+    )
+    def test_malformed_alerts_are_ignored(self, client, alert):
+        r = _post(client, {"alerts": [alert]})
+        assert r.status_code == 200 and r.json()["result"] == "ignored"
+        assert client.run_mock.await_count == 0
+
+    def test_only_first_twenty_alerts_are_read(self, client):
+        filler = [{"status": "firing", "labels": {"alertname": "NodeDown"}}] * 20
+        late = {"status": "firing", "labels": {"alertname": "EmptyRepliesReachingUsers"}}
+        r = _post(client, {"alerts": filler + [late]})
+        assert r.status_code == 200 and r.json()["result"] == "ignored"
+
+    def test_twentieth_alert_is_still_read(self, client):
+        filler = [{"status": "firing", "labels": {"alertname": "NodeDown"}}] * 19
+        last = {"status": "firing", "labels": {"alertname": "EmptyRepliesReachingUsers"}}
+        r = _post(client, {"alerts": filler + [last]})
+        assert r.status_code == 202
+
+    def test_cooldown_falls_through_to_next_candidate(self, client):
+        assert _post(client, _payload(("EmptyRepliesReachingUsers", "firing"))).status_code == 202
+        r = _post(client, _payload(("EmptyRepliesReachingUsers", "firing"), ("EmbeddingErrors", "firing")))
+        assert r.status_code == 202 and r.json()["alertname"] == "EmbeddingErrors"
+
+    def test_non_dict_annotations_become_empty(self, client):
+        p = _payload(("EmptyRepliesReachingUsers", "firing"))
+        p["alerts"][0]["annotations"] = "x" * 100
+        p["alerts"][0]["startsAt"] = "2026-10-20T00:00:00Z" + "y" * 500
+        assert _post(client, p).status_code == 202
+        alert = client.run_mock.await_args.kwargs["alert"]
+        assert alert["annotations"] == {} and len(alert["startsAt"]) == 40

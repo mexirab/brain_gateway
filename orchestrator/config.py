@@ -709,11 +709,16 @@ class Settings(BaseSettings):
         """Auto-disable F-014 self-audit on bad config. Log + disable,
         never raise — optional feature must not block startup.
         """
-        if not self.self_audit_enabled:
-            return self
         import logging
 
         log = logging.getLogger(__name__)
+        # Unconditional: BearerAuthMiddleware reads this token even with the
+        # audit off, so a weak one must never be accepted.
+        if self.self_audit_webhook_token and len(self.self_audit_webhook_token) < 24:
+            log.error("[CONFIG] SELF_AUDIT_WEBHOOK_TOKEN is shorter than 24 chars; ignoring it.")
+            object.__setattr__(self, "self_audit_webhook_token", "")
+        if not self.self_audit_enabled:
+            return self
         url = self.self_audit_loki_url or ""
         if not url.startswith(("http://", "https://")):
             log.error(
@@ -748,9 +753,6 @@ class Settings(BaseSettings):
         object.__setattr__(
             self, "self_audit_investigate_max_seconds", min(max(self.self_audit_investigate_max_seconds, 60), 1800)
         )
-        if self.self_audit_webhook_token and len(self.self_audit_webhook_token) < 24:
-            log.error("[CONFIG] SELF_AUDIT_WEBHOOK_TOKEN is shorter than 24 chars; ignoring it.")
-            object.__setattr__(self, "self_audit_webhook_token", "")
         return self
 
     @model_validator(mode="after")
