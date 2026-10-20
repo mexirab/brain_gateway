@@ -18,6 +18,17 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # BEGIN self-investigator — generate-configs.sh strips this block (and the
+    # receiver below) when SELF_AUDIT_WEBHOOK_TOKEN is unset in .env.
+    # Copies these alerts to the orchestrator's read-only investigator
+    # (POST /api/self_audit/alert); `continue: true` so the normal Pushover
+    # route below still matches. Keep the list in sync with ALERT_TRIGGERS in
+    # orchestrator/routes_self_audit.py (the orchestrator ignores the rest).
+    - matchers:
+        - alertname=~"HeliosHardwareFault|BrainOnCPU|BrainCudaInitFailed|HeliosGpuDriverBroken|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|EmbeddingErrors|AutoLearnFailing|SchedulerJobsMissed|HeliosLogsSilent"
+      receiver: "self-investigator"
+      continue: true
+    # END self-investigator
     # Paging tier: data-at-risk + service-down. JessBackupStale / JessHABackupStale
     # (nightly state + HA config backups) belong here — an unprotected backup is a
     # data-loss window, so it should page like OrchestratorDown, not sit silent on
@@ -40,7 +51,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
@@ -63,6 +74,21 @@ route:
       repeat_interval: 24h
 receivers:
   - name: "null"
+  # BEGIN self-investigator
+  # Same path Prometheus uses to scrape the orchestrator (its published,
+  # bearer-gated port) — Alertmanager stays off gateway-net. The token file is
+  # written by generate-configs.sh from SELF_AUDIT_WEBHOOK_TOKEN; the
+  # orchestrator accepts that token on /api/self_audit/alert only.
+  - name: "self-investigator"
+    webhook_configs:
+      - url: "http://${NODE_JUPITER_IP}:${SERVICE_ORCHESTRATOR_PORT}/api/self_audit/alert"
+        send_resolved: false
+        max_alerts: 20
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/self_audit_webhook_token
+  # END self-investigator
   - name: "pushover"
     pushover_configs:
       - user_key: ${PUSHOVER_USER_KEY}

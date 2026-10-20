@@ -130,6 +130,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         "/api/reminder/ack/",
         "/api/reminder/snooze/",
     )
+    # Exact paths that also accept a scoped (non-API_TOKEN) bearer token.
+    WEBHOOK_TOKEN_PATHS = frozenset({"/api/self_audit/alert"})
 
     async def dispatch(self, request: Request, call_next):
         # CORS preflight must pass through
@@ -143,6 +145,12 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         # Check Bearer token (scheme case-insensitive, constant-time compare)
         if bearer_token_matches(request.headers.get("authorization", ""), API_TOKEN):
+            return await call_next(request)
+        # Scoped token: SELF_AUDIT_WEBHOOK_TOKEN (held by Alertmanager) opens
+        # exactly one path and nothing else. Empty token never matches.
+        if request.url.path in self.WEBHOOK_TOKEN_PATHS and bearer_token_matches(
+            request.headers.get("authorization", ""), _cfg.self_audit_webhook_token
+        ):
             return await call_next(request)
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
@@ -166,11 +174,15 @@ _LARGE_UPLOAD_PATHS = {
 
 # Upload routes with their own cap (below MAX_UPLOAD_SIZE) so an oversized body is
 # refused on Content-Length instead of being spooled to disk first.
-_PATH_UPLOAD_LIMITS = {"/api/documents/suggest-name": 16 * 1024 * 1024}
+_PATH_UPLOAD_LIMITS = {
+    "/api/documents/suggest-name": 16 * 1024 * 1024,
+    # Alertmanager webhook: a few alerts' labels/annotations, never more.
+    "/api/self_audit/alert": 64 * 1024,
+}
 
 
 # Upload routes that refuse chunked (length-less) bodies.
-_LENGTH_REQUIRED_PATHS = {"/api/pantry/scan", "/api/documents/suggest-name"}
+_LENGTH_REQUIRED_PATHS = {"/api/pantry/scan", "/api/documents/suggest-name", "/api/self_audit/alert"}
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -1150,6 +1162,22 @@ async def _startup_logic():
         )
         # SELF_AUDIT_HOUR_UTC is a misnomer: the cron runs in the scheduler's tz.
         logger.info(f"[SCHEDULER] Self-audit daily at {shared.SELF_AUDIT_HOUR_UTC:02d}:00 {shared.TIMEZONE}")
+
+        # Helios log-silence check (feeds HeliosLogsSilent): cheap Loki count.
+        from orchestrator.jobs_self_audit import check_helios_log_silence
+
+        scheduler.add_job(
+            check_helios_log_silence,
+            trigger="interval",
+            minutes=5,
+            id="helios_log_silence_check",
+            name="Helios log-silence check",
+            replace_existing=True,
+        )
+    else:
+        from orchestrator.jobs_self_audit import forget_last_run
+
+        forget_last_run()
 
     # Training corpus drain: nightly at 02:30 — appends new user/assistant
     # turns from state_store + Claude Code sessions to monthly JSONL

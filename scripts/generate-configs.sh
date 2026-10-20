@@ -197,12 +197,34 @@ if [[ -z "${PUSHOVER_USER_KEY:-}" || -z "${PUSHOVER_APP_TOKEN:-}" ]]; then
     echo -e "  ${YELLOW}SKIP${NC}: alertmanager.yml.template (PUSHOVER_USER_KEY/PUSHOVER_APP_TOKEN not set in .env;"
     echo "        the pushover receiver cannot render a loadable config — existing render left untouched)"
 else
+    # Self-investigator webhook (Alertmanager -> orchestrator
+    # /api/self_audit/alert). With SELF_AUDIT_WEBHOOK_TOKEN set, write the
+    # token file the receiver reads (644 + gitignored, same posture as
+    # monitoring/prometheus/api_token; truncated in place, never mv'd) and
+    # keep the block; unset, strip the BEGIN/END self-investigator blocks so
+    # Alertmanager never posts without a token.
+    am_template="${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml.template"
+    am_token_file="${PROJECT_DIR}/monitoring/alertmanager/self_audit_webhook_token"
+    am_tmp_template=""
+    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:-}" ]]; then
+        printf '%s' "$SELF_AUDIT_WEBHOOK_TOKEN" > "$am_token_file"
+        chmod 644 "$am_token_file"
+        echo -e "  ${GREEN}OK${NC}: self-investigator webhook token -> $(basename "$am_token_file")"
+    else
+        am_tmp_template="$(mktemp)"
+        sed '/# BEGIN self-investigator/,/# END self-investigator/d' "$am_template" > "$am_tmp_template"
+        am_template="$am_tmp_template"
+        echo -e "  ${YELLOW}SKIP${NC}: self-investigator webhook (SELF_AUDIT_WEBHOOK_TOKEN not set in .env)"
+    fi
+    am_rc=0
     render_template \
-        "${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml.template" \
+        "$am_template" \
         "${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml" \
-        '${PUSHOVER_USER_KEY} ${PUSHOVER_APP_TOKEN}' \
+        '${PUSHOVER_USER_KEY} ${PUSHOVER_APP_TOKEN} ${NODE_JUPITER_IP} ${SERVICE_ORCHESTRATOR_PORT}' \
         644 \
-        alertmanager
+        alertmanager || am_rc=$?
+    [[ -n "$am_tmp_template" ]] && rm -f "$am_tmp_template"
+    [[ "$am_rc" -eq 0 ]] || exit "$am_rc"
 fi
 
 echo ""

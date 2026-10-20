@@ -603,6 +603,68 @@ SELF_AUDIT_FORMAT_DRIFT_TOTAL = Counter(
     "-- signals Qwen3.5-27B went off-format and the prompt may need tuning",
 )
 
+# One Loki query per source group (orchestrator | jupiter_other | helios | ups);
+# a group whose sample came back at exactly its line limit was cut off. The
+# report still shows the exact count (metric query), but the clusters only
+# see the sample.
+SELF_AUDIT_TRUNCATED_TOTAL = Counter(
+    "bgw_self_audit_truncated_total",
+    "Self-audit Loki groups whose sample hit the per-group line limit",
+    ["group"],
+)
+for _group in ("orchestrator", "jupiter_other", "helios", "ups"):
+    SELF_AUDIT_TRUNCATED_TOTAL.labels(group=_group)
+
+# 1 = the brain's own journal (llama-server-primary) has no lines in Loki for
+# the last 30 min. Idle is normal: HeliosLogsSilent only fires when this is 1
+# WHILE llama-server's /metrics shows it served prompts in that window — the
+# "Helios is up but its logs stopped reaching Loki" case (dead promtail-helios
+# or loki-push-gw). Left unchanged when the Loki check itself fails.
+HELIOS_LOGS_SILENT = Gauge(
+    "bgw_helios_logs_silent",
+    "1 if Loki has no llama-server-primary lines from Helios in the last 30 min",
+)
+HELIOS_LOG_CHECK_TOTAL = Counter(
+    "bgw_helios_log_check_total",
+    "Helios log-silence checks against Loki",
+    # result: lines | silent | error
+    ["result"],
+)
+for _result in ("lines", "silent", "error"):
+    HELIOS_LOG_CHECK_TOTAL.labels(result=_result)
+
+# Read-only investigator (self-monitoring step 2): the brain with
+# list_dir/read_file/grep/loki_query tools, run daily and on allow-listed alerts.
+SELF_INVESTIGATOR_RUNS_TOTAL = Counter(
+    "bgw_self_investigator_runs_total",
+    "Self-investigator runs",
+    # trigger: daily | alert
+    # result:  ok | budget (a limit ran out; final answer forced) |
+    #          brain_asleep (skipped, deterministic digest only) | error
+    ["trigger", "result"],
+)
+for _trigger in ("daily", "alert"):
+    for _result in ("ok", "budget", "brain_asleep", "error"):
+        SELF_INVESTIGATOR_RUNS_TOTAL.labels(trigger=_trigger, result=_result)
+
+SELF_INVESTIGATOR_TOOL_CALLS_TOTAL = Counter(
+    "bgw_self_investigator_tool_calls_total",
+    "Self-investigator tool calls",
+    # tool:   list_dir | read_file | grep | loki_query | unknown
+    # result: ok | denied (path/argument refused) | error | duplicate | capped
+    ["tool", "result"],
+)
+
+SELF_AUDIT_ALERT_TRIGGER_TOTAL = Counter(
+    "bgw_self_audit_alert_trigger_total",
+    "Alertmanager webhook deliveries to /api/self_audit/alert",
+    # result: accepted | ignored (resolved / not allow-listed) | rate_limited |
+    #         busy | disabled | bad_request
+    ["result"],
+)
+for _result in ("accepted", "ignored", "rate_limited", "busy", "disabled", "bad_request"):
+    SELF_AUDIT_ALERT_TRIGGER_TOTAL.labels(result=_result)
+
 # -- Helios wake-on-demand (PT-C) --------------------------------------------
 HELIOS_WAKE_TOTAL = Counter(
     "bgw_helios_wake_total",

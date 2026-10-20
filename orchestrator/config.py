@@ -501,6 +501,22 @@ class Settings(BaseSettings):
     self_audit_max_clusters: int = 30
     self_audit_output_dir: str = "/app/data/self_audits"
     self_audit_llm_timeout_sec: int = 120
+    # Lines sampled per Loki source group (orchestrator | jupiter_other |
+    # helios | ups); a group that hits it is reported as truncated.
+    self_audit_loki_limit_per_group: int = 1500
+    # Read-only investigator (self-monitoring step 2): the brain gets
+    # list_dir/read_file/grep/loki_query tools over the read-only repo mount
+    # instead of one no-tools call. Needs Helios awake; never wakes it.
+    self_audit_investigate: bool = False
+    self_audit_repo_path: str = "/opt/gateway_mvp"
+    self_audit_investigate_max_rounds: int = 12
+    self_audit_investigate_max_tool_calls: int = 30
+    self_audit_investigate_max_seconds: int = 600
+    # Alertmanager -> POST /api/self_audit/alert. This token is accepted ONLY
+    # on that path (Alertmanager never holds API_TOKEN). Empty = the route
+    # only accepts API_TOKEN.
+    self_audit_webhook_token: str = ""
+    self_audit_alert_lookback_hours: int = 3
 
     # ---- Computed properties ---------------------------------------------------
 
@@ -717,6 +733,24 @@ class Settings(BaseSettings):
             object.__setattr__(self, "self_audit_max_clusters", 1)
         elif self.self_audit_max_clusters > 200:
             object.__setattr__(self, "self_audit_max_clusters", 200)
+        object.__setattr__(
+            self, "self_audit_loki_limit_per_group", min(max(self.self_audit_loki_limit_per_group, 50), 5000)
+        )
+        object.__setattr__(
+            self, "self_audit_alert_lookback_hours", min(max(self.self_audit_alert_lookback_hours, 1), 24)
+        )
+        object.__setattr__(
+            self, "self_audit_investigate_max_rounds", min(max(self.self_audit_investigate_max_rounds, 2), 30)
+        )
+        object.__setattr__(
+            self, "self_audit_investigate_max_tool_calls", min(max(self.self_audit_investigate_max_tool_calls, 1), 80)
+        )
+        object.__setattr__(
+            self, "self_audit_investigate_max_seconds", min(max(self.self_audit_investigate_max_seconds, 60), 1800)
+        )
+        if self.self_audit_webhook_token and len(self.self_audit_webhook_token) < 24:
+            log.error("[CONFIG] SELF_AUDIT_WEBHOOK_TOKEN is shorter than 24 chars; ignoring it.")
+            object.__setattr__(self, "self_audit_webhook_token", "")
         return self
 
     @model_validator(mode="after")

@@ -702,6 +702,29 @@ groups:
   # rules in monitoring/loki/rules/fake/helios.yml.
   - name: helios_health
     rules:
+      # The brain is generating on Helios, but none of its log lines reach
+      # Loki: promtail-helios or loki-push-gw died. Without this, Helios
+      # errors just stop showing up in the self-audit and in the Loki ruler
+      # alerts (HeliosHardwareFault, BrainCudaInitFailed), with nothing to say
+      # so. The orchestrator's bgw_helios_logs_silent (5-min job) is 1 when
+      # Loki has no llama-server-primary lines in the last 30 min; idle is
+      # normal, so it only counts while llama-server's own /metrics shows it
+      # generated in the same window (backtest 2026-10-17..20: every such
+      # 30-min window had >= 8 lines). `for: 15m` rides out the up-to-5-min
+      # lag of the orchestrator check. Needs SELF_AUDIT_ENABLED + JESS_ADVANCED
+      # (the check runs with the self-audit).
+      - alert: HeliosLogsSilent
+        expr: |
+          bgw_helios_logs_silent{job="orchestrator"} == 1
+          and on() increase(llamacpp:tokens_predicted_total{job="llama-primary"}[30m]) >= 1
+        for: 15m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Helios logs stopped reaching Loki while the brain is working"
+          description: "llama-server on Helios generated tokens in the last 30 min, but Loki has no llama-server-primary lines from Helios. promtail-helios (on Helios: `docker ps` / `docker logs promtail-helios` in /opt/promtail-helios) or loki-push-gw on Jupiter (`docker logs loki-push-gw`) is likely down, so Helios errors are invisible to the self-audit and the Loki ruler."
+
       # Jess's brain is generating, but at CPU speed. Normal decode on the 5090
       # is ~105-125 tok/s; CPU fallback measured ~6 tok/s on 2026-10-15 (driver
       # swap under a loaded module). Ratio of the two llama.cpp counters = mean

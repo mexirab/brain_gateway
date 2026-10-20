@@ -369,6 +369,7 @@ _MESSAGE_BODY = {
     "morning_briefing": "Morning briefing ready",
     "evening_briefing": "Evening wrap-up ready",
     "missed_recap": "Some reminders didn't reach you",
+    "self_audit": "Jess system check ready",
 }
 
 
