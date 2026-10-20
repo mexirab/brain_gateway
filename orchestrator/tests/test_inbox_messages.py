@@ -244,7 +244,9 @@ def test_call_sites_use_mirror_with_known_refs():
 
     src = inspect.getsource(jobs_calendar)
     refs = re.findall(r'_mirror_message\("([a-z_]+)"', src)
-    assert sorted(refs) == ["evening_briefing", "missed_recap", "morning_briefing"]
+    # Set, not list: the evening briefing mirrors from two places (normal
+    # night + routine-active night), and that's intended.
+    assert set(refs) == {"evening_briefing", "missed_recap", "morning_briefing"}
     assert all(r in inbox.MESSAGE_REFS for r in refs)
     # fire_system_message is only reached via the helper now.
     assert src.count("fire_system_message(") == 1
