@@ -447,11 +447,29 @@ async def test_skip_day_without_recap_posts_only_digest(briefing_env):
     briefing_env.fire.assert_called_once()
 
 
+def _pin_hour(monkeypatch, hour):
+    """Freeze jobs_calendar's clock at ``hour`` today. morning_briefing clears
+    sleep mode only between 05:00 and 11:59, so DND tests must not depend on
+    when the suite happens to run (this one failed every morning)."""
+    from datetime import datetime as _dt
+
+    from orchestrator import jobs_calendar
+
+    class _Fixed(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt.now(tz).replace(hour=hour, minute=0, second=0, microsecond=0)
+
+    monkeypatch.setattr(jobs_calendar, "datetime", _Fixed)
+
+
 @_skip_no_deps
 async def test_skip_day_under_dnd_posts_cards_without_push(briefing_env, monkeypatch):
-    """Sleep mode at 07:00: cards wait in the tray, the phone isn't buzzed."""
+    """Sleep mode still on (briefing before 05:00): cards wait in the tray,
+    the phone isn't buzzed."""
     from orchestrator import inbox, jobs_calendar, routine_manager
 
+    _pin_hour(monkeypatch, 4)
     monkeypatch.setattr(jobs_calendar.shared, "DND_ACTIVE", True)
     notify = MagicMock()
     monkeypatch.setattr(inbox, "notify", notify)
@@ -461,6 +479,23 @@ async def test_skip_day_under_dnd_posts_cards_without_push(briefing_env, monkeyp
 
     assert {c["ref"] for c in inbox.list_pending()} == {"missed_recap", "morning_briefing"}
     notify.assert_not_called()
+
+
+@_skip_no_deps
+async def test_morning_hours_clear_dnd_then_push(briefing_env, monkeypatch):
+    """At 07:00 the briefing ends sleep mode first, so its cards do push."""
+    from orchestrator import inbox, jobs_calendar, routine_manager
+
+    _pin_hour(monkeypatch, 7)
+    monkeypatch.setattr(jobs_calendar.shared, "DND_ACTIVE", True)
+    notify = MagicMock()
+    monkeypatch.setattr(inbox, "notify", notify)
+    briefing_env.undelivered = [{"text": "water the plants", "status": "missed"}]
+    with patch.object(routine_manager, "_active_session", _session()):
+        await jobs_calendar.morning_briefing()
+
+    assert jobs_calendar.shared.DND_ACTIVE is False
+    assert notify.call_count == 2
 
 
 @_skip_no_deps
