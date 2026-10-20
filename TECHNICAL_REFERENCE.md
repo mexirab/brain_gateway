@@ -226,6 +226,17 @@ Known gaps (not fixed): assistant replies that paraphrase a photo still reach au
 |--------|------|---------|
 | GET | `/api/ambient/status` | Aggregated ambient status (schedule, focus, tasks, LED color). Calendar: merged via `calendar_sources` (same as `check_calendar` and the briefings); schedule reads "unknown" when a source fails — see `docs/CALENDAR.md`. |
 
+### Self-Audit (F-014)
+
+Both need `SELF_AUDIT_ENABLED` + `JESS_ADVANCED`. Spec: `jess-features/F-014-self-audit.md`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/self_audit/run` | Run the daily audit now (bearer `API_TOKEN`). Waits for it to finish. 200 `{ok, result:"ok\|partial\|failed\|skipped", clusters, severity_counts, report_path, reason}`; **409** `result:"busy"` while another audit holds the lock. `reason` on partial: `brain_asleep` \| `sources_failed`; on failed: `loki_unreachable` \| `loki_probe_empty`. |
+| POST | `/api/self_audit/alert` | Alertmanager webhook → background read-only investigation (`routes_self_audit.py`). Auth: bearer `API_TOKEN` **or** `SELF_AUDIT_WEBHOOK_TOKEN` (≥ 24 chars; accepted on this exact path only). Body: Alertmanager webhook JSON (`{alerts:[{status, labels:{alertname,…}, annotations, startsAt}]}`), Content-Length required, 64 KB cap. Only the first `firing` alert whose `alertname` is in `ALERT_TRIGGERS` and not rate-limited runs (6 h per alert, 6 a day, RAM-only); labels/annotations capped (30 keys, 500 chars) and framed as untrusted. **202** `{ok:true, result:"accepted", alertname}`; **200** `result:"ignored"` (resolved / not allow-listed) \| `"rate_limited"` \| `"busy"` (no Alertmanager retry); **409** `"disabled"` (needs `SELF_AUDIT_INVESTIGATE` too); **400** malformed; **413** too large. |
+
+`ALERT_TRIGGERS`: `HeliosHardwareFault`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `EmbeddingErrors`, `AutoLearnFailing`, `SchedulerJobsMissed`, `HeliosLogsSilent` (keep in sync with the `self-investigator` route in `monitoring/alertmanager/alertmanager.yml.template`). Metric: `bgw_self_audit_alert_trigger_total{result}`.
+
 ### Helios Power (PT-C)
 
 All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, skipped:"disabled", reason}`), 502 on HA error (`{ok:false, error}`). All control runs through Home Assistant `switch.turn_on`/`switch.turn_off` on the Helios smart plug — see `orchestrator/helios_power.py`.

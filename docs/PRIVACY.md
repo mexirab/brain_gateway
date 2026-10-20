@@ -25,7 +25,7 @@ The short version: **there is no telemetry.** The project does not phone home, d
 | Paperless inbox files (if used) | `data/paperless_inbox/` | Until Paperless-ngx ingests them |
 | Training corpus (if enabled) | `data/training_corpus/YYYY-MM.jsonl` | Indefinite; no auto-rotation |
 | Application logs | `docker logs` + Loki (if the monitoring stack runs) | Loki: 30 days (`retention_period: 720h`). Logs hold lengths, ids, categories and counts — never message text, queries, reminder/calendar/medication/meal/task text, or tool arguments (see below) |
-| Self-audit reports (if enabled) | `data/self_audits/YYYY-MM-DD.md` | Indefinite |
+| Self-audit reports (if enabled) | `data/self_audits/YYYY-MM-DD.md` (alert runs `YYYY-MM-DD-HHMM-alert-<Name>.md`) | Indefinite |
 | Wake-word recordings (if you enable the capture WIP) | `data/wakeword/` | Indefinite; gitignored to prevent accidental commit |
 
 **Everything in `data/` is yours.** Back it up, delete it, copy it to another box — Brain Gateway has no opinion on what you do with it.
@@ -56,7 +56,7 @@ You can verify any of this by watching the orchestrator container's egress with 
 
 Log lines describe *what happened*, not *what you said*: they record lengths, ids (reminder, calendar event, email message, task), categories, counts and dict keys. Chat and voice text, search/memory queries, reminder and announcement text, calendar titles/locations, travel destinations, medication names, meal descriptions, task and brain-dump text, document/file names, finance names, Home Assistant call values, tool arguments, your name, and mood/distress signals from the mode router are never logged — at any level, DEBUG included. HTTP access logs drop query strings. A test (`orchestrator/tests/test_no_user_content_in_logs.py`) fails the build if a log call reintroduces personal content.
 
-This matters because logs travel further than the database: Loki keeps them for 30 days, and the optional self-audit sends warning/error lines to the local LLM and a one-line digest to Pushover.
+This matters because logs travel further than the database: Loki keeps them for 30 days, and the optional self-audit sends warning/error lines to the local LLM and a one-line digest to Pushover and the dashboard inbox (the memory palace only gets a line of counts, never log text).
 
 **Upgrading from an older build:** earlier versions did log some of the content above. Those lines remain in Loki until they age out (30 days after the upgrade) and in `docker logs` until the container is recreated. To purge sooner, delete the Loki data volume and recreate the orchestrator container.
 
