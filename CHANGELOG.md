@@ -4,6 +4,24 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — `code_agent` removed (2026-10-21)
+
+Branch `chore/remove-code-agent`. The tool gave a model `run_command` (subprocess), `write_file` and git commits; its model (Qwen3-Coder-Next on Helios :8082) was retired 2026-10-16 after the primary brain beat it on a debugging eval. Self-troubleshooting is the read-only self-investigator (`self_investigator.py`).
+
+### Removed
+
+- `orchestrator/code_agent.py`, the `code_agent` tool schema + handler, its system-prompt guidance line, and its tests.
+- `CODE_AGENT_ENABLED`, `CODE_AGENT_MODEL_URL`, `CODE_AGENT_MODEL_NAME`, `CODE_AGENT_CODEBASE_PATH`, `CODE_AGENT_MAX_ROUNDS` (settings + compose env). Leftover lines in `.env` are inert (Settings ignores extra keys); delete at leisure.
+- Metric `bgw_code_agent_preflight_failures_total` and its Grafana panel.
+
+### Changed
+
+- `JESS_ADVANCED` now gates 4 tools: `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity`.
+- The `/opt/gateway_mvp:ro` repo mount stays; it is the investigator's `SELF_AUDIT_REPO_PATH` default.
+- `llama-server-coder.service` + its GGUF remain on Helios (disabled), but nothing in the app can use them.
+
+---
+
 ## [Unreleased] — Helios UPS exporter compose + Helios Health dashboard (2026-10-21)
 
 Branch `chore/selfmon-ups-grafana`.

@@ -5,6 +5,8 @@
 > - **`docs/HA.md`** — Home Assistant on Jupiter (migrated off the Pi 2026-07-04).
 > - **`docs/BACKUP.md`** — nightly state/HA backups.
 >
+> The `code_agent` tool and its coder model are gone (model retired 2026-10-16, tool removed 2026-10-21); any mention below is history.
+>
 > Specifically stale below: the Mode-Router→Helios two-model flow, `_run_nemotron_tool_loop()` / `call_nemotron_orchestrator()` / `ask_orchestrator`, `MAX_TOOL_ROUNDS = 5`, the `nadim_rag` collection (deleted 2026-04-13 — memory now lives in the single `mempalace` ChromaDB collection), and any "Helios always-on / hosts the orchestrator" implication (Helios is power-tiered; the orchestrator runs 24/7 on Jupiter).
 
 Deep dive into Brain Gateway internals. See `CLAUDE.md` for the current (v7) quick reference.

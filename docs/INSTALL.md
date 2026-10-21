@@ -18,7 +18,7 @@ Before you start (either path), confirm:
 - [ ] **GPU:** at least 20 GiB VRAM (24 GB card class). Below that, manual model selection — see [HARDWARE.md](HARDWARE.md).
 - [ ] **Driver:** none yet, or `nvidia-driver-580-open` or newer
 - [ ] **Disk:** ~120 GiB free on the partition that holds `/var/lib/docker` and the repo
-- [ ] **RAM:** 16 GiB minimum, 32 GiB if you plan to enable the advanced profile or code agent
+- [ ] **RAM:** 16 GiB minimum, 32 GiB if you plan to enable the advanced profile
 - [ ] **Network:** the box can reach the public internet to pull container images and HuggingFace models (one-time)
 - [ ] **Sudo:** you can `sudo` on the box
 - [ ] **Time:** ~30 minutes end-to-end on a fresh box (mostly waiting on container images + model weights to download, ~50 GB the first time). The CLI wizard at the end takes ~30 seconds.
@@ -278,7 +278,7 @@ docker compose up -d
 
 This adds:
 - `nebula-sync` (multi-instance Pi-hole replication)
-- Owner-specific tools (`code_agent`, `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity`)
+- Owner-specific tools (`ask_expert`, `query_budget`, `finance_status`, `check_claude_activity`)
 - Background jobs (self-audit, training corpus drain)
 
 Most users never need this. The default profile is the recommended starting point.

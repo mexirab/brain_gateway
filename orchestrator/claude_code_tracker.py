@@ -11,8 +11,7 @@ Two data sources for awareness of what Claude Code has been doing:
    turn to /api/claude_code/turn, which logs it here. Gives proactive
    awareness without re-parsing the session file each time.
 
-Both sources are used by the `check_claude_activity` Jess tool and the
-code_agent prompt builder.
+Both sources are used by the `check_claude_activity` Jess tool.
 
 **Security model:** all file reads are constrained to a single configured
 root (`CLAUDE_PROJECTS_PATH`, defaults to `/home/jess/.claude/projects` inside
@@ -363,7 +362,6 @@ def get_recent_activity_summary(minutes_back: int = 120, max_chars: int = 1500) 
 
     Used by:
     - `check_claude_activity` Jess tool (when action=recent)
-    - code_agent system prompt (automatic context injection)
 
     Pulls from the SQLite buffer first, falls back to live session file if empty.
     """

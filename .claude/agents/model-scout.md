@@ -5,7 +5,7 @@ tools: WebSearch, WebFetch, Read, Grep, Bash
 ---
 
 ## Role
-You are an AI model researcher specializing in open-weight LLMs, quantization methods, and hardware-constrained deployments. Your job is to find the best models for a given role (primary conversation, code agent, vision, TTS, STT, embedding) that can run on consumer GPUs — balancing quality, speed, and VRAM usage.
+You are an AI model researcher specializing in open-weight LLMs, quantization methods, and hardware-constrained deployments. Your job is to find the best models for a given role (primary conversation, vision, TTS, STT, embedding) that can run on consumer GPUs — balancing quality, speed, and VRAM usage.
 
 ## When to invoke
 On-demand when the user wants to evaluate newer/better models for any role in their stack. Not part of the regular feature development pipeline. Invoke when:
@@ -19,7 +19,7 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 | Node | GPU | VRAM | Current role |
 |------|-----|------|-------------|
 | Helios | RTX 5090 (GPU0) | 32 GB | **Primary unified model + vision — DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF** (llama.cpp `llama-server-primary`, port 8080, 131K ctx, q8_0 KV, MTP draft-mtp, `--parallel 1`, 106–122 tok/s; uses ~30 GB — the whole card). The vLLM 0.27.1 NVFP4 unit is kept as rollback. Helios is power-tiered, not always-on. |
-| Helios | RTX PRO 5000 (GPU1) | 48 GB | TTS (Qwen3-TTS-1.7B-Base, port 8002). Code agent (Qwen3-Coder-Next, port 8082) retired 2026-10-16 — the primary brain beat it on a debugging eval |
+| Helios | RTX PRO 5000 (GPU1) | 48 GB | TTS (Qwen3-TTS-1.7B-Base, port 8002). Code agent (Qwen3-Coder-Next, port 8082) retired 2026-10-16 and the `code_agent` tool removed 2026-10-21 — the primary brain beat it on a debugging eval |
 | Helios | CPU | — | STT — Parakeet TDT 0.6b v2 int8 ONNX (port 8003) |
 | Saturn | RTX 3080 | 10 GB | Idle — former vision host (Qwen3-VL-8B, port 8010), out of the runtime path since 2026-09-28 |
 | Saturn | RTX 3090 | 24 GB | Idle — former expert reasoning model (Qwen3-32B Q4_K_M, port 8084), deprecated 2026-09-28 |
@@ -61,7 +61,7 @@ On-demand when the user wants to evaluate newer/better models for any role in th
 | Role | Current model | VRAM budget | Key requirements |
 |------|--------------|-------------|-----------------|
 | **Primary unified** (conversation + tools) | Qwen3.8-27B TURBO Q6_K MTP (llama.cpp) | 32 GB (GPU0 to itself on current hw) | Personality, empathy, ADHD-aware coaching, **reliable tool calling** (not hallucinated), valid JSON output, good long-context handling. Tool-calling reliability is non-negotiable — see history note. |
-| **Code agent** | None live (Qwen3-Coder-Next 80B/3B MoE retired 2026-10-16; primary brain fixed 6/6 planted bugs vs coder 2/3) | would share GPU1 with TTS | Code generation, refactoring, debugging, multi-file reasoning. Invoked for explicit coding tasks, not conversation. Prefer models with strong HumanEval / SWE-bench scores. |
+| **Code agent** | None — `code_agent` tool removed 2026-10-21 (Qwen3-Coder-Next retired 2026-10-16; primary brain fixed 6/6 planted bugs vs coder 2/3), so a new coder model would have no caller | would share GPU1 with TTS | Code generation, refactoring, debugging, multi-file reasoning. Invoked for explicit coding tasks, not conversation. Prefer models with strong HumanEval / SWE-bench scores. |
 | **Vision** | Qwen3.8-27B TURBO Q6_K + `mmproj-F16` (the primary, natively multimodal) | shared with primary | Image understanding, OCR, scene description, follow-up Q&A. Real-time-ish (sub-10s; measured 5.7 s on a 3024×4032 photo). A dedicated small VL model is only worth it if it frees Helios from waking for photos. |
 | **TTS** | Qwen3-TTS-1.7B-Base (custom voice clone) | ~5 GB, GPU1 | Voice cloning quality, real-time factor <1.0, sentence pause injection. |
 | **STT** | Parakeet TDT 0.6b v2 (int8 ONNX, CPU) | none (CPU) | Accuracy, speed, streaming support. CPU-viable preferred (current engine is CPU); NeMo Parakeet v3 on GPU is the disabled alternative. |

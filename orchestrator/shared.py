@@ -464,15 +464,6 @@ DIET_PROFILE_PATH = settings.diet_profile_path
 PAPERLESS_ENABLED = settings.paperless_enabled
 
 # ---------------------------------------------------------------------------
-# Code Agent (coding-focused model for self-troubleshooting)
-# ---------------------------------------------------------------------------
-CODE_AGENT_ENABLED = settings.code_agent_enabled
-CODE_AGENT_MODEL_URL = settings.code_agent_model_url
-CODE_AGENT_MODEL_NAME = settings.code_agent_model_name
-CODE_AGENT_CODEBASE_PATH = settings.code_agent_codebase_path
-CODE_AGENT_MAX_ROUNDS = settings.code_agent_max_rounds
-
-# ---------------------------------------------------------------------------
 # Expert Model (Qwen3-32B Thinking on Saturn 3090)
 # ---------------------------------------------------------------------------
 EXPERT_ENABLED = settings.expert_enabled

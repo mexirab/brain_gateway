@@ -1,6 +1,6 @@
 # Claude Code ↔ Jess Integration
 
-Jess can see what Claude Code has been working on, for self-troubleshooting and giving the local `code_agent` awareness of in-flight work. Data flow is one-way (Claude Code → Jess) and entirely local. No Claude.ai / Anthropic API involvement.
+Jess can see what Claude Code has been working on, via the `check_claude_activity` tool (gated by `JESS_ADVANCED`). Data flow is one-way (Claude Code → Jess) and entirely local. No Claude.ai / Anthropic API involvement.
 
 ## Two data sources
 
@@ -43,15 +43,9 @@ Example user-facing phrases:
 - *"Did Claude Code touch the palace code today?"*
 - *"Show me the last hour of Claude Code activity"*
 
-## Code agent integration
+## Code agent (removed 2026-10-21)
 
-> **Status (2026-10-16):** the code agent is retired on the live deployment — `llama-server-coder.service` on Helios is stopped + disabled and `CODE_AGENT_ENABLED=false`, so `code_agent` is not in Jess's tool list. The feature remains in the code for other installs (`CODE_AGENT_ENABLED` + `JESS_ADVANCED`). Restore on Helios with `sudo systemctl enable --now llama-server-coder`.
-
-`orchestrator/code_agent.py` automatically injects recent Claude Code activity (~180 min window, capped at 1200 chars) into its system prompt. This means when Jess delegates a coding task to the local Qwen3-Coder-Next 80B/3B MoE agent (Helios GPU1 + RAM-spilled experts, port 8082), the agent already knows what Claude Code has been working on and won't step on in-flight work.
-
-The injection happens transparently before every `code_agent` tool call. If no activity is found (e.g., hook not installed and JSONL files empty), the system prompt just omits the section rather than failing.
-
-**Preflight reachability check:** because the code model runs on Helios (port 8082), which is power-tiered and asleep most of the time, `code_agent` first probes `GET {CODE_AGENT_MODEL_URL}/models` with a short timeout (4s / 2s-connect) before entering the agent loop. If the endpoint is unreachable (connection error, timeout, or 5xx), it fails fast with an actionable "wake Helios" message and increments `bgw_code_agent_preflight_failures_total` — instead of hanging through up to `CODE_AGENT_MAX_ROUNDS` (10) rounds of 120s connect timeouts.
+The `code_agent` tool, which injected this activity into a local coder model's prompt, is removed (it gave a model `run_command`, `write_file` and git commits). Self-troubleshooting is the read-only self-audit / self-investigator (`jobs_self_audit.py`, `self_investigator.py`; see `jess-features/F-014-self-audit.md`).
 
 ## API endpoints
 
@@ -59,4 +53,4 @@ See [`TECHNICAL_REFERENCE.md`](../TECHNICAL_REFERENCE.md#claude-code-integration
 
 ## Privacy
 
-Everything is local. Claude Code → Jess is a LAN-only HTTP POST to the orchestrator on Helios. Neither the hook nor the tool sends anything to Anthropic or any third party. Session files live on your disk, the rolling buffer lives in your local SQLite, and the `code_agent` (when enabled) runs on your local GPU. This integration was explicitly designed to keep Jess's privacy guarantee intact — see the privacy intent memory for the decision rationale.
+Everything is local. Claude Code → Jess is a LAN-only HTTP POST to the orchestrator on Jupiter. Neither the hook nor the tool sends anything to Anthropic or any third party. Session files live on your disk, and the rolling buffer lives in your local SQLite. This integration was explicitly designed to keep Jess's privacy guarantee intact — see the privacy intent memory for the decision rationale.

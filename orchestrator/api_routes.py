@@ -1073,8 +1073,8 @@ async def presence_status():
 async def log_claude_code_turn_endpoint(req: Request):
     """Receive a Claude Code turn from the Stop hook.
 
-    Stores the turn in the rolling SQLite buffer so Jess and the code_agent
-    can reference recent Claude Code activity.
+    Stores the turn in the rolling SQLite buffer so Jess can reference
+    recent Claude Code activity.
 
     Owner-specific dev surface — gated behind JESS_ADVANCED (the
     `check_claude_activity` tool that consumes this is gated the same way), so a

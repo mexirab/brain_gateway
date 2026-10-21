@@ -118,7 +118,7 @@ Full feature reference: [`docs/JESS_QUICK_START.md`](docs/JESS_QUICK_START.md).
 |------|-------|
 | Change any setting later | `/settings` page in the dashboard |
 | Upgrade to a newer release | [`docs/UPGRADE.md`](docs/UPGRADE.md) |
-| Enable advanced features (monitoring, multi-host, code agent) | Set `COMPOSE_PROFILES=advanced` and/or `JESS_ADVANCED=true` in `.env`, then `docker compose up -d` |
+| Enable advanced features (monitoring, multi-host, owner-only tools) | Set `COMPOSE_PROFILES=advanced` and/or `JESS_ADVANCED=true` in `.env`, then `docker compose up -d` |
 | Run the API directly | `POST /v1/chat/completions` with `Authorization: Bearer $API_TOKEN` (OpenAI-compatible) |
 | Get a printable ADHD reference card | [`docs/JESS_REFERENCE_CARD.md`](docs/JESS_REFERENCE_CARD.md) |
 
