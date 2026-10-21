@@ -238,21 +238,20 @@ scrape_configs:
   # ============================================
   # UPS METRICS (NUT exporter on Helios)
   # ============================================
-  # Both UPSes are USB-attached to Helios; the NUT systemd service reads them
+  # The UPS is USB-attached to Helios; the NUT systemd service reads it
   # and the nut_exporter Docker container exposes /ups_metrics on port 9199.
   # The exporter requires `?ups=<name>` per scrape, so we use relabeling to
   # turn the static targets into URL params and tag each series with `ups`.
   #
-  # CyberPower CP1500PFCLCD (1000W) exposes ups.load + input/output voltage.
-  # Goldenmate 2000VA LiFePO4 (iDowell chipset) only exposes status + battery
-  # state — no load watts available from firmware. For Goldenmate watts, use
-  # a Kasa/Tapo smart plug at the wall (separate ingestion via Home Assistant)
-  # or sum nvidia-smi power draw on Helios.
+  # Goldenmate 2000VA LiFePO4 only exposes status + battery charge/runtime —
+  # no load watts or voltages from firmware. Helios's wall draw comes from its
+  # Tapo smart plug instead (bgw_helios_plug_watts via the orchestrator).
   - job_name: 'nut'
     metrics_path: /ups_metrics
     scrape_interval: 15s
     static_configs:
-      - targets: ['cyberpower', 'goldenmate']
+      # CyberPower CP1500 retired 2026-10-21 (no longer attached to Helios).
+      - targets: ['goldenmate']
         labels:
           node: 'helios'
     relabel_configs:

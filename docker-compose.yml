@@ -569,10 +569,9 @@ services:
   # NUT Prometheus exporter — reads local NUT server (upsd on host 127.0.0.1:3493)
   # and exposes /metrics on Helios:9199 for scraping by Prometheus on Jupiter.
   #
-  # Both UPSes (CyberPower CP1500PFCLCD, Goldenmate 2000VA LiFePO4) are USB-
-  # attached to Helios and read by host-level NUT systemd services. Goldenmate's
-  # iDowell-chip firmware doesn't expose load watts — only status and battery.
-  # CyberPower exposes everything including ups.load.
+  # The UPS (Goldenmate 2000VA LiFePO4) is USB-attached to Helios and read by
+  # host-level NUT systemd services. Its firmware exposes only status flags and
+  # battery charge/runtime — no load watts. (CyberPower retired 2026-10-21.)
   #
   # Hardening: digest-pinned image, cap_drop ALL, no-new-privileges, read-only
   # filesystem with /tmp tmpfs. network_mode: host because the exporter only

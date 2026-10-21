@@ -277,6 +277,8 @@ Morning briefing includes weather forecast from the National Weather Service API
 |----------|---------|---------|
 | `WEBUI_URL` | (empty) | URL an HA Companion push opens on tap (e.g. the dashboard). Empty = no tap action |
 
+HA Companion push is optional and enabled by the profile's `notifications.mobile_services` list (not an env var). Empty list = channel off: one INFO line at startup, DEBUG per skipped send (was a WARNING per reminder/nudge until 2026-10-21). Phone delivery still runs through ntfy, Pushover, Telegram and the dashboard inbox.
+
 ## Brain Gateway Core
 
 A few essential vars that always need to be set. These are usually defined in `.env` at the repo root:

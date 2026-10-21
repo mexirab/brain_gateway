@@ -43,8 +43,12 @@ route:
     # 3 days on 2026-07-15 precisely because nothing was watching the watcher.
     # HeliosPoweredButUnreachable pages because NodeDown excludes the
     # power-tiered Helios; it is the plug-aware "Helios is hung" signal.
+    # UPSOnBattery / UPSLowBattery page: grid power is gone or the battery is
+    # about to run out. Until 2026-10-21 no UPS* alert was routed at all, so
+    # they all fell through to "null" — the UPS exporter sat dead for three
+    # months unnoticed.
     - matchers:
-        - alertname=~"OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
+        - alertname=~"UPSOnBattery|UPSLowBattery|OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
@@ -52,7 +56,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|UPSExporterDown|UPSReplaceBattery|UPSOverload"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a

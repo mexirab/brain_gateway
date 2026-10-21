@@ -83,6 +83,18 @@ wings:
         description: "Budget, spending, YNAB, financial"
         keywords: ["budget", "money", "spend", "ynab", "finance", "savings", "cost"]
 
+  # Jess's own operational notes, written explicitly by background jobs (the
+  # self-audit stores a one-line facts summary here). No keywords and no
+  # routing rule: auto-routing must never file a user's memory here. Without
+  # this wing, store() fell back to "personal" — operational notes landed
+  # among personal memories (found 2026-10-21).
+  system:
+    description: "Jess's own operational notes (self-audit facts)"
+    rooms:
+      audit:
+        description: "Daily self-audit facts: date, counts, services"
+        keywords: []
+
 # Routing rules: regex patterns matched against text to auto-route to wing/room.
 # Evaluated in order; first match wins. Falls back to keyword matching if no regex hits.
 routing_rules:

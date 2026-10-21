@@ -1,7 +1,7 @@
 {
   "title": "UPS / Power Chain",
   "uid": "ups-power-chain",
-  "description": "CyberPower CP1500PFCLCD + Goldenmate 2000VA LiFePO4 power Helios. Source: druggeri/nut_exporter via NUT on the Helios host.",
+  "description": "Goldenmate 2000VA LiFePO4 powers Helios (CyberPower retired 2026-10-21). Source: druggeri/nut_exporter via NUT on the Helios host.",
   "tags": [
     "brain-gateway",
     "infra",
@@ -68,7 +68,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "count(network_ups_tools_ups_status{flag=\"OL\"} == 1)",
+          "expr": "count(network_ups_tools_ups_status{flag=\"OL\"} == 1) or vector(0)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -87,12 +87,8 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 1
-              },
-              {
                 "color": "green",
-                "value": 2
+                "value": 1
               }
             ]
           },
@@ -119,7 +115,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
+        "w": 6,
         "x": 0,
         "y": 1
       },
@@ -196,8 +192,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 4,
+        "w": 6,
+        "x": 6,
         "y": 1
       },
       "id": 3
@@ -267,8 +263,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 8,
+        "w": 6,
+        "x": 12,
         "y": 1
       },
       "id": 4
@@ -307,11 +303,11 @@
               },
               {
                 "color": "yellow",
-                "value": 300
+                "value": 180
               },
               {
                 "color": "green",
-                "value": 900
+                "value": 300
               }
             ]
           },
@@ -338,82 +334,11 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 12,
+        "w": 6,
+        "x": 18,
         "y": 1
       },
       "id": 5
-    },
-    {
-      "type": "stat",
-      "title": "CyberPower draw",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "(network_ups_tools_ups_load{ups=\"cyberpower\"} / 100) * network_ups_tools_ups_realpower_nominal{ups=\"cyberpower\"}",
-          "legendFormat": "__auto",
-          "range": false,
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "watt",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 700
-              },
-              {
-                "color": "red",
-                "value": 900
-              }
-            ]
-          },
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "textMode": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 16,
-        "y": 1
-      },
-      "id": 6
     },
     {
       "type": "row",
@@ -426,7 +351,7 @@
         "x": 0,
         "y": 6
       },
-      "id": 7
+      "id": 6
     },
     {
       "type": "timeseries",
@@ -515,14 +440,14 @@
           "sort": "desc"
         }
       },
-      "description": "Both UPSes report battery.charge percent.",
+      "description": "battery.charge percent.",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 7
       },
-      "id": 8
+      "id": 7
     },
     {
       "type": "timeseries",
@@ -557,11 +482,11 @@
               },
               {
                 "color": "yellow",
-                "value": 300
+                "value": 180
               },
               {
                 "color": "green",
-                "value": 900
+                "value": 300
               }
             ]
           },
@@ -612,409 +537,11 @@
       "description": "Seconds at current load. Drops fast on grid loss.",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 7
       },
-      "id": 9
-    },
-    {
-      "type": "timeseries",
-      "title": "Battery voltage (CyberPower)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_battery_voltage{ups=\"cyberpower\"}",
-          "legendFormat": "actual",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_battery_voltage_nominal{ups=\"cyberpower\"}",
-          "legendFormat": "nominal",
-          "range": true,
-          "instant": false,
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "volt",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "description": "Goldenmate iDowell firmware doesn't expose battery.voltage.",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 7
-      },
-      "id": 10
-    },
-    {
-      "type": "row",
-      "title": "Power Chain (CyberPower only \u2014 Goldenmate firmware limited)",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 15
-      },
-      "id": 11
-    },
-    {
-      "type": "timeseries",
-      "title": "Real power draw",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "(network_ups_tools_ups_load{ups=\"cyberpower\"} / 100) * network_ups_tools_ups_realpower_nominal{ups=\"cyberpower\"}",
-          "legendFormat": "{{ups}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "watt",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 700
-              },
-              {
-                "color": "red",
-                "value": 900
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "description": "Computed from ups.load (%) \u00d7 ups.realpower.nominal (1000W).",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 16
-      },
-      "id": 12
-    },
-    {
-      "type": "timeseries",
-      "title": "UPS load %",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_ups_load{ups=\"cyberpower\"}",
-          "legendFormat": "{{ups}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "min": 0,
-          "max": 100
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 16
-      },
-      "id": 13
-    },
-    {
-      "type": "timeseries",
-      "title": "Input voltage",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_input_voltage{ups=\"cyberpower\"}",
-          "legendFormat": "actual",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "editorMode": "code",
-          "expr": "network_ups_tools_input_voltage_nominal{ups=\"cyberpower\"}",
-          "legendFormat": "nominal",
-          "range": true,
-          "instant": false,
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "volt",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity",
-            "spanNulls": true,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "description": "Wall voltage. Sustained < 110V or > 130V is a brownout / surge signal.",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 16
-      },
-      "id": 14
+      "id": 8
     },
     {
       "type": "row",
@@ -1025,9 +552,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 15
       },
-      "id": 15
+      "id": 9
     },
     {
       "type": "bargauge",
@@ -1092,9 +619,9 @@
         "h": 6,
         "w": 6,
         "x": 0,
-        "y": 25
+        "y": 16
       },
-      "id": 16
+      "id": 10
     },
     {
       "type": "bargauge",
@@ -1155,9 +682,9 @@
         "h": 6,
         "w": 6,
         "x": 6,
-        "y": 25
+        "y": 16
       },
-      "id": 17
+      "id": 11
     },
     {
       "type": "bargauge",
@@ -1218,9 +745,9 @@
         "h": 6,
         "w": 6,
         "x": 12,
-        "y": 25
+        "y": 16
       },
-      "id": 18
+      "id": 12
     },
     {
       "type": "bargauge",
@@ -1281,9 +808,9 @@
         "h": 6,
         "w": 6,
         "x": 18,
-        "y": 25
+        "y": 16
       },
-      "id": 19
+      "id": 13
     },
     {
       "type": "row",
@@ -1294,9 +821,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 22
       },
-      "id": 20
+      "id": 14
     },
     {
       "type": "timeseries",
@@ -1386,9 +913,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 23
       },
-      "id": 21
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -1472,9 +999,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 23
       },
-      "id": 22
+      "id": 16
     }
   ]
 }

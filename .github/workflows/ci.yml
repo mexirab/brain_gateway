@@ -160,7 +160,9 @@ jobs:
           CHANGED="$(git diff --name-only "$LAST" "$HEAD_SHA")"
           echo "$CHANGED"
 
-          if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$"; then
+          # data/palace.yaml is a single-file bind mount read once at startup:
+          # a git pull swaps its inode, so only a recreate picks the change up.
+          if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$"; then
             echo "::group::Rebuilding orchestrator"
             docker compose up -d --build --force-recreate orchestrator
             echo "::endgroup::"

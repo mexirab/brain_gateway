@@ -19,6 +19,7 @@ Five code paths write into the mempalace collection. Not all of them go through 
 | `rag_ingest.py::check_and_ingest` (every 2 min) | `shared.collection.add` (HNSW-safe direct write), `PALACE_STORES_TOTAL` incremented manually with `wing="library"` | ✅ (as of commit `e5e1d07`) |
 | `auto_learn.py::store_fact` | `shared.collection.add`, `PALACE_STORES_TOTAL` incremented manually with the routed wing/room | ✅ (as of commit `e5e1d07`) |
 | Document vault (`document_vault` tool) | `palace.store()` | ✅ |
+| `jobs_self_audit.py` (daily facts line, wing `system`, room `audit`) | `palace.store()` | ✅ |
 
 ## Embedding model
 
@@ -45,6 +46,12 @@ All palace vectors come from `nomic-ai/nomic-embed-text-v2-moe` (`EMBEDDING_MODE
 ## Configuration
 
 Palace env vars live in [`ENV_VARS.md`](ENV_VARS.md#mempalace-unified-memory). Palace structure itself (wings, rooms, routing rules) lives in `data/palace.yaml`.
+
+**Wings:** `jess`, `brain_gateway`, `conjure`, `infrastructure`, `personal`, `system`. A wing not defined in `palace.yaml` silently falls back to `personal`.
+
+**Reserved wing `system`** (room `audit`, added 2026-10-21): Jess's own operational notes, currently only the self-audit facts line. It has no keywords and no routing rule, so auto-routing never files a user memory there. `POST /api/palace/store` returns 403 for `wing: system` (`_RESERVED_WINGS` in `routes_palace.py`); the MCP `palace_store` goes through that route, so only in-process writers can use it. Before the wing existed, self-audit facts landed in `personal` (the misfiled entries were deleted 2026-10-21).
+
+**Changing `palace.yaml`:** it is a single-file bind mount read once at startup, so changes need `docker compose up -d --force-recreate orchestrator` (`git pull` swaps the inode; a restart alone may keep the old file). CI recreates the orchestrator when `data/palace.yaml` changes.
 
 ## API endpoints
 
