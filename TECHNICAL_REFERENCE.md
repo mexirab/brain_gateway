@@ -65,7 +65,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | GET | `/api/memory/learned/stats` | Auto-learn statistics (counts by category) |
 | POST | `/api/memory/learned/toggle` | Enable/disable auto-learn at runtime |
 | GET | `/api/palace/search?query=&wing=&room=&n=5` | Structured palace search with optional wing/room filter |
-| POST | `/api/palace/store` | Store a memory: `{text, wing?, room?, source?, category?, project?}` |
+| POST | `/api/palace/store` | Store a memory: `{text, wing?, room?, source?, category?, project?}`. 400 if `text` empty; 403 if `wing` is reserved (`system` — in-process writers only) |
 | GET | `/api/palace/memory/{doc_id}` | Get a single memory by ID |
 | DELETE | `/api/palace/memory/{doc_id}` | Delete a memory by ID |
 | GET | `/api/palace/wings` | Palace wing structure |

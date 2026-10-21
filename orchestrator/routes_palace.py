@@ -10,6 +10,9 @@ from orchestrator import shared
 
 logger = logging.getLogger(__name__)
 
+# Wings only in-process writers may use (see palace_store).
+_RESERVED_WINGS = frozenset({"system"})
+
 
 def _require_palace_enabled():
     """FastAPI dependency: reject requests when PALACE_ENABLED is false.
@@ -46,6 +49,11 @@ async def palace_store(req: Request):
     text = str(body.get("text", "")).strip()
     if not text:
         return JSONResponse({"error": "text is required"}, status_code=400)
+    # `system` holds Jess's own operational facts (self-audit), written only
+    # in-process. API/MCP callers can't file text there, so nothing outside
+    # the orchestrator can plant fake "audit facts".
+    if str(body.get("wing", "")).strip().lower() in _RESERVED_WINGS:
+        return JSONResponse({"error": "wing is reserved for internal use"}, status_code=403)
 
     doc_id = await palace.store(
         text=text,

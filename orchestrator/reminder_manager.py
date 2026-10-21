@@ -44,6 +44,12 @@ _raw_services = _profile.mobile_notify_services or (
 MOBILE_NOTIFY_SERVICES: list[str] = [
     s for s in _raw_services[:_MAX_NOTIFY_SERVICES] if isinstance(s, str) and _NOTIFY_SERVICE_RE.match(s)
 ]
+# HA Companion push is optional: phone delivery also runs through ntfy /
+# Pushover / Telegram / the dashboard inbox. Say once at startup that this
+# channel is off, instead of a WARNING on every reminder and nudge (that was
+# ~21/day of self-audit noise, 2026-10-21).
+if not MOBILE_NOTIFY_SERVICES:
+    logger.info("HA Companion push not configured (profile notifications.mobile_services) — channel off")
 
 
 # =============================================================================
@@ -624,7 +630,7 @@ async def _send_notification(text: str) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
 
     if not MOBILE_NOTIFY_SERVICES:
-        logger.warning("No mobile_notify_services configured, skipping notification")
+        logger.debug("HA Companion push not configured, skipping")
         return {"success": False, "error": "No mobile notification services configured"}
 
     # Build notification data with deep link for both platforms

@@ -1,19 +1,18 @@
 """
-ups — UPS power chain visibility for the Helios cluster.
+ups — UPS power chain visibility for Helios.
 
-Both UPSes are USB-attached to Helios; the host NUT service feeds the
-nut_exporter Docker container on Helios:9199, which Prometheus scrapes
-with one target per UPS (relabel turns the static target into the
-`?ups=<name>` URL param the multi-target exporter requires).
+One UPS is USB-attached to Helios (since the CyberPower CP1500PFCLCD was
+retired, 2026-10-21): the host NUT service feeds the nut_exporter container
+on Helios:9199, which Prometheus scrapes per UPS (relabel turns the static
+target into the `?ups=<name>` URL param the multi-target exporter requires).
 
-Metric prefix: `network_ups_tools_*`. Labels: `job="nut"`,
-`node="helios"`, `ups="cyberpower"|"goldenmate"`.
+Metric prefix: `network_ups_tools_*`. Labels: `job="nut"`, `node="helios"`,
+`ups="goldenmate"`.
 
-Per-UPS coverage:
-  - CyberPower CP1500PFCLCD (1000W): full data — load %, real power,
-    input/output voltage, battery charge/runtime/voltage, status flags.
-  - Goldenmate 2000VA LiFePO4 (iDowell chip): partial — status, battery
-    charge, battery runtime. No load watts (firmware doesn't expose).
+Goldenmate 2000VA LiFePO4 (BMS "Smart-Battery" USB chip) exposes only
+status flags, battery charge and battery runtime — no load watts, input
+voltage or battery voltage, so the old CyberPower power-chain panels are
+gone. If a full-data UPS comes back, restore them from git history.
 
 Status flags (`ups_status{flag=...}`):
   OL = on-line, OB = on battery, LB = low battery, CHRG = charging,
@@ -38,10 +37,12 @@ def build() -> dict:
     overview_row = [
         stat(
             "UPSes Online",
-            'count(network_ups_tools_ups_status{flag="OL"} == 1)',
+            # `or vector(0)`: count() of nothing is "No data", not 0, so without
+            # it the panel went blank exactly when the UPS dropped off line power.
+            'count(network_ups_tools_ups_status{flag="OL"} == 1) or vector(0)',
             unit="none",
             graph_mode="none",
-            thresholds=[(None, "red"), (1, "yellow"), (2, "green")],
+            thresholds=[(None, "red"), (1, "green")],
         ),
         stat(
             "On Battery (now)",
@@ -65,20 +66,10 @@ def build() -> dict:
             "min(network_ups_tools_battery_runtime)",
             unit="s",
             graph_mode="area",
-            thresholds=[(None, "red"), (300, "yellow"), (900, "green")],
-        ),
-        stat(
-            "CyberPower draw",
-            # `ups.load` is a percent of `ups.realpower.nominal` watts.
-            # (network_ups_tools_ups_load{ups="cyberpower"} / 100) * realpower_nominal
-            '(network_ups_tools_ups_load{ups="cyberpower"} / 100) * '
-            'network_ups_tools_ups_realpower_nominal{ups="cyberpower"}',
-            unit="watt",
-            graph_mode="area",
-            thresholds=[(None, "green"), (700, "yellow"), (900, "red")],
+            thresholds=[(None, "red"), (180, "yellow"), (300, "green")],  # Goldenmate reads ~420 s at full charge
         ),
     ]
-    row, y = grid_row(overview_row, y, heights=[5, 5, 5, 5, 5])
+    row, y = grid_row(overview_row, y, heights=[5, 5, 5, 5])
     panels.extend(row)
 
     # ------------------------------------------------------------- Battery
@@ -95,7 +86,7 @@ def build() -> dict:
             min_value=0,
             max_value=100,
             thresholds=[(None, "red"), (20, "yellow"), (50, "green")],
-            description="Both UPSes report battery.charge percent.",
+            description="battery.charge percent.",
         ),
         timeseries(
             "Battery runtime remaining",
@@ -103,73 +94,11 @@ def build() -> dict:
                 ("network_ups_tools_battery_runtime", "{{ups}}"),
             ],
             unit="s",
-            thresholds=[(None, "red"), (300, "yellow"), (900, "green")],
+            thresholds=[(None, "red"), (180, "yellow"), (300, "green")],  # Goldenmate reads ~420 s at full charge
             description="Seconds at current load. Drops fast on grid loss.",
         ),
-        timeseries(
-            "Battery voltage (CyberPower)",
-            [
-                (
-                    'network_ups_tools_battery_voltage{ups="cyberpower"}',
-                    "actual",
-                ),
-                (
-                    'network_ups_tools_battery_voltage_nominal{ups="cyberpower"}',
-                    "nominal",
-                ),
-            ],
-            unit="volt",
-            description="Goldenmate iDowell firmware doesn't expose battery.voltage.",
-        ),
     ]
-    row, y = grid_row(battery_row, y, heights=[8, 8, 8])
-    panels.extend(row)
-
-    # ------------------------------------------------------------- Power chain
-    r, y = row_divider("Power Chain (CyberPower only — Goldenmate firmware limited)", y)
-    panels.append(r)
-
-    power_row = [
-        timeseries(
-            "Real power draw",
-            [
-                (
-                    '(network_ups_tools_ups_load{ups="cyberpower"} / 100) * '
-                    'network_ups_tools_ups_realpower_nominal{ups="cyberpower"}',
-                    "{{ups}}",
-                ),
-            ],
-            unit="watt",
-            thresholds=[(None, "green"), (700, "yellow"), (900, "red")],
-            description="Computed from ups.load (%) × ups.realpower.nominal (1000W).",
-        ),
-        timeseries(
-            "UPS load %",
-            [
-                ('network_ups_tools_ups_load{ups="cyberpower"}', "{{ups}}"),
-            ],
-            unit="percent",
-            min_value=0,
-            max_value=100,
-            thresholds=[(None, "green"), (70, "yellow"), (90, "red")],
-        ),
-        timeseries(
-            "Input voltage",
-            [
-                (
-                    'network_ups_tools_input_voltage{ups="cyberpower"}',
-                    "actual",
-                ),
-                (
-                    'network_ups_tools_input_voltage_nominal{ups="cyberpower"}',
-                    "nominal",
-                ),
-            ],
-            unit="volt",
-            description="Wall voltage. Sustained < 110V or > 130V is a brownout / surge signal.",
-        ),
-    ]
-    row, y = grid_row(power_row, y, heights=[8, 8, 8])
+    row, y = grid_row(battery_row, y, heights=[8, 8])
     panels.extend(row)
 
     # ------------------------------------------------------------- Status flags
@@ -242,7 +171,7 @@ def build() -> dict:
         title="UPS / Power Chain",
         uid="ups-power-chain",
         description=(
-            "CyberPower CP1500PFCLCD + Goldenmate 2000VA LiFePO4 power Helios. "
+            "Goldenmate 2000VA LiFePO4 powers Helios (CyberPower retired 2026-10-21). "
             "Source: druggeri/nut_exporter via NUT on the Helios host."
         ),
         tags=["brain-gateway", "infra", "ups"],
