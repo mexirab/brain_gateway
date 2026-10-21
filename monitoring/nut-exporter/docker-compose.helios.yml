@@ -1,0 +1,48 @@
+# Helios UPS exporter — reads the host NUT server (upsd on 127.0.0.1:3493) and
+# serves /ups_metrics on Helios:9199 for Prometheus on Jupiter (job "nut").
+#
+# Its own compose project, like monitoring/promtail/docker-compose.helios.yml:
+# Helios runs the model layer as host systemd units, and this used to live in
+# the main docker-compose.yml under the `advanced` profile — so on Helios it
+# belonged to the stale /opt/gateway_mvp checkout, where it sat stopped from
+# 2026-07-24 to 2026-10-21 unnoticed (no UPS alert was routed back then).
+#
+# Deploy on Helios:
+#   rsync -a monitoring/nut-exporter/docker-compose.helios.yml \
+#       labadmin@helios:/opt/nut-exporter-helios/
+#   # .env next to it (chmod 600): NUT_EXPORTER_PASSWORD=<upsd.users "exporter" password>
+#   ssh labadmin@helios 'cd /opt/nut-exporter-helios && \
+#       docker compose -f docker-compose.helios.yml -p nut-exporter-helios up -d'
+#
+# Never `docker compose up` the stale /opt/gateway_mvp checkout on Helios: its
+# old main compose also defines container_name nut-exporter and would collide.
+#
+# Hardening: digest-pinned image, cap_drop ALL, no-new-privileges, read-only
+# rootfs with a /tmp tmpfs. network_mode: host because the exporter only needs
+# upsd at 127.0.0.1 and serves on the host — the same posture as node_exporter.
+services:
+  nut-exporter:
+    image: druggeri/nut_exporter:3.2.5@sha256:76fc9fb623bf8b7f1ee8ffc018ad7ffc568d297c04360accb54ef76981e0fa32
+    container_name: nut-exporter
+    restart: unless-stopped
+    network_mode: host
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - NUT_EXPORTER_SERVER=127.0.0.1
+      - NUT_EXPORTER_USERNAME=exporter
+      - NUT_EXPORTER_PASSWORD=${NUT_EXPORTER_PASSWORD:?set NUT_EXPORTER_PASSWORD in .env next to this file}
+      # The Goldenmate exposes only battery.charge/runtime + ups.status; the
+      # rest are listed so a full-data UPS is picked up without a config change
+      # (the exporter skips variables a UPS doesn't publish).
+      - NUT_EXPORTER_VARIABLES=battery.charge,battery.runtime,battery.voltage,battery.voltage.nominal,input.voltage,input.voltage.nominal,output.voltage,ups.load,ups.realpower,ups.realpower.nominal,ups.status

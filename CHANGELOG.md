@@ -4,6 +4,21 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Helios UPS exporter compose + Helios Health dashboard (2026-10-21)
+
+Branch `chore/selfmon-ups-grafana`.
+
+### Changed
+
+- `nut-exporter` moved out of the main `docker-compose.yml` into its own project, `monitoring/nut-exporter/docker-compose.helios.yml` (Helios `/opt/nut-exporter-helios`, project `nut-exporter-helios`). `NUT_EXPORTER_PASSWORD` is now required (`:?`) from a chmod-600 `.env` next to it. The `advanced` profile now covers only `nebula-sync`.
+- Grafana SRE dashboard: new row "Helios Health (self-monitoring)" (GPU driver exit code, brain decode tok/s, Helios logs reaching Loki, self-audit truncated groups; Helios kernel-fault + errors/warnings log panels); self-audit row gains "Investigator & Alert Webhook (/day)".
+
+### Ops
+
+- Live on Helios 2026-10-21, replacing the container from the stale `/opt/gateway_mvp` checkout (now chmod 700, credentials 600; never `compose up` it — `container_name` collision). Hand-deployed; CI deploys nothing to Helios. See `monitoring/README.md` → Deploy nut-exporter on Helios.
+
+---
+
 ## [Unreleased] — Open WebUI retired (2026-10-18)
 
 Branch `chore/retire-open-webui`. The dashboard `/chat` (frontend :3001) is the chat UI; Open WebUI is removed from the product.
