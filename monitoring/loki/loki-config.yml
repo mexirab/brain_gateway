@@ -55,6 +55,11 @@ ruler:
 
 limits_config:
   retention_period: 720h  # 30 days
+  # Backstop for the read-only self-investigator: no query (any client) reaches
+  # further back than 7 days, matching the self-audit's own lookback ceiling
+  # (SELF_AUDIT_LOOKBACK_HOURS <= 168). Loki clamps the start rather than
+  # erroring. Note: Grafana Explore is limited to 7 days too.
+  max_query_lookback: 168h
   ingestion_rate_mb: 10
   ingestion_burst_size_mb: 20
   max_streams_per_user: 10000

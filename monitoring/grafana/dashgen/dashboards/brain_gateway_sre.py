@@ -1747,7 +1747,8 @@ def build() -> dict:
             fill=40,
             description="ok = logs read + diagnosed; partial = logs read, Helios asleep so no "
             "LLM diagnosis (healthy); failed = Loki unreachable/empty (2 in 2d with no "
-            "ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis.",
+            "ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis "
+            "(Helios asleep, or the investigator failed — see SelfInvestigatorFailing).",
         ),
         timeseries(
             "Investigator & Alert Webhook (/day)",
@@ -1757,10 +1758,14 @@ def build() -> dict:
                     "run {{trigger}} {{result}}",
                 ),
                 ("sum by (result) (increase(bgw_self_audit_alert_trigger_total[1d]))", "webhook {{result}}"),
+                (
+                    'sum by (tool, result) (increase(bgw_self_investigator_tool_calls_total{result=~"denied|capped|error|duplicate"}[1d]))',
+                    "tool {{tool}} {{result}}",
+                ),
             ],
             unit="none",
             description="Read-only investigator runs (daily / alert-triggered) and Alertmanager "
-            "webhook deliveries. All zero until SELF_AUDIT_INVESTIGATE=true + the webhook token.",
+            "webhook deliveries, plus tool calls that were denied/capped/errored/duplicated (a growing count = the model is fighting its allow-list or looping). On since 2026-10-21; SelfInvestigatorFailing alerts on repeated daily errors.",
         ),
     ]
     row, y = grid_row(self_audit_row, y, heights=[8, 8, 8])

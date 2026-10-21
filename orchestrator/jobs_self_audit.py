@@ -669,6 +669,27 @@ def _redact_secrets(text: str) -> str:
     return out
 
 
+# The required closing line: "**Overall:** <C> critical, <H> high, <M> medium, <L> low".
+_OVERALL_RE = re.compile(
+    r"^\*\*Overall:\*\*\s*(\d+)\s+critical,\s*(\d+)\s+high,\s*(\d+)\s+medium,\s*(\d+)\s+low\b\s*\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _format_drifted(diagnosis: str, severity_counts: dict[str, int]) -> bool:
+    """True when the diagnosis is off-format: no Overall line, or its counts
+    disagree with the severity sections actually parsed (e.g. "2 high" but the
+    headers were malformed). An all-zero Overall with no sections is a valid
+    "nothing found" answer (first alert drill, 2026-10-21). Known limit: a model
+    that writes an honest-looking all-clear while ignoring clusters it should
+    have covered still passes — that is judgment, not format."""
+    m = _OVERALL_RE.search(diagnosis)
+    if not m:
+        return True
+    overall = dict(zip(("CRITICAL", "HIGH", "MEDIUM", "LOW"), (int(g) for g in m.groups()), strict=True))
+    return overall != severity_counts
+
+
 def _count_severities(diagnosis: str) -> dict[str, int]:
     counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for m in _SEVERITY_HEADER_RE.finditer(diagnosis):
@@ -1106,11 +1127,11 @@ async def _run_self_audit_locked(trigger: str, alert: dict[str, Any]) -> dict[st
         reason = reason or "sources_failed"
 
     severity_counts = _count_severities(diagnosis) if diagnosis else {}
-    if diagnosis and not any(severity_counts.values()):
-        # Diagnosis text exists but no severity headers parsed — model went
-        # off-format. Surface this so we can tune the prompt / re-evaluate.
+    if diagnosis and _format_drifted(diagnosis, severity_counts):
+        # Off-format: missing Overall line, or its counts disagree with the
+        # sections parsed. Surface this so we can tune the prompt / re-evaluate.
         SELF_AUDIT_FORMAT_DRIFT_TOTAL.inc()
-        logger.warning("[SELF_AUDIT] Diagnosis parsed zero severity headers — format drift")
+        logger.warning("[SELF_AUDIT] Diagnosis format drift (Overall line missing or disagrees with sections)")
 
     for sev, n in severity_counts.items():
         SELF_AUDIT_CLUSTERS_TOTAL.labels(severity=sev).inc(n)

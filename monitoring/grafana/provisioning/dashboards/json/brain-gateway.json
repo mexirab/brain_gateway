@@ -11999,7 +11999,7 @@
           "sort": "desc"
         }
       },
-      "description": "ok = logs read + diagnosed; partial = logs read, Helios asleep so no LLM diagnosis (healthy); failed = Loki unreachable/empty (2 in 2d with no ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis.",
+      "description": "ok = logs read + diagnosed; partial = logs read, Helios asleep so no LLM diagnosis (healthy); failed = Loki unreachable/empty (2 in 2d with no ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis (Helios asleep, or the investigator failed \u2014 see SelfInvestigatorFailing).",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -12039,6 +12039,18 @@
           "range": true,
           "instant": false,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (tool, result) (increase(bgw_self_investigator_tool_calls_total{result=~\"denied|capped|error|duplicate\"}[1d]))",
+          "legendFormat": "tool {{tool}} {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "C"
         }
       ],
       "fieldConfig": {
@@ -12097,7 +12109,7 @@
           "sort": "desc"
         }
       },
-      "description": "Read-only investigator runs (daily / alert-triggered) and Alertmanager webhook deliveries. All zero until SELF_AUDIT_INVESTIGATE=true + the webhook token.",
+      "description": "Read-only investigator runs (daily / alert-triggered) and Alertmanager webhook deliveries, plus tool calls that were denied/capped/errored/duplicated (a growing count = the model is fighting its allow-list or looping). On since 2026-10-21; SelfInvestigatorFailing alerts on repeated daily errors.",
       "gridPos": {
         "h": 8,
         "w": 8,

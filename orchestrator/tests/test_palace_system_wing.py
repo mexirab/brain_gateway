@@ -285,6 +285,67 @@ class TestPalaceStoreRoute:
         fake_palace.store.assert_not_called()
 
 
+class TestPalaceStoreBodyValidation:
+    @pytest.mark.parametrize("raw", ["[]", '["text"]', '"x"', "5", "null", "true"])
+    def test_non_dict_body_400(self, palace_client, raw):
+        client, fake_palace = palace_client
+        r = client.post("/api/palace/store", content=raw, headers={"content-type": "application/json"})
+        assert r.status_code == 400
+        assert "error" in r.json()
+        fake_palace.store.assert_not_called()
+
+    @pytest.mark.parametrize("field", ["wing", "room", "source", "category", "confidence", "project", "session_id"])
+    @pytest.mark.parametrize("value", [["system"], {"x": 1}, 5, 1.5, True, []])
+    def test_non_string_field_400(self, palace_client, field, value):
+        client, fake_palace = palace_client
+        r = client.post("/api/palace/store", json={"text": "some memory", field: value})
+        assert r.status_code == 400
+        assert field in r.json()["error"]
+        fake_palace.store.assert_not_called()
+
+    def test_list_wing_system_cannot_bypass_reserved_check(self, palace_client):
+        client, fake_palace = palace_client
+        r = client.post("/api/palace/store", json={"text": "fake audit fact", "wing": ["system"], "room": "audit"})
+        assert r.status_code == 400
+        fake_palace.store.assert_not_called()
+
+    @pytest.mark.parametrize("field", ["wing", "room", "source", "category", "confidence", "project", "session_id"])
+    def test_null_field_still_stores(self, palace_client, field):
+        client, fake_palace = palace_client
+        r = client.post("/api/palace/store", json={"text": "auto-routed memory", field: None})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        fake_palace.store.assert_awaited_once()
+
+    def test_null_wing_auto_routes(self, palace_client):
+        client, fake_palace = palace_client
+        r = client.post("/api/palace/store", json={"text": "auto-routed memory", "wing": None})
+        assert r.status_code == 200
+        assert fake_palace.store.call_args.kwargs.get("wing") in (None, "")
+
+    def test_string_fields_still_store(self, palace_client):
+        client, fake_palace = palace_client
+        body = {
+            "text": "note",
+            "wing": "personal",
+            "room": "health",
+            "source": "api",
+            "category": "fact",
+            "confidence": "high",
+            "project": "jess",
+            "session_id": "s1",
+        }
+        r = client.post("/api/palace/store", json=body)
+        assert r.status_code == 200
+        fake_palace.store.assert_awaited_once()
+
+    def test_reserved_wing_still_403_with_valid_types(self, palace_client):
+        client, fake_palace = palace_client
+        r = client.post("/api/palace/store", json={"text": "fake audit fact", "wing": "system", "room": "audit"})
+        assert r.status_code == 403
+        fake_palace.store.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # reminder_manager._send_notification with no mobile services
 # ---------------------------------------------------------------------------
@@ -310,3 +371,18 @@ class TestSendNotificationUnconfigured:
         with patch("httpx.AsyncClient") as mock_client:
             await reminder_manager._send_notification("hello")
         mock_client.assert_not_called()
+
+
+def test_store_malformed_json_is_400(palace_client):
+    client, palace = palace_client
+    resp = client.post("/api/palace/store", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert resp.status_code == 400
+    palace.store.assert_not_called()
+
+
+def test_store_null_fields_get_defaults(palace_client):
+    client, palace = palace_client
+    resp = client.post("/api/palace/store", json={"text": "a memory", "source": None, "category": None, "room": None})
+    assert resp.status_code == 200
+    kwargs = palace.store.call_args.kwargs
+    assert kwargs["source"] == "api" and kwargs["category"] == "general" and kwargs["room"] == ""
