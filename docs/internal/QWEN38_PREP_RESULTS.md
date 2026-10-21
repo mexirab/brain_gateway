@@ -7,6 +7,7 @@
 > `CLAUDE.md` Notes, `docs/internal/HELIOS_INFRASTRUCTURE.md`). `vllm-primary.service`
 > is kept on Helios as the rollback unit. Everything below is historical record;
 > the 2026-09-26 GPU-consolidation plan (`LOCAL_SINGLE_BOX_PLAN.md`) is likewise historical.
+> The coder mentioned below was retired 2026-10-16 and the `code_agent` tool removed 2026-10-21.
 
 > Session: 2026-09-26, unattended, on Jupiter. Helios stayed unplugged the whole
 > time; nothing GPU-side was run, woken, or SSH'd to. `brain-orchestrator` was

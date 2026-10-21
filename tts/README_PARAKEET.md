@@ -1,6 +1,6 @@
 # Parakeet STT — deploy & rollback runbook
 
-> **Status (2026-09-28):** `parakeet-stt.service` is **disabled** on Helios. The live STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU, same endpoints (source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service`). This runbook stays valid for the NeMo/GPU engine as the alternative: `sudo systemctl disable --now stt-onnx && sudo systemctl enable --now parakeet-stt` (never run both — they share the port). GPU1 now also hosts qwen-tts and the code agent; check headroom first.
+> **Status (2026-09-28):** `parakeet-stt.service` is **disabled** on Helios. The live STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU, same endpoints (source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service`). This runbook stays valid for the NeMo/GPU engine as the alternative: `sudo systemctl disable --now stt-onnx && sudo systemctl enable --now parakeet-stt` (never run both — they share the port). GPU1 also hosts qwen-tts (and VoxCPM2 TTS); check headroom first.
 
 `stt_server_parakeet.py` is a drop-in replacement for the Whisper STT server
 (`stt_server.py`) that uses NVIDIA Parakeet TDT V3 via NeMo. It binds the same
@@ -9,7 +9,7 @@ port (`8003`) and exposes the same three endpoints, so the orchestrator
 
 **Expected wins:** ~10× faster (RTFx >2000), lower WER (6.32% vs Whisper
 medium's 7.44%), sub-200ms streaming. Frees real VRAM headroom on Helios GPU1
-(RTX PRO 5000), which is shared with TTS (and, until its 2026-10-16 retirement, the code agent).
+(RTX PRO 5000), which is shared with TTS.
 
 **Trade-off:** Parakeet is English-only. ATOM Echo and dashboard voice usage in this
 deployment is English, so this is acceptable.

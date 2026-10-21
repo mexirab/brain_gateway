@@ -117,7 +117,6 @@ def test_injection_rule_names_the_write_tools():
         "update_data",
         "selfcare_log",
         "helios_power",
-        "code_agent",
     ):
         assert tool in line
     assert "including but not limited to" in line
@@ -146,22 +145,20 @@ def test_voice_mode_drops_guidance_but_keeps_rules():
 
 def test_gated_tools_only_mentioned_when_in_schema(monkeypatch):
     monkeypatch.setattr(shared, "JESS_ADVANCED", False)
-    monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", True)
     monkeypatch.setattr(shared, "EXPERT_ENABLED", True)
     monkeypatch.setattr(shared, "PAPERLESS_ENABLED", False, raising=False)
     p = get_unified_system_prompt()
-    for name in ("code_agent", "check_claude_activity", "ask_expert", "paperless_save"):
+    for name in ("check_claude_activity", "ask_expert", "paperless_save"):
         assert name not in p.split(DYNAMIC_CONTEXT_MARKER)[0].split("IMPORTANT RULES:")[0], name
 
     monkeypatch.setattr(shared, "JESS_ADVANCED", True)
     monkeypatch.setattr(shared, "PAPERLESS_ENABLED", True, raising=False)
     p = get_unified_system_prompt()
     guidance = p.split("IMPORTANT RULES:")[0]
-    for name in ("code_agent", "check_claude_activity", "ask_expert", "paperless_save"):
+    for name in ("check_claude_activity", "ask_expert", "paperless_save"):
         assert name in guidance, name
 
-    monkeypatch.setattr(shared, "CODE_AGENT_ENABLED", False)
-    assert "code_agent for questions" not in get_unified_system_prompt().split("IMPORTANT RULES:")[0]
+    assert "code_agent" not in get_unified_system_prompt()
     assert "ask_expert" not in get_unified_system_prompt(is_voice=True)
 
 

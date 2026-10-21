@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # -- Distribution profile ----------------------------------------------------
     # JESS_ADVANCED gates owner-specific tools and integrations from the
-    # shippable single-box build (e.g. code_agent, ask_expert, query_budget,
+    # shippable single-box build (e.g. ask_expert, query_budget,
     # finance_status, check_claude_activity). Default OFF so a fresh install
     # only exposes the core ADHD toolset; flip to true in .env to unlock the
     # full advanced surface used in development.
@@ -349,13 +349,6 @@ class Settings(BaseSettings):
     palace_wakeup_max_tokens: int = 170
     palace_dedup_threshold: float = 0.85
     palace_session_mine_path: str = ""
-
-    # -- Code Agent --------------------------------------------------------------
-    code_agent_enabled: bool = False
-    code_agent_model_url: str = ""
-    code_agent_model_name: str = ""
-    code_agent_codebase_path: str = "/opt/gateway_mvp"
-    code_agent_max_rounds: int = 10
 
     # -- Expert Model (Qwen3-32B Thinking on Saturn 3090) ------------------------
     # Hard-reasoning delegate. Primary model calls this via the `ask_expert`

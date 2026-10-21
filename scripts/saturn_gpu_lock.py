@@ -21,7 +21,7 @@ Design notes:
 
 - Uses subprocess + ssh. Requires passwordless ssh to
   ``labadmin@10.0.0.58`` (same key the orchestrator already uses for
-  the vision / code-agent nodes).
+  other GPU nodes).
 - Stop-on-enter is guarded by try/finally, so a crash inside the block
   still restarts the expert. The start-on-exit is best-effort: if the
   docker start fails, we log loudly but do not re-raise, so the

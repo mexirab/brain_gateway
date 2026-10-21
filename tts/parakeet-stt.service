@@ -11,9 +11,9 @@ Group=labadmin
 WorkingDirectory=/home/labadmin
 
 Environment="PATH=/home/labadmin/parakeet-env/bin:/usr/local/bin:/usr/bin:/bin"
-# Hide GPU0 (RTX 5090 — code agent) from this process so NeMo's from_pretrained
+# Hide GPU0 (RTX 5090 — primary LLM) from this process so NeMo's from_pretrained
 # loads on the RTX PRO 5000 (physical GPU1, which becomes cuda:0 from the
-# process's point of view). Loading on GPU0 first OOMs against the code agent.
+# process's point of view). Loading on GPU0 first OOMs against the primary LLM.
 Environment="CUDA_VISIBLE_DEVICES=1"
 Environment="PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v3"
 Environment="PARAKEET_DEVICE=cuda:0"

@@ -80,16 +80,13 @@ The default install runs the conversation model + voice + reminders + focus time
 | Google Calendar / Gmail | ✅ | ✅ | ✅ | ✅ |
 | Paperless-ngx (OCR) | ✅¹ | ✅¹ | ✅¹ | ✅¹ |
 | Monitoring stack (Prom/Graf/Loki) | ⚠️² | ✅ | ✅ | ✅ |
-| Code agent (Qwen3-Coder MoE) | ❌ | ❌³ | ❌³ | ✅⁴ |
-| Vision (Qwen3-VL-8B) | ❌ | ⚠️⁵ | ⚠️⁵ | ✅ |
-| Expert reasoner (Qwen3-32B) | ❌ | ❌⁶ | ❌⁶ | ❌⁶ |
+| Vision (Qwen3-VL-8B) | ❌ | ⚠️³ | ⚠️³ | ✅ |
+| Expert reasoner (Qwen3-32B) | ❌ | ❌⁴ | ❌⁴ | ❌⁴ |
 
 ¹ Paperless-ngx runs on a separate box or container; no GPU requirement on this side.
 ² Advanced profile adds ~1.5 GiB RAM overhead; tight on a 16 GiB system.
-³ Code agent is an 80B MoE that spills experts to system RAM. Needs ≥48 GiB GPU + 64 GiB system RAM.
-⁴ Realistic only on a second 48 GiB GPU (pinned away from vLLM). On a single-GPU box it competes for VRAM.
-⁵ Vision model fits on the same GPU only if you can spare ~6 GiB VRAM; usually means dropping context.
-⁶ Expert reasoner runs on a separate box (Qwen3-32B Q4_K_M on a dedicated 24 GiB GPU). Not viable on a single-box install.
+³ Vision model fits on the same GPU only if you can spare ~6 GiB VRAM; usually means dropping context.
+⁴ Expert reasoner runs on a separate box (Qwen3-32B Q4_K_M on a dedicated 24 GiB GPU). Not viable on a single-box install.
 
 ---
 
@@ -98,7 +95,7 @@ The default install runs the conversation model + voice + reminders + focus time
 - **OS:** Ubuntu 22.04 LTS or 24.04 LTS. Other distros work but you're on your own for driver + DKMS packaging.
 - **Kernel:** 6.5+ (needed for nvidia-driver-580). Default on Ubuntu 22.04.5+ and 24.04+.
 - **CPU:** any x86-64 from the last ~5 years. The orchestrator is I/O-bound, not CPU-bound.
-- **RAM:** 16 GiB minimum (boots); 32 GiB recommended (advanced profile, code agent spill).
+- **RAM:** 16 GiB minimum (boots); 32 GiB recommended (advanced profile).
 - **Disk:** ~120 GiB free. The breakdown: ~40 GiB for docker container images, ~50 GiB for the HF model cache (vLLM + Qwen3-TTS + Parakeet weights — pulled on first `docker compose up`, then cached forever), the rest for ChromaDB + state. First-time install downloads all of this; subsequent boots are local-only.
 - **Network:** any LAN. For off-LAN access from your phone, Tailscale (free tier) + `tailscale serve` is the easiest path; the maintainer's deployment uses exactly this.
 

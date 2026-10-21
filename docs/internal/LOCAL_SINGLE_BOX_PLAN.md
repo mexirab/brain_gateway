@@ -5,6 +5,9 @@
 > brain target moved from Qwen3.6-27B to **Qwen3.8-27B**. The 2026-07-24 one-GPU version
 > is in git history. The all-local decision itself is unchanged — see
 > `DECISION_local_vs_cloud_brain.md`.
+>
+> **Since then:** the coder model was retired 2026-10-16 and the `code_agent` tool
+> removed 2026-10-21, so the code-agent lines below are historical.
 
 ## Goal
 

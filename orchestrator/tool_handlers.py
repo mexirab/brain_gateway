@@ -1953,11 +1953,7 @@ def _reg_check_claude_activity(arguments: dict) -> str:
     return f"Unknown action: {action}"
 
 
-# Import code_agent to register its @register_tool handler
 import contextlib
-
-with contextlib.suppress(ImportError):
-    from orchestrator import code_agent  # noqa: F401
 
 # Import expert_agent to register the ask_expert handler
 with contextlib.suppress(ImportError):

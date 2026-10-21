@@ -30,7 +30,7 @@ from orchestrator.vision_handler import PHOTO_BLOCK_RE
 logger = logging.getLogger(__name__)
 
 # Hard cap on a single tool result inserted into the conversation. Without
-# this cap, a tool like code_agent or a long check_system dump can dominate
+# this cap, a long tool result (e.g. a check_system dump) can dominate
 # the model's 32K context budget after just a few invocations — every
 # subsequent turn replays the entire bloated message list until llama-server
 # rejects the request with HTTP 400. 8000 chars ≈ 2000 tokens, which is
@@ -111,7 +111,6 @@ TERMINAL_TOOLS = {
     "routine_action",
     "bookmark_context",
     "selfcare_log",
-    "code_agent",
 }
 
 

@@ -1476,36 +1476,6 @@ STATIC_TOOLS = [
     },
 ]
 
-# Code agent tool — added dynamically when enabled
-_CODE_AGENT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "code_agent",
-        "description": (
-            "Delegate a coding task to the code agent: troubleshoot issues, read source code, "
-            "search for patterns, run tests, or make changes to the Brain Gateway codebase. "
-            "Use this when the user asks about how something works in the code, asks you to "
-            "fix a bug, investigate an error, or implement a feature."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "Description of what to investigate or implement",
-                },
-                "apply_changes": {
-                    "type": "boolean",
-                    "description": "If true, the agent can write files. If false (default), diagnosis and investigation only.",
-                    "default": False,
-                },
-            },
-            "required": ["task"],
-        },
-    },
-}
-
-
 # Expert model tool — added dynamically when enabled
 _EXPERT_TOOL = {
     "type": "function",
@@ -1589,7 +1559,6 @@ def _refresh_tool_caches() -> None:
     ha_tool = get_ha_tool_definition()  # TTL-cached; may bump _ha_tool_cache_time
     key = (
         shared._ha_tool_cache_time,
-        shared.CODE_AGENT_ENABLED,
         shared.EXPERT_ENABLED,
         shared.JESS_ADVANCED,
         shared.WORKOUTS_ENABLED,
@@ -1613,8 +1582,6 @@ def _refresh_tool_caches() -> None:
         if not getattr(shared, "PAPERLESS_ENABLED", False):
             static = [t for t in static if t.get("function", {}).get("name") not in PAPERLESS_TOOL_NAMES]
         tools = [ha_tool] + static
-        if shared.CODE_AGENT_ENABLED and shared.JESS_ADVANCED:
-            tools.append(_CODE_AGENT_TOOL)
         if shared.EXPERT_ENABLED and shared.JESS_ADVANCED:
             tools.append(_EXPERT_TOOL)
         _all_tools_cache = tools
@@ -1623,9 +1590,9 @@ def _refresh_tool_caches() -> None:
 
 
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools for unified mode (v7): HA tool + gated static tools + optional code agent + optional expert.
+    """Get all tools for unified mode (v7): HA tool + gated static tools + optional expert.
 
-    JESS_ADVANCED gates owner-specific tools (`code_agent`, `ask_expert`,
+    JESS_ADVANCED gates owner-specific tools (`ask_expert`,
     `query_budget`, `finance_status`, `check_claude_activity`); WORKOUTS/MEALS/
     HELIOS flags gate their feature areas. Results are cached and rebuilt only
     when a gating flag or the HA tool cache changes (called every LLM round).

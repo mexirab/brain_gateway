@@ -75,11 +75,11 @@ services:
       # import_budget.py that operate on data inside the container.
       - ${GATEWAY_ROOT_PATH:-.}/scripts:/app/scripts:ro
       # Claude Code session files (read-only) — lets Jess see what Claude Code
-      # has been working on for self-troubleshooting + code_agent context.
+      # has been working on for self-troubleshooting (check_claude_activity).
       # Host path is configurable; container path is fixed (matches
       # CLAUDE_PROJECTS_PATH env var in the environment block below).
       - ${CLAUDE_PROJECTS_HOST_PATH:-/home/labadmin/.claude/projects}:/home/jess/.claude/projects:ro
-      # Codebase access for code_agent (read-only by default)
+      # Read-only repo for the self-investigator (SELF_AUDIT_REPO_PATH default).
       - ${GATEWAY_ROOT_PATH:-.}:/opt/gateway_mvp:ro
     environment:
       # Primary model (conversation + tools) — Bring Your Own Model; set in .env
@@ -184,12 +184,6 @@ services:
       - VISION_MODEL_NAME=${VISION_MODEL_NAME:-Qwen3VL-8B-Instruct-Q4_K_M.gguf}
       - VISION_MAX_IMAGE_SIZE=${VISION_MAX_IMAGE_SIZE:-10485760}
       - VISION_TIMEOUT=${VISION_TIMEOUT:-120}
-      # Code Agent (coding model for self-troubleshooting)
-      - CODE_AGENT_ENABLED=${CODE_AGENT_ENABLED:-false}
-      - CODE_AGENT_MODEL_URL=${CODE_AGENT_MODEL_URL:-}
-      - CODE_AGENT_MODEL_NAME=${CODE_AGENT_MODEL_NAME:-}
-      - CODE_AGENT_CODEBASE_PATH=${CODE_AGENT_CODEBASE_PATH:-/opt/gateway_mvp}
-      - CODE_AGENT_MAX_ROUNDS=${CODE_AGENT_MAX_ROUNDS:-10}
       # Presence awareness (empty entity = disabled)
       - PRESENCE_ENABLED=${PRESENCE_ENABLED:-false}
       - PRESENCE_ENTITY=${PRESENCE_ENTITY:-}
