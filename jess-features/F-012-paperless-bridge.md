@@ -149,6 +149,7 @@ Response: `{"ok": true, "task_id": "uuid", "paperless_status_url": "..."}` or `{
 
 - `bgw_paperless_upload_total{result="ok|fail|skipped"}` — Counter. `skipped` fires when the feature is disabled or config is incomplete.
 - `bgw_paperless_upload_latency_seconds` — Histogram of orchestrator → Paperless upload round-trip.
+- `bgw_paperless_read_total{op="search|get", result}` — Counter for the read tools. `result` ∈ `ok|not_found|http_4xx|http_5xx|http_other|bad_body|timeout|connect_error|other|disabled|missing_url|missing_token`.
 
 ---
 
@@ -162,6 +163,39 @@ Response: `{"ok": true, "task_id": "uuid", "paperless_status_url": "..."}` or `{
 - [ ] REST route multipart upload happy path.
 - [ ] REST route rejects oversize upload (handled by `RequestSizeLimitMiddleware`).
 - [ ] `PAPERLESS_ENABLED=true` + empty token → `model_validator` logs + auto-disables; tool/route return "disabled".
+
+---
+
+## Read tools (paperless_search / paperless_read)
+
+Read-only access to the archive so Jess can answer "when does my car insurance renew?" from papers already in Paperless.
+
+| Tool | Args | Does |
+|------|------|------|
+| `paperless_search` | `query` (required), `limit` 1-10 (default 5) | `GET /api/documents/?query=` — title + OCR full text. One line per match with `[id]`, title, date, correspondent, type, tags (≤8). |
+| `paperless_read` | `doc_id` (required), `offset` (default 0) | `GET /api/documents/{id}/` — 6000-char OCR chunk; `next_offset` returned while text remains. |
+
+- Code: `paperless_manager.search_documents` / `get_document` (GET-only, never raise, 10 s / 3 s connect per request, tag/correspondent/type name lookups run concurrently); handlers `_reg_paperless_search` / `_reg_paperless_read` in `tool_handlers.py` (hard 20 s per call).
+- Gating: same `PAPERLESS_TOOL_NAMES` / `PAPERLESS_ENABLED` gate as `paperless_save`. Not voice tools, not terminal.
+- Untrusted content: OCR text sits between `BEGIN PAPERLESS DOCUMENT <random 8-hex>` / `END PAPERLESS DOCUMENT <same>`; content and metadata pass through `prompt_builder._escape_boundaries`; metadata flattened to one line.
+- Prompt: tool guidance routes "papers already in Paperless" to search → read. The EXTERNAL CONTENT IS DATA rule names both tools and forbids copying numbers/names/details from documents, email or memory into a `web_search` query unless the user asked for that exact search (anti-exfiltration).
+- Logging: nothing logs a query, title or content. `httpx`/`httpcore` loggers are held at WARNING globally (`log_config.quiet_url_logging_libs()`) because their INFO lines include the full URL, i.e. the search text.
+
+### Operator setup — least-privilege token
+
+1. In Paperless, create a dedicated **non-superuser** (e.g. `jess`) with: Document view (+ add, for `paperless_save`), Tag / Correspondent / Document type view. No change, delete or admin.
+2. Paperless 2.x object permissions: that user only sees documents it owns, that are shared with it or its group, or that have no owner. Share existing documents via bulk edit → permissions; share new ones with a Workflow "Assign permissions" action. Leave sensitive documents unshared to keep them out of Jess's reach.
+3. Create an API token for that user → `PAPERLESS_API_TOKEN`.
+4. `PAPERLESS_URL` must be reachable from the orchestrator container. If Paperless isn't on `gateway-net`, use the host LAN IP + port; container names and tailnet MagicDNS names may not resolve.
+
+### Data exposure
+
+- Assistant replies that quote document details land in chat history, the state backups, and (under `JESS_ADVANCED`) the training corpus.
+
+### Known gaps
+
+- No dashboard panel or alert for `bgw_paperless_read_total`.
+- Paperless itself has no health probe or alert — it can be stopped for months unnoticed (happened in 2026). A dead Paperless shows up only as "Couldn't reach Paperless" tool results and `connect_error` counts.
 
 ---
 
