@@ -531,6 +531,90 @@ def build() -> dict:
     row, y = grid_row(helios_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Helios Health (self-monitoring)
+    # What Jess can sense about her own body: the Helios journal shipped to Loki
+    # (promtail-helios -> loki-push-gw), the GPU driver, decode speed and whether
+    # the shipping itself still works. Alerts: HeliosGpuDriverBroken, BrainOnCPU,
+    # HeliosLogsSilent/HeliosLogCheckFailing, HeliosHardwareFault (Loki ruler).
+    r, y = row_divider("Helios Health (self-monitoring)", y)
+    panels.append(r)
+
+    helios_health_stats = [
+        stat(
+            "GPU Driver (nvidia-smi exit)",
+            'nvidia_smi_command_exit_code{job="gpu-exporter", node="helios"}',
+            color_mode="background",
+            graph_mode="none",
+            thresholds=[(None, "green"), (1, "red")],
+            mappings=[{"type": "value", "options": {"0": {"text": "OK", "color": "green", "index": 0}}}],
+            description="Non-zero = the GPU exporter can't talk to the NVIDIA driver (18 = "
+            "driver/library mismatch, the 2026-10-15 CPU-fallback cause) -> HeliosGpuDriverBroken. "
+            "'No data' = Helios asleep.",
+        ),
+        stat(
+            "Brain Decode Speed (15m)",
+            # Same guard as BrainOnCPU: without it an awake-but-idle brain gives
+            # 0/0 = NaN instead of "No data".
+            '(rate(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) '
+            '/ rate(llamacpp:tokens_predicted_seconds_total{job="llama-primary"}[15m])) '
+            'and increase(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) >= 1',
+            unit="none",
+            thresholds=[(None, "red"), (30, "yellow"), (80, "green")],
+            description="Mean tok/s while generating. ~105-125 on the RTX 5090; under 30 = "
+            "running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
+        ),
+        stat(
+            "Helios Logs Reaching Loki",
+            # Only trust the gauge when a check actually completed recently: it
+            # reads 0 from process start, while the check is disabled, and keeps
+            # its last value while the check fails (HeliosLogCheckFailing).
+            'bgw_helios_logs_silent and on() increase(bgw_helios_log_check_total{result=~"lines|silent"}[15m]) > 0',
+            color_mode="background",
+            graph_mode="none",
+            thresholds=[(None, "green"), (1, "blue")],
+            mappings=[
+                {
+                    "type": "value",
+                    "options": {
+                        "0": {"text": "Flowing", "color": "green", "index": 0},
+                        "1": {"text": "Silent 30m", "color": "blue", "index": 1},
+                    },
+                }
+            ],
+            description="Flowing = the last check saw brain log lines in Loki. Silent is normal while "
+            "the brain is idle; HeliosLogsSilent only fires when it is silent AND the brain served "
+            "prompts (promtail-helios or loki-push-gw down). 'No data' = no check completed in 15m "
+            "(self-audit disabled, just restarted, or HeliosLogCheckFailing).",
+        ),
+        stat(
+            "Self-Audit Truncated Groups (1d)",
+            "round(sum(increase(bgw_self_audit_truncated_total[1d])))",
+            graph_mode="none",
+            thresholds=[(None, "green"), (1, "yellow")],
+            description="Self-audit log groups (orchestrator / jupiter_other / helios / ups) whose "
+            "Loki sample hit its line limit in the last day; counts are still exact, but clusters "
+            "only saw the sample (e.g. a UPS USB flap).",
+        ),
+    ]
+    row, y = grid_row(helios_health_stats, y, heights=[5, 5, 5, 5])
+    panels.extend(row)
+
+    helios_health_logs = [
+        logs(
+            "Helios Kernel Faults",
+            '{host="helios", service="kernel"} |~ "IO_PAGE_FAULT|HC died|host controller not '
+            'responding|NVRM: Xid|PCIe Bus Error|Hardware Error"',
+        ),
+        logs(
+            "Helios Errors & Warnings",
+            # A UPS USB-link flap logs ~1800 warnings/h from nut-driver and would bury
+            # everything else here; the self-audit and the UPS dashboard still see it.
+            '{host="helios", level=~"error|critical|warning", service!~"nut-driver@.*"}',
+        ),
+    ]
+    row, y = grid_row(helios_health_logs, y, heights=[9, 9])
+    panels.extend(row)
+
     # -------------------------------------------------------- Expert Agent
     r, y = row_divider("Expert Agent (Saturn 3090 Qwen3-32B)", y)
     panels.append(r)
@@ -1665,8 +1749,21 @@ def build() -> dict:
             "LLM diagnosis (healthy); failed = Loki unreachable/empty (2 in 2d with no "
             "ok/partial = SelfAuditFailing). A run of partials means the audit never gets a diagnosis.",
         ),
+        timeseries(
+            "Investigator & Alert Webhook (/day)",
+            [
+                (
+                    "sum by (trigger, result) (increase(bgw_self_investigator_runs_total[1d]))",
+                    "run {{trigger}} {{result}}",
+                ),
+                ("sum by (result) (increase(bgw_self_audit_alert_trigger_total[1d]))", "webhook {{result}}"),
+            ],
+            unit="none",
+            description="Read-only investigator runs (daily / alert-triggered) and Alertmanager "
+            "webhook deliveries. All zero until SELF_AUDIT_INVESTIGATE=true + the webhook token.",
+        ),
     ]
-    row, y = grid_row(self_audit_row, y, heights=[8, 8])
+    row, y = grid_row(self_audit_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Logs (with $request_id trace)

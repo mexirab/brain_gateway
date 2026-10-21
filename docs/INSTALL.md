@@ -218,7 +218,7 @@ This pulls + starts the **default** profile:
 
 It does **not** start (these are opt-in):
 - `vllm-primary`, `qwen-tts`, `parakeet-stt` — model layer, behind the `models` profile (Helios runs these as host systemd units; new installs that want them via compose set `COMPOSE_PROFILES=models`)
-- `nebula-sync`, `nut-exporter` — operator tooling, behind `advanced`
+- `nebula-sync` — operator tooling, behind `advanced`
 
 First-boot will take 5–15 minutes to pull all the container images. Watch progress:
 
@@ -278,7 +278,6 @@ docker compose up -d
 
 This adds:
 - `nebula-sync` (multi-instance Pi-hole replication)
-- `nut-exporter` (UPS monitoring)
 - Owner-specific tools (`code_agent`, `ask_expert`, `query_budget`, `finance_status`, `check_claude_activity`)
 - Background jobs (self-audit, training corpus drain)
 

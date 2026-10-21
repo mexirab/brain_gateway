@@ -180,6 +180,6 @@ rsync -a monitoring/promtail/{docker-compose.helios.yml,promtail-helios.yml} lab
 ssh labadmin@helios 'cd /opt/promtail-helios && docker compose -f docker-compose.helios.yml -p promtail-helios up -d'
 ```
 
-**Advanced profile gating:** `nebula-sync` (multi-Pi-hole replication) and `nut-exporter` (UPS metrics) are behind `profiles: ["advanced"]` in `docker-compose.yml`. Default installs skip them; set `COMPOSE_PROFILES=advanced` in `.env` to bring them up. `NODE_JUPITER_IP` and `NODE_SATURN_IP` use soft `${VAR:-}` defaults so default installs don't fail compose validation.
+**Advanced profile gating:** `nebula-sync` (multi-Pi-hole replication) is behind `profiles: ["advanced"]` in `docker-compose.yml`. Default installs skip it; set `COMPOSE_PROFILES=advanced` in `.env` to bring it up. `nut-exporter` (UPS metrics, :9199) runs from its own compose project `/opt/nut-exporter-helios` (`monitoring/nut-exporter/docker-compose.helios.yml`, since 2026-10-21) — never `compose up` the stale `/opt/gateway_mvp` checkout (container_name collision). Deploy: `monitoring/README.md` → Deploy nut-exporter on Helios. `NODE_JUPITER_IP` and `NODE_SATURN_IP` use soft `${VAR:-}` defaults so default installs don't fail compose validation.
 
 See `monitoring/README.md` for full setup details including the two-promtail topology and LogQL examples.

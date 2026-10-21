@@ -34,6 +34,7 @@ docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up
 | loki-push-gw | 3101 (`${NODE_JUPITER_IP}`, LAN; loopback if unset) | Push-only nginx in front of Loki for Helios promtail (Helios IP + bearer token) |
 | Node Exporter | 9100 | System metrics |
 | Blackbox | 9115 (127.0.0.1 only) | HTTP probes |
+| nut-exporter (Helios) | 9199 (host network) | UPS metrics from host NUT (own compose project on Helios, `/opt/nut-exporter-helios`) |
 
 ## Remote Node Setup
 
@@ -98,6 +99,23 @@ ssh labadmin@helios 'cd /opt/promtail-helios && \
 ```
 
 Jupiter `.env` needs `LOKI_PUSH_TOKEN` and `NODE_HELIOS_IP` (gateway allow-list) — then `docker compose --env-file ../.env up -d loki-push-gw` from `monitoring/`. Check: `{host="helios"}` in Grafana Explore.
+
+### Deploy nut-exporter on Helios
+
+The UPS exporter (`:9199`, Prometheus job `nut`) is its own compose project `nut-exporter-helios` (`nut-exporter/docker-compose.helios.yml`), not part of the main `docker-compose.yml`. Live since 2026-10-21.
+
+```bash
+# From the repo on Jupiter
+rsync -a monitoring/nut-exporter/docker-compose.helios.yml \
+    labadmin@helios:/opt/nut-exporter-helios/
+# On Helios: /opt/nut-exporter-helios/.env (chmod 600) with
+#   NUT_EXPORTER_PASSWORD=<the [exporter] password in /etc/nut/upsd.users>
+#   (required — compose refuses to start without it)
+ssh labadmin@helios 'cd /opt/nut-exporter-helios && \
+    docker compose -f docker-compose.helios.yml -p nut-exporter-helios up -d'
+```
+
+Same command to update. CI deploys nothing to Helios — this and `promtail-helios` are hand-deployed. **Never `docker compose up` the stale `/opt/gateway_mvp` checkout on Helios** (now chmod 700, credentials 600): its old compose also defines `container_name: nut-exporter` and would collide.
 
 **Both promtails share the same security posture:** image pinned by digest (`grafana/promtail:3.4.2@sha256:c6e9a987…`), `cap_drop: [ALL]`, `security_opt: no-new-privileges:true`, `-config.expand-env=true`. When updating the image, pin both to the new digest; don't use a floating tag. The Helios promtail also runs read-only on an isolated `promtail-net` network and has no Docker socket (`:ro` doesn't restrict the Docker API — it would mean root on Helios).
 
@@ -168,7 +186,7 @@ Configured in `prometheus/prometheus.yml.template`. After editing, render + relo
 - **Calendar sources (orchestrator metrics, PR #83 — not deployed):** `CalendarSourceFailing` (quiet; replaces the dead Google-only `CalendarPollingFailed`) fires when `bgw_calendar_source_fetch_total{source=~"caldav|google",result=~"error|timeout"}` increases >6 in 1h for 15m — catches what the probe can't (401 after a password change, REPORT errors). `ExchangeCalendarSyncStale` (deadmans group, quiet, daily repeat) fires when `bgw_phone_calendar_last_sync_timestamp_seconds` is >26h old (+30m `for`); silent while 0 (work Shortcut never synced, or only the retired legacy push). Grafana row **"Calendar Sources"** (`brain_gateway_sre.py`): reads by source/result, success ratio, read latency p95, work-sync age, iPhone push rejections by reason, writes by target/result, Radicale probe. The older Google-era panels are renamed "Calendar tools: check/create …".
 - **`tts-voxcpm`** blackbox probe: `http://<helios>:8004/health` (VoxCPM2, `tts/voxcpm-tts.service`; `/health` 503s when no voice is usable). `TTSDown` now matches `probe_success{service=~"tts|tts-voxcpm"}` — both Qwen3-TTS (:8002) and VoxCPM2 alert while both run; whichever `TTS_URL` points at is the live voice. Port hardcoded (no `SERVICE_*` template var). See `docs/VOICE_AND_TTS.md` → VoxCPM2 TTS server.
 - **Dashboard inbox + Web Push:** `WebPushFailing` (quiet `pushover-quiet`, warning, `for: 30m`) fires when `bgw_webpush_send_total` shows failures (`auth|http_4xx|http_5xx|timeout|redirect|error`) and no `ok` in 6h — Web Push counts as phone delivery while a device is recently healthy, so a rejecting push service would mark reminders delivered into the void. `result=auth` = VAPID key (`WEBPUSH_KEY_PATH`) changed → re-enable on each device. Silent when nothing was sent. Grafana row **"Dashboard Inbox & Web Push"** (`brain_gateway_sre.py`): devices (`bgw_webpush_subscriptions`), cards added by kind, cards resolved by via/resolution (cards climbing with no `dashboard` resolutions = nobody sees the tray), sends by result; web push ok/fail lines also in the Push Channels panels.
-- **`nut`** (UPS, Helios :9199): one UPS since 2026-10-21 — Goldenmate 2000VA LiFePO4 (CyberPower CP1500PFCLCD retired). Firmware exposes only status flags + battery charge/runtime (no load, no voltages), so `UPSInputVoltageOutOfRange` is gone and `UPSOverload` uses the `OVER` flag only; the UPS dashboard shows only those metrics. `UPSExporterDown` is gated on `bgw_helios_running == 1` (silent while Helios sleeps). Routing: `UPSOnBattery` + `UPSLowBattery` page; `UPSExporterDown`, `UPSReplaceBattery`, `UPSOverload` → `pushover-quiet`. Before 2026-10-21 no UPS alert was routed (all to `null`) and the exporter sat dead from 2026-07-24 unnoticed. **Known gap:** the exporter still runs from the stale `/opt/gateway_mvp` compose project on Helios (`restart: unless-stopped`); follow-up is its own compose project like `promtail-helios`.
+- **`nut`** (UPS, Helios :9199): one UPS since 2026-10-21 — Goldenmate 2000VA LiFePO4 (CyberPower CP1500PFCLCD retired). Firmware exposes only status flags + battery charge/runtime (no load, no voltages), so `UPSInputVoltageOutOfRange` is gone and `UPSOverload` uses the `OVER` flag only; the UPS dashboard shows only those metrics. `UPSExporterDown` is gated on `bgw_helios_running == 1` (silent while Helios sleeps). Routing: `UPSOnBattery` + `UPSLowBattery` page; `UPSExporterDown`, `UPSReplaceBattery`, `UPSOverload` → `pushover-quiet`. Before 2026-10-21 no UPS alert was routed (all to `null`) and the exporter sat dead from 2026-07-24 unnoticed. Since 2026-10-21 the exporter runs from its own compose project on Helios (`/opt/nut-exporter-helios`, see Deploy nut-exporter on Helios).
 - **HA unknown-entity refusals:** Tools-row panel "HA: Unknown entity_id refusals (/1h)" graphs `bgw_ha_unknown_entity_total`; the metric ships with branch `fix/ha-entity-listing` — no data until that deploys.
 - **HA device-setting guard:** Tools-row panels "HA: Guard refusals (/1h)" (all refusals `bgw_ha_call_refused_total` by path + device-setting refusals `bgw_ha_device_setting_refused_total{path,source}`; a `path=tool` burst can mean prompt injection) and stat "HA: Registry entities" (`bgw_ha_registry_entities`; 0 = registry never read, guard falls back to name-only checks). No alerts.
 
@@ -190,6 +208,8 @@ Enabled in `loki/loki-config.yml`: local rule storage from `loki/rules/fake/` (`
 | `HeliosLogCheckFailing` | Prometheus `helios_health` | ≥ 5 `bgw_helios_log_check_total{result="error"}` in 30 min, for 5 m. Also the only "Loki unreachable from the orchestrator" signal (Loki has no alert of its own); `HeliosLogsSilent` is blind meanwhile | `docker ps --filter name=loki`; `docker logs loki --tail 50`; `SELF_AUDIT_LOKI_URL` (`http://loki:3100`) resolves from `brain-orchestrator` |
 | `HeliosPoweredButUnreachable` (**pages**, critical) | Prometheus `helios_health` | Plug > 60 W, `bgw_helios_running == 1`, an ok plug read in 10 m, Helios node-exporter down, for 5 m (`bgw_helios_*` pinned to `job="orchestrator"`) | Hang or dead NIC — attach a monitor; power-cycle via the plug. Needs `HELIOS_PLUG_MONITOR_ENABLED` (or `HELIOS_WAKE_ENABLED`) on the orchestrator, else never fires |
 | `HeliosUnreachablePlugBlind` | Prometheus `helios_health` | Helios node-exporter down AND plug reads stale (no ok read in 10 m — poll disabled, HA down, orchestrator down) or incoherent (`running == 0` with watts ≥ 30 = switch unavailable while the sensor reports a draw; or 30–60 W), or unreadable (plug/sensor unavailable/unknown → watts NaN, `running == 0`; also NaN after an orchestrator restart until the first poll), for 30 m. 24h repeat | `HELIOS_PLUG_MONITOR_ENABLED` / `HELIOS_WAKE_ENABLED` on the orchestrator; the plug + power sensor in HA; `docker logs brain-orchestrator \| grep HELIOS`. Switch `off` exports 0 W even with the sensor unreadable. **Remaining gap:** a power sensor stuck at a stale standby number while Helios is up and hung (the 2026-10-17 post-restart blind spot is closed by the NaN export) |
+
+**Grafana row "Helios Health (self-monitoring)"** (`brain_gateway_sre.py`): stats for GPU driver (`nvidia_smi_command_exit_code`, non-zero = broken), brain decode tok/s (15m, only while generating), Helios logs reaching Loki (`bgw_helios_logs_silent`, shown only when a check completed in the last 15m) and self-audit truncated groups (1d); Loki log panels "Helios Kernel Faults" and "Helios Errors & Warnings" (excludes `nut-driver@*` flap spam). The self-audit row also has "Investigator & Alert Webhook (/day)" (`bgw_self_investigator_runs_total` by trigger + `bgw_self_audit_alert_trigger_total`) — zeros until `SELF_AUDIT_INVESTIGATE` is on.
 
 ## Architecture
 
