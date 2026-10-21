@@ -12,7 +12,8 @@ HuggingFace model cache, which re-downloads on demand). The genuinely
 | `data/app/auto_learn.key` | **Fernet key that decrypts learned personal facts** | ❌ **no — losing it bricks every encrypted memory, even though the ciphertext survives** |
 | `data/app/webpush_vapid.pem` | VAPID private key for dashboard Web Push (`WEBPUSH_KEY_PATH`, 0600). Critical file — an unreadable copy fails the run | ⚠️ a new key is auto-created, but every subscribed device stops receiving pushes until re-enabled in Settings → Notifications. The archive (and its plaintext Saturn copy) holds it unencrypted — anyone with the archive can sign pushes to subscribed devices |
 | live Chroma store (`CHROMA_HOST_PATH`, archived as `chroma/`) | RAG / mempalace vector store, incl. auto-learned facts | ⚠️ RAG docs re-ingestable; auto-learned facts are ❌ not |
-| `data/app/` subdirs | self-audits, budget summaries, imports, meal photos, paperless inbox, training corpus, documents | ❌ no |
+| `data/app/` subdirs | self-audits, budget summaries, imports, meal photos, paperless inbox, training corpus | ❌ no |
+| `data/documents/` | document vault uploads (`DOCUMENTS_PATH`, default `./data/documents`) — the original files; `brain_state.db` and Chroma only hold their extracted text. Archived (and copied to Saturn) unencrypted, like the rest. Only covered while `DOCUMENTS_PATH` stays under `data/` — the script does not follow a custom path | ❌ no |
 | `credentials/` | Google OAuth token + client secret | ⚠️ re-auth possible but painful |
 
 Until `scripts/backup_state.py` landed, none of this was backed up — a single

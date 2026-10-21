@@ -16,9 +16,12 @@ is tiny (~15 MB) and has never had a backup:
                          compose mounts it (CHROMA_HOST_PATH, e.g.
                          ~/.local/share/chroma); data/chroma/ is only the default
   - data/app/ subdirs    self-audits, budget summaries, imports, meal photos,
-                         paperless inbox, training corpus, documents
+                         paperless inbox, training corpus
                          (NOT exercise_library/ — reconstructable, nor pantry_photos/ —
                          transient; see EXCLUDE_DIRS)
+  - data/documents/      document vault uploads (DOCUMENTS_PATH default) — the
+                         original files; only their extracted text is in the DBs.
+                         Covered only while DOCUMENTS_PATH stays under data/
   - credentials/         the Google OAuth token + client secret
 
 This script is deliberately standalone and stdlib-only: it snapshots the live

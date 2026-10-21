@@ -54,6 +54,11 @@ def state_tree(tmp_path):
     (data / "app" / "self_audits").mkdir(parents=True)
     (data / "app" / "self_audits" / "audit.json").write_text("{}")
 
+    # Document vault uploads (DOCUMENTS_PATH default ./data/documents) — outside
+    # data/app/, still irreplaceable.
+    (data / "documents" / "insurance").mkdir(parents=True)
+    (data / "documents" / "insurance" / "policy.pdf").write_bytes(b"%PDF-1.4")
+
     # Excludable noise:
     (data / "hf_cache").mkdir()
     (data / "hf_cache" / "big.bin").write_bytes(b"x" * 4096)
@@ -111,6 +116,7 @@ class TestBackupContents:
         assert "data/app/brain_state.db" in names
         assert "data/app/auto_learn.key" in names
         assert "data/app/self_audits/audit.json" in names
+        assert "data/documents/insurance/policy.pdf" in names
         assert "data/chroma/personal_rag/chroma.sqlite3" in names
         assert "credentials/google_token.json" in names
         # excluded
