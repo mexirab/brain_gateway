@@ -1141,6 +1141,56 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "paperless_search",
+            "description": (
+                "Search the user's Paperless-ngx paper archive (scanned bills, insurance, tax, medical, "
+                "receipts) by words in the title or OCR text. Read-only. Returns titles, dates, tags and "
+                "ids — then use paperless_read to see what a document says. "
+                "E.g. 'when does my car insurance renew?', 'find my last water bill'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search words, e.g. 'car insurance renewal' or 'water bill'.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (1-10, default 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "paperless_read",
+            "description": (
+                "Read the OCR text of one Paperless document by its id from paperless_search. Read-only. "
+                "Long documents come in chunks; pass the offset it gives you to continue."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doc_id": {
+                        "type": "integer",
+                        "description": "The Paperless document id shown in [brackets] by paperless_search.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Character offset to start from (default 0).",
+                    },
+                },
+                "required": ["doc_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_claude_activity",
             "description": "Check what Claude Code (the CLI coding assistant) has been working on recently. Use this when the user asks you to troubleshoot something that may have just changed, says 'what did I just do with Claude Code', mentions code they were editing, or asks you to help diagnose something that might be related to recent changes. Returns recent turns, files touched, or the current live session.",
             "parameters": {
@@ -1543,7 +1593,7 @@ HELIOS_TOOL_NAMES: frozenset[str] = frozenset({"helios_power"})
 # Paperless bridge (F-012) — hidden from the schema unless PAPERLESS_ENABLED
 # (config.py already forces it off when the URL/token are missing). No point
 # spending ~350 prompt tokens per turn advertising a tool that can only fail.
-PAPERLESS_TOOL_NAMES: frozenset[str] = frozenset({"paperless_save"})
+PAPERLESS_TOOL_NAMES: frozenset[str] = frozenset({"paperless_save", "paperless_search", "paperless_read"})
 
 # Assembled tool-list cache. Rebuilt only when the HA tool cache refreshes
 # (every ~5 min) or a feature flag flips — get_all_tools/get_voice_tools are

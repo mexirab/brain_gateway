@@ -102,6 +102,17 @@ class StripQueryStringFilter(logging.Filter):
         return True
 
 
+# Third-party loggers that log full request URLs at INFO ("HTTP Request: GET
+# http://…/?query=<user text>"). httpx is the client for SearXNG, Paperless,
+# HA, Google… — the URL routinely carries the user's search words.
+_URL_LOGGING_LIBS = ("httpx", "httpcore")
+
+
+def quiet_url_logging_libs() -> None:
+    for name in _URL_LOGGING_LIBS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def configure_logging(level: str = "INFO"):
     """Replace the root logger's handler with JSON formatter."""
     handler = logging.StreamHandler()
@@ -111,6 +122,8 @@ def configure_logging(level: str = "INFO"):
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+    quiet_url_logging_libs()
 
     access = logging.getLogger("uvicorn.access")
     if not any(isinstance(f, StripQueryStringFilter) for f in access.filters):

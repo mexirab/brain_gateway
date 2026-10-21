@@ -14,7 +14,8 @@ make that prefix stable:
 - voice mode drops tool guidance but keeps the rules;
 - guidance only names schema-gated tools when they are in the schema;
 - retrieved text cannot forge the prompt's own boundaries;
-- paperless_save is hidden from the schema when PAPERLESS_ENABLED is off.
+- paperless_save / paperless_search / paperless_read are hidden from the
+  schema when PAPERLESS_ENABLED is off.
 """
 
 import re
@@ -148,14 +149,14 @@ def test_gated_tools_only_mentioned_when_in_schema(monkeypatch):
     monkeypatch.setattr(shared, "EXPERT_ENABLED", True)
     monkeypatch.setattr(shared, "PAPERLESS_ENABLED", False, raising=False)
     p = get_unified_system_prompt()
-    for name in ("check_claude_activity", "ask_expert", "paperless_save"):
+    for name in ("check_claude_activity", "ask_expert", "paperless_save", "paperless_search", "paperless_read"):
         assert name not in p.split(DYNAMIC_CONTEXT_MARKER)[0].split("IMPORTANT RULES:")[0], name
 
     monkeypatch.setattr(shared, "JESS_ADVANCED", True)
     monkeypatch.setattr(shared, "PAPERLESS_ENABLED", True, raising=False)
     p = get_unified_system_prompt()
     guidance = p.split("IMPORTANT RULES:")[0]
-    for name in ("check_claude_activity", "ask_expert", "paperless_save"):
+    for name in ("check_claude_activity", "ask_expert", "paperless_save", "paperless_search", "paperless_read"):
         assert name in guidance, name
 
     assert "code_agent" not in get_unified_system_prompt()
@@ -182,10 +183,13 @@ def test_paperless_gated_by_flag(monkeypatch):
     try:
         monkeypatch.setattr(shared, "PAPERLESS_ENABLED", False, raising=False)
         tool_definitions._tools_cache_key = ()
-        assert "paperless_save" not in _names(tool_definitions.get_all_tools())
+        paperless = {"paperless_save", "paperless_search", "paperless_read"}
+        assert paperless == tool_definitions.PAPERLESS_TOOL_NAMES
+        assert not paperless & _names(tool_definitions.get_all_tools())
+        assert not paperless & _names(tool_definitions.get_voice_tools())
         monkeypatch.setattr(shared, "PAPERLESS_ENABLED", True, raising=False)
         tool_definitions._tools_cache_key = ()
-        assert "paperless_save" in _names(tool_definitions.get_all_tools())
+        assert paperless <= _names(tool_definitions.get_all_tools())
     finally:
         tool_definitions._tools_cache_key = saved_key
         tool_definitions._tools_cache_key = ()  # force a clean rebuild for later tests

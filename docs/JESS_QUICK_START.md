@@ -214,6 +214,7 @@ Styles: calm, gentle, soothing, quiet, warm, thoughtful, encouraging, upbeat, pr
 | "Read me the lease summary" | Pulls from `document_vault` |
 | Dashboard → Documents → Upload → "Take photo" | Photographs a paper document; Jess suggests a title + category (when Helios is awake), you edit and Save |
 | Drop a PDF in the inbox + "Save the lease for OCR" | Pushed to Paperless-ngx for OCR + auto-tagging (requires the wizard's Paperless integration) |
+| *"When does my car insurance renew?"* / *"Find my last water bill"* | Searches your Paperless archive (titles + scanned text) and reads the matching document. Read-only; text chat, not voice |
 
 ---
 

@@ -467,6 +467,16 @@ PAPERLESS_UPLOAD_TOTAL = Counter(
     ["result", "reason"],
 )
 
+PAPERLESS_READ_TOTAL = Counter(
+    "bgw_paperless_read_total",
+    "Read-only Paperless-ngx API calls from the paperless_search / paperless_read tools",
+    # op: search | get
+    # result: ok | not_found | http_4xx | http_5xx | http_other | bad_body |
+    #         timeout | connect_error | other | disabled | missing_url |
+    #         missing_token
+    ["op", "result"],
+)
+
 PAPERLESS_UPLOAD_LATENCY = Histogram(
     "bgw_paperless_upload_latency_seconds",
     "Orchestrator → Paperless upload round-trip latency",
