@@ -279,10 +279,66 @@ def _grep(pattern: str, path: str = "") -> str:
 _METRIC_QUERY_RE = re.compile(r"^\s*(sum|count|rate|avg|max|min|topk|bottomk|count_over_time|bytes_over_time)\b")
 
 
+# The time window is enforced on the QUERY, not just on start/end: a metric query
+# carries its own range (`[20d]`, `offset 8d`) and LogQL parser/format stages can
+# copy line text into labels. Without these checks a metric query could read log
+# text from the full 30-day retention (security review, 2026-10-21) — including
+# lines from before PR #81 stopped personal text reaching the logs.
+# No word boundaries: strings are blanked first, so any remaining "offset" is
+# the keyword (Loki rejects "offset8d" today, but don't rely on it).
+_LOGQL_OFFSET_RE = re.compile(r"offset", re.IGNORECASE)
+# LogQL accepts `#` line comments (verified live 2026-10-21): a `"` inside a
+# comment would make the string blanker and Loki disagree about where strings
+# end, hiding a stage on the next line. No comments, no multi-line queries.
+_LOGQL_FORBIDDEN_RE = re.compile(r"[#\r\n]")
+_LOGQL_RANGE_RE = re.compile(r"\[([^\]]*)\]")
+_LOGQL_DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h|d|w|y)")
+_DURATION_SECONDS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}
+_LOGQL_STAGE_RE = re.compile(
+    r"\|\s*(regexp|pattern|json|logfmt|unpack|label_format|line_format|unwrap)\b", re.IGNORECASE
+)
+# Metric results print only these labels, each capped — never arbitrary labels
+# (which a parser stage or a high-cardinality label could fill with log text).
+_LOKI_LABEL_ALLOW = ("service", "level", "host", "job", "unit", "container", "transport", "group")
+_LOKI_LABEL_MAX = 64
+
+
+_LOGQL_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"|`[^`]*`')
+
+
+def _check_logql(query: str) -> None:
+    """Raise PathDenied unless the query stays inside the last MAX_LOKI_HOURS.
+
+    Quoted strings (line filters, label matchers) are blanked first, so a
+    regex like |~ "[0-9]+" or the word "offset" in a filter isn't mistaken
+    for a range or keyword. Stage names are checked on the blanked query too:
+    `| json` inside a string is just text."""
+    if "\r" in query or "\n" in query:
+        raise PathDenied("multi-line queries are not allowed")
+    query = _LOGQL_STRING_RE.sub('""', query)
+    if _LOGQL_FORBIDDEN_RE.search(query):
+        raise PathDenied("comments are not allowed")
+    if _LOGQL_OFFSET_RE.search(query):
+        raise PathDenied("offset is not allowed")
+    if _LOGQL_STAGE_RE.search(query):
+        raise PathDenied(
+            "parser/format stages (regexp, pattern, json, logfmt, unpack, label_format, line_format, unwrap) are not allowed"
+        )
+    for raw in _LOGQL_RANGE_RE.findall(query):
+        spec = raw.strip()
+        parts = _LOGQL_DURATION_RE.findall(spec)
+        if not parts or "".join(n + u for n, u in parts) != spec.replace(" ", ""):
+            raise PathDenied(f"unsupported range [{raw}] (use e.g. [1h], [30m])")
+        seconds = sum(float(n) * _DURATION_SECONDS[u] for n, u in parts)
+        if seconds > MAX_LOKI_HOURS * 3600:
+            raise PathDenied(f"range [{raw}] is longer than {MAX_LOKI_HOURS}h")
+
+
 async def _loki_query(query: str, hours: int = 1, limit: int = 50) -> str:
     query = str(query or "").strip()
     if not query or len(query) > MAX_LOKI_QUERY_CHARS:
         raise PathDenied(f"query must be 1-{MAX_LOKI_QUERY_CHARS} characters")
+    _check_logql(query)
     hours = min(max(int(hours or 1), 1), MAX_LOKI_HOURS)
     limit = min(max(int(limit or 50), 1), MAX_LOKI_LINES)
     base = settings.self_audit_loki_url.rstrip("/")
@@ -322,7 +378,7 @@ def _format_loki(result: Any, is_metric: bool, limit: int) -> str:
         for row in result[:50]:
             metric = row.get("metric") or {}
             value = (row.get("value") or [None, "?"])[1]
-            labels = ", ".join(f"{k}={v}" for k, v in sorted(metric.items()))
+            labels = ", ".join(f"{k}={str(metric[k])[:_LOKI_LABEL_MAX]}" for k in _LOKI_LABEL_ALLOW if k in metric)
             lines.append(f"{{{labels}}} {value}")
         return "\n".join(lines) or "no series"
     rows: list[tuple[str, str, str]] = []

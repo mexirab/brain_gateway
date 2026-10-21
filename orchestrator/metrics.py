@@ -599,8 +599,8 @@ SELF_AUDIT_LATENCY = Histogram(
 
 SELF_AUDIT_FORMAT_DRIFT_TOTAL = Counter(
     "bgw_self_audit_format_drift_total",
-    "Audits where diagnosis text was non-empty but no severity headers parsed "
-    "-- signals Qwen3.5-27B went off-format and the prompt may need tuning",
+    "Audits whose diagnosis is off-format: no **Overall:** line, or its counts disagree "
+    "with the severity sections parsed -- the prompt may need tuning",
 )
 
 # One Loki query per source group (orchestrator | jupiter_other | helios | ups);

@@ -44,7 +44,18 @@ async def palace_store(req: Request):
     from orchestrator.shared import get_palace
 
     palace = get_palace()
-    body = await req.json()
+    try:
+        body = await req.json()
+    except ValueError:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "JSON object body required"}, status_code=400)
+    # Non-string values used to raise inside store() (500) and would skip the
+    # reserved-wing check below; reject them cleanly.
+    for field in ("wing", "room", "source", "category", "confidence", "project", "session_id"):
+        if field in body and body[field] is not None and not isinstance(body[field], str):
+            return JSONResponse({"error": f"{field} must be a string"}, status_code=400)
 
     text = str(body.get("text", "")).strip()
     if not text:
@@ -57,13 +68,14 @@ async def palace_store(req: Request):
 
     doc_id = await palace.store(
         text=text,
-        wing=body.get("wing", ""),
-        room=body.get("room", ""),
-        source=body.get("source", "api"),
-        category=body.get("category", "general"),
-        confidence=body.get("confidence", "high"),
-        project=body.get("project", ""),
-        session_id=body.get("session_id", ""),
+        # `or <default>`: an explicit null must not reach ChromaDB metadata.
+        wing=body.get("wing") or "",
+        room=body.get("room") or "",
+        source=body.get("source") or "api",
+        category=body.get("category") or "general",
+        confidence=body.get("confidence") or "high",
+        project=body.get("project") or "",
+        session_id=body.get("session_id") or "",
     )
 
     if doc_id:

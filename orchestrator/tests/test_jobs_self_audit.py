@@ -1199,3 +1199,139 @@ class TestSeedLastRunGauge:
         seed_last_run_gauge()  # must not raise
 
         assert _last_run_gauge_value() == _SENTINEL_TS
+
+
+# ===========================================================================
+# Format drift: **Overall:** line vs parsed severity headers
+# ===========================================================================
+
+_DRILL_OUTPUT = (
+    "Summary: the alert fired as a drill; nothing in the logs.\n\n**Overall:** 0 critical, 0 high, 0 medium, 0 low"
+)
+
+
+class TestFormatDrift:
+    @staticmethod
+    def _drifted(text: str) -> bool:
+        from orchestrator.jobs_self_audit import _count_severities, _format_drifted
+
+        return _format_drifted(text, _count_severities(text))
+
+    def test_all_zero_overall_no_sections_not_drift(self):
+        assert self._drifted(_DRILL_OUTPUT) is False
+
+    def test_matching_nonzero_counts_not_drift(self):
+        text = (
+            "## brain-orchestrator · HIGH\n- cause\n\n"
+            "## loki · LOW\n- cause\n\n"
+            "## helios · LOW\n- cause\n\n"
+            "**Overall:** 0 critical, 1 high, 0 medium, 2 low\n"
+        )
+        assert self._drifted(text) is False
+
+    def test_overall_case_insensitive_and_trailing_period(self):
+        text = "## x · CRITICAL\n\n**overall:** 1 Critical, 0 High, 0 Medium, 0 Low.\n"
+        assert self._drifted(text) is False
+
+    def test_missing_overall_is_drift(self):
+        assert self._drifted("## brain-orchestrator · HIGH\n- cause\n") is True
+
+    def test_empty_counts_with_missing_overall_is_drift(self):
+        assert self._drifted("Summary: nothing to see here.") is True
+
+    def test_overall_zero_high_but_one_high_header_is_drift(self):
+        text = "## brain-orchestrator · HIGH\n- cause\n\n**Overall:** 0 critical, 0 high, 0 medium, 0 low\n"
+        assert self._drifted(text) is True
+
+    def test_overall_two_high_but_no_headers_is_drift(self):
+        text = "Summary: two things.\n\n**Overall:** 0 critical, 2 high, 0 medium, 0 low\n"
+        assert self._drifted(text) is True
+
+    def test_lower_does_not_match_low(self):
+        from orchestrator.jobs_self_audit import _OVERALL_RE
+
+        text = "**Overall:** 0 critical, 0 high, 0 medium, 0 lower\n"
+        assert _OVERALL_RE.search(text) is None
+        assert self._drifted(text) is True
+
+    def test_midline_overall_does_not_match(self):
+        from orchestrator.jobs_self_audit import _OVERALL_RE
+
+        text = "Note: **Overall:** 0 critical, 0 high, 0 medium, 0 low\n"
+        assert _OVERALL_RE.search(text) is None
+        assert self._drifted(text) is True
+
+    def test_trailing_text_after_low_does_not_match(self):
+        from orchestrator.jobs_self_audit import _OVERALL_RE
+
+        assert _OVERALL_RE.search("**Overall:** 0 critical, 0 high, 0 medium, 0 low but really 3 high") is None
+
+    def test_overall_line_anywhere_in_multiline_text(self):
+        text = "**Overall:** 0 critical, 0 high, 0 medium, 0 low\n\nTrailing commentary.\n"
+        assert self._drifted(text) is False
+
+
+def _drift_total() -> float:
+    from orchestrator.metrics import SELF_AUDIT_FORMAT_DRIFT_TOTAL
+
+    return SELF_AUDIT_FORMAT_DRIFT_TOTAL._value.get()
+
+
+class TestFormatDriftMetric:
+    async def _run_with_diagnosis(self, diagnosis: str):
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_query_range_response(_entries_with_one_cluster(3)))
+        )
+        with patch(
+            "orchestrator.orchestrator.call_model",
+            new=AsyncMock(return_value={"choices": [{"message": {"content": diagnosis}}]}),
+        ):
+            return await run_self_audit()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_matching_overall_does_not_increment(self, audit_on, mock_pushover, mock_palace):
+        before = _drift_total()
+        result = await self._run_with_diagnosis(
+            "## brain-orchestrator · HIGH\n- **Likely cause:** x\n\n**Overall:** 0 critical, 1 high, 0 medium, 0 low\n"
+        )
+        assert result["result"] == "ok"
+        assert _drift_total() == before
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_all_zero_drill_output_does_not_increment(self, audit_on, mock_pushover, mock_palace):
+        before = _drift_total()
+        result = await self._run_with_diagnosis(_DRILL_OUTPUT)
+        assert result["result"] == "ok"
+        assert _drift_total() == before
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_missing_overall_increments(self, audit_on, mock_pushover, mock_palace):
+        before = _drift_total()
+        await self._run_with_diagnosis("## brain-orchestrator · HIGH\n- **Likely cause:** x\n")
+        assert _drift_total() == before + 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_mismatched_overall_increments(self, audit_on, mock_pushover, mock_palace):
+        before = _drift_total()
+        await self._run_with_diagnosis("Summary.\n\n**Overall:** 0 critical, 2 high, 0 medium, 0 low\n")
+        assert _drift_total() == before + 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_diagnosis_does_not_increment(self, audit_on, mock_pushover, mock_palace):
+        from orchestrator.jobs_self_audit import run_self_audit
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(
+            return_value=Response(200, json=_loki_query_range_response(_entries_with_one_cluster(3)))
+        )
+        before = _drift_total()
+        with patch("orchestrator.orchestrator.call_model", new=AsyncMock(return_value=None)):
+            result = await run_self_audit()
+        assert result["result"] == "partial"
+        assert _drift_total() == before

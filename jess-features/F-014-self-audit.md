@@ -46,9 +46,10 @@ The user's review path is: read the Pushover digest → if interesting, open the
 
 ### Read-only investigator (`orchestrator/self_investigator.py`, self-monitoring step 2)
 
-Behind `SELF_AUDIT_INVESTIGATE=false`. Design + as-built notes: `docs/internal/SELF_INVESTIGATOR_DESIGN.md`.
+Behind `SELF_AUDIT_INVESTIGATE` (default false; **on in the live deployment since 2026-10-21**, scoped webhook token set, alert drill passed). Design + as-built notes: `docs/internal/SELF_INVESTIGATOR_DESIGN.md`.
 
 - **Tools:** `list_dir`, `read_file`, `grep` (substring only — regex was dropped because a backtracking pattern holds the GIL and froze the orchestrator) over the repo mounted read-only at `SELF_AUDIT_REPO_PATH` (`/opt/gateway_mvp`), plus `loki_query` (log or metric query, capped lines/hours). Path allow-list: `orchestrator/`, `monitoring/`, `scripts/`, `tts/`, `docs/` (not `docs/internal/`), `jess-features/`, `frontend/src/`, `homeassistant/` and a few top-level docs; `.env*`, `data/`, `credentials/`, `config/`, rendered configs and token/secret files are refused. "Missing" and "denied" return the same message.
+- **`loki_query` confinement (`_check_logql`):** the query itself is held to the last 24 h, not only start/end. Rejected: `offset`; any `[range]` over 24 h or with a subquery step; parser/format stages (`regexp`, `pattern`, `json`, `logfmt`, `unpack`, `label_format`, `line_format`, `unwrap`); `#` comments and newlines. Quoted strings are ignored when scanning. Metric output prints only allow-listed labels (`service`, `level`, `host`, `job`, `unit`, `container`, `transport`, `group`), each capped at 64 chars. Backstop for every client: Loki `max_query_lookback: 168h`.
 - **Every tool result** is secret-redacted, defanged, framed as untrusted and capped (6000 chars).
 - **Budgets:** daily runs `SELF_AUDIT_INVESTIGATE_MAX_ROUNDS` 12 / `_MAX_TOOL_CALLS` 30 / `_MAX_SECONDS` 600; alert runs 6 rounds / 300 s. ≤ 5 calls per round, duplicates collapsed, per-call timeouts clipped to the deadline with 90 s kept for a forced final report (`result=budget`).
 - **Slot etiquette:** waits for the single llama slot to be idle (`bgw_active_requests` and llama-server's `llamacpp:requests_processing`) before every model call; alert runs first wait for 3 min of idle (up to 30 min). **Never wakes Helios** — asleep means the deterministic digest (`result=brain_asleep`, run `partial`).
@@ -138,7 +139,7 @@ the model download. User kills it. No more restart loop.
 - `bgw_self_audit_runs_total{result}` — **daily runs only**. `result ∈ {ok, partial, failed, skipped}`. `partial` = logs read but no diagnosis (Helios asleep / LLM failed) or a source group failed (`reason=sources_failed`). `failed` = Loki unreachable. `skipped` = feature disabled. Labels pre-initialized at 0.
 - `bgw_self_audit_clusters_total{severity}` — per cluster Jess returned.
 - `bgw_self_audit_latency_seconds` — histogram, full job runtime.
-- `bgw_self_audit_format_drift_total` — diagnosis didn't match the expected format.
+- `bgw_self_audit_format_drift_total` — the `**Overall:**` line is missing, or its counts disagree with the parsed `## svc · SEVERITY` sections. An all-zero Overall with no sections is valid (not drift).
 - `bgw_self_audit_truncated_total{group}` — a source group's sample hit `SELF_AUDIT_LOKI_LIMIT_PER_GROUP`.
 - `bgw_self_audit_last_run_timestamp_seconds` — on `job_heartbeat` (`app_state` key `self_audit_last_run_ts`), stamped after each **daily** run (alert runs must not mask a dead cron), re-seeded at startup from the persisted value; disabling the audit forgets it.
 - `bgw_self_investigator_runs_total{trigger,result}` — `trigger ∈ {daily, alert}`, `result ∈ {ok, budget, brain_asleep, error}`.
@@ -149,12 +150,13 @@ the model download. User kills it. No more restart loop.
 
 ## Alerting
 
-Both in `monitoring/prometheus/alert-rules.yml` group `brain_gateway_deadmans`, routed to the non-paging `pushover-quiet` receiver:
+In `monitoring/prometheus/alert-rules.yml` group `brain_gateway_deadmans`, routed to the non-paging `pushover-quiet` receiver:
 
 | Alert | Fires when |
 |-------|-----------|
 | `SelfAuditStale` | No completed run in 25.5h |
 | `SelfAuditFailing` | ≥2 `failed` runs in 2d with no `ok`/`partial` run (`partial` = Helios asleep, logs still read — counts as healthy) |
+| `SelfInvestigatorFailing` | Daily investigator `result=error` ≥2 in 3d with no `ok` (a failed investigation still yields a `partial` audit, so `SelfAuditFailing` can't see it) |
 
 In group `helios_health`, also `pushover-quiet`:
 
@@ -185,7 +187,7 @@ Grafana (`brain_gateway_sre.py`, "Background Jobs" row): "Self-Audit Heartbeat A
 - **Loki URL** is container-internal (`loki:3100` over `gateway-net`); Loki publishes on `127.0.0.1` only. Loki's delete API (`deletion_mode: disabled`) and ruler API are off, so nothing reachable can wipe error streams into a false "all clean".
 - **Webhook:** scoped `SELF_AUDIT_WEBHOOK_TOKEN` opens only `/api/self_audit/alert`, so Alertmanager never holds `API_TOKEN`. Only an allow-listed `alertname` selects what runs; nothing from the payload is logged except that name.
 - **Manual trigger** (`POST /api/self_audit/run`) is bearer-gated. `run_self_audit()` re-checks `SELF_AUDIT_ENABLED` and `JESS_ADVANCED` at entry (alert runs also `SELF_AUDIT_INVESTIGATE`), so no route bypasses the gate.
-- **Known limits:** Loki still holds pre-PR #81 log text until it ages out (30 d); `loki_query` can read it into the on-disk report (never mempalace/Pushover/inbox). Mempalace entries written by the old audit (model prose, `source="self_audit"`) are still reachable from chat until purged.
+- **Known limits:** Loki still holds pre-PR #81 log text until it ages out (30 d); `loki_query` is confined to 24 h in the query (see above), so it can't reach it. Old-audit mempalace entries were purged 2026-10-21.
 
 ## Testing checklist
 

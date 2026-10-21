@@ -281,11 +281,21 @@ Checks:
 
 ### Known limits, not fixed here
 
-- Loki still holds personal log text written before PR #81 (30-day retention, gone by
-  about mid-November). `loki_query` can read it and the model could quote it into the
-  on-disk report; it never reaches mempalace, Pushover or the inbox.
-- Mempalace entries written by the OLD audit (`source="self_audit"`, model prose) are
-  still there and reachable from chat. A one-off purge is suggested in the PR.
+- Pre-#81 personal log text (Loki keeps 30 days, so until about mid-November): the
+  investigator's `loki_query` is confined to the last `MAX_LOKI_HOURS` (24 h) **in the
+  query itself**, not only via start/end. `_check_logql` (2026-10-21) rejects `offset`,
+  any `[range]` longer than 24 h or with a subquery step, and the parser/format stages
+  (`regexp`, `pattern`, `json`, `logfmt`, `unpack`, `label_format`, `line_format`,
+  `unwrap`) that could copy line text into labels; quoted strings are ignored when
+  scanning. Metric results print only allow-listed labels (`service`, `level`, `host`,
+  `job`, `unit`, `container`, `transport`, `group`), each capped at 64 chars. Before
+  this, a metric query like `count_over_time(... | regexp "(?P<l>.*)" [20d] offset 8d)`
+  could return 30-day-old log text as label values (security review, 2026-10-21). The
+  investigator was switched on live the same day; model text never reaches mempalace,
+  Pushover or the inbox, only the on-disk report.
+- ~~Mempalace entries written by the OLD audit are still reachable from chat.~~ Purged
+  2026-10-21 (4 entries, all misfiled under wing `personal` because the `system` wing
+  didn't exist yet — fixed in PR #129, which also 403s `system` on `/api/palace/store`).
 - The frame markers are advisory. The real boundary is that every tool is read-only.
-- No Grafana panels yet (dashgen follow-up). The alerts carry the signal.
+- ~~No Grafana panels yet.~~ Self-audit row has "Investigator & Alert Webhook (/day)" (runs, webhook, denied/capped/error/duplicate tool calls); alert `SelfInvestigatorFailing` (quiet) covers repeated daily errors. Loki `max_query_lookback: 168h` is a server-side backstop for every client.
 - `run_tests` in an offline sandbox is the agreed follow-up (decision 3).

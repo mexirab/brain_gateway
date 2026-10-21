@@ -1200,3 +1200,190 @@ class TestWebhookPayloadShapes:
         assert _post(client, p).status_code == 202
         alert = client.run_mock.await_args.kwargs["alert"]
         assert alert["annotations"] == {} and len(alert["startsAt"]) == 40
+
+
+# ---------------------------------------------------------------------------
+# LogQL time-window guard (_check_logql) + metric label allow-list
+# ---------------------------------------------------------------------------
+
+_EXTRACTION_ATTACK = 'sum by (l) (count_over_time({service="orchestrator"} | regexp "(?P<l>.{0,300})" [20d] offset 8d))'
+
+
+class TestCheckLogql:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            _EXTRACTION_ATTACK,
+            'count_over_time({service="orchestrator"}[20d])',
+            'count_over_time({service="orchestrator"}[23h61m])',
+            'count_over_time({service="orchestrator"}[25h])',
+            'count_over_time({service="orchestrator"}[1w])',
+            'count_over_time({service="orchestrator"}[1h] offset 1h)',
+            'count_over_time({service="orchestrator"}[1h] OFFSET 1h)',
+            'count_over_time({service="orchestrator"}[1h] Offset 1h)',
+            'count_over_time({service="orchestrator"}[1h:5m])',
+            'count_over_time({service="orchestrator"}[$__interval])',
+            'count_over_time({service="orchestrator"}[])',
+            'count_over_time({service="orchestrator"}[1h foo])',
+            '{service="orchestrator"} | json',
+            '{service="orchestrator"} | JSON',
+            '{service="orchestrator"}|logfmt',
+            '{service="orchestrator"} | pattern `<l> x`',
+            '{service="orchestrator"} | regexp "(?P<l>.*)"',
+            '{service="orchestrator"} | unpack',
+            '{service="orchestrator"} | label_format l="{{.x}}"',
+            '{service="orchestrator"} | line_format "{{.x}}"',
+            'sum_over_time({service="orchestrator"} | unwrap bytes [1h])',
+        ],
+    )
+    def test_denied(self, query):
+        from orchestrator.self_investigator import PathDenied, _check_logql
+
+        with pytest.raises(PathDenied):
+            _check_logql(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            '{service="orchestrator"}',
+            'count_over_time({service="orchestrator"}[1d])',
+            'count_over_time({service="orchestrator"}[24h])',
+            'count_over_time({service="orchestrator"}[12h30m])',
+            'count_over_time({service="orchestrator"}[30m])',
+            'sum by (service) (count_over_time({host="helios"}[1h]))',
+            '{host="helios"} |~ "[0-9]+ errors"',
+            '{host="helios"} |= "offset 5"',
+            '{host="helios"} |= "| json"',
+            '{host="helios"} |~ `[20d] offset`',
+            # Quoted string with an escaped quote containing a fake long range;
+            # the real range is [1h].
+            r'count_over_time({host="helios"} |= "say \"[20d]\" ok" [1h])',
+        ],
+    )
+    def test_allowed(self, query):
+        from orchestrator.self_investigator import _check_logql
+
+        _check_logql(query)  # must not raise
+
+    def test_escaped_quote_does_not_hide_a_real_long_range(self):
+        # The escaped quote must not end the string early and swallow [20d].
+        from orchestrator.self_investigator import PathDenied, _check_logql
+
+        with pytest.raises(PathDenied):
+            _check_logql(r'count_over_time({host="helios"} |= "a \" b" [20d])')
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize(
+        "query",
+        [_EXTRACTION_ATTACK, 'count_over_time({service="orchestrator"}[20d])', '{service="orchestrator"} | json'],
+    )
+    async def test_loki_query_rejects_before_any_request(self, fake_repo, query):
+        from orchestrator.self_investigator import PathDenied, _loki_query
+
+        rng = respx.get(f"{_LOKI_URL}/loki/api/v1/query_range").mock(return_value=Response(200, json={}))
+        inst = respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(return_value=Response(200, json={}))
+        with pytest.raises(PathDenied):
+            await _loki_query(query)
+        assert rng.call_count == 0
+        assert inst.call_count == 0
+        assert len(respx.calls) == 0
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_run_tool_reports_refusal_without_request(self, fake_repo):
+        from orchestrator.self_investigator import run_tool
+
+        out = await run_tool("loki_query", {"query": _EXTRACTION_ATTACK})
+        assert "Refused" in out
+        assert len(respx.calls) == 0
+
+
+class TestFormatLokiLabels:
+    def test_only_allow_listed_labels_printed(self):
+        from orchestrator.self_investigator import _format_loki
+
+        secret = "user said take 20mg at 9pm " * 10
+        result = [
+            {
+                "metric": {"service": "orchestrator", "level": "error", "l": secret, "msg": "hello there"},
+                "value": [0, "3"],
+            }
+        ]
+        out = _format_loki(result, is_metric=True, limit=50)
+        assert "service=orchestrator" in out
+        assert "level=error" in out
+        assert "20mg" not in out
+        assert "l=" not in out.replace("level=", "")
+        assert "hello there" not in out
+        assert out.endswith(" 3")
+
+    def test_all_allow_listed_labels_kept_and_capped(self):
+        from orchestrator.self_investigator import _LOKI_LABEL_ALLOW, _LOKI_LABEL_MAX, _format_loki
+
+        assert set(_LOKI_LABEL_ALLOW) == {
+            "service",
+            "level",
+            "host",
+            "job",
+            "unit",
+            "container",
+            "transport",
+            "group",
+        }
+        metric = {k: k[0] * 200 for k in _LOKI_LABEL_ALLOW}
+        out = _format_loki([{"metric": metric, "value": [0, "1"]}], is_metric=True, limit=50)
+        for k in _LOKI_LABEL_ALLOW:
+            assert f"{k}={k[0] * _LOKI_LABEL_MAX}" in out
+            assert k[0] * (_LOKI_LABEL_MAX + 1) not in out
+
+    def test_series_with_no_allowed_labels(self):
+        from orchestrator.self_investigator import _format_loki
+
+        out = _format_loki([{"metric": {"l": "x" * 300}, "value": [0, "9"]}], is_metric=True, limit=50)
+        assert out == "{} 9"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_metric_query_end_to_end_strips_label(self, fake_repo):
+        from orchestrator.self_investigator import run_tool
+
+        respx.get(f"{_LOKI_URL}/loki/api/v1/query").mock(
+            return_value=Response(
+                200,
+                json={"data": {"result": [{"metric": {"service": "x", "l": "SECRET LINE TEXT"}, "value": [0, "2"]}]}},
+            )
+        )
+        out = await run_tool("loki_query", {"query": 'sum by (service) (count_over_time({host="helios"}[1h]))'})
+        assert "{service=x} 2" in out
+        assert "SECRET" not in out
+
+
+class TestCheckLogqlCommentsAndOffset:
+    """Hardening after a live check (2026-10-21): Loki accepts `#` comments, so a
+    quote inside a comment could desync the string blanker from Loki's parser."""
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            'count_over_time({service="orchestrator"}[1m]) # x',
+            'sum(count_over_time({a="b"} # "\n | regexp "(?P<l>.*)" [1h]))',
+            'sum(count_over_time({a="b"}[1h]))\n',
+            'sum(count_over_time({a="b"}[1h]))\r',
+            'sum(count_over_time({a="b"}[1m] offset8d))',
+        ],
+    )
+    def test_denied(self, query):
+        from orchestrator.self_investigator import PathDenied, _check_logql
+
+        with pytest.raises(PathDenied):
+            _check_logql(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        ['{host="helios"} |= "issue #42"', '{host="helios"} |= "offset 5"'],
+    )
+    def test_hash_or_offset_inside_string_allowed(self, query):
+        from orchestrator.self_investigator import _check_logql
+
+        _check_logql(query)
