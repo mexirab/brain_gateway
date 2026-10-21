@@ -33,6 +33,22 @@ ha-config-*.tar.gz
 # Never commit this — contains personal state that changes every run.
 data/app/
 
+# Document vault uploads (DOCUMENTS_PATH default) — the user's own files
+# (insurance, IDs…). Public repo: never commit. Backed up by backup_state.py.
+data/documents/
+
+# Other compose bind-mount defaults (fresh installs): RAG_BASE source docs
+# (personal), TTS_VOICES_PATH cloned-voice reference audio (biometric),
+# VLLM_MODELS_DIR model weights (bloat).
+data/rag/
+data/tts_voices/
+data/models/
+
+# Playwright MCP screenshots/page snapshots of the dashboard (render personal
+# data); VRM avatars anywhere (frontend/public/avatar/*.vrm is also below).
+.playwright-mcp/
+*.vrm
+
 # Local ML caches / fine-tune artifacts (can be regenerated; bloats the repo)
 data/embedding_finetune/
 data/hf_cache/
