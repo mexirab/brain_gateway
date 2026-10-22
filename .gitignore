@@ -152,6 +152,11 @@ radicale/data/
 radicale/users
 radicale/backups/
 radicale-*.tar.gz
+# Grist: secrets + data live outside the repo at /opt/apps/grist.
+grist/grist.env
+grist/persist/
+grist/backups/
+grist-*.tar.gz
 
 # Chat avatar model (operator-supplied VRM; keep personal models out of the public repo)
 frontend/public/avatar/*.vrm

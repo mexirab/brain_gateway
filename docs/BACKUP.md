@@ -161,6 +161,42 @@ rm -rf /tmp/actual-restore
 Verify: `curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status`
 (or trigger a sync) and open the Actual UI at https://jupiter-amds.tail74fc4a.ts.net:5007 (tailnet only).
 
+## Grist (spreadsheets)
+
+Separate nightly job for the Grist server (`grist/` compose project, container
+`grist`, data at `/opt/apps/grist/persist`, owned `1000:1000` mode `700`).
+Runbook: `docs/SPREADSHEETS.md`.
+
+| | |
+|---|---|
+| Script | `grist/backup_grist.sh` (bash + stdlib python, runs as the host user — no sudo) |
+| Schedule | cron 04:05 on Jupiter (`5 4 * * *`) |
+| What | every `*.grist` doc + `home.sqlite3` (users, orgs, API keys) via the online-backup API (`mode=ro`) + `PRAGMA quick_check` (fails the run on error); `grist-sessions.db` and `-wal/-shm/-journal` skipped; other files copied, retried once if they change mid-read; symlinks skipped |
+| Local | `/home/labadmin/grist/backups/grist-YYYYmmdd-HHMMSS.tar.gz` (mode 600), keep 30 |
+| Off-box | rsync to `saturn:/home/labadmin/grist-backups/` (`JESS_GRIST_BACKUP_REMOTE`; plaintext, like the other backups — `home.sqlite3` holds the Grist API keys) |
+| Log | `/home/labadmin/grist/backup.log` |
+| Metrics | textfile `jess_grist_backup.prom`: `jess_grist_backup_success_timestamp_seconds`, `jess_grist_backup_offbox_success`, `jess_grist_backup_docs` |
+| Alerts | `JessGristBackupStale` (>36h, paging), `JessBackupOffboxFailing` (shared, quiet) |
+
+Overrides: `JESS_GRIST_DATA`, `JESS_GRIST_BACKUP_REMOTE`,
+`JESS_GRIST_BACKUP_METRICS_PATH`. Run it once by hand after install to seed the
+metric — `JessGristBackupStale` can't fire before the first run.
+
+**Restore** (archive has `data/` at the top):
+
+```bash
+cd /home/labadmin/gateway_nerves/grist && docker compose down
+tar tzf /home/labadmin/grist/backups/grist-<stamp>.tar.gz | head   # inspect
+mkdir -p /tmp/grist-restore && tar xzf /home/labadmin/grist/backups/grist-<stamp>.tar.gz -C /tmp/grist-restore
+sudo rsync -a --delete /tmp/grist-restore/data/ /opt/apps/grist/persist/
+sudo chown -R 1000:1000 /opt/apps/grist/persist && sudo chmod 700 /opt/apps/grist/persist
+docker compose up -d
+rm -rf /tmp/grist-restore
+```
+
+Verify: open https://jupiter-amds.tail74fc4a.ts.net:8485 (tailnet only) and ask
+Jess "what spreadsheets do you have?".
+
 ## File ownership
 
 The orchestrator container runs as non-root `jess` with uid/gid

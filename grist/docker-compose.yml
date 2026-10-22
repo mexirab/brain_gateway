@@ -1,0 +1,108 @@
+# Grist — self-hosted spreadsheet on Jupiter (the always-on node). The owner
+# edits sheets in the browser / on the phone; Jess reads and edits allow-listed
+# documents through the `spreadsheet` tool (orchestrator/grist_client.py).
+# Local replacement for Google Sheets: nothing leaves the box. Own compose
+# project, like actual/ and radicale/: a pulled image with its own lifecycle,
+# never touched by the orchestrator's build/deploy.
+#
+# Exposure: NOT on the LAN. One published port, loopback only:
+#   127.0.0.1:8484 — Tailscale Serve proxies https://jupiter-amds.tail74fc4a.ts.net:8485
+#                    here (tailnet-only HTTPS):
+#                    sudo tailscale serve --bg --https=8485 http://127.0.0.1:8484
+# Containers reach it by name (http://grist:8484) over two dedicated networks
+# (external here):
+#   gateway_nerves_grist-net    — brain-orchestrator only (GRIST_URL, API key auth);
+#                                 created by the main compose project
+#   monitoring_grist-probe-net  — blackbox-exporter only (GristDown probe);
+#                                 created by the monitoring compose project
+# Deliberately NOT gateway-net / monitoring-net: see the auth caveat below.
+#
+# Auth (verified on 1.7.20 with a throwaway container before this went in):
+#   - Browser: forwarded-header login. Tailscale Serve sets Tailscale-User-Login
+#     on every proxied request from a tailnet user and STRIPS client-sent copies,
+#     so Grist can trust it (GRIST_FORWARD_AUTH_HEADER + GRIST_IGNORE_SESSION).
+#     Only GRIST_DEFAULT_EMAIL (the owner's Tailscale login) owns the docs;
+#     other tailnet users see an empty site.
+#   - Anonymous: GRIST_FORCE_LOGIN — the UI 401s and the API lists nothing.
+#   - Orchestrator: Bearer API key of the least-privilege "jess" Grist user
+#     (below), no header.
+#   Caveat: the header needs no secret, so anything that reaches Grist
+#   without going through Tailscale Serve can claim to be the owner:
+#     - members of grist-net / grist-probe-net (only the orchestrator and
+#       blackbox — keep it that way; that's why Grist isn't on gateway-net);
+#     - any process on Jupiter itself via 127.0.0.1:8484 (host-networked Home
+#       Assistant, pihole, local users). Accepted: those already control the
+#       house / the box.
+#   After deploy, prove Serve strips a forged header — from another tailnet
+#   device: curl -H 'Tailscale-User-Login: <owner login>' \
+#     https://jupiter-amds.tail74fc4a.ts.net:8485/api/orgs   → must NOT list the
+#   owner's org unless that device IS the owner.
+#   Jess's API key belongs to a separate least-privilege Grist user (Editor on
+#   the allow-listed docs only), not the owner — see docs/SPREADSHEETS.md.
+#   GRIST_IN_SERVICE skips the /boot wizard; everything it would set is below.
+#
+# Formulas run in gVisor (GRIST_SANDBOX_FLAVOR=gvisor works unprivileged with
+# cap_drop ALL + read-only rootfs — "gvisor check ok" in the startup log).
+#
+# Secrets live OUTSIDE the repo in /opt/apps/grist/grist.env (chmod 600, see
+# grist.env.example). Data: /opt/apps/grist/persist (1000:1000, mode 700):
+#   home.sqlite3 — users, orgs, API keys;  docs/*.grist — one SQLite per doc.
+# Nightly backup: grist/backup_grist.sh.
+services:
+  grist:
+    container_name: grist
+    # 1.7.20 pinned by digest (2026-09-28).
+    image: gristlabs/grist:1.7.20@sha256:c862d4c1ffa2a36009d69b72e7ab319155c3529da7df2de0a4e437e994cfe7f1
+    # Starting as 1000 skips the entrypoint's root chown + setpriv step.
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - /opt/apps/grist/grist.env
+    environment:
+      HOME: /tmp
+      GRIST_IN_SERVICE: "true"
+      GRIST_SINGLE_ORG: jess
+      GRIST_FORWARD_AUTH_HEADER: Tailscale-User-Login
+      GRIST_IGNORE_SESSION: "true"
+      GRIST_FORCE_LOGIN: "true"
+      GRIST_ORG_CREATION_ANYONE: "false"
+      GRIST_PERSONAL_ORGS: "false"
+      GRIST_ANON_PLAYGROUND: "false"
+      GRIST_SANDBOX_FLAVOR: gvisor
+      GRIST_TELEMETRY_LEVEL: "off"
+      GRIST_ALLOW_AUTOMATIC_VERSION_CHECKING: "false"
+      APP_HOME_URL: https://jupiter-amds.tail74fc4a.ts.net:8485
+    volumes:
+      - /opt/apps/grist/persist:/persist
+    tmpfs:
+      - /tmp:size=256m
+    ports:
+      - "127.0.0.1:8484:8484"
+    networks:
+      - grist-net
+      - grist-probe-net
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    mem_limit: 1g
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8484/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 120s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  grist-net:
+    name: gateway_nerves_grist-net
+    external: true
+  grist-probe-net:
+    name: monitoring_grist-probe-net
+    external: true

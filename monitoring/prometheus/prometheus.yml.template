@@ -180,6 +180,16 @@ scrape_configs:
           node: 'jupiter'
           tier: 'app'
 
+      # Grist spreadsheet (docker on Jupiter, own compose project grist/).
+      # Loopback-only publish like Actual, but probed over the dedicated
+      # grist-probe-net (Grist isn't on monitoring-net — see
+      # grist/docker-compose.yml). /status is unauthenticated and content-free.
+      - targets: ['http://grist:8484/status']
+        labels:
+          service: 'grist'
+          node: 'jupiter'
+          tier: 'app'
+
       # Dashboard (Next.js). /login is public (no auth) and served by the app
       # itself, so a 200 proves the server renders pages. Probed by container
       # name over frontend-probe-net (the frontend may publish on 127.0.0.1

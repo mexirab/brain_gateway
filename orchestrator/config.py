@@ -8,7 +8,8 @@ Import `settings` to access configuration anywhere:
     url = settings.model_url
 """
 
-from typing import List
+import re
+from typing import Dict, List
 
 from dotenv import load_dotenv
 from pydantic import field_validator, model_validator
@@ -16,6 +17,22 @@ from pydantic_settings import BaseSettings
 
 # Load .env before Settings reads os.environ
 load_dotenv("/app/.env", override=False)
+
+_GRIST_NICK_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+_GRIST_DOC_ID_RE = re.compile(r"^[A-Za-z0-9]{10,64}$")
+
+
+def parse_grist_docs(raw: str) -> Dict[str, str]:
+    """GRIST_DOCS ("nickname=docId,...") → {nickname: doc_id}. Malformed
+    entries are dropped; nicknames are lower-cased. Lives here (not in
+    grist_client) so the config validator can use it without a circular import."""
+    docs: Dict[str, str] = {}
+    for part in (raw or "").split(","):
+        nick, sep, doc_id = part.strip().partition("=")
+        nick, doc_id = nick.strip().lower(), doc_id.strip()
+        if sep and _GRIST_NICK_RE.match(nick) and _GRIST_DOC_ID_RE.match(doc_id):
+            docs[nick] = doc_id
+    return docs
 
 
 class Settings(BaseSettings):
@@ -454,6 +471,16 @@ class Settings(BaseSettings):
     paperless_default_tags: str = ""  # comma-separated, optional
     paperless_upload_timeout_seconds: int = 30
 
+    # -- Grist spreadsheet (spreadsheet tool) --------------------------------------
+    # Self-hosted Grist on Jupiter (grist/docker-compose.yml). Default off.
+    grist_enabled: bool = False
+    grist_url: str = ""  # e.g. http://grist:8484 (container name over grist-net)
+    # API key of the least-privilege "jess" Grist user (Editor on the allow-listed
+    # docs only — never the owner's key). See docs/SPREADSHEETS.md.
+    grist_api_key: str = ""
+    # Allow-list: "nickname=docId,..." — the only docs Jess can open.
+    grist_docs: str = ""
+
     # -- ntfy feedback loop (F-011) ---------------------------------------------
     # Third delivery channel for reminders (alongside TTS + HA Companion push).
     # Includes HMAC-signed Done/Snooze action buttons that POST back to the
@@ -814,6 +841,28 @@ class Settings(BaseSettings):
                 "Set both in .env to re-enable."
             )
             object.__setattr__(self, "paperless_enabled", False)
+        return self
+
+    @model_validator(mode="after")
+    def validate_grist_config(self) -> "Settings":
+        """Auto-disable the spreadsheet tool if Grist config is incomplete.
+        Loud error log, never raises (same rule as the Paperless bridge)."""
+        if not self.grist_enabled:
+            return self
+        import logging
+
+        problem = None
+        if not self.grist_url.startswith(("http://", "https://")):
+            problem = "GRIST_URL is missing or not an http(s) URL"
+        elif len(self.grist_api_key) < 20:
+            problem = "GRIST_API_KEY is missing"
+        elif not parse_grist_docs(self.grist_docs):
+            problem = "GRIST_DOCS has no valid nickname=docId entries"
+        if problem:
+            logging.getLogger(__name__).error(
+                "[CONFIG] GRIST_ENABLED=true but %s; disabling the spreadsheet tool.", problem
+            )
+            object.__setattr__(self, "grist_enabled", False)
         return self
 
     @model_validator(mode="after")
