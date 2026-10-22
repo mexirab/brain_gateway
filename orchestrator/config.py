@@ -272,6 +272,9 @@ class Settings(BaseSettings):
     actual_sync_interval: int = 30  # minutes
     # Months mirrored into finance.db, including the current one.
     actual_sync_months: int = 3
+    # Months of Actual history (incl. the current one) the query_budget tool
+    # can see, as the reserved dataset "actual". See budget_manager.refresh_actual_dataset.
+    actual_history_months: int = 24
     # Case-insensitive substring match ("Fun Money" matches "🎮 Fun Money").
     actual_fun_money_category: str = "Fun Money"
 
@@ -774,6 +777,8 @@ class Settings(BaseSettings):
             object.__setattr__(self, "actual_sync_interval", 5)
         if not 1 <= self.actual_sync_months <= 24:
             object.__setattr__(self, "actual_sync_months", min(24, max(1, self.actual_sync_months)))
+        if not 1 <= self.actual_history_months <= 120:
+            object.__setattr__(self, "actual_history_months", min(120, max(1, self.actual_history_months)))
         return self
 
     @model_validator(mode="after")

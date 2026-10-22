@@ -15,6 +15,7 @@ Gamified finance tracking for ADHD support:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -948,8 +949,11 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
     """
     prefix = f"{SYNC_PROVIDER}:"
     window_start = snapshot.window_start
-    outflows = [t for t in snapshot.transactions if t.amount < 0]
-    skipped_inflows = len(snapshot.transactions) - len(outflows)
+    # The snapshot reaches back ACTUAL_HISTORY_MONTHS for query_budget; the
+    # Quest Board mirror only covers the ACTUAL_SYNC_MONTHS window.
+    in_window = [t for t in snapshot.transactions if t.date >= window_start]
+    outflows = [t for t in in_window if t.amount < 0]
+    skipped_inflows = len(in_window) - len(outflows)
 
     with get_db() as conn:
         mapping = {
@@ -1121,18 +1125,35 @@ async def sync_budget_transactions() -> dict:
             await asyncio.to_thread(_record_failure, msg)
             return {"synced": 0, "error": msg}
 
-        _category_cache = (time.monotonic(), snapshot)
+        # query_budget's "actual" dataset (query_budget is a JESS_ADVANCED
+        # tool — no second copy of the history without it). Separate step so a
+        # failure here never fails the Quest Board sync above.
+        if settings.jess_advanced:
+            from orchestrator import budget_manager
+            from orchestrator.metrics import BUDGET_HISTORY_REFRESH_TOTAL
+
+            try:
+                history = await asyncio.to_thread(budget_manager.refresh_actual_dataset, snapshot)
+                result["history_rows"] = history["row_count"]
+                BUDGET_HISTORY_REFRESH_TOTAL.labels(result="ok").inc()
+            except Exception as e:  # noqa: BLE001
+                BUDGET_HISTORY_REFRESH_TOTAL.labels(result="error").inc()
+                logger.error("[ACTUAL] Refreshing the query_budget history failed: %s", type(e).__name__)
+
+        # Only categories + fun money are read from the cache; drop the rows.
+        _category_cache = (time.monotonic(), dataclasses.replace(snapshot, transactions=[]))
         _category_fail = None
         BUDGET_SYNC_TOTAL.labels(result="ok").inc()
         BUDGET_SYNC_LAST_SUCCESS.set(time.time())
         logger.info(
-            "[ACTUAL] Synced budget in %.1fs: +%d new, %d updated, %d removed, %d inflows skipped%s%s",
+            "[ACTUAL] Synced budget in %.1fs: +%d new, %d updated, %d removed, %d inflows skipped%s%s%s",
             time.monotonic() - t0,
             result["inserted"],
             result["updated"],
             result["deleted"],
             result["skipped_inflows"],
             f", {result['legacy_removed']} legacy YNAB rows replaced" if result["legacy_removed"] else "",
+            f", {result['history_rows']} history rows" if "history_rows" in result else "",
             ""
             if snapshot.fun_money_balance is not None
             else f" — fun-money category '{settings.actual_fun_money_category}' not found",

@@ -6,7 +6,7 @@ HuggingFace model cache, which re-downloads on demand). The genuinely
 
 | Path | What | Reconstructable? |
 |------|------|------------------|
-| `data/app/brain_state.db` | reminders, focus, routines, selfcare, workouts, meals, pantry inventory, chat history | ❌ no |
+| `data/app/brain_state.db` | reminders, focus, routines, selfcare, workouts, meals, pantry inventory, chat history, budget history (CSV imports + up to `ACTUAL_HISTORY_MONTHS`, default 24, of Actual transactions incl. payees/notes — `JESS_ADVANCED` only) | ❌ no |
 | `data/app/progress.db` | streaks, XP, event history | ❌ no |
 | `data/app/finance.db` | budget/finance state | ❌ no |
 | `data/app/auto_learn.key` | **Fernet key that decrypts learned personal facts** | ❌ **no — losing it bricks every encrypted memory, even though the ciphertext survives** |

@@ -469,9 +469,9 @@ STATIC_TOOLS = [
         "function": {
             "name": "query_budget",
             "description": (
-                "Query imported historical budget data (CSV/Excel; separate from the live Actual Budget sync in "
-                "finance_status) for PAST spending: totals, categories, monthly trends, outliers. "
-                "Call list_datasets once if you don't know the dataset. For 'find patterns', "
+                "Query budget history for PAST spending/income: totals, categories, payees, monthly trends, "
+                "outliers. Dataset 'actual' is the user's Actual Budget, synced (see as_of + date_range), and is "
+                "the default; other datasets are old CSV/Excel imports (list_datasets). For 'find patterns', "
                 "'what stood out', 'biggest X', 'why did I overspend', 'compare years': use "
                 "question_type='analyze' — ONE call returns all the aggregated data. If the result has "
                 "an expert_synthesis field use it; otherwise write the synthesis yourself from `data`."
@@ -504,7 +504,7 @@ STATIC_TOOLS = [
                     },
                     "dataset": {
                         "type": "string",
-                        "description": "Dataset name (from list_datasets). Required for every question_type except list_datasets.",
+                        "description": "Dataset name (from list_datasets). Defaults to 'actual' (the live Actual Budget).",
                     },
                     "start_date": {
                         "type": "string",
@@ -529,7 +529,9 @@ STATIC_TOOLS = [
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max rows/groups to return (default 20).",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Max rows/groups to return (default 20, max 100).",
                     },
                 },
                 "required": ["question_type"],

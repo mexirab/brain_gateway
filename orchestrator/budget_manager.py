@@ -3,8 +3,10 @@ Budget import + analysis for historical CSV/Excel data.
 
 Intentionally narrow: one-off imports of old YNAB/Mint/bank exports so Jess
 can answer questions about past spending without that data ever leaving the
-local stack. The live Actual Budget sync (finance_manager.py) is separate
-and untouched.
+local stack. Plus one synced dataset: every Actual Budget sync
+(finance_manager.sync_budget_transactions) replaces the reserved dataset
+``actual`` with the last ACTUAL_HISTORY_MONTHS of Actual transactions
+(refresh_actual_dataset), so query_budget answers from the live budget too.
 
 Flow:
   1. import_file(path, name) parses CSV/XLSX via pandas, normalizes columns,
@@ -21,11 +23,21 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from orchestrator import state_store
 
+if TYPE_CHECKING:
+    from orchestrator.actual_client import ActualSnapshot
+
 logger = logging.getLogger(__name__)
+
+# Dataset name the Actual sync owns; imports may not use it.
+ACTUAL_DATASET = "actual"
+ACTUAL_SOURCE = "actual-sync"
+# Payee / notes come from bank feeds (Venmo/Zelle memos are written by the
+# sender) and reach the model as tool results: cap each one.
+_ACTUAL_TEXT_MAX = 120
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +306,8 @@ async def import_file(
 
     Async because the mempalace indexing step is async (embedding + encryption).
     """
+    if name.strip().lower() == ACTUAL_DATASET:
+        raise ValueError(f"Dataset name {ACTUAL_DATASET!r} is reserved for the Actual Budget sync")
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
 
@@ -569,6 +583,49 @@ def strip_symbols_from_existing(dataset: Optional[str] = None) -> Dict[str, int]
     return {"categories_updated": cat_updates, "payees_updated": payee_updates}
 
 
+def refresh_actual_dataset(snapshot: ActualSnapshot) -> Dict[str, Any]:
+    """Replace the ``actual`` dataset with a sync snapshot's transactions. Blocking.
+
+    Takes an ``actual_client.ActualSnapshot``: on-budget, non-transfer lines
+    (split legs individually), inflows included, back to ``history_start``.
+    Amounts keep Actual's sign (negative = outflow), matching the CSV imports.
+    No RAG summary — this runs on every sync. Raises if a CSV import already
+    owns the name (never overwrite one).
+    """
+    from orchestrator.metrics import BUDGET_HISTORY_ROWS
+
+    existing = state_store.get_budget_import(ACTUAL_DATASET)
+    if existing and existing.get("source_file") != ACTUAL_SOURCE:
+        raise ValueError(f"dataset {ACTUAL_DATASET!r} is a CSV import; rename it to enable the Actual history")
+
+    def _clip(text: str) -> Optional[str]:
+        return text[:_ACTUAL_TEXT_MAX] or None
+
+    rows = [
+        {
+            "txn_date": t.date,
+            "amount": float(t.amount),
+            "category": _clip(t.category),
+            "payee": _clip(t.payee),
+            "description": _clip(t.notes),
+        }
+        for t in snapshot.transactions
+    ]
+    dates = sorted(r["txn_date"] for r in rows)
+    meta = {
+        "name": ACTUAL_DATASET,
+        "source_file": ACTUAL_SOURCE,
+        "date_min": dates[0] if dates else None,
+        "date_max": dates[-1] if dates else None,
+        "total_outflow": sum(r["amount"] for r in rows if r["amount"] < 0),
+        "total_inflow": sum(r["amount"] for r in rows if r["amount"] > 0),
+        "column_map": {"source": "actual", "history_start": snapshot.history_start},
+    }
+    written = state_store.replace_budget_dataset(meta, rows)
+    BUDGET_HISTORY_ROWS.set(written)
+    return {"row_count": written, "date_min": meta["date_min"], "date_max": meta["date_max"]}
+
+
 def list_datasets() -> List[Dict[str, Any]]:
     return state_store.list_budget_imports()
 
@@ -615,7 +672,9 @@ async def query(
         }
 
     if not dataset:
-        return {"error": "dataset is required for this question_type. Call list_datasets first if unsure."}
+        if not state_store.get_budget_import(ACTUAL_DATASET):
+            return {"error": "dataset is required for this question_type. Call list_datasets first if unsure."}
+        dataset = ACTUAL_DATASET
 
     if not state_store.get_budget_import(dataset):
         return {"error": f"Unknown dataset: {dataset!r}. Available: {[d['name'] for d in list_datasets()]}"}

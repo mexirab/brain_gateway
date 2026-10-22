@@ -1298,6 +1298,17 @@ BUDGET_SYNC_LAST_SUCCESS = Gauge(
     "Unix time of the last successful Actual Budget sync (0 = none since process start).",
 )
 
+BUDGET_HISTORY_ROWS = Gauge(
+    "bgw_budget_history_rows",
+    "Transactions in query_budget's synced 'actual' dataset after the last refresh.",
+)
+
+BUDGET_HISTORY_REFRESH_TOTAL = Counter(
+    "bgw_budget_history_refresh_total",
+    "Refreshes of query_budget's 'actual' dataset after an Actual sync, by result (ok|error).",
+    ["result"],
+)
+
 # ---------------------------------------------------------------------------
 # Workout program builder — workout_manager.generate_workout + the tool handler
 # ---------------------------------------------------------------------------
