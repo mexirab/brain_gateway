@@ -180,6 +180,17 @@ scrape_configs:
           node: 'jupiter'
           tier: 'app'
 
+      # Paperless-ngx (own compose project at /opt/paperless on Jupiter, NOT on
+      # gateway-net/monitoring-net, so probed via the LAN publish on :8777).
+      # /accounts/login/ is the unauthenticated page that answers 200 — `/` and
+      # `/api/` 302 to it. tier=app → AppDown (Grafana only); PaperlessDown
+      # keys on service=paperless.
+      - targets: ['http://${NODE_JUPITER_IP}:8777/accounts/login/']
+        labels:
+          service: 'paperless'
+          node: 'jupiter'
+          tier: 'app'
+
       # Dashboard (Next.js). /login is public (no auth) and served by the app
       # itself, so a 200 proves the server renders pages. Probed by container
       # name over frontend-probe-net (the frontend may publish on 127.0.0.1
