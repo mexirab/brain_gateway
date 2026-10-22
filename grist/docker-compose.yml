@@ -69,7 +69,13 @@ services:
       GRIST_IGNORE_SESSION: "true"
       GRIST_FORCE_LOGIN: "true"
       GRIST_ORG_CREATION_ANYONE: "false"
-      GRIST_PERSONAL_ORGS: "false"
+      # Must be "true", and set explicitly: with it "false" OR unset (the
+      # default is off once GRIST_SINGLE_ORG is set), 1.7.20 crash-loops on a
+      # FRESH /persist ("No example workspace available") — the example docs
+      # live in a personal org (bisected 2026-10-22). Harmless here:
+      # GRIST_SINGLE_ORG pins everyone to the "jess" site, and the only users
+      # are the owner and the least-privilege jess user.
+      GRIST_PERSONAL_ORGS: "true"
       GRIST_ANON_PLAYGROUND: "false"
       GRIST_SANDBOX_FLAVOR: gvisor
       GRIST_TELEMETRY_LEVEL: "off"
