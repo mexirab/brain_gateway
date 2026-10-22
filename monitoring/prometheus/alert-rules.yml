@@ -494,6 +494,17 @@ groups:
         annotations:
           summary: "Actual Budget sync has not succeeded in 6h"
           description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
+      - alert: BudgetHistoryRefreshFailing
+        # The Actual sync itself succeeded but rewriting query_budget's
+        # "actual" dataset failed every time for 6h, so Jess answers budget
+        # history questions from stale rows. Same shape as BudgetSyncFailing.
+        expr: (sum(increase(bgw_budget_history_refresh_total{result="error"}[6h])) > 0) unless (sum(increase(bgw_budget_history_refresh_total{result="ok"}[6h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "query_budget history (Actual) not refreshed in 6h"
+          description: "Every refresh of the query_budget 'actual' dataset after an Actual sync failed in the last 6h. Check `docker logs brain-orchestrator | grep 'query_budget history'`. A CSV import named 'actual' blocks it (rename that dataset)."
       - alert: WebPushFailing
         # Web Push counts as phone delivery while a device is recently healthy,
         # so a push service that started rejecting us (VAPID key replaced →

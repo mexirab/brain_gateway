@@ -28,6 +28,8 @@ Configuration (all via ``orchestrator.config.settings``):
     ACTUAL_ENCRYPTION_PASSWORD   only for end-to-end-encrypted budgets
     ACTUAL_FUN_MONEY_CATEGORY    category whose balance drives the health bar
     ACTUAL_SYNC_MONTHS           how many months (incl. current) to mirror
+    ACTUAL_HISTORY_MONTHS        how many months the snapshot fetches for the
+                                 query_budget "actual" dataset (>= sync months)
 """
 
 from __future__ import annotations
@@ -104,7 +106,11 @@ class ActualCategory:
 @dataclass
 class ActualSnapshot:
     budget_name: str
-    window_start: str  # ISO date, inclusive
+    window_start: str  # ISO date, inclusive — the finance.db (Quest Board) window
+    # Oldest date in ``transactions`` (ISO, inclusive). <= window_start: the
+    # fetch covers ACTUAL_HISTORY_MONTHS for query_budget, and apply_snapshot
+    # only mirrors rows from window_start on.
+    history_start: str = ""
     transactions: list[ActualTransaction] = field(default_factory=list)
     categories: list[ActualCategory] = field(default_factory=list)
     # Balance of the fun-money category this month as the Actual UI shows it
@@ -154,6 +160,7 @@ def fetch_snapshot(today: _dt.date | None = None) -> ActualSnapshot:
 
     today = today or _dt.date.today()
     start = sync_window_start(today)
+    history_start = min(start, sync_window_start(today, settings.actual_history_months))
     fun_name = (settings.actual_fun_money_category or "").strip().lower()
 
     import httpx
@@ -173,6 +180,7 @@ def fetch_snapshot(today: _dt.date | None = None) -> ActualSnapshot:
         snap = ActualSnapshot(
             budget_name=_name(getattr(actual, "_file", None)) or settings.actual_budget_file,
             window_start=start.isoformat(),
+            history_start=history_start.isoformat(),
         )
 
         # One pass over this month's budget gives budgeted / spent /
@@ -209,11 +217,11 @@ def fetch_snapshot(today: _dt.date | None = None) -> ActualSnapshot:
                 snap.fun_money_category = name
                 snap.fun_money_balance = balance if getattr(cat, "id", None) in month_stats else None
 
-        # Spendable lines in the window: on-budget accounts, no transfers.
+        # Spendable lines in the history window: on-budget accounts, no transfers.
         # get_transactions() returns split legs individually (each carries
         # its own category) and single transactions as-is; parents of
         # splits are excluded. Deleted rows are excluded by default.
-        for t in get_transactions(s, start_date=start, transfer=False, off_budget=False):
+        for t in get_transactions(s, start_date=history_start, transfer=False, off_budget=False):
             if getattr(t, "starting_balance_flag", 0):
                 continue
             payee = getattr(t, "payee", None)

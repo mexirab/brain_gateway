@@ -2345,6 +2345,62 @@ def save_budget_transactions(dataset: str, rows: List[Dict[str, Any]]) -> Dict[s
     }
 
 
+def replace_budget_dataset(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> int:
+    """Replace a whole dataset (metadata + every transaction) in ONE transaction.
+
+    For synced datasets (budget_manager.refresh_actual_dataset): readers never
+    see a half-written dataset, and identical rows are all kept (no multiset
+    dedup — the source is authoritative). Returns the number of rows written.
+    """
+    import json as _json
+
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO budget_imports
+               (name, source_file, imported_at, row_count, date_min, date_max,
+                total_outflow, total_inflow, column_map, summary_doc_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+               ON CONFLICT(name) DO UPDATE SET
+                   source_file = excluded.source_file,
+                   imported_at = excluded.imported_at,
+                   row_count = excluded.row_count,
+                   date_min = excluded.date_min,
+                   date_max = excluded.date_max,
+                   total_outflow = excluded.total_outflow,
+                   total_inflow = excluded.total_inflow,
+                   column_map = excluded.column_map""",
+            (
+                meta["name"],
+                meta["source_file"],
+                meta.get("imported_at") or datetime.now().isoformat(),
+                len(rows),
+                meta.get("date_min"),
+                meta.get("date_max"),
+                float(meta.get("total_outflow", 0)),
+                float(meta.get("total_inflow", 0)),
+                _json.dumps(meta.get("column_map") or {}),
+            ),
+        )
+        conn.execute("DELETE FROM budget_transactions WHERE dataset = ?", (meta["name"],))
+        conn.executemany(
+            """INSERT INTO budget_transactions
+               (dataset, txn_date, amount, category, payee, description)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    meta["name"],
+                    r["txn_date"],
+                    float(r["amount"]),
+                    r.get("category"),
+                    r.get("payee"),
+                    r.get("description"),
+                )
+                for r in rows
+            ],
+        )
+    return len(rows)
+
+
 def clear_budget_transactions(dataset: str) -> int:
     with get_db() as conn:
         cur = conn.execute("DELETE FROM budget_transactions WHERE dataset = ?", (dataset,))
