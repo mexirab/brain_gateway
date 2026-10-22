@@ -377,6 +377,17 @@ Thin file handoff to Paperless-ngx on Jupiter for OCR + auto-tagging. If `PAPERL
 | `PAPERLESS_DEFAULT_TAGS` | (empty) | Comma-separated tag names applied to every upload (in addition to tool-supplied tags). |
 | `PAPERLESS_UPLOAD_TIMEOUT_SECONDS` | `30` | Per-upload httpx timeout. Metric bucketed into `bgw_paperless_upload_latency_seconds`. |
 
+## Grist spreadsheet (`spreadsheet` tool)
+
+Jess's access to the self-hosted Grist server (`grist/` compose project; runbook `docs/SPREADSHEETS.md`). `validate_grist_config` (`config.py`) auto-disables the tool (logs `[CONFIG] GRIST_ENABLED=true but …`, never raises) when the URL is not `http(s)://`, the API key is shorter than 20 chars, or `GRIST_DOCS` has no valid entry. After changing these: `docker compose up -d --force-recreate orchestrator` (not `restart`). The Grist server's own settings live in `/opt/apps/grist/grist.env` (template `grist/grist.env.example`), not here.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GRIST_ENABLED` | `false` | Enable the `spreadsheet` tool. When off it is removed from the LLM schema (`GRIST_TOOL_NAMES`, part of the tool-cache key) and the spreadsheet line is dropped from the prompt's tool guidance; the handler stays registered and self-gates. Exposed as `shared.GRIST_ENABLED`. |
+| `GRIST_URL` | (empty) | Grist base URL. Jupiter: `http://grist:8484` (container name over `grist-net` — Grist is not on `gateway-net`). |
+| `GRIST_API_KEY` | (empty) | API key of the least-privilege `jess@grist.invalid` Grist user (Editor on the allow-listed docs only) — never the owner's or admin's key. See `docs/SPREADSHEETS.md` → Deploy step 7. |
+| `GRIST_DOCS` | (empty) | Allow-list `nickname=docId,...` (docId from the doc URL). Nicknames: lower-case `[a-z0-9_-]`, ≤40 chars; doc ids 10–64 alphanumerics; malformed entries dropped. The only docs Jess can open. Keep medical/financial sheets off it (contents reach chat history + training corpus). |
+
 ## Ntfy Feedback Loop (F-011)
 
 Third reminder delivery channel with Done/Snooze action buttons. Callbacks hit HMAC-signed URLs (`/api/reminder/ack/{id}`, `/api/reminder/snooze/{id}`). If `NTFY_HMAC_SECRET` is empty, a `model_validator` in `config.py` auto-disables the channel regardless of `NTFY_ENABLED` — reminders continue via TTS + HA Companion push.

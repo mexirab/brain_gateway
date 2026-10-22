@@ -462,6 +462,9 @@ DIET_PROFILE_PATH = settings.diet_profile_path
 # PAPERLESS_API_TOKEN are missing; tool_definitions hides paperless_save from
 # the LLM schema when it is off (the handler stays registered and self-gates).
 PAPERLESS_ENABLED = settings.paperless_enabled
+# Grist spreadsheet tool — config.py auto-disables it on incomplete config;
+# tool_definitions hides `spreadsheet` from the schema when it is off.
+GRIST_ENABLED = settings.grist_enabled
 
 # ---------------------------------------------------------------------------
 # Expert Model (Qwen3-32B Thinking on Saturn 3090)

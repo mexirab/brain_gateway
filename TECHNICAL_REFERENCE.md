@@ -783,6 +783,21 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 - OCR text framed between `BEGIN PAPERLESS DOCUMENT <8-hex>` / `END PAPERLESS DOCUMENT <same>` (random per call, so the document can't forge its end marker); text boundary-escaped.
 - Both tools: hidden unless `PAPERLESS_ENABLED` (`PAPERLESS_TOOL_NAMES`), not voice tools, non-terminal. Client timeout 10 s (3 s connect) per request; hard 20 s per tool call (`_PAPERLESS_CALL_TIMEOUT_S`). Never raise — failures map to a short message (401/403 → token/permission hint, timeout/connect → "couldn't reach Paperless", 404 → "No Paperless document with id N"). Metric `bgw_paperless_read_total{op=search|get, result}`.
 
+### spreadsheet
+```json
+{"action": "add_row", "sheet": "gym", "table": "Log", "values": {"Date": "2026-10-22", "Weight (lbs)": 135}}
+```
+- `action` (required): `list` | `read` | `add_row` | `update_row`. Self-hosted Grist via `orchestrator/grist_client.py`; runbook `docs/SPREADSHEETS.md`.
+- `sheet`: nickname from `GRIST_DOCS` — a doc not on the allow-list can't be read or written. `table`: Grist table id from `list`.
+- `list`: allow-listed sheets → their tables (a doc that fails shows "couldn't open", metric `result=partial`).
+- `read`: newest rows (`limit` 1-50, default 20), optional exact-match `filter` `{column label: value or [values]}` (ISO date converted for Date columns). Rows shown oldest→newest as `#id | Label: value | …`; Date/DateTime cells as `YYYY-MM-DD` / ISO text; cells one-lined, capped at 200 chars, boundary-escaped; output ≤6000 chars, framed `BEGIN SPREADSHEET DATA <8-hex>` / `END SPREADSHEET DATA <same>` (cell text is untrusted). Says when older rows exist.
+- `add_row`: `values` (one row) or `rows` (max 20), `{column label: value}`; values text/number/bool/null, ≤1000 chars per cell. Returns the new row ids.
+- `update_row`: `row_id` (the `#id` from read) + `values`; reply includes each changed cell's old value.
+- Columns addressed by visible LABEL, not column id. Formula columns are readable, never writable (`formula_column` error lists writable columns). No delete.
+- A write sent but not confirmed (timeout after send, 5xx, or the 20 s per-call ceiling) → `write_unknown`: "may or may not have been saved. Read the table before trying again" — never treated as "nothing happened".
+- Writes only when the user asked in this conversation (schema + IMPORTANT RULES list it as both untrusted source and state-changing tool).
+- Hidden unless `GRIST_ENABLED` (`GRIST_TOOL_NAMES`), not a voice tool. Client timeout 6 s (3 s connect), ≤3 requests per call, hard 20 s per call. Never raises; logs no cells, filter values or column names. Metric `bgw_spreadsheet_total{action=list|read|add|update, result}` (`ok`, `partial`, `write_unknown`, `disabled`, `unknown_sheet`, `bad_table`, `bad_filter`, `bad_row_id`, `row_not_found`, `no_values`, `too_many_rows`, `unknown_column`, `formula_column`, `bad_value`, `auth`, `not_found`, `http_4xx`, `http_5xx`, `http_other`, `timeout`, `connect_error`, `other`) — no dashboard panel or alert.
+
 ### ask_expert
 ```json
 {"question": "Why might my 2025 gaming spend have spiked in November?"}

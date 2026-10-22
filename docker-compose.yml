@@ -235,6 +235,7 @@ services:
       - PUSHOVER_UPLOAD_TIMEOUT_SECONDS=${PUSHOVER_UPLOAD_TIMEOUT_SECONDS:-10}
     networks:
       - gateway-net
+      - grist-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
@@ -574,6 +575,13 @@ networks:
   # external. Absent on installs without the monitoring stack — harmless.
   frontend-probe-net:
     name: gateway_nerves_frontend-probe-net
+    driver: bridge
+  # Only the orchestrator + Grist (grist/docker-compose.yml joins it as
+  # external). Grist trusts a forwarded login header that needs no secret, so it
+  # must not sit on gateway-net, where a compromised frontend/searxng could send
+  # that header. Empty (harmless) on installs without Grist.
+  grist-net:
+    name: gateway_nerves_grist-net
     driver: bridge
 
 volumes:

@@ -467,6 +467,18 @@ PAPERLESS_UPLOAD_TOTAL = Counter(
     ["result", "reason"],
 )
 
+SPREADSHEET_TOTAL = Counter(
+    "bgw_spreadsheet_total",
+    "Grist calls from the spreadsheet tool",
+    # action: list | read | add | update
+    # result: ok | partial (list: some docs failed) | write_unknown (write sent,
+    #         no confirmation) | disabled | unknown_sheet | bad_table | bad_filter | bad_row_id |
+    #         row_not_found | no_values | too_many_rows | unknown_column |
+    #         formula_column | bad_value | auth | not_found | http_4xx | http_5xx |
+    #         http_other | timeout | connect_error | other
+    ["action", "result"],
+)
+
 PAPERLESS_READ_TOTAL = Counter(
     "bgw_paperless_read_total",
     "Read-only Paperless-ngx API calls from the paperless_search / paperless_read tools",
