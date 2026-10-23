@@ -97,7 +97,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Identity & Tone</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Identity & Tone</h2>
         <p className="text-sm text-content-secondary mt-1">
           What Jess calls herself, what she calls you, and how she talks.
         </p>
@@ -134,7 +134,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
           className="mt-1 h-4 w-4 accent-brand-500"
         />
         <span className="flex flex-col">
-          <span className="text-sm text-white">ADHD mode</span>
+          <span className="text-sm text-content-primary">ADHD mode</span>
           <span className="text-xs text-content-muted">
             When off, Jess uses a generic tone and skips ADHD-coaching framing.
           </span>
@@ -162,7 +162,7 @@ export default function IdentityPanel({ registerDirty }: PanelProps = {}) {
                 className="mt-1 accent-brand-500"
               />
               <span className="flex flex-col">
-                <span className="text-sm text-white">{opt.label}</span>
+                <span className="text-sm text-content-primary">{opt.label}</span>
                 <span className="text-xs text-content-muted">{opt.hint}</span>
               </span>
             </label>

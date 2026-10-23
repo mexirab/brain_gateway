@@ -30,7 +30,7 @@ export default function PantryPage() {
         Pantry
       </h1>
 
-      <div className="flex gap-1 p-1 rounded-lg bg-surface-raised/40 border border-line-subtle" role="tablist">
+      <div className="segmented" role="tablist">
         {(['inventory', 'plan', 'scan'] as Tab[]).map((t) => (
           <button
             key={t}
@@ -39,9 +39,7 @@ export default function PantryPage() {
             aria-selected={tab === t}
             aria-controls={`pantry-panel-${t}`}
             onClick={() => setTab(t)}
-            className={`flex-1 py-2 rounded-md text-sm transition-colors ${
-              tab === t ? 'bg-brand/25 text-content-primary' : 'text-content-muted hover:text-content-primary'
-            }`}
+            className={`segmented-item ${tab === t ? 'segmented-item-active' : ''}`}
           >
             {TAB_LABEL[t]}
           </button>

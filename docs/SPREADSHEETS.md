@@ -8,7 +8,8 @@ Self-hosted [Grist](https://www.getgrist.com) on Jupiter: the local replacement 
 
 | | |
 |---|---|
-| Compose project | `grist/` (own project, like `actual/` and `radicale/`; never touched by the orchestrator's build/deploy) |
+| Compose project | `grist/` (own project, like `actual/` and `radicale/`). CI deploy recreates it (`up -d --force-recreate grist`, then checks `/status`) only when `grist/docker-compose.yml` or `theme/dist/grist.css` changes |
+| Theme | Suite theme: `theme/dist/grist.css` bind-mounted as `/grist/static/custom.css` + `APP_STATIC_INCLUDE_CUSTOM_CSS=true`; covers Grist Light and Dark. Single-file mount pins the inode → after a manual theme change, `cd grist && docker compose up -d --force-recreate`. See `theme/README.md` |
 | Image | `gristlabs/grist:1.7.20`, digest-pinned |
 | Hardening | uid 1000, read-only rootfs, `cap_drop: ALL`, `no-new-privileges`, `/tmp` tmpfs 256m, `mem_limit 1g`, `pids_limit 512`; formulas run in gVisor (`GRIST_SANDBOX_FLAVOR=gvisor`) |
 | Publish | `127.0.0.1:8484` only |

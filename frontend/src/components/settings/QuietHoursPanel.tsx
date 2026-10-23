@@ -123,7 +123,7 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Quiet Hours</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Quiet Hours</h2>
         <p className="text-sm text-content-secondary mt-1">
           During this window, selfcare nudges are suppressed. Reminders still fire (they may be urgent).
         </p>
@@ -172,7 +172,7 @@ export default function QuietHoursPanel({ registerDirty }: PanelProps = {}) {
                 className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
                   active
                     ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                    : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
+                    : 'border-line text-content-secondary hover:border-line-strong hover:text-content-primary'
                 }`}
               >
                 {label}

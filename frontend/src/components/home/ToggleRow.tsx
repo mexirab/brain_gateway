@@ -18,13 +18,13 @@ export default function ToggleRow({ entity }: { entity: HAEntity }) {
       disabled={pending[entity.entity_id]}
       aria-pressed={isOn}
       className={`min-w-0 flex items-center gap-2.5 w-full min-h-[52px] px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
-        isOn ? 'bg-success/10 border-success/30' : 'bg-surface-raised/40 border-line/30'
+        isOn ? 'bg-success/10 border-success/30' : 'bg-surface-raised/40 border-ink/30'
       }`}
     >
       <span className={`p-1.5 rounded-lg shrink-0 ${isOn ? 'bg-success/20 text-success' : 'bg-surface-overlay/60 text-content-muted'}`}>
         <Icon size={18} />
       </span>
-      <span className="flex-1 min-w-0 text-sm font-medium text-white truncate">{entity.friendly_name}</span>
+      <span className="flex-1 min-w-0 text-sm font-medium text-content-primary truncate">{entity.friendly_name}</span>
       <span aria-live="polite" className={`text-xs ${error ? 'text-danger' : isOn ? 'text-success' : 'text-content-muted'}`}>
         {error || (isOn ? 'On' : 'Off')}
       </span>

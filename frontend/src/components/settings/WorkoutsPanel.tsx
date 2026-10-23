@@ -272,7 +272,7 @@ export default function WorkoutsPanel({ registerDirty }: PanelProps = {}) {
   if (disabled) {
     return (
       <div className="space-y-2">
-        <h2 className="text-lg font-semibold text-white">Workouts</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Workouts</h2>
         <p className="text-sm text-content-secondary">Workout tracking isn’t enabled on this install.</p>
       </div>
     );
@@ -281,7 +281,7 @@ export default function WorkoutsPanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white">Workouts</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Workouts</h2>
         <p className="text-sm text-content-secondary mt-1">
           Your weekly program, and what equipment each place you train has. Jess only plans
           exercises the place you’re at can support.
@@ -301,10 +301,10 @@ export default function WorkoutsPanel({ registerDirty }: PanelProps = {}) {
 
       {/* Program */}
       <section className="space-y-3">
-        <h3 className="text-sm font-semibold text-white">Weekly program</h3>
+        <h3 className="text-sm font-semibold text-content-primary">Weekly program</h3>
         {program ? (
           <p className="text-sm text-content-secondary">
-            {program.split.join(' / ')} · next up: <span className="text-white">{program.next_day_label}</span> ·
+            {program.split.join(' / ')} · next up: <span className="text-content-primary">{program.next_day_label}</span> ·
             about {program.exercises_per_session} exercises per session
             {program.deload?.is_deload
               ? ' · this week is a deload week'
@@ -402,7 +402,7 @@ export default function WorkoutsPanel({ registerDirty }: PanelProps = {}) {
 
       {/* Locations */}
       <section className="space-y-3">
-        <h3 className="text-sm font-semibold text-white">Where you train</h3>
+        <h3 className="text-sm font-semibold text-content-primary">Where you train</h3>
         {locations.length === 0 && (
           <p className="text-sm text-content-muted italic">
             No locations yet. Without one, Jess assumes a full gym.
@@ -416,7 +416,7 @@ export default function WorkoutsPanel({ registerDirty }: PanelProps = {}) {
             return (
               <li key={loc.id} className="rounded-lg border border-line bg-surface-base/40 p-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-white truncate">{loc.name}</p>
+                  <p className="text-sm font-medium text-content-primary truncate">{loc.name}</p>
                   <button
                     type="button"
                     onClick={() => deleteLocation(loc)}
@@ -441,7 +441,7 @@ export default function WorkoutsPanel({ registerDirty }: PanelProps = {}) {
                           className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-full text-sm border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
                             on
                               ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                              : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
+                              : 'border-line text-content-secondary hover:border-line-strong hover:text-content-primary'
                           }`}
                         >
                           {on && <Check size={12} aria-hidden="true" />}

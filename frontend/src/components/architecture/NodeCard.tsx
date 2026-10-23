@@ -41,7 +41,7 @@ interface NodeCardProps {
 export default function NodeCard({ node, status }: NodeCardProps) {
   const { id, name, ip, gpu, role, services } = node;
   const Icon = NODE_ICONS[id] || Server;
-  const borderColor = NODE_COLORS[id] || 'border-line-strong/30';
+  const borderColor = NODE_COLORS[id] || 'border-ink/[0.045]';
   const accentColor = GPU_COLORS[id] || 'text-content-secondary';
   const tone = STATUS_TONE[status.tone];
 
@@ -52,7 +52,7 @@ export default function NodeCard({ node, status }: NodeCardProps) {
           <Icon size={22} />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-bold text-white">{name}</h3>
+          <h3 className="text-lg font-bold text-content-primary">{name}</h3>
           <p className="text-xs text-content-muted font-mono">{ip}</p>
         </div>
         {/* Live status badge — reflects real /api/services health */}
@@ -82,7 +82,7 @@ export default function NodeCard({ node, status }: NodeCardProps) {
         {services.map((s) => (
           <span
             key={s}
-            className="text-xs px-2 py-0.5 rounded-full bg-surface-raised/80 text-content-secondary border border-line/50"
+            className="text-xs px-2 py-0.5 rounded-full bg-surface-raised/80 text-content-secondary border border-ink/50"
           >
             {s}
           </span>

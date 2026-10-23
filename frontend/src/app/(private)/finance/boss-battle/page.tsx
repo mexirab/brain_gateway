@@ -124,7 +124,7 @@ export default function BossBattlePage() {
           </p>
         </div>
       ) : (
-        <div className="glass p-8 text-center border border-line/50">
+        <div className="glass p-8 text-center border border-ink/50">
           <Swords size={40} className="text-content-muted mx-auto mb-3" />
           <h2 className="text-lg font-semibold text-content-secondary">No Boss This Month</h2>
           <p className="text-sm text-content-muted mt-1">
@@ -153,7 +153,7 @@ export default function BossBattlePage() {
                 className={`flex items-center justify-between p-3 rounded-lg border ${
                   isCurrent
                     ? 'border-accent-gold/30 bg-accent-gold/5'
-                    : 'border-line/50 bg-surface-raised/30'
+                    : 'border-ink/50 bg-surface-raised/30'
                 }`}
               >
                 <div>

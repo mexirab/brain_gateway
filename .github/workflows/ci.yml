@@ -54,6 +54,35 @@ jobs:
             exit 1
           fi
 
+  check-theme:
+    name: Suite Theme In Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      # frontend/src/styles/{tokens.css,theme-meta.ts} and theme/dist/* are
+      # GENERATED from theme/tokens.json by theme/build.py (stdlib only).
+      - name: Test the theme generator
+        run: |
+          pip install -q pytest pyyaml
+          python -m pytest theme -q -p no:cacheprovider
+      - name: Regenerate theme files
+        run: python theme/build.py
+      - name: Fail if the committed theme files drifted from tokens.json
+        run: |
+          # status --porcelain also catches a new output nobody committed.
+          if git diff --exit-code -- frontend/src/styles/ theme/dist/ \
+             && [ -z "$(git status --porcelain -- frontend/src/styles/ theme/dist/)" ]; then
+            echo "Theme files are in sync with theme/tokens.json."
+          else
+            echo "::error::Generated theme files are out of sync with theme/tokens.json (diff above)."
+            echo "Edit theme/tokens.json (or theme/build.py), never the generated files."
+            echo "Fix: python3 theme/build.py, then commit the regenerated files."
+            exit 1
+          fi
+
   test-python:
     name: Python Tests
     runs-on: ubuntu-latest
@@ -111,7 +140,7 @@ jobs:
     # post power-tiering) so auto-deploy is reliable. The orchestrator + frontend
     # now run on Jupiter; Helios is model-layer only.
     runs-on: [self-hosted, linux, jupiter]
-    needs: [lint-python, test-python, lint-frontend, docker-build, check-dashboards]
+    needs: [lint-python, test-python, lint-frontend, docker-build, check-dashboards, check-theme]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     # Serialize deploys. The runner deploys from ONE shared checkout at
     # /home/labadmin/gateway_nerves; rapid successive merges must not race on it
@@ -171,6 +200,18 @@ jobs:
           if echo "$CHANGED" | grep -qE "^frontend/|^docker-compose\.yml$"; then
             echo "::group::Rebuilding frontend"
             docker compose up -d --build --force-recreate frontend
+            echo "::endgroup::"
+          fi
+
+          # Grist (own compose project) mounts theme/dist/grist.css as a single
+          # file — a git pull swaps its inode, so only a recreate applies a
+          # theme change. `up -d` returns 0 even if Grist then fails to start,
+          # so check /status before going green.
+          if grep -qE "^grist/docker-compose\.yml$|^theme/dist/grist\.css$" <<<"$CHANGED"; then
+            echo "::group::Recreating Grist"
+            docker compose -f grist/docker-compose.yml up -d --force-recreate grist
+            for i in $(seq 1 30); do curl -sf http://127.0.0.1:8484/status >/dev/null && break; sleep 2; done
+            curl -sf http://127.0.0.1:8484/status >/dev/null || { echo "Grist not up after 60s"; docker logs --tail 30 grist; exit 1; }
             echo "::endgroup::"
           fi
 

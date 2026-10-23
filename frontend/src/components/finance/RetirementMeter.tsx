@@ -54,8 +54,8 @@ export default function RetirementMeter({ config }: RetirementMeterProps) {
       >
         <defs>
           <linearGradient id="retirementGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#6f63ff" />
-            <stop offset="100%" stopColor="#a78bfa" />
+            <stop offset="0%" style={{ stopColor: 'rgb(var(--c-brand))' }} />
+            <stop offset="100%" style={{ stopColor: 'rgb(var(--c-accent-violet))' }} />
           </linearGradient>
         </defs>
 
@@ -63,7 +63,7 @@ export default function RetirementMeter({ config }: RetirementMeterProps) {
         <path
           d={bgArc}
           fill="none"
-          stroke="#14151f"
+          style={{ stroke: 'rgb(var(--c-surface-raised))' }}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
         />

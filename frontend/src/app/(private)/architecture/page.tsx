@@ -52,7 +52,7 @@ export default function ArchitecturePage() {
             <Card key={label} padding="sm" className="flex items-center gap-3">
               <Icon size={20} className="text-brand shrink-0" />
               <div>
-                <div className="text-2xl font-bold text-white">{value}</div>
+                <div className="text-2xl font-bold text-content-primary">{value}</div>
                 <div className="text-xs text-content-muted">{label}</div>
               </div>
             </Card>
