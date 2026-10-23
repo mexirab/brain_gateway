@@ -5,6 +5,9 @@
 *token*
 # ...but this is source code (reads token files at runtime), not a secret:
 !scripts/refresh_google_token.py
+# ...and these are design tokens (colors/fonts for the suite theme), not secrets:
+!theme/tokens.json
+!frontend/src/styles/tokens.css
 
 # Active user profile (contains personal data)
 user_profile.yaml
