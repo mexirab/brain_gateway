@@ -54,6 +54,29 @@ jobs:
             exit 1
           fi
 
+  check-theme:
+    name: Suite Theme In Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      # frontend/src/styles/{tokens.css,theme-meta.ts} and theme/dist/* are
+      # GENERATED from theme/tokens.json by theme/build.py (stdlib only).
+      - name: Regenerate theme files
+        run: python theme/build.py
+      - name: Fail if the committed theme files drifted from tokens.json
+        run: |
+          if git diff --exit-code -- frontend/src/styles/ theme/dist/; then
+            echo "Theme files are in sync with theme/tokens.json."
+          else
+            echo "::error::Generated theme files are out of sync with theme/tokens.json (diff above)."
+            echo "Edit theme/tokens.json (or theme/build.py), never the generated files."
+            echo "Fix: python3 theme/build.py, then commit the regenerated files."
+            exit 1
+          fi
+
   test-python:
     name: Python Tests
     runs-on: ubuntu-latest

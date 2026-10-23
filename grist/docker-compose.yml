@@ -81,8 +81,15 @@ services:
       GRIST_TELEMETRY_LEVEL: "off"
       GRIST_ALLOW_AUTOMATIC_VERSION_CHECKING: "false"
       APP_HOME_URL: https://jupiter-amds.tail74fc4a.ts.net:8485
+      # Jess suite theme (theme/dist/grist.css, generated from theme/tokens.json).
+      APP_STATIC_INCLUDE_CUSTOM_CSS: "true"
     volumes:
       - /opt/apps/grist/persist:/persist
+      # Single-file mount: a `git pull` that changes the theme replaces the file
+      # with a new inode the running container never sees (bind-mount inode
+      # trap, monitoring/README.md), so recreate after theme changes:
+      # docker compose up -d --force-recreate
+      - ../theme/dist/grist.css:/grist/static/custom.css:ro
     tmpfs:
       - /tmp:size=256m
     ports:

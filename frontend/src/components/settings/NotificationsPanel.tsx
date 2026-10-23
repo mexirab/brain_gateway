@@ -184,7 +184,7 @@ export default function NotificationsPanel() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Notifications</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Notifications</h2>
         <p className="text-sm text-content-secondary mt-1">
           Get reminders and self-care nudges on this device’s lock screen. Tap one to open Chat, where the Done and
           Snooze buttons are. Jess sends these herself; Apple or Google only pass along an encrypted message they

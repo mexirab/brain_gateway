@@ -47,7 +47,7 @@ export default function SceneChips({ scenes, roomName }: { scenes: HAEntity[]; r
                 ? 'border-danger/50 text-danger bg-danger/10'
                 : ok
                   ? 'border-brand/50 text-brand bg-brand/20'
-                  : 'border-line/40 text-content-secondary bg-surface-raised/40 hover:text-white'
+                  : 'border-ink/40 text-content-secondary bg-surface-raised/40 hover:text-content-primary'
             }`}
           >
             {ok ? <Check size={14} /> : <Sparkles size={14} />}
@@ -59,7 +59,7 @@ export default function SceneChips({ scenes, roomName }: { scenes: HAEntity[]; r
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="min-h-[44px] px-3 rounded-full text-sm text-content-muted hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+          className="min-h-[44px] px-3 rounded-full text-sm text-content-muted hover:text-content-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
         >
           {expanded ? 'Show fewer' : `${scenes.length - VISIBLE} more`}
         </button>

@@ -189,14 +189,14 @@ export default function CalendarPage() {
                         return (
                           <li
                             key={`${ev.id}|${ev.start}`}
-                            className={`flex flex-col gap-1 rounded-lg border border-line/30 bg-surface-raised/40 p-2.5 sm:flex-row sm:gap-3 ${done ? 'opacity-60' : ''}`}
+                            className={`flex flex-col gap-1 rounded-lg border border-ink/30 bg-surface-raised/40 p-2.5 sm:flex-row sm:gap-3 ${done ? 'opacity-60' : ''}`}
                           >
                             <span className="shrink-0 text-xs text-content-muted sm:w-32 sm:pt-0.5">
                               {ev.all_day ? 'All day' : timeRange(ev)}
                               {done && <span className="sr-only"> (finished)</span>}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-white [overflow-wrap:anywhere]">
+                              <p className="text-sm font-medium text-content-primary [overflow-wrap:anywhere]">
                                 {ev.title}
                                 {ev.source === 'exchange' && (
                                   <Badge tone="info" className="ml-2 align-middle">

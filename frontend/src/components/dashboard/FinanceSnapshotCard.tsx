@@ -50,7 +50,7 @@ export default function FinanceSnapshotCard() {
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-2">
               <TrendingUp size={14} className="text-brand" />
-              <span className="text-sm text-white">
+              <span className="text-sm text-content-primary">
                 Lv.{game.level}
               </span>
             </div>

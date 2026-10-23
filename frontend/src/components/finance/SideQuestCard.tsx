@@ -90,7 +90,7 @@ export default function SideQuestCard({
           ? 'border border-accent-gold/40 shadow-accent-gold/5 shadow-lg'
           : isAbandoned
             ? 'opacity-50 border border-line'
-            : 'border border-line/50'
+            : 'border border-ink/50'
       }`}
     >
       {/* Header */}
@@ -194,7 +194,7 @@ export default function SideQuestCard({
 
       {/* Action buttons (complete / abandon) */}
       {showActions && quest.status === 'active' && (
-        <div className="mt-3 pt-3 border-t border-line/50 flex gap-2">
+        <div className="mt-3 pt-3 border-t border-ink/50 flex gap-2">
           <button
             onClick={handleComplete}
             disabled={busy}

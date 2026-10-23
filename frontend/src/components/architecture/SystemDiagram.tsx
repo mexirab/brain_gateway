@@ -331,7 +331,7 @@ export default function SystemDiagram() {
 
   return (
     <Card padding="none" className="p-4 md:p-6">
-      <h2 className="text-lg md:text-xl font-bold text-white mb-1">
+      <h2 className="text-lg md:text-xl font-bold text-content-primary mb-1">
         How Jess Works
       </h2>
       <p className="text-xs md:text-sm text-content-secondary mb-3">
@@ -375,7 +375,7 @@ export default function SystemDiagram() {
         ))}
         <button
           onClick={() => setIsPlaying(!isPlaying)}
-          className="ml-auto px-3 py-1.5 rounded-full text-xs font-medium bg-surface-raised/60 text-content-secondary hover:text-white transition-colors"
+          className="ml-auto px-3 py-1.5 rounded-full text-xs font-medium bg-surface-raised/60 text-content-secondary hover:text-content-primary transition-colors"
         >
           {isPlaying ? '⏸ Pause' : '▶ Play'}
         </button>

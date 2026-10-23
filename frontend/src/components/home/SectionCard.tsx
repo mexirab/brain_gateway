@@ -57,7 +57,7 @@ export default function SectionCard({ section, open, onToggleOpen, isRoom }: Sec
           className="flex items-center gap-2 flex-1 min-w-0 min-h-[44px] text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
         >
           {open ? <ChevronDown size={16} className="text-content-muted shrink-0" /> : <ChevronRight size={16} className="text-content-muted shrink-0" />}
-          <span className="text-base font-semibold text-white truncate">{section.name}</span>
+          <span className="text-base font-semibold text-content-primary truncate">{section.name}</span>
           <span className="text-xs text-content-muted shrink-0">{summary || `${sectionSize(section)}`}</span>
         </button>
         {failed > 0 && (
@@ -98,8 +98,8 @@ export default function SectionCard({ section, open, onToggleOpen, isRoom }: Sec
           )}
           {/* Covers / locks: shown read-only — opening and unlocking aren't allowed from here. */}
           {section.other.map((e) => (
-            <div key={e.entity_id} className="flex items-center justify-between rounded-xl border border-line/30 bg-surface-raised/40 px-3 py-2.5">
-              <span className="text-sm text-white truncate">{e.friendly_name}</span>
+            <div key={e.entity_id} className="flex items-center justify-between rounded-xl border border-ink/30 bg-surface-raised/40 px-3 py-2.5">
+              <span className="text-sm text-content-primary truncate">{e.friendly_name}</span>
               <span className="text-xs text-content-muted">{e.state}</span>
             </div>
           ))}

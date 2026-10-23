@@ -47,7 +47,7 @@ export default function ChatSidebar({
             key={conv.id}
             className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm ${
               conv.id === activeId
-                ? 'bg-surface-overlay/50 text-white'
+                ? 'bg-surface-overlay/50 text-content-primary'
                 : 'text-content-secondary hover:bg-surface-raised/60 hover:text-content-primary'
             }`}
             onClick={() => onSelect(conv.id)}

@@ -1,21 +1,24 @@
 import type { MetadataRoute } from 'next';
+import { getAssistantName } from '@/lib/branding.server';
+import { THEME_BACKGROUND } from '@/styles/theme-meta';
 
 /**
  * PWA manifest (served at /manifest.webmanifest). Makes the dashboard
- * installable — useful for the Callisto Pi kiosk (launches standalone, no
- * browser chrome) and for installing on a phone. Colors mirror the design
- * tokens (surface-base background, theme color matches the status bar).
+ * installable on a phone (standalone, no browser chrome). The name follows the
+ * assistant name from /settings → Identity; the splash color is the dark
+ * palette's page background (the default theme).
  */
-export default function manifest(): MetadataRoute.Manifest {
+export default async function manifest(): Promise<MetadataRoute.Manifest> {
+  const name = await getAssistantName();
   return {
-    name: 'Convivial Prophet — Jess',
-    short_name: 'Jess',
+    name,
+    short_name: name,
     description: 'Personal AI assistant for ADHD support',
     start_url: '/dashboard',
     display: 'standalone',
     orientation: 'any',
-    background_color: '#0b0c12',
-    theme_color: '#0b0c12',
+    background_color: THEME_BACKGROUND.dark,
+    theme_color: THEME_BACKGROUND.dark,
     // PNGs are required for iOS home-screen install (needed for Web Push);
     // the SVG stays for browsers that prefer it.
     icons: [

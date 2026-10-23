@@ -65,7 +65,7 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
       : `${label}: no record ever`;
 
   return (
-    <div className="rounded-lg bg-surface-raised/40 border border-line/30">
+    <div className="rounded-lg bg-surface-raised/40 border border-ink/30">
       <button
         onClick={() => hasEntries && setExpanded((v) => !v)}
         disabled={!hasEntries}
@@ -81,7 +81,7 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
         <Icon size={16} className={logged ? 'text-success shrink-0' : 'text-content-muted shrink-0'} />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
-            <span className="text-sm font-medium text-white">{label}</span>
+            <span className="text-sm font-medium text-content-primary">{label}</span>
             {logged && (
               <span className="text-xs text-success/80">
                 {state.count_today}× today
@@ -113,7 +113,7 @@ function ActionRow({ action, state }: { action: SelfcareAction; state: SelfcareA
       </button>
 
       {expanded && hasEntries && (
-        <div className="border-t border-line/30 px-3 py-2 space-y-1">
+        <div className="border-t border-ink/30 px-3 py-2 space-y-1">
           {state.entries.map((e) => (
             <div key={`${e.logged_at}-${e.detail ?? ''}`} className="flex items-baseline justify-between gap-2 text-xs">
               <span className="text-content-secondary truncate">{e.detail || '(no detail)'}</span>

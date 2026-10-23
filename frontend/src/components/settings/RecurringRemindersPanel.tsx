@@ -176,7 +176,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white">Recurring Reminders</h2>
+          <h2 className="text-lg font-semibold text-content-primary">Recurring Reminders</h2>
           <p className="text-sm text-content-secondary mt-1">
             Schedule reminders that fire on a repeating cadence. Cron syntax: <code className="bg-surface-raised px-1 rounded">m h dom mon dow</code>.
           </p>
@@ -246,7 +246,7 @@ export default function RecurringRemindersPanel({ registerDirty }: PanelProps = 
               ) : (
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-white truncate">{rule.text}</p>
+                    <p className="text-sm text-content-primary truncate">{rule.text}</p>
                     <p className="text-xs text-content-muted mt-1">
                       <code className="bg-surface-raised px-1 rounded">{rule.cron_expression}</code> · {summarizeDays(rule.days_of_week)} · {rule.target}
                     </p>
@@ -373,7 +373,7 @@ function RuleForm({
                 className={`px-3 py-1 rounded-full text-sm border transition-colors ${
                   active
                     ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                    : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
+                    : 'border-line text-content-secondary hover:border-line-strong hover:text-content-primary'
                 }`}
               >
                 {label}

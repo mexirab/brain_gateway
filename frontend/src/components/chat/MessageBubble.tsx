@@ -89,7 +89,7 @@ export default function MessageBubble({
                 key={i}
                 src={src}
                 alt={`Photo ${i + 1} you sent`}
-                className="h-32 max-w-full rounded-xl object-cover border border-line/30"
+                className="h-32 max-w-full rounded-xl object-cover border border-ink/30"
               />
             ))}
           </div>
@@ -98,10 +98,10 @@ export default function MessageBubble({
         <div
           className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
             isUser
-              ? 'bg-brand/20 text-white rounded-br-md'
+              ? 'bg-brand/20 text-content-primary rounded-br-md'
               : isAnnouncement
-                ? `${annStyle!.bg} text-content-primary border border-line/30 border-l-2 ${annStyle!.border} rounded-bl-md`
-                : 'bg-surface-raised/60 text-content-primary border border-line/30 rounded-bl-md'
+                ? `${annStyle!.bg} text-content-primary border border-ink/30 border-l-2 ${annStyle!.border} rounded-bl-md`
+                : 'bg-surface-raised/60 text-content-primary border border-ink/30 rounded-bl-md'
           }`}
         >
           {content}

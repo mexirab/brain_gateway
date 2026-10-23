@@ -145,7 +145,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Routines</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Routines</h2>
         <p className="text-sm text-content-secondary mt-1">
           Step-by-step routines Jess walks you through. Time + day changes take effect immediately —
           power-user fields like Home Assistant actions are preserved.
@@ -166,7 +166,7 @@ export default function RoutinesPanel({ registerDirty }: PanelProps = {}) {
                 className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
                   isActive
                     ? 'border-brand-500/60 bg-brand-500/10 text-brand-500'
-                    : 'border-line text-content-primary hover:border-line-strong hover:text-white'
+                    : 'border-line text-content-primary hover:border-line-strong hover:text-content-primary'
                 }`}
               >
                 {draft.routines[rid].display_name || rid}
@@ -327,7 +327,7 @@ function RoutineEditor({
             className="mt-1 h-4 w-4 accent-brand-500"
           />
           <span className="flex flex-col">
-            <span className="text-sm text-white">Auto-skip on max nudges</span>
+            <span className="text-sm text-content-primary">Auto-skip on max nudges</span>
             <span className="text-xs text-content-muted">
               When max nudges hit: <strong>on</strong> = advance past skippable steps; <strong>off</strong> = end the whole routine.
             </span>
@@ -349,7 +349,7 @@ function RoutineEditor({
                 className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
                   active
                     ? 'border-brand-500/60 bg-brand-500/15 text-brand-500'
-                    : 'border-line text-content-secondary hover:border-line-strong hover:text-white'
+                    : 'border-line text-content-secondary hover:border-line-strong hover:text-content-primary'
                 }`}
               >
                 {label}
@@ -361,7 +361,7 @@ function RoutineEditor({
 
       <div>
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-white">Steps ({routine.steps.length})</h3>
+          <h3 className="text-sm font-semibold text-content-primary">Steps ({routine.steps.length})</h3>
           <Button
             type="button"
             variant="secondary"

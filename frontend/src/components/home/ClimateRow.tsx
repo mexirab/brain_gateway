@@ -19,12 +19,12 @@ export default function ClimateRow({ entity }: { entity: HAEntity }) {
   };
 
   return (
-    <div className="min-w-0 flex items-center gap-2.5 rounded-xl border border-line/30 bg-surface-raised/40 px-3 py-2.5">
+    <div className="min-w-0 flex items-center gap-2.5 rounded-xl border border-ink/30 bg-surface-raised/40 px-3 py-2.5">
       <span className="p-1.5 rounded-lg shrink-0 bg-info/15 text-info">
         <Thermometer size={18} />
       </span>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-white truncate">{entity.friendly_name}</p>
+        <p className="text-sm font-medium text-content-primary truncate">{entity.friendly_name}</p>
         <p aria-live="polite" className={`text-xs ${error ? 'text-danger' : 'text-content-muted'}`}>
           {error ||
             [
@@ -40,7 +40,7 @@ export default function ClimateRow({ entity }: { entity: HAEntity }) {
           <Button icon variant="secondary" className="min-h-[44px] min-w-[44px]" disabled={busy} onClick={() => nudge(-1)} aria-label={`Lower ${entity.friendly_name} target`}>
             <Minus size={14} />
           </Button>
-          <span className="w-10 text-center text-sm font-semibold text-white tabular-nums">{target}°</span>
+          <span className="w-10 text-center text-sm font-semibold text-content-primary tabular-nums">{target}°</span>
           <Button icon variant="secondary" className="min-h-[44px] min-w-[44px]" disabled={busy} onClick={() => nudge(1)} aria-label={`Raise ${entity.friendly_name} target`}>
             <Plus size={14} />
           </Button>

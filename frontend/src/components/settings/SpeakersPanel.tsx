@@ -145,7 +145,7 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Speakers</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Speakers</h2>
         <p className="text-sm text-content-secondary mt-1">
           Pick which speaker each kind of announcement plays on. Use a single Home Assistant{' '}
           <code className="text-xs bg-surface-raised px-1 rounded">media_player.*</code> entity, or
@@ -189,7 +189,7 @@ export default function SpeakersPanel({ registerDirty }: PanelProps = {}) {
               className="rounded-lg border border-line bg-surface-base/40 p-3 sm:grid sm:grid-cols-[200px_1fr] sm:gap-4 sm:items-start"
             >
               <div className="mb-2 sm:mb-0">
-                <div id={titleId} className="text-sm font-medium text-white">
+                <div id={titleId} className="text-sm font-medium text-content-primary">
                   {meta.label}
                 </div>
                 <div className="text-xs text-content-muted mt-0.5">{meta.hint}</div>

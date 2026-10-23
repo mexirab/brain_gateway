@@ -96,10 +96,10 @@ export default function RemindersCard() {
           {reminders.map((r) => (
             <div
               key={r.id}
-              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-line/30"
+              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-ink/30"
             >
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">{r.text}</p>
+                <p className="text-sm font-medium text-content-primary truncate">{r.text}</p>
                 <p className="text-xs text-content-muted">{formatTime(r.time)}</p>
               </div>
               <button
@@ -115,7 +115,7 @@ export default function RemindersCard() {
       )}
 
       {!isLoading && !error && recent.length > 0 && (
-        <div className="mt-4 pt-3 border-t border-line/30">
+        <div className="mt-4 pt-3 border-t border-ink/30">
           <p className="text-xs font-medium text-content-muted mb-2">Last 24 h</p>
           <div className="space-y-1.5">
             {recent.map((r) => (

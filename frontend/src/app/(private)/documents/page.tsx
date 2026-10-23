@@ -119,7 +119,7 @@ export default function DocumentsPage() {
         {docs.map((doc) => (
           <div
             key={doc.id}
-            className="flex items-center gap-3 px-4 py-3 bg-surface-raised/40 border border-line/30 rounded-lg group"
+            className="flex items-center gap-3 px-4 py-3 bg-surface-raised/40 border border-ink/30 rounded-lg group"
           >
             <FileText size={20} className="text-content-muted shrink-0" />
             <div className="flex-1 min-w-0">
