@@ -300,7 +300,7 @@ def build_ha_yaml(tok: dict) -> str:
         "# Home Assistant theme — copy to <ha config>/themes/jess_suite.yaml, make sure",
         "# configuration.yaml has `frontend: themes: !include_dir_merge_named themes`,",
         "# then pick 'Jess Suite' in your HA profile (Theme → Jess Suite, Auto mode).",
-        f"{tok['name']}:",
+        f"{yaml_str(tok['name'])}:",
     ]
     out += [f"  {k}: {yaml_str(v)}" for k, v in shared.items()]
     out.append("  modes:")

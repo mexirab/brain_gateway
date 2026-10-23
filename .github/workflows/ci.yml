@@ -64,6 +64,10 @@ jobs:
           python-version: "3.11"
       # frontend/src/styles/{tokens.css,theme-meta.ts} and theme/dist/* are
       # GENERATED from theme/tokens.json by theme/build.py (stdlib only).
+      - name: Test the theme generator
+        run: |
+          pip install -q pytest pyyaml
+          python -m pytest theme -q -p no:cacheprovider
       - name: Regenerate theme files
         run: python theme/build.py
       - name: Fail if the committed theme files drifted from tokens.json
