@@ -13,9 +13,9 @@ theme/tokens.json  ──python3 theme/build.py──▶  frontend/src/styles/to
 
 - **Edit `tokens.json` only**, run `python3 theme/build.py` and commit the
   regenerated files. CI (`Suite Theme In Sync`) fails if they drift.
-- `dark` is the original Jess palette and `light` is its daytime pair. Every
-  text color clears WCAG AA on `surface.raised`; check contrast again if you
-  change one.
+- `dark` is the original Jess palette and `light` is its daytime pair. In
+  `light`, every text, status and accent color clears WCAG AA (4.5:1) on every
+  surface and on its own 10–20% badge tint. Re-check contrast if you change one.
 - The font is Inter, falling back to the platform UI font (SF on Apple
   devices). The dashboard bundles Inter. Other apps use it only if the device
   has it installed, otherwise they get the system font.

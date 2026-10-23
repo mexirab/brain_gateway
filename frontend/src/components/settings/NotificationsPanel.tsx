@@ -230,13 +230,13 @@ export default function NotificationsPanel() {
       ) : (
         <div className="flex flex-wrap gap-2">
           {device === 'off' ? (
-            <button type="button" onClick={enable} disabled={busy} className={`${btn} bg-brand-500 text-white hover:bg-brand-600`}>
+            <button type="button" onClick={enable} disabled={busy} className={`${btn} bg-brand-600 text-on-brand hover:bg-brand-700`}>
               {busy ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Bell size={16} aria-hidden />}
               Turn on for this device
             </button>
           ) : (
             <>
-              <button type="button" onClick={test} disabled={busy} className={`${btn} bg-brand-500 text-white hover:bg-brand-600`}>
+              <button type="button" onClick={test} disabled={busy} className={`${btn} bg-brand-600 text-on-brand hover:bg-brand-700`}>
                 {busy ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Send size={16} aria-hidden />}
                 Send test
               </button>

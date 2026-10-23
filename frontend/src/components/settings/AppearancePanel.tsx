@@ -24,6 +24,17 @@ export default function AppearancePanel() {
     setPref(value);
   };
 
+  // WAI-ARIA radiogroup: arrows move the selection, Tab enters/leaves once.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = OPTIONS.findIndex((o) => o.value === pref);
+    const next = OPTIONS[(i + step + OPTIONS.length) % OPTIONS.length].value;
+    choose(next);
+    e.currentTarget.querySelector<HTMLButtonElement>(`[data-value="${next}"]`)?.focus();
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -33,15 +44,23 @@ export default function AppearancePanel() {
         </p>
       </div>
 
-      <div role="radiogroup" aria-label="Theme" className="grid gap-3 sm:grid-cols-3">
-        {OPTIONS.map(({ value, label, hint, icon: Icon }) => {
+      <div
+        role="radiogroup"
+        aria-label="Theme"
+        onKeyDown={onKeyDown}
+        className="grid gap-3 sm:grid-cols-3"
+      >
+        {OPTIONS.map(({ value, label, hint, icon: Icon }, i) => {
           const selected = pref === value;
+          const tabbable = pref === null ? i === 0 : selected;
           return (
             <button
               key={value}
               type="button"
               role="radio"
+              data-value={value}
               aria-checked={selected}
+              tabIndex={tabbable ? 0 : -1}
               onClick={() => choose(value)}
               className={`relative flex flex-col items-start gap-2 rounded-card border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
                 selected
@@ -74,6 +93,12 @@ export default function AppearancePanel() {
           );
         })}
       </div>
+
+      <p className="text-xs text-content-muted">
+        On iPhone, the home-screen app keeps the status-bar style it was added with. If the clock
+        and battery are hard to read after switching, remove the app from the Home Screen, add it
+        again, then turn notifications back on in Settings → Notifications.
+      </p>
     </div>
   );
 }

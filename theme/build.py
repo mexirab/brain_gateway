@@ -18,6 +18,7 @@ How to apply each one: theme/README.md.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +45,7 @@ def to_hex(c: tuple[float, float, float]) -> str:
 def mix(a: str, b: str, t: float) -> str:
     """t=0 → a, t=1 → b."""
     ca, cb = rgb(a), rgb(b)
-    return to_hex(tuple(x + (y - x) * t for x, y in zip(ca, cb)))
+    return to_hex(tuple(x + (y - x) * t for x, y in zip(ca, cb, strict=True)))
 
 
 def channels(hex_color: str) -> str:
@@ -112,22 +113,22 @@ def build_frontend_css(tok: dict) -> str:
 
 :root,
 [data-theme='dark'] {{
-{theme_block(dark, '  ')}
+{theme_block(dark, "  ")}
 }}
 
 [data-theme='light'] {{
-{theme_block(light, '  ')}
+{theme_block(light, "  ")}
 }}
 
 @media (prefers-color-scheme: light) {{
   [data-theme='system'] {{
-{theme_block(light, '    ')}
+{theme_block(light, "    ")}
   }}
 }}
 
 :root {{
-  --font-sans: {tok['font']['sans']};
-  --font-mono: {tok['font']['mono']};
+  --font-sans: {tok["font"]["sans"]};
+  --font-mono: {tok["font"]["mono"]};
 {radius}
 
   /* Solid-color aliases for plain CSS (var(--surface-raised), …). */
@@ -149,7 +150,7 @@ def build_frontend_meta(tok: dict) -> str:
     return f"""// {HEADER}
 // Page background per theme — for places CSS variables can't reach
 // (<meta name="theme-color">, the PWA manifest).
-export const THEME_BACKGROUND = {{ dark: '{bg['dark']}', light: '{bg['light']}' }} as const;
+export const THEME_BACKGROUND = {{ dark: '{bg["dark"]}', light: '{bg["light"]}' }} as const;
 """
 
 
@@ -184,47 +185,47 @@ def build_homepage_css(tok: dict) -> str:
  */
 :root:root {{
 {ramp}
-  --color-logo-start: {channels(d['brand']['DEFAULT'])};
-  --color-logo-stop: {channels(d['brand']['700'])};
+  --color-logo-start: {channels(d["brand"]["DEFAULT"])};
+  --color-logo-stop: {channels(d["brand"]["700"])};
 }}
 
 html,
 body {{
-  font-family: {tok['font']['sans']};
+  font-family: {tok["font"]["sans"]};
 }}
 
 .dark body {{
-  background: radial-gradient(900px circle at 100% -10%, {rgba(d['brand']['DEFAULT'], d['glow'])}, transparent 55%);
+  background: radial-gradient(900px circle at 100% -10%, {rgba(d["brand"]["DEFAULT"], d["glow"])}, transparent 55%);
 }}
 
 .light body {{
-  background: radial-gradient(900px circle at 100% -10%, {rgba(lt['brand']['DEFAULT'], lt['glow'])}, transparent 55%);
+  background: radial-gradient(900px circle at 100% -10%, {rgba(lt["brand"]["DEFAULT"], lt["glow"])}, transparent 55%);
 }}
 
 .service-card,
 .bookmark {{
-  border-radius: {r['lg']}px;
+  border-radius: {r["lg"]}px;
 }}
 
 .dark .service-card {{
-  background-color: {rgba(d['surface']['raised'], 0.82)};
-  border: 1px solid {rgba(d['ink'], d['line']['DEFAULT'])};
-  box-shadow: {d['shadow']['card']};
+  background-color: {rgba(d["surface"]["raised"], 0.82)};
+  border: 1px solid {rgba(d["ink"], d["line"]["DEFAULT"])};
+  box-shadow: {d["shadow"]["card"]};
   backdrop-filter: blur(12px);
 }}
 
 .light .service-card {{
-  background-color: {lt['surface']['raised']};
-  border: 1px solid {rgba(lt['ink'], lt['line']['DEFAULT'])};
-  box-shadow: {lt['shadow']['card']};
+  background-color: {lt["surface"]["raised"]};
+  border: 1px solid {rgba(lt["ink"], lt["line"]["DEFAULT"])};
+  box-shadow: {lt["shadow"]["card"]};
 }}
 
 .dark .service-card:hover {{
-  box-shadow: {d['shadow']['glow']};
+  box-shadow: {d["shadow"]["glow"]};
 }}
 
 .light .service-card:hover {{
-  box-shadow: {lt['shadow']['glow']};
+  box-shadow: {lt["shadow"]["glow"]};
 }}
 
 .service-group-name,
@@ -238,7 +239,7 @@ body {{
 
 
 # ----------------------------------------------------------- Home Assistant
-def ha_mode(t: dict, tok: dict) -> dict[str, str]:
+def ha_mode(t: dict) -> dict[str, str]:
     s, c, st = t["surface"], t["content"], t["status"]
     line = rgba(t["ink"], t["line"]["DEFAULT"])
     return {
@@ -281,7 +282,8 @@ def ha_mode(t: dict, tok: dict) -> dict[str, str]:
 
 
 def yaml_str(v: str) -> str:
-    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    # A JSON string is a valid YAML double-quoted scalar (escapes included).
+    return json.dumps(v, ensure_ascii=False)
 
 
 def build_ha_yaml(tok: dict) -> str:
@@ -298,13 +300,13 @@ def build_ha_yaml(tok: dict) -> str:
         "# Home Assistant theme — copy to <ha config>/themes/jess_suite.yaml, make sure",
         "# configuration.yaml has `frontend: themes: !include_dir_merge_named themes`,",
         "# then pick 'Jess Suite' in your HA profile (Theme → Jess Suite, Auto mode).",
-        "Jess Suite:",
+        f"{tok['name']}:",
     ]
     out += [f"  {k}: {yaml_str(v)}" for k, v in shared.items()]
     out.append("  modes:")
     for mode in ("light", "dark"):
         out.append(f"    {mode}:")
-        out += [f"      {k}: {yaml_str(v)}" for k, v in ha_mode(tok["themes"][mode], tok).items()]
+        out += [f"      {k}: {yaml_str(v)}" for k, v in ha_mode(tok["themes"][mode]).items()]
     return "\n".join(out) + "\n"
 
 
@@ -357,13 +359,13 @@ def build_grist_css(tok: dict) -> str:
  */
 @layer grist-custom {{
   :root {{
-    --grist-theme-font-family: {tok['font']['sans']};
-    --grist-theme-control-border-radius: {r['sm']}px;
+    --grist-theme-font-family: {tok["font"]["sans"]};
+    --grist-theme-control-border-radius: {r["sm"]}px;
   }}
 
-{block('GristLight', tok['themes']['light'])}
+{block("GristLight", tok["themes"]["light"])}
 
-{block('GristDark', tok['themes']['dark'])}
+{block("GristDark", tok["themes"]["dark"])}
 }}
 """
 
@@ -379,11 +381,38 @@ def outputs(tok: dict) -> dict[Path, str]:
     }
 
 
+_HEX = re.compile(r"#[0-9a-fA-F]{6}")
+_SHADOW = re.compile(r"[0-9a-z.,()\s-]+")
+_FONT = re.compile(r'[A-Za-z0-9 ,"-]+')
+
+
+def validate(tok: dict) -> None:
+    """Token values are pasted into CSS/YAML verbatim; refuse anything that
+    could break out of a declaration (url(, @import, braces, semicolons)."""
+    for name, value in tok["font"].items():
+        if not _FONT.fullmatch(value):
+            raise ValueError(f"font.{name}: unexpected characters in {value!r}")
+    for name, value in tok["radius"].items():
+        if not isinstance(value, int) or not 0 <= value <= 64:
+            raise ValueError(f"radius.{name}: expected an int 0–64, got {value!r}")
+    for mode, t in tok["themes"].items():
+        for name, value in flat_colors(t).items():
+            if not _HEX.fullmatch(value):
+                raise ValueError(f"themes.{mode}.{name}: expected #rrggbb, got {value!r}")
+        for name, value in t["shadow"].items():
+            if not _SHADOW.fullmatch(value) or "url" in value:
+                raise ValueError(f"themes.{mode}.shadow.{name}: unexpected characters")
+        for name, value in [*t["line"].items(), ("glow", t["glow"])]:
+            if not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                raise ValueError(f"themes.{mode}.{name}: expected an opacity 0–1, got {value!r}")
+
+
 def main() -> None:
-    tok = json.loads(TOKENS.read_text())
+    tok = json.loads(TOKENS.read_text(encoding="utf-8"))
+    validate(tok)
     for path, text in outputs(tok).items():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {path.relative_to(ROOT)}")
 
 

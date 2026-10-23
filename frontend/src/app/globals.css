@@ -41,8 +41,9 @@ body {
      collapsing toolbar; vh is the fallback) minus <main>'s vertical padding
      from (private)/layout.tsx — keep the two in sync: mobile pt 1.5rem + top
      safe-area inset (status bar) + pb 5rem (clears the fixed ~57px
-     MobileNav) + bottom inset; md+ (no bottom nav) p-6 → 3rem. The insets are
-     live because the root viewport export sets viewportFit: 'cover'. */
+     MobileNav) + bottom inset; md+ (no bottom nav) 1.5rem + insets top and
+     bottom (iPad / phone-landscape PWA). The insets are live because the root
+     viewport export sets viewportFit: 'cover'. */
   .page-viewport {
     height: calc(
       100vh - 6.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
@@ -53,8 +54,12 @@ body {
   }
   @media (min-width: 768px) {
     .page-viewport {
-      height: calc(100vh - 3rem);
-      height: calc(100dvh - 3rem);
+      height: calc(
+        100vh - 3rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+      );
+      height: calc(
+        100dvh - 3rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+      );
     }
   }
 

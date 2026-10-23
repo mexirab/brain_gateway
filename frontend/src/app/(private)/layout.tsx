@@ -34,7 +34,7 @@ export default async function PrivateLayout({
       {/* Main content — mobile pt clears the status bar (viewportFit: cover)
           and pb the fixed MobileNav. If you change this padding, update
           .page-viewport in globals.css to match. */}
-      <main className="flex-1 min-w-0 p-6 pt-[calc(1.5rem+env(safe-area-inset-top,0px))] pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pt-6 md:pb-6 overflow-auto">
+      <main className="flex-1 min-w-0 p-6 pl-[max(1.5rem,env(safe-area-inset-left,0px))] pr-[max(1.5rem,env(safe-area-inset-right,0px))] pt-[calc(1.5rem+env(safe-area-inset-top,0px))] pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pl-6 md:pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] overflow-auto">
         <SessionExpiredWatcher />
         <ServiceWorkerRegistrar />
         {children}

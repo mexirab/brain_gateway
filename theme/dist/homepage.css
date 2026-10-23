@@ -27,7 +27,7 @@ body {
 }
 
 .light body {
-  background: radial-gradient(900px circle at 100% -10%, rgba(91, 78, 232, 0.06), transparent 55%);
+  background: radial-gradient(900px circle at 100% -10%, rgba(79, 67, 217, 0.06), transparent 55%);
 }
 
 .service-card,
@@ -53,7 +53,7 @@ body {
 }
 
 .light .service-card:hover {
-  box-shadow: 0 0 0 1px rgba(91,78,232,0.18), 0 8px 30px -8px rgba(91,78,232,0.28);
+  box-shadow: 0 0 0 1px rgba(79,67,217,0.18), 0 8px 30px -8px rgba(79,67,217,0.28);
 }
 
 .service-group-name,

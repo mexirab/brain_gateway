@@ -13,7 +13,7 @@ export default function Sidebar({ flags, appName }: { flags: FeatureFlags; appNa
   const items = NAV_ITEMS.filter(({ href }) => isNavItemEnabled(href, flags));
 
   return (
-    <aside className="hidden md:flex flex-col w-56 shrink-0 bg-surface-raised/80 backdrop-blur-xl border-r border-line-subtle p-4 sticky top-0 h-screen supports-[height:100dvh]:h-dvh">
+    <aside className="hidden md:flex flex-col w-56 shrink-0 bg-surface-raised/80 backdrop-blur-xl border-r border-line-subtle p-4 pl-[max(1rem,env(safe-area-inset-left,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sticky top-0 h-screen supports-[height:100dvh]:h-dvh">
       <Link
         href="/"
         className="flex items-center gap-2 px-2 mb-8 text-lg font-bold tracking-tight text-content-primary"
