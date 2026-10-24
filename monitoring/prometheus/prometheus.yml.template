@@ -13,8 +13,8 @@
 #   Jupiter: ${NODE_JUPITER_IP} (Always-on hub: orchestrator, frontend, Home Assistant,
 #                                 monitoring stack — prometheus/grafana/loki/alertmanager,
 #                                 Pi-hole primary, conjure API, netdata)
-#   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM on RTX 5090, TTS/STT + code
-#                                 agent on RTX PRO 5000 — power-tiered, asleep most of the time)
+#   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM split across RTX 5090 + RTX PRO
+#                                 5000, live TTS on the PRO 5000, STT on CPU — power-tiered)
 #   Saturn:  ${NODE_SATURN_IP}  (Vision model on RTX 3080, expert model on RTX 3090,
 #                                 Pi-hole secondary)
 #   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
@@ -108,7 +108,7 @@ scrape_configs:
           node: 'jupiter'
 
   # ============================================
-  # PRIMARY LLM SERVER METRICS (llama-server --metrics, Helios GPU0)
+  # PRIMARY LLM SERVER METRICS (llama-server --metrics, Helios GPU0 + GPU1 since 2026-10-24)
   # ============================================
   # llamacpp:* counters: requests_deferred / requests_processing (the --parallel 1
   # queue — the one failure mode the 2026-10-02 llama.cpp cutover introduced),
@@ -139,11 +139,11 @@ scrape_configs:
           service: 'orchestrator'
           node: 'jupiter'
 
-      # TTS (Qwen3-TTS on Helios GPU1) — rollback target once VoxCPM2 is live
-      - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
-        labels:
-          service: 'tts'
-          node: 'helios'
+      # TTS (Qwen3-TTS on Helios GPU1, :${SERVICE_TTS_PORT}) — rollback only. Disabled since
+      # 2026-10-24: the Flash-Next brain needs its ~4.5 GiB on GPU1, so it is no longer probed
+      # (a probe of a stopped unit fires TTSDown). Re-add this target if it is re-enabled:
+      #   - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
+      #     labels: {service: 'tts', node: 'helios'}
 
       # TTS (VoxCPM2 on Helios GPU1, tts/voxcpm-tts.service; /health 503s with no usable voice)
       - targets: ['http://${NODE_HELIOS_IP}:8004/health']
@@ -151,13 +151,13 @@ scrape_configs:
           service: 'tts-voxcpm'
           node: 'helios'
 
-      # STT (Whisper on Helios GPU1)
+      # STT (Parakeet ONNX on Helios CPU, stt-onnx.service)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_STT_PORT}/health']
         labels:
           service: 'stt'
           node: 'helios'
 
-      # Primary LLM (llama-server-primary on Helios GPU0 RTX 5090)
+      # Primary LLM (llama-server-primary on Helios, split across GPU0 + GPU1)
       - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
         labels:
           service: 'llama-primary'

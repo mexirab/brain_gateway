@@ -2,8 +2,9 @@
 
 FastAPI servers for Qwen3-TTS and Parakeet STT, running on Helios (10.0.0.195) as systemd services.
 
-**Deployment (as of 2026-09-28):**
-- Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`) on port 8002, GPU1 (RTX PRO 5000 Blackwell, 48GB). The unit sets `QWEN_TTS_DEVICE=cuda:0`; the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`. Without it TTS lands on GPU0 (RTX 5090), which the Qwen3.8 brain needs to itself.
+**Deployment (as of 2026-10-24):**
+- Live TTS is VoxCPM2 on port 8004, GPU1 (`tts/voxcpm-tts.service` + `tts/voxcpm_server.py`, same API) — see `docs/VOICE_AND_TTS.md` → VoxCPM2 TTS server. GPU1 also holds part of the primary brain (Qwen3.8-Flash-Next, split across both GPUs).
+- Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`, port 8002) is the rollback TTS and is **disabled** since 2026-10-24: its ~4.5 GiB no longer fits on GPU1 next to the brain. It only comes back with the 27B brain rollback (`tts/llama-server-primary-27b-q6k.service` header). When it runs, the unit sets `QWEN_TTS_DEVICE=cuda:0` and the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`; without it TTS lands on GPU0 (RTX 5090).
 - STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU (source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service`).
 - `parakeet-stt.service` (NeMo, Parakeet v3, GPU1 via `CUDA_VISIBLE_DEVICES=1`) is the **disabled** GPU alternative on the same port/API — it replaced the old Whisper HTTP STT server on 2026-04-26. See `README_PARAKEET.md`.
 
@@ -253,11 +254,11 @@ Preset voices are faster on first use.
 
 ### Service Status
 ```bash
-# Check both services
-sudo systemctl status qwen-tts stt-onnx
+# Check the live services (qwen-tts is disabled since 2026-10-24; VoxCPM2 is the live TTS)
+sudo systemctl status voxcpm-tts stt-onnx
 
 # View logs
-journalctl -u qwen-tts -f
+journalctl -u voxcpm-tts -f
 journalctl -u stt-onnx -f
 ```
 

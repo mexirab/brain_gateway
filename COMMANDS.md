@@ -174,9 +174,9 @@ docker logs brain-orchestrator 2>&1 | grep '\[ACTUAL\]' | tail -20
 
 ---
 
-## Helios Primary Model (Qwen3.8-27B TURBO Q6_K MTP via llama.cpp)
+## Helios Primary Model (Qwen3.8-Flash-Next UD-Q3_K_XL MTP via llama.cpp)
 
-Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 as `qwen3.8-27b-turbo-q6k` (`llama-server-primary.service` — llama.cpp build 11358 from `/home/labadmin/llama.cpp-mtp`, DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF, GPU0 RTX 5090, since the 2026-10-02 cutover; repo copy of the unit: `tts/llama-server-primary.service`, whose header comments are authoritative). Loads in ~4 s from page cache (~60 s cold). The same endpoint also serves vision (`VISION_*`) and exposes llama.cpp `/metrics`. Single slot (`--parallel 1`): background LLM jobs queue behind chat — watch `llamacpp:requests_deferred`.
+Helios (the GPU model layer) is power-tiered — asleep most of the time and woken on demand via an HA smart plug (the orchestrator runs 24/7 on Jupiter). When awake, the primary model serves on port 8080 as `qwen3.8-flash-next-q3kxl` (`llama-server-primary.service` — llama.cpp build 11358 from `/home/labadmin/llama.cpp-mtp`, Qwen3.8-Flash-Next 125B MoE Unsloth UD-Q3_K_XL MTP GGUF, split across GPU0 RTX 5090 + GPU1 RTX PRO 5000, since the 2026-10-24 cutover; repo copy of the unit: `tts/llama-server-primary.service`, whose header comments are authoritative). Loads in 6–9 s from page cache (27 s cold). Needs Jupiter `.env` `VOICE_THINKING_ENABLED=true`. The same endpoint also serves vision (`VISION_*`) and exposes llama.cpp `/metrics`. Single slot (`--parallel 1`): background LLM jobs queue behind chat — watch `llamacpp:requests_deferred`.
 
 ### Check via API
 ```bash
@@ -191,33 +191,42 @@ ssh labadmin@10.0.0.195 "sudo systemctl restart llama-server-primary"
 
 ssh labadmin@10.0.0.195 "journalctl -u llama-server-primary --no-pager -n 100"
 
-# llama.cpp server metrics (queue depth, MTP acceptance, KV usage)
-curl -s http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing|kv_cache_usage_ratio)'
+# llama.cpp server metrics (queue depth; this build exports no kv_cache_usage_ratio)
+curl -s http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing)'
 
-# Sandbox score (expect ~3.1)
+# Both GPUs hold the brain; GPU1 also the live TTS (expect ~90 % / ~92 %)
+ssh labadmin@10.0.0.195 "nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv"
+
+# Sandbox score
 ssh labadmin@10.0.0.195 "systemd-analyze security llama-server-primary"
 
 # Coder (Qwen3-Coder-Next 80B/3B MoE, GPU1) — RETIRED 2026-10-16 (stopped + disabled); the code_agent tool was removed 2026-10-21, so a restored server has no caller. Restore:
 # ssh labadmin@10.0.0.195 "sudo systemctl enable --now llama-server-coder"
 
-# Rollback to the vLLM NVFP4 brain (2026-09-28 → 2026-10-02), then on Jupiter:
-#   cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator
-ssh labadmin@10.0.0.195 "sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary"
+# Rollback to the 27B Q6_K brain (2026-10-02 → 2026-10-24, GPU0 alone): follow the header of
+# tts/llama-server-primary-27b-q6k.service — on Helios swap in
+# /etc/systemd/system/llama-server-primary.service.27b-q6k.bak, restart, re-enable qwen-tts;
+# on Jupiter set MODEL_NAME/FALLBACK_MODEL_NAME/VISION_MODEL_NAME=qwen3.8-27b-turbo-q6k and
+# VOICE_THINKING_ENABLED=false, then docker compose up -d --force-recreate orchestrator.
 
-# Older rollback (vLLM unit → Qwen3.6): on Helios
+# Older rollback (vLLM NVFP4 brain, 2026-09-28 → 2026-10-02), then on Jupiter:
+#   cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator
+# ssh labadmin@10.0.0.195 "sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary"
+
+# Oldest rollback (vLLM unit → Qwen3.6): on Helios
 #   sudo cp /etc/systemd/system/vllm-primary.service.qwen36.bak /etc/systemd/system/vllm-primary.service && sudo systemctl daemon-reload
 # then on Jupiter `cp .env.bak-qwen36 .env` and recreate the orchestrator.
 ```
 
-Garbled output / dropped tool calls: set `--spec-type none` in the unit first (disables MTP, ~45% slower). `--enforce-eager` was the vLLM-era lever and does nothing on llama.cpp. Never add `--verbose` or `--slot-save-path` (would log/persist prompt text). Sampling must keep temperature ≤ 1.0 and `repeat_penalty` 1.0 or MTP acceptance collapses. `vllm-primary.service` (rollback) and `llama-server.service` (the Qwen3.5-27B primary before 2026-04-26) are disabled but retained on disk. Details: `docs/internal/HELIOS_INFRASTRUCTURE.md`.
+Garbled output / dropped tool calls: set `--spec-type none` in the unit first (disables MTP, ~105 tok/s). `--enforce-eager` was the vLLM-era lever and does nothing on llama.cpp. Never add `--verbose` or `--slot-save-path` (would log/persist prompt text). Sampling must keep temperature ≤ 1.0 and `repeat_penalty` 1.0 or MTP acceptance collapses. Startup failures (e.g. GPU1 out of memory) fire the Loki alert `BrainFailedToStart`. `vllm-primary.service` (older rollback) and `llama-server.service` (the Qwen3.5-27B primary before 2026-04-26) are disabled but retained on disk. Details: `docs/internal/HELIOS_INFRASTRUCTURE.md`.
 
 ---
 
 ## Voice / TTS / STT
 
-### Test TTS with Jessica voice
+### Test TTS with Jessica voice (VoxCPM2, live)
 ```bash
-curl -X POST http://10.0.0.195:8002/tts \
+curl -X POST http://10.0.0.195:8004/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "Good morning Nadim!", "voice": "jessica"}' \
   --output test.wav
@@ -225,14 +234,15 @@ curl -X POST http://10.0.0.195:8002/tts \
 
 ### Manage TTS/STT services on Helios
 ```bash
-# TTS on Helios GPU1 (RTX PRO 5000, via drop-in qwen-tts.service.d/gpu1.conf);
+# Live TTS is voxcpm-tts (VoxCPM2, :8004, GPU1 — shared with part of the brain).
+# qwen-tts (Qwen3-TTS :8002, rollback) is DISABLED since 2026-10-24: it no longer fits on GPU1.
 # STT is stt-onnx (Parakeet v2 int8 ONNX, CPU). parakeet-stt (NeMo, GPU) is disabled.
-ssh labadmin@10.0.0.195 "sudo systemctl status qwen-tts stt-onnx"
-ssh labadmin@10.0.0.195 "sudo systemctl restart qwen-tts"
-ssh labadmin@10.0.0.195 "journalctl -u qwen-tts --no-pager -n 50"
+ssh labadmin@10.0.0.195 "sudo systemctl status voxcpm-tts stt-onnx"
+ssh labadmin@10.0.0.195 "sudo systemctl restart voxcpm-tts"
+ssh labadmin@10.0.0.195 "journalctl -u voxcpm-tts --no-pager -n 50"
 ```
 
-### Load a new voice clone
+### Load a new voice clone (Qwen3-TTS rollback only — disabled; VoxCPM2 has no `/voices/load`, see `docs/VOICE_AND_TTS.md`)
 ```bash
 curl -X POST http://10.0.0.195:8002/voices/load \
   -H "Content-Type: application/json" \
