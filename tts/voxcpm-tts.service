@@ -1,7 +1,9 @@
 # VoxCPM2 TTS server (cloned voice + per-utterance style notes) — Helios.
 #
-# Runs ALONGSIDE qwen-tts.service (port 8002), not instead of it: the orchestrator
-# picks one via TTS_URL, so rollback is repointing TTS_URL at :8002.
+# The live voice (TTS_URL :8004). qwen-tts.service (port 8002) is the rollback, DISABLED since
+# 2026-10-24: GPU1 also holds half of the Flash-Next brain, so there is no room for both TTS
+# servers. Rollback = enable qwen-tts (only with the 27B brain back, see
+# tts/llama-server-primary-27b-q6k.service) and repoint TTS_URL at :8002.
 #
 # Install on Helios (one-time):
 #   mkdir -p ~/voxcpm && cd ~/voxcpm

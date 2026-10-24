@@ -2576,7 +2576,7 @@
           "sort": "desc"
         }
       },
-      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline on the 5090 with MTP: ~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
+      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline (Qwen3.8-Flash-Next on 5090 + PRO 5000 with MTP, since 2026-10-24): ~135-180 decode, ~30-85 while TTS speaks on the shared GPU1; prefill ~2000-2200 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -2676,7 +2676,7 @@
           "sort": "desc"
         }
       },
-      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
+      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.55-0.9 (Flash-Next: ~0.6 on prose, ~0.9 on code). A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -3207,7 +3207,7 @@
           "values": false
         }
       },
-      "description": "Mean tok/s while generating. ~105-125 on the RTX 5090; under 30 = running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
+      "description": "Mean tok/s while generating. ~135-180 on Flash-Next (5090 + PRO 5000), ~30-85 while TTS speaks on the shared GPU1; under 30 with the GPUs empty = running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
       "gridPos": {
         "h": 5,
         "w": 6,
