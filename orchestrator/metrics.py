@@ -1191,7 +1191,7 @@ VOICE_TTS_LATENCY = Histogram(
 EMPTY_REPLY_TOTAL = Counter(
     "bgw_llm_empty_reply_total",
     "Unified-loop rounds where the model returned no text and no tool call",
-    # outcome: retried (first empty round, retried once with thinking on) |
+    # outcome: retried (first empty round, retried once — thinking on unless already on) |
     #          recovered (the retry produced text) | still_empty (blank reply returned)
     ["outcome"],
 )

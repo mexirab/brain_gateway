@@ -12,6 +12,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from orchestrator import shared
 from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
     CHAT_STREAM_OUTCOME,
@@ -660,13 +661,23 @@ async def run_unified_tool_loop(
     # 7/8 times when the history held an empty assistant turn. cloud_brain
     # drops those turns, and an empty round is retried once WITH thinking
     # (see EMPTY_REPLY_TOTAL below), so the fast path never leaves a blank reply.
+    # VOICE_THINKING_ENABLED keeps thinking on for voice turns, for brains that
+    # act unasked without it: Qwen3.8-Flash-Next turned devices off on a voice
+    # "tell me a fun fact" 4/8 times with thinking off, 0/33 with it on
+    # (first spoken token ~0.40 s vs ~0.13 s). Default off keeps the 27B as is.
+    # Reasoning tokens count against max_tokens on llama.cpp, so thinking-on
+    # voice turns get 2048: reply length is held by the voice prompt, and the
+    # 1024 cap was sized for thinking off.
     voice_extra = None
     if is_voice:
-        voice_extra = {
-            "max_tokens": 1024,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-        logger.info("[%s] Voice mode: max_tokens=1024, thinking=off", label)
+        voice_thinking = shared.VOICE_THINKING_ENABLED
+        voice_max_tokens = 2048 if voice_thinking else 1024
+        voice_extra = {"max_tokens": voice_max_tokens}
+        if not voice_thinking:
+            voice_extra["chat_template_kwargs"] = {"enable_thinking": False}
+        logger.info(
+            "[%s] Voice mode: max_tokens=%d, thinking=%s", label, voice_max_tokens, "on" if voice_thinking else "off"
+        )
     empty_retry_done = False
     retry_text_only = False  # the retry follows tool execution: words only, no new actions
 
@@ -745,12 +756,13 @@ async def run_unified_tool_loop(
                     ]
                 }
                 logger.info(
-                    "[%s] LLM probe (stream): raw_len=%d reasoning_len=%d emitted=%d tool_calls=%d elapsed=%.2fs",
+                    "[%s] LLM probe (stream): raw_len=%d reasoning_len=%d emitted=%d tool_calls=%d finish=%s elapsed=%.2fs",
                     label,
                     len(sr["content"]),
                     sr["reasoning_len"],
                     sr["emitted"],
                     len(sr["tool_calls"]),
+                    sr["finish_reason"],
                     time.time() - _llm_t0,
                 )
 
@@ -788,12 +800,13 @@ async def run_unified_tool_loop(
             _usage = llm_resp.get("usage") or {}
             _has_think = "<think>" in _content_probe
             logger.info(
-                "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s elapsed=%.2fs",
+                "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s finish=%s elapsed=%.2fs",
                 label,
                 _usage.get("prompt_tokens"),
                 _usage.get("completion_tokens"),
                 len(_content_probe),
                 _has_think,
+                (llm_resp.get("choices") or [{}])[0].get("finish_reason"),
                 time.time() - _llm_t0,
             )
 
@@ -885,8 +898,9 @@ async def run_unified_tool_loop(
         # No tool calls and nothing visible: the model ended its turn
         # immediately (or only echoed the <think></think> prefill). Nothing
         # visible reached the client, so one retry is safe — with thinking
-        # enabled, the robust path on Qwen3.8. A rejected/truncated <tool_call>
-        # echo is not "empty" and isn't retried.
+        # enabled, the robust path on Qwen3.8 (VOICE_THINKING_ENABLED: thinking
+        # is already on, so the retry is a plain resample). A rejected/truncated
+        # <tool_call> echo is not "empty" and isn't retried.
         if (
             not tool_calls
             and not clean_response(content).strip()
@@ -923,7 +937,7 @@ async def run_unified_tool_loop(
             if not result.strip() and not _dropped_call:
                 EMPTY_REPLY_TOTAL.labels(outcome="still_empty").inc()
                 logger.warning(
-                    "[%s] Empty reply after thinking retry — user got no answer (finish_reason=%s)",
+                    "[%s] Empty reply after retry — user got no answer (finish_reason=%s)",
                     label,
                     choice.get("finish_reason"),
                 )

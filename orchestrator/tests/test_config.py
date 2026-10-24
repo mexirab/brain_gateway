@@ -217,3 +217,33 @@ class TestSelfAuditInvestigatorConfig:
     def test_webhook_token_of_24_chars_is_kept(self):
         s = self._make_settings({"SELF_AUDIT_WEBHOOK_TOKEN": "x" * 24})
         assert s.self_audit_webhook_token == "x" * 24
+
+
+class TestVoiceThinkingConfig:
+    """VOICE_THINKING_ENABLED: default off (the pre-switch voice payload), opt-in
+    via env, re-exported as shared.VOICE_THINKING_ENABLED (read per voice turn
+    by unified_loop)."""
+
+    def _make_settings(self, env_overrides):
+        env = {"MODEL_URL": "http://localhost:8080/v1", "MODEL_NAME": "m"}
+        env.update(env_overrides)
+        # Same isolation as TestSelfAuditInvestigatorConfig: no module reload,
+        # and orchestrator.config resolves in the image layout too.
+        from orchestrator.config import Settings
+
+        with patch.dict(os.environ, env, clear=True):
+            return Settings(_env_file=None)
+
+    def test_default_is_off(self):
+        assert self._make_settings({}).voice_thinking_enabled is False
+
+    @pytest.mark.parametrize("raw, expected", [("true", True), ("1", True), ("false", False), ("0", False)])
+    def test_env_coercion(self, raw, expected):
+        assert self._make_settings({"VOICE_THINKING_ENABLED": raw}).voice_thinking_enabled is expected
+
+    def test_shared_reexports_setting(self):
+        from orchestrator import shared
+        from orchestrator.config import settings
+
+        assert isinstance(shared.VOICE_THINKING_ENABLED, bool)
+        assert shared.VOICE_THINKING_ENABLED is settings.voice_thinking_enabled
