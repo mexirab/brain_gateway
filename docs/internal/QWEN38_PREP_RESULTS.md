@@ -3,9 +3,10 @@
 > **Superseded 2026-10-02 by the llama.cpp cutover.** The vLLM NVFP4 brain this
 > document prepared went live 2026-09-28 and was replaced on 2026-10-02 by
 > DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp
-> (`llama-server-primary.service`; see `tts/llama-server-primary.service` header,
-> `CLAUDE.md` Notes, `docs/internal/HELIOS_INFRASTRUCTURE.md`). `vllm-primary.service`
-> is kept on Helios as the rollback unit. Everything below is historical record;
+> (`llama-server-primary.service`; its repo copy is now `tts/llama-server-primary-27b-q6k.service`,
+> whose header has the 27B sha256s; see also `CLAUDE.md` Notes, `docs/internal/HELIOS_INFRASTRUCTURE.md`),
+> itself replaced on 2026-10-24 by Qwen3.8-Flash-Next (`tts/llama-server-primary.service`,
+> `docs/internal/FLASH_NEXT_TRIAL.md`). `vllm-primary.service` is kept on Helios as an older rollback unit. Everything below is historical record;
 > the 2026-09-26 GPU-consolidation plan (`LOCAL_SINGLE_BOX_PLAN.md`) is likewise historical.
 > The coder mentioned below was retired 2026-10-16 and the `code_agent` tool removed 2026-10-21.
 

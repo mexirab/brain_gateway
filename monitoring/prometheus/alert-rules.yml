@@ -150,7 +150,7 @@ groups:
           severity: warning
         annotations:
           summary: "TTS service {{ $labels.service }} (Helios) is down"
-          description: "{{ $labels.service }} has not responded for 5 minutes (tts = Qwen3-TTS :8002, tts-voxcpm = VoxCPM2 :8004; whichever TTS_URL points at is the live voice). Diagnose with journalctl -u qwen-tts / voxcpm-tts on Helios."
+          description: "{{ $labels.service }} has not responded for 5 minutes (tts-voxcpm = VoxCPM2 :8004, the live voice; the Qwen3-TTS :8002 rollback is disabled since 2026-10-24 and no longer probed). Diagnose with journalctl -u voxcpm-tts on Helios."
 
       - alert: STTDown
         expr: probe_success{service="stt"} == 0
@@ -159,7 +159,7 @@ groups:
           severity: warning
         annotations:
           summary: "STT service (Helios) is down"
-          description: "Whisper STT has not responded for 5 minutes. Voice input unavailable."
+          description: "Parakeet STT (stt-onnx.service, CPU) has not responded for 5 minutes. Voice input unavailable."
 
       # -- Error Rates ----------------------------------------------------------
       - alert: HighErrorRate
@@ -209,18 +209,20 @@ groups:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
           description: "{{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
 
-      # Helios GPU0 (RTX 5090) is included again since 2026-10-02: the brain is
-      # llama.cpp (llama-server-primary.service), whose ~92% is real allocation
-      # (weights + 131K q8_0 KV), not a vLLM pre-allocation. Creep past 95%
-      # (e.g. vision encoder buffers on top of the static set) is a real signal.
+      # Both Helios GPUs carry the brain since 2026-10-24 (Qwen3.8-Flash-Next split
+      # across the 5090 + PRO 5000 by llama-server-primary.service): ~90% GPU0 and
+      # ~92% GPU1 (with voxcpm-tts), peak 92.8% with TTS + vision + generation at
+      # once. That is real allocation (weights + 64K q8_0 KV + MTP head), not a vLLM
+      # pre-allocation, so creep past 95% is a real signal — and on GPU1 it can
+      # starve the live voice.
       - alert: HighVRAMUsage
         expr: nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes > 0.95
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "VRAM >95% on {{ $labels.node }}"
-          description: "VRAM usage is {{ $value | humanizePercentage }} on {{ $labels.node }}."
+          summary: "VRAM >95% on {{ $labels.node }} (GPU {{ $labels.uuid }})"
+          description: "VRAM usage is {{ $value | humanizePercentage }} on {{ $labels.node }} GPU {{ $labels.uuid }}. On Helios both GPUs carry the brain and GPU1 also the live TTS — creep here can starve the voice."
 
       # Memory offline: the embedding model can't encode (startup self-test).
       # Memory search, RAG context, palace writes and auto_learn all fail per
@@ -330,7 +332,7 @@ groups:
           severity: warning
         annotations:
           summary: "Jess answered with nothing — even after the empty-reply retry"
-          description: "{{ $value | humanize }} turn(s) in the last hour returned a blank reply. The brain ended its turn immediately (look for 1-token completions in `journalctl -u llama-server-primary` on Helios and '[UNIFIED] Empty reply after thinking retry' in Loki). If it persists, the voice-mode enable_thinking=false path is the first suspect."
+          description: "{{ $value | humanize }} turn(s) in the last hour returned a blank reply. The brain ended its turn immediately (look for 1-token completions in `journalctl -u llama-server-primary` on Helios and '[UNIFIED] Empty reply after retry' in Loki). If it persists, the voice-mode enable_thinking=false path is the first suspect (or, with VOICE_THINKING_ENABLED=true, reasoning eating the voice max_tokens budget — finish_reason=length)."
 
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
@@ -745,8 +747,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Model tool calls are being silently dropped (Qwen3.8 TURBO Q6_K on llama.cpp)"
-          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-02): DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (llama-server-primary.service on Helios GPU0), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the cutover session saw no drops. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~45% slower). Rollback to the vLLM NVFP4 brain: on Helios `systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary`, on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator` (see tts/llama-server-primary.service header)."
+          summary: "Model tool calls are being silently dropped (Qwen3.8-Flash-Next on llama.cpp)"
+          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-24): Qwen3.8-Flash-Next UD-Q3_K_XL GGUF on llama.cpp (llama-server-primary.service on Helios, split across GPU0 + GPU1), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the trial saw no drops. On any thinking-on turn (all text turns, and voice turns with VOICE_THINKING_ENABLED=true) a `<tool_call` written only inside the reasoning also counts as dropped. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~25-40% slower: ~105 tok/s measured). Rollback to the 27B brain: see the header of tts/llama-server-primary-27b-q6k.service."
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded
@@ -801,14 +803,19 @@ groups:
           summary: "The orchestrator can't query Loki for the Helios log check"
           description: "bgw_helios_log_check_total{result=\"error\"} keeps rising, so HeliosLogsSilent can't see anything and the next self-audit will likely report Loki unreachable. Check `docker ps --filter name=loki`, `docker logs loki --tail 50`, and that SELF_AUDIT_LOKI_URL (http://loki:3100) resolves from brain-orchestrator."
 
-      # Jess's brain is generating, but at CPU speed. Normal decode on the 5090
-      # is ~105-125 tok/s; CPU fallback measured ~6 tok/s on 2026-10-15 (driver
+      # Jess's brain is generating, but at CPU speed. Normal decode (Flash-Next on
+      # the 5090 + PRO 5000 since 2026-10-24) is ~135-180 tok/s, but only ~30-85 while the
+      # live TTS synthesizes on the shared GPU1 (spoken replies); CPU fallback measured ~6 tok/s on 2026-10-15 (driver
       # swap under a loaded module). Ratio of the two llama.cpp counters = mean
       # decode speed over the window. An idle brain gives 0/0 = NaN, and
       # NaN < 30 is false, so no traffic floor is needed — a floor hid the
       # 10-15 incident, where a CPU-bound brain produced only 7 tokens in 10 min
-      # before chat timed out. Backtest 2026-10-03..17: the only 10-min windows
-      # under 60 tok/s were that incident (6.8) and its restart (58).
+      # before chat timed out. Backtest 2026-10-03..17 (27B on GPU0 alone): the only
+      # 10-min windows under 60 tok/s were that incident (6.8) and its restart (58).
+      # The `unless` clause: a brain really on GPU holds >=90 % of both cards, so a slow
+      # window while either Helios GPU is >50 % full is TTS contention, not CPU fallback.
+      # When the driver is broken the nvidia_smi series are absent, the `unless` matches
+      # nothing, and the alert still fires.
       # HeliosGpuDriverBroken below fires hours earlier, without traffic.
       - alert: BrainOnCPU
         expr: |
@@ -817,13 +824,14 @@ groups:
               / rate(llamacpp:tokens_predicted_seconds_total{job="llama-primary"}[15m])
           ) < 30
           and increase(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) >= 1
+          unless on() (max(nvidia_smi_memory_used_bytes{node="helios"} / nvidia_smi_memory_total_bytes{node="helios"}) > 0.5)
         for: 2m
         labels:
           severity: warning
           node: helios
         annotations:
           summary: "Jess's brain is generating at {{ $value | printf \"%.0f\" }} tok/s — likely on CPU"
-          description: "Mean decode speed over 10 min is far below the ~110 tok/s the RTX 5090 does. Check `nvidia-smi` and `journalctl -u llama-server-primary -b | grep -i cuda` on Helios; a driver/library mismatch is fixed by a reboot."
+          description: "Mean decode speed over 15 min is far below the ~135+ tok/s the brain does on Helios's two GPUs, and neither GPU holds the model. Check `nvidia-smi` and `journalctl -u llama-server-primary -b | grep -i cuda` on Helios; a driver/library mismatch is fixed by a reboot."
 
       # nvidia-smi on Helios is failing while the box is up. Exit 18 is NVML's
       # "driver/library version mismatch": on 2026-10-15 unattended-upgrades

@@ -715,7 +715,11 @@ async def _startup_logic():
         fallback_model_url=FALLBACK_MODEL_URL,
         fallback_model_name=FALLBACK_MODEL_NAME,
     )
-    logger.info("[orchestrator] CloudBrain initialized (mode=unified_v7)")
+    logger.info(
+        "[orchestrator] CloudBrain initialized (mode=unified_v7, real_streaming=%s, voice_thinking=%s)",
+        shared.REAL_STREAMING_ENABLED,
+        shared.VOICE_THINKING_ENABLED,
+    )
 
     # Reload pending reminders from DB and re-schedule. Past-due ones are
     # late-delivered or marked missed (they used to be silently dropped —

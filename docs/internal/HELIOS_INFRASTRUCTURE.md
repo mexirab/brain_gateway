@@ -78,47 +78,59 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 
 Chipset IOMMU faults killed Helios's USB controller and NIC on 2026-10-16. Fix: `iommu=pt` added to the kernel cmdline in `/etc/default/grub`, and the box now boots kernel 6.8.0-147-generic. Rollback: restore `/etc/default/grub.bak-pre-iommu-pt` + `update-grub`, and/or pick the 6.8.0-60 entry under GRUB "Advanced options".
 
-## Helios GPU Layout (post llama.cpp cutover, 2026-10-02)
+## Helios GPU Layout (post Flash-Next cutover, 2026-10-24)
 
 | GPU | Card | VRAM | Tenants |
 |-----|------|------|---------|
-| GPU0 | RTX 5090 | 32 GB | llama.cpp primary only (`llama-server-primary.service`, port 8080, DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF + `mmproj-F16.gguf`, ~30 GB; peak 30.3 GB of 32.6 with a 3024×4032 vision request) |
-| GPU1 | RTX PRO 5000 Blackwell | 48 GB | TTS (`qwen-tts.service`, port 8002, `Qwen3-TTS-1.7B-Base`, voice `jessica`). Coder retired 2026-10-16 (see below) |
+| GPU0 | RTX 5090 | 32 GB | Primary brain, part 1 (`llama-server-primary.service`, port 8080, Qwen3.8-Flash-Next UD-Q3_K_XL MTP; `-ts 44,56` layer split): ~29 GiB, ~90 % |
+| GPU1 | RTX PRO 5000 Blackwell | 48 GB | Primary brain, part 2 + MTP draft head (`-devd CUDA1`) ~37 GiB, plus live TTS (`voxcpm-tts.service`, port 8004, VoxCPM2) ~7.7 GiB: ~92 % used, peak 92.8 % with TTS + vision + generation at once. `qwen-tts.service` (:8002, ~4.5 GiB) is **disabled** — it no longer fits. Coder retired 2026-10-16 (see below) |
 | CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`) |
 
-- **TTS on GPU1 via drop-in** `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28). Before that it silently ran on the 5090: the unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`, despite its Description saying GPU1. Revert: delete the file, `daemon-reload`, `restart qwen-tts`.
-- **Coder retired 2026-10-16:** `llama-server-coder.service` (port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) is stopped + disabled. An agentic debugging eval on planted Jess bugs had the primary brain fix 6/6 with exact one-line fixes; the coder fixed 2/3, ran ~51 tok/s (experts on CPU, 32K ctx) and wandered on a symptom-only bug. Unit file and GGUF (`/home/labadmin/.cache/llama.cpp/Qwen3-Coder-Next-UD-Q4_K_XL.gguf`) are still on disk. `sudo systemctl enable --now llama-server-coder` would restart the server, but nothing in the app can use it: the `code_agent` tool and `CODE_AGENT_*` settings were removed 2026-10-21. The unit's Description says GPU0 — wrong; it ran on GPU1.
+- **Shared GPU1:** brain generation drops from ~135–180 to ~30–85 tok/s while the TTS synthesizes (spoken replies). `After=voxcpm-tts.service` only orders process start (voxcpm-tts is `Type=simple`), so at boot the two can still race for GPU1; a cold-cache boot test had both ready in 27 s with no restarts. Never re-enable `qwen-tts` while Flash-Next is installed.
+- **Qwen3-TTS GPU1 drop-in (rollback TTS only):** `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that it silently ran on the 5090 because the unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`). Only matters if the 27B rollback re-enables `qwen-tts`.
+- **Coder retired 2026-10-16:** `llama-server-coder.service` (port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) is stopped + disabled. An agentic debugging eval on planted Jess bugs had the primary brain fix 6/6 with exact one-line fixes; the coder fixed 2/3, ran ~51 tok/s (experts on CPU, 32K ctx) and wandered on a symptom-only bug. Unit file and GGUF (`/home/labadmin/.cache/llama.cpp/Qwen3-Coder-Next-UD-Q4_K_XL.gguf`) are still on disk. `sudo systemctl enable --now llama-server-coder` would restart the server, but nothing in the app can use it: the `code_agent` tool and `CODE_AGENT_*` settings were removed 2026-10-21. The unit's Description says GPU0 — wrong; it ran on GPU1. It would not fit next to Flash-Next anyway.
 - `parakeet-stt.service` (NeMo, GPU, v3) is disabled; it is the GPU alternative to `stt-onnx`, same port + API.
 
-### `llama-server-primary.service` (repo copy: `tts/llama-server-primary.service`) — LIVE since 2026-10-02
+### `llama-server-primary.service` (repo copy: `tts/llama-server-primary.service`) — LIVE since 2026-10-24
 
-The unit's header comments are the authoritative record (weight sha256s, tunables, rollback, sandbox caveats). Summary:
+The unit's header comments are the authoritative record (weight sha256s, flags, VRAM budget, rollback pointer, sandbox caveats). Trial, A/B results and known limits: `FLASH_NEXT_TRIAL.md` (same directory). Summary:
 
-- **Model:** `DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`, Q6_K MTP quant (24 GB) + `mmproj-F16.gguf`, at `/home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/`. Alias `qwen3.8-27b-turbo-q6k` (= `MODEL_NAME`/`FALLBACK_MODEL_NAME`/`VISION_MODEL_NAME` in Jupiter `.env`).
-- **Engine:** llama.cpp `llama-server` build 11358 (2026-10-02) from `/home/labadmin/llama.cpp-mtp/build/bin`. The OLD `/home/labadmin/llama.cpp` checkout (April 2026, build 8932) is what the retired `llama-server-coder.service` uses — it cannot load Qwen3.8 GGUFs and has no `--spec-type`. Two checkouts coexist on purpose; never point this unit at the old one.
+- **Model:** Qwen3.8-Flash-Next (125B MoE, ~6B active per token, multimodal, llama.cpp arch `qwen4exp`): Unsloth UD-Q3_K_XL GGUF (3 shards) + standalone `MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf` + `mmproj-F16.gguf`, at `/home/labadmin/models/Qwen3.8-Flash-Next-Unsloth/`. Alias `qwen3.8-flash-next-q3kxl` (= `MODEL_NAME`/`FALLBACK_MODEL_NAME`/`VISION_MODEL_NAME` in Jupiter `.env`). The "shared" MTP GGUF on disk fails on this build — keep the standalone one.
+- **Requires** Jupiter `.env` `VOICE_THINKING_ENABLED=true`: with voice thinking off this brain took unrequested Home Assistant actions. Mitigation, not a control (the flag defaults `false`); never restore a pre-2026-10-24 `.env` with this unit installed.
+- **Engine:** llama.cpp `llama-server` build 11358 (2026-10-02) from `/home/labadmin/llama.cpp-mtp/build/bin` (has `qwen4exp` + its MTP). The OLD `/home/labadmin/llama.cpp` checkout (April 2026, build 8932) is what the retired `llama-server-coder.service` uses — it cannot load Qwen3.8 GGUFs and has no `--spec-type`. Two checkouts coexist on purpose; never point this unit at the old one.
+- **n-gram table:** the model's 28.8 GB `per_layer_token_embd` is an input GET_ROWS tensor loaded lazily from mmap, so it stays in host RAM / page cache, not VRAM.
 
 | Flag | Value | Why |
 |------|-------|-----|
-| `-c` | `131072` | Same context as the vLLM era |
-| `--cache-type-k/v` | `q8_0` | Weights + 131K KV fit the 5090 with headroom for the vision encoder |
+| `CUDA_VISIBLE_DEVICES` | `0,1` | Both GPUs |
+| `-sm layer -ts 44,56` | layer split | Fits ~29 GiB on GPU0, ~37 GiB on GPU1 next to the TTS |
+| `-md … -devd CUDA1 -ngld all -ctkd/-ctvd q8_0` | MTP draft head on GPU1 | |
+| `-c` | `65536` | 131072 would add ~2.5–3 GiB and push GPU1 to ~98 % |
+| `--cache-type-k/v` | `q8_0` | |
 | `-fa on`, `-ngl 999` | | Full GPU offload |
 | `--parallel 1` | single slot | MTP gain evaporates past ~4 slots. Background LLM callers (auto_learn, session_miner, task_decomposition, email→calendar, vision) QUEUE behind interactive chat — watch `llamacpp:requests_deferred` |
-| `--spec-type draft-mtp --spec-draft-n-max 2` | MTP via the draft head inside the GGUF | Draft acceptance 70–88 %; 3 was ~equal on the PRO 5000, sweep on the 5090 |
-| `--jinja --chat-template-kwargs '{"reasoning_effort":"low"}'` | | Tool-call + reasoning parsing from the GGUF template |
+| `--spec-type draft-mtp --spec-draft-n-max 2` | MTP | Acceptance ~60 % prose, ~90 % code; ~105 tok/s without MTP |
+| `--jinja --chat-template-kwargs '{"reasoning_effort":"low"}'` | | Tool-call + reasoning parsing; also sets the thinking depth of voice turns (with `VOICE_THINKING_ENABLED=true` they send no kwarg) |
 | `--reasoning-format auto` | | Thinking routed to `reasoning_content` |
+| `--fit off` | | Every placement arg is explicit; a boot that finds GPU1 short fails loudly (Loki alert `BrainFailedToStart`) instead of silently shrinking |
 | `--no-webui --no-slots --metrics` | | `/metrics` scraped by Prometheus job `llama-primary` |
 
-Measured on the 5090: 106 prose / 122 code / 121 tool-call tok/s, ~2700 tok/s prompt processing, loads in ~4 s from page cache (~60 s cold from NVMe; `TimeoutStartSec=360`, readiness loop polls `/v1/models` for up to 240 s). vLLM NVFP4 was ~111 tok/s with a ~2m50s start. PRO 5000 trial before cutover: 65/88/90 tok/s with MTP vs 45 without.
+Measured: decode ~135–180 tok/s (137–140 prose / 174–179 code), ~30–85 while the TTS synthesizes on GPU1; warm streaming TTFT through Jess 0.44–0.53 s (first turn after a restart ~8 s: cold prompt cache); loads in 6–9 s from page cache, 27 s cold (`TimeoutStartSec=360`; the readiness loop polls `/v1/models` for up to 240 s and gives up at once if the server process dies). A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
 
+- **Context limit:** 64K. Chat prompts are ~10–15K tokens, but the self-audit investigator once reached ~70K (2026-10-21); a run that large is rejected and the audit comes back `partial`.
 - **Sampling:** temperature ≤ 1.0 and `repeat_penalty` 1.0 (llama.cpp's wire name — not `repetition_penalty`) or MTP acceptance collapses.
-- **Garbled output / dropped tool calls:** first lever is `--spec-type none` (disables MTP, ~45% slower). `--enforce-eager` was a vLLM flag and means nothing here. Then `journalctl -u llama-server-primary`.
+- **Garbled output / dropped tool calls:** first lever is `--spec-type none` (disables MTP, ~105 tok/s). `--enforce-eager` was a vLLM flag and means nothing here. Then `journalctl -u llama-server-primary`.
 - **Never add `--verbose` or `--slot-save-path`:** both put prompt text (medical facts, conversations) in the journal / on disk.
 - **`--api-key` NOT enabled:** `auto_learn.py`, `jobs_calendar.py`, `vision_handler.py`, `meal_manager.py` call `MODEL_URL` with bare httpx and have no api-key plumbing. Network exposure is bounded by the unit's `IPAddressAllow` instead.
-- **Sandbox:** runs as nologin `llama` (`useradd -r -M -s /usr/sbin/nologin llama`), `ProtectSystem=strict`, `ProtectHome=tmpfs` with read-only binds of the binary dir + weights dir, `PrivateTmp`, `DevicePolicy=closed` + `DeviceAllow` for `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` (0666 nodes created by `nvidia-persistenced` at boot), empty capability set, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (host-firewall substitute — ufw is inactive on Helios). `systemd-analyze security llama-server-primary` → 3.1. Do NOT add `MemoryDenyWriteExecute` (CUDA JITs PTX into W+X pages) or `PrivateDevices=yes` (hides `/dev/nvidia*`).
-- **Rollback to vLLM NVFP4:** on Helios `sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary`; on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator`. The two units carry `Conflicts=` so they cannot both hold port 8080.
-- **Logs:** journal, shipped to Loki by `promtail-helios`'s journald job (`{host="helios", service="llama-server-primary"}`; level re-derived from llama.cpp's `E`/`W` prefixes). See `monitoring/README.md` → Log Pipeline.
+- **Sandbox:** runs as nologin `llama` (`useradd -r -M -s /usr/sbin/nologin llama`), `ProtectSystem=strict`, `ProtectHome=tmpfs` with read-only binds of the binary dir + weights dir, `PrivateTmp`, `DevicePolicy=closed` + `DeviceAllow` for `/dev/nvidia0`, `/dev/nvidia1`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` (0666 nodes created by `nvidia-persistenced` at boot), empty capability set, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (host-firewall substitute — ufw is inactive on Helios). Check with `systemd-analyze security llama-server-primary`. Do NOT add `MemoryDenyWriteExecute` (CUDA JITs PTX into W+X pages) or `PrivateDevices=yes` (hides `/dev/nvidia*`).
+- **Rollback to the 27B:** see the header of `tts/llama-server-primary-27b-q6k.service` (Helios copy `/etc/systemd/system/llama-server-primary.service.27b-q6k.bak`; also re-enables `qwen-tts` and needs the Jupiter `.env` model names + `VOICE_THINKING_ENABLED=false`). The 27B weights are still on Helios. `llama-server-primary` and `vllm-primary` carry `Conflicts=` so they cannot both hold port 8080.
+- **Logs:** journal, shipped to Loki by `promtail-helios`'s journald job (`{host="helios", service="llama-server-primary"}`; level re-derived from llama.cpp's `E`/`W` prefixes). Startup failures fire `BrainFailedToStart`. See `monitoring/README.md` → Log Pipeline.
 
-### `vllm-primary.service` — ROLLBACK unit (repo copy: `tts/vllm-primary.service`; live 2026-09-28 → 2026-10-02, now disabled)
+### 27B Q6_K unit — ROLLBACK (repo copy: `tts/llama-server-primary-27b-q6k.service`; live 2026-10-02 → 2026-10-24)
+
+Same unit name when installed. `DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`, Q6_K MTP quant (24 GB) + `mmproj-F16.gguf`, at `/home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/`, alias `qwen3.8-27b-turbo-q6k`, GPU0 RTX 5090 alone (~30 GB; peak 30.3 GB of 32.6 with a 3024×4032 vision request), same engine. Flags: `-c 131072`, q8_0 K/V, `-fa on`, `--parallel 1`, `--spec-type draft-mtp --spec-draft-n-max 2` (MTP head inside the GGUF; acceptance 70–88 %), same `--jinja` / `reasoning_effort` low / `--reasoning-format auto` / `--metrics`. Measured on the 5090: 106 prose / 122 code / 121 tool-call tok/s, ~2700 tok/s prompt processing, ~4 s warm load, ~60 s cold. Its header carries the rollback steps and the 27B weight sha256s. Rollback from it to vLLM NVFP4: `sudo systemctl disable --now llama-server-primary && sudo systemctl enable --now vllm-primary`; on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator`.
+
+### `vllm-primary.service` — older ROLLBACK unit (repo copy: `tts/vllm-primary.service`; live 2026-09-28 → 2026-10-02, now disabled)
 
 `docker run vllm/vllm-openai:v0.27.1`, `--gpus device=0`, host port 8080 → 8000, weights bind-mounted read-only from `/home/labadmin/models/Qwen3.8-27B-NVFP4` (HF revision `319f741cce68d7914884900c138a1fbb70a42f30`, 20.4 GiB, hand-staged; copy also on Jupiter).
 
@@ -143,11 +155,13 @@ Full trial + acceptance record: `QWEN38_PREP_RESULTS.md` (same directory).
 
 ### History
 
-2026-09-28 → 2026-10-02: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1, GPU0 (`vllm-primary.service`, now the rollback unit above). Replaced by llama.cpp for ~equal decode speed (106–122 vs ~111 tok/s), a ~4 s warm start instead of ~2m50s, a systemd-sandboxed native process instead of a privileged `docker run`, and llama.cpp's `/metrics`.
+2026-10-02 → 2026-10-24: DavidAU Qwen3.8-27B TURBO Q6_K MTP on llama.cpp, GPU0 alone (now the 27B rollback unit above). Replaced by Qwen3.8-Flash-Next for a better A/B score (66/66 vs 64/66), faster decode (~135–180 vs ~106–122 tok/s), ~0.5 s warm TTFT and a 27 s cold load; costs: 64K context instead of 131K, Qwen3-TTS no longer fits on GPU1, and voice turns need thinking on. See `FLASH_NEXT_TRIAL.md`.
+
+2026-09-28 → 2026-10-02: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1, GPU0 (`vllm-primary.service`, now the older rollback unit above). Replaced by llama.cpp for ~equal decode speed (106–122 vs ~111 tok/s), a ~4 s warm start instead of ~2m50s, a systemd-sandboxed native process instead of a privileged `docker run`, and llama.cpp's `/metrics`.
 
 2026-04-26 → 2026-09-28: `Lorbus/Qwen3.6-27B-int4-AutoRound` on vLLM 0.19.1, GPU0 (Plan A — a bench showed it at only 28–79% of GPU0 throughput on the PRO 5000; see `VLLM_PHASE_3_PLAN.md` → Outcome). By 2026-09 the unit had drifted to 16,384 ctx, `--gpu-memory-utilization 0.70`, `--enforce-eager`, no MTP, and TTS was sharing the 5090.
 
-Disabled units kept on disk: `vllm-primary.service` (rollback target), `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM; uses the old `/home/labadmin/llama.cpp` checkout), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
+Disabled units kept on disk: `qwen-tts.service` (rollback TTS, disabled 2026-10-24), `vllm-primary.service` (older rollback target), `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM; uses the old `/home/labadmin/llama.cpp` checkout), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
 
 ## Performance Notes
 

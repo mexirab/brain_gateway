@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # switch — flip to false to restore chunk-the-finished-string behavior
     # without a code change.
     real_streaming_enabled: bool = True
+    # Thinking on voice turns. Off (default) sends enable_thinking=false for
+    # the fastest first spoken word; turn on for a brain that takes
+    # unrequested actions with thinking off (see unified_loop voice mode).
+    voice_thinking_enabled: bool = False
 
     # -- Home Assistant (empty = disabled) ----------------------------------------
     ha_url: str = ""

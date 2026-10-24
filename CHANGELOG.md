@@ -4,6 +4,42 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Qwen3.8-Flash-Next brain cutover + `VOICE_THINKING_ENABLED` (2026-10-24)
+
+Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) are unchanged. Trial, measurements and known limits: `docs/internal/FLASH_NEXT_TRIAL.md`.
+
+### Infrastructure
+
+- **Primary brain → Qwen3.8-Flash-Next** (125B MoE, ~6B active per token, multimodal, llama.cpp arch `qwen4exp`): Unsloth UD-Q3_K_XL GGUF + standalone Q8_0 MTP head + F16 mmproj, alias `qwen3.8-flash-next-q3kxl`. Same unit name (`llama-server-primary.service`, repo copy `tts/llama-server-primary.service`) and the same `llama.cpp-mtp` build, port 8080, now split across GPU0 RTX 5090 + GPU1 RTX PRO 5000: `-sm layer -ts 44,56`, `-c 65536`, q8_0 KV, `--spec-type draft-mtp --spec-draft-n-max 2`, `--fit off`, `reasoning_effort` low, `--reasoning-format auto`. Sandbox also allows `/dev/nvidia1`.
+- Measured: decode ~135–180 tok/s (~30–85 while the TTS synthesizes on the shared GPU1), warm streaming TTFT through Jess 0.44–0.53 s (27B: ~0.9–1.3 s), load 6–9 s warm / 27 s cold (27B: ~60 s cold), VRAM GPU0 ~90 % / GPU1 ~92 % with VoxCPM2. A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
+- Jupiter `.env`: `MODEL_NAME`/`FALLBACK_MODEL_NAME`/`VISION_MODEL_NAME` → `qwen3.8-flash-next-q3kxl`, `VOICE_THINKING_ENABLED=true` (required, see below). Vision still runs on the brain.
+- `qwen-tts.service` (Qwen3-TTS :8002, the rollback TTS) disabled: the brain needs its ~4.5 GiB on GPU1. VoxCPM2 (:8004) stays the live voice.
+- Old brain (DavidAU Qwen3.8-27B TURBO Q6_K MTP, GPU0 alone, live 2026-10-02 → 2026-10-24) kept as the rollback reference `tts/llama-server-primary-27b-q6k.service` (header = rollback steps; Helios copy `/etc/systemd/system/llama-server-primary.service.27b-q6k.bak`). `vllm-primary` (NVFP4) is an older rollback.
+- The unit's readiness loop now gives up as soon as the server process dies.
+
+### Orchestrator (PR #141)
+
+- New `VOICE_THINKING_ENABLED` (default `false`, read at start — change with `--force-recreate`). `false` keeps the old voice payload byte-identical (`enable_thinking: false`, `max_tokens` 1024). `true` sends no thinking kwarg (the server's `reasoning_effort` applies) and raises voice `max_tokens` to 2048, since reasoning counts against it on llama.cpp. The empty-reply retry is a plain resend when thinking is already on. Both `LLM probe` log lines carry `finish=<finish_reason>`; the startup line logs `real_streaming` / `voice_thinking`.
+- Why: with voice thinking off, Flash-Next sometimes answered a chit-chat voice turn ("tell me a fun fact") by turning off speakers or a light; with it on, 0 of 33 and then 0 of 80 probe turns did. This is a model-behavior mitigation, not a control. A deterministic "did the user ask?" gate in front of `home_assistant` calls is a separate change.
+
+### Monitoring
+
+- New Loki ruler alert `BrainFailedToStart` (`pushover-quiet`): llama-server-primary exited during startup. `--fit off` makes a GPU1 shortfall fail loudly instead of silently shrinking the setup; three failed trial starts went unalerted before this rule.
+- `BrainOnCPU` suppressed while either Helios GPU is >50 % full (a slow window then is TTS contention, not CPU fallback); normal decode baseline now ~135–180 tok/s.
+- Qwen3-TTS :8002 blackbox probe removed (`TTSDown` now covers only `tts-voxcpm`); `HighVRAMUsage` text names the GPU; `STTDown` text names Parakeet; Grafana baselines updated.
+
+### Known limits
+
+- Context is 64K, not 131K (131K doesn't fit with the MTP head on GPU1). A self-audit investigator run as large as the ~70K-token one seen 2026-10-21 is rejected and the audit comes back `partial`.
+- `VOICE_THINKING_ENABLED` fails open: nothing ties it to the running brain. Restoring an `.env` from before 2026-10-24 with this unit installed brings the unrequested voice actions back.
+- Stock Qwen weights (the 27B was an uncensored fine-tune): refusal behavior may differ. Prompt-cache hit ratio not yet re-baselined.
+
+### Docs
+
+- `CLAUDE.md`, `COMMANDS.md`, `ROADMAP.md`, `TECHNICAL_REFERENCE.md`, `docs/ENV_VARS.md`, `docs/VOICE_AND_TTS.md`, `docs/JESS_SELF_KNOWLEDGE.md`, `docs/HARDWARE.md`, `docs/WORKOUTS_AND_MEALS.md`, `docs/FRONTEND.md`, `tts/README.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md`, `docs/internal/QWEN38_PREP_RESULTS.md` (pointer), `monitoring/README.md`, `.env.example` comments and agent definitions updated. New `docs/internal/FLASH_NEXT_TRIAL.md`.
+
+---
+
 ## [Unreleased] — `code_agent` removed (2026-10-21)
 
 Branch `chore/remove-code-agent`. The tool gave a model `run_command` (subprocess), `write_file` and git commits; its model (Qwen3-Coder-Next on Helios :8082) was retired 2026-10-16 after the primary brain beat it on a debugging eval. Self-troubleshooting is the read-only self-investigator (`self_investigator.py`).

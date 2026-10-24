@@ -132,9 +132,10 @@ def build() -> dict:
             [("sum by (outcome) (rate(bgw_llm_empty_reply_total[5m])) * 60", "{{outcome}}")],
             unit="none",
             description="Rounds where the brain returned no text and no tool call. retried = "
-            "re-asked once with thinking on; recovered = the retry answered; still_empty = "
-            "the user got a blank. A sustained retried rate (>5% of voice turns) means the "
-            "voice no-think fast path no longer pays off.",
+            "re-asked once (with thinking on, unless VOICE_THINKING_ENABLED already has it on); "
+            "recovered = the retry answered; still_empty = the user got a blank. A sustained "
+            "retried rate (>5% of voice turns) means the voice no-think fast path no longer pays "
+            "off; with thinking on, check finish=length (reasoning ate the voice budget).",
         ),
         stat(
             "Blank Replies (still_empty, 24h)",
@@ -424,8 +425,8 @@ def build() -> dict:
             unit="none",
             span_nulls=False,
             description="Tokens per second while actually generating (decode) and prefilling (prompt), "
-            "averaged over 15 min of busy time — idle time is excluded. Baseline on the 5090 with MTP: "
-            "~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the "
+            "averaged over 15 min of busy time — idle time is excluded. Baseline (Qwen3.8-Flash-Next on "
+            "5090 + PRO 5000 with MTP, since 2026-10-24): ~135-180 decode, ~30-85 while TTS speaks on the shared GPU1; prefill ~2000-2200 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the "
             "model fell back to CPU (see BrainOnCPU).",
         ),
         timeseries(
@@ -446,7 +447,7 @@ def build() -> dict:
             description="Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). "
             "'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; "
             "pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos "
-            "lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
+            "lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.55-0.9 (Flash-Next: ~0.6 on prose, ~0.9 on code). A collapse means sampling drifted (temperature > 1, "
             "repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever "
             "is --spec-type none on the llama-server-primary unit.",
         ),
@@ -545,7 +546,8 @@ def build() -> dict:
             'and increase(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) >= 1',
             unit="none",
             thresholds=[(None, "red"), (30, "yellow"), (80, "green")],
-            description="Mean tok/s while generating. ~105-125 on the RTX 5090; under 30 = "
+            description="Mean tok/s while generating. ~135-180 on Flash-Next (5090 + PRO 5000), ~30-85 while "
+            "TTS speaks on the shared GPU1; under 30 with the GPUs empty = "
             "running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
         ),
         stat(

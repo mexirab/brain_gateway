@@ -12,7 +12,8 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - **July 2026 reliability push** (PRs #32–#43): reminder-delivery state machine fixed, code-agent shell hardened, nightly off-box backups to Saturn, June perf branches rebased in, HA migrated off the dead Pi onto Jupiter, monitoring/Homepage config folded into the repo, deploy race fixed, Grafana consolidated to one app dashboard.
 - **Durable task backlog** shipped July 2026 (PRs #44/#45/#46): `tasks` table + `backlog_manager` + voice tools (`add_task`, `what_now`, …) + `/tasks` page + dashboard TasksCard + brain-dump capture routing + `decompose_task` auto-linking + weekly Sunday review + Grafana row. The missing spine now exists.
 - **Qwen3.8 brain** shipped 2026-09-28: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1 (5090, 131K context, MTP, ~111 tok/s — 2× Qwen3.6), and it now serves vision too (Saturn Qwen3-VL-8B out of the runtime path). See CHANGELOG.
-- **llama.cpp brain** shipped 2026-10-02: DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (`llama-server-primary.service`, sandboxed, 131K ctx, MTP, 106–122 tok/s, ~4 s warm start, llama.cpp `/metrics` scraped) replaced the vLLM NVFP4 unit, which stays on disk as the rollback. See CHANGELOG.
+- **llama.cpp brain** shipped 2026-10-02: DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (`llama-server-primary.service`, sandboxed, 131K ctx, MTP, 106–122 tok/s, ~4 s warm start, llama.cpp `/metrics` scraped) replaced the vLLM NVFP4 unit, which stays on disk as an older rollback. See CHANGELOG.
+- **Qwen3.8-Flash-Next brain** shipped 2026-10-24: 125B MoE (~6B active) Unsloth UD-Q3_K_XL MTP GGUF on llama.cpp, split across the 5090 + PRO 5000 (64K ctx, ~135–180 tok/s, ~0.5 s warm TTFT, 27 s cold load; A/B 66/66 vs 64/66). Needs `VOICE_THINKING_ENABLED=true` (PR #141). The 27B unit is the rollback; Qwen3-TTS rollback disabled to make room on GPU1. See CHANGELOG + `docs/internal/FLASH_NEXT_TRIAL.md`.
 - **`code_agent` removed** 2026-10-21: the tool (shell + file writes + git commits on a local coder model) is gone; its Qwen3-Coder-Next model was retired 2026-10-16. Self-troubleshooting is the read-only self-audit / self-investigator. See CHANGELOG.
 
 The list below is ordered by tier, and within each tier roughly by priority.
@@ -121,7 +122,7 @@ Vision already works through the Qwen3.8 brain on Helios (meal-photo calories + 
 
 ### vLLM 262K context ⬜ (when worth it)
 
-Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context.
+Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context. Since 2026-10-24 the live brain (Qwen3.8-Flash-Next on llama.cpp, two GPUs) runs at 64K — 131K doesn't fit next to the TTS on GPU1. The self-audit investigator has hit ~70K once, so it is the first thing a bigger context (or a size cap in `self_investigator.py`) would fix.
 
 ## Dropped / superseded
 
