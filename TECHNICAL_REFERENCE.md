@@ -515,12 +515,12 @@ Known gaps (not fixed): announcement-ack inference still trusts the client trans
 
 ## Empty-Reply Handling
 
-Fix for blank replies (2026-10-14): llama-server sometimes generated a single EOS token, mostly in voice mode (`enable_thinking: false`) when the history held an empty assistant turn.
+Fix for blank replies (2026-10-14): llama-server sometimes generated a single EOS token, mostly in voice mode with thinking off (`enable_thinking: false`, the `VOICE_THINKING_ENABLED=false` default) when the history held an empty assistant turn.
 
 | Layer | Behavior |
 |-------|----------|
 | `cloud_brain._is_empty_assistant` | Empty assistant turns in client history (`/v1/chat/completions`, every client) are dropped before the loop. Log: `Dropped N empty assistant message(s)`. |
-| `unified_loop.run_unified_tool_loop` | A round with no tool call and no visible text (think-only counts as empty; a `<tool_call>` echo does not) is retried once, with thinking re-enabled in voice mode. The retry gets its own round (`round_limit += 1`); if tools already ran this turn the retry is text-only (its tool calls are ignored). `TOOL_ROUNDS` and the selfcare safety net use the effective round (retry not counted). Logs: retry INFO, `[UNIFIED] Empty reply after thinking retry` WARNING. |
+| `unified_loop.run_unified_tool_loop` | A round with no tool call and no visible text (think-only counts as empty; a `<tool_call>` echo does not) is retried once: in voice mode with `VOICE_THINKING_ENABLED=false` the no-think kwarg is dropped (thinking on); with it `true`, thinking is already on and the retry is a plain resend. The retry gets its own round (`round_limit += 1`); if tools already ran this turn the retry is text-only (its tool calls are ignored). `TOOL_ROUNDS` and the selfcare safety net use the effective round (retry not counted). Logs: retry INFO, `[UNIFIED] Empty reply after retry — user got no answer (finish_reason=…)` WARNING. Both `LLM probe` lines (stream + buffered) carry `finish=<finish_reason>`; `finish=length` on a voice turn with thinking on = reasoning used up the 2048 `max_tokens`. |
 | Metric / alert | `bgw_llm_empty_reply_total{outcome=retried\|recovered\|still_empty}`; Grafana "Empty Model Replies (/min)" + "Blank Replies (still_empty, 24h)" (Request Flow row, `brain_gateway_sre.py`); `EmptyRepliesReachingUsers` (`still_empty` in 1h → quiet Pushover). |
 
 No post-terminal-tool round cap (by design): the old `max_rounds = round_num + 2` reassignment never took effect and was removed 2026-10-17 — enforcing it would cut off legitimate follow-up actions. `MAX_TOOL_ROUNDS` (plus the empty-retry `round_limit`) bounds the loop; `TOOL_ROUNDS` observes `round_limit`.
@@ -975,6 +975,7 @@ See `.env.example` for full list. Key vars:
 | EVENING_BRIEFING_TIME | HH:MM for the evening shutdown ritual (default: 21:30) |
 | EVENING_BRIEFING_ENABLED | true/false (default: true) |
 | REAL_STREAMING_ENABLED | true/false (default: true) — real SSE token streaming on /v1/chat/completions; false = buffered chunking |
+| VOICE_THINKING_ENABLED | true/false (default: false) — keep thinking on for voice turns (`max_tokens` 2048 instead of 1024 + `enable_thinking: false`); see `docs/ENV_VARS.md` |
 | WIND_DOWN_ENABLED | true/false (default: true) — T-60 lights + T-30 nudge ahead of bedtime |
 | WIND_DOWN_BEDTIME | HH:MM bedtime anchor (default: 22:30) |
 | WIND_DOWN_SCENE | Comma-separated HA scene ids for the lights rung (empty = skip) |

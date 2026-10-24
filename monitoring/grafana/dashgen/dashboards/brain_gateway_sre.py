@@ -132,9 +132,10 @@ def build() -> dict:
             [("sum by (outcome) (rate(bgw_llm_empty_reply_total[5m])) * 60", "{{outcome}}")],
             unit="none",
             description="Rounds where the brain returned no text and no tool call. retried = "
-            "re-asked once with thinking on; recovered = the retry answered; still_empty = "
-            "the user got a blank. A sustained retried rate (>5% of voice turns) means the "
-            "voice no-think fast path no longer pays off.",
+            "re-asked once (with thinking on, unless VOICE_THINKING_ENABLED already has it on); "
+            "recovered = the retry answered; still_empty = the user got a blank. A sustained "
+            "retried rate (>5% of voice turns) means the voice no-think fast path no longer pays "
+            "off; with thinking on, check finish=length (reasoning ate the voice budget).",
         ),
         stat(
             "Blank Replies (still_empty, 24h)",

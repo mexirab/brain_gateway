@@ -166,7 +166,16 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 - Mic-sent message → always spoken reply (walkie-talkie), even with the speaker toggle off.
 - Typed message → follows the speaker toggle (localStorage `tts_enabled`, per device, default off).
 
-**Voice mode (backend):** voice turns run the unified loop with `max_tokens` 1024 and `chat_template_kwargs {"enable_thinking": false}` — first spoken word ~0.16 s vs ~0.77 s with the server default `reasoning_effort=low`. Caveat: the Qwen3.8 template then pre-fills an empty `<think></think>` and the model can end its turn at once (7/8 when the history held an empty assistant turn; 0/48 with clean history). Mitigations: `cloud_brain` drops empty assistant turns from history, and an empty round is retried once with thinking on. Detail: `TECHNICAL_REFERENCE.md` → Empty-Reply Handling.
+**Voice mode (backend):** thinking on voice turns is controlled by `VOICE_THINKING_ENABLED` (default `false`; read at process start, change with `docker compose up -d --force-recreate orchestrator` — see `docs/ENV_VARS.md`). The startup log shows it: `CloudBrain initialized (… voice_thinking=…)`.
+
+| `VOICE_THINKING_ENABLED` | Voice-turn request | First spoken word (Qwen3.8-27B) |
+|---|---|---|
+| `false` (default) | `max_tokens` 1024 + `chat_template_kwargs {"enable_thinking": false}` | ~0.16 s |
+| `true` | `max_tokens` 2048, no kwarg; depth set by llama-server `--chat-template-kwargs '{"reasoning_effort":"low"}'` (keep that flag in the unit). 2048 because reasoning tokens count against `max_tokens` on llama.cpp | ~0.77 s |
+
+- **Why the switch:** some brains act unasked with thinking off. A trial brain (Qwen3.8-Flash-Next, 2026-10-24) turned off speakers or a light on 4 of 8 voice "tell me a fun fact" turns with thinking off, 0 of 33 with it on (voice tool cases 18/18); first spoken token 0.40 s vs 0.13 s.
+- **Thinking off caveat:** the Qwen3.8 template pre-fills an empty `<think></think>` and the model can end its turn at once (7/8 when the history held an empty assistant turn; 0/48 with clean history). Mitigations: `cloud_brain` drops empty assistant turns from history, and an empty round is retried once — with thinking on when the switch is off, as a plain resend when it is on. Detail: `TECHNICAL_REFERENCE.md` → Empty-Reply Handling.
+- **Thinking on caveat:** a long reasoning pass can use up the 2048 budget and cut the reply. Look for `finish=length` on the `LLM probe (stream): …` / `LLM probe: …` lines in Loki.
 
 **Empty replies (client):** the chat page snapshots history before adding the new turn (the first message of a new chat used to go out twice with a blank assistant turn between) and never sends blank or error bubbles as history. A reply that is still empty shows — and in voice/call mode speaks — "Sorry — I didn't get a reply just now. Please try again."
 

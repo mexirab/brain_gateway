@@ -8,12 +8,16 @@ Tests for the 2026-10-14 empty-reply fix (branch fix/voice-empty-replies):
 - the selfcare safety net still fires when the answer arrived on the retry;
 - the streaming path emits the recovered text without a leading separator;
 - ``cloud_brain._is_empty_assistant`` + the unified-path drop of blank
-  assistant turns from client history.
+  assistant turns from client history;
+- ``VOICE_THINKING_ENABLED``: off (default) keeps the pre-switch voice payload
+  byte-for-byte; on sends ``{"max_tokens": 2048}`` with no
+  ``chat_template_kwargs``, and the empty-reply retry is a plain resample.
 
 Mocking style mirrors ``test_loop_hardening.py`` (buffered) and
 ``test_real_streaming.py`` (fake stream backend).
 """
 
+import copy
 import json
 import logging
 from types import SimpleNamespace
@@ -21,6 +25,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from orchestrator import shared
 from orchestrator.cloud_brain import _is_empty_assistant
 from orchestrator.metrics import EMPTY_REPLY_TOTAL
 from orchestrator.unified_loop import run_unified_tool_loop
@@ -63,6 +68,14 @@ def _snapshot():
 
 def _delta(before):
     return {o: _count(o) - v for o, v in before.items()}
+
+
+@pytest.fixture(autouse=True)
+def _voice_thinking_off(monkeypatch):
+    """Pin VOICE_THINKING_ENABLED to its default (off) so the voice tests
+    below can't flip with the host env; the switch-on tests override it.
+    The default itself is asserted in test_config.py."""
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", False)
 
 
 async def _run(call_model, execute_tool, messages=None, max_rounds=5, is_voice=False):
@@ -291,7 +304,9 @@ class SequencedBackend:
         self.extra_bodies = []
 
     async def stream_chat_completion(self, *args, **kwargs):
-        self.extra_bodies.append(kwargs.get("extra_body"))
+        # Snapshot at call time: the loop passes the same dict every round,
+        # so a stored reference would hide a later in-place mutation.
+        self.extra_bodies.append(copy.deepcopy(kwargs.get("extra_body")))
         lines = self._rounds[min(self.calls, len(self._rounds) - 1)]
         self.calls += 1
         for line in lines:
@@ -448,3 +463,302 @@ async def test_dropped_tool_call_is_not_retried():
     assert result == ""
     assert _delta(before)["retried"] == 0
     assert _delta(before)["still_empty"] == 0  # covered by the dropped metric/alert instead
+
+
+# ---------------------------------------------------------------------------
+# 10: VOICE_THINKING_ENABLED switch (voice payload + empty-reply retry)
+# ---------------------------------------------------------------------------
+
+# The voice payload as it was before the switch existed. Off (the default) must
+# reproduce it exactly — same keys, values AND order, so the request body the
+# brain sees is byte-identical.
+_OLD_VOICE_EXTRA = {"max_tokens": 1024, "chat_template_kwargs": {"enable_thinking": False}}
+_OLD_VOICE_EXTRA_JSON = '{"max_tokens": 1024, "chat_template_kwargs": {"enable_thinking": false}}'
+_THINKING_VOICE_EXTRA = {"max_tokens": 2048}
+
+_LOOP_LOGGER = "orchestrator.unified_loop"
+
+
+def _recording_call_model(replies):
+    """Buffered call_model mock that snapshots extra_body at call time."""
+    queue = list(replies)
+    seen = []
+
+    async def _call(*args, **kwargs):
+        seen.append(copy.deepcopy(kwargs.get("extra_body")))
+        return queue.pop(0)
+
+    return AsyncMock(side_effect=_call), seen
+
+
+def _loop_messages(caplog, level=None):
+    return [r.getMessage() for r in caplog.records if r.name == _LOOP_LOGGER and (level is None or r.levelno == level)]
+
+
+def _retry_logs(caplog):
+    return [m for m in _loop_messages(caplog) if "retrying once" in m]
+
+
+def _stop_reason_chunk(reason):
+    return _sse({"choices": [{"delta": {}, "finish_reason": reason}]})
+
+
+# -- (1) switch off: payload identical to the old literal ---------------------
+
+
+async def test_voice_switch_off_buffered_payload_identical_to_old_literal(caplog):
+    call_model, seen = _recording_call_model([_reply("hello")])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result = await _run(call_model, AsyncMock(), is_voice=True)
+
+    assert result == "hello"
+    assert seen == [_OLD_VOICE_EXTRA]
+    assert list(seen[0]) == ["max_tokens", "chat_template_kwargs"]
+    assert json.dumps(seen[0]) == _OLD_VOICE_EXTRA_JSON
+    assert "[UNIFIED] Voice mode: max_tokens=1024, thinking=off" in _loop_messages(caplog)
+
+
+async def test_voice_switch_off_stream_payload_identical_to_old_literal(caplog):
+    backend = SequencedBackend([[_content_chunk("hello"), _stop_chunk()]])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result, deltas = await _run_stream(backend, is_voice=True)
+
+    assert result == "hello"
+    assert "".join(deltas) == "hello"
+    assert backend.extra_bodies == [_OLD_VOICE_EXTRA]
+    assert json.dumps(backend.extra_bodies[0]) == _OLD_VOICE_EXTRA_JSON
+    assert "[UNIFIED] Voice mode: max_tokens=1024, thinking=off" in _loop_messages(caplog)
+
+
+# -- (2) switch on: thinking left on, 2048-token budget -----------------------
+
+
+async def test_voice_switch_on_buffered_payload_has_no_template_kwargs(monkeypatch, caplog):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", True)
+    call_model, seen = _recording_call_model([_reply("hello")])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result = await _run(call_model, AsyncMock(), is_voice=True)
+
+    assert result == "hello"
+    assert seen == [_THINKING_VOICE_EXTRA]
+    assert "chat_template_kwargs" not in seen[0]
+    logs = _loop_messages(caplog)
+    assert "[UNIFIED] Voice mode: max_tokens=2048, thinking=on" in logs
+    assert not any("thinking=off" in m for m in logs)
+
+
+async def test_voice_switch_on_stream_payload_and_probe_logs_finish_reason(monkeypatch, caplog):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", True)
+    backend = SequencedBackend([[_content_chunk("hello"), _stop_chunk()]])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result, deltas = await _run_stream(backend, is_voice=True)
+
+    assert result == "hello"
+    assert "".join(deltas) == "hello"
+    assert backend.extra_bodies == [_THINKING_VOICE_EXTRA]
+    logs = _loop_messages(caplog)
+    assert "[UNIFIED] Voice mode: max_tokens=2048, thinking=on" in logs
+    probes = [m for m in logs if "LLM probe (stream)" in m]
+    assert len(probes) == 1
+    assert "finish=stop " in probes[0]
+
+
+async def test_voice_switch_is_read_per_turn_not_at_import(monkeypatch):
+    """Flipping shared.VOICE_THINKING_ENABLED changes the very next turn —
+    the loop must not have captured the value at import time."""
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", True)
+    on_model, on_seen = _recording_call_model([_reply("a")])
+    await _run(on_model, AsyncMock(), is_voice=True)
+
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", False)
+    off_model, off_seen = _recording_call_model([_reply("b")])
+    await _run(off_model, AsyncMock(), is_voice=True)
+
+    assert on_seen == [_THINKING_VOICE_EXTRA]
+    assert off_seen == [_OLD_VOICE_EXTRA]
+
+
+# -- (3) empty reply → one retry; switch decides what the retry changes -------
+
+
+@pytest.mark.parametrize(
+    "thinking, extras, retry_log",
+    [
+        (
+            False,
+            [_OLD_VOICE_EXTRA, {"max_tokens": 1024}],
+            "[UNIFIED] Empty reply (finish_reason=length) — retrying once with thinking",
+        ),
+        (
+            True,
+            [_THINKING_VOICE_EXTRA, _THINKING_VOICE_EXTRA],
+            "[UNIFIED] Empty reply (finish_reason=length) — retrying once",
+        ),
+    ],
+    ids=["switch_off_reenables_thinking", "switch_on_plain_resample"],
+)
+async def test_voice_empty_reply_retry_payload_and_log(monkeypatch, caplog, thinking, extras, retry_log):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", thinking)
+    call_model, seen = _recording_call_model([_reply("", finish_reason="length"), _reply("hello")])
+    before = _snapshot()
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result = await _run(call_model, AsyncMock(), is_voice=True)
+
+    assert result == "hello"
+    assert seen == extras
+    assert _retry_logs(caplog) == [retry_log]
+    assert _delta(before) == {"retried": 1, "recovered": 1, "still_empty": 0}
+
+
+async def test_voice_switch_on_stream_retry_resends_same_extra_body(monkeypatch, caplog):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", True)
+    backend = SequencedBackend([[_stop_reason_chunk("length")], [_content_chunk("hello"), _stop_chunk()]])
+    before = _snapshot()
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result, deltas = await _run_stream(backend, is_voice=True)
+
+    assert result == "hello"
+    assert "".join(deltas) == "hello"
+    assert backend.extra_bodies == [_THINKING_VOICE_EXTRA, _THINKING_VOICE_EXTRA]
+    retry = _retry_logs(caplog)
+    assert len(retry) == 1
+    assert "with thinking" not in retry[0]
+    assert _delta(before) == {"retried": 1, "recovered": 1, "still_empty": 0}
+
+
+@pytest.mark.parametrize(
+    "thinking, extras, retry_log",
+    [
+        (
+            False,
+            [_OLD_VOICE_EXTRA, _OLD_VOICE_EXTRA, {"max_tokens": 1024}],
+            "[UNIFIED] Empty reply (finish_reason=stop) — retrying once with thinking (text only)",
+        ),
+        (
+            True,
+            [_THINKING_VOICE_EXTRA] * 3,
+            "[UNIFIED] Empty reply (finish_reason=stop) — retrying once (text only)",
+        ),
+    ],
+    ids=["switch_off", "switch_on"],
+)
+async def test_voice_payload_stable_across_tool_round_and_post_tool_retry(
+    monkeypatch, caplog, thinking, extras, retry_log
+):
+    """The voice payload rides every round (tool round included); only the
+    switch-off retry drops the no-think kwarg."""
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", thinking)
+    call_model, seen = _recording_call_model(
+        [
+            _reply("", tool_calls=[_native("web_search", {"query": "weather"}, "c1")]),
+            _reply(""),
+            _reply("It is sunny."),
+        ]
+    )
+    execute_tool = AsyncMock(return_value="75F sunny")
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result = await _run(call_model, execute_tool, is_voice=True)
+
+    assert result == "It is sunny."
+    execute_tool.assert_called_once_with("web_search", {"query": "weather"})
+    assert seen == extras
+    assert _retry_logs(caplog) == [retry_log]
+
+
+# -- (4) switch on + empty twice: still_empty + reworded WARNING --------------
+
+
+async def test_voice_switch_on_empty_twice_counts_still_empty_and_warns(monkeypatch, caplog):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", True)
+    call_model, seen = _recording_call_model(
+        [_reply("", finish_reason="length"), _reply("", finish_reason="length"), _reply("never reached")]
+    )
+    before = _snapshot()
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result = await _run(call_model, AsyncMock(), is_voice=True)
+
+    assert result == ""
+    assert call_model.call_count == 2
+    assert seen == [_THINKING_VOICE_EXTRA, _THINKING_VOICE_EXTRA]
+    assert _delta(before) == {"retried": 1, "recovered": 0, "still_empty": 1}
+    assert _loop_messages(caplog, logging.WARNING) == [
+        "[UNIFIED] Empty reply after retry — user got no answer (finish_reason=length)"
+    ]
+    assert "thinking retry" not in caplog.text
+    # finish_reason on the probe is what tells "reasoning ate the budget"
+    # (length) apart from an EOS-only reply (stop) in Loki.
+    probes = [m for m in _loop_messages(caplog) if "LLM probe: " in m]
+    assert len(probes) == 2
+    assert all("finish=length " in m for m in probes)
+
+
+async def test_voice_switch_on_stream_empty_twice_counts_still_empty(monkeypatch, caplog):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", True)
+    backend = SequencedBackend([[_stop_reason_chunk("length")], [_stop_reason_chunk("length")]])
+    before = _snapshot()
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result, deltas = await _run_stream(backend, is_voice=True)
+
+    assert result == ""
+    assert deltas == []
+    assert backend.calls == 2
+    assert backend.extra_bodies == [_THINKING_VOICE_EXTRA, _THINKING_VOICE_EXTRA]
+    assert _delta(before) == {"retried": 1, "recovered": 0, "still_empty": 1}
+    assert _loop_messages(caplog, logging.WARNING) == [
+        "[UNIFIED] Empty reply after retry — user got no answer (finish_reason=length)"
+    ]
+    probes = [m for m in _loop_messages(caplog) if "LLM probe (stream)" in m]
+    assert len(probes) == 2
+    assert all("finish=length " in m for m in probes)
+
+
+async def test_switch_off_empty_twice_warning_text_is_reworded(caplog):
+    """The still-empty WARNING no longer claims a 'thinking' retry (it isn't
+    one with the switch on); the wording is shared by both settings."""
+    call_model = AsyncMock(side_effect=[_reply(""), _reply("")])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        await _run(call_model, AsyncMock(), is_voice=True)
+
+    assert _loop_messages(caplog, logging.WARNING) == [
+        "[UNIFIED] Empty reply after retry — user got no answer (finish_reason=stop)"
+    ]
+
+
+# -- (5) non-voice turns ignore the switch ------------------------------------
+
+
+@pytest.mark.parametrize("thinking", [False, True], ids=["switch_off", "switch_on"])
+async def test_non_voice_buffered_ignores_switch(monkeypatch, caplog, thinking):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", thinking)
+    call_model, seen = _recording_call_model([_reply(""), _reply("hello")])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result = await _run(call_model, AsyncMock())
+
+    assert result == "hello"
+    assert seen == [None, None]
+    assert not any("Voice mode" in m for m in _loop_messages(caplog))
+    assert _retry_logs(caplog) == ["[UNIFIED] Empty reply (finish_reason=stop) — retrying once"]
+
+
+@pytest.mark.parametrize("thinking", [False, True], ids=["switch_off", "switch_on"])
+async def test_non_voice_stream_ignores_switch(monkeypatch, caplog, thinking):
+    monkeypatch.setattr(shared, "VOICE_THINKING_ENABLED", thinking)
+    backend = SequencedBackend([[_content_chunk("hello"), _stop_chunk()]])
+
+    with caplog.at_level(logging.INFO, logger=_LOOP_LOGGER):
+        result, _ = await _run_stream(backend)
+
+    assert result == "hello"
+    assert backend.extra_bodies == [None]
+    assert not any("Voice mode" in m for m in _loop_messages(caplog))

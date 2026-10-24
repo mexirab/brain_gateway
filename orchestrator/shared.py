@@ -212,6 +212,7 @@ embedding_model = _CountingEmbedder(
 # ---------------------------------------------------------------------------
 MAX_TOOL_ROUNDS = settings.max_tool_rounds
 REAL_STREAMING_ENABLED = settings.real_streaming_enabled
+VOICE_THINKING_ENABLED = settings.voice_thinking_enabled
 
 # ---------------------------------------------------------------------------
 # Shared httpx client (initialized in startup_event)
