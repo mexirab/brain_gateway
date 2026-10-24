@@ -153,7 +153,8 @@ async def test_distinct_native_calls_capped_per_round():
     execute_tool = AsyncMock(return_value="ok")
     capped_before = TOOL_CALLS_CAPPED._value.get()
 
-    await _run(call_model, execute_tool)
+    # A device request, so the "did the user ask?" gate (ha_intent) lets the calls through.
+    await _run(call_model, execute_tool, [{"role": "user", "content": "turn on the lights in every room"}])
 
     assert execute_tool.call_count == MAX_TOOL_CALLS_PER_ROUND == 5
     executed = [c.args[1]["entity_id"] for c in execute_tool.call_args_list]

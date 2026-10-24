@@ -510,8 +510,9 @@ Echo-injection defences in `unified_loop.py` (2026-10-02 security review: a `<to
 | `_xml_fallback_allowed(content, finish_reason)` | XML `<tool_call>` fallback parsing only when `finish_reason != "length"` and the prose outside tool-call/think blocks is ≤ `_XML_FALLBACK_MAX_PROSE_CHARS` (200). Otherwise the markup is treated as quoted content and logged at WARNING. | `bgw_tool_call_source_total{source="xml_rejected"}` |
 | `_filter_new_tool_calls()` | Drops calls already executed in earlier rounds, collapses identical `(name, args)` within a round, caps a round at `MAX_TOOL_CALLS_PER_ROUND = 5`. | `bgw_tool_calls_capped_total` |
 | `cloud_brain` message strip | Client-supplied `role: "system"` and `role: "tool"` messages are removed before the loop — the orchestrator is the only legitimate producer of tool results. Log: `[UNIFIED] Stripped N client system/tool message(s)`. | — |
+| `ha_intent.check_call` (2026-10-24) | Every `home_assistant` call the model makes is checked against the user's own words; an unrequested call is answered `executed: false` instead of running, and a model that keeps trying gets a tool-less final round. See home_assistant → "Did the user ask?" gate. | `bgw_ha_unrequested_blocked_total{domain}`, `bgw_ha_intent_decision_total{result,via}` |
 
-Known gaps (not fixed): announcement-ack inference still trusts the client transcript's assistant turns (API-token holders only). HA unlock/cover-open have no confirmation flow, so the `home_assistant` tool refuses them outright (see below).
+Known gaps (not fixed): announcement-ack inference still trusts the client transcript's assistant turns (API-token holders only). HA unlock/cover-open have no confirmation flow, so the `home_assistant` tool refuses them outright (see below). The did-the-user-ask gate covers `home_assistant` only (see its known limits).
 
 ## Empty-Reply Handling
 
@@ -555,6 +556,49 @@ Media limits: `play_media` keeps only `media_content_id`, `media_content_type`, 
 Refusals: metric `bgw_ha_call_refused_total{path}` (`tool`, `nlp`, `api`).
 
 Device-setting threat: prompt-injected content (email, web page) steering the model to disable a camera or its motion detection. Known limits: member check is one level deep; name match can over-refuse (e.g. a camera floodlight — the dashboard still works). Add camera-touching scenes, or uncategorised camera switches with unusual names, to `HA_TOOL_DENY_ENTITIES` as a backstop.
+
+#### "Did the user ask?" gate (`orchestrator/ha_intent.py`, 2026-10-24)
+
+The guard decides which calls are allowed at all; neither it nor the model checked whether the user asked. A trial brain switched off speakers / a light on 4 of 8 voice "tell me a fun fact" turns with thinking off; thinking on hid it, but that is model behaviour, not a control, and does nothing against injected content. So `unified_loop.run_unified_tool_loop` (buffered and streaming) runs `check_call` before each model `home_assistant` call; `ha_guard.check_ha_call` still runs behind it, unchanged. **Not gated:** internal callers (routine `ha_action`, wind-down scenes, focus audio, announcements), the HA fast path / NLP path, `POST /api/ha/command`. A test asserts only the chat loop imports the gate.
+
+Judged once per turn, on the first `home_assistant` call, against the user's latest message (photo-analysis text stripped, first 4000 chars) and the assistant message right before it — never the loop's own injected follow-up turns.
+
+| Counts as asking (`via`) | Rule |
+|---|---|
+| `verb` | Control verb phrase ("turn/switch … on/off", "turn it up", dim, brighten, mute, pause, play, "set … to 70" — not reminder/timer/alarm, "make them blue", lock — not "lock in"/"lock screen", "close it"), or an action verb governing a device word/name ("stop the music", "close the blinds") |
+| `device_word` | Device word (light, fan, speaker, music, TV, thermostat, heat, AC, blinds, volume, …) with a cue right after ("lights off", "music please"), a request phrase ("I want", "let's", "how about", "too hot"), a number ("to 30", "50%"), or in a message of ≤ 3 words ("the fan"). "Tell me a fun fact about music" is not a request |
+| `name` | HA area name or multi-word entity display name / object id from the controllable listing (denied + device-setting entities excluded), with the same cues; no short-message pass; single-word entity names never count (scenes are called "Relax", "Read") |
+| `short` | Whole-message bare command: "off", "back on", "stop", "pause", "next", "68 degrees" |
+| `confirmed` | Yes-path (below) |
+
+How-to clauses are not read ("how do I turn off the lights?": the rest of the sentence after "how do I" / "how to" / "tips for" … is dropped). Indirect requests ("I'm cold") are refused — the model asks first.
+
+**Strict mode.** Once someone else's text is in play this turn — a tool outside `ha_intent.TRUSTED_RESULT_TOOLS` has run (allow-list of tools whose results hold only orchestrator text or the user's own words; a new tool starts out untrusted), or the user's message carries a photo — only an explicit request counts: an action verb governing a device word or name, or a confirmed yes. "Check my email and turn off the lights" still works; "check my email and dim it" or "open the email about the heating bill" does not. Calls in the same round as the untrusted tool are judged before its result exists.
+
+**Yes-path.** The whole message is an affirmative ("yes", "ok", "yes please", "go ahead"), contains no negation, and the assistant message right before ENDS with its own question or offer about a device ("Want me to turn off the porch light?"). When finding that last sentence, quoted spans, readout lines (bullets, numbers, letters `a)`, table rows, lines starting with a time), how-to clauses and closing pleasantries are dropped. A spoken announcement — dashboard label `[Jess announced - …]` or text matching the last 50 announcement-history rows — is never Jess's question (calendar titles are read out verbatim; history unreadable → no yes-path). Needs the client to send the previous assistant turn (dashboard and Telegram do).
+
+**Blocked call.** Not executed (never reaches `execute_tool`, so `bgw_tool_calls_total{tool="home_assistant"}` counts real executions), not terminal. Tool result:
+
+```json
+{"executed": false, "reason": "the user didn't ask for a device change — ask before acting", "note": "Nothing was changed. Don't call home_assistant again this turn. If a device change would help, ask first and name the device and the change, e.g. 'Want me to turn off the living room speaker?'"}
+```
+
+The XML-fallback and terminal-tool follow-up instructions say calls marked `executed: false` did not happen. After the second round in which every call was a refused device call, the loop makes one tool-less final model call (shared `_forced_final`, also used for the all-repeats case; voice turns keep their voice settings) instead of burning rounds into the max-rounds apology.
+
+**Modes — `HA_INTENT_GATE`:** `enforce` (default; anything unrecognised → `enforce`) | `shadow` (count + INFO "Would block unrequested home_assistant call (shadow mode, …)", call executes) | `off`. Read at process start (recreate the orchestrator to change).
+
+**Observability.** `bgw_ha_unrequested_blocked_total{domain}` (listed domain or `other`; enforce only). `bgw_ha_intent_decision_total{result,via}`: `allowed` × `verb|device_word|name|short|confirmed`; `blocked|shadow` × `none|untrusted_content` (`untrusted_content` = the message showed intent but not explicitly enough for strict mode). `allowed{via=confirmed}` rising alongside blocks = real requests refused, the user had to say yes. Log `[UNIFIED] Blocked unrequested home_assistant call (reason=none|untrusted_content): domain=… entity=… service=…` — WARNING for the turn's first refusal, INFO after; entity only if HA knows it and service only if allow-listed (else `-`); never user text. Grafana Tools-row panel "HA: Unrequested calls blocked (/1h)"; alert `HAUnrequestedCallsBlocked` (≥ 3 in 6h, info, `pushover-quiet`).
+
+**Known limits** (errs towards letting a real request through — a miss costs one question, and the guard behind it still refuses everything risky):
+
+- Turn-level, not entity-level: "turn off the lights" lets the model touch any listed device that turn.
+- Negation is not parsed: "don't turn off the lights" counts as asking.
+- Text the user pastes into their own message counts as theirs.
+- Ordinary sentences still pass now and then ("I put on some weight", "the heat is too high today").
+- With real streaming, words the model wrote before a blocked call ("turning it off…") already reached the screen.
+- Memory / RAG context in the system prompt does not make a turn strict (it is on every turn); a planted memory still needs the user's own words to show device intent.
+- The yes-path trusts the model's own closing question: content the model rephrases into its last sentence (a calendar title read out inline, not as a list line) can still be what a "yes" answers.
+- Only `home_assistant` is gated. Other model-steerable device-affecting tools are not: `helios_power` sleep, `start_focus` speaker audio, `start_routine` steps with `ha_action`, `sleep_mode`. `ha_guard` has no bounds on climate setpoints.
 
 ### search_memory
 ```json

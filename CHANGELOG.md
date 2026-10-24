@@ -4,6 +4,33 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — "Did the user ask?" gate on chat `home_assistant` calls (2026-10-24)
+
+On 2026-10-24 a trial brain switched off speakers / a light on 4 of 8 voice "tell me a fun fact" turns with thinking off. Thinking on hid it, but that is model behaviour, not a control, and does nothing against prompt injection.
+
+### Security
+
+- New `orchestrator/ha_intent.py`: `unified_loop` checks every model `home_assistant` call against the user's latest message (and, for a bare "yes", the assistant's previous message) before it runs. Unrequested calls are not executed; the model gets `{"executed": false, …}` telling it to ask, naming the device. Strict mode after a tool outside `TRUSTED_RESULT_TOOLS` ran or on a photo turn (only an action verb governing a device word/name, or a confirmed yes). Announcements, quoted spans and readout lines never count as Jess's question. After the second all-refused round the loop forces a tool-less final reply. `ha_guard.check_ha_call` unchanged behind it.
+- Scope: chat model only. Fast path / NLP, `POST /api/ha/command` and internal callers (routines, wind-down, focus audio, announcements) are not gated.
+
+### Added
+
+- `HA_INTENT_GATE` = `enforce` (default; unrecognised → enforce) | `shadow` | `off`, read at process start.
+- Metrics `bgw_ha_unrequested_blocked_total{domain}`, `bgw_ha_intent_decision_total{result,via}`; WARNING `[UNIFIED] Blocked unrequested home_assistant call (reason=…)` for a turn's first refusal (ids only, no user text).
+- Grafana Tools-row panel "HA: Unrequested calls blocked (/1h)"; alert `HAUnrequestedCallsBlocked` (≥ 3 in 6h, info, `pushover-quiet`).
+- Tests: `orchestrator/tests/test_ha_intent_gate.py`, `test_ha_intent_internals.py`.
+
+### Changed
+
+- `unified_loop`: the all-repeats forced final reply now shares `_forced_final` and keeps voice settings on voice turns; XML-fallback / terminal-tool follow-up instructions say `executed: false` calls did not happen.
+
+### Known gaps
+
+- Detector limits (turn-level not entity-level, negation not parsed, pasted text counts as the user's, streamed words before a blocked call already shown): `TECHNICAL_REFERENCE.md` → home_assistant → "Did the user ask?" gate.
+- Not gated: `helios_power` sleep, `start_focus` speaker audio, `start_routine` `ha_action` steps, `sleep_mode`. `ha_guard` has no bounds on climate setpoints.
+
+---
+
 ## [Unreleased] — Qwen3.8-Flash-Next brain cutover + `VOICE_THINKING_ENABLED` (2026-10-24)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) are unchanged. Trial, measurements and known limits: `docs/internal/FLASH_NEXT_TRIAL.md`.

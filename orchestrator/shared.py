@@ -150,6 +150,7 @@ def _resolve_api_key(value: str) -> str:
 HA_URL = settings.ha_url
 HA_TOKEN = settings.ha_token
 HA_TOOL_DENY_ENTITIES = settings.ha_tool_deny_entities
+HA_INTENT_GATE = settings.ha_intent_gate
 HELIOS_PLUG_ENTITY = settings.helios_plug_entity
 ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 

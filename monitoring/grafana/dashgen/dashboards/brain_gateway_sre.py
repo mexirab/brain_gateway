@@ -726,6 +726,28 @@ def build() -> dict:
             "chat and the fast path can't change these; the dashboard can. A burst on path=tool can mean a "
             "prompt-injection attempt.",
         ),
+        timeseries(
+            "HA: Unrequested calls blocked (/1h)",
+            [
+                ("sum by (domain) (increase(bgw_ha_unrequested_blocked_total[1h]))", "blocked {{domain}}"),
+                (
+                    'sum(increase(bgw_ha_intent_decision_total{result="allowed",via="confirmed"}[1h])) or vector(0)',
+                    "allowed after a yes",
+                ),
+                ('sum(increase(bgw_tool_calls_total{tool="home_assistant"}[1h])) or vector(0)', "executed"),
+                (
+                    'sum(increase(bgw_ha_intent_decision_total{result="shadow"}[1h])) or vector(0)',
+                    "would block (shadow mode)",
+                ),
+            ],
+            unit="none",
+            description="Chat-model home_assistant calls refused by the did-the-user-ask gate (ha_intent): the "
+            "user's message showed no device intent, so nothing ran and the model was told to ask. Blocked calls "
+            "never reach execute_tool, so 'executed' counts real executions. A rise after a brain change = the "
+            "model acts unasked; a rise after an ha_intent change = real requests refused ('allowed after a yes' "
+            "climbing too: the user had to confirm). A burst can mean injected content. With HA_INTENT_GATE=shadow "
+            "nothing is blocked; 'would block' shows what enforce would have refused.",
+        ),
         stat(
             "HA: Registry entities",
             "bgw_ha_registry_entities",

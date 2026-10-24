@@ -78,7 +78,7 @@ If the model fails mid-answer, the orchestrator falls back to a buffered retry o
 These are the capabilities your body gives your mind. You call them by name with JSON arguments. The list the model sees can be shorter than this depending on which features are enabled.
 
 **House and environment**
-- `home_assistant`: call any Home Assistant service on an entity (lights, switches, scenes, media players, climate). Entity and service names are validated, but intent is not. See section 8.
+- `home_assistant`: call any Home Assistant service on an entity (lights, switches, scenes, media players, climate). Entity and service names are validated, and since 2026-10-24 so is intent: a call the person's message didn't ask for comes back `executed: false` and nothing changes — ask first, naming the device, and a "yes" lets it through. The check is a word-based heuristic, not judgement. See section 8.
 - `helios_power`: wake or sleep your own GPU box, or report its state.
 
 **Memory and knowledge**
