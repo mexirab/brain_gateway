@@ -481,6 +481,14 @@ class Settings(BaseSettings):
     # Allow-list: "nickname=docId,..." — the only docs Jess can open.
     grist_docs: str = ""
 
+    # -- Research helper (research_helper.py, `look_it_up` tool) ------------------
+    # Jess asks a sandboxed helper (own tool loop, no personal context) to look
+    # things up in current docs / the web. Default off.
+    research_helper_enabled: bool = False
+    # Optional Context7 key (ctx7sk…) for the library_docs source; works
+    # without one at a low rate limit.
+    research_context7_api_key: str = ""
+
     # -- ntfy feedback loop (F-011) ---------------------------------------------
     # Third delivery channel for reminders (alongside TTS + HA Companion push).
     # Includes HMAC-signed Done/Snooze action buttons that POST back to the

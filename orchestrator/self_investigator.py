@@ -559,6 +559,10 @@ async def _slot_busy() -> bool:
             return True
     except Exception:
         pass
+    from orchestrator.research_helper import lookup_active
+
+    if lookup_active():  # between a lookup's rounds llama-server looks idle
+        return True
     client = shared._http
     if client is None:
         return False

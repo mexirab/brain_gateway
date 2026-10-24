@@ -465,6 +465,9 @@ PAPERLESS_ENABLED = settings.paperless_enabled
 # Grist spreadsheet tool — config.py auto-disables it on incomplete config;
 # tool_definitions hides `spreadsheet` from the schema when it is off.
 GRIST_ENABLED = settings.grist_enabled
+# Research helper (`look_it_up`) — tool_definitions hides it when off.
+RESEARCH_HELPER_ENABLED = settings.research_helper_enabled
+RESEARCH_CONTEXT7_API_KEY = settings.research_context7_api_key
 
 # ---------------------------------------------------------------------------
 # Expert Model (Qwen3-32B Thinking on Saturn 3090)

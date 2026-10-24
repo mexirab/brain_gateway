@@ -388,6 +388,15 @@ Jess's access to the self-hosted Grist server (`grist/` compose project; runbook
 | `GRIST_API_KEY` | (empty) | API key of the least-privilege `jess@grist.invalid` Grist user (Editor on the allow-listed docs only) — never the owner's or admin's key. See `docs/SPREADSHEETS.md` → Deploy step 7. |
 | `GRIST_DOCS` | (empty) | Allow-list `nickname=docId,...` (docId from the doc URL). Nicknames: lower-case `[a-z0-9_-]`, ≤40 chars; doc ids 10–64 alphanumerics; malformed entries dropped. The only docs Jess can open. Keep medical/financial sheets off it (contents reach chat history + training corpus). |
 
+## Research helper (`look_it_up` tool)
+
+Sandboxed research helper (`orchestrator/research_helper.py`; behaviour in `TECHNICAL_REFERENCE.md` → Research Helper). Read at process start — after changing: `docker compose up -d --force-recreate orchestrator`. No URL settings: SearXNG comes from the existing web-search config, Context7's endpoint is fixed in code.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RESEARCH_HELPER_ENABLED` | `false` | Enable `look_it_up`. When off it is removed from the LLM schema (`RESEARCH_TOOL_NAMES`, part of the tool-cache key), the `_RESEARCH_GUIDANCE` line and the `look_it_up` mentions in IMPORTANT RULES are dropped from the prompt, and the handler (still registered) answers "turned off" (`result=disabled`). Exposed as `shared.RESEARCH_HELPER_ENABLED`. Turning it on sends technical questions off the box — see `docs/PRIVACY.md`. |
+| `RESEARCH_CONTEXT7_API_KEY` | (empty) | Optional Context7 key (`ctx7sk…`) for the `library_docs` source, sent as a bearer header to `context7.com` only. Works without one at a low rate limit (`bgw_research_source_calls_total{tool="library_docs",result="rate_limited"}`). Exposed as `shared.RESEARCH_CONTEXT7_API_KEY`. |
+
 ## Ntfy Feedback Loop (F-011)
 
 Third reminder delivery channel with Done/Snooze action buttons. Callbacks hit HMAC-signed URLs (`/api/reminder/ack/{id}`, `/api/reminder/snooze/{id}`). If `NTFY_HMAC_SECRET` is empty, a `model_validator` in `config.py` auto-disables the channel regardless of `NTFY_ENABLED` — reminders continue via TTS + HA Companion push.
