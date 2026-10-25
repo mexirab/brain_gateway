@@ -114,9 +114,11 @@ def _network_keys(svc: dict) -> list[str]:
 
 
 def _real_net_name(compose: dict, key: str) -> str:
-    """Docker name of a compose network key: its `name:`, else the key (projects prefix it)."""
+    """Docker name of a compose network key: its `name:` (or the old `external: {name: ...}`),
+    else the key (unprefixed when external, project-prefixed otherwise)."""
     decl = (compose.get("networks") or {}).get(key) or {}
-    return str(decl.get("name") or key)
+    ext = decl.get("external")
+    return str(decl.get("name") or (ext.get("name") if isinstance(ext, dict) else None) or key)
 
 
 def _repo_compose_files() -> list[Path]:
@@ -277,7 +279,7 @@ def test_searxng_runs_unprivileged():
     )
 
 
-# -- 6. probe network ----------------------------------------------------------
+# -- 6. networks ---------------------------------------------------------------
 
 
 @_needs(_COMPOSE)
@@ -301,8 +303,9 @@ def test_searxng_net_is_a_fixed_name_network_with_egress():
     top = (compose.get("networks") or {}).get(_SEARXNG_NET)
     assert isinstance(top, dict), f"docker-compose.yml has no top-level networks.{_SEARXNG_NET}"
     assert top.get("name") == _SEARXNG_NET_NAME, (
-        f"networks.{_SEARXNG_NET}.name is {top.get('name')!r}, expected {_SEARXNG_NET_NAME!r} (fixed, like "
-        "grist-net, so the docs and CI can name it)"
+        f"networks.{_SEARXNG_NET}.name is {top.get('name')!r}, expected {_SEARXNG_NET_NAME!r}: a stable name "
+        "(the docs and runbooks use it, e.g. `docker network connect`) that the cross-project guard below can "
+        "look for"
     )
     assert not top.get("internal"), (
         f"networks.{_SEARXNG_NET} is internal. It is searxng's only non-internal network, so internal: true "
@@ -317,33 +320,54 @@ def test_searxng_net_is_a_fixed_name_network_with_egress():
 @_needs(_COMPOSE)
 def test_only_orchestrator_and_searxng_share_searxng_net():
     compose = _load(_COMPOSE)
+    services = {n: s for n, s in (compose.get("services") or {}).items() if isinstance(s, dict)}
     members = sorted(
         name
-        for name, svc in (compose.get("services") or {}).items()
-        if isinstance(svc, dict)
-        and any(_real_net_name(compose, k) == _SEARXNG_NET_NAME or k == _SEARXNG_NET for k in _network_keys(svc))
+        for name, svc in services.items()
+        if any(_real_net_name(compose, k) == _SEARXNG_NET_NAME or k == _SEARXNG_NET for k in _network_keys(svc))
     )
     assert members == ["orchestrator", "searxng"], (
         f"services on {_SEARXNG_NET}: {members!r}, expected exactly ['orchestrator', 'searxng']. The "
         "orchestrator must be there (SEARXNG_URL=http://searxng:8080 resolves only on a shared network); "
         "nothing else may be, or a compromised searxng gets a new neighbour to attack."
     )
+    # A sidecar in either member's network namespace is an even closer neighbour.
+    member_ids = {"service:orchestrator", "service:searxng"} | {
+        f"container:{services[m].get('container_name') or m}" for m in members
+    }
+    sidecars = sorted(
+        f"{name} (network_mode {svc['network_mode']!r})"
+        for name, svc in services.items()
+        if str(svc.get("network_mode") or "") in member_ids
+    )
+    assert not sidecars, (
+        f"services sharing the orchestrator's or searxng's network namespace: {sidecars!r}. That puts them on "
+        f"{_SEARXNG_NET} (and reachable from searxng) without listing it."
+    )
 
 
 @_needs(_COMPOSE)
 def test_no_other_compose_project_joins_searxng_net():
+    files = _repo_compose_files()
+    assert _MON_COMPOSE in files, (
+        f"the compose-file walk didn't find {_rel(_MON_COMPOSE)}; fix _repo_compose_files before trusting this guard"
+    )
     joined = []
-    for path in _repo_compose_files():
+    for path in files:
         if path == _COMPOSE:
             continue
+        text = path.read_text(encoding="utf-8")
         try:
-            compose = yaml.safe_load(path.read_text(encoding="utf-8"))
+            compose = yaml.safe_load(text)
         except yaml.YAMLError:
-            continue  # not this guard's file to police
+            # e.g. compose's own !reset / !override tags: fall back to the name appearing at all.
+            if _SEARXNG_NET_NAME in text:
+                joined.append(f"{_rel(path)} (unparseable; mentions {_SEARXNG_NET_NAME})")
+            continue
         if not isinstance(compose, dict):
             continue
-        for key, decl in (compose.get("networks") or {}).items():
-            if str((decl or {}).get("name") or "") == _SEARXNG_NET_NAME:
+        for key in compose.get("networks") or {}:
+            if _real_net_name(compose, key) == _SEARXNG_NET_NAME:
                 joined.append(f"{_rel(path)} networks.{key}")
     assert not joined, (
         f"{_SEARXNG_NET_NAME} is declared outside docker-compose.yml: {joined!r}. Only the orchestrator and "
@@ -391,7 +415,8 @@ def test_blackbox_on_searxng_probe_net_and_off_gateway_net():
     on_gateway = [k for k in keys if k == "gateway-net" or _real_net_name(mon, k) == _GATEWAY_NET_NAME]
     assert not on_gateway, (
         f"blackbox-exporter is on gateway-net (via {on_gateway!r}). Anything on its networks can drive /probe, "
-        "and gateway-net holds the orchestrator, frontend and searxng. Use a dedicated probe network."
+        "and gateway-net holds the orchestrator, frontend, redis, Loki, Actual and Radicale. Use a dedicated probe "
+        "network."
     )
 
     top = top_nets.get(_PROBE_NET)

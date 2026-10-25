@@ -347,6 +347,8 @@ services:
     # reach Loki (no auth: read every log, push lines the self-audit LLM
     # reads), redis, the frontend, Actual and Radicale. searxng-net holds only
     # the orchestrator (its one client) and is its route to the internet.
+    # Like any NAT'd bridge it can still reach the LAN and Jupiter's
+    # non-loopback ports (HA :8123, orchestrator :8888, Helios :8080).
     networks:
       - searxng-net
       - searxng-probe-net

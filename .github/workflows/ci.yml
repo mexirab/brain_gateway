@@ -245,6 +245,19 @@ jobs:
               docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' searxng || true
               exit 1
             fi
+            # The check above goes through the host port. Jess calls
+            # SEARXNG_URL over searxng-net, which only the orchestrator shares,
+            # and SearXNGDown probes over searxng-probe-net, so neither would
+            # notice the orchestrator missing that network. /healthz only.
+            orch_ok=false
+            for i in $(seq 1 10); do
+              if docker exec brain-orchestrator python -c "import os, httpx; httpx.get(os.environ['SEARXNG_URL'].rstrip('/') + '/healthz', timeout=5).raise_for_status()" >/dev/null 2>&1; then orch_ok=true; break; fi
+              sleep 3
+            done
+            if [ "$orch_ok" != true ]; then
+              echo "::error::brain-orchestrator can't reach SearXNG at \$SEARXNG_URL (web search is down). Is it on gateway_nerves_searxng-net? docker inspect -f '{{json .NetworkSettings.Networks}}' brain-orchestrator; fix with: docker compose up -d orchestrator"
+              exit 1
+            fi
             echo "::endgroup::"
           fi
 
