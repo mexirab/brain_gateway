@@ -161,6 +161,25 @@ def one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _neutralize_event_text(ev: CalendarEvent) -> None:
+    """Rewrite chat-template / tool-call markup in an event's text, in place.
+
+    Titles, locations and descriptions come from outside invites (work
+    Exchange, Google, invites accepted into CalDAV). The brain is protected
+    at its two inputs (tool results, client chat history), but spoken
+    announcements send titles raw to the TTS model and future readers may
+    send them to a model directly, so every reader gets plain text from here
+    (2026-10-25 review). `<|im_start|>` / `<tool_call>` never occur in real
+    titles, so nothing visible changes.
+    """
+    from orchestrator.unified_loop import _neutralize_control_markup  # local: unified_loop is a heavy import
+
+    for field in ("title", "location", "description", "calendar_name"):
+        value = getattr(ev, field)
+        if isinstance(value, str) and "<" in value:
+            setattr(ev, field, _neutralize_control_markup(value))
+
+
 def phone_record_to_event(ev: dict, tz: ZoneInfo, default_source: str) -> CalendarEvent:
     """One pushed record → CalendarEvent. Raises ValueError/TypeError if unusable."""
     if not isinstance(ev, dict):
@@ -350,6 +369,7 @@ async def get_events(start: datetime, end: datetime, timeout: float = SOURCE_TIM
 
     best: dict[tuple, CalendarEvent] = {}
     for ev in collected:
+        _neutralize_event_text(ev)
         key = _dedup_key(ev)
         cur = best.get(key)
         if cur is None or _PRIORITY.get(ev.source, 9) < _PRIORITY.get(cur.source, 9):

@@ -372,6 +372,40 @@ def build() -> dict:
     ]
     row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8, 8])
     panels.extend(row)
+    # Prompt-injection defences firing: <tool_call>/<think>/<|im_start|> markup
+    # rewritten as quoted text before it reached the brain. Any non-zero is
+    # worth a look (live baseline 0); the content was defused, so no alert.
+    row, y = grid_row(
+        [
+            timeseries(
+                "Control Markup Neutralized (tool results + client chat)",
+                [
+                    (
+                        "sum by (tool) (increase(bgw_tool_result_markup_neutralized_total[1h]))",
+                        "tool:{{tool}}",
+                    ),
+                    (
+                        "sum by (role, position) (increase(bgw_client_markup_neutralized_total[1h]))",
+                        "client:{{role}}/{{position}}",
+                    ),
+                ],
+                unit="short",
+                stack=True,
+                description=(
+                    "Tool-call / chat-template markup rewritten as quoted text before it "
+                    "reached the brain. tool:* = a tool result (web page, email, calendar, "
+                    "photo description...). client:* = a chat turn the client sent: "
+                    "position=latest is the new turn (each event once); history turns are "
+                    "resent and counted again on every chat turn. client:assistant means "
+                    "text Jess didn't write — usually an announcement quoting an outside "
+                    "calendar title. Pasted code can trip it too."
+                ),
+            ),
+        ],
+        y,
+        heights=[7],
+    )
+    panels.extend(row)
 
     # -------------------------------------------------------- Brain Server (llama-server)
     # Scraped straight from llama-server's /metrics (Prometheus job
