@@ -130,6 +130,59 @@ def _repo_compose_files() -> list[Path]:
     return sorted(found)
 
 
+def _compose_docs() -> list[tuple[Path, dict | None, str]]:
+    """(path, parsed mapping or None, raw text) for every repo compose file. None when plain YAML can't
+    load it (e.g. compose's own !reset / !override tags); callers then fall back to the raw text."""
+    files = _repo_compose_files()
+    assert _MON_COMPOSE in files, (
+        f"the compose-file walk didn't find {_rel(_MON_COMPOSE)}; fix _repo_compose_files before trusting this guard"
+    )
+    out = []
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError:
+            data = None
+        out.append((path, data if isinstance(data, dict) else None, text))
+    return out
+
+
+def _network_members(key: str, fixed_name: str) -> tuple[set[str], list[str]]:
+    """Who is on a fixed-name network, across every repo compose file, as "<file>:<service>".
+
+    A service counts when one of its networks resolves to `fixed_name` (or, in the main compose, is `key`),
+    and so does a sidecar in a member's namespace (network_mode service:<member> in the same file, or
+    container:<member's container> in any file). Also returns files that don't parse but mention the name."""
+    members: set[str] = set()
+    unparsed: list[str] = []
+    containers: set[str] = set()
+    docs = _compose_docs()
+    for path, compose, text in docs:
+        if compose is None:
+            if fixed_name in text:
+                unparsed.append(_rel(path))
+            continue
+        services = {n: s for n, s in (compose.get("services") or {}).items() if isinstance(s, dict)}
+        on = {
+            n
+            for n, svc in services.items()
+            if any(
+                _real_net_name(compose, k) == fixed_name or (path == _COMPOSE and k == key) for k in _network_keys(svc)
+            )
+        }
+        members |= {f"{_rel(path)}:{n}" for n in on}
+        containers |= {str(services[n].get("container_name") or n) for n in on}
+        modes = {f"service:{n}" for n in on}
+        members |= {f"{_rel(path)}:{n}" for n, svc in services.items() if str(svc.get("network_mode") or "") in modes}
+    modes = {f"container:{c}" for c in containers}
+    for path, compose, _ in docs:
+        for n, svc in ((compose or {}).get("services") or {}).items():
+            if isinstance(svc, dict) and str(svc.get("network_mode") or "") in modes:
+                members.add(f"{_rel(path)}:{n}")
+    return members, unparsed
+
+
 def _scrape_jobs() -> list[dict]:
     jobs = _load(_PROM_TEMPLATE).get("scrape_configs") or []
     assert jobs, f"{_rel(_PROM_TEMPLATE)} has no scrape_configs"
@@ -319,59 +372,53 @@ def test_searxng_net_is_a_fixed_name_network_with_egress():
 
 @_needs(_COMPOSE)
 def test_only_orchestrator_and_searxng_share_searxng_net():
-    compose = _load(_COMPOSE)
-    services = {n: s for n, s in (compose.get("services") or {}).items() if isinstance(s, dict)}
-    members = sorted(
-        name
-        for name, svc in services.items()
-        if any(_real_net_name(compose, k) == _SEARXNG_NET_NAME or k == _SEARXNG_NET for k in _network_keys(svc))
-    )
-    assert members == ["orchestrator", "searxng"], (
-        f"services on {_SEARXNG_NET}: {members!r}, expected exactly ['orchestrator', 'searxng']. The "
-        "orchestrator must be there (SEARXNG_URL=http://searxng:8080 resolves only on a shared network); "
-        "nothing else may be, or a compromised searxng gets a new neighbour to attack."
-    )
-    # A sidecar in either member's network namespace is an even closer neighbour.
-    member_ids = {"service:orchestrator", "service:searxng"} | {
-        f"container:{services[m].get('container_name') or m}" for m in members
-    }
-    sidecars = sorted(
-        f"{name} (network_mode {svc['network_mode']!r})"
-        for name, svc in services.items()
-        if str(svc.get("network_mode") or "") in member_ids
-    )
-    assert not sidecars, (
-        f"services sharing the orchestrator's or searxng's network namespace: {sidecars!r}. That puts them on "
-        f"{_SEARXNG_NET} (and reachable from searxng) without listing it."
+    members, unparsed = _network_members(_SEARXNG_NET, _SEARXNG_NET_NAME)
+    expected = {"docker-compose.yml:orchestrator", "docker-compose.yml:searxng"}
+    assert members == expected and not unparsed, (
+        f"on {_SEARXNG_NET_NAME}: {sorted(members)!r} (plus unparseable files naming it: {unparsed!r}); expected "
+        f"exactly {sorted(expected)!r}. The orchestrator must be there (SEARXNG_URL=http://searxng:8080 resolves "
+        "only on a shared network); nothing else may be, in any compose file or as a network_mode sidecar, or a "
+        "compromised searxng gets a new neighbour to attack."
     )
 
 
 @_needs(_COMPOSE)
-def test_no_other_compose_project_joins_searxng_net():
-    files = _repo_compose_files()
-    assert _MON_COMPOSE in files, (
-        f"the compose-file walk didn't find {_rel(_MON_COMPOSE)}; fix _repo_compose_files before trusting this guard"
-    )
-    joined = []
-    for path in files:
-        if path == _COMPOSE:
-            continue
-        text = path.read_text(encoding="utf-8")
-        try:
-            compose = yaml.safe_load(text)
-        except yaml.YAMLError:
-            # e.g. compose's own !reset / !override tags: fall back to the name appearing at all.
-            if _SEARXNG_NET_NAME in text:
-                joined.append(f"{_rel(path)} (unparseable; mentions {_SEARXNG_NET_NAME})")
-            continue
-        if not isinstance(compose, dict):
-            continue
-        for key in compose.get("networks") or {}:
-            if _real_net_name(compose, key) == _SEARXNG_NET_NAME:
-                joined.append(f"{_rel(path)} networks.{key}")
-    assert not joined, (
-        f"{_SEARXNG_NET_NAME} is declared outside docker-compose.yml: {joined!r}. Only the orchestrator and "
+def test_no_other_compose_project_declares_searxng_net():
+    declared = [
+        f"{_rel(path)} networks.{key}"
+        for path, compose, _ in _compose_docs()
+        if path != _COMPOSE and compose is not None
+        for key in compose.get("networks") or {}
+        if _real_net_name(compose, key) == _SEARXNG_NET_NAME
+    ]
+    assert not declared, (
+        f"{_SEARXNG_NET_NAME} is declared outside docker-compose.yml: {declared!r}. Only the orchestrator and "
         "searxng may share it (a compromised searxng reaches everything on it)."
+    )
+
+
+@_needs(_COMPOSE, _MON_COMPOSE)
+def test_searxng_probe_net_holds_only_searxng_and_blackbox():
+    members, unparsed = _network_members(_PROBE_NET, _PROBE_NET_NAME)
+    expected = {"docker-compose.yml:searxng", "monitoring/docker-compose.yml:blackbox-exporter"}
+    assert members == expected and not unparsed, (
+        f"on {_PROBE_NET_NAME}: {sorted(members)!r} (plus unparseable files naming it: {unparsed!r}); expected "
+        f"exactly {sorted(expected)!r}. Internal or not, searxng reaches every member directly; keep Loki, "
+        "Prometheus and the orchestrator off it."
+    )
+
+
+@_needs(_COMPOSE)
+def test_searxng_networks_are_plain_ipv4_bridges():
+    top = _load(_COMPOSE).get("networks") or {}
+    bad = {}
+    for key in (_SEARXNG_NET, _PROBE_NET):
+        decl = top.get(key) or {}
+        if str(decl.get("driver") or "bridge") != "bridge" or decl.get("enable_ipv6"):
+            bad[key] = {"driver": decl.get("driver"), "enable_ipv6": decl.get("enable_ipv6")}
+    assert not bad, (
+        f"searxng's networks aren't plain IPv4 bridges: {bad!r}. macvlan/ipvlan give searxng its own LAN address "
+        "(:8080 reachable from the LAN, around the loopback publish); IPv6 adds a route nothing here filters."
     )
 
 
