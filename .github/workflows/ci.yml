@@ -203,6 +203,28 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # SearXNG mounts searxng/settings.yml as a single file (a git pull
+          # swaps its inode), so only a recreate applies a change. Runs before
+          # the monitoring step: it creates searxng-probe-net, which
+          # blackbox-exporter joins as external. A missing SEARXNG_SECRET in
+          # .env stops searxng, so check /healthz before going green.
+          if grep -qE "^searxng/|^docker-compose\.yml$" <<<"$CHANGED"; then
+            echo "::group::Recreating SearXNG"
+            docker compose up -d --force-recreate searxng
+            # `compose port` prints 127.0.0.1:<SEARXNG_PORT>; empty while the
+            # container is crash-looping. SearXNG logs upstream request URLs
+            # (search text in the query string) and this repo's CI logs are
+            # public: drop every query string.
+            searxng_ok=false
+            for i in $(seq 1 30); do
+              addr="$(docker compose port searxng 8080 2>/dev/null || true)"
+              if [ -n "$addr" ] && curl -sf "http://${addr}/healthz" >/dev/null; then searxng_ok=true; break; fi
+              sleep 2
+            done
+            [ "$searxng_ok" = true ] || { echo "SearXNG not up after 60s (is SEARXNG_SECRET set in .env?)"; docker logs --tail 30 searxng 2>&1 | sed -E 's/\?[^ "]*/?<redacted>/g'; exit 1; }
+            echo "::endgroup::"
+          fi
+
           # Grist (own compose project) mounts theme/dist/grist.css as a single
           # file — a git pull swaps its inode, so only a recreate applies a
           # theme change. `up -d` returns 0 even if Grist then fails to start,

@@ -294,19 +294,42 @@ services:
       - CRON=0 4 * * *
       - TZ=${TZ:-America/Chicago}
   searxng:
-    image: searxng/searxng:latest
+    # Digest-pinned (was :latest). Bump deliberately: orchestrator/web_search.py
+    # (_parse_unresponsive) reads the JSON `unresponsive_engines` field as
+    # [engine, message] pairs (searx/webutils.py get_json_response) — check the
+    # new image still emits that shape.
+    image: searxng/searxng:2026.8.17-374939b88@sha256:3aed6b4bfb4e6a2b3b94c890dafb3f35cb2588493b83818434aa260e8bdeb4d4
     container_name: searxng
     restart: unless-stopped
     logging: *default-logging
+    # The image runs as root; it parses untrusted upstream pages.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Loopback only: there is no auth and the limiter is off, and ufw is
+    # inactive on Jupiter, so a LAN/tailnet publish let any host burst searches
+    # through it and get the upstream engines suspended. Jess uses
+    # http://searxng:8080 over gateway-net; the browser UI goes through
+    # Tailscale Serve HTTPS (CLAUDE.md → Services); the blackbox probe uses
+    # searxng:8080 over searxng-probe-net.
     ports:
-      - "${SEARXNG_PORT:-8090}:8080"
+      - "127.0.0.1:${SEARXNG_PORT:-8090}:8080"
     volumes:
       - searxng-data:/etc/searxng
       - ${GATEWAY_ROOT_PATH:-.}/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8090}/
+      # server.secret_key: signs /image_proxy URLs (that route is live even
+      # with image_proxy: false) and keys the engine cache. Never commit it to
+      # searxng/settings.yml. Unset or empty falls back to the image's
+      # placeholder, which SearXNG refuses to start with, so a missing secret
+      # stops searxng (SearXNGDown) instead of breaking every compose command
+      # or running with an empty key.
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-ultrasecretkey}
     networks:
       - gateway-net
+      - searxng-probe-net
 
   # --------------------------------------------------------------------------
   # Model layer (compose profile: models)
@@ -576,6 +599,14 @@ networks:
   frontend-probe-net:
     name: gateway_nerves_frontend-probe-net
     driver: bridge
+  # Only searxng + blackbox-exporter, for the /healthz probe now that searxng
+  # publishes on loopback only. Same reasoning as frontend-probe-net (blackbox
+  # stays off gateway-net). Internal: no gateway, so searxng's upstream traffic
+  # keeps using gateway-net. Fixed name: monitoring joins it as external.
+  searxng-probe-net:
+    name: gateway_nerves_searxng-probe-net
+    driver: bridge
+    internal: true
   # Only the orchestrator + Grist (grist/docker-compose.yml joins it as
   # external). Grist trusts a forwarded login header that needs no secret, so it
   # must not sit on gateway-net, where a compromised frontend/searxng could send

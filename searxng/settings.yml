@@ -6,7 +6,11 @@ use_default_settings: true
 server:
   # Bind to all interfaces inside container
   bind_address: "0.0.0.0"
-  secret_key: "brain-gateway-searxng-key"
+  # secret_key is NOT set here (this repo is public): it comes from
+  # SEARXNG_SECRET in .env (docker-compose.yml). Without it SearXNG refuses to
+  # start.
+  # No limiter: only the orchestrator (gateway-net) and the loopback publish
+  # behind Tailscale Serve reach this instance.
   limiter: false
   image_proxy: false
 
