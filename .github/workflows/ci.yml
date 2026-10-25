@@ -203,25 +203,39 @@ jobs:
             echo "::endgroup::"
           fi
 
-          # SearXNG mounts searxng/settings.yml as a single file (a git pull
-          # swaps its inode), so only a recreate applies a change. Runs before
-          # the monitoring step: it creates searxng-probe-net, which
-          # blackbox-exporter joins as external. A missing SEARXNG_SECRET in
-          # .env stops searxng, so check /healthz before going green.
+          # Runs before the monitoring step: it creates searxng-probe-net,
+          # which blackbox-exporter joins as external. settings.yml is a
+          # single-file mount (a git pull swaps its inode), so a change there
+          # needs --force-recreate; for compose edits a plain `up` recreates
+          # only if searxng's own config changed (a recreate also resets
+          # SearXNG's engine suspensions). Without SEARXNG_SECRET in .env
+          # searxng won't start, so check that first and leave the running
+          # container alone. Never print its logs here: they carry upstream
+          # URLs with the search text, and this repo's CI logs are public.
           if grep -qE "^searxng/|^docker-compose\.yml$" <<<"$CHANGED"; then
-            echo "::group::Recreating SearXNG"
-            docker compose up -d --force-recreate searxng
+            echo "::group::Updating SearXNG"
+            if ! grep -qE '^SEARXNG_SECRET=[^[:space:]]{32,}$' .env; then
+              echo "::error::SEARXNG_SECRET missing from .env — SearXNG would refuse to start. Add one: python3 -c 'import secrets; print(\"SEARXNG_SECRET=\" + secrets.token_hex(32))' >> .env, then re-run this job."
+              exit 1
+            fi
+            if grep -qE "^searxng/" <<<"$CHANGED"; then
+              docker compose up -d --force-recreate searxng
+            else
+              docker compose up -d searxng
+            fi
             # `compose port` prints 127.0.0.1:<SEARXNG_PORT>; empty while the
-            # container is crash-looping. SearXNG logs upstream request URLs
-            # (search text in the query string) and this repo's CI logs are
-            # public: drop every query string.
+            # container is restarting.
             searxng_ok=false
             for i in $(seq 1 30); do
               addr="$(docker compose port searxng 8080 2>/dev/null || true)"
-              if [ -n "$addr" ] && curl -sf "http://${addr}/healthz" >/dev/null; then searxng_ok=true; break; fi
+              if [ -n "$addr" ] && curl -sf -m 5 "http://${addr}/healthz" >/dev/null; then searxng_ok=true; break; fi
               sleep 2
             done
-            [ "$searxng_ok" = true ] || { echo "SearXNG not up after 60s (is SEARXNG_SECRET set in .env?)"; docker logs --tail 30 searxng 2>&1 | sed -E 's/\?[^ "]*/?<redacted>/g'; exit 1; }
+            if [ "$searxng_ok" != true ]; then
+              echo "::error::SearXNG not up after 60s. Read 'docker logs searxng' on Jupiter."
+              docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' searxng || true
+              exit 1
+            fi
             echo "::endgroup::"
           fi
 

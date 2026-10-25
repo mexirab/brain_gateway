@@ -294,38 +294,53 @@ services:
       - CRON=0 4 * * *
       - TZ=${TZ:-America/Chicago}
   searxng:
-    # Digest-pinned (was :latest). Bump deliberately: orchestrator/web_search.py
-    # (_parse_unresponsive) reads the JSON `unresponsive_engines` field as
-    # [engine, message] pairs (searx/webutils.py get_json_response) — check the
-    # new image still emits that shape.
+    # Digest-pinned (was :latest). Bump deliberately, and check in the new image:
+    # orchestrator/web_search.py (_parse_unresponsive) reads the JSON
+    # `unresponsive_engines` field as [engine, message] pairs
+    # (searx/webutils.py get_json_response), and searx/webapp.py still refuses
+    # to start with secret_key 'ultrasecretkey' (see SEARXNG_SECRET below).
     image: searxng/searxng:2026.8.17-374939b88@sha256:3aed6b4bfb4e6a2b3b94c890dafb3f35cb2588493b83818434aa260e8bdeb4d4
     container_name: searxng
     restart: unless-stopped
     logging: *default-logging
-    # The image runs as root; it parses untrusted upstream pages.
+    # It parses untrusted upstream pages: non-root (the image's searxng user;
+    # its entrypoint then skips chown + update-ca-certificates), no caps,
+    # read-only rootfs (its caches live in /tmp), bounded memory/pids (it
+    # idles at ~130 MiB / ~14 pids).
+    user: "977:977"
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    mem_limit: 1g
+    pids_limit: 256
     # Loopback only: there is no auth and the limiter is off, and ufw is
-    # inactive on Jupiter, so a LAN/tailnet publish let any host burst searches
-    # through it and get the upstream engines suspended. Jess uses
-    # http://searxng:8080 over gateway-net; the browser UI goes through
-    # Tailscale Serve HTTPS (CLAUDE.md → Services); the blackbox probe uses
-    # searxng:8080 over searxng-probe-net.
+    # inactive on Jupiter, so the old all-interfaces publish let any LAN or
+    # tailnet host burst searches through it (and get the upstream engines
+    # suspended) and use /image_proxy. Jess uses http://searxng:8080 over
+    # gateway-net; the blackbox probe uses searxng:8080 over searxng-probe-net.
+    # The browser UI answers on Jupiter only. To open it from other devices:
+    # `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` — that
+    # puts it back on the tailnet, still without auth.
     ports:
       - "127.0.0.1:${SEARXNG_PORT:-8090}:8080"
     volumes:
       - searxng-data:/etc/searxng
       - ${GATEWAY_ROOT_PATH:-.}/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    # Don't pass SEARXNG_PORT in here: the entrypoint turns it into
+    # GRANIAN_PORT and the server would leave 8080.
     environment:
       - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8090}/
       # server.secret_key: signs /image_proxy URLs (that route is live even
       # with image_proxy: false) and keys the engine cache. Never commit it to
       # searxng/settings.yml. Unset or empty falls back to the image's
-      # placeholder, which SearXNG refuses to start with, so a missing secret
-      # stops searxng (SearXNGDown) instead of breaking every compose command
-      # or running with an empty key.
+      # placeholder, which SearXNG refuses to start with (unless debug is on —
+      # never set SEARXNG_DEBUG), so a missing secret stops searxng
+      # (SearXNGDown) instead of breaking every compose command or running with
+      # an empty key.
       - SEARXNG_SECRET=${SEARXNG_SECRET:-ultrasecretkey}
     networks:
       - gateway-net
