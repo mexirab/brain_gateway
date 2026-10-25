@@ -4,6 +4,38 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — SearXNG hardening (2026-10-25)
+
+Branch `fix/searxng-hardening`, stacked on the web search observability change (PR #145). Jess's web search path (`SEARXNG_URL=http://searxng:8080` over `gateway-net`) is unchanged.
+
+### Upgrade action (required)
+
+- Add `SEARXNG_SECRET` to `.env` **before** `searxng` is next recreated: `python3 -c 'import secrets; print("SEARXNG_SECRET=" + secrets.token_hex(32))' >> .env`, then `docker compose up -d searxng`. Without it SearXNG refuses to start (`server.secret_key is not changed`) and web search is down; nothing else is affected. The CI deploy fails before rebuilding anything when `searxng/` or `docker-compose.yml` changed and `.env` lacks it. The previously committed key was public (it signs `/image_proxy` URLs), so this also rotates it.
+
+### Security
+
+- `server.secret_key` removed from `searxng/settings.yml`; it now comes from `SEARXNG_SECRET` (compose `${SEARXNG_SECRET:-ultrasecretkey}` — unset/empty gives the placeholder SearXNG refuses, so a missing secret fails closed). `install.sh` and `scripts/byo-setup.sh` generate it. Never set `SEARXNG_DEBUG` (debug mode skips the refusal).
+- Host port published on `127.0.0.1:${SEARXNG_PORT:-8090}` only (was all interfaces, with no auth and the limiter off). The browser UI answers on the host only; `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` puts it back on the tailnet (still no auth) — not set up on the maintainer's Jupiter.
+- Image digest-pinned (`searxng/searxng:2026.8.17-374939b88`, was `:latest`). On a bump, re-check the `unresponsive_engines` JSON shape `web_search.py` parses and the placeholder-key refusal.
+- Container: user `977:977`, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs + 64 MB `/tmp` tmpfs, `mem_limit: 1g`, `pids_limit: 256`.
+- Blackbox modules `http_post_2xx` and `tcp_connect` removed (unused; any probe-network neighbour can call `/probe` with any module — POST could reach `prometheus:9090/-/quit`, tcp is a port scanner).
+
+### Monitoring
+
+- `SearXNGDown` probe target is now `http://searxng:8080/healthz` over the new `gateway_nerves_searxng-probe-net` (`internal: true`, created by the main compose; blackbox-exporter joins it as external — bring the main stack up first). `generate-configs.sh` no longer renders `SEARXNG_PORT`. The alert's runbook text covers the missing-secret log line and the probe-path debug.
+- SearXNG logs stay out of Loki (its warnings log upstream URLs carrying the search text); `promtail-config.yml` says so.
+
+### CI
+
+- New deploy step (after the frontend, before monitoring): `docker compose up -d searxng` (`--force-recreate` only when `searxng/` changed — `settings.yml` is a single-file mount; a recreate resets engine suspensions), waits ≤60 s for `/healthz`, prints container state only on failure (never its logs — CI logs are public).
+- `orchestrator/tests/test_searxng_hardening.py`: 14 static guards over the compose/monitoring YAML (skip without a full checkout).
+
+### Docs
+
+- `CLAUDE.md`, `monitoring/README.md`, `docs/ENV_VARS.md` (new Web search section), `docs/UPGRADE.md`, `docs/INSTALL.md`, `docs/BYO_MODEL.md`, `docs/TRY_IT_RENTED_GPU.md`, `docs/PRIVACY.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
 ## [Unreleased] — Qwen3.8-Flash-Next brain cutover + `VOICE_THINKING_ENABLED` (2026-10-24)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) are unchanged. Trial, measurements and known limits: `docs/internal/FLASH_NEXT_TRIAL.md`.
