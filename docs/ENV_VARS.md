@@ -218,7 +218,7 @@ Cutover = point `TTS_URL` at `http://<helios>:8004`. See `docs/VOICE_AND_TTS.md`
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `VISION_ENABLED` | `false` | Enable/disable image analysis feature |
+| `VISION_ENABLED` | `false` | Enable/disable image analysis feature. Off: chat images become a `[PHOTO N NOT ANALYZED]` note, never forwarded to the brain (`TECHNICAL_REFERENCE.md` → Vision) |
 | `VISION_MODEL_URL` | (empty) | Vision model endpoint, e.g. `http://vision.example.tld:8010/v1`. Helios deployment (since 2026-09-28): `http://10.0.0.195:8080/v1` — the multimodal Qwen3.8 primary brain serves vision, so vision needs Helios awake; previously Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080 (:8010; rollback lines in Jupiter `.env.bak-vision-saturn`). Required when `VISION_ENABLED=true`. |
 | `VISION_MODEL_NAME` | `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | Vision model identifier (the served model name; default matches the llama.cpp `--model` filename). Helios deployment: `qwen3.8-flash-next-q3kxl` since 2026-10-24 (the brain's `--alias`; vision runs on the primary — photo descriptions verified correct in the Flash-Next trial; was `qwen3.8-27b-turbo-q6k`). |
 | `VISION_MAX_IMAGE_SIZE` | `10485760` | Maximum image upload size in bytes (10 MB) |

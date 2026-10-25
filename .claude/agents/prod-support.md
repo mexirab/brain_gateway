@@ -291,9 +291,11 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### Vision
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_vision_requests_total` | Counter | status | Vision analysis requests (success/error/disabled) |
+| `bgw_vision_requests_total` | Counter | status | Vision analysis requests: success/empty/timeout/connect_error/http_error/error/disabled/skipped_unreachable/rejected_mime/rejected_empty/rejected_corrupt/rejected_size, plus chat-path `rejected_url` (image part that is a link, empty or not inline data — never fetched or forwarded), `skipped_cap` (past `MAX_IMAGES_PER_REQUEST`), `rejected_assistant` (image part in a client assistant turn, dropped). `disabled` also counts each chat image while `VISION_ENABLED=false`. Chat path counts per image part in the request, so resent history recounts the same image every turn |
 | `bgw_vision_request_duration_seconds` | Histogram | | Vision model latency |
 | `bgw_vision_image_size_bytes` | Histogram | | Image size distribution |
+
+Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or empty, not inline data — not fetched, not forwarded` (a client sent image links or empty image parts in a user turn; same SSRF vector as WARNING `[UNIFIED] Dropped N image part(s) from client assistant turns — not forwarded`); INFO `[VISION] Vision disabled — N image(s) not analyzed`; INFO `[VISION] Dropped N non-text, non-image content part(s)`. No image part ever reaches the brain; llama-server itself still fetches URLs for direct callers — `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`.
 
 ### Web Search
 | Metric | Type | Labels | Purpose |
