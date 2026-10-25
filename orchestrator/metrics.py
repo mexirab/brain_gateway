@@ -280,11 +280,18 @@ WIND_DOWN_SCENE_RESULT = Counter(
 # client; buffered fallbacks observe at their single final chunk, so a
 # streaming regression shows up as this histogram collapsing toward
 # REQUEST_LATENCY.
+# voice: "true" for streamed voice turns (dashboard mic / call mode — HA Assist
+# doesn't stream, so it never lands here). Measured from when the loop starts
+# to the first streamed text; the first spoken word also waits for a whole
+# sentence and TTS.
 CHAT_TTFT = Histogram(
     "bgw_chat_ttft_seconds",
     "Time to first streamed content chunk on /v1/chat/completions",
+    ["voice"],
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0],
 )
+for _voice in ("true", "false"):
+    CHAT_TTFT.labels(voice=_voice)
 
 # Streaming degradation events — the happy path (a clean streamed answer) is
 # NOT counted; the denominator is bgw_chat_ttft_seconds_count. Only the
@@ -833,9 +840,30 @@ PIHOLE_BLOCKING_TOGGLES = Counter(
 )
 
 # -- Web Search --------------------------------------------------------------
+# result: ok | no_results (every engine answered, nothing found) | empty (no
+# results and SearXNG reported engines suspended / timing out — the search is
+# broken) | error | timeout. voice: "true" for voice turns, which get a 5 s
+# deadline instead of 15 s. Pre-seeded so increase() sees the first hit
+# (WebSearchFailing counts empty|error|timeout).
 WEB_SEARCH_COUNT = Counter(
     "bgw_web_search_total",
-    "Web search queries",
+    "Web searches by outcome and channel",
+    ["result", "voice"],
+)
+for _result in ("ok", "no_results", "empty", "error", "timeout"):
+    for _voice in ("true", "false"):
+        WEB_SEARCH_COUNT.labels(result=_result, voice=_voice)
+
+# Engines SearXNG listed as unresponsive in a search response (once per engine
+# per search). engine = SearXNG engine name ("other" if it isn't label-safe, or
+# past 40 distinct names); reason: suspended | timeout | captcha |
+# access_denied | too_many_requests | other. Not pre-seeded (engine names are
+# only known at runtime), so increase() misses the first hit per engine after
+# a restart.
+WEB_SEARCH_ENGINE_UNRESPONSIVE = Counter(
+    "bgw_web_search_engine_unresponsive_total",
+    "SearXNG engines reported unresponsive during a web search",
+    ["engine", "reason"],
 )
 
 WEB_SEARCH_LATENCY = Histogram(
@@ -1171,12 +1199,22 @@ EXPERT_CIRCUIT_OPEN = Gauge(
 # upstream and (b) TTS synthesis + speaker playback downstream. It captures
 # the LLM + tool-loop portion — the part we control and the part that's been
 # the dominant cost on recent optimizations.
+# path: "streamed" (dashboard mic / call mode, real streaming) is observed
+# when the stream ends (cloud_brain _stream_loop_response) — the user hears
+# the first sentence long before that; a call hung up mid-reply records the
+# shorter time. Before 2026-10-25 streamed turns were recorded before the
+# loop ran, so slow tool turns (web_search) never showed. "buffered" (HA
+# Assist and any stream=false client, fast path, REAL_STREAMING_ENABLED=false)
+# is the whole wait in silence.
 VOICE_PIPELINE_LATENCY = Histogram(
     "bgw_voice_pipeline_seconds",
     "Text-in to text-out latency for voice-channel requests (LLM + tool loop). "
     "Excludes STT upstream and TTS/playback downstream.",
+    ["path"],
     buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 13.0, 17.0, 22.0, 30.0, 45.0, 60.0],
 )
+for _path in ("streamed", "buffered"):
+    VOICE_PIPELINE_LATENCY.labels(path=_path)
 
 # TTS synthesis latency — observed on the /v1/audio/speech proxy in
 # routes_vision. Captures time to fetch audio bytes from the TTS server at

@@ -613,6 +613,22 @@ daily:
 ```json
 {"query": "weather Houston today", "category": "general", "time_range": "day"}
 ```
+- `query` (string, required)
+- `category` (string, optional): `general` (default) or `news`. `time_range` (string, optional): `day`, `week`, `month`, `year`. `_reg_web_search` clamps both to these enums (anything else → `general` / no time filter), since the schema enums aren't enforced on the wire.
+- **Deadline:** whole-request (`asyncio.timeout`, connect + read — not httpx's per-phase timeout). Typed turns `web_search.DEFAULT_TIMEOUT_SECONDS` = 15 s; voice turns `VOICE_TIMEOUT_SECONDS` = 5 s, read from `shared.voice_turn_var` (a ContextVar set by `unified_loop._run_one` around each tool call — per task, so it reaches parallel calls and never leaks into a typed turn; other tools can read it to tighten budgets). Applies when `web_search` is in `VOICE_TOOL_NAMES`. SearXNG's own per-engine timeout is 3 s. A turn can search in several rounds, so the worst case is rounds × deadline. Known gap: `cloud_brain._unified_fallback` (health-check fallback) doesn't pass `is_voice`, so a voice turn there gets 15 s.
+- **Outcomes** (`SearchResponse.outcome` → `bgw_web_search_total{result}`):
+
+| result | Meaning | Model sees |
+|--------|---------|-----------|
+| `ok` | Results returned | `Web search results for '<query>':` + list |
+| `no_results` | Every engine answered, nothing found — not a failure | `No results found for '<query>'` |
+| `empty` | No results AND SearXNG listed `unresponsive_engines` (suspended, timeout, CAPTCHA…) — search is broken | `No results found for '<query>'` |
+| `timeout` | Deadline hit | `Web search failed: Search timed out after N seconds` |
+| `error` | HTTP error or other exception | `Web search failed: Search service error: <status>` / `Search service unavailable (<ExceptionClass>)` |
+
+- Failures are returned as text, so `bgw_tool_call_errors_total{tool="web_search"}` never rises — `bgw_web_search_total{result,voice}` is the only failure signal.
+- **Metrics:** `bgw_web_search_total{result,voice}` (pre-seeded at 0; `voice` = `true|false`); `bgw_web_search_engine_unresponsive_total{engine,reason}` from SearXNG's `unresponsive_engines` (`web_search._parse_unresponsive`; reason `suspended|timeout|captcha|access_denied|too_many_requests|other`; engine names regex-checked, ≤40 distinct, else `other`; not pre-seeded); `bgw_web_search_duration_seconds`; `bgw_web_search_results_count` (records 0 on no results). Alerts `WebSearchFailing`, `SearXNGDown` — see `monitoring/README.md`.
+- **Logs:** query length only, never query text. Exception class names only (httpx error text carries the URL with `?q=`). One line per failed search from `web_search.py` (WARNING on timeout, ERROR otherwise; the tool's own "Failed" line is INFO); `empty` logs a WARNING with engine=reason pairs; `no_results` logs at INFO.
 
 ### check_calendar
 ```json
