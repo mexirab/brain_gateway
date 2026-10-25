@@ -1096,8 +1096,13 @@ VISION_REQUEST_COUNT = Counter(
     # success | empty | timeout | connect_error | http_error | error | disabled | skipped_unreachable
     # | rejected_mime | rejected_empty | rejected_corrupt | rejected_size
     # | rejected_url (chat image that is a link / not inline data) | skipped_cap (past MAX_IMAGES_PER_REQUEST)
+    # | rejected_assistant (image part in a client assistant turn). The chat path counts per image
+    # part in the request, so a client that resends history counts the same old image every turn.
     ["status"],
 )
+# Pre-created: these are rare, and a series born at 1 reads as 0 in rate()/increase().
+for _status in ("disabled", "skipped_unreachable", "rejected_url", "rejected_assistant", "skipped_cap"):
+    VISION_REQUEST_COUNT.labels(status=_status)
 
 VISION_REQUEST_LATENCY = Histogram(
     "bgw_vision_request_duration_seconds",

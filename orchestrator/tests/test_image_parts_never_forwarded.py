@@ -32,13 +32,16 @@ from orchestrator.metrics import VISION_REQUEST_COUNT
 from orchestrator.prompt_builder import last_user_text
 from orchestrator.unified_loop import _last_user_text
 from orchestrator.vision_handler import (
+    MAX_IMAGES_PER_REQUEST,
     NOT_ANALYZED_DISABLED,
     NOT_ANALYZED_NOT_INLINE,
     NOT_ANALYZED_OVER_CAP,
     PHOTO_BLOCK_RE,
     _is_safe_image_url,
+    analyze_image,
     extract_images_from_messages,
     frame_photo_description,
+    is_vision_failure,
 )
 
 DATA_URI = "data:image/jpeg;base64," + "A" * 400
@@ -117,6 +120,11 @@ def test_inline_image_data_is_safe(url):
 @pytest.mark.parametrize("url", [*LINKS, "", "not base64!", None, 42, ["x"], {"url": "x"}])
 def test_links_and_junk_are_not_inline(url):
     assert not _is_safe_image_url(url)
+
+
+def test_extraction_records_the_part_each_image_came_from():
+    messages = [{"role": "user", "content": [_text("a"), _img(LINK), _img(DATA_URI)]}]
+    assert [(i["msg_index"], i["part_index"]) for i in extract_images_from_messages(messages)] == [(0, 2)]
 
 
 def test_extraction_skips_links_and_malformed_parts():
@@ -212,6 +220,27 @@ async def test_mixed_photo_and_link_keep_part_order(vision_on):
     )
 
 
+async def test_descriptions_land_on_their_own_photo_across_the_cap(vision_on):
+    a, b, c, d = (DATA_URI + t for t in "ABCD")
+    analyze = AsyncMock(side_effect=lambda url, *args, **kw: f"desc {url[-1]}")
+    messages = [
+        {"role": "user", "content": [_img(a), _img(b)]},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": [_img(LINK), _img(c), _img(d)]},
+    ]
+    with _vision(analyze):
+        out = await _brain()._process_vision(messages, {})
+
+    assert out[0]["content"] == frame_photo_description(1, "desc A") + "\n\n" + frame_photo_description(2, "desc B")
+    assert out[2]["content"] == "\n\n".join(
+        [
+            f"[PHOTO 1 NOT ANALYZED] {NOT_ANALYZED_NOT_INLINE}",
+            frame_photo_description(2, "desc C"),
+            f"[PHOTO 3 NOT ANALYZED] {NOT_ANALYZED_OVER_CAP}",
+        ]
+    )
+
+
 async def test_photos_past_the_cap_are_noted_not_forwarded(vision_on):
     before = _status("skipped_cap")
     analyze = AsyncMock(side_effect=["one", "two", "three"])
@@ -227,7 +256,11 @@ async def test_photos_past_the_cap_are_noted_not_forwarded(vision_on):
     assert _status("skipped_cap") == before + 1
 
 
-async def test_other_part_types_are_dropped(vision_off, caplog):
+@pytest.mark.parametrize("vision", [True, False])
+async def test_other_part_types_are_dropped(monkeypatch, caplog, vision):
+    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
+    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    analyze = AsyncMock(return_value="a photo")
     messages = [
         {
             "role": "user",
@@ -242,11 +275,46 @@ async def test_other_part_types_are_dropped(vision_off, caplog):
             ],
         }
     ]
-    with caplog.at_level(logging.INFO):
+    with _vision(analyze), caplog.at_level(logging.INFO):
         out = await _brain()._process_vision(messages, {})
-    assert out[0]["content"] == f"listen\n\n[PHOTO 1 NOT ANALYZED] {NOT_ANALYZED_DISABLED}"
+    photo = frame_photo_description(1, "a photo") if vision else f"[PHOTO 1 NOT ANALYZED] {NOT_ANALYZED_DISABLED}"
+    assert out[0]["content"] == "listen\n\n" + photo
     _assert_text_only(out)
     assert "Dropped 5 non-text, non-image content part(s)" in caplog.text
+    if vision:  # extraction skips the non-string text part instead of crashing
+        assert analyze.await_args.args[1] == "listen"
+
+
+async def test_many_empty_image_parts_do_not_grow_the_prompt(vision_on):
+    # 40-byte image parts must not each turn into a ~140-char note.
+    parts = [{"type": "image_url", "image_url": ""} for _ in range(500)]
+    messages = [{"role": "user", "content": parts}, {"role": "user", "content": [_img(LINK)] * 50}]
+    with _vision(AsyncMock(return_value="unused")):
+        out = await _brain()._process_vision(messages, {})
+
+    blocks = out[0]["content"].split("\n\n")
+    assert blocks[0] == f"[PHOTO 1 NOT ANALYZED] {NOT_ANALYZED_NOT_INLINE}"
+    assert blocks[MAX_IMAGES_PER_REQUEST - 1].endswith(NOT_ANALYZED_NOT_INLINE)
+    assert blocks[MAX_IMAGES_PER_REQUEST] == f"[PHOTO {MAX_IMAGES_PER_REQUEST + 1} NOT ANALYZED]"
+    assert out[1]["content"].split("\n\n")[0] == "[PHOTO 1 NOT ANALYZED]"
+    assert len(json.dumps(out)) < len(json.dumps(messages))
+    assert PHOTO_BLOCK_RE.sub("", out[1]["content"]) == ""
+
+
+async def test_lone_surrogate_data_uri_does_not_crash(vision_on):
+    analyze = AsyncMock(return_value="[Invalid image data. The image appears to be corrupted or not properly encoded.]")
+    with _vision(analyze):
+        out = await _brain()._process_vision([{"role": "user", "content": [_img("data:image/jpeg;base64,\ud800")]}], {})
+    assert out[0]["content"].startswith("[PHOTO 1 NOT ANALYZED]")
+
+
+async def test_malformed_data_uri_header_is_not_echoed(vision_on, caplog):
+    # A data: URI with no comma: the whole client string is the "MIME type".
+    with caplog.at_level(logging.WARNING):
+        out = await analyze_image("data:" + "evil\ninjected log line " * 20, "x", http_client=object())
+    assert out == "[Unsupported image type: malformed. Supported: JPEG, PNG, WebP, GIF.]"
+    assert is_vision_failure(out)
+    assert "injected" not in caplog.text and "Unsupported MIME type: malformed" in caplog.text
 
 
 async def test_string_turns_pass_through_unchanged(vision_off):
@@ -306,15 +374,18 @@ def test_sanitize_flattens_assistant_turns_and_drops_image_only_ones(caplog):
         {"role": "user", "content": [_text("look"), _img(DATA_URI)]},
     ]
     snapshot = json.dumps(client)
+    before = _status("rejected_assistant")
     with caplog.at_level(logging.INFO, logger="orchestrator.cloud_brain"):
         out = _sanitize_client_history(client)
+    assert _status("rejected_assistant") == before + 2
 
     assert out[0] is client[0]
     assert out[1] == {"role": "assistant", "content": "Sure."}
     assert out[2] is client[3]  # user photos are vision's job, untouched here
     assert len(out) == 3
     assert json.dumps(client) == snapshot
-    assert "Dropped 2 non-text part(s) from client assistant turns" in caplog.text
+    assert "Dropped 2 image part(s) from client assistant turns" in caplog.text
+    assert "other non-text part" not in caplog.text
     assert "Dropped 1 empty assistant message(s) from history" in caplog.text
     assert "127.0.0.1" not in caplog.text
 
@@ -395,3 +466,19 @@ async def test_no_loop_path_is_handed_an_image_part(monkeypatch, vision, stream,
     assert seen[2]["content"] == "and this one?\n\n" + expected_photo
     assert analyze.await_count == (1 if vision else 0)
     brain._try_fast_path.assert_not_awaited()
+
+
+@pytest.mark.parametrize("vision", [True, False])
+async def test_non_string_text_part_is_dropped_not_a_500(monkeypatch, vision):
+    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
+    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    loop_mock = AsyncMock(return_value="fine")
+    brain = _make_brain(monkeypatch, loop_mock)
+    client = [{"role": "user", "content": [{"type": "text", "text": {"x": 1}}, _text("hello"), _img(DATA_URI)]}]
+    with _vision(AsyncMock(return_value="a photo")):
+        resp = await brain.chat(client, stream=False)
+
+    assert "fine" in resp.body.decode()
+    seen = loop_mock.call_args.kwargs["messages"]
+    _assert_text_only(seen)
+    assert seen[0]["content"].startswith("hello\n\n[PHOTO 1 ")

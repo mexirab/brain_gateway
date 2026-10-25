@@ -33,8 +33,10 @@ Allow only Helios loopback and Jupiter:
 
 ```
 IPAddressDeny=any
-IPAddressAllow=127.0.0.0/8 10.0.0.248/32
+IPAddressAllow=localhost 10.0.0.248/32
 ```
+
+`localhost` is systemd's name for `127.0.0.0/8` plus `::1`. A process on Helios that calls `10.0.0.195:8080` (Helios's own LAN address) arrives from `10.0.0.195`, not loopback, and would be refused: add `10.0.0.195/32` only if something needs that.
 
 This does two things at once:
 
@@ -51,6 +53,15 @@ Before applying, check nothing else calls the brain:
 
 2. Think of callers that only run sometimes: experiments from Saturn, the owner's laptop over Tailscale, anything using `helios.tail74fc4a.ts.net:8080` (that arrives from a `100.x` tailnet address, not `10.0.0.248`). Add each one's address as a `/32`, or accept that it stops working.
 
+Optionally check the mechanism first without touching the brain. A throwaway unit with the same two lines should fail to reach the router and succeed to reach Jupiter:
+
+```bash
+sudo systemd-run --wait --pipe -p IPAddressDeny=any -p IPAddressAllow='localhost 10.0.0.248/32' curl -s -m3 -o /dev/null -w '%{http_code}\n' http://10.0.0.1/
+sudo systemd-run --wait --pipe -p IPAddressDeny=any -p IPAddressAllow='localhost 10.0.0.248/32' curl -s -m3 -o /dev/null -w '%{http_code}\n' http://10.0.0.248:8888/health
+```
+
+The first should print `000` (no connection), the second `200`.
+
 Apply (on Helios):
 
 1. Edit the line in the repo copy `tts/llama-server-primary.service`, then copy it to `/etc/systemd/system/llama-server-primary.service`.
@@ -61,7 +72,7 @@ Apply (on Helios):
 
 Rollback: put the old line back, `daemon-reload`, restart.
 
-What it does not cover: any process or container on Jupiter can still reach `:8080` and make Helios fetch a URL on Helios loopback or Jupiter. The orchestrator no longer forwards image URLs (this PR), so what remains is other software on Jupiter.
+What it does not cover: any process or container on Jupiter can still reach `:8080` and make Helios fetch a URL on Helios loopback or Jupiter. The orchestrator no longer forwards image URLs (this PR), so what remains is other software on Jupiter. One worth naming: Qwen Code on Jupiter is an LLM agent that talks to `:8080` directly. If it ever sends an `image_url` part with a link, Helios still fetches it; option A limits where that fetch can land.
 
 ## Option B: `--api-key` (defence in depth; more work)
 
@@ -71,13 +82,14 @@ Helios side:
 
 1. Put the key in a file the sandboxed unit can read. `ProtectHome=tmpfs` hides `/home`, so not there. For example `/etc/llama-server/api-keys`, owned `root:llama`, mode `0640`, one key per line.
 2. Add `--api-key-file /etc/llama-server/api-keys` to `ExecStart`. Use the file, not `--api-key KEY`: argv shows up in `ps` for every user on Helios.
-3. Change the unit's `ExecStartPost` readiness check from `/v1/models` to `/health`. `/v1/models` is no longer public with a key, so the unit would never become ready and systemd would kill it after 240 s.
+3. Change the unit's `ExecStartPost` readiness check from `/v1/models` to `/health`. In this build `/v1/models` is no longer public with a key, so the unit would never become ready and systemd would kill it after 240 s. `/health` returns 503 until the model is loaded, so it still works as a readiness check. (Older checkouts differ: the Jan 2026 tree at `/home/labadmin/src/llama.cpp` leaves `/models` and `/v1/models` public. Check the build you deploy.)
+4. Write the key file without a trailing space or CRLF: `--api-key-file` does not trim lines, so they become part of the key.
 
 Jupiter side, everything that talks to `MODEL_URL` / `VISION_MODEL_URL` must send the key. `MODEL_API_KEY` and `FALLBACK_MODEL_API_KEY` already exist, but only the loop backends read them. The callers:
 
 - through `llm_backend.OpenAICompatibleBackend` (sends `Authorization: Bearer` when `api_key` is set): the unified loop and the fallback loop. `shared.py` already passes `MODEL_API_KEY` / `FALLBACK_MODEL_API_KEY`. The one-off backend `orchestrator._resolve_backend` builds when a URL matches neither does not.
-- bare httpx calls with no key plumbing today: `auto_learn.py`, `jobs_calendar.py` (`_LLM_URL`), `vision_handler.py` (`analyze_image` and `check_vision_health`), `meal_manager.py`, `meal_planner.py`, `jobs_self_audit.py`, `self_investigator.py`, `session_miner.py`, `task_decomposition.py`.
-- health probes on `/models`: `model_manager.py` (`_models_probe_url`), `system_diagnostics.py`, `service_registry.py`, `meal_planner.py`, `self_investigator.py`. Switch these to the key or to `/health`.
+- bare httpx calls with no key plumbing today: `auto_learn.py`, `jobs_calendar.py` (`_LLM_URL`), `vision_handler.py` (`analyze_image` and `check_vision_health`; meal photos, pantry and receipt scans, document photos and Telegram photos all go through `analyze_image`), `meal_planner.py`, `jobs_self_audit.py`, `self_investigator.py`, `session_miner.py`, `task_decomposition.py`.
+- health probes on `/models`: `model_manager.py` (`_models_probe_url`), `system_diagnostics.py`, `service_registry.py`, `meal_planner.py`, `self_investigator.py`, and `api_routes.py`'s two probes of `{FALLBACK_MODEL_URL}/models` (with a key and no header, `FALLBACK_ONLINE` would always read 0). Switch these to the key or to `/health`.
 - monitoring: the Prometheus `llama-primary` job scrapes `/metrics` (add `authorization: {type: Bearer, credentials_file: …}`), and the blackbox probe of `http://<helios>:8080/v1/models` in `prometheus.yml.template` would see 401 (probe `/health` instead).
 - Qwen Code on Jupiter: set its OpenAI API key to the same key.
 
@@ -85,10 +97,15 @@ Rollback: remove the flag and restore the old readiness URL; the orchestrator ke
 
 What it does not cover: a caller that has the key (the orchestrator) can still make Helios fetch a URL. That is the hole this PR closes on the orchestrator side.
 
+## Detection (cheap, whichever option)
+
+llama-server logs every fetch at INFO: `downloading image from '<url>'` (`server-common.cpp:1094`). Those lines already reach Loki through promtail-helios (`llama-server-primary` journal). A Loki ruler alert on that string for the brain unit (`monitoring/loki/rules/fake/`, next to `BrainFailedToStart`) would catch any remaining SSRF use from any caller, since no legitimate caller sends links any more. Note the flip side: fetched URLs end up in Loki (30 days).
+
 ## Recommendation
 
 1. **Now:** Option A. One line, closes the LAN/tailnet exposure and shrinks where a fetch can land.
-2. **Later, if wanted:** Option B for defence in depth. It is a code change across ~15 call sites plus monitoring, so it should be its own PR.
-3. **Skip** option C unless upstream adds a flag.
+2. **With it:** the Loki detection alert above. One rule, no Helios change.
+3. **Later, if wanted:** Option B for defence in depth. It is a code change across ~15 call sites plus monitoring, so it should be its own PR.
+4. **Skip** option C unless upstream adds a flag.
 
 Do not test any of this by sending chat traffic to the live brain. `GET /health` and a TCP connect are enough to check who can reach it.

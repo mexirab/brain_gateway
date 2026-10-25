@@ -59,8 +59,8 @@ def last_user_text(messages: List[Dict[str, Any]]) -> str:
                 return PHOTO_BLOCK_RE.sub("", content).strip()
             if isinstance(content, list):
                 for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        return part.get("text", "").strip()
+                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                        return part["text"].strip()
     return ""
 
 

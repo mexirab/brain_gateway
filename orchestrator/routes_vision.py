@@ -96,7 +96,7 @@ async def vision_analyze(request: Request):
 
         if not _is_safe_image_url(image_data):
             return JSONResponse(
-                {"ok": False, "error": "Only base64 image data or data: URIs accepted (not URLs)"},
+                {"ok": False, "error": "Only inline image data (a data: URI or plain base64) accepted, not URLs"},
                 status_code=400,
             )
         # Size guard: ~1.33x base64 overhead; check before expensive processing

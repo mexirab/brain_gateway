@@ -32,12 +32,14 @@ from orchestrator.metrics import (
     REQUEST_COUNT,
     REQUEST_ERRORS,
     REQUEST_LATENCY,
+    VISION_REQUEST_COUNT,
     VOICE_PIPELINE_LATENCY,
     WELCOME_FIRED,
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
 from orchestrator.vision_handler import (
+    MAX_IMAGES_PER_REQUEST,
     NOT_ANALYZED_DISABLED,
     NOT_ANALYZED_NOT_INLINE,
     NOT_ANALYZED_OVER_CAP,
@@ -120,7 +122,7 @@ def _is_empty_assistant(m: dict) -> bool:
     if isinstance(content, list):
         for p in content:
             if not isinstance(p, dict) or p.get("type") != "text":
-                return False  # image or unknown part: keep the turn
+                return False  # defensive: _sanitize_client_history flattens lists first
             t = p.get("text")
             if not isinstance(t, str) or t.strip():
                 return False  # odd/non-string text is kept, never crashes
@@ -143,20 +145,21 @@ def _text_only(content: list) -> tuple[str, int]:
 
 
 def _flatten_content(
-    messages: List[Dict], descriptions: Dict[int, List[str]], vision_on: bool
+    messages: List[Dict], descriptions: Dict[tuple[int, int], str], vision_on: bool
 ) -> tuple[List[Dict], Dict[str, int]]:
     """The messages with every content list turned into the string the loop is given.
 
     No image part ever reaches the brain: it would skip the untrusted PHOTO
     CONTENT framing, and llama-server downloads http(s) image URLs itself. In a
     user turn each image becomes a block after the text (where PHOTO_BLOCK_RE
-    expects it): the framed description from `descriptions[msg_index]`
-    (extraction order), or a NOT ANALYZED note for a link, vision switched off,
-    or an image past the per-request cap. Other roles keep their text only, and
+    expects it): the framed description from `descriptions[(msg_index,
+    part_index)]`, or a NOT ANALYZED note for a link, vision switched off, or
+    an image past the per-request cap. Other roles keep their text only, and
     other part types (input_audio, video_url, ...) are dropped everywhere.
     Returns (messages, counts of each kind of image or part not analyzed).
     """
     counts = {"not_inline": 0, "disabled": 0, "over_cap": 0, "other_parts": 0}
+    notes = 0
     out: List[Dict] = []
     for i, msg in enumerate(messages):
         content = msg.get("content")
@@ -168,28 +171,30 @@ def _flatten_content(
             counts["other_parts"] += dropped
             out.append({"role": msg.get("role"), "content": text})
             continue
-        pending = list(descriptions.get(i, []))
         texts: List[str] = []
         blocks: List[str] = []
-        for part in content:
+        for j, part in enumerate(content):
             if isinstance(part, str):
                 texts.append(part)
             elif isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
                 texts.append(part["text"])
             elif isinstance(part, dict) and part.get("type") == "image_url":
                 n = len(blocks) + 1
-                # Same test extraction used, so descriptions line up with parts.
                 if not _is_safe_image_url(image_part_url(part)):
-                    counts["not_inline"] += 1
-                    blocks.append(photo_not_analyzed(n, NOT_ANALYZED_NOT_INLINE))
+                    kind, reason = "not_inline", NOT_ANALYZED_NOT_INLINE
                 elif not vision_on:
-                    counts["disabled"] += 1
-                    blocks.append(photo_not_analyzed(n, NOT_ANALYZED_DISABLED))
-                elif pending:
-                    blocks.append(frame_photo_description(n, pending.pop(0)))
-                else:
-                    counts["over_cap"] += 1
-                    blocks.append(photo_not_analyzed(n, NOT_ANALYZED_OVER_CAP))
+                    kind, reason = "disabled", NOT_ANALYZED_DISABLED
+                elif (i, j) in descriptions:
+                    blocks.append(frame_photo_description(n, descriptions[(i, j)]))
+                    continue
+                else:  # extraction took every inline image; the cap dropped this one
+                    kind, reason = "over_cap", NOT_ANALYZED_OVER_CAP
+                counts[kind] += 1
+                # A reason on the first few notes of the request, then a bare
+                # note shorter than any image part: a request full of empty
+                # image parts can't make the prompt bigger than itself.
+                notes += 1
+                blocks.append(photo_not_analyzed(n, reason if notes <= MAX_IMAGES_PER_REQUEST else ""))
             else:
                 counts["other_parts"] += 1
         text = "\n".join(texts).strip()
@@ -232,17 +237,22 @@ def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
     # framing vision gives user photos — and llama-server downloads http(s)
     # image URLs itself (blind GET SSRF from Helios). Before the empty-turn
     # check, so a turn that was only an image is dropped.
-    n_media = 0
-    flat = []
+    n_media = n_images = 0
+    flat: List[Dict] = []
     for m in messages:
         if m.get("role") != "user" and isinstance(m.get("content"), list):
+            n_images += sum(1 for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url")
             text, dropped = _text_only(m["content"])
             n_media += dropped
             m = {"role": m["role"], "content": text}
         flat.append(m)
     messages = flat
-    if n_media:
-        logger.info("[UNIFIED] Dropped %d non-text part(s) from client assistant turns", n_media)
+    if n_images:
+        # Same SSRF vector as a link in a user turn: visible to the self-audit.
+        VISION_REQUEST_COUNT.labels(status="rejected_assistant").inc(n_images)
+        logger.warning("[UNIFIED] Dropped %d image part(s) from client assistant turns — not forwarded", n_images)
+    if n_media > n_images:
+        logger.info("[UNIFIED] Dropped %d other non-text part(s) from client assistant turns", n_media - n_images)
 
     # Drop empty assistant turns (a failed reply the client kept as a blank
     # bubble). One empty assistant message in the history made the Qwen3.8
@@ -706,7 +716,6 @@ class CloudBrain:
         Always ends with _flatten_content, vision on or off: no image part (a
         link included) is ever forwarded to the brain.
         """
-        from orchestrator.metrics import VISION_REQUEST_COUNT
         from orchestrator.vision_handler import (
             UNREACHABLE_PLACEHOLDER,
             analyze_image,
@@ -716,7 +725,7 @@ class CloudBrain:
 
         vision_on = shared.VISION_ENABLED
         images = extract_images_from_messages(messages) if vision_on else []
-        descriptions_by_idx: Dict[int, List[str]] = {}
+        descriptions: Dict[tuple[int, int], str] = {}
 
         if images:
             logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
@@ -738,7 +747,7 @@ class CloudBrain:
                 # Cache the image for follow-up analyze_image tool calls. Key from
                 # the WHOLE data URI: canvas JPEGs share their first ~200 chars.
                 # Re-insert so the newest image is last (the tool reads the last).
-                cache_key = hashlib.sha256(image_url.encode()).hexdigest()[:16]
+                cache_key = hashlib.sha256(image_url.encode("utf-8", "surrogatepass")).hexdigest()[:16]
                 shared._vision_image_cache.pop(cache_key, None)
                 shared._vision_image_cache[cache_key] = image_url
                 # Cap cache at 5 entries
@@ -752,13 +761,13 @@ class CloudBrain:
                     description = await analyze_image(image_url, prompt, thinking=False)
                 else:
                     description = UNREACHABLE_PLACEHOLDER
-                descriptions_by_idx.setdefault(img_info["msg_index"], []).append(description)
+                descriptions[(img_info["msg_index"], img_info["part_index"])] = description
 
             logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
 
         # Every content list becomes a string, including history the client
         # resent with old images: the loop only ever gets text.
-        processed, counts = _flatten_content(messages, descriptions_by_idx, vision_on)
+        processed, counts = _flatten_content(messages, descriptions, vision_on)
 
         not_analyzed = counts["not_inline"] + counts["disabled"] + counts["over_cap"]
         if not_analyzed:
