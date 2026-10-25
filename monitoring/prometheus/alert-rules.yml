@@ -400,7 +400,7 @@ groups:
           severity: warning
         annotations:
           summary: "SearXNG (web search) is down"
-          description: "SearXNG on Jupiter has failed its /healthz probe for 10 minutes, so Jess's web_search fails. Check `docker ps --filter name=searxng` and `docker logs searxng`, then `docker compose up -d searxng` from ~/gateway_nerves. Restarting with 'server.secret_key is not changed' in the log = SEARXNG_SECRET missing from .env. Running but probe failing with 'no such host' = blackbox-exporter is off searxng-probe-net: `cd ~/gateway_nerves/monitoring && docker compose --env-file ../.env up -d blackbox-exporter`."
+          description: "SearXNG on Jupiter has failed its /healthz probe for 10 minutes, so Jess's web_search fails. Check `docker ps --filter name=searxng` and `docker logs searxng`, then `docker compose up -d searxng` from ~/gateway_nerves. Restarting with 'server.secret_key is not changed' in the log = SEARXNG_SECRET missing from .env. Running and `curl -s 127.0.0.1:8090/healthz` says OK: check the probe path with `curl -s 'http://127.0.0.1:9115/probe?module=http_2xx&target=http://searxng:8080/healthz&debug=true' | tail -20` — 'no such host' = blackbox-exporter is off searxng-probe-net: `cd ~/gateway_nerves/monitoring && docker compose --env-file ../.env up -d --force-recreate blackbox-exporter`. A green probe doesn't prove a Tailscale Serve URL works."
       - alert: FrontendDown
         # The dashboard. The orchestrator can be healthy while the Next.js
         # server is crashed or hung, and nothing else would say so; CI's

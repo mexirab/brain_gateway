@@ -189,6 +189,16 @@ jobs:
           CHANGED="$(git diff --name-only "$LAST" "$HEAD_SHA")"
           echo "$CHANGED"
 
+          # SearXNG takes server.secret_key from SEARXNG_SECRET in .env and won't
+          # start without it. Checked before anything is rebuilt, so a missing
+          # secret recreates nothing. (searxng/settings.yml has no secret_key,
+          # so the running container would also crash on its next restart.)
+          if grep -qE "^searxng/|^docker-compose\.yml$" <<<"$CHANGED" \
+              && ! grep -qE '^SEARXNG_SECRET=[^[:space:]]{32,}$' .env; then
+            echo "::error::SEARXNG_SECRET missing from .env — SearXNG refuses to start without it, and the running searxng will crash on its next restart until it is added. Add one: python3 -c 'import secrets; print(\"SEARXNG_SECRET=\" + secrets.token_hex(32))' >> .env, then re-run this job."
+            exit 1
+          fi
+
           # data/palace.yaml is a single-file bind mount read once at startup:
           # a git pull swaps its inode, so only a recreate picks the change up.
           if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$"; then
@@ -208,16 +218,11 @@ jobs:
           # single-file mount (a git pull swaps its inode), so a change there
           # needs --force-recreate; for compose edits a plain `up` recreates
           # only if searxng's own config changed (a recreate also resets
-          # SearXNG's engine suspensions). Without SEARXNG_SECRET in .env
-          # searxng won't start, so check that first and leave the running
-          # container alone. Never print its logs here: they carry upstream
-          # URLs with the search text, and this repo's CI logs are public.
+          # SearXNG's engine suspensions). SEARXNG_SECRET was checked above.
+          # Never print its logs here: they carry upstream URLs with the
+          # search text, and this repo's CI logs are public.
           if grep -qE "^searxng/|^docker-compose\.yml$" <<<"$CHANGED"; then
             echo "::group::Updating SearXNG"
-            if ! grep -qE '^SEARXNG_SECRET=[^[:space:]]{32,}$' .env; then
-              echo "::error::SEARXNG_SECRET missing from .env — SearXNG would refuse to start. Add one: python3 -c 'import secrets; print(\"SEARXNG_SECRET=\" + secrets.token_hex(32))' >> .env, then re-run this job."
-              exit 1
-            fi
             if grep -qE "^searxng/" <<<"$CHANGED"; then
               docker compose up -d --force-recreate searxng
             else
