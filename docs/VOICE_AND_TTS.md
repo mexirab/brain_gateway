@@ -315,7 +315,7 @@ Behaviour:
 - List answers (movies, events, news) can run 4–6 sentences. The dashboard TTS (`frontend/src/lib/speech-text.ts`) strips markdown and URLs and caps speech at 1200 chars; HA Assist has no such cleanup.
 
 Known limits (from the SRE and security reviews; not fixed):
-- SearXNG upstream engines get rate-limited or CAPTCHA'd (Brave "too many requests", Startpage CAPTCHA). Many searches in a short time can leave SearXNG returning no results for ~1–24 h.
+- Brave ("too many requests"), DuckDuckGo and Startpage (CAPTCHA) refuse this server's searches on most days (seen on every day with searches since at least 2026-10-14). Results come from the engines that still answer: Google CSE for general queries, Bing News for news. A burst of searches can also briefly leave news queries with no results.
 - SearXNG `/healthz` stays 200 while that happens. There is no probe or alert on SearXNG.
 - `tool_web_search` returns failures as text, so `bgw_tool_call_errors_total{tool="web_search"}` never rises; empty or failed searches are not counted anywhere.
 - SearXNG client timeout is 15 s per search round, with no tighter voice budget. A hung SearXNG can leave a voice turn silent for a long time.
