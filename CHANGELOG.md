@@ -6,11 +6,12 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ## [Unreleased] — SearXNG hardening (2026-10-25)
 
-Branch `fix/searxng-hardening`, stacked on the web search observability change (PR #145). Jess's web search path (`SEARXNG_URL=http://searxng:8080` over `gateway-net`) is unchanged.
+Branch `fix/searxng-hardening` (PR #147), stacked on the web search observability change (PR #145), plus `fix/searxng-own-network` on top. Jess's web search URL (`SEARXNG_URL=http://searxng:8080`) is unchanged; it now resolves over the new `searxng-net` instead of `gateway-net`.
 
 ### Upgrade action (required)
 
-- Add `SEARXNG_SECRET` to `.env` **before** `searxng` is next recreated: `python3 -c 'import secrets; print("SEARXNG_SECRET=" + secrets.token_hex(32))' >> .env`, then `docker compose up -d searxng`. Without it SearXNG refuses to start (`server.secret_key is not changed`) and web search is down; nothing else is affected. The CI deploy fails before rebuilding anything when `searxng/` or `docker-compose.yml` changed and `.env` lacks it. The previously committed key was public (it signs `/image_proxy` URLs), so this also rotates it.
+- Add `SEARXNG_SECRET` to `.env` **before** `searxng` is next recreated: `python3 -c 'import secrets; print("SEARXNG_SECRET=" + secrets.token_hex(32))' >> .env`, then re-run the CI deploy job, or by hand `docker compose up -d --build orchestrator && docker compose up -d searxng`. Without it SearXNG refuses to start (`server.secret_key is not changed`) and web search is down; nothing else is affected. The CI deploy fails before rebuilding anything when `searxng/` or `docker-compose.yml` changed and `.env` lacks it. The previously committed key was public (it signs `/image_proxy` URLs), so this also rotates it.
+- **Deploy order:** the orchestrator must join `searxng-net` before searxng leaves `gateway-net`. CI rebuilds the orchestrator first; by hand use the command above (or `docker compose up -d --build`). Never `docker compose up -d searxng` alone on a freshly pulled checkout: the old orchestrator can't resolve `searxng`, web search fails with `ConnectError`, and `SearXNGDown` stays green. Recovery: `docker network connect gateway_nerves_searxng-net brain-orchestrator` (no restart) or `docker compose up -d orchestrator`. Rollback is the reverse order: searxng back on `gateway-net` first, then drop `searxng-net` from the orchestrator (a CI revert recreates the orchestrator first, so web search is down until the SearXNG step; a leftover empty `gateway_nerves_searxng-net` is harmless).
 
 ### Security
 
@@ -18,6 +19,8 @@ Branch `fix/searxng-hardening`, stacked on the web search observability change (
 - Host port published on `127.0.0.1:${SEARXNG_PORT:-8090}` only (was all interfaces, with no auth and the limiter off). The browser UI answers on the host only; `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` puts it back on the tailnet (still no auth) — not set up on the maintainer's Jupiter.
 - Image digest-pinned (`searxng/searxng:2026.8.17-374939b88`, was `:latest`). On a bump, re-check the `unresponsive_engines` JSON shape `web_search.py` parses and the placeholder-key refusal.
 - Container: user `977:977`, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs + 64 MB `/tmp` tmpfs, `mem_limit: 1g`, `pids_limit: 256`.
+- `searxng` left `gateway-net` (where it could reach `loki:3100` with no auth — read every log, push lines the self-audit LLM reads — plus redis, brain-frontend, actual-budget and radicale). It now joins only the new `searxng-net` (fixed name `gateway_nerves_searxng-net`, plain bridge, not internal — its route to the upstream engines; created by the main compose; shared only with the orchestrator, its one client) and `searxng-probe-net`.
+- Known, accepted: `searxng-net` is a NAT'd bridge, so searxng can still reach the LAN, tailnet peers and Jupiter's non-loopback host ports (e.g. HA :8123, orchestrator :8888, Helios llama-server :8080) — loopback-only publishes and Tailscale Serve endpoints are out of reach. Through `searxng-probe-net` it can drive blackbox's GET-only `/probe`, which reaches `monitoring-net`: no push or POST, but probe metrics (status code, body length) are a blind read path.
 - Blackbox modules `http_post_2xx` and `tcp_connect` removed (unused; any probe-network neighbour can call `/probe` with any module — POST could reach `prometheus:9090/-/quit`, tcp is a port scanner).
 
 ### Monitoring
@@ -27,12 +30,12 @@ Branch `fix/searxng-hardening`, stacked on the web search observability change (
 
 ### CI
 
-- New deploy step (after the frontend, before monitoring): `docker compose up -d searxng` (`--force-recreate` only when `searxng/` changed — `settings.yml` is a single-file mount; a recreate resets engine suspensions), waits ≤60 s for `/healthz`, prints container state only on failure (never its logs — CI logs are public).
-- `orchestrator/tests/test_searxng_hardening.py`: 14 static guards over the compose/monitoring YAML (skip without a full checkout).
+- New deploy step (after the frontend, before monitoring): `docker compose up -d searxng` (`--force-recreate` only when `searxng/` changed — `settings.yml` is a single-file mount; a recreate resets engine suspensions), waits ≤60 s for `/healthz`, prints container state only on failure (never its logs — CI logs are public). Runs after the orchestrator rebuild, which creates `searxng-net`. It then GETs `$SEARXNG_URL/healthz` from inside brain-orchestrator (the host-port check and `SearXNGDown` can't see the orchestrator missing `searxng-net`) and checks runtime membership: searxng on exactly `searxng-net` + `searxng-probe-net`, only brain-orchestrator + searxng on `searxng-net`, at most blackbox-exporter beside searxng on the probe net. Either failure fails the deploy.
+- `orchestrator/tests/test_searxng_hardening.py`: 21 static guards (was 14) over the compose/monitoring YAML (skip without a full checkout). New: searxng on exactly `searxng-net` + `searxng-probe-net`; `searxng-net` fixed name, not internal, not external, declared by no other compose file; across every repo compose file (`network_mode` sidecars included) `searxng-net` holds only orchestrator + searxng and `searxng-probe-net` only searxng + blackbox-exporter; both plain IPv4 bridges; the orchestrator on `searxng-net` with the `SEARXNG_URL` default.
 
 ### Docs
 
-- `CLAUDE.md`, `monitoring/README.md`, `docs/ENV_VARS.md` (new Web search section), `docs/UPGRADE.md`, `docs/INSTALL.md`, `docs/BYO_MODEL.md`, `docs/TRY_IT_RENTED_GPU.md`, `docs/PRIVACY.md`, `TECHNICAL_REFERENCE.md`.
+- `CLAUDE.md`, `monitoring/README.md`, `docs/ENV_VARS.md` (new Web search section), `docs/UPGRADE.md`, `docs/INSTALL.md`, `docs/BYO_MODEL.md`, `docs/TRY_IT_RENTED_GPU.md`, `docs/PRIVACY.md`, `docs/SPREADSHEETS.md`, `TECHNICAL_REFERENCE.md`.
 
 ---
 
