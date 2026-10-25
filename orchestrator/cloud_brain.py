@@ -37,7 +37,16 @@ from orchestrator.metrics import (
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
-from orchestrator.vision_handler import PHOTO_BLOCK_RE
+from orchestrator.vision_handler import (
+    NOT_ANALYZED_DISABLED,
+    NOT_ANALYZED_NOT_INLINE,
+    NOT_ANALYZED_OVER_CAP,
+    PHOTO_BLOCK_RE,
+    _is_safe_image_url,
+    frame_photo_description,
+    image_part_url,
+    photo_not_analyzed,
+)
 from orchestrator.voice_style import apply_tone_request, record_reply_style
 
 logger = logging.getLogger(__name__)
@@ -119,6 +128,75 @@ def _is_empty_assistant(m: dict) -> bool:
     return False
 
 
+def _text_only(content: list) -> tuple[str, int]:
+    """The text parts of an OpenAI content list, joined, and how many other parts were dropped."""
+    texts: List[str] = []
+    dropped = 0
+    for part in content:
+        if isinstance(part, str):
+            texts.append(part)
+        elif isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+        else:
+            dropped += 1
+    return "\n".join(texts).strip(), dropped
+
+
+def _flatten_content(
+    messages: List[Dict], descriptions: Dict[int, List[str]], vision_on: bool
+) -> tuple[List[Dict], Dict[str, int]]:
+    """The messages with every content list turned into the string the loop is given.
+
+    No image part ever reaches the brain: it would skip the untrusted PHOTO
+    CONTENT framing, and llama-server downloads http(s) image URLs itself. In a
+    user turn each image becomes a block after the text (where PHOTO_BLOCK_RE
+    expects it): the framed description from `descriptions[msg_index]`
+    (extraction order), or a NOT ANALYZED note for a link, vision switched off,
+    or an image past the per-request cap. Other roles keep their text only, and
+    other part types (input_audio, video_url, ...) are dropped everywhere.
+    Returns (messages, counts of each kind of image or part not analyzed).
+    """
+    counts = {"not_inline": 0, "disabled": 0, "over_cap": 0, "other_parts": 0}
+    out: List[Dict] = []
+    for i, msg in enumerate(messages):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        if msg.get("role") != "user":
+            text, dropped = _text_only(content)
+            counts["other_parts"] += dropped
+            out.append({"role": msg.get("role"), "content": text})
+            continue
+        pending = list(descriptions.get(i, []))
+        texts: List[str] = []
+        blocks: List[str] = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+            elif isinstance(part, dict) and part.get("type") == "image_url":
+                n = len(blocks) + 1
+                # Same test extraction used, so descriptions line up with parts.
+                if not _is_safe_image_url(image_part_url(part)):
+                    counts["not_inline"] += 1
+                    blocks.append(photo_not_analyzed(n, NOT_ANALYZED_NOT_INLINE))
+                elif not vision_on:
+                    counts["disabled"] += 1
+                    blocks.append(photo_not_analyzed(n, NOT_ANALYZED_DISABLED))
+                elif pending:
+                    blocks.append(frame_photo_description(n, pending.pop(0)))
+                else:
+                    counts["over_cap"] += 1
+                    blocks.append(photo_not_analyzed(n, NOT_ANALYZED_OVER_CAP))
+            else:
+                counts["other_parts"] += 1
+        text = "\n".join(texts).strip()
+        out.append({"role": "user", "content": "\n\n".join(([text] if text else []) + blocks)})
+    return out, counts
+
+
 def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
     """The client's messages without the turns no loop may be given.
 
@@ -148,6 +226,23 @@ def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
         logger.info(
             "[UNIFIED] Stripped %d client message(s) with another role", _n_before - len(messages) - n_system_tool
         )
+
+    # Assistant turns reach the loop as text only. Their image (or audio,
+    # video) parts would go to the multimodal brain without the PHOTO CONTENT
+    # framing vision gives user photos — and llama-server downloads http(s)
+    # image URLs itself (blind GET SSRF from Helios). Before the empty-turn
+    # check, so a turn that was only an image is dropped.
+    n_media = 0
+    flat = []
+    for m in messages:
+        if m.get("role") != "user" and isinstance(m.get("content"), list):
+            text, dropped = _text_only(m["content"])
+            n_media += dropped
+            m = {"role": m["role"], "content": text}
+        flat.append(m)
+    messages = flat
+    if n_media:
+        logger.info("[UNIFIED] Dropped %d non-text part(s) from client assistant turns", n_media)
 
     # Drop empty assistant turns (a failed reply the client kept as a blank
     # bubble). One empty assistant message in the history made the Qwen3.8
@@ -370,8 +465,8 @@ class CloudBrain:
         logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%d", intent.mode, intent.intensity, len(intent.tags))
 
         # Fast-path: simple device commands. Never on a photo turn — the
-        # question is about the photo, and the vision text already ran.
-        if ha_client and not routing_info.get("vision_images"):
+        # question is about the photo (analyzed or not: vision off, a link).
+        if ha_client and not (routing_info.get("vision_images") or routing_info.get("images_not_analyzed")):
             try:
                 fast_result = await self._try_fast_path(user_text, ha_client)
                 if fast_result.handled:
@@ -601,107 +696,88 @@ class CloudBrain:
     # --- Vision processing ---
 
     async def _process_vision(self, messages: List[Dict], routing_info: Dict) -> List[Dict]:
-        """Detect images in messages, analyze via vision model, replace with text descriptions.
+        """Turn every image in the history into text before any loop sees it.
 
         Images go to the vision model (VISION_MODEL_URL — the Helios brain on the
         live deployment). Each description is neutralized and framed as untrusted
         PHOTO CONTENT, then replaces the image so the text-only loop can use it.
         If the vision model is unreachable no analysis is attempted (no
         VISION_TIMEOUT wait); the turn carries a NOT ANALYZED note instead.
+        Always ends with _flatten_content, vision on or off: no image part (a
+        link included) is ever forwarded to the brain.
         """
-        if not shared.VISION_ENABLED:
-            return messages
-
         from orchestrator.metrics import VISION_REQUEST_COUNT
         from orchestrator.vision_handler import (
             UNREACHABLE_PLACEHOLDER,
             analyze_image,
             check_vision_health,
             extract_images_from_messages,
-            frame_photo_description,
         )
 
-        images = extract_images_from_messages(messages)
-        if not images:
-            return messages
+        vision_on = shared.VISION_ENABLED
+        images = extract_images_from_messages(messages) if vision_on else []
+        descriptions_by_idx: Dict[int, List[str]] = {}
 
-        logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
-        routing_info["vision_images"] = len(images)
+        if images:
+            logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
+            routing_info["vision_images"] = len(images)
 
-        # Probe first: with Helios asleep each analyze_image call would wait out
-        # VISION_TIMEOUT before the brain-asleep reply (and its wake) ever ran.
-        vision_up = await check_vision_health()
-        if not vision_up:
-            routing_info["vision_skipped"] = "unreachable"
-            # Expected while Helios sleeps: INFO, and counted (no analyze_image call).
-            VISION_REQUEST_COUNT.labels(status="skipped_unreachable").inc(len(images))
-            logger.info("[VISION] Vision model unreachable — skipping %d image(s)", len(images))
+            # Probe first: with Helios asleep each analyze_image call would wait out
+            # VISION_TIMEOUT before the brain-asleep reply (and its wake) ever ran.
+            vision_up = await check_vision_health()
+            if not vision_up:
+                routing_info["vision_skipped"] = "unreachable"
+                # Expected while Helios sleeps: INFO, and counted (no analyze_image call).
+                VISION_REQUEST_COUNT.labels(status="skipped_unreachable").inc(len(images))
+                logger.info("[VISION] Vision model unreachable — skipping %d image(s)", len(images))
 
-        # Process images and collect descriptions per message index
-        processed_msgs = [m.copy() for m in messages]
-        descriptions_by_idx: Dict[int, list] = {}
+            for img_info in images:
+                prompt = img_info["text"] or "Describe this image in detail, including any text visible."
+                image_url = img_info["image_url"]
 
-        for img_info in images:
-            idx = img_info["msg_index"]
-            prompt = img_info["text"] or "Describe this image in detail, including any text visible."
-            image_url = img_info["image_url"]
+                # Cache the image for follow-up analyze_image tool calls. Key from
+                # the WHOLE data URI: canvas JPEGs share their first ~200 chars.
+                # Re-insert so the newest image is last (the tool reads the last).
+                cache_key = hashlib.sha256(image_url.encode()).hexdigest()[:16]
+                shared._vision_image_cache.pop(cache_key, None)
+                shared._vision_image_cache[cache_key] = image_url
+                # Cap cache at 5 entries
+                while len(shared._vision_image_cache) > 5:
+                    oldest = next(iter(shared._vision_image_cache))
+                    shared._vision_image_cache.pop(oldest, None)
 
-            # Cache the image for follow-up analyze_image tool calls. Key from
-            # the WHOLE data URI: canvas JPEGs share their first ~200 chars.
-            # Re-insert so the newest image is last (the tool reads the last).
-            cache_key = hashlib.sha256(image_url.encode()).hexdigest()[:16]
-            shared._vision_image_cache.pop(cache_key, None)
-            shared._vision_image_cache[cache_key] = image_url
-            # Cap cache at 5 entries
-            while len(shared._vision_image_cache) > 5:
-                oldest = next(iter(shared._vision_image_cache))
-                shared._vision_image_cache.pop(oldest, None)
+                if vision_up:
+                    # thinking=False: on a busy photo the brain can spend the whole
+                    # token budget reasoning and return nothing (seen on pantry scans).
+                    description = await analyze_image(image_url, prompt, thinking=False)
+                else:
+                    description = UNREACHABLE_PLACEHOLDER
+                descriptions_by_idx.setdefault(img_info["msg_index"], []).append(description)
 
-            if vision_up:
-                # thinking=False: on a busy photo the brain can spend the whole
-                # token budget reasoning and return nothing (seen on pantry scans).
-                description = await analyze_image(image_url, prompt, thinking=False)
-            else:
-                description = UNREACHABLE_PLACEHOLDER
-            descriptions_by_idx.setdefault(idx, []).append(description)
+            logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
 
-        # Replace multipart content with all image descriptions for that message
-        for idx, descs in descriptions_by_idx.items():
-            original_text = ""
-            for img in images:
-                if img["msg_index"] == idx and img["text"]:
-                    original_text = img["text"]
-                    break
-            analysis_parts = [frame_photo_description(i + 1, d) for i, d in enumerate(descs)]
-            replacement = "\n\n".join(analysis_parts)
-            if original_text:
-                replacement = f"{original_text}\n\n{replacement}"
+        # Every content list becomes a string, including history the client
+        # resent with old images: the loop only ever gets text.
+        processed, counts = _flatten_content(messages, descriptions_by_idx, vision_on)
 
-            processed_msgs[idx] = {
-                "role": "user",
-                "content": replacement,
-            }
+        not_analyzed = counts["not_inline"] + counts["disabled"] + counts["over_cap"]
+        if not_analyzed:
+            routing_info["images_not_analyzed"] = not_analyzed
+        if counts["not_inline"]:
+            VISION_REQUEST_COUNT.labels(status="rejected_url").inc(counts["not_inline"])
+            logger.warning(
+                "[VISION] %d image part(s) were links or empty, not inline data — not fetched, not forwarded",
+                counts["not_inline"],
+            )
+        if counts["disabled"]:
+            VISION_REQUEST_COUNT.labels(status="disabled").inc(counts["disabled"])
+            logger.info("[VISION] Vision disabled — %d image(s) not analyzed", counts["disabled"])
+        if counts["over_cap"]:
+            VISION_REQUEST_COUNT.labels(status="skipped_cap").inc(counts["over_cap"])
+        if counts["other_parts"]:
+            logger.info("[VISION] Dropped %d non-text, non-image content part(s)", counts["other_parts"])
 
-        logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
-
-        # Strip any remaining base64/image content from ALL messages before sending to text-only LLM
-        # Clients may resend full conversation history including old images
-        for i, msg in enumerate(processed_msgs):
-            content = msg.get("content")
-            if isinstance(content, list):
-                text_parts = []
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                    elif isinstance(part, dict) and part.get("type") == "image_url":
-                        text_parts.append("[Previously shared image]")
-                if text_parts:
-                    processed_msgs[i] = {
-                        "role": msg.get("role", "user"),
-                        "content": "\n".join(text_parts),
-                    }
-
-        return processed_msgs
+        return processed
 
     # --- Helpers ---
 

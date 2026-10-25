@@ -117,6 +117,20 @@ def is_vision_failure(text: str) -> bool:
     return not t or t in _FAILURE_SENTENCES or bool(_VARIABLE_FAILURE_RE.fullmatch(t))
 
 
+# Why a chat image got no analysis. cloud_brain puts one of these in the turn
+# (as a NOT ANALYZED block) in place of the image part.
+NOT_ANALYZED_NOT_INLINE = (
+    "[Not an attached photo (a link or empty image), so it was not opened. To look at it, attach the photo itself.]"
+)
+NOT_ANALYZED_DISABLED = _FAIL_DISABLED
+NOT_ANALYZED_OVER_CAP = f"[Only the first {MAX_IMAGES_PER_REQUEST} photos in a request are analyzed.]"
+
+
+def photo_not_analyzed(n: int, reason: str) -> str:
+    """The block a turn carries for a photo that has no description."""
+    return f"[PHOTO {n} NOT ANALYZED] {reason}"
+
+
 def frame_photo_description(n: int, description: str) -> str:
     """Wrap one vision description as clearly-labelled untrusted photo content.
 
@@ -129,7 +143,7 @@ def frame_photo_description(n: int, description: str) -> str:
 
     if is_vision_failure(description):
         reason = (description or "").strip() or "[Image analysis returned nothing.]"
-        return f"[PHOTO {n} NOT ANALYZED] {reason}"
+        return photo_not_analyzed(n, reason)
     # NFKC first: fullwidth "＜｜im_start｜＞" / "［END PHOTO" fold to ASCII and
     # are then caught by the neutralizer / frame escape below.
     text = _FORMAT_CHARS_RE.sub("", unicodedata.normalize("NFKC", description)).strip()
@@ -144,19 +158,40 @@ def frame_photo_description(n: int, description: str) -> str:
     )
 
 
+_RAW_BASE64_RE = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+
+
 def _is_safe_image_url(url: str) -> bool:
-    """Validate that an image URL is a data URI or raw base64, not an HTTP URL (SSRF prevention)."""
+    """True for inline image data (a data: URI or raw base64), False for a link or anything else.
+
+    SSRF prevention: a link is never fetched here, and never forwarded to the
+    brain either (llama-server downloads http(s) image URLs itself). Raw base64
+    must be base64 characters only, so "HTTP://...", "//host/x" or "gopher:"
+    count as links, not as corrupt image data.
+    """
+    if not isinstance(url, str):
+        return False
     if url.startswith("data:"):
         return True
-    # Raw base64 — no protocol prefix — is safe
-    return not url.startswith(("http://", "https://", "ftp://", "file://"))
+    return bool(_RAW_BASE64_RE.fullmatch(url))
+
+
+def image_part_url(part: dict) -> str:
+    """The URL of an OpenAI image_url part ("" when missing or malformed).
+
+    Accepts {"image_url": {"url": ...}} and the plain-string form some clients send.
+    """
+    url_data = part.get("image_url", {})
+    url = url_data.get("url", "") if isinstance(url_data, dict) else url_data
+    return url if isinstance(url, str) else ""
 
 
 def extract_images_from_messages(messages: list[dict]) -> list[dict]:
     """Extract image_url content parts from OpenAI-format messages.
 
     Returns list of dicts: [{"image_url": "data:...", "text": "user prompt", "msg_index": 0}]
-    Only accepts data URIs and raw base64 — rejects http:// URLs to prevent SSRF.
+    Only accepts data URIs and raw base64 — skips links (SSRF prevention;
+    cloud_brain turns each skipped one into a NOT ANALYZED note and counts it).
     Caps at MAX_IMAGES_PER_REQUEST images to prevent resource exhaustion.
     """
     images = []
@@ -172,9 +207,8 @@ def extract_images_from_messages(messages: list[dict]) -> list[dict]:
                 if part.get("type") == "text":
                     text_parts.append(part.get("text", ""))
                 elif part.get("type") == "image_url":
-                    url_data = part.get("image_url", {})
-                    url = url_data.get("url", "") if isinstance(url_data, dict) else url_data
-                    if url and _is_safe_image_url(url):
+                    url = image_part_url(part)
+                    if _is_safe_image_url(url):
                         images.append(
                             {
                                 "image_url": url,
@@ -182,8 +216,6 @@ def extract_images_from_messages(messages: list[dict]) -> list[dict]:
                                 "msg_index": i,
                             }
                         )
-                    elif url:
-                        logger.warning("[VISION] Rejected non-data-URI image URL (SSRF prevention)")
         # Attach collected text to all images from this message
         combined_text = " ".join(text_parts).strip()
         for img in images:

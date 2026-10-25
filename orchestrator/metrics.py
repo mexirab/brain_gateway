@@ -1095,6 +1095,7 @@ VISION_REQUEST_COUNT = Counter(
     "Vision model analysis requests",
     # success | empty | timeout | connect_error | http_error | error | disabled | skipped_unreachable
     # | rejected_mime | rejected_empty | rejected_corrupt | rejected_size
+    # | rejected_url (chat image that is a link / not inline data) | skipped_cap (past MAX_IMAGES_PER_REQUEST)
     ["status"],
 )
 
