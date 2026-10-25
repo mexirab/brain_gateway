@@ -87,6 +87,8 @@ async def vision_analyze(request: Request):
 
     elif "application/json" in content_type:
         body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON body must be an object"}, status_code=400)
         image_data = body.get("image", "")
         prompt = body.get("prompt", "Describe this image in detail, including any text visible.")
         if not image_data:

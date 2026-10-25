@@ -482,3 +482,119 @@ async def test_non_string_text_part_is_dropped_not_a_500(monkeypatch, vision):
     seen = loop_mock.call_args.kwargs["messages"]
     _assert_text_only(seen)
     assert seen[0]["content"].startswith("hello\n\n[PHOTO 1 ")
+
+
+@pytest.mark.parametrize("vision", [True, False])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_loop_failure_fallback_is_handed_text_only(monkeypatch, vision, stream):
+    # The primary loop raises with nothing emitted: the buffered except branch
+    # (stream=False) and the streamed producer (stream=True) both rerun the
+    # request on the fallback model — from the same flattened list.
+    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
+    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    loop_mock = AsyncMock(side_effect=[RuntimeError("primary died"), "from fallback"])
+    brain = _make_brain(monkeypatch, loop_mock)
+    analyze = AsyncMock(return_value="A cat on a sofa")
+
+    with _vision(analyze):
+        resp = await brain.chat(_client_messages(), stream=stream)
+        body = await _drain(resp) if stream else resp.body.decode()
+
+    assert "from fallback" in body
+    calls = [(c.kwargs["model_url"], c.kwargs["messages"]) for c in loop_mock.call_args_list]
+    assert [url for url, _ in calls] == [PRIMARY_URL, FALLBACK_URL]
+    primary, fallback = (seen for _, seen in calls)
+    _assert_text_only(fallback)
+    assert fallback == primary
+    assert fallback[0]["content"] == "what's in this?\n\n[PHOTO 1 NOT ANALYZED] " + NOT_ANALYZED_NOT_INLINE
+    assert analyze.await_count == (1 if vision else 0)  # the fallback does not re-run vision
+
+
+@pytest.mark.parametrize(
+    ("vision", "part"),
+    [(False, _img(DATA_URI)), (True, _img(LINK))],
+    ids=["vision-off-photo", "vision-on-link"],
+)
+async def test_fast_path_skipped_on_a_photo_turn_that_was_not_analyzed(monkeypatch, vision, part):
+    # vision-on-link: extraction finds no inline image, so "vision_images" is
+    # never set and only "images_not_analyzed" keeps the device command in
+    # the text from being run before the loop sees the turn.
+    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
+    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    loop_mock = AsyncMock(return_value="fine")
+    brain = _make_brain(monkeypatch, loop_mock)
+    brain._try_fast_path = AsyncMock(
+        return_value=SimpleNamespace(handled=True, action="turn_off", entity_name="kitchen", response_text="Done.")
+    )
+    analyze = AsyncMock(return_value="unused")
+
+    with _vision(analyze):
+        resp = await brain.chat(
+            [{"role": "user", "content": [_text("turn off the kitchen lights"), part]}], ha_client=object()
+        )
+
+    brain._try_fast_path.assert_not_awaited()
+    analyze.assert_not_awaited()
+    loop_mock.assert_awaited_once()
+    routing = json.loads(resp.body)["_routing"]
+    assert routing["images_not_analyzed"] == 1
+    assert "vision_images" not in routing
+
+
+@pytest.mark.parametrize("vision", [True, False])
+async def test_fast_path_still_runs_on_the_same_turn_without_a_photo(monkeypatch, vision):
+    # Control for the test above: same harness, no image part.
+    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
+    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    loop_mock = AsyncMock(return_value="unused")
+    brain = _make_brain(monkeypatch, loop_mock)
+    brain._try_fast_path = AsyncMock(
+        return_value=SimpleNamespace(handled=True, action="turn_off", entity_name="kitchen", response_text="Done.")
+    )
+    ha = object()
+
+    with _vision(AsyncMock(return_value="unused")):
+        resp = await brain.chat([{"role": "user", "content": "turn off the kitchen lights"}], ha_client=ha)
+
+    brain._try_fast_path.assert_awaited_once_with("turn off the kitchen lights", ha)
+    loop_mock.assert_not_awaited()
+    assert json.loads(resp.body)["choices"][0]["message"]["content"] == "Done."
+
+
+class _Scheduler:
+    def __init__(self):
+        self.jobs = {}
+
+    def add_job(self, func, trigger, run_date, args, id, replace_existing):  # noqa: A002
+        self.jobs[id] = args
+
+
+@pytest.mark.parametrize("vision", [True, False])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_auto_learn_snapshot_holds_no_image_link_or_photo_text(monkeypatch, vision, stream):
+    # The real _schedule_auto_learn (buffered path and streaming producer):
+    # the cached conversation is what auto-learn later sends to the brain.
+    monkeypatch.setattr(shared, "VISION_ENABLED", vision)
+    monkeypatch.setattr(shared, "_vision_image_cache", {})
+    monkeypatch.setattr(shared, "scheduler", _Scheduler())
+    monkeypatch.setattr(shared, "AUTO_LEARN_ENABLED", True)
+    monkeypatch.setattr(shared, "AUTO_LEARN_DELAY_MINUTES", 10)
+    monkeypatch.setattr(shared, "_auto_learn_conversations", {})
+    brain = _make_brain(monkeypatch, AsyncMock(return_value="fine"))
+    del brain._schedule_auto_learn  # use the real method, not _make_brain's stub
+
+    with _vision(AsyncMock(return_value="A cat on a sofa")):
+        resp = await brain.chat(_client_messages(), stream=stream)
+        if stream:
+            await _drain(resp)
+
+    (cached,) = shared._auto_learn_conversations.values()
+    assert cached == [
+        {"role": "user", "content": "what's in this?\n\n[photo]"},
+        {"role": "assistant", "content": "Let me see."},
+        {"role": "user", "content": "and this one?\n\n[photo]"},
+    ]
+    dumped = json.dumps(cached)
+    for leaked in ("image_url", "127.0.0.1", "example.invalid", "A" * 100, "sofa", "NOT ANALYZED"):
+        assert leaked not in dumped
+    assert len(shared.scheduler.jobs) == 1

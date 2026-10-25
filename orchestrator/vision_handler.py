@@ -169,8 +169,8 @@ def _is_safe_image_url(url: object) -> bool:
     brain either (llama-server downloads http(s) image URLs itself). Raw base64
     must be base64 characters only, so "HTTP://...", "//host.example/x" or
     "gopher:" count as links. A string that happens to be all base64
-    characters ("//host/x") passes and then fails analyze_image's base64
-    decode as corrupt data: it is never fetched either way.
+    characters ("//host/x") passes: analyze_image sends it to the vision
+    model as inline data (which fails to load as an image), never fetched.
     """
     if not isinstance(url, str):
         return False
