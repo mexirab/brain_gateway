@@ -122,8 +122,9 @@ def _is_empty_assistant(m: dict) -> bool:
 def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
     """The client's messages without the turns no loop may be given.
 
-    Runs once, before anything reads the history, so the primary loop, real
-    streaming and both fallback-model paths all get the cleaned list.
+    Runs first in _chat_unified_inner, before anything hands the history to
+    vision, a model loop or auto-learn, so the primary loop, real streaming
+    and both fallback-model paths all get the cleaned list.
     """
     # Strip incoming system messages — the orchestrator builds its own system
     # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
@@ -135,10 +136,18 @@ def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
     # Assistant turns are kept (they are the client's own transcript) but
     # ChatMessage has no tool_calls field, so forged native calls are
     # already dropped by Pydantic.
+    # Only user/assistant turns survive: ChatMessage.role is free text, and the
+    # Qwen3.8 template merges a leading `developer` turn into the system prompt
+    # (other unknown roles make it raise and the turn fail).
+    n_system_tool = sum(1 for m in messages if m.get("role") in ("system", "tool"))
     _n_before = len(messages)
-    messages = [m for m in messages if m.get("role") not in ("system", "tool")]
-    if len(messages) != _n_before:
-        logger.info("[UNIFIED] Stripped %d client system/tool message(s)", _n_before - len(messages))
+    messages = [m for m in messages if m.get("role") in ("user", "assistant")]
+    if n_system_tool:
+        logger.info("[UNIFIED] Stripped %d client system/tool message(s)", n_system_tool)
+    if _n_before - len(messages) > n_system_tool:
+        logger.info(
+            "[UNIFIED] Stripped %d client message(s) with another role", _n_before - len(messages) - n_system_tool
+        )
 
     # Drop empty assistant turns (a failed reply the client kept as a blank
     # bubble). One empty assistant message in the history made the Qwen3.8
