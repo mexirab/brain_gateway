@@ -14,11 +14,20 @@ REQUEST_COUNT = Counter(
     ["mode"],  # unified, unified_fallback, fast_path
 )
 
+# Whole chat turn. A real-streamed turn is observed when its SSE stream ends
+# (cloud_brain _stream_loop_response), tool rounds included, and counts in
+# ACTIVE_REQUESTS until then; before 2026-10-25 both were recorded when the
+# StreamingResponse was returned, before the loop ran. A client that hangs up
+# mid-reply records the shorter time; one gone before the stream starts
+# records nothing, so _count can sit slightly under bgw_requests_total.
+# Whole turns mostly take 2-13 s, so the buckets follow the voice-pipeline
+# edges there (a 10 -> 30 gap read a 12 s turn as p95 ~28 s); 10 and 30 stay
+# edges for the Grafana thresholds and HighRequestLatency.
 REQUEST_LATENCY = Histogram(
     "bgw_request_duration_seconds",
     "End-to-end request latency",
     ["mode"],
-    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 13.0, 17.0, 22.0, 30.0, 45.0, 60.0, 120.0, 300.0],
 )
 
 REQUEST_ERRORS = Counter(
