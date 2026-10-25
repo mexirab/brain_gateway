@@ -201,6 +201,9 @@ jobs:
 
           # data/palace.yaml is a single-file bind mount read once at startup:
           # a git pull swaps its inode, so only a recreate picks the change up.
+          # Keep this before the SearXNG step: the recreate puts the
+          # orchestrator on searxng-net (and creates that network), so searxng
+          # can then leave gateway-net without cutting Jess's web search off.
           if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$"; then
             echo "::group::Rebuilding orchestrator"
             docker compose up -d --build --force-recreate orchestrator
@@ -213,8 +216,9 @@ jobs:
             echo "::endgroup::"
           fi
 
-          # Runs before the monitoring step: it creates searxng-probe-net,
-          # which blackbox-exporter joins as external. settings.yml is a
+          # Runs after the orchestrator step (searxng-net, above) and before the
+          # monitoring step: it creates searxng-probe-net, which
+          # blackbox-exporter joins as external. settings.yml is a
           # single-file mount (a git pull swaps its inode), so a change there
           # needs --force-recreate; for compose edits a plain `up` recreates
           # only if searxng's own config changed (a recreate also resets
