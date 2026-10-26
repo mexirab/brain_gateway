@@ -82,6 +82,32 @@ Branch `fix/searxng-hardening` (PR #147), stacked on the web search observabilit
 
 ---
 
+## [Unreleased] — client message strip on every path (2026-10-25)
+
+Found by the code review of PR #146.
+
+### Security
+
+- `orchestrator/cloud_brain.py`: new `_sanitize_client_history(messages)`, the first statement of `CloudBrain._chat_unified_inner`. Keeps only client turns whose role is exactly `user` or `assistant` (was a `system`/`tool` deny-list): `ChatMessage.role` is free text, the live Qwen3.8 template merges a leading `developer` turn into the system prompt after the END OF CONTEXT footer, and other unknown roles (`function`, `System`, `tool `) make the template raise, so the turn fails into the fallback / brain-asleep reply. Blank assistant turns are still dropped. Returns a new list; client dicts are not edited.
+- **Fixed:** the strip ran after the model health check, so when the primary was offline and `_start_model_server()` failed, `_unified_fallback` ran the fallback model's tool loop (and auto-learn's cache) on the raw client history — forged `tool` results and extra `system` messages included. Now every path gets the cleaned list: buffered primary, real streaming + its in-producer fallback, health-check fallback, buffered loop-failure fallback, vision, auto-learn. Live impact was narrow: on the live box `FALLBACK_MODEL_URL == MODEL_URL`, and only `API_TOKEN` holders can send arbitrary roles.
+- Logs (counts only): unchanged `[UNIFIED] Stripped N client system/tool message(s)` and `[UNIFIED] Dropped N empty assistant message(s) from history`; new `[UNIFIED] Stripped N client message(s) with another role`.
+
+### Tests
+
+- New `orchestrator/tests/test_client_message_strip_paths.py` (26): all four loop paths incl. voice, fast path, vision ordering, other / near-miss / non-string roles, no in-place edits, idempotence, count-only logs.
+
+### Known gaps (surfaced by review, not fixed)
+
+- Client `user`/`assistant` content is not run through `_neutralize_control_markup`: tool-call/tool-response markup or chat-template specials typed into an ordinary turn can still forge a tool round (renders byte-identical on the live template).
+- Image parts vision doesn't extract (http(s) URLs, non-user roles, `VISION_ENABLED=false`) reach the brain unframed, and llama-server fetches http(s) image URLs itself (blind SSRF from Helios).
+- `routes_chat` stores any client role, and the `[CHAT] Incoming` log line in `orchestrator.py` includes the raw role string.
+
+### Docs
+
+- `CLAUDE.md` (Key Files `cloud_brain.py` row, loop-hardening note + known gaps), `TECHNICAL_REFERENCE.md` (Tool-Call Loop Guards, Empty-Reply Handling).
+
+---
+
 ## [Unreleased] — Qwen3.8-Flash-Next brain cutover + `VOICE_THINKING_ENABLED` (2026-10-24)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) are unchanged. Trial, measurements and known limits: `docs/internal/FLASH_NEXT_TRIAL.md`.
