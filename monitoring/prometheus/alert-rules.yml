@@ -392,10 +392,11 @@ groups:
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
   # ===========================================================================
-  # Lightweight self-hosted apps (Actual Budget, etc.) run on Jupiter and are
-  # probed by the blackbox-http job. Every app target carries tier="app", so
-  # this one rule covers all of them — adding an app means adding a scrape
-  # target in prometheus.yml, not a new alert here.
+  # Lightweight self-hosted apps (Actual Budget, Radicale, Paperless, etc.)
+  # run on Jupiter and are probed by the blackbox-http / blackbox-http10 jobs.
+  # Every app target carries tier="app", so this one rule covers all of them —
+  # adding an app means adding a scrape target in prometheus.yml, not a new
+  # alert here.
   - name: app_server
     interval: 30s
     rules:
@@ -455,6 +456,17 @@ groups:
         annotations:
           summary: "Actual Budget server is down"
           description: "Actual (container actual-budget, probed over monitoring-net) has failed its HTTP probe for 5 minutes. The budget web UI and Jess's finance sync are down. Check `docker logs actual-budget` and `cd ~/gateway_nerves/actual && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
+      - alert: PaperlessDown
+        # Paperless-ngx (document archive; Jess's paperless_search/read/save
+        # tools depend on it). Same shape as RadicaleDown/ActualDown: AppDown is
+        # Grafana-only. It sat stopped 2026-07-24 → 2026-10-21 with no alert.
+        expr: probe_success{service="paperless"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Paperless-ngx is down"
+          description: "Paperless (container paperless-webserver, probed at :8777/accounts/login/) has failed its HTTP probe for 5 minutes. The document archive web UI and Jess's paperless_search/paperless_read/paperless_save tools are down. Check `docker logs paperless-webserver --tail 50`, confirm /mnt/documents is mounted (`findmnt /mnt/documents` — it holds Paperless's media AND its Postgres data; if it isn't, follow DocumentsMountMissing's runbook before starting anything), then `cd /opt/paperless && docker compose up -d`."
 
       - alert: GristDown
         # Grist (self-hosted spreadsheet, grist/ compose project). Same shape as

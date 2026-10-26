@@ -195,7 +195,7 @@ Read-only access to the archive so Jess can answer "when does my car insurance r
 ### Known gaps
 
 - No dashboard panel or alert for `bgw_paperless_read_total`.
-- Paperless itself has no health probe or alert — it can be stopped for months unnoticed (happened in 2026). A dead Paperless shows up only as "Couldn't reach Paperless" tool results and `connect_error` counts.
+- ~~Paperless itself has no health probe or alert~~ — closed 2026-10-22: blackbox probe `service=paperless` (`:8777/accounts/login/`) drives the quiet `PaperlessDown` alert (5m). It had sat stopped 2026-07-24 → 2026-10-21 unnoticed. See `monitoring/README.md`. The probe only proves the web server renders; a broken Postgres (`paperless-db`) still probes green — no alert covers that yet.
 
 ---
 
