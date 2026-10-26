@@ -3,8 +3,11 @@
 Regression: the pantry tools were missing from that set, so a spoken "what can
 I cook with the ground turkey?" got "I don't have access to your pantry" while
 the same typed question worked. They must be offered on voice whenever the
-pantry is enabled — and never when it is off.
+pantry is enabled — and never when it is off. web_search is pinned the same
+way: a spoken "what's the weather tomorrow?" must be able to search.
 """
+
+import itertools
 
 import pytest
 
@@ -44,6 +47,32 @@ def test_pantry_tools_hidden_on_voice_when_disabled(fresh_cache, monkeypatch):
     monkeypatch.setattr(shared, "PANTRY_ENABLED", False)
     voice = _names(td.get_voice_tools())
     assert "pantry" not in voice and "meal_plan" not in voice
+
+
+_GATING_FLAGS = (
+    "JESS_ADVANCED",
+    "WORKOUTS_ENABLED",
+    "MEALS_ENABLED",
+    "PANTRY_ENABLED",
+    "HELIOS_WAKE_ENABLED",
+    "PAPERLESS_ENABLED",
+    "GRIST_ENABLED",
+    "EXPERT_ENABLED",
+)
+
+
+def test_web_search_offered_on_voice(fresh_cache, monkeypatch):
+    # Spoken "what's the weather tomorrow?" got "I can't look that up" while
+    # the typed question searched. web_search has no feature flag, so it must
+    # be on the voice list under every gating-flag combination (each flag is
+    # part of the cache key, so every combo is a fresh rebuild).
+    missing = []
+    for combo in itertools.product((False, True), repeat=len(_GATING_FLAGS)):
+        for flag, value in zip(_GATING_FLAGS, combo, strict=True):
+            monkeypatch.setattr(shared, flag, value, raising=False)
+        if "web_search" not in _names(td.get_voice_tools()):
+            missing.append(dict(zip(_GATING_FLAGS, combo, strict=True)))
+    assert not missing, f"web_search dropped from voice under {missing[:3]}"
 
 
 def test_voice_tool_names_all_exist():

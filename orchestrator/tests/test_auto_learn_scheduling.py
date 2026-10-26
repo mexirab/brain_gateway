@@ -203,28 +203,47 @@ def test_chat_request_conversation_id_validation():
         assert ChatRequest(messages=[], conversation_id=bad).conversation_id is None
 
 
-async def test_extraction_keeps_the_end_of_long_conversations():
-    from orchestrator import auto_learn
-
+def _long_conversation(turns: int) -> list:
     msgs = []
-    for i in range(80):
+    for i in range(turns):
         msgs.append({"role": "user", "content": f"turn {i} with some filler text to make it long enough"})
         msgs.append({"role": "assistant", "content": "a long reply " * 60})
     msgs.append({"role": "user", "content": "LAST TURN marker"})
-    captured = {}
+    return msgs
+
+
+async def _capture_extraction_prompts(msgs) -> list:
+    from orchestrator import auto_learn
+
+    prompts = []
 
     async def fake_call_model(*args, **kwargs):
-        captured["prompt"] = str(args) + str(kwargs)
-        raise RuntimeError("stop after capturing the prompt")
+        prompts.append(str(args) + str(kwargs))
+        return {"choices": [{"message": {"content": "[]"}}]}
 
     with patch("orchestrator.orchestrator.call_model", fake_call_model):
         await auto_learn.extract_facts(msgs)
-    prompt = captured.get("prompt", "")
-    assert "LAST TURN marker" in prompt
-    # Assistant replies are shortened before any user turn is dropped.
-    assert "[...]" in prompt
-    assert "turn 0 with" not in prompt
-    assert len(prompt) < 16000
+    return prompts
+
+
+async def test_extraction_reads_all_of_a_long_conversation():
+    # Was: cut to the last 12k chars, so a long talk lost its beginning.
+    prompts = await _capture_extraction_prompts(_long_conversation(80))
+    assert 1 < len(prompts) <= 4
+    joined = "".join(prompts)
+    assert "turn 0 with" in joined and "LAST TURN marker" in joined
+    # Assistant replies are shortened before anything is split.
+    assert "[...]" in joined
+    assert all(len(p) < 16000 for p in prompts)
+
+
+async def test_extraction_keeps_the_most_recent_windows_when_too_long():
+    prompts = await _capture_extraction_prompts(_long_conversation(200))
+    assert len(prompts) == 4
+    joined = "".join(prompts)
+    assert "LAST TURN marker" in joined
+    assert "turn 0 with" not in joined
+    assert "earlier conversation omitted" in prompts[0]
 
 
 def test_conversation_id_without_overlap_replaces(sched, cid):

@@ -1706,7 +1706,7 @@ def get_all_tools() -> List[Dict[str, Any]]:
 # Tools kept available in voice mode. 38 full tool schemas cost ~6.9k prompt
 # tokens; the voice subset keeps the quick-hit conversational flows (device
 # control, shopping list, reminders, memory, focus, selfcare, routines,
-# decision help) while dropping verbose/debug/typed-only tools. See
+# decision help, web search) while dropping verbose/debug/typed-only tools. See
 # docs/VOICE_AND_TTS.md for the rationale on each entry.
 VOICE_TOOL_NAMES: frozenset = frozenset(
     {
@@ -1743,6 +1743,15 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
         # stay hidden unless PANTRY_ENABLED (filtered from the full list).
         "pantry",
         "meal_plan",
+        # "What's the weather tomorrow?" / "who won last night?" are spoken
+        # requests too. Measured 2026-10-25 on Flash-Next (voice thinking on):
+        # first spoken word ~2.0 s median, 3.1 s p95 on search turns, 30/30
+        # search questions searched, 0/30 non-search ones did, 0/100 personal
+        # ones (meds, calendar, memory) did. Poisoned results caused 0/16
+        # extra tool calls with voice thinking on and 0/10 with it off; the
+        # 27B rollback brain was not measured. ~725 chars of schema. Without
+        # it, voice said "I can't look that up" 27/30 times.
+        "web_search",
     }
 )
 

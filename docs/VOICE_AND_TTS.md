@@ -287,10 +287,38 @@ ssh labadmin@10.0.0.195 'journalctl -u stt-onnx -f'
 ## Voice tool subset
 
 Voice turns (the dashboard chat mic, HA Assist / ATOM Echo) get a reduced tool list, `tool_definitions.VOICE_TOOL_NAMES`, because every tool schema is prefilled on each turn and voice is latency-sensitive. `prompt_builder` also drops the tool-guidance block on voice, so on voice the model routes by the schema descriptions alone. The voice list is filtered from the already-gated full list, so feature flags still apply. `tests/test_voice_tools.py` pins this down, and also catches a typo in the name list.
+- **Voice tool budgets:** While a tool runs for a voice turn, `shared.voice_turn_var` (a ContextVar that `unified_loop._run_one` sets per tool call, so it reaches parallel calls and never leaks into a typed turn) is `True`; tools read it to tighten their budgets. `web_search` (when on the voice list) uses a 5 s whole-request deadline on voice, 15 s typed (SearXNG gives each engine 3 s). A turn that searches in several rounds can still wait rounds × 5 s. The fallback model gets `is_voice` too (buffered `cloud_brain._unified_fallback` since 2026-10-25; the streamed fallback already did), so it keeps the voice generation settings and the 5 s deadline; its tool list stays the full one. Search outcomes, metrics and alerts (`bgw_web_search_total{result,voice}`, `WebSearchFailing`, `SearXNGDown`): `TECHNICAL_REFERENCE.md` → web_search; voice latency (`bgw_voice_pipeline_seconds{path}`): `monitoring/README.md`.
 
-What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss).
+What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss). Since 2026-10-25 it also includes **`web_search`** (SearXNG) — see below.
 
 Notes for the pantry tools on voice:
 - The `pantry` description itself carries the hints the dropped guidance used to give: summarise `view` when speaking, and `out` already adds to the grocery list (don't also call `shopping_list`).
 - HA Assist sends only the latest utterance, so a two-step "accept the plan?" → "yes" can't work there. Say "accept the meal plan" in one go, or accept on the dashboard.
 - `meal_plan swap` never waits for chat to go idle (`meal_planner._ask(..., wait_for_idle=False)`). On non-streaming turns (HA Assist, Telegram) the turn that called the tool is itself counted as active, so waiting would stall the swap for the full 60 s idle timeout.
+
+### web_search on voice (since 2026-10-25)
+
+The dashboard mic, hands-free call mode and HA Assist can look things up (weather, sports scores, store hours, news). It used to be typed-chat only, left off for latency, and voice said it couldn't look things up 27 of 30 times. No new env vars, routes, metrics or jobs. `tests/test_voice_tools.py::test_web_search_offered_on_voice` keeps it on the voice list under every gating-flag combination.
+
+Measured 2026-10-25 on the live brain (Qwen3.8 Flash-Next, `VOICE_THINKING_ENABLED=true`). The real voice prompt and tool schemas went straight to llama-server; only `web_search` ran for real.
+
+| What | Result |
+|------|--------|
+| First spoken token, search turns | ~2.0 s median, 3.1 s p95, 4.0 s worst (normal voice turn ~0.5 s) |
+| Where the time goes | round 1 (decide to search) ~0.8 s; SearXNG ~0.3 s median; round 2 prefills ~570 tokens |
+| Tool choice | 30/30 search questions called `web_search`; 0/30 non-search questions; 0/100 personal questions (meds, calendar, memory) |
+| Poisoned search results | 0 extra tool calls (0/16 voice thinking on, 0/10 off). The 27B rollback brain was not measured — re-run before relying on it after a rollback |
+| Schema cost | ~725 chars (~180 tokens; ~120 ms only on a prompt-cache miss) |
+
+Behaviour:
+- No spoken preamble before searching: ~2 s of silence, then the answer.
+- News questions often search 2–3 times.
+- List answers (movies, events, news) can run 4–6 sentences. The dashboard TTS (`frontend/src/lib/speech-text.ts`) strips markdown and URLs and caps speech at 1200 chars; HA Assist has no such cleanup.
+
+Known limits (from the SRE and security reviews; not fixed):
+- Brave ("too many requests"), DuckDuckGo and Startpage (CAPTCHA) refuse this server's searches on most days (seen on every day with searches since at least 2026-10-14). Results come from the engines that still answer: Google CSE for general queries, Bing News for news. A burst of searches can also briefly leave news queries with no results.
+- SearXNG `/healthz` stays 200 while that happens. There is no probe or alert on SearXNG.
+- `tool_web_search` returns failures as text, so `bgw_tool_call_errors_total{tool="web_search"}` never rises; empty or failed searches are not counted anywhere.
+- SearXNG client timeout is 15 s per search round, with no tighter voice budget. A hung SearXNG can leave a voice turn silent for a long time.
+- Streamed (dashboard) voice turns record `bgw_voice_pipeline_seconds` before the tool loop runs, so slow search turns don't show there; only HA Assist turns are really measured.
+- SearXNG's own container logs carry query text at WARNING when an engine fails. They stay out of Loki only because the promtail keep regex excludes searxng — keep it that way.

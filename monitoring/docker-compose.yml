@@ -254,10 +254,13 @@ services:
     # comment in the main docker-compose.yml.
     # grist-probe-net: probes grist:8484/status without Grist joining
     # monitoring-net (see grist/docker-compose.yml for why it's isolated).
+    # searxng-probe-net: probes searxng:8080/healthz (published on loopback
+    # only).
     networks:
       - monitoring-net
       - frontend-probe-net
       - grist-probe-net
+      - searxng-probe-net
 
   # NODE EXPORTER runs on host (systemd), not in container
 
@@ -274,6 +277,10 @@ networks:
   # Created by the main compose project (brain-frontend + blackbox only).
   frontend-probe-net:
     name: gateway_nerves_frontend-probe-net
+    external: true
+  # Created by the main compose project (searxng + blackbox only).
+  searxng-probe-net:
+    name: gateway_nerves_searxng-probe-net
     external: true
   # loki-push-gw ↔ loki only (see loki-push-gw above).
   loki-push-net:

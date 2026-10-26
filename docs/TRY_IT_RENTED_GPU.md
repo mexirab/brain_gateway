@@ -78,12 +78,13 @@ nvidia-smi
 git clone https://github.com/mexirab/brain_gateway.git
 cd brain_gateway
 
-# 2. Minimal .env: copy the example, generate the two tokens, pick a model
+# 2. Minimal .env: copy the example, generate the secrets, pick a model
 cp .env.example .env
 python3 - <<'PY' >> .env
 import secrets
 print("API_TOKEN=" + secrets.token_urlsafe(32))
 print("DASHBOARD_TOKEN=" + secrets.token_urlsafe(24))
+print("SEARXNG_SECRET=" + secrets.token_hex(32))   # web search won't start without it
 PY
 # Turn on the GPU model layer and point paths at this checkout:
 {
