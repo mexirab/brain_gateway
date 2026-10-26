@@ -11,10 +11,16 @@ from orchestrator.tool_registry import execute_tool, get_registered_tools, regis
 
 @pytest.fixture(autouse=True)
 def _clear_registry():
-    """Clear the registry before each test to prevent cross-test leakage."""
+    """Run each test against an empty registry, then put the real one back.
+
+    tool_handlers registers its handlers once, at first import; a registry
+    left empty here broke every execute_tool test in later test files.
+    """
+    saved = dict(tool_registry._registry)
     tool_registry._registry.clear()
     yield
     tool_registry._registry.clear()
+    tool_registry._registry.update(saved)
 
 
 class TestRegisterTool:

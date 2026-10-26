@@ -184,9 +184,9 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
 | `bgw_requests_total` | Counter | mode | Chat completion requests (mode: unified / unified_fallback / fast_path) |
-| `bgw_request_duration_seconds` | Histogram | mode | End-to-end request latency |
+| `bgw_request_duration_seconds` | Histogram | mode | Whole chat turn incl. tool rounds; real-streamed turns observed when the SSE stream ends (since 2026-10-25) |
 | `bgw_request_errors_total` | Counter | mode, error_type | Request errors |
-| `bgw_active_requests` | Gauge | | In-flight requests |
+| `bgw_active_requests` | Gauge | | In-flight chat turns (streamed ones until the stream ends; not auto_learn / photo-scan / meal-planner brain calls) |
 | `bgw_llm_calls_total` | Counter | model, purpose | LLM API calls (model: primary/fallback, purpose: conversation/tool_loop/final) |
 | `bgw_llm_call_duration_seconds` | Histogram | model, purpose | LLM call latency |
 | `bgw_llm_call_errors_total` | Counter | model, error_type | LLM call failures |
@@ -291,16 +291,19 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### Vision
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_vision_requests_total` | Counter | status | Vision analysis requests (success/error/disabled) |
+| `bgw_vision_requests_total` | Counter | status | Vision analysis requests: success/empty/timeout/connect_error/http_error/error/disabled/skipped_unreachable/rejected_mime/rejected_empty/rejected_corrupt/rejected_size, plus chat-path `rejected_url` (image part that is a link, empty or not inline data — never fetched or forwarded), `skipped_cap` (past `MAX_IMAGES_PER_REQUEST`), `rejected_assistant` (image part in a client assistant turn, dropped). `disabled` also counts each chat image while `VISION_ENABLED=false`. Chat path counts per image part in the request, so resent history recounts the same image every turn |
 | `bgw_vision_request_duration_seconds` | Histogram | | Vision model latency |
 | `bgw_vision_image_size_bytes` | Histogram | | Image size distribution |
+
+Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or empty, not inline data — not fetched, not forwarded` (a client sent image links or empty image parts in a user turn; same SSRF vector as WARNING `[UNIFIED] Dropped N image part(s) from client assistant turns — not forwarded`); INFO `[VISION] Vision disabled — N image(s) not analyzed`; INFO `[VISION] Dropped N non-text, non-image content part(s)`. No image part ever reaches the brain; llama-server itself still fetches URLs for direct callers — `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`.
 
 ### Web Search
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_web_search_total` | Counter | | Web search queries |
+| `bgw_web_search_total` | Counter | result, voice | Searches by outcome (`ok\|no_results\|empty\|error\|timeout`; `no_results` is not a failure). The only web_search failure signal — failures return as text, so `bgw_tool_call_errors_total` never sees them. Alert `WebSearchFailing` |
+| `bgw_web_search_engine_unresponsive_total` | Counter | engine, reason | SearXNG engines reported unresponsive per search (reason `suspended\|timeout\|captcha\|access_denied\|too_many_requests\|other`; ≤40 engines, else `other`; not pre-seeded) |
 | `bgw_web_search_duration_seconds` | Histogram | | Search latency |
-| `bgw_web_search_results_count` | Histogram | | Results returned |
+| `bgw_web_search_results_count` | Histogram | | Results returned (0 on no results) |
 
 ### Infrastructure
 | Metric | Type | Labels | Purpose |
@@ -345,7 +348,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### "Chat is slow"
 1. Check `/health` — is the primary model online at `http://10.0.0.195:8080/v1`?
 2. Check how many tool-loop rounds the unified loop made (look for `[UNIFIED_LOOP]` log lines)
-3. Check `bgw_chat_duration_seconds` histogram in Grafana for p95
+3. Check `bgw_request_duration_seconds` p95 in Grafana ("Request Latency" panels; whole turn) vs `bgw_chat_ttft_seconds` (slow before the first word, or slow to finish?)
 4. Check Helios GPU utilization: `ssh labadmin@10.0.0.195 nvidia-smi`
 
 ### "Primary model unreachable"

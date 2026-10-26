@@ -11,6 +11,7 @@ import os
 import sys
 import threading
 import time
+from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
 import chromadb
@@ -170,6 +171,11 @@ CHROMA_PERSIST = settings.chroma_persist
 CHROMA_COLLECTION = settings.palace_collection
 MIN_COS = settings.min_cos
 TOP_K = settings.top_k
+MEMORY_FACT_MIN_COS = settings.memory_fact_min_cos
+MEMORY_SEARCH_MIN_COS = settings.memory_search_min_cos
+# Collection `source` values that are short facts about the user (as opposed to
+# document chunks, vault entries or audit notes).
+MEMORY_FACT_SOURCES = ("auto_learn", "user_correction")
 
 chroma = chromadb.PersistentClient(
     path=os.path.expanduser(CHROMA_PERSIST),
@@ -353,6 +359,12 @@ def mark_voice_activity() -> None:
     from the chat endpoint whenever is_voice=True. Used by is_voice_session_active."""
     global _last_voice_activity_at
     _last_voice_activity_at = time.time()
+
+
+# True while a tool runs for a voice turn. Set by unified_loop around each
+# tool call (per task, so a concurrent typed turn never sees it); tools read
+# it to tighten budgets — web_search uses a 5 s deadline instead of 15 s.
+voice_turn_var: ContextVar[bool] = ContextVar("voice_turn", default=False)
 
 
 def is_voice_session_active(window_sec: float = VOICE_SESSION_WINDOW_SEC) -> bool:

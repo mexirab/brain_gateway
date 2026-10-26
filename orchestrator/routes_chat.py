@@ -4,6 +4,9 @@ import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+
+from orchestrator.schemas import ChatHistoryMessage
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +54,22 @@ async def add_chat_message(conv_id: str, request: Request):
     conv = get_conversation(conv_id)
     if not conv:
         return JSONResponse({"error": "Conversation not found"}, status_code=404)
-    body = await request.json()
-    role = body.get("role", "user")
-    content = body.get("content", "")
-    routing = body.get("routing")
-    announcement_type = body.get("announcement_type")
-    if not content:
-        return JSONResponse({"error": "No content"}, status_code=400)
+    try:
+        body = ChatHistoryMessage.model_validate(await request.json())
+    except ValidationError as e:
+        # Field names only (a fixed set) — the error text quotes the input.
+        logger.info(
+            "[CHAT] Refused to save a chat message (bad %s)",
+            ",".join(sorted({str(x["loc"][0]) for x in e.errors() if x["loc"]})) or "body",
+        )
+        return JSONResponse({"error": "role must be user or assistant, content non-empty text"}, status_code=400)
+    except ValueError:  # not JSON
+        logger.info("[CHAT] Refused to save a chat message (bad JSON)")
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
     import json
 
-    routing_str = json.dumps(routing) if routing else None
-    msg = save_chat_message(conv_id, role, content, routing_str, announcement_type)
+    routing_str = json.dumps(body.routing) if body.routing else None
+    msg = save_chat_message(conv_id, body.role, body.content, routing_str, body.announcement_type)
     return JSONResponse(msg)
 
 

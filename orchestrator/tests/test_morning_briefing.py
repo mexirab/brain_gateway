@@ -220,14 +220,18 @@ def _outcome(label):
 
 
 def _session(*, paused=False, age_hours=0.0):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
+    from orchestrator import jobs_calendar
     from orchestrator.routine_manager import RoutineSession
 
+    # jobs_calendar's own clock, so a _pin_hour'd test sees a fresh session:
+    # with the real clock, a run between 00:00 and 04:00 made the session look
+    # 3+ h older than the pinned 07:00 and the routine gate ignored it.
     return RoutineSession(
         routine_id="morning",
         display_name="Morning",
-        started_at=datetime.now() - timedelta(hours=age_hours),
+        started_at=jobs_calendar.datetime.now() - timedelta(hours=age_hours),
         paused=paused,
     )
 

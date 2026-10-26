@@ -51,18 +51,36 @@ MAX_TOOL_RESULT_CHARS = 8000
 # fools the StreamGate, and ``<|im_start|>`` / ``<|im_end|>`` are tokenised as
 # chat-template specials by llama-server, i.e. a tool result could forge a
 # user turn at token level. Each is rewritten with Unicode angle quotes so the
-# text stays readable but is no longer markup.
+# text stays readable but is no longer markup. Since 2026-10-25 this also runs
+# on the client's own chat history (cloud_brain._sanitize_client_history) and
+# covers the live vocab's <tts_…> specials. Every quantifier is bounded and a
+# tag body may not contain "<", so the scan is linear: the old `[^>]*` re-read
+# the rest of the string for every unclosed "<think" (~1 s for 140 KB). An
+# opener with no ">" before the next "<" or within 512 chars (`<think a="<b">`)
+# still gets its "<" quoted: StreamGate and clean_response treat any
+# `<think\b…>` as a sentinel and would hide the rest of a reply quoting it.
 _CONTROL_MARKUP_RE = re.compile(
-    r"</?\s*(tool_call|tool_response|think|function|parameter)\b[^>]*>|<\|[^|<>]{1,32}\|>",
+    r"</?\s{0,8}(tool_call|tool_response|think|function|parameter|tts_\w{1,24})\b(?:[^<>]{0,512}>)?"
+    r"|<\|[^|<>]{1,32}\|>",
     re.IGNORECASE,
 )
 
 
+def _quote_markup(m: "re.Match[str]") -> str:
+    tag = m.group(0)
+    return "‹" + tag[1:-1] + "›" if tag.endswith(">") else "‹" + tag[1:]
+
+
 def _neutralize_control_markup(s: str) -> str:
-    """Rewrite chat-template / tool-call markup in untrusted text as plain text."""
+    """Rewrite chat-template / tool-call markup in untrusted text as plain text.
+
+    One pass leaves no live tag or special token. It is not a fixpoint on
+    crafted nesting: ``<tool_call <think>>`` changes again on a second pass
+    (harmless — it only quotes more).
+    """
     if "<" not in s:
         return s
-    return _CONTROL_MARKUP_RE.sub(lambda m: "‹" + m.group(0)[1:-1] + "›", s)
+    return _CONTROL_MARKUP_RE.sub(_quote_markup, s)
 
 
 def _cap_tool_result(result: Any, tool_name: str) -> str:
@@ -1120,11 +1138,14 @@ async def run_unified_tool_loop(
             if preset is not None:
                 return (call_id, tool_name, preset)
             # Metrics are recorded inside execute_tool() — no double-counting here
+            voice_token = shared.voice_turn_var.set(is_voice)
             try:
                 result = await execute_tool(tool_name, arguments)
             except Exception as e:
                 logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
                 result = f"The {tool_name} tool encountered an error. Please try again."
+            finally:
+                shared.voice_turn_var.reset(voice_token)
             return (call_id, tool_name, _cap_tool_result(result, tool_name))
 
         if len(parsed_calls) > 1 and not has_terminal:

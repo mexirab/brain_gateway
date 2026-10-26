@@ -109,8 +109,13 @@ services:
       # ~600 tokens on every voice turn. 0.50 keeps only chunks with clear
       # semantic match, dropping moderate-similarity noise.
       - MIN_COS=${MIN_COS:-0.50}
-      # TOP_K is the retrieval size AND the floor on chunks returned per
-      # turn (see prompt_builder.py: MIN_RESULTS = TOP_K). 25 floods the
+      # Short personal facts (auto-learn, update_memory) score ~0.35-0.45
+      # against the question they answer, so they get their own, lower
+      # floors: per-turn context, and the explicit search_memory tool.
+      # Document chunks keep MIN_COS in both.
+      - MEMORY_FACT_MIN_COS=${MEMORY_FACT_MIN_COS:-0.35}
+      - MEMORY_SEARCH_MIN_COS=${MEMORY_SEARCH_MIN_COS:-0.30}
+      # TOP_K is the retrieval size (candidates per query). 25 floods the
       # primary LLM's prefill context and was contributing ~10s of turn
       # latency in voice conversation mode.
       - TOP_K=${TOP_K:-10}
@@ -173,7 +178,7 @@ services:
       # Auto-learn from conversations
       - AUTO_LEARN_ENABLED=${AUTO_LEARN_ENABLED:-true}
       - AUTO_LEARN_DELAY_MINUTES=${AUTO_LEARN_DELAY_MINUTES:-10}
-      - AUTO_LEARN_MAX_FACTS=${AUTO_LEARN_MAX_FACTS:-5}
+      - AUTO_LEARN_MAX_FACTS=${AUTO_LEARN_MAX_FACTS:-20}
       - AUTO_LEARN_DEDUP_THRESHOLD=${AUTO_LEARN_DEDUP_THRESHOLD:-0.85}
       - AUTO_LEARN_MARKDOWN=${AUTO_LEARN_MARKDOWN:-true}
       - AUTO_LEARN_ENCRYPT=${AUTO_LEARN_ENCRYPT:-true}
@@ -236,6 +241,7 @@ services:
     networks:
       - gateway-net
       - grist-net
+      - searxng-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
@@ -294,19 +300,63 @@ services:
       - CRON=0 4 * * *
       - TZ=${TZ:-America/Chicago}
   searxng:
-    image: searxng/searxng:latest
+    # Digest-pinned (was :latest). Bump deliberately, and check in the new image:
+    # orchestrator/web_search.py (_parse_unresponsive) reads the JSON
+    # `unresponsive_engines` field as [engine, message] pairs
+    # (searx/webutils.py get_json_response), and searx/webapp.py still refuses
+    # to start with secret_key 'ultrasecretkey' (see SEARXNG_SECRET below).
+    image: searxng/searxng:2026.8.17-374939b88@sha256:3aed6b4bfb4e6a2b3b94c890dafb3f35cb2588493b83818434aa260e8bdeb4d4
     container_name: searxng
     restart: unless-stopped
     logging: *default-logging
+    # It parses untrusted upstream pages: non-root (the image's searxng user;
+    # its entrypoint then skips chown + update-ca-certificates), no caps,
+    # read-only rootfs (its caches live in /tmp), bounded memory/pids (it
+    # idles at ~130 MiB / ~14 pids).
+    user: "977:977"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    mem_limit: 1g
+    pids_limit: 256
+    # Loopback only: there is no auth and the limiter is off, and ufw is
+    # inactive on Jupiter, so the old all-interfaces publish let any LAN or
+    # tailnet host burst searches through it (and get the upstream engines
+    # suspended) and use /image_proxy. Jess uses http://searxng:8080 over
+    # searxng-net; the blackbox probe uses searxng:8080 over searxng-probe-net.
+    # The browser UI answers on Jupiter only. To open it from other devices:
+    # `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` — that
+    # puts it back on the tailnet, still without auth.
     ports:
-      - "${SEARXNG_PORT:-8090}:8080"
+      - "127.0.0.1:${SEARXNG_PORT:-8090}:8080"
     volumes:
       - searxng-data:/etc/searxng
       - ${GATEWAY_ROOT_PATH:-.}/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    # Don't pass SEARXNG_PORT in here: the entrypoint turns it into
+    # GRANIAN_PORT and the server would leave 8080.
     environment:
       - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8090}/
+      # server.secret_key: signs /image_proxy URLs (that route is live even
+      # with image_proxy: false) and keys the engine cache. Never commit it to
+      # searxng/settings.yml. Unset or empty falls back to the image's
+      # placeholder, which SearXNG refuses to start with (unless debug is on —
+      # never set SEARXNG_DEBUG), so a missing secret stops searxng
+      # (SearXNGDown) instead of breaking every compose command or running with
+      # an empty key.
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-ultrasecretkey}
+    # Not on gateway-net: it parses untrusted pages, and from there it could
+    # reach Loki (no auth: read every log, push lines the self-audit LLM
+    # reads), redis, the frontend, Actual and Radicale. searxng-net holds only
+    # the orchestrator (its one client) and is its route to the internet.
+    # Like any NAT'd bridge it can still reach the LAN and Jupiter's
+    # non-loopback ports (HA :8123, orchestrator :8888, Helios :8080).
     networks:
-      - gateway-net
+      - searxng-net
+      - searxng-probe-net
 
   # --------------------------------------------------------------------------
   # Model layer (compose profile: models)
@@ -570,18 +620,34 @@ networks:
     driver: bridge
   # Only brain-frontend + the monitoring stack's blackbox-exporter, so the
   # unauthenticated /probe proxy can check the dashboard without joining
-  # gateway-net (which would let searxng/redis/orchestrator drive /probe, and
+  # gateway-net (which would let every container there drive /probe, and
   # through it Prometheus' lifecycle API). Fixed name: monitoring joins it as
   # external. Absent on installs without the monitoring stack — harmless.
   frontend-probe-net:
     name: gateway_nerves_frontend-probe-net
     driver: bridge
+  # Only searxng + blackbox-exporter, for the /healthz probe now that searxng
+  # publishes on loopback only. Same reasoning as frontend-probe-net (blackbox
+  # stays off gateway-net). Internal: no gateway, so searxng's upstream traffic
+  # uses searxng-net. Fixed name: monitoring joins it as external.
+  searxng-probe-net:
+    name: gateway_nerves_searxng-probe-net
+    driver: bridge
+    internal: true
   # Only the orchestrator + Grist (grist/docker-compose.yml joins it as
   # external). Grist trusts a forwarded login header that needs no secret, so it
-  # must not sit on gateway-net, where a compromised frontend/searxng could send
-  # that header. Empty (harmless) on installs without Grist.
+  # must not sit on gateway-net, where a compromised frontend could send that
+  # header. Empty (harmless) on installs without Grist.
   grist-net:
     name: gateway_nerves_grist-net
+    driver: bridge
+  # Only the orchestrator + searxng. Same idea as grist-net: searxng parses
+  # untrusted internet HTML, so it gets the one neighbour that calls it instead
+  # of all of gateway-net. Not internal: it is searxng's way out to the
+  # upstream engines. Compose creates it with whichever of the two starts first
+  # (CI rebuilds the orchestrator before it updates searxng).
+  searxng-net:
+    name: gateway_nerves_searxng-net
     driver: bridge
 
 volumes:

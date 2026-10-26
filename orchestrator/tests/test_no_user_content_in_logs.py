@@ -19,6 +19,8 @@ exception is a conscious, reviewable decision.
 import ast
 import pathlib
 
+import pytest
+
 PKG = pathlib.Path(__file__).resolve().parent.parent
 
 LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
@@ -213,6 +215,81 @@ def test_access_log_query_string_stripped():
     assert StripQueryStringFilter().filter(rec) is True
     assert "private" not in rec.getMessage()
     assert "/api/documents?…" in rec.getMessage()
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        # uvicorn logs quote(scope["path"]): a "?" the client sent as %3F
+        # arrives decoded and is re-quoted, with the text still after it
+        "/api/documents%3Fsearch%3Dprivate%20words",
+        "/api/documents%3fsearch=private",
+        "/api/documents%253Fsearch%253Dprivate",
+        "/api/documents%25253fsearch=private",
+        "/api/documents%3Fa?search=private",
+        "/api/documents?a%3Fsearch=private",
+    ],
+)
+def test_access_log_encoded_query_mark_stripped(full_path):
+    import logging
+
+    from orchestrator.log_config import StripQueryStringFilter
+
+    rec = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("10.0.0.1:5000", "GET", full_path, "1.1", 404),
+        None,
+    )
+    assert StripQueryStringFilter().filter(rec) is True
+    assert "private" not in rec.getMessage()
+    assert "/api/documents?…" in rec.getMessage()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/api/documents?search=private",
+        "/api/documents%3Fsearch=private",
+        "/api/documents%3fsearch%3dprivate",
+        "/api/documents%253Fsearch=private",
+        "/api/documents%253fsearch=private",
+        "/api/documents%25253Fsearch=private",
+        "/api/documents%25%33fsearch=private",  # decodes to "%3f", logged "%253f"
+    ],
+)
+def test_access_log_strips_query_from_uvicorns_own_rendering(target):
+    """The strings above, but produced by the installed uvicorn: its HTTP
+    protocols set scope["path"] = unquote(<target path>) and log
+    get_path_with_query_string(scope) (quote(path) + "?" + query)."""
+    import logging
+    from urllib.parse import unquote
+
+    uvicorn_utils = pytest.importorskip("uvicorn.protocols.utils")
+    from orchestrator.log_config import StripQueryStringFilter
+
+    raw_path, _, query = target.partition("?")
+    scope = {"type": "http", "path": unquote(raw_path), "query_string": query.encode("ascii"), "root_path": ""}
+    args = ("10.0.0.1:5000", "GET", uvicorn_utils.get_path_with_query_string(scope), "1.1", 404)
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d', args, None)
+    assert StripQueryStringFilter().filter(rec) is True
+    assert "private" not in rec.getMessage()
+    assert "/api/documents?…" in rec.getMessage()
+
+
+@pytest.mark.parametrize("full_path", ["/api/documents", "/api/audio/3f9a1c2e.wav", "/api/docs%2F3"])
+def test_access_log_path_without_query_untouched(full_path):
+    import logging
+
+    from orchestrator.log_config import StripQueryStringFilter
+
+    args = ("10.0.0.1:5000", "GET", full_path, "1.1", 200)
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d', args, None)
+    assert StripQueryStringFilter().filter(rec) is True
+    assert rec.args == args
 
 
 def test_configure_logging_attaches_access_filter_once():

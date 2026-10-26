@@ -190,6 +190,17 @@ scrape_configs:
           node: 'jupiter'
           tier: 'app'
 
+      # SearXNG (web search, main compose). /healthz is a fixed "OK" route that
+      # sends nothing upstream — never probe /search (bursts of real searches
+      # get the engines suspended). Published on 127.0.0.1 only, so probed by
+      # container name over searxng-probe-net (blackbox must stay off
+      # gateway-net). SearXNGDown keys on service=searxng; no tier label, so
+      # AppDown doesn't double up.
+      - targets: ['http://searxng:8080/healthz']
+        labels:
+          service: 'searxng'
+          node: 'jupiter'
+
       # Dashboard (Next.js). /login is public (no auth) and served by the app
       # itself, so a 200 proves the server renders pages. Probed by container
       # name over frontend-probe-net (the frontend may publish on 127.0.0.1

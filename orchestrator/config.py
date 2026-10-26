@@ -156,6 +156,14 @@ class Settings(BaseSettings):
     chroma_collection: str = "personal_rag"  # legacy collection name (for migration)
     min_cos: float = 0.30
     top_k: int = 6
+    # Lower floors for short personal facts (auto-learned facts and
+    # update_memory saves). Against the un-prefixed nomic embedder a natural
+    # question scores ~0.35-0.45 on the fact that answers it, so MIN_COS (0.50
+    # in compose, tuned to keep long document chunks out of voice prefill) hid
+    # every stored fact. Document chunks keep MIN_COS everywhere (0.30 is near
+    # this embedder's noise floor for long chunks).
+    memory_fact_min_cos: float = 0.35  # facts, per-turn context
+    memory_search_min_cos: float = 0.30  # facts, explicit search (search_memory tool, /api/memory/search)
     rag_base: str = "/app/data/rag"
 
     # -- TTS (empty = disabled) --------------------------------------------------
@@ -306,7 +314,10 @@ class Settings(BaseSettings):
     # -- Auto-learn (F-007) ------------------------------------------------------
     auto_learn_enabled: bool = True
     auto_learn_delay_minutes: int = 10
-    auto_learn_max_facts: int = 5
+    # Per extraction window (one conversation up to ~12k chars; longer ones are
+    # read in several windows). Was 5: a long talk about the user's past
+    # extracted 32 facts and kept the first 5.
+    auto_learn_max_facts: int = 20
     auto_learn_dedup_threshold: float = 0.85
     auto_learn_markdown: bool = False
     auto_learn_encrypt: bool = True

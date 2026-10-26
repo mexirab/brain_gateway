@@ -4,6 +4,175 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — bearer-auth public-path hardening (2026-10-26)
+
+### Security
+
+- `BearerAuthMiddleware` used `startswith()` on `/api/audio/`, `/api/reminder/ack/`, `/api/reminder/snooze/`. uvicorn percent-decodes paths, so `/api/audio/..%2f..%2fmemory%2flearned` skipped the bearer check (it 404'd here, but any path-normalizing layer in front would have made it a bypass). Now `is_public_path` exempts exact `/health` or one segment after a prefix that passes `bearer_auth.is_public_segment` (`[A-Za-z0-9._-]+`, not `.`/`..`); everything else gets 401 without a token.
+- The middleware decides on the routed `scope["path"]` (public check + `WEBHOOK_TOKEN_PATHS`), not `request.url.path`, which drops decoded `\t`/`\r`/`\n`.
+- `reminder_manager._build_callback_url` warns when a minted reminder id falls outside the charset (its taps would 401). All current id formats fit.
+- New `tests/test_auth_public_paths.py`: traversal matrix via raw ASGI scopes, pinned prefix set, one-segment route shapes, no OPTIONS/websocket/mounted routes. Rule: `TECHNICAL_REFERENCE.md` → Tokenless paths.
+- `OPTIONS` skips the bearer check only as a real CORS preflight (`Origin` + `Access-Control-Request-Method`, which `CORSMiddleware` answers without a route); other `OPTIONS` get 401 without a token (was 405 from the router).
+- `RequestSizeLimitMiddleware` + `RateLimitMiddleware` look up `_routed_path()` (`scope["path"]` minus one trailing `\n`) instead of `request.url.path`: `/metrics%09` is no longer rate-limit exempt, `/api/self_audit/alert%0a` keeps its 411 + 64 KB cap. The 16 MB / 100 MB upload caps apply to POST only. See `TECHNICAL_REFERENCE.md` → Body-size + rate limits.
+- `ha_guard`: `play_media` of `{ORCHESTRATOR_URL}/api/audio/<file>` needs `<file>` to pass `is_public_segment` (encoded traversal, a second segment, `?`/`#` refused).
+- `StripQueryStringFilter` also cuts access-line paths at a client-encoded `%3F` (any case, `%253F`…): uvicorn logs the re-quoted path, so query text followed it.
+
+---
+
+## [Unreleased] — Memory recall fix (2026-10-26)
+
+Branch `fix/memory-recall`. After a long voice conversation about the user's past, Jess could not recall it although auto_learn had stored facts from it. Detail: `docs/MEMPALACE.md`.
+
+### Orchestrator
+
+- **Retrieval floors:** fact docs (`source` `auto_learn` / `user_correction`, `shared.MEMORY_FACT_SOURCES`) get `MEMORY_FACT_MIN_COS` (0.35) per turn and `MEMORY_SEARCH_MIN_COS` (0.30) in `search_memory` + `GET /api/memory/search`, never above `MIN_COS`. Short facts score ~0.35–0.45 against the question they answer, so the 0.50 document floor hid all of them. Document chunks keep `MIN_COS`. `file_marker` rows and undecryptable rows are skipped; the 100-char minimum now applies to ingested file chunks only (10 for memories), measured on decrypted text.
+- `search_memory`: an empty wing/room-filtered search retries once unfiltered.
+- **Fact routing:** new room `personal/identity` (`data/palace.yaml`, no keywords). `MemPalace.route_fact` files background facts (identity, work, career, education, history, background, biography; ≤300 chars) there and other personal categories in `personal`; used by auto_learn and `update_memory`. Keyword routing matches whole words + inflections (substrings like "lora" in "exploration" no longer match).
+- **Wakeup / IDENTITY CONTEXT block:** moved first after the dynamic marker (stays in the llama.cpp cached prefix), relabelled as facts that may be outdated, `personal/identity` first with up to 25 entries, `max_tokens` 170 → 600, fact docs only, newest first, entries ≤300 chars, cache invalidated on every fact write.
+- Retrieved memory and the identity block are markup-neutralized (`_frame_memory`, `bgw_tool_result_markup_neutralized_total{tool="memory_context"}`); more section headers defanged.
+- **auto_learn:** long conversations extracted in up to 4 windows of ≤12k chars (was: cut to the last 12k), each waiting for in-flight chat; `AUTO_LEARN_MAX_FACTS` 5 → 20, now per window and after filtering.
+- **update_memory:** only fact docs are replacement candidates, and only when ≥0.60 to both the search query and the new text (was: any doc ≥0.60 to the query, whole collection); reply says when similar facts were kept.
+
+### Monitoring
+
+- New counters `bgw_auto_learn_facts_capped_total`, `bgw_memory_facts_replaced_total`, `bgw_memory_replace_skipped_total` (Grafana Auto-Learn panel "Dedup / Filtered / Capped + update_memory"); `bgw_auto_learn_extraction_duration_seconds` buckets gained 120/300 s.
+
+### Repair
+
+- One-off (2026-10-26): existing fact docs re-filed with `route_fact` (wing/room metadata only) and the affected conversation re-extracted.
+
+### Docs
+
+- `CLAUDE.md`, `docs/MEMPALACE.md`, `docs/ENV_VARS.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
+## [Unreleased] — SearXNG hardening (2026-10-25)
+
+Branch `fix/searxng-hardening` (PR #147), stacked on the web search observability change (PR #145), plus `fix/searxng-own-network` on top. Jess's web search URL (`SEARXNG_URL=http://searxng:8080`) is unchanged; it now resolves over the new `searxng-net` instead of `gateway-net`.
+
+### Upgrade action (required)
+
+- Add `SEARXNG_SECRET` to `.env` **before** `searxng` is next recreated: `python3 -c 'import secrets; print("SEARXNG_SECRET=" + secrets.token_hex(32))' >> .env`, then re-run the CI deploy job, or by hand `docker compose up -d --build orchestrator && docker compose up -d searxng`. Without it SearXNG refuses to start (`server.secret_key is not changed`) and web search is down; nothing else is affected. The CI deploy fails before rebuilding anything when `searxng/` or `docker-compose.yml` changed and `.env` lacks it. The previously committed key was public (it signs `/image_proxy` URLs), so this also rotates it.
+- **Deploy order:** the orchestrator must join `searxng-net` before searxng leaves `gateway-net`. CI rebuilds the orchestrator first; by hand use the command above (or `docker compose up -d --build`). Never `docker compose up -d searxng` alone on a freshly pulled checkout: the old orchestrator can't resolve `searxng`, web search fails with `ConnectError`, and `SearXNGDown` stays green. Recovery: `docker network connect gateway_nerves_searxng-net brain-orchestrator` (no restart) or `docker compose up -d orchestrator`. Rollback is the reverse order: searxng back on `gateway-net` first, then drop `searxng-net` from the orchestrator (a CI revert recreates the orchestrator first, so web search is down until the SearXNG step; a leftover empty `gateway_nerves_searxng-net` is harmless).
+
+### Security
+
+- `server.secret_key` removed from `searxng/settings.yml`; it now comes from `SEARXNG_SECRET` (compose `${SEARXNG_SECRET:-ultrasecretkey}` — unset/empty gives the placeholder SearXNG refuses, so a missing secret fails closed). `install.sh` and `scripts/byo-setup.sh` generate it. Never set `SEARXNG_DEBUG` (debug mode skips the refusal).
+- Host port published on `127.0.0.1:${SEARXNG_PORT:-8090}` only (was all interfaces, with no auth and the limiter off). The browser UI answers on the host only; `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` puts it back on the tailnet (still no auth) — not set up on the maintainer's Jupiter.
+- Image digest-pinned (`searxng/searxng:2026.8.17-374939b88`, was `:latest`). On a bump, re-check the `unresponsive_engines` JSON shape `web_search.py` parses and the placeholder-key refusal.
+- Container: user `977:977`, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs + 64 MB `/tmp` tmpfs, `mem_limit: 1g`, `pids_limit: 256`.
+- `searxng` left `gateway-net` (where it could reach `loki:3100` with no auth — read every log, push lines the self-audit LLM reads — plus redis, brain-frontend, actual-budget and radicale). It now joins only the new `searxng-net` (fixed name `gateway_nerves_searxng-net`, plain bridge, not internal — its route to the upstream engines; created by the main compose; shared only with the orchestrator, its one client) and `searxng-probe-net`.
+- Known, accepted: `searxng-net` is a NAT'd bridge, so searxng can still reach the LAN, tailnet peers and Jupiter's non-loopback host ports (e.g. HA :8123, orchestrator :8888, Helios llama-server :8080) — loopback-only publishes and Tailscale Serve endpoints are out of reach. Through `searxng-probe-net` it can drive blackbox's GET-only `/probe`, which reaches `monitoring-net`: no push or POST, but probe metrics (status code, body length) are a blind read path.
+- Blackbox modules `http_post_2xx` and `tcp_connect` removed (unused; any probe-network neighbour can call `/probe` with any module — POST could reach `prometheus:9090/-/quit`, tcp is a port scanner).
+
+### Monitoring
+
+- `SearXNGDown` probe target is now `http://searxng:8080/healthz` over the new `gateway_nerves_searxng-probe-net` (`internal: true`, created by the main compose; blackbox-exporter joins it as external — bring the main stack up first). `generate-configs.sh` no longer renders `SEARXNG_PORT`. The alert's runbook text covers the missing-secret log line and the probe-path debug.
+- SearXNG logs stay out of Loki (its warnings log upstream URLs carrying the search text); `promtail-config.yml` says so.
+
+### CI
+
+- New deploy step (after the frontend, before monitoring): `docker compose up -d searxng` (`--force-recreate` only when `searxng/` changed — `settings.yml` is a single-file mount; a recreate resets engine suspensions), waits ≤60 s for `/healthz`, prints container state only on failure (never its logs — CI logs are public). Runs after the orchestrator rebuild, which creates `searxng-net`. It then GETs `$SEARXNG_URL/healthz` from inside brain-orchestrator (the host-port check and `SearXNGDown` can't see the orchestrator missing `searxng-net`) and checks runtime membership: searxng on exactly `searxng-net` + `searxng-probe-net`, only brain-orchestrator + searxng on `searxng-net`, at most blackbox-exporter beside searxng on the probe net. Either failure fails the deploy.
+- `orchestrator/tests/test_searxng_hardening.py`: 21 static guards (was 14) over the compose/monitoring YAML (skip without a full checkout). New: searxng on exactly `searxng-net` + `searxng-probe-net`; `searxng-net` fixed name, not internal, not external, declared by no other compose file; across every repo compose file (`network_mode` sidecars included) `searxng-net` holds only orchestrator + searxng and `searxng-probe-net` only searxng + blackbox-exporter; both plain IPv4 bridges; the orchestrator on `searxng-net` with the `SEARXNG_URL` default.
+
+### Docs
+
+- `CLAUDE.md`, `monitoring/README.md`, `docs/ENV_VARS.md` (new Web search section), `docs/UPGRADE.md`, `docs/INSTALL.md`, `docs/BYO_MODEL.md`, `docs/TRY_IT_RENTED_GPU.md`, `docs/PRIVACY.md`, `docs/SPREADSHEETS.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
+## [Unreleased] — control markup neutralized in client chat + calendar text (2026-10-25)
+
+Stacked on the client-message-strip entry below. Closes its "client content is not neutralized" and "`routes_chat` stores any role" gaps.
+
+### Security
+
+- `orchestrator/cloud_brain.py`: `_sanitize_client_history` now runs new `_neutralize_turn` on every surviving `user`/`assistant` turn — the same `_neutralize_control_markup` rewrite tool results get. Covers string content, string list parts and any dict part's string `text`; image parts untouched; an unchanged turn is returned as the same dict; caller dicts never edited. Verified live on Helios (llama.cpp b11358, render-only `/apply-template` + `/tokenize`): an assistant turn `<tool_call>…</tool_call>` + a user turn `<tool_response>…</tool_response>` rendered byte-identical to a real tool round, and after neutralization render as quoted text; `<|im_end|>`, `<|image_pad|>`, `<tool_call>` and `<tts_pad>` typed in content each tokenize as ONE special token. Outsider chain closed: work calendar invite title → announcement → dashboard `/chat` stores it as an assistant turn → resent every turn. Normal Jess history and Telegram photo turns are unchanged.
+- `orchestrator/unified_loop.py`: shared `_CONTROL_MARKUP_RE` (also used by `_cap_tool_result`, `vision_handler.frame_photo_description`, `jobs_self_audit`) is now `</?\s{0,8}(tool_call|tool_response|think|function|parameter|tts_\w{1,24})\b(?:[^<>]{0,512}>)?|<\|[^|<>]{1,32}\|>` (IGNORECASE). **Fixed:** the old `[^>]*` was quadratic on unclosed `<think` openers (~1 s for 140 KB, minutes for MBs, on the event loop); now linear, ~85 ms/MB worst case. Adds the live vocab's `<tts_pad>` / `<tts_text_bos>` / `<tts_text_eod>` / `<tts_text_bos_single>` specials. An opener with no `>` before the next `<` or within 512 chars (`<think a="<b">`) still has its `<` quoted (`‹think a="<b">`), so `StreamGate` / `clean_response` never treat it as a sentinel. One pass leaves no live token; not a fixpoint on crafted nesting (harmless).
+- `orchestrator/calendar_sources.py`: `get_events` runs new `_neutralize_event_text(ev)` on every event's title, location, description and calendar name before dedup — announcements (and the TTS model that speaks them), briefings, `check_calendar` and the dashboard `/calendar` all get plain text. Side effect: an already-announced event whose title contained markup gets a new alert key once after deploy.
+- `/v1/chat/completions` (`orchestrator.py`): every rejection goes through `_reject_chat(reason, error)` → 400 with a fixed-reason INFO log `[CHAT] Rejected chat request: <bad_json|body_not_object|messages_not_array|message_not_object|validation>`. **Fixed:** these were 500s (AttributeError, or an uncaught pydantic `ValidationError` whose traceback quoted the input into the logs). `schemas.ChatMessage.normalize_content` rejects non-string `text` parts (→ 400). The HA-Assist branch no longer crashes on null / non-string content.
+- `[CHAT] Incoming` logs roles from a fixed set (`system, developer, user, assistant, tool, function`), anything else as `other`, and shows the NEWEST 10 messages (was the oldest 10).
+- `POST /api/chat/conversations/{id}/messages` (`routes_chat.py`) validates with new `schemas.ChatHistoryMessage`: role `user`|`assistant` (default `user`), non-empty string content, `routing` any, `announcement_type` optional string. Anything else or bad JSON → 400, INFO log names only the bad field(s). The live table only ever had user/assistant rows.
+
+### Monitoring
+
+- New metric `bgw_client_markup_neutralized_total{role=user|assistant, position=latest|history}` (pre-initialized). `latest` = the turn the request adds (counted once); `history` turns are resent and re-counted every chat turn; `role=assistant` = text Jess didn't write. Log (counts only): `[UNIFIED] Neutralized control markup in client history (user=N assistant=N)`.
+- New Grafana panel "Control Markup Neutralized (tool results + client chat)" in the LLM Performance row (`brain_gateway_sre.py`; generated JSON regenerated): `bgw_tool_result_markup_neutralized_total` by tool + the new counter by role/position. No alert, by design (live baseline 0; the content was defused).
+
+### Tests
+
+- New `orchestrator/tests/test_client_markup_neutralize.py` (~70: forged round + specials, list/image parts, unchanged history, Telegram photo turns, no in-place edits, linear time, every loop path, endpoint 400s, chat-history route) and `test_client_markup_neutralize_extra.py` (~52: `<tts_…>` + 512-char bound via `_cap_tool_result` / `frame_photo_description`, `_neutralize_turn` shapes, `ChatHistoryMessage`, pre-initialized series, body validation). 6 new tests in `test_calendar_sources.py` (every reader gets neutralized text, ordinary text untouched, dedup, stable alert keys). Full suite: 5239 passed, 13 skipped; affected suites after the final regex tweak: 479 passed.
+
+### Known gaps (surfaced by review, not fixed)
+
+- The dynamic system-prompt context (RAG chunks, palace wakeup, tasks/backlog/routine/bookmarks) is only boundary-escaped by `prompt_builder._escape_boundaries`, not markup-neutralized, so a stored `<|im_start|>` there is a live special inside the system turn.
+- Announcements put outside text (calendar titles) into Jess's own words unquoted, then the dashboard resends them as assistant turns, so a title phrased as a question can be "answered" by a later "ok" — semantic, not markup.
+- The VoxCPM2 TTS server NFKC-folds fullwidth `＜｜im_end｜＞` into real ASCII markup after the orchestrator's neutralization.
+- Email→calendar extraction (`jobs_calendar`, gated by `EMAIL_TO_CALENDAR_ENABLED`) sends any sender's email body raw to the model.
+- Still open from the entry below: image parts vision doesn't extract reach the brain unframed (blind SSRF via llama-server's http(s) image fetch).
+
+### Docs
+
+- `CLAUDE.md` (Key Files `cloud_brain.py` row, loop-hardening note + known gaps), `TECHNICAL_REFERENCE.md` (`/v1/chat/completions` rejections, Chat History route, Markup neutralization, Tool-Call Loop Guards + known gaps), `docs/CALENDAR.md` (How Jess uses it), `monitoring/README.md` (panel).
+
+---
+
+## [Unreleased] — image parts never forwarded to the brain (2026-10-25)
+
+Found by the security review of PR #148. Branch `fix/image-parts-untrusted-ssrf`.
+
+### Security
+
+- **Fixed:** some image parts reached the multimodal brain without vision's untrusted PHOTO CONTENT framing, and llama-server downloads http(s) image URLs itself (blind GET SSRF from Helios). `CloudBrain._process_vision` returned early when `VISION_ENABLED=false` or extraction found nothing, so http(s) `image_url` parts in user turns, image parts in assistant turns, and every image with vision off were forwarded unchanged.
+- `orchestrator/cloud_brain.py`: `_sanitize_client_history` flattens assistant list content to text. Image parts there are dropped (WARNING `[UNIFIED] Dropped N image part(s) from client assistant turns — not forwarded` + `bgw_vision_requests_total{status="rejected_assistant"}`); other parts INFO.
+- `_process_vision` always ends with `_flatten_content`: every content list becomes a string. Each user image is either its framed description (keyed by `(msg_index, part_index)`) or a `[PHOTO N NOT ANALYZED] <reason>` note after the text: link / not inline (`NOT_ANALYZED_NOT_INLINE`), vision off (`NOT_ANALYZED_DISABLED`), past `MAX_IMAGES_PER_REQUEST` (`NOT_ANALYZED_OVER_CAP`). Only the first 3 notes in a request carry a reason, then bare notes, so empty image parts can't grow the prompt. Other part types (`input_audio`, `video_url`, `input_video`) are dropped. The old `[Previously shared image]` marker is gone.
+- `routing_info["images_not_analyzed"]` (in `_routing`); the HA fast path is now skipped on any photo turn, analyzed or not.
+- `orchestrator/vision_handler.py`: `_is_safe_image_url` accepts only a `data:` prefix or strict raw base64, so `HTTP://`, `//host.example/x` and `gopher:` are links. New helpers `image_part_url`, `photo_not_analyzed`. Extraction records `part_index` and skips non-string text parts; `prompt_builder.last_user_text` does too (both were 500s); the image-cache key encodes with `surrogatepass` (a lone surrogate was a 500). `analyze_image` shows a malformed data-URI MIME as `malformed` in its log and reply.
+- `POST /api/vision/analyze` (`routes_vision.py`) JSON branch: a link or non-string `image` → 400 `Only inline image data (a data: URI or plain base64) accepted, not URLs`; a non-object JSON body → 400 `JSON body must be an object` (was a 500).
+- `bgw_vision_requests_total{status}` gains `rejected_url` (chat image part that is a link, empty, malformed, or not plain base64; never fetched or forwarded), `skipped_cap` and `rejected_assistant`; `disabled` is now also counted once per chat image while `VISION_ENABLED=false`. Rare statuses are pre-created. The chat path counts per image part in the request, so a client that resends history counts the same old image every turn.
+- Logs (counts only): WARNING `[VISION] N image part(s) were links or empty, not inline data — not fetched, not forwarded`; INFO `[VISION] Vision disabled — N image(s) not analyzed`; INFO `[VISION] Dropped N non-text, non-image content part(s)`. The per-URL WARNING `Rejected non-data-URI image URL (SSRF prevention)` is gone.
+
+### Tests
+
+- New `orchestrator/tests/test_image_parts_never_forwarded.py` (65): links, vision off, the cap, assistant-turn images, other part types, per-part description keys, bounded notes, every loop path incl. the buffered + streamed loop-failure fallback, fast-path gate, auto-learn snapshot.
+- New `orchestrator/tests/test_vision_analyze_route.py` (21): links, odd casing, non-string and non-object bodies → 400 without reaching `analyze_image`; inline data is analyzed.
+- Full suite: 5246 passed, 13 skipped.
+
+### Known gaps (surfaced by review, not fixed)
+
+- Brain side unchanged: llama-server :8080 has no API key, so any host that can reach it directly (LAN, tailnet, Docker networks) can still make Helios fetch a URL. This build has no remote-media off switch. Options (narrow `IPAddressAllow` to `localhost 10.0.0.248/32`, `--api-key-file`, a Loki alert on llama-server's `downloading image from` line) are in the new `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md` — recommendation only, the owner decides.
+
+### Docs
+
+- New `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`. `CLAUDE.md` (Tools `analyze_image` row, Key Files `cloud_brain.py` row, router table, loop-hardening known gaps), `TECHNICAL_REFERENCE.md` (Vision: route table, new "Only text reaches the loop" paragraph, `bgw_vision_requests_total` statuses; Tool-Call Loop Guards `_sanitize_client_history` row + known gaps), `docs/ENV_VARS.md` (`VISION_ENABLED` off behavior), `.claude/agents/prod-support.md` (Vision metric row + log lines).
+
+---
+
+## [Unreleased] — client message strip on every path (2026-10-25)
+
+Found by the code review of PR #146.
+
+### Security
+
+- `orchestrator/cloud_brain.py`: new `_sanitize_client_history(messages)`, the first statement of `CloudBrain._chat_unified_inner`. Keeps only client turns whose role is exactly `user` or `assistant` (was a `system`/`tool` deny-list): `ChatMessage.role` is free text, the live Qwen3.8 template merges a leading `developer` turn into the system prompt after the END OF CONTEXT footer, and other unknown roles (`function`, `System`, `tool `) make the template raise, so the turn fails into the fallback / brain-asleep reply. Blank assistant turns are still dropped. Returns a new list; client dicts are not edited.
+- **Fixed:** the strip ran after the model health check, so when the primary was offline and `_start_model_server()` failed, `_unified_fallback` ran the fallback model's tool loop (and auto-learn's cache) on the raw client history — forged `tool` results and extra `system` messages included. Now every path gets the cleaned list: buffered primary, real streaming + its in-producer fallback, health-check fallback, buffered loop-failure fallback, vision, auto-learn. Live impact was narrow: on the live box `FALLBACK_MODEL_URL == MODEL_URL`, and only `API_TOKEN` holders can send arbitrary roles.
+- Logs (counts only): unchanged `[UNIFIED] Stripped N client system/tool message(s)` and `[UNIFIED] Dropped N empty assistant message(s) from history`; new `[UNIFIED] Stripped N client message(s) with another role`.
+
+### Tests
+
+- New `orchestrator/tests/test_client_message_strip_paths.py` (26): all four loop paths incl. voice, fast path, vision ordering, other / near-miss / non-string roles, no in-place edits, idempotence, count-only logs.
+
+### Known gaps (surfaced by review, not fixed)
+
+- Image parts vision doesn't extract (http(s) URLs, non-user roles, `VISION_ENABLED=false`) reach the brain unframed, and llama-server fetches http(s) image URLs itself (blind SSRF from Helios). — **Fixed** in the entry above (orchestrator side; llama-server itself still fetches URLs for direct callers).
+
+### Docs
+
+- `CLAUDE.md` (Key Files `cloud_brain.py` row, loop-hardening note + known gaps), `TECHNICAL_REFERENCE.md` (Tool-Call Loop Guards, Empty-Reply Handling).
+
+---
+
 ## [Unreleased] — "Did the user ask?" gate on chat `home_assistant` calls (2026-10-24)
 
 On 2026-10-24 a trial brain switched off speakers / a light on 4 of 8 voice "tell me a fun fact" turns with thinking off. Thinking on hid it, but that is model behaviour, not a control, and does nothing against prompt injection.

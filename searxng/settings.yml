@@ -6,7 +6,12 @@ use_default_settings: true
 server:
   # Bind to all interfaces inside container
   bind_address: "0.0.0.0"
-  secret_key: "brain-gateway-searxng-key"
+  # secret_key is NOT set here (this repo is public): it comes from
+  # SEARXNG_SECRET in .env (docker-compose.yml). Without it SearXNG refuses to
+  # start.
+  # No limiter (it needs Valkey): the host port is published on 127.0.0.1
+  # only, so just containers on its Docker networks and Jupiter itself (or a
+  # Tailscale Serve forward the owner adds) reach this instance.
   limiter: false
   image_proxy: false
 

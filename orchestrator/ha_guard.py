@@ -33,6 +33,7 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 from orchestrator import ha_registry
+from orchestrator.bearer_auth import is_public_segment
 from orchestrator.config import settings
 
 # Domains listed in the home_assistant tool schema, in listing order.
@@ -236,7 +237,10 @@ def _allowed_media_url(media_id: str) -> bool:
     if media_id in {s for s in streams if s}:
         return True
     base = (settings.orchestrator_url or "").rstrip("/")
-    return bool(base) and media_id.startswith(f"{base}/api/audio/")
+    prefix = f"{base}/api/audio/"
+    # One clip filename, the same rule the tokenless /api/audio/ route gets:
+    # "%2e%2e%2f..." or a second segment would make HA fetch another path.
+    return bool(base) and media_id.startswith(prefix) and is_public_segment(media_id[len(prefix) :])
 
 
 def _check_media_data(service: str, data: Dict[str, Any]) -> Optional[str]:
