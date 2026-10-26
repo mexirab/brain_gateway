@@ -291,9 +291,11 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### Vision
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_vision_requests_total` | Counter | status | Vision analysis requests (success/error/disabled) |
+| `bgw_vision_requests_total` | Counter | status | Vision analysis requests: success/empty/timeout/connect_error/http_error/error/disabled/skipped_unreachable/rejected_mime/rejected_empty/rejected_corrupt/rejected_size, plus chat-path `rejected_url` (image part that is a link, empty or not inline data — never fetched or forwarded), `skipped_cap` (past `MAX_IMAGES_PER_REQUEST`), `rejected_assistant` (image part in a client assistant turn, dropped). `disabled` also counts each chat image while `VISION_ENABLED=false`. Chat path counts per image part in the request, so resent history recounts the same image every turn |
 | `bgw_vision_request_duration_seconds` | Histogram | | Vision model latency |
 | `bgw_vision_image_size_bytes` | Histogram | | Image size distribution |
+
+Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or empty, not inline data — not fetched, not forwarded` (a client sent image links or empty image parts in a user turn; same SSRF vector as WARNING `[UNIFIED] Dropped N image part(s) from client assistant turns — not forwarded`); INFO `[VISION] Vision disabled — N image(s) not analyzed`; INFO `[VISION] Dropped N non-text, non-image content part(s)`. No image part ever reaches the brain; llama-server itself still fetches URLs for direct callers — `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`.
 
 ### Web Search
 | Metric | Type | Labels | Purpose |
@@ -362,6 +364,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 2. Check entity count in health endpoint — 0 entities = HA unreachable at startup
 3. Check entity exists: `curl -s http://localhost:8888/api/ha/entities | python3 -c "import sys,json; [print(e['entity_id']) for e in json.load(sys.stdin)['controllable'].get('light',[])]"` — lists only listed-domain, non-denied entities; a denied (Helios plug, `HA_TOOL_DENY_ENTITIES`) or unlisted-domain (e.g. vacuum) entity won't appear, so check HA directly: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.248:8123/api/states/<entity_id>`
 4. Refused by the shared guard (`ha_guard.py`)? `bgw_ha_call_refused_total{path=tool|nlp|api}` + WARNING `[HA] Legacy command refused` / `[HA] API command refused`. unlock / open-cover / vacuum are refused by design (chat, fast path, `/api/ha/command`).
+5. Chat only — refused by the did-the-user-ask gate (`ha_intent.py`)? `bgw_ha_unrequested_blocked_total{domain}` / `bgw_ha_intent_decision_total{result,via}` + Loki `Blocked unrequested home_assistant call` (ids only; reason `none` = no device intent in the user's message, `untrusted_content` = intent not explicit enough after a web/mail/memory/photo result). The call never ran and the model should have asked, naming the device; a "yes" to that question goes through. `allowed{via=confirmed}` climbing with the blocks = the detector misses real requests. To measure without blocking: `HA_INTENT_GATE=shadow` in `.env` + `docker compose up -d --force-recreate orchestrator` (logs "Would block …", still executes). Fast path, `/api/ha/command` and internal callers are never gated.
 
 ### "Reminders not firing"
 1. Check scheduler is running: health endpoint → `scheduler.running`

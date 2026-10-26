@@ -221,7 +221,7 @@ Cutover = point `TTS_URL` at `http://<helios>:8004`. See `docs/VOICE_AND_TTS.md`
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `VISION_ENABLED` | `false` | Enable/disable image analysis feature |
+| `VISION_ENABLED` | `false` | Enable/disable image analysis feature. Off: chat images become a `[PHOTO N NOT ANALYZED]` note, never forwarded to the brain (`TECHNICAL_REFERENCE.md` → Vision) |
 | `VISION_MODEL_URL` | (empty) | Vision model endpoint, e.g. `http://vision.example.tld:8010/v1`. Helios deployment (since 2026-09-28): `http://10.0.0.195:8080/v1` — the multimodal Qwen3.8 primary brain serves vision, so vision needs Helios awake; previously Qwen3-VL-8B-Instruct Q4_K_M on Saturn RTX 3080 (:8010; rollback lines in Jupiter `.env.bak-vision-saturn`). Required when `VISION_ENABLED=true`. |
 | `VISION_MODEL_NAME` | `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | Vision model identifier (the served model name; default matches the llama.cpp `--model` filename). Helios deployment: `qwen3.8-flash-next-q3kxl` since 2026-10-24 (the brain's `--alias`; vision runs on the primary — photo descriptions verified correct in the Flash-Next trial; was `qwen3.8-27b-turbo-q6k`). |
 | `VISION_MAX_IMAGE_SIZE` | `10485760` | Maximum image upload size in bytes (10 MB) |
@@ -291,6 +291,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 |----------|---------|
 | `HA_TOKEN` | Home Assistant long-lived access token |
 | `HA_TOOL_DENY_ENTITIES` | Comma-separated entity ids / `fnmatch` globs (lowercased) no user/model-steerable HA call may target or list (`ha_guard.py`: chat `home_assistant` tool, fast-path/NLP commands, dashboard `/home` via `POST /api/ha/command`, and `GET /api/ha/entities`), e.g. `switch.router_*,switch.*_camera_enabled`. Default empty. The Helios plug (`HELIOS_PLUG_ENTITY`, its object id in any domain) is always denied on top of this list. Recreate the orchestrator after changing. |
+| `HA_INTENT_GATE` | "Did the user ask?" gate on the chat model's `home_assistant` calls (`ha_intent.py`; fast path, `/api/ha/command` and internal callers are never gated). `enforce` (default — unrequested calls refused, model told to ask) \| `shadow` (count + log "would block", still execute — for measuring a detector change) \| `off`. Anything unrecognised → `enforce`. Read at process start — recreate the orchestrator after changing. Rules: `TECHNICAL_REFERENCE.md` → home_assistant → "Did the user ask?" gate. |
 | `API_TOKEN` | Orchestrator API bearer auth (also required for `/metrics`, `/api/rag/ingest`, `/api/claude_code/turn`) |
 | `CHROMA_PERSIST` | ChromaDB persistence path |
 | `MIN_COS`, `TOP_K` | RAG retrieval params. `MIN_COS` = cosine floor for document chunks everywhere (compose default `0.50`, `config.py` `0.30`); fact docs use `MEMORY_FACT_MIN_COS` / `MEMORY_SEARCH_MIN_COS` (MemPalace section). `TOP_K` = candidates per query (compose `10`) |

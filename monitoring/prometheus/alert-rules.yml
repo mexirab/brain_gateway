@@ -373,6 +373,22 @@ groups:
           summary: "Most web searches failed in the last 6h"
           description: "{{ $value | humanizePercentage }} of Jess's web searches in the last 6h failed (empty, error or timeout), so she can't look things up. Split by result in Grafana (Web Search panel). empty: SearXNG's engines are suspended or blocked — check the SearXNG Engines Unresponsive panel and `docker logs searxng`; suspensions lift on their own (minutes to a day), and don't test with bursts of real searches. timeout/error: SearXNG is slow or down — `docker ps --filter name=searxng`, `docker logs brain-orchestrator | grep WEB_SEARCH`. Voice searches give up after 5 s, typed ones after 15 s. Clears up to 6 h after recovery."
 
+      # The did-the-user-ask gate (orchestrator/ha_intent.py) refused chat-model
+      # home_assistant calls. Nothing changed on any device — the gate worked —
+      # but repeated blocks mean either the brain is acting unasked (after a
+      # brain swap / with voice thinking off) or the detector misses real
+      # requests. 6h window + >= 3: traffic is sparse (~3 HA calls/day), and a
+      # single block is normal. Quiet tier, not the self-investigator: the log
+      # lines carry no user text, so it couldn't tell the two apart.
+      - alert: HAUnrequestedCallsBlocked
+        expr: sum(increase(bgw_ha_unrequested_blocked_total[6h])) >= 3
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Jess tried device changes nobody asked for (blocked)"
+          description: "{{ $value | humanize }} home_assistant call(s) refused in 6h because the user's message showed no device intent. Nothing was changed. Check Loki for 'Blocked unrequested home_assistant call' (domain/entity only) and bgw_ha_intent_decision_total: blocked{via=none} rising after a brain change = the model acts unasked (check voice thinking); allowed{via=confirmed} rising alongside = real requests being refused, the user had to say yes (ha_intent detector miss). HA_INTENT_GATE=shadow|off in .env + `docker compose up -d --force-recreate orchestrator` relaxes the gate."
+
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
   # ===========================================================================

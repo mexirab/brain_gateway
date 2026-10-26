@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     # Helios plug (helios_plug_entity) is always denied on top of this list —
     # it is controlled only through the gated helios_power tool.
     ha_tool_deny_entities: str = ""
+    # "Did the user ask?" gate on the chat model's home_assistant calls
+    # (ha_intent): enforce (refuse unrequested calls) | shadow (count + log
+    # "would block", still execute) | off. Read at process start.
+    ha_intent_gate: str = "enforce"
 
     # -- Helios wake-on-demand (PT-C) --------------------------------------------
     # Power-tier the GPU box: Helios runs only the model layer (vLLM/TTS/STT) and
@@ -587,6 +591,13 @@ class Settings(BaseSettings):
         if v < 1:
             return 1
         return v
+
+    @field_validator("ha_intent_gate")
+    @classmethod
+    def validate_ha_intent_gate(cls, v: str) -> str:
+        # Anything unrecognised enforces: a typo must not switch a safety gate off.
+        v = (v or "").strip().lower()
+        return v if v in ("enforce", "shadow", "off") else "enforce"
 
     @field_validator("ntfy_default_priority")
     @classmethod
