@@ -66,6 +66,11 @@ else
     set_env DASHBOARD_TOKEN "${DASH_TOKEN}"
     ok "Generated DASHBOARD_TOKEN"
 fi
+if ! grep -qE '^SEARXNG_SECRET=[A-Za-z0-9_-]{32,}$' "${ENV_FILE}"; then
+    # Web search: SearXNG refuses to start without its own secret.
+    set_env SEARXNG_SECRET "$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    ok "Generated SEARXNG_SECRET"
+fi
 
 set_env GATEWAY_ROOT_PATH "${REPO_ROOT}"
 set_env JESS_LAN_IP "localhost"
