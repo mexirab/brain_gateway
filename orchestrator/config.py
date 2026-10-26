@@ -8,7 +8,8 @@ Import `settings` to access configuration anywhere:
     url = settings.model_url
 """
 
-from typing import List
+import re
+from typing import Dict, List
 
 from dotenv import load_dotenv
 from pydantic import field_validator, model_validator
@@ -16,6 +17,22 @@ from pydantic_settings import BaseSettings
 
 # Load .env before Settings reads os.environ
 load_dotenv("/app/.env", override=False)
+
+_GRIST_NICK_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+_GRIST_DOC_ID_RE = re.compile(r"^[A-Za-z0-9]{10,64}$")
+
+
+def parse_grist_docs(raw: str) -> Dict[str, str]:
+    """GRIST_DOCS ("nickname=docId,...") → {nickname: doc_id}. Malformed
+    entries are dropped; nicknames are lower-cased. Lives here (not in
+    grist_client) so the config validator can use it without a circular import."""
+    docs: Dict[str, str] = {}
+    for part in (raw or "").split(","):
+        nick, sep, doc_id = part.strip().partition("=")
+        nick, doc_id = nick.strip().lower(), doc_id.strip()
+        if sep and _GRIST_NICK_RE.match(nick) and _GRIST_DOC_ID_RE.match(doc_id):
+            docs[nick] = doc_id
+    return docs
 
 
 class Settings(BaseSettings):
@@ -94,6 +111,10 @@ class Settings(BaseSettings):
     # switch — flip to false to restore chunk-the-finished-string behavior
     # without a code change.
     real_streaming_enabled: bool = True
+    # Thinking on voice turns. Off (default) sends enable_thinking=false for
+    # the fastest first spoken word; turn on for a brain that takes
+    # unrequested actions with thinking off (see unified_loop voice mode).
+    voice_thinking_enabled: bool = False
 
     # -- Home Assistant (empty = disabled) ----------------------------------------
     ha_url: str = ""
@@ -103,6 +124,10 @@ class Settings(BaseSettings):
     # Helios plug (helios_plug_entity) is always denied on top of this list —
     # it is controlled only through the gated helios_power tool.
     ha_tool_deny_entities: str = ""
+    # "Did the user ask?" gate on the chat model's home_assistant calls
+    # (ha_intent): enforce (refuse unrequested calls) | shadow (count + log
+    # "would block", still execute) | off. Read at process start.
+    ha_intent_gate: str = "enforce"
 
     # -- Helios wake-on-demand (PT-C) --------------------------------------------
     # Power-tier the GPU box: Helios runs only the model layer (vLLM/TTS/STT) and
@@ -131,6 +156,14 @@ class Settings(BaseSettings):
     chroma_collection: str = "personal_rag"  # legacy collection name (for migration)
     min_cos: float = 0.30
     top_k: int = 6
+    # Lower floors for short personal facts (auto-learned facts and
+    # update_memory saves). Against the un-prefixed nomic embedder a natural
+    # question scores ~0.35-0.45 on the fact that answers it, so MIN_COS (0.50
+    # in compose, tuned to keep long document chunks out of voice prefill) hid
+    # every stored fact. Document chunks keep MIN_COS everywhere (0.30 is near
+    # this embedder's noise floor for long chunks).
+    memory_fact_min_cos: float = 0.35  # facts, per-turn context
+    memory_search_min_cos: float = 0.30  # facts, explicit search (search_memory tool, /api/memory/search)
     rag_base: str = "/app/data/rag"
 
     # -- TTS (empty = disabled) --------------------------------------------------
@@ -272,13 +305,19 @@ class Settings(BaseSettings):
     actual_sync_interval: int = 30  # minutes
     # Months mirrored into finance.db, including the current one.
     actual_sync_months: int = 3
+    # Months of Actual history (incl. the current one) the query_budget tool
+    # can see, as the reserved dataset "actual". See budget_manager.refresh_actual_dataset.
+    actual_history_months: int = 24
     # Case-insensitive substring match ("Fun Money" matches "🎮 Fun Money").
     actual_fun_money_category: str = "Fun Money"
 
     # -- Auto-learn (F-007) ------------------------------------------------------
     auto_learn_enabled: bool = True
     auto_learn_delay_minutes: int = 10
-    auto_learn_max_facts: int = 5
+    # Per extraction window (one conversation up to ~12k chars; longer ones are
+    # read in several windows). Was 5: a long talk about the user's past
+    # extracted 32 facts and kept the first 5.
+    auto_learn_max_facts: int = 20
     auto_learn_dedup_threshold: float = 0.85
     auto_learn_markdown: bool = False
     auto_learn_encrypt: bool = True
@@ -451,6 +490,24 @@ class Settings(BaseSettings):
     paperless_default_tags: str = ""  # comma-separated, optional
     paperless_upload_timeout_seconds: int = 30
 
+    # -- Grist spreadsheet (spreadsheet tool) --------------------------------------
+    # Self-hosted Grist on Jupiter (grist/docker-compose.yml). Default off.
+    grist_enabled: bool = False
+    grist_url: str = ""  # e.g. http://grist:8484 (container name over grist-net)
+    # API key of the least-privilege "jess" Grist user (Editor on the allow-listed
+    # docs only — never the owner's key). See docs/SPREADSHEETS.md.
+    grist_api_key: str = ""
+    # Allow-list: "nickname=docId,..." — the only docs Jess can open.
+    grist_docs: str = ""
+
+    # -- Research helper (research_helper.py, `look_it_up` tool) ------------------
+    # Jess asks a sandboxed helper (own tool loop, no personal context) to look
+    # things up in current docs / the web. Default off.
+    research_helper_enabled: bool = False
+    # Optional Context7 key (ctx7sk…) for the library_docs source; works
+    # without one at a low rate limit.
+    research_context7_api_key: str = ""
+
     # -- ntfy feedback loop (F-011) ---------------------------------------------
     # Third delivery channel for reminders (alongside TTS + HA Companion push).
     # Includes HMAC-signed Done/Snooze action buttons that POST back to the
@@ -534,6 +591,13 @@ class Settings(BaseSettings):
         if v < 1:
             return 1
         return v
+
+    @field_validator("ha_intent_gate")
+    @classmethod
+    def validate_ha_intent_gate(cls, v: str) -> str:
+        # Anything unrecognised enforces: a typo must not switch a safety gate off.
+        v = (v or "").strip().lower()
+        return v if v in ("enforce", "shadow", "off") else "enforce"
 
     @field_validator("ntfy_default_priority")
     @classmethod
@@ -774,6 +838,8 @@ class Settings(BaseSettings):
             object.__setattr__(self, "actual_sync_interval", 5)
         if not 1 <= self.actual_sync_months <= 24:
             object.__setattr__(self, "actual_sync_months", min(24, max(1, self.actual_sync_months)))
+        if not 1 <= self.actual_history_months <= 120:
+            object.__setattr__(self, "actual_history_months", min(120, max(1, self.actual_history_months)))
         return self
 
     @model_validator(mode="after")
@@ -809,6 +875,28 @@ class Settings(BaseSettings):
                 "Set both in .env to re-enable."
             )
             object.__setattr__(self, "paperless_enabled", False)
+        return self
+
+    @model_validator(mode="after")
+    def validate_grist_config(self) -> "Settings":
+        """Auto-disable the spreadsheet tool if Grist config is incomplete.
+        Loud error log, never raises (same rule as the Paperless bridge)."""
+        if not self.grist_enabled:
+            return self
+        import logging
+
+        problem = None
+        if not self.grist_url.startswith(("http://", "https://")):
+            problem = "GRIST_URL is missing or not an http(s) URL"
+        elif len(self.grist_api_key) < 20:
+            problem = "GRIST_API_KEY is missing"
+        elif not parse_grist_docs(self.grist_docs):
+            problem = "GRIST_DOCS has no valid nickname=docId entries"
+        if problem:
+            logging.getLogger(__name__).error(
+                "[CONFIG] GRIST_ENABLED=true but %s; disabling the spreadsheet tool.", problem
+            )
+            object.__setattr__(self, "grist_enabled", False)
         return self
 
     @model_validator(mode="after")

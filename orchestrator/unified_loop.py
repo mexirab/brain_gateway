@@ -10,8 +10,10 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from orchestrator import shared
+from orchestrator.ha_intent import TRUSTED_RESULT_TOOLS, UNREQUESTED_RESULT, Assessment, assess, check_call
 from orchestrator.log_config import content_shape
 from orchestrator.metrics import (
     CHAT_STREAM_OUTCOME,
@@ -49,18 +51,36 @@ MAX_TOOL_RESULT_CHARS = 8000
 # fools the StreamGate, and ``<|im_start|>`` / ``<|im_end|>`` are tokenised as
 # chat-template specials by llama-server, i.e. a tool result could forge a
 # user turn at token level. Each is rewritten with Unicode angle quotes so the
-# text stays readable but is no longer markup.
+# text stays readable but is no longer markup. Since 2026-10-25 this also runs
+# on the client's own chat history (cloud_brain._sanitize_client_history) and
+# covers the live vocab's <tts_…> specials. Every quantifier is bounded and a
+# tag body may not contain "<", so the scan is linear: the old `[^>]*` re-read
+# the rest of the string for every unclosed "<think" (~1 s for 140 KB). An
+# opener with no ">" before the next "<" or within 512 chars (`<think a="<b">`)
+# still gets its "<" quoted: StreamGate and clean_response treat any
+# `<think\b…>` as a sentinel and would hide the rest of a reply quoting it.
 _CONTROL_MARKUP_RE = re.compile(
-    r"</?\s*(tool_call|tool_response|think|function|parameter)\b[^>]*>|<\|[^|<>]{1,32}\|>",
+    r"</?\s{0,8}(tool_call|tool_response|think|function|parameter|tts_\w{1,24})\b(?:[^<>]{0,512}>)?"
+    r"|<\|[^|<>]{1,32}\|>",
     re.IGNORECASE,
 )
 
 
+def _quote_markup(m: "re.Match[str]") -> str:
+    tag = m.group(0)
+    return "‹" + tag[1:-1] + "›" if tag.endswith(">") else "‹" + tag[1:]
+
+
 def _neutralize_control_markup(s: str) -> str:
-    """Rewrite chat-template / tool-call markup in untrusted text as plain text."""
+    """Rewrite chat-template / tool-call markup in untrusted text as plain text.
+
+    One pass leaves no live tag or special token. It is not a fixpoint on
+    crafted nesting: ``<tool_call <think>>`` changes again on a second pass
+    (harmless — it only quotes more).
+    """
     if "<" not in s:
         return s
-    return _CONTROL_MARKUP_RE.sub(lambda m: "‹" + m.group(0)[1:-1] + "›", s)
+    return _CONTROL_MARKUP_RE.sub(_quote_markup, s)
 
 
 def _cap_tool_result(result: Any, tool_name: str) -> str:
@@ -528,6 +548,31 @@ _MOVEMENT_PATTERNS = re.compile(
 _IMAGE_ANALYSIS_RE = PHOTO_BLOCK_RE
 
 
+def _text_parts(content: list) -> str:
+    return " ".join(
+        p.get("text", "")
+        for p in content
+        if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
+    ).strip()
+
+
+def _last_user_index(messages: list) -> Optional[int]:
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            return i
+        if isinstance(content, str):
+            # Skip chat-UI auto-generated prompts (tags, follow-ups, titles —
+            # the "### Task:" format Open WebUI used before it was retired)
+            if content.startswith("### Task:"):
+                continue
+            return i
+    return None
+
+
 def _last_user_text(messages: list) -> str:
     """Extract the last user message's own text.
 
@@ -535,23 +580,35 @@ def _last_user_text(messages: list) -> str:
     "" for a photo-only turn — and never falls back to an older turn: that
     re-ran the previous message's fast-path device command on a photo send.
     """
-    for msg in reversed(messages):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if isinstance(content, list):
-            return " ".join(
-                p.get("text", "")
-                for p in content
-                if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
-            ).strip()
-        if isinstance(content, str):
-            # Skip chat-UI auto-generated prompts (tags, follow-ups, titles —
-            # the "### Task:" format Open WebUI used before it was retired)
-            if content.startswith("### Task:"):
-                continue
-            return _IMAGE_ANALYSIS_RE.sub("", content).strip()
-    return ""
+    i = _last_user_index(messages)
+    if i is None:
+        return ""
+    content = messages[i]["content"]
+    if isinstance(content, list):
+        return _text_parts(content)
+    return _IMAGE_ANALYSIS_RE.sub("", content).strip()
+
+
+def _last_user_turn_has_photo(messages: list) -> bool:
+    i = _last_user_index(messages)
+    if i is None:
+        return False
+    content = messages[i]["content"]
+    if isinstance(content, list):
+        return any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+    return bool(_IMAGE_ANALYSIS_RE.search(content))
+
+
+def _assistant_text_before_last_user(messages: list) -> str:
+    """Text of the assistant message right before the last user message, or
+    "" — what a bare "yes" is answering."""
+    i = _last_user_index(messages)
+    if not i or messages[i - 1].get("role") != "assistant":
+        return ""
+    content = messages[i - 1].get("content")
+    if isinstance(content, list):
+        return _text_parts(content)
+    return content if isinstance(content, str) else ""
 
 
 def _detect_selfcare_action(text: str) -> dict | None:
@@ -651,6 +708,34 @@ async def run_unified_tool_loop(
                 logger.warning("[%s] Final emit failed: %s", label, e)
         return text
 
+    async def _forced_final(instruction: str, fallback: str) -> str:
+        """One tool-less model call for the closing words: the model only
+        repeated calls, or kept trying device calls the user didn't ask for."""
+        last = messages[-1] if messages else {}
+        if last.get("role") == "user" and isinstance(last.get("content"), str):
+            # XML fallback: the results already sit in a user turn — no second one in a row.
+            last["content"] = f"{last['content']}\n\n{instruction}"
+        else:
+            messages.append({"role": "user", "content": instruction})
+        _final_t0 = time.time()
+        try:
+            final_resp = await call_model(
+                model_url,
+                model_name,
+                messages,
+                system=system_prompt,
+                timeout=120,  # same budget as a normal round (single llama slot)
+                extra_body=voice_extra,  # voice turns stay short and fast
+            )
+            LLM_CALL_COUNT.labels(model=model_name, purpose="unified_final").inc()
+            LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_final").observe(time.time() - _final_t0)
+            final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return await _finalize(clean_response(final_content), already_streamed=False)
+        except Exception as e:
+            LLM_CALL_ERRORS.labels(model=model_name, error_type=type(e).__name__).inc()
+            logger.error("[%s] Final response failed: %s", label, e)
+            return await _finalize(fallback, already_streamed=False)
+
     # Voice mode: reduce max_tokens for shorter responses (faster TTS) and
     # disable thinking. Added for Qwen3.6 on vLLM (2026-04), whose default
     # thinking ate the whole 1024-token budget; on the Qwen3.8 brain it still
@@ -660,13 +745,23 @@ async def run_unified_tool_loop(
     # 7/8 times when the history held an empty assistant turn. cloud_brain
     # drops those turns, and an empty round is retried once WITH thinking
     # (see EMPTY_REPLY_TOTAL below), so the fast path never leaves a blank reply.
+    # VOICE_THINKING_ENABLED keeps thinking on for voice turns, for brains that
+    # act unasked without it: Qwen3.8-Flash-Next turned devices off on a voice
+    # "tell me a fun fact" 4/8 times with thinking off, 0/33 with it on
+    # (first spoken token ~0.40 s vs ~0.13 s). Default off keeps the 27B as is.
+    # Reasoning tokens count against max_tokens on llama.cpp, so thinking-on
+    # voice turns get 2048: reply length is held by the voice prompt, and the
+    # 1024 cap was sized for thinking off.
     voice_extra = None
     if is_voice:
-        voice_extra = {
-            "max_tokens": 1024,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-        logger.info("[%s] Voice mode: max_tokens=1024, thinking=off", label)
+        voice_thinking = shared.VOICE_THINKING_ENABLED
+        voice_max_tokens = 2048 if voice_thinking else 1024
+        voice_extra = {"max_tokens": voice_max_tokens}
+        if not voice_thinking:
+            voice_extra["chat_template_kwargs"] = {"enable_thinking": False}
+        logger.info(
+            "[%s] Voice mode: max_tokens=%d, thinking=%s", label, voice_max_tokens, "on" if voice_thinking else "off"
+        )
     empty_retry_done = False
     retry_text_only = False  # the retry follows tool execution: words only, no new actions
 
@@ -674,6 +769,18 @@ async def run_unified_tool_loop(
     valid_tool_names = {t["function"]["name"] for t in tools if "function" in t}
 
     executed_calls = set()
+
+    # The user's own words this turn, read before the loop appends its own
+    # "respond naturally" user turns: every round's home_assistant calls are
+    # judged against them (ha_intent — "did the user actually ask?").
+    turn_user_text = _last_user_text(messages)
+    turn_assistant_before = _assistant_text_before_last_user(messages)
+    ha_assessment: Optional[Assessment] = None  # assessed on the turn's first home_assistant call
+    # Someone else's text is already in play: a tool returning it ran this
+    # turn, or the user's message carries a photo (its analysis is untrusted).
+    untrusted_seen = _last_user_turn_has_photo(messages)
+    ha_blocks = 0
+    ha_blocked_rounds = 0
 
     # Iteration budget, separate from max_rounds: the empty-reply retry adds a
     # round instead of consuming one (an empty LAST round must not fall into
@@ -745,12 +852,13 @@ async def run_unified_tool_loop(
                     ]
                 }
                 logger.info(
-                    "[%s] LLM probe (stream): raw_len=%d reasoning_len=%d emitted=%d tool_calls=%d elapsed=%.2fs",
+                    "[%s] LLM probe (stream): raw_len=%d reasoning_len=%d emitted=%d tool_calls=%d finish=%s elapsed=%.2fs",
                     label,
                     len(sr["content"]),
                     sr["reasoning_len"],
                     sr["emitted"],
                     len(sr["tool_calls"]),
+                    sr["finish_reason"],
                     time.time() - _llm_t0,
                 )
 
@@ -788,12 +896,13 @@ async def run_unified_tool_loop(
             _usage = llm_resp.get("usage") or {}
             _has_think = "<think>" in _content_probe
             logger.info(
-                "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s elapsed=%.2fs",
+                "[%s] LLM probe: prompt_toks=%s completion_toks=%s raw_len=%d has_think=%s finish=%s elapsed=%.2fs",
                 label,
                 _usage.get("prompt_tokens"),
                 _usage.get("completion_tokens"),
                 len(_content_probe),
                 _has_think,
+                (llm_resp.get("choices") or [{}])[0].get("finish_reason"),
                 time.time() - _llm_t0,
             )
 
@@ -885,8 +994,9 @@ async def run_unified_tool_loop(
         # No tool calls and nothing visible: the model ended its turn
         # immediately (or only echoed the <think></think> prefill). Nothing
         # visible reached the client, so one retry is safe — with thinking
-        # enabled, the robust path on Qwen3.8. A rejected/truncated <tool_call>
-        # echo is not "empty" and isn't retried.
+        # enabled, the robust path on Qwen3.8 (VOICE_THINKING_ENABLED: thinking
+        # is already on, so the retry is a plain resample). A rejected/truncated
+        # <tool_call> echo is not "empty" and isn't retried.
         if (
             not tool_calls
             and not clean_response(content).strip()
@@ -923,7 +1033,7 @@ async def run_unified_tool_loop(
             if not result.strip() and not _dropped_call:
                 EMPTY_REPLY_TOTAL.labels(outcome="still_empty").inc()
                 logger.warning(
-                    "[%s] Empty reply after thinking retry — user got no answer (finish_reason=%s)",
+                    "[%s] Empty reply after retry — user got no answer (finish_reason=%s)",
                     label,
                     choice.get("finish_reason"),
                 )
@@ -960,31 +1070,10 @@ async def run_unified_tool_loop(
         if not new_tool_calls:
             logger.info("[%s] All tool calls are repeats, forcing final response", label)
             messages.append({"role": "assistant", "content": content})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "You already have the results above. Do NOT call any tools again. Summarize the information in a brief, natural response.",
-                }
+            return await _forced_final(
+                "You already have the results above. Do NOT call any tools again. Summarize the information in a brief, natural response.",
+                "I found some results but couldn't summarize them. Please try again.",
             )
-            _final_t0 = time.time()
-            try:
-                final_resp = await call_model(
-                    model_url,
-                    model_name,
-                    messages,
-                    system=system_prompt,
-                    timeout=120,  # same budget as a normal round (single llama slot)
-                )
-                LLM_CALL_COUNT.labels(model=model_name, purpose="unified_final").inc()
-                LLM_CALL_LATENCY.labels(model=model_name, purpose="unified_final").observe(time.time() - _final_t0)
-                final_content = final_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-                return await _finalize(clean_response(final_content), already_streamed=False)
-            except Exception as e:
-                LLM_CALL_ERRORS.labels(model=model_name, error_type=type(e).__name__).inc()
-                logger.error("[%s] Final response failed: %s", label, e)
-                return await _finalize(
-                    "I found some results but couldn't summarize them. Please try again.", already_streamed=False
-                )
 
         # Execute new tool calls
         logger.info("[%s] Processing %d tool call(s)", label, len(new_tool_calls))
@@ -1003,14 +1092,16 @@ async def run_unified_tool_loop(
         # runs concurrently; any batch containing a state-mutating terminal
         # tool keeps the original strict sequential order.
         has_terminal = False
-        parsed_calls = []  # (call_id, tool_name, arguments) — arguments is None when rejected
+        # (call_id, tool_name, arguments, preset_result) — a preset result
+        # (unknown tool, unrequested device call) is returned without executing.
+        parsed_calls: List[Tuple[str, str, Any, Optional[str]]] = []
         for tool_call in new_tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
             args_str = function.get("arguments", "{}")
             try:
                 arguments = json.loads(args_str)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError):  # TypeError: XML fallback hands over a parsed list
                 arguments = {}
 
             call_id = tool_call.get("id", f"call_{round_num}")
@@ -1019,31 +1110,51 @@ async def run_unified_tool_loop(
             if tool_name not in valid_tool_names:
                 # log-safe: model-emitted tool name (not user text)
                 logger.warning("[%s] Rejected unknown tool call: %s", label, tool_name[:50])
-                parsed_calls.append((call_id, tool_name, None))
+                parsed_calls.append((call_id, tool_name, None, f"Unknown tool: {tool_name}"))
                 continue
 
             call_key = (tool_name, json.dumps(arguments, sort_keys=True))
             executed_calls.add(call_key)
-            parsed_calls.append((call_id, tool_name, arguments))
+
+            # A device change the user didn't ask for is refused here, in code,
+            # whatever the model (or content it read) decided. Not terminal: the
+            # model gets the refusal and asks instead of "confirming" an action.
+            if tool_name == "home_assistant":
+                if ha_assessment is None:
+                    ha_assessment = assess(turn_user_text, turn_assistant_before)
+                if check_call(
+                    ha_assessment, arguments, label, after_untrusted=untrusted_seen, first_block=ha_blocks == 0
+                ):
+                    ha_blocks += 1
+                    parsed_calls.append((call_id, tool_name, arguments, UNREQUESTED_RESULT))
+                    continue
+
+            parsed_calls.append((call_id, tool_name, arguments, None))
 
             if tool_name in TERMINAL_TOOLS:
                 has_terminal = True
 
-        async def _run_one(call_id: str, tool_name: str, arguments) -> tuple:
-            if arguments is None:
-                return (call_id, tool_name, f"Unknown tool: {tool_name}")
+        async def _run_one(call_id: str, tool_name: str, arguments, preset: Optional[str]) -> tuple:
+            if preset is not None:
+                return (call_id, tool_name, preset)
             # Metrics are recorded inside execute_tool() — no double-counting here
+            voice_token = shared.voice_turn_var.set(is_voice)
             try:
                 result = await execute_tool(tool_name, arguments)
             except Exception as e:
                 logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
                 result = f"The {tool_name} tool encountered an error. Please try again."
+            finally:
+                shared.voice_turn_var.reset(voice_token)
             return (call_id, tool_name, _cap_tool_result(result, tool_name))
 
         if len(parsed_calls) > 1 and not has_terminal:
             tool_results = list(await asyncio.gather(*[_run_one(*pc) for pc in parsed_calls]))
         else:
             tool_results = [await _run_one(*pc) for pc in parsed_calls]
+        if any(pc[3] is None and pc[1] not in TRUSTED_RESULT_TOOLS for pc in parsed_calls):
+            untrusted_seen = True
+        blocked_this_round = sum(1 for pc in parsed_calls if pc[3] == UNREQUESTED_RESULT)
 
         # Add tool results to conversation
         # Use proper tool role messages if the model sent native tool_calls
@@ -1060,12 +1171,31 @@ async def run_unified_tool_loop(
         else:
             # XML fallback: add results as user message (like nemotron_loop)
             results_text = "\n".join(f"[{name}] {result}" for _, name, result in tool_results)
+            done = (
+                "Calls marked executed: false did NOT happen. Summarize what happened in a brief, natural response."
+                if blocked_this_round
+                else "The action is complete. Summarize the result in a brief, natural response."
+            )
             messages.append(
                 {
                     "role": "user",
-                    "content": f"<tool_response>\n{results_text}\n</tool_response>\n\nThe action is complete. Summarize the result in a brief, natural response. Do NOT call any more tools.",
+                    "content": f"<tool_response>\n{results_text}\n</tool_response>\n\n{done} Do NOT call any more tools.",
                 }
             )
+
+        # Every call this round was a refused device call, and not for the
+        # first time: the model keeps trying instead of asking. End the turn
+        # with words (without tools) rather than burning rounds into the
+        # "ran into some complexity" apology.
+        if blocked_this_round and blocked_this_round == len(parsed_calls):
+            ha_blocked_rounds += 1
+            if ha_blocked_rounds >= 2:
+                logger.info("[%s] Device calls refused in %d rounds, forcing final response", label, ha_blocked_rounds)
+                return await _forced_final(
+                    "Nothing was changed on any device: the user didn't ask for that. Do NOT call any tools. "
+                    "Reply to the user's message; if a device change would help, ask first and name the device.",
+                    "Sorry, I couldn't finish that. Please try again.",
+                )
 
         # For terminal tools, allow one final round for natural language response
         # but prevent further tool calls
@@ -1073,10 +1203,15 @@ async def run_unified_tool_loop(
             logger.info("[%s] Terminal tool executed, allowing final response round", label)
             # Add instruction to respond naturally without more tool calls
             if message.get("tool_calls"):
+                done = (
+                    "The tool calls above have run, except any marked executed: false, which did NOT happen."
+                    if blocked_this_round
+                    else "The action(s) above are complete."
+                )
                 messages.append(
                     {
                         "role": "user",
-                        "content": "The action(s) above are complete. Now respond naturally to the user's full request. Do NOT call any more tools.",
+                        "content": f"{done} Now respond naturally to the user's full request. Do NOT call any more tools.",
                     }
                 )
 

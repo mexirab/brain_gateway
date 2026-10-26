@@ -27,14 +27,14 @@ export default function FlowDiagram() {
   // v7 unified flow: User → Frontend → Orchestrator → Brain. No Open WebUI.
   const flowSteps = [
     { label: 'User', sub: 'Voice / Web UI', color: 'bg-warning/20 border-warning/40 text-warning' },
-    { label: 'Frontend', sub: 'Next.js · Jupiter', color: 'bg-surface-overlay/40 border-line/40 text-content-primary' },
+    { label: 'Frontend', sub: 'Next.js · Jupiter', color: 'bg-surface-overlay/40 border-ink/40 text-content-primary' },
     { label: 'Orchestrator', sub: 'Unified loop · Jupiter', color: 'bg-brand/20 border-brand/40 text-brand' },
     { label: 'Brain', sub: `${brainModel} · Helios (wake-on-demand)`, color: 'bg-success/20 border-success/40 text-success' },
   ];
 
   return (
     <Card padding="none" className="p-6 md:p-8">
-      <h2 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
+      <h2 className="text-lg font-bold text-content-primary mb-6 flex items-center gap-2">
         <Workflow size={20} className="text-brand" />
         Data Flow
       </h2>
@@ -62,7 +62,7 @@ export default function FlowDiagram() {
           {TOOLS.map((t) => (
             <div
               key={t}
-              className="text-xs px-2.5 py-1.5 rounded-lg bg-surface-raised/70 text-content-secondary border border-line/50 text-center whitespace-nowrap"
+              className="text-xs px-2.5 py-1.5 rounded-lg bg-surface-raised/70 text-content-secondary border border-ink/50 text-center whitespace-nowrap"
             >
               {t}
             </div>

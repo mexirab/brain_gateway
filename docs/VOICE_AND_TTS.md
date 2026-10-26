@@ -10,13 +10,13 @@ Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
     -> Home Assistant voice pipeline
     -> Wyoming Whisper STT (Docker on Jupiter :10300)
     -> HA Conversation Agent -> Brain Gateway :8888
-    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> Helios TTS :8002
+    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> Helios TTS (`TTS_URL`: VoxCPM2 :8004; Qwen3-TTS :8002 disabled since 2026-10-24)
     -> ATOM Echo S3R speaker (or Google speakers group)
 ```
 
 **Current status:**
 - Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF (llama.cpp `llama-server-primary`, since 2026-10-02; RadixArk/Qwen3.8-27B-NVFP4 on vLLM 0.27.1 2026-09-28 → 2026-10-02; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed. **Known gap (2026-10-02):** the HA Conversation Agent is still configured with `http://10.0.0.195:8888` (Helios), but the orchestrator has lived on Jupiter (`http://10.0.0.248:8888`) since the HA migration — ATOM Echo voice turns currently fail at the conversation step until the agent's base URL is repointed in the HA UI (Settings → Voice assistants → the Jess conversation agent).
+- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on Qwen3.8-Flash-Next UD-Q3_K_XL MTP GGUF (llama.cpp `llama-server-primary`, both Helios GPUs, since 2026-10-24; voice turns run with thinking on — `VOICE_THINKING_ENABLED=true`, see Voice mode below; DavidAU Qwen3.8-27B TURBO Q6_K on llama.cpp 2026-10-02 → 2026-10-24; RadixArk/Qwen3.8-27B-NVFP4 on vLLM 0.27.1 2026-09-28 → 2026-10-02; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed. **Known gap (2026-10-02):** the HA Conversation Agent is still configured with `http://10.0.0.195:8888` (Helios), but the orchestrator has lived on Jupiter (`http://10.0.0.248:8888`) since the HA migration — ATOM Echo voice turns currently fail at the conversation step until the agent's base URL is repointed in the HA UI (Settings → Voice assistants → the Jess conversation agent).
 - TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
 - No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
 
@@ -38,12 +38,12 @@ esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom J
 
 ## TTS Pacing
 
-Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002) is the rollback TTS; the live orchestrator voice is VoxCPM2 on :8004 (see VoxCPM2 TTS server below). The pacing notes here are Qwen-specific. The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Pacing control:
+Qwen3-TTS (`Qwen3-TTS-1.7B-Base`) on Helios (GPU1 RTX PRO 5000, port 8002) is the rollback TTS — **disabled since 2026-10-24**: the Qwen3.8-Flash-Next brain uses its ~4.5 GiB on GPU1, so it only comes back with the 27B brain rollback (`tts/llama-server-primary-27b-q6k.service` header). The live orchestrator voice is VoxCPM2 on :8004 (see VoxCPM2 TTS server below). The pacing notes here are Qwen-specific. The GPU1 pin comes from a systemd drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that the unit's `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES` silently put it on the 5090 next to the brain). Pacing control:
 
 - **Sentence pauses:** `inject_sentence_pauses()` in `/home/labadmin/server.py` on Helios — inserts `...` between sentences for calmer delivery
 
 ```bash
-# Restart TTS after pacing changes
+# Restart TTS after pacing changes (only when qwen-tts is re-enabled for a rollback)
 ssh labadmin@10.0.0.195 'sudo systemctl restart qwen-tts'
 ```
 
@@ -66,13 +66,13 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 
 ## VoxCPM2 TTS server (port 8004)
 
-Second TTS server on Helios, replacing Qwen3-TTS (:8002) as the live voice. **Status: cut over** — Jupiter `.env` has `TTS_URL=http://10.0.0.195:8004`; `qwen-tts` on :8002 stays running as rollback. Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
+Second TTS server on Helios, replacing Qwen3-TTS (:8002) as the live voice. **Status: cut over** — Jupiter `.env` has `TTS_URL=http://10.0.0.195:8004`; `qwen-tts` on :8002 is the rollback, disabled since 2026-10-24 (GPU1 now also holds part of the brain). Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
 
 | Property | Value |
 |----------|-------|
 | Unit / source | `voxcpm-tts.service` / `tts/voxcpm_server.py` (repo copies: `tts/voxcpm-tts.service`, `tts/voxcpm_server.py`) |
 | Model | `openbmb/VoxCPM2` (Apache-2.0, 2B), weights copied to `/home/labadmin/models/VoxCPM2`, loaded offline; HF revision + sha256s in the unit header |
-| GPU / VRAM | GPU1 RTX PRO 5000 (`CUDA_VISIBLE_DEVICES=1`), ~7.4 GiB resident |
+| GPU / VRAM | GPU1 RTX PRO 5000 (`CUDA_VISIBLE_DEVICES=1`), ~7.4–7.7 GiB resident. Shares GPU1 with part of the primary brain since 2026-10-24 (~92 % used together); brain decode drops to ~30–85 tok/s while it synthesizes |
 | Speed | ~0.4–1.3 s per sentence; output 24 kHz WAV (`VOXCPM_OUTPUT_SR`, same rate as Qwen) |
 | Startup | first-ever start ~50 s (torch.compile); warm ~27 s — compile cache in `/var/cache/voxcpm`, persists across boots |
 | API | Same as `tts/server.py`: `/health`, `/voices`, `/tts` (honors `emotion`), `/v1/audio/speech` (honors OpenAI `instructions`) |
@@ -94,18 +94,18 @@ cp .env .env.bak-qwen-tts
 docker compose up -d --force-recreate orchestrator
 docker logs brain-orchestrator 2>&1 | grep '\[TTS\] Backend'   # confirm :8004
 ```
-Rollback: `cp .env.bak-qwen-tts .env && docker compose up -d --force-recreate orchestrator`. `qwen-tts` keeps running on :8002 alongside. The Wyoming bridge (`wyoming-jessica-tts`) reads `--tts-url ${TTS_URL}` from the `.env` of the compose host it runs on and is not recreated by the command above — recreate it there too if HA Assist should use VoxCPM2.
+Rollback to Qwen3-TTS: only together with the 27B brain rollback (`qwen-tts` is disabled and no longer fits next to Flash-Next) — re-enable `qwen-tts`, set `TTS_URL` back to :8002, `docker compose up -d --force-recreate orchestrator`. (`.env.bak-qwen-tts` predates later `.env` changes, incl. the 2026-10-24 model names + `VOICE_THINKING_ENABLED`; don't `cp` it over a Flash-Next `.env`.) A Wyoming bridge still pointed at :8002 gets no audio now. The Wyoming bridge (`wyoming-jessica-tts`) reads `--tts-url ${TTS_URL}` from the `.env` of the compose host it runs on and is not recreated by the command above — recreate it there too if HA Assist should use VoxCPM2.
 
 ```bash
 ssh labadmin@10.0.0.195 'sudo systemctl restart voxcpm-tts'
 ssh labadmin@10.0.0.195 'journalctl -u voxcpm-tts -f'
 ```
 
-**Monitoring:** blackbox probe `service="tts-voxcpm"` on `:8004/health`; `TTSDown` covers `service=~"tts|tts-voxcpm"`, so both servers alert while both run. No server-side `/metrics` yet.
+**Monitoring:** blackbox probe `service="tts-voxcpm"` on `:8004/health` feeds `TTSDown`. The Qwen3-TTS :8002 probe (`service="tts"`) was removed 2026-10-24 when `qwen-tts` was disabled — restore it in `monitoring/prometheus/prometheus.yml.template` if it is re-enabled. No server-side `/metrics` yet.
 
 ## Voice style
 
-How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voice_style.py` and sent to the TTS as a style note. Qwen3-TTS accepts and ignores it, so it is harmless on the :8002 rollback.
+How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voice_style.py` and sent to the TTS as a style note. Qwen3-TTS accepts and ignores it, so it is harmless on the :8002 rollback (disabled since 2026-10-24).
 
 **Presets** (the only phrases that ever reach the TTS — never free text from the user, model or content): `auto` (no note), `calm`, `gentle`, `soothing`, `quiet`, `warm`, `thoughtful`, `encouraging`, `upbeat`, `proud`, `energetic`, `firm`, plus acting tones `excited`, `sad`, `angry`, `scared`, `whisper`, `sultry`, `sarcastic` (`ACTING_PRESETS`) — 19 keys incl. `auto`. The tool's `style` enum is built from `PRESETS` (minus `auto`).
 
@@ -166,7 +166,16 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 - Mic-sent message → always spoken reply (walkie-talkie), even with the speaker toggle off.
 - Typed message → follows the speaker toggle (localStorage `tts_enabled`, per device, default off).
 
-**Voice mode (backend):** voice turns run the unified loop with `max_tokens` 1024 and `chat_template_kwargs {"enable_thinking": false}` — first spoken word ~0.16 s vs ~0.77 s with the server default `reasoning_effort=low`. Caveat: the Qwen3.8 template then pre-fills an empty `<think></think>` and the model can end its turn at once (7/8 when the history held an empty assistant turn; 0/48 with clean history). Mitigations: `cloud_brain` drops empty assistant turns from history, and an empty round is retried once with thinking on. Detail: `TECHNICAL_REFERENCE.md` → Empty-Reply Handling.
+**Voice mode (backend):** thinking on voice turns is controlled by `VOICE_THINKING_ENABLED` (default `false`; read at process start, change with `docker compose up -d --force-recreate orchestrator` — see `docs/ENV_VARS.md`). The startup log shows it: `CloudBrain initialized (… voice_thinking=…)`. **Live deployment: `true` since 2026-10-24** — required by the Qwen3.8-Flash-Next brain (see Why the switch); the 27B rollback runs with `false`.
+
+| `VOICE_THINKING_ENABLED` | Voice-turn request | First spoken word (Qwen3.8-27B) | First spoken token (Flash-Next) |
+|---|---|---|---|
+| `false` (default) | `max_tokens` 1024 + `chat_template_kwargs {"enable_thinking": false}` | ~0.16 s | 0.13 s (not used: unrequested actions) |
+| `true` (live) | `max_tokens` 2048, no kwarg; depth set by llama-server `--chat-template-kwargs '{"reasoning_effort":"low"}'` (keep that flag in the unit). 2048 because reasoning tokens count against `max_tokens` on llama.cpp | ~0.77 s | 0.40 s |
+
+- **Why the switch:** some brains act unasked with thinking off. The live brain (Qwen3.8-Flash-Next, since 2026-10-24) in its trial turned off speakers or a light on 4 of 8 voice "tell me a fun fact" turns with thinking off, 0 of 33 with it on, then 0 of 80 in the full no-action probe (voice tool cases 18/18); first spoken token 0.40 s vs 0.13 s. This is a model-behavior mitigation, not a control: the flag defaults `false` and nothing ties it to the running brain, so restoring a pre-2026-10-24 `.env` brings the unrequested actions back. A deterministic "did the user ask?" gate in front of `home_assistant` calls is a separate change.
+- **Thinking off caveat:** the Qwen3.8 template pre-fills an empty `<think></think>` and the model can end its turn at once (7/8 when the history held an empty assistant turn; 0/48 with clean history). Mitigations: `cloud_brain` drops empty assistant turns from history, and an empty round is retried once — with thinking on when the switch is off, as a plain resend when it is on. Detail: `TECHNICAL_REFERENCE.md` → Empty-Reply Handling.
+- **Thinking on caveat:** a long reasoning pass can use up the 2048 budget and cut the reply. Look for `finish=length` on the `LLM probe (stream): …` / `LLM probe: …` lines in Loki.
 
 **Empty replies (client):** the chat page snapshots history before adding the new turn (the first message of a new chat used to go out twice with a blank assistant turn between) and never sends blank or error bubbles as history. A reply that is still empty shows — and in voice/call mode speaks — "Sorry — I didn't get a reply just now. Please try again."
 
@@ -278,10 +287,38 @@ ssh labadmin@10.0.0.195 'journalctl -u stt-onnx -f'
 ## Voice tool subset
 
 Voice turns (the dashboard chat mic, HA Assist / ATOM Echo) get a reduced tool list, `tool_definitions.VOICE_TOOL_NAMES`, because every tool schema is prefilled on each turn and voice is latency-sensitive. `prompt_builder` also drops the tool-guidance block on voice, so on voice the model routes by the schema descriptions alone. The voice list is filtered from the already-gated full list, so feature flags still apply. `tests/test_voice_tools.py` pins this down, and also catches a typo in the name list.
+- **Voice tool budgets:** While a tool runs for a voice turn, `shared.voice_turn_var` (a ContextVar that `unified_loop._run_one` sets per tool call, so it reaches parallel calls and never leaks into a typed turn) is `True`; tools read it to tighten their budgets. `web_search` (when on the voice list) uses a 5 s whole-request deadline on voice, 15 s typed (SearXNG gives each engine 3 s). A turn that searches in several rounds can still wait rounds × 5 s. The fallback model gets `is_voice` too (buffered `cloud_brain._unified_fallback` since 2026-10-25; the streamed fallback already did), so it keeps the voice generation settings and the 5 s deadline; its tool list stays the full one. Search outcomes, metrics and alerts (`bgw_web_search_total{result,voice}`, `WebSearchFailing`, `SearXNGDown`): `TECHNICAL_REFERENCE.md` → web_search; voice latency (`bgw_voice_pipeline_seconds{path}`): `monitoring/README.md`.
 
-What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss).
+What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss). Since 2026-10-25 it also includes **`web_search`** (SearXNG) — see below.
 
 Notes for the pantry tools on voice:
 - The `pantry` description itself carries the hints the dropped guidance used to give: summarise `view` when speaking, and `out` already adds to the grocery list (don't also call `shopping_list`).
 - HA Assist sends only the latest utterance, so a two-step "accept the plan?" → "yes" can't work there. Say "accept the meal plan" in one go, or accept on the dashboard.
 - `meal_plan swap` never waits for chat to go idle (`meal_planner._ask(..., wait_for_idle=False)`). On non-streaming turns (HA Assist, Telegram) the turn that called the tool is itself counted as active, so waiting would stall the swap for the full 60 s idle timeout.
+
+### web_search on voice (since 2026-10-25)
+
+The dashboard mic, hands-free call mode and HA Assist can look things up (weather, sports scores, store hours, news). It used to be typed-chat only, left off for latency, and voice said it couldn't look things up 27 of 30 times. No new env vars, routes, metrics or jobs. `tests/test_voice_tools.py::test_web_search_offered_on_voice` keeps it on the voice list under every gating-flag combination.
+
+Measured 2026-10-25 on the live brain (Qwen3.8 Flash-Next, `VOICE_THINKING_ENABLED=true`). The real voice prompt and tool schemas went straight to llama-server; only `web_search` ran for real.
+
+| What | Result |
+|------|--------|
+| First spoken token, search turns | ~2.0 s median, 3.1 s p95, 4.0 s worst (normal voice turn ~0.5 s) |
+| Where the time goes | round 1 (decide to search) ~0.8 s; SearXNG ~0.3 s median; round 2 prefills ~570 tokens |
+| Tool choice | 30/30 search questions called `web_search`; 0/30 non-search questions; 0/100 personal questions (meds, calendar, memory) |
+| Poisoned search results | 0 extra tool calls (0/16 voice thinking on, 0/10 off). The 27B rollback brain was not measured — re-run before relying on it after a rollback |
+| Schema cost | ~725 chars (~180 tokens; ~120 ms only on a prompt-cache miss) |
+
+Behaviour:
+- No spoken preamble before searching: ~2 s of silence, then the answer.
+- News questions often search 2–3 times.
+- List answers (movies, events, news) can run 4–6 sentences. The dashboard TTS (`frontend/src/lib/speech-text.ts`) strips markdown and URLs and caps speech at 1200 chars; HA Assist has no such cleanup.
+
+Known limits (from the SRE and security reviews; not fixed):
+- Brave ("too many requests"), DuckDuckGo and Startpage (CAPTCHA) refuse this server's searches on most days (seen on every day with searches since at least 2026-10-14). Results come from the engines that still answer: Google CSE for general queries, Bing News for news. A burst of searches can also briefly leave news queries with no results.
+- SearXNG `/healthz` stays 200 while that happens. There is no probe or alert on SearXNG.
+- `tool_web_search` returns failures as text, so `bgw_tool_call_errors_total{tool="web_search"}` never rises; empty or failed searches are not counted anywhere.
+- SearXNG client timeout is 15 s per search round, with no tighter voice budget. A hung SearXNG can leave a voice turn silent for a long time.
+- Streamed (dashboard) voice turns record `bgw_voice_pipeline_seconds` before the tool loop runs, so slow search turns don't show there; only HA Assist turns are really measured.
+- SearXNG's own container logs carry query text at WARNING when an engine fails. They stay out of Loki only because the promtail keep regex excludes searxng — keep it that way.

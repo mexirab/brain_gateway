@@ -48,21 +48,21 @@ export default function ProgressCard() {
             <div className="text-center">
               <div className="flex items-center justify-center gap-1">
                 <CheckCircle size={14} className="text-success" />
-                <span className="text-xl font-bold text-white">{today.tasks_completed}</span>
+                <span className="text-xl font-bold text-content-primary">{today.tasks_completed}</span>
               </div>
               <p className="text-xs text-content-muted">tasks</p>
             </div>
             <div className="text-center">
               <div className="flex items-center justify-center gap-1">
                 <Zap size={14} className="text-warning" />
-                <span className="text-xl font-bold text-white">{today.focus_minutes}</span>
+                <span className="text-xl font-bold text-content-primary">{today.focus_minutes}</span>
               </div>
               <p className="text-xs text-content-muted">focus min</p>
             </div>
             <div className="text-center">
               <div className="flex items-center justify-center gap-1">
                 <Brain size={14} className="text-brand" />
-                <span className="text-xl font-bold text-white">{today.brain_dumps}</span>
+                <span className="text-xl font-bold text-content-primary">{today.brain_dumps}</span>
               </div>
               <p className="text-xs text-content-muted">dumps</p>
             </div>

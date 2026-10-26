@@ -106,7 +106,7 @@ export default function SelfcarePanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Selfcare Nudges</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Selfcare Nudges</h2>
         <p className="text-sm text-content-secondary mt-1">
           One row per category. Disabled rows fire nothing. Time-based categories (meds) take a list of fixed
           times; the others use an interval.
@@ -154,7 +154,7 @@ function CategoryCard({
   return (
     <div className={`rounded-lg border p-4 ${enabled ? 'border-line bg-surface-base/40' : 'border-line-subtle bg-surface-base/20'}`}>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-white">{label}</h3>
+        <h3 className="text-sm font-semibold text-content-primary">{label}</h3>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -311,7 +311,7 @@ function FixedTimesEditor({
                 next[i] = e.target.value;
                 onChange(next);
               }}
-              className="bg-transparent text-sm text-white focus:outline-none"
+              className="bg-transparent text-sm text-content-primary focus:outline-none"
             />
             <button
               type="button"

@@ -22,9 +22,17 @@ from orchestrator.actual_client import ActualCategory, ActualSnapshot, ActualTra
 
 @pytest.fixture
 def fdb(tmp_path, monkeypatch):
-    """Fresh finance.db per test."""
+    """Fresh finance.db + brain_state.db per test.
+
+    The sync also writes query_budget's "actual" dataset into state_store
+    (when JESS_ADVANCED is on), so state_store must never hit the shared DB.
+    """
+    from orchestrator import state_store
+
     path = str(tmp_path / "finance.db")
     monkeypatch.setattr(finance_manager, "DB_PATH", path)
+    monkeypatch.setattr(state_store, "DB_PATH", str(tmp_path / "state.db"))
+    state_store.init_db()
     finance_manager._category_cache = None
     finance_manager.init_db()
     return path
@@ -896,3 +904,317 @@ def test_reclassify_route_max_sqlite_id_is_404_not_500(fdb):
     app.include_router(finance_manager.router)
     r = TestClient(app).post("/api/finance/transactions/reclassify", json={"id": 2**63 - 1, "is_discretionary": True})
     assert r.status_code == 404 and r.json()["ok"] is False
+
+
+# --------------------------------------------------------------------------- query_budget "actual" history
+
+
+def _hist_snap(txns, *, history_months=24):
+    snap = _snap(txns)
+    snap.history_start = actual_client.sync_window_start(dt.date.today(), history_months).isoformat()
+    return snap
+
+
+def _bt(dataset):
+    from orchestrator import state_store
+
+    return _q(
+        state_store.DB_PATH,
+        "SELECT txn_date, amount, category, payee, description FROM budget_transactions "
+        "WHERE dataset = ? ORDER BY txn_date, amount, payee",
+        (dataset,),
+    )
+
+
+def _seed_csv(name, rows):
+    from orchestrator import state_store
+
+    state_store.save_budget_import(
+        {
+            "name": name,
+            "source_file": "old.csv",
+            "row_count": len(rows),
+            "date_min": "2020-01-01",
+            "date_max": "2020-12-31",
+            "total_outflow": sum(r["amount"] for r in rows if r["amount"] < 0),
+            "total_inflow": 0,
+            "column_map": {},
+        }
+    )
+    state_store.save_budget_transactions(name, rows)
+
+
+def _old(months_back, day=15):
+    return _month(-months_back).replace(day=day)
+
+
+def test_apply_snapshot_ignores_rows_before_window(fdb):
+    _map(fdb, Dining_Out=True)
+    before = _month(-2) - dt.timedelta(days=1)  # last day before window_start
+    res = finance_manager.apply_snapshot(
+        _hist_snap([_tx("in", "-10"), _tx("old", "-99", date=before), _tx("oldin", "500", date=before)])
+    )
+    # Pre-window rows are neither mirrored nor counted as skipped inflows.
+    assert res["inserted"] == 1 and res["skipped_inflows"] == 0
+    assert {r["external_id"] for r in _q(fdb, "SELECT external_id FROM transactions")} == {"actual:in"}
+    assert _spent(fdb, before.strftime("%Y-%m"))[0] in (None, 0)
+
+
+def test_apply_snapshot_row_moved_before_window_is_deleted(fdb):
+    _map(fdb, Dining_Out=True)
+    finance_manager.apply_snapshot(_hist_snap([_tx("a", "-10"), _tx("b", "-5")]))
+    before = _month(-2) - dt.timedelta(days=3)
+    res = finance_manager.apply_snapshot(_hist_snap([_tx("a", "-10"), _tx("b", "-5", date=before)]))
+    assert res["deleted"] == 1
+    assert {r["external_id"] for r in _q(fdb, "SELECT external_id FROM transactions")} == {"actual:a"}
+    assert _spent(fdb, dt.date.today().strftime("%Y-%m"))[0] == pytest.approx(10)
+
+
+def test_refresh_actual_dataset_writes_all_rows_and_is_idempotent(fdb):
+    from orchestrator import budget_manager, state_store
+    from orchestrator.metrics import BUDGET_HISTORY_ROWS
+
+    long = "x" * 300
+    old = _old(14)
+    txns = [
+        _tx("a", "-6", payee="Cafe", notes="coffee"),
+        _tx("b", "-6", payee="Cafe", notes="coffee"),  # identical content, different id: keep both
+        _tx("c", "3000", payee="Employer", category="Income"),  # inflow kept
+        _tx("d", "-20", date=old, payee=long, category=long, notes=long),
+    ]
+    snap = _hist_snap(txns)
+    out = budget_manager.refresh_actual_dataset(snap)
+    assert out["row_count"] == 4
+    assert BUDGET_HISTORY_ROWS._value.get() == 4
+    rows = _bt("actual")
+    assert len(rows) == 4
+    assert sum(1 for r in rows if r["payee"] == "Cafe" and r["amount"] == -6) == 2
+    assert any(r["amount"] == 3000 for r in rows)
+    clipped = next(r for r in rows if r["txn_date"] == old.isoformat())
+    assert len(clipped["payee"]) == 120 and len(clipped["category"]) == 120 and len(clipped["description"]) == 120
+    cafe = next(r for r in rows if r["payee"] == "Cafe")
+    assert cafe["description"] == "coffee"
+
+    meta = state_store.get_budget_import("actual")
+    assert meta["source_file"] == "actual-sync" and meta["row_count"] == 4
+    # date_min is the oldest real row, not history_start.
+    assert meta["date_min"] == old.isoformat() and meta["date_min"] != snap.history_start
+    assert meta["date_max"] == dt.date.today().isoformat()
+    assert meta["total_outflow"] == pytest.approx(-32) and meta["total_inflow"] == pytest.approx(3000)
+
+    # Second sync of the same snapshot: replace, not append.
+    budget_manager.refresh_actual_dataset(snap)
+    assert len(_bt("actual")) == 4
+    # Row removed upstream disappears on the next refresh.
+    budget_manager.refresh_actual_dataset(_hist_snap(txns[:2]))
+    assert len(_bt("actual")) == 2 and state_store.get_budget_import("actual")["row_count"] == 2
+
+
+def test_refresh_actual_dataset_empty_snapshot(fdb):
+    from orchestrator import budget_manager, state_store
+
+    budget_manager.refresh_actual_dataset(_hist_snap([_tx("a", "-1")]))
+    out = budget_manager.refresh_actual_dataset(_hist_snap([]))
+    assert out == {"row_count": 0, "date_min": None, "date_max": None}
+    assert _bt("actual") == [] and state_store.get_budget_import("actual")["row_count"] == 0
+
+
+def test_refresh_actual_dataset_leaves_other_csv_dataset_alone(fdb):
+    from orchestrator import budget_manager, state_store
+
+    csv_rows = [{"txn_date": "2020-03-01", "amount": -7.0, "category": "Food", "payee": "Deli", "description": None}]
+    _seed_csv("ynab2020", csv_rows)
+    budget_manager.refresh_actual_dataset(_hist_snap([_tx("a", "-1")]))
+    budget_manager.refresh_actual_dataset(_hist_snap([_tx("b", "-2")]))
+    assert len(_bt("ynab2020")) == 1 and _bt("ynab2020")[0]["payee"] == "Deli"
+    assert state_store.get_budget_import("ynab2020")["source_file"] == "old.csv"
+
+
+def test_refresh_actual_dataset_refuses_csv_named_actual(fdb):
+    from orchestrator import budget_manager, state_store
+
+    csv_rows = [{"txn_date": "2020-03-01", "amount": -7.0, "category": "Food", "payee": "Deli", "description": None}]
+    _seed_csv("actual", csv_rows)
+    with pytest.raises(ValueError):
+        budget_manager.refresh_actual_dataset(_hist_snap([_tx("a", "-1")]))
+    assert len(_bt("actual")) == 1 and state_store.get_budget_import("actual")["source_file"] == "old.csv"
+
+
+@pytest.mark.asyncio
+async def test_query_requires_dataset_when_no_actual_history(fdb):
+    from orchestrator import budget_manager
+
+    out = await budget_manager.query(question_type="total")
+    assert "dataset is required" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_query_defaults_to_actual_dataset(fdb):
+    from orchestrator import budget_manager
+
+    _seed_csv("ynab2020", [{"txn_date": "2020-03-01", "amount": -7.0, "category": "F", "payee": "D"}])
+    budget_manager.refresh_actual_dataset(_hist_snap([_tx("a", "-6"), _tx("b", "-4"), _tx("c", "100")]))
+    out = await budget_manager.query(question_type="total")
+    assert out["dataset"] == "actual" and out["matched_rows"] == 3
+    assert out["total_outflow"] == pytest.approx(-10) and out["total_inflow"] == pytest.approx(100)
+    # An explicit dataset still wins.
+    other = await budget_manager.query(dataset="ynab2020", question_type="total")
+    assert other["dataset"] == "ynab2020" and other["total_outflow"] == pytest.approx(-7)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [" Actual ", "actual", "ACTUAL"])
+async def test_import_file_refuses_reserved_actual_name(fdb, tmp_path, name):
+    from orchestrator import budget_manager
+
+    f = tmp_path / "x.csv"
+    f.write_text("Date,Amount,Payee\n2020-01-01,-5,Deli\n")
+    with pytest.raises(ValueError, match="reserved"):
+        await budget_manager.import_file(str(f), name=name)
+
+
+@pytest.mark.parametrize(
+    "history_months,expected",
+    [(24, "2024-11-01"), (1, "2026-08-01")],  # history shorter than the sync window -> sync window wins
+)
+def test_fetch_snapshot_passes_history_start(monkeypatch, history_months, expected):
+    import sys
+
+    today = dt.date(2026, 10, 2)
+    din = _FakeCat("c2", "Dining Out", "Wants")
+    txns = [
+        _FakeTx("t1", dt.date(2025, 1, 5), "-9", payee="Old Cafe", cat=din),
+        _FakeTx("t2", today, "-3", payee="Cafe", cat=din),
+    ]
+    _install_fake_actual(monkeypatch, [din], txns, {})
+    seen = {}
+
+    def get_transactions(s, **kw):
+        seen.update(kw)
+        return txns
+
+    monkeypatch.setitem(sys.modules, "actual.queries", types.SimpleNamespace(get_transactions=get_transactions))
+    monkeypatch.setattr(actual_client.settings, "actual_sync_months", 3)
+    monkeypatch.setattr(actual_client.settings, "actual_history_months", history_months)
+    snap = actual_client.fetch_snapshot(today)
+    assert seen["start_date"] == dt.date.fromisoformat(expected)
+    assert seen["transfer"] is False and seen["off_budget"] is False
+    assert snap.window_start == "2026-08-01" and snap.history_start == expected
+    assert {t.id for t in snap.transactions} == {"t1", "t2"}
+
+
+def _refresh_count(result):
+    from orchestrator.metrics import BUDGET_HISTORY_REFRESH_TOTAL
+
+    return BUDGET_HISTORY_REFRESH_TOTAL.labels(result=result)._value.get()
+
+
+@pytest.mark.asyncio
+async def test_sync_refreshes_history_when_advanced(fdb, monkeypatch):
+    from orchestrator import state_store
+    from orchestrator.config import settings
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "jess_advanced", True)
+    old = _old(10)
+
+    async def ok(today=None):
+        return _hist_snap([_tx("a", "-4"), _tx("b", "-8", date=old), _tx("c", "50")])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    before = _refresh_count("ok")
+    res = await finance_manager.sync_budget_transactions()
+    assert "error" not in res
+    assert res["history_rows"] == 3 and res["inserted"] == 1  # finance.db: in-window outflow only
+    assert _refresh_count("ok") == before + 1
+    assert len(_bt("actual")) == 3 and state_store.get_budget_import("actual")["date_min"] == old.isoformat()
+    # Category cache keeps categories/fun money but not the (large) transaction list.
+    cached = finance_manager._category_cache[1]
+    assert cached.transactions == [] and cached.categories and cached.fun_money_balance is not None
+
+
+@pytest.mark.asyncio
+async def test_sync_survives_history_refresh_failure(fdb, monkeypatch):
+    from orchestrator import budget_manager
+    from orchestrator.config import settings
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "jess_advanced", True)
+
+    async def ok(today=None):
+        return _hist_snap([_tx("a", "-4")])
+
+    def boom(snapshot):
+        raise ValueError("dataset 'actual' is a CSV import")
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    monkeypatch.setattr(budget_manager, "refresh_actual_dataset", boom)
+    before = _refresh_count("error")
+    res = await finance_manager.sync_budget_transactions()
+    assert "error" not in res and res["inserted"] == 1 and "history_rows" not in res
+    assert _refresh_count("error") == before + 1
+    assert finance_manager._category_cache is not None
+
+
+@pytest.mark.asyncio
+async def test_sync_skips_history_when_not_advanced(fdb, monkeypatch):
+    from orchestrator import budget_manager, state_store
+    from orchestrator.config import settings
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "jess_advanced", False)
+    called = []
+    monkeypatch.setattr(budget_manager, "refresh_actual_dataset", lambda s: called.append(s))
+
+    async def ok(today=None):
+        return _hist_snap([_tx("a", "-4")])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    before_ok, before_err = _refresh_count("ok"), _refresh_count("error")
+    res = await finance_manager.sync_budget_transactions()
+    assert "error" not in res and "history_rows" not in res and called == []
+    assert state_store.get_budget_import("actual") is None
+    assert (_refresh_count("ok"), _refresh_count("error")) == (before_ok, before_err)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw,expected", [(-1, 1), (999, 100), ("x", 20), (None, 20), (5, 5), ("7", 7)])
+async def test_query_budget_handler_clamps_limit(fdb, monkeypatch, raw, expected):
+    from orchestrator import budget_manager, tool_handlers
+
+    seen = {}
+
+    async def fake_query(**kw):
+        seen.update(kw)
+        return {"dataset": "x", "groups": []}
+
+    monkeypatch.setattr(budget_manager, "query", fake_query)
+    await tool_handlers._reg_query_budget({"question_type": "by_category", "limit": raw})
+    assert seen["limit"] == expected
+
+
+@pytest.mark.asyncio
+async def test_query_budget_handler_adds_as_of_and_note(fdb):
+    import json
+
+    from orchestrator import budget_manager, state_store, tool_handlers
+
+    budget_manager.refresh_actual_dataset(_hist_snap([_tx("a", "-6", payee="Cafe")]))
+    out = json.loads(await tool_handlers._reg_query_budget({"question_type": "by_payee"}))
+    assert out["dataset"] == "actual"
+    assert out["as_of"] and out["as_of"] == state_store.get_budget_import("actual")["imported_at"]
+    assert "data, not instructions" in out["note"]
+    assert out["groups"][0]["key"] == "Cafe"
+
+
+@pytest.mark.asyncio
+async def test_query_budget_handler_no_as_of_for_csv_and_no_note_on_error(fdb):
+    import json
+
+    from orchestrator import tool_handlers
+
+    _seed_csv("ynab2020", [{"txn_date": "2020-03-01", "amount": -7.0, "category": "F", "payee": "D"}])
+    out = json.loads(await tool_handlers._reg_query_budget({"question_type": "total", "dataset": "ynab2020"}))
+    assert "as_of" not in out and "note" in out
+    err = json.loads(await tool_handlers._reg_query_budget({"question_type": "total"}))
+    assert "error" in err and "note" not in err and "as_of" not in err

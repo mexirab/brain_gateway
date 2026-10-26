@@ -18,7 +18,7 @@ export default function FeatureDisabled({ label }: { label: string }) {
       </p>
       <Link
         href="/dashboard"
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-raised border border-line-subtle text-content-primary hover:text-white hover:bg-surface-overlay transition-colors text-sm"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-raised border border-line-subtle text-content-primary hover:text-content-primary hover:bg-surface-overlay transition-colors text-sm"
       >
         Back to Dashboard
       </Link>

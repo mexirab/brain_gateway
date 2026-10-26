@@ -184,7 +184,7 @@ export default function NotificationsPanel() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Notifications</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Notifications</h2>
         <p className="text-sm text-content-secondary mt-1">
           Get reminders and self-care nudges on this device’s lock screen. Tap one to open Chat, where the Done and
           Snooze buttons are. Jess sends these herself; Apple or Google only pass along an encrypted message they
@@ -230,13 +230,13 @@ export default function NotificationsPanel() {
       ) : (
         <div className="flex flex-wrap gap-2">
           {device === 'off' ? (
-            <button type="button" onClick={enable} disabled={busy} className={`${btn} bg-brand-500 text-white hover:bg-brand-600`}>
+            <button type="button" onClick={enable} disabled={busy} className={`${btn} bg-brand-600 text-on-brand hover:bg-brand-700`}>
               {busy ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Bell size={16} aria-hidden />}
               Turn on for this device
             </button>
           ) : (
             <>
-              <button type="button" onClick={test} disabled={busy} className={`${btn} bg-brand-500 text-white hover:bg-brand-600`}>
+              <button type="button" onClick={test} disabled={busy} className={`${btn} bg-brand-600 text-on-brand hover:bg-brand-700`}>
                 {busy ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Send size={16} aria-hidden />}
                 Send test
               </button>

@@ -50,7 +50,7 @@ export default function LightTile({ entity, roomName }: { entity: HAEntity; room
   return (
     <div
       className={`min-w-0 rounded-xl border transition-colors ${
-        isOn ? 'bg-warning/10 border-warning/30' : 'bg-surface-raised/40 border-line/30'
+        isOn ? 'bg-warning/10 border-warning/30' : 'bg-surface-raised/40 border-ink/30'
       }`}
     >
       <button
@@ -66,7 +66,7 @@ export default function LightTile({ entity, roomName }: { entity: HAEntity; room
           <Icon size={18} />
         </span>
         <span className="flex-1 min-w-0">
-          <span className="block text-sm font-medium text-white truncate" title={entity.friendly_name}>
+          <span className="block text-sm font-medium text-content-primary truncate" title={entity.friendly_name}>
             {stripRoom(entity.friendly_name, roomName)}
           </span>
           <span aria-live="polite" className={`block text-xs ${error ? 'text-danger' : isOn ? 'text-warning' : 'text-content-muted'}`}>

@@ -11,6 +11,7 @@ import os
 import sys
 import threading
 import time
+from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
 import chromadb
@@ -150,6 +151,7 @@ def _resolve_api_key(value: str) -> str:
 HA_URL = settings.ha_url
 HA_TOKEN = settings.ha_token
 HA_TOOL_DENY_ENTITIES = settings.ha_tool_deny_entities
+HA_INTENT_GATE = settings.ha_intent_gate
 HELIOS_PLUG_ENTITY = settings.helios_plug_entity
 ha_client = HomeAssistantClient(url=HA_URL, token=HA_TOKEN)
 
@@ -169,6 +171,11 @@ CHROMA_PERSIST = settings.chroma_persist
 CHROMA_COLLECTION = settings.palace_collection
 MIN_COS = settings.min_cos
 TOP_K = settings.top_k
+MEMORY_FACT_MIN_COS = settings.memory_fact_min_cos
+MEMORY_SEARCH_MIN_COS = settings.memory_search_min_cos
+# Collection `source` values that are short facts about the user (as opposed to
+# document chunks, vault entries or audit notes).
+MEMORY_FACT_SOURCES = ("auto_learn", "user_correction")
 
 chroma = chromadb.PersistentClient(
     path=os.path.expanduser(CHROMA_PERSIST),
@@ -212,6 +219,7 @@ embedding_model = _CountingEmbedder(
 # ---------------------------------------------------------------------------
 MAX_TOOL_ROUNDS = settings.max_tool_rounds
 REAL_STREAMING_ENABLED = settings.real_streaming_enabled
+VOICE_THINKING_ENABLED = settings.voice_thinking_enabled
 
 # ---------------------------------------------------------------------------
 # Shared httpx client (initialized in startup_event)
@@ -353,6 +361,12 @@ def mark_voice_activity() -> None:
     _last_voice_activity_at = time.time()
 
 
+# True while a tool runs for a voice turn. Set by unified_loop around each
+# tool call (per task, so a concurrent typed turn never sees it); tools read
+# it to tighten budgets — web_search uses a 5 s deadline instead of 15 s.
+voice_turn_var: ContextVar[bool] = ContextVar("voice_turn", default=False)
+
+
 def is_voice_session_active(window_sec: float = VOICE_SESSION_WINDOW_SEC) -> bool:
     """True if voice activity happened within the last window_sec seconds.
     Use this to gate reminder announcements so they don't stomp on an active
@@ -462,6 +476,12 @@ DIET_PROFILE_PATH = settings.diet_profile_path
 # PAPERLESS_API_TOKEN are missing; tool_definitions hides paperless_save from
 # the LLM schema when it is off (the handler stays registered and self-gates).
 PAPERLESS_ENABLED = settings.paperless_enabled
+# Grist spreadsheet tool — config.py auto-disables it on incomplete config;
+# tool_definitions hides `spreadsheet` from the schema when it is off.
+GRIST_ENABLED = settings.grist_enabled
+# Research helper (`look_it_up`) — tool_definitions hides it when off.
+RESEARCH_HELPER_ENABLED = settings.research_helper_enabled
+RESEARCH_CONTEXT7_API_KEY = settings.research_context7_api_key
 
 # ---------------------------------------------------------------------------
 # Expert Model (Qwen3-32B Thinking on Saturn 3090)

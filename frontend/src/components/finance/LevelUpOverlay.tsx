@@ -78,19 +78,19 @@ export default function LevelUpOverlay({ level, onDismiss }: Props) {
 
         {/* Card */}
         <div
-          className={`bg-gradient-to-br ${colors.bg} rounded-2xl p-10 text-center shadow-2xl ${colors.glow} border border-white/10`}
+          className={`bg-gradient-to-br ${colors.bg} rounded-2xl p-10 text-center shadow-2xl ${colors.glow} border border-ink/10`}
         >
           <div className={`${colors.text} mb-3`}>
             <Shield size={56} className="mx-auto" />
           </div>
-          <p className="text-sm text-white/60 uppercase tracking-widest mb-1">
+          <p className="text-sm text-content-primary/70 uppercase tracking-widest mb-1">
             Level Up!
           </p>
           <h1 className={`text-3xl font-black ${colors.text} mb-1`}>
             Level {level}
           </h1>
-          <p className="text-lg font-semibold text-white/90">{title}</p>
-          <p className="text-xs text-white/40 mt-4">Tap to dismiss</p>
+          <p className="text-lg font-semibold text-content-primary">{title}</p>
+          <p className="text-xs text-content-primary/60 mt-4">Tap to dismiss</p>
         </div>
       </div>
     </div>

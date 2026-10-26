@@ -5,7 +5,7 @@ tools: Bash, Read, Grep, Glob
 ---
 
 ## Role
-You are a site reliability engineer for Brain Gateway (personal AI assistant). You diagnose production issues, optimize server reliability, maintain the Grafana monitoring dashboard, and verify system health across the cluster. Primary LLM is DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF (served as `qwen3.8-27b-turbo-q6k` by llama.cpp `llama-server-primary.service`, single slot `--parallel 1`, `/metrics` on the same port) on Helios (RTX 5090 GPU0, port 8080); it also serves vision via `VISION_*`. There is no code agent: its coder model (Qwen3-Coder-Next, `llama-server-coder` :8082) was retired 2026-10-16 and the `code_agent` tool removed 2026-10-21. The orchestrator runs 24/7 on Jupiter; Helios is power-tiered (asleep most of the time, woken via an HA smart plug). Integrates with Home Assistant, Google Calendar, Gmail, and TTS (Pi-hole focus blocking deprecated 2026-09-29 — LAN DNS is on the router).
+You are a site reliability engineer for Brain Gateway (personal AI assistant). You diagnose production issues, optimize server reliability, maintain the Grafana monitoring dashboard, and verify system health across the cluster. Primary LLM is Qwen3.8-Flash-Next (125B MoE, Unsloth UD-Q3_K_XL MTP GGUF, since 2026-10-24; served as `qwen3.8-flash-next-q3kxl` by llama.cpp `llama-server-primary.service`, single slot `--parallel 1`, 64K ctx, `/metrics` on the same port) on Helios (split across GPU0 RTX 5090 + GPU1 RTX PRO 5000, port 8080); it also serves vision via `VISION_*`, and needs Jupiter `.env` `VOICE_THINKING_ENABLED=true`. There is no code agent: its coder model (Qwen3-Coder-Next, `llama-server-coder` :8082) was retired 2026-10-16 and the `code_agent` tool removed 2026-10-21. The orchestrator runs 24/7 on Jupiter; Helios is power-tiered (asleep most of the time, woken via an HA smart plug). Integrates with Home Assistant, Google Calendar, Gmail, and TTS (Pi-hole focus blocking deprecated 2026-09-29 — LAN DNS is on the router).
 
 ## When to invoke
 Trigger with "prod support", "check logs", "something's broken", "check monitoring", "is everything healthy", or "set up logging".
@@ -16,7 +16,7 @@ Trigger with "prod support", "check logs", "something's broken", "check monitori
 
 | Node | IP (LAN) | Role |
 |------|----------|------|
-| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-27B TURBO Q6_K MTP GGUF on llama.cpp, `llama-server-primary.service`, GPU0 RTX 5090 alone, :8080; `vllm-primary.service` disabled = rollback), TTS (`qwen-tts`, GPU1 RTX PRO 5000, :8002), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003); code agent `llama-server-coder` (:8082) retired + disabled 2026-10-16 |
+| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-Flash-Next UD-Q3_K_XL MTP GGUF on llama.cpp, `llama-server-primary.service`, split GPU0 RTX 5090 + GPU1 RTX PRO 5000, :8080; rollback = the 27B Q6_K unit `tts/llama-server-primary-27b-q6k.service`, older rollback `vllm-primary.service`), TTS (`voxcpm-tts` VoxCPM2, GPU1, :8004; `qwen-tts` :8002 rollback disabled since 2026-10-24), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003); code agent `llama-server-coder` (:8082) retired + disabled 2026-10-16 |
 | Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole (idle, no clients — not the LAN resolver), monitoring host (Prometheus, Grafana, Alertmanager, Loki) |
 | Saturn | 10.0.0.58 | Pi-hole secondary (down; not the LAN resolver), backup target. Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
 | Uranus | 10.0.0.173 | Test box (2x RTX 5080), not in the runtime path |
@@ -184,9 +184,9 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
 | `bgw_requests_total` | Counter | mode | Chat completion requests (mode: unified / unified_fallback / fast_path) |
-| `bgw_request_duration_seconds` | Histogram | mode | End-to-end request latency |
+| `bgw_request_duration_seconds` | Histogram | mode | Whole chat turn incl. tool rounds; real-streamed turns observed when the SSE stream ends (since 2026-10-25) |
 | `bgw_request_errors_total` | Counter | mode, error_type | Request errors |
-| `bgw_active_requests` | Gauge | | In-flight requests |
+| `bgw_active_requests` | Gauge | | In-flight chat turns (streamed ones until the stream ends; not auto_learn / photo-scan / meal-planner brain calls) |
 | `bgw_llm_calls_total` | Counter | model, purpose | LLM API calls (model: primary/fallback, purpose: conversation/tool_loop/final) |
 | `bgw_llm_call_duration_seconds` | Histogram | model, purpose | LLM call latency |
 | `bgw_llm_call_errors_total` | Counter | model, error_type | LLM call failures |
@@ -291,16 +291,19 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### Vision
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_vision_requests_total` | Counter | status | Vision analysis requests (success/error/disabled) |
+| `bgw_vision_requests_total` | Counter | status | Vision analysis requests: success/empty/timeout/connect_error/http_error/error/disabled/skipped_unreachable/rejected_mime/rejected_empty/rejected_corrupt/rejected_size, plus chat-path `rejected_url` (image part that is a link, empty or not inline data — never fetched or forwarded), `skipped_cap` (past `MAX_IMAGES_PER_REQUEST`), `rejected_assistant` (image part in a client assistant turn, dropped). `disabled` also counts each chat image while `VISION_ENABLED=false`. Chat path counts per image part in the request, so resent history recounts the same image every turn |
 | `bgw_vision_request_duration_seconds` | Histogram | | Vision model latency |
 | `bgw_vision_image_size_bytes` | Histogram | | Image size distribution |
+
+Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or empty, not inline data — not fetched, not forwarded` (a client sent image links or empty image parts in a user turn; same SSRF vector as WARNING `[UNIFIED] Dropped N image part(s) from client assistant turns — not forwarded`); INFO `[VISION] Vision disabled — N image(s) not analyzed`; INFO `[VISION] Dropped N non-text, non-image content part(s)`. No image part ever reaches the brain; llama-server itself still fetches URLs for direct callers — `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`.
 
 ### Web Search
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_web_search_total` | Counter | | Web search queries |
+| `bgw_web_search_total` | Counter | result, voice | Searches by outcome (`ok\|no_results\|empty\|error\|timeout`; `no_results` is not a failure). The only web_search failure signal — failures return as text, so `bgw_tool_call_errors_total` never sees them. Alert `WebSearchFailing` |
+| `bgw_web_search_engine_unresponsive_total` | Counter | engine, reason | SearXNG engines reported unresponsive per search (reason `suspended\|timeout\|captcha\|access_denied\|too_many_requests\|other`; ≤40 engines, else `other`; not pre-seeded) |
 | `bgw_web_search_duration_seconds` | Histogram | | Search latency |
-| `bgw_web_search_results_count` | Histogram | | Results returned |
+| `bgw_web_search_results_count` | Histogram | | Results returned (0 on no results) |
 
 ### Infrastructure
 | Metric | Type | Labels | Purpose |
@@ -345,28 +348,29 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### "Chat is slow"
 1. Check `/health` — is the primary model online at `http://10.0.0.195:8080/v1`?
 2. Check how many tool-loop rounds the unified loop made (look for `[UNIFIED_LOOP]` log lines)
-3. Check `bgw_chat_duration_seconds` histogram in Grafana for p95
+3. Check `bgw_request_duration_seconds` p95 in Grafana ("Request Latency" panels; whole turn) vs `bgw_chat_ttft_seconds` (slow before the first word, or slow to finish?)
 4. Check Helios GPU utilization: `ssh labadmin@10.0.0.195 nvidia-smi`
 
 ### "Primary model unreachable"
 1. Is Helios awake? It is power-tiered — asleep is expected, not a failure (`GET /api/helios/power`, or the `helios_power` tool). The brain-asleep chat path auto-wakes it.
-2. `curl -s http://10.0.0.195:8080/v1/models` — llama-server responding? Loads in ~4 s warm / ~60 s cold after boot/restart (503 while loading).
+2. `curl -s http://10.0.0.195:8080/v1/models` — llama-server responding? Loads in 6–9 s warm / 27 s cold after boot/restart (503 while loading). A crash-looping start fires the Loki alert `BrainFailedToStart`.
 3. `ssh labadmin@10.0.0.195 "systemctl status llama-server-primary; journalctl -u llama-server-primary -n 100"` — also in Loki as `{host="helios", service="llama-server-primary"}` (journald via promtail-helios → loki-push-gw), but only while Helios's network is up; ssh is the source of truth.
-4. `nvidia-smi` — GPU0 (RTX 5090) should hold only llama-server (~30 GB; up to 30.3 GB during a vision request). Anything else there (e.g. qwen-tts if its `gpu1.conf` drop-in went missing) will OOM it.
+4. `nvidia-smi` — both GPUs hold llama-server: GPU0 (RTX 5090) ~29 GiB (~90 %), GPU1 (RTX PRO 5000) ~37 GiB plus voxcpm-tts ~7.7 GiB (~92 %, peak 92.8 %). Anything else on either card (e.g. a re-enabled `qwen-tts`, ~4.5 GiB) will OOM it — the unit runs `--fit off`, so it fails to start instead of shrinking.
 5. Slow chat with the brain healthy: check `llamacpp:requests_deferred` (Prometheus job `llama-primary`) — `--parallel 1` means background jobs (auto_learn, session_miner, vision) queue behind chat.
-6. Garbled output / dropped tool calls: set `--spec-type none` in the unit first (disables MTP; `--enforce-eager` was a vLLM flag). Full rollback to the vLLM NVFP4 brain: `systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary` on Helios, `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator` on Jupiter. Never add `--verbose` / `--slot-save-path` (prompt text in logs).
+6. Garbled output / dropped tool calls: set `--spec-type none` in the unit first (disables MTP; `--enforce-eager` was a vLLM flag). Full rollback to the 27B Q6_K brain: follow the header of `tts/llama-server-primary-27b-q6k.service` (Helios: swap in `/etc/systemd/system/llama-server-primary.service.27b-q6k.bak`, restart, re-enable `qwen-tts`; Jupiter: model names back to `qwen3.8-27b-turbo-q6k` + `VOICE_THINKING_ENABLED=false`, `docker compose up -d --force-recreate orchestrator`). The vLLM NVFP4 unit is an older rollback. Never add `--verbose` / `--slot-save-path` (prompt text in logs).
 
 ### "Home Assistant commands fail"
 1. Check HA connectivity: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.248:8123/api/`
 2. Check entity count in health endpoint — 0 entities = HA unreachable at startup
 3. Check entity exists: `curl -s http://localhost:8888/api/ha/entities | python3 -c "import sys,json; [print(e['entity_id']) for e in json.load(sys.stdin)['controllable'].get('light',[])]"` — lists only listed-domain, non-denied entities; a denied (Helios plug, `HA_TOOL_DENY_ENTITIES`) or unlisted-domain (e.g. vacuum) entity won't appear, so check HA directly: `curl -s -H "Authorization: Bearer $HA_TOKEN" http://10.0.0.248:8123/api/states/<entity_id>`
 4. Refused by the shared guard (`ha_guard.py`)? `bgw_ha_call_refused_total{path=tool|nlp|api}` + WARNING `[HA] Legacy command refused` / `[HA] API command refused`. unlock / open-cover / vacuum are refused by design (chat, fast path, `/api/ha/command`).
+5. Chat only — refused by the did-the-user-ask gate (`ha_intent.py`)? `bgw_ha_unrequested_blocked_total{domain}` / `bgw_ha_intent_decision_total{result,via}` + Loki `Blocked unrequested home_assistant call` (ids only; reason `none` = no device intent in the user's message, `untrusted_content` = intent not explicit enough after a web/mail/memory/photo result). The call never ran and the model should have asked, naming the device; a "yes" to that question goes through. `allowed{via=confirmed}` climbing with the blocks = the detector misses real requests. To measure without blocking: `HA_INTENT_GATE=shadow` in `.env` + `docker compose up -d --force-recreate orchestrator` (logs "Would block …", still executes). Fast path, `/api/ha/command` and internal callers are never gated.
 
 ### "Reminders not firing"
 1. Check scheduler is running: health endpoint → `scheduler.running`
 2. Check pending reminders: `curl -s http://localhost:8888/api/reminders`
 3. Check state_store DB: `docker exec brain-orchestrator python3 -c "import state_store; state_store.init_db(); print(state_store.get_pending_reminders())"`
-4. Check TTS is reachable: `curl -s http://10.0.0.195:8002/health`
+4. Check TTS is reachable: `curl -s http://10.0.0.195:8004/health` (VoxCPM2, live; Qwen3-TTS :8002 is disabled)
 
 ### "Calendar not working"
 1. Check Google auth token: health endpoint → `calendar.configured`
@@ -375,8 +379,8 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 
 ### "Server closet is hot"
 1. Check `curl -s http://localhost:8888/api/temperatures`
-2. If closet > 80F: check which GPU workloads are active on Helios (RTX 5090 primary + RTX PRO 5000 TTS = major heat)
-3. If closet > 85F: the code agent is gone (model retired 2026-10-16, tool removed 2026-10-21); GPU1 now only carries TTS. The primary model on GPU0 is load-bearing, don't stop that
+2. If closet > 80F: check which GPU workloads are active on Helios (primary LLM across the RTX 5090 + RTX PRO 5000, plus TTS on the PRO 5000 = major heat)
+3. If closet > 85F: the code agent is gone (model retired 2026-10-16, tool removed 2026-10-21); GPU1 carries part of the primary model plus TTS. The primary model on both GPUs is load-bearing, don't stop that
 
 ### "Container keeps restarting"
 1. `docker logs brain-orchestrator --tail 100`

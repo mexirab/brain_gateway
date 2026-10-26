@@ -27,17 +27,30 @@ from orchestrator.metrics import (
     AUTO_LEARN_REARMED,
     CHAT_STREAM_OUTCOME,
     CHAT_TTFT,
+    CLIENT_MARKUP_NEUTRALIZED,
     FAST_PATH_COUNT,
     MODE_ROUTE_COUNT,
     REQUEST_COUNT,
     REQUEST_ERRORS,
     REQUEST_LATENCY,
+    VISION_REQUEST_COUNT,
     VOICE_PIPELINE_LATENCY,
     WELCOME_FIRED,
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
-from orchestrator.vision_handler import PHOTO_BLOCK_RE
+from orchestrator.unified_loop import _neutralize_control_markup
+from orchestrator.vision_handler import (
+    MAX_IMAGES_PER_REQUEST,
+    NOT_ANALYZED_DISABLED,
+    NOT_ANALYZED_NOT_INLINE,
+    NOT_ANALYZED_OVER_CAP,
+    PHOTO_BLOCK_RE,
+    _is_safe_image_url,
+    frame_photo_description,
+    image_part_url,
+    photo_not_analyzed,
+)
 from orchestrator.voice_style import apply_tone_request, record_reply_style
 
 logger = logging.getLogger(__name__)
@@ -111,12 +124,202 @@ def _is_empty_assistant(m: dict) -> bool:
     if isinstance(content, list):
         for p in content:
             if not isinstance(p, dict) or p.get("type") != "text":
-                return False  # image or unknown part: keep the turn
+                return False  # defensive: _sanitize_client_history flattens lists first
             t = p.get("text")
             if not isinstance(t, str) or t.strip():
                 return False  # odd/non-string text is kept, never crashes
         return True
     return False
+
+
+def _text_only(content: list) -> tuple[str, int]:
+    """The text parts of an OpenAI content list, joined, and how many other parts were dropped."""
+    texts: List[str] = []
+    dropped = 0
+    for part in content:
+        if isinstance(part, str):
+            texts.append(part)
+        elif isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+        else:
+            dropped += 1
+    return "\n".join(texts).strip(), dropped
+
+
+def _flatten_content(
+    messages: List[Dict], descriptions: Dict[tuple[int, int], str], vision_on: bool
+) -> tuple[List[Dict], Dict[str, int]]:
+    """The messages with every content list turned into the string the loop is given.
+
+    No image part ever reaches the brain: it would skip the untrusted PHOTO
+    CONTENT framing, and llama-server downloads http(s) image URLs itself. In a
+    user turn each image becomes a block after the text (where PHOTO_BLOCK_RE
+    expects it): the framed description from `descriptions[(msg_index,
+    part_index)]`, or a NOT ANALYZED note for a link, vision switched off, or
+    an image past the per-request cap. Other roles keep their text only, and
+    other part types (input_audio, video_url, ...) are dropped everywhere.
+    Returns (messages, counts of each kind of image or part not analyzed).
+    """
+    counts = {"not_inline": 0, "disabled": 0, "over_cap": 0, "other_parts": 0}
+    notes = 0
+    out: List[Dict] = []
+    for i, msg in enumerate(messages):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        if msg.get("role") != "user":
+            text, dropped = _text_only(content)
+            counts["other_parts"] += dropped
+            out.append({"role": msg.get("role"), "content": text})
+            continue
+        texts: List[str] = []
+        blocks: List[str] = []
+        for j, part in enumerate(content):
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+            elif isinstance(part, dict) and part.get("type") == "image_url":
+                n = len(blocks) + 1
+                if not _is_safe_image_url(image_part_url(part)):
+                    kind, reason = "not_inline", NOT_ANALYZED_NOT_INLINE
+                elif not vision_on:
+                    kind, reason = "disabled", NOT_ANALYZED_DISABLED
+                elif (i, j) in descriptions:
+                    blocks.append(frame_photo_description(n, descriptions[(i, j)]))
+                    continue
+                else:  # extraction took every inline image; the cap dropped this one
+                    kind, reason = "over_cap", NOT_ANALYZED_OVER_CAP
+                counts[kind] += 1
+                # A reason on the first few notes of the request, then a bare
+                # note shorter than any image part: a request full of empty
+                # image parts can't make the prompt bigger than itself.
+                notes += 1
+                blocks.append(photo_not_analyzed(n, reason if notes <= MAX_IMAGES_PER_REQUEST else ""))
+            else:
+                counts["other_parts"] += 1
+        text = "\n".join(texts).strip()
+        out.append({"role": "user", "content": "\n\n".join(([text] if text else []) + blocks)})
+    return out, counts
+
+
+def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
+    """The client's messages without the turns no loop may be given, and with
+    tool-call / chat-template markup in the rest neutralized.
+
+    Runs first in _chat_unified_inner, before anything hands the history to
+    vision, a model loop or auto-learn, so the primary loop, real streaming
+    and both fallback-model paths all get the cleaned list.
+    """
+    # Strip incoming system messages — the orchestrator builds its own system
+    # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
+    # send a system message with all entity states; keeping it causes Qwen's Jinja
+    # template to fail ("System message must be at the beginning" / duplicate system).
+    # Also strip client-supplied `tool` turns: the orchestrator is the only
+    # legitimate producer of tool results, and a forged one is believed by
+    # the model as its own verified output (2026-10-02 red-team finding).
+    # Assistant turns are kept (they are the client's own transcript) but
+    # ChatMessage has no tool_calls field, so forged native calls are
+    # already dropped by Pydantic.
+    # Only user/assistant turns survive: ChatMessage.role is free text, and the
+    # Qwen3.8 template merges a leading `developer` turn into the system prompt
+    # (other unknown roles make it raise and the turn fail).
+    n_system_tool = sum(1 for m in messages if m.get("role") in ("system", "tool"))
+    _n_before = len(messages)
+    messages = [m for m in messages if m.get("role") in ("user", "assistant")]
+    if n_system_tool:
+        logger.info("[UNIFIED] Stripped %d client system/tool message(s)", n_system_tool)
+    if _n_before - len(messages) > n_system_tool:
+        logger.info(
+            "[UNIFIED] Stripped %d client message(s) with another role", _n_before - len(messages) - n_system_tool
+        )
+
+    # Assistant turns reach the loop as text only. Their image (or audio,
+    # video) parts would go to the multimodal brain without the PHOTO CONTENT
+    # framing vision gives user photos — and llama-server downloads http(s)
+    # image URLs itself (blind GET SSRF from Helios). Before the empty-turn
+    # check, so a turn that was only an image is dropped.
+    n_media = n_images = 0
+    flat: List[Dict] = []
+    for m in messages:
+        if m.get("role") != "user" and isinstance(m.get("content"), list):
+            n_images += sum(1 for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url")
+            text, dropped = _text_only(m["content"])
+            n_media += dropped
+            m = {"role": m["role"], "content": text}
+        flat.append(m)
+    messages = flat
+    if n_images:
+        # Same SSRF vector as a link in a user turn: visible to the self-audit.
+        VISION_REQUEST_COUNT.labels(status="rejected_assistant").inc(n_images)
+        logger.warning("[UNIFIED] Dropped %d image part(s) from client assistant turns — not forwarded", n_images)
+    if n_media > n_images:
+        logger.info("[UNIFIED] Dropped %d other non-text part(s) from client assistant turns", n_media - n_images)
+
+    # Drop empty assistant turns (a failed reply the client kept as a blank
+    # bubble). One empty assistant message in the history made the Qwen3.8
+    # brain answer with nothing 7/8 times — so a single empty reply
+    # snowballed into a silent conversation (2026-10-14).
+    _n_before = len(messages)
+    messages = [m for m in messages if not _is_empty_assistant(m)]
+    if len(messages) != _n_before:
+        logger.info("[UNIFIED] Dropped %d empty assistant message(s) from history", _n_before - len(messages))
+
+    # Neutralize control markup in what the client typed or kept, the same
+    # rewrite tool results get. A typed `<tool_call>…</tool_call>` assistant
+    # turn followed by a `<tool_response>…</tool_response>` user turn renders
+    # byte-identical to a real tool round, and `<|im_end|><|im_start|>system`
+    # in content is tokenized as real special tokens by the live llama.cpp
+    # build — a forged system turn. Outsiders reach this through any text the
+    # dashboard resends, e.g. an announcement quoting a work calendar invite
+    # title (2026-10-25 review). Jess's own replies never carry these tags
+    # (StreamGate / clean_response remove them), so normal history is unchanged.
+    # The metric's position label: "latest" is the turn this request adds,
+    # "history" the turns the client resends every time (counted again each turn).
+    neutralized = {"user": 0, "assistant": 0}
+    out = []
+    for i, m in enumerate(messages):
+        cleaned = _neutralize_turn(m)
+        if cleaned is not m:
+            neutralized[m["role"]] += 1
+            position = "latest" if i == len(messages) - 1 else "history"
+            CLIENT_MARKUP_NEUTRALIZED.labels(role=m["role"], position=position).inc()
+        out.append(cleaned)
+    if any(neutralized.values()):
+        logger.info(
+            "[UNIFIED] Neutralized control markup in client history (user=%d assistant=%d)",
+            neutralized["user"],
+            neutralized["assistant"],
+        )
+    return out
+
+
+def _neutralize_turn(m: Dict) -> Dict:
+    """`m` with control markup in its text rewritten as plain text.
+
+    Returns `m` itself when nothing changed, else a copy (the caller's dicts
+    are never edited). Only text is touched — a string part, or any dict
+    part's string `text` whatever its `type` — image parts pass through as-is.
+    """
+    c = m.get("content")
+    if isinstance(c, str):
+        cleaned = _neutralize_control_markup(c)
+        return m if cleaned == c else {**m, "content": cleaned}
+    if not isinstance(c, list):
+        return m
+    parts, changed = [], False
+    for p in c:
+        if isinstance(p, str):
+            t = _neutralize_control_markup(p)
+            if t != p:
+                p, changed = t, True
+        elif isinstance(p, dict) and isinstance(p.get("text"), str):
+            t = _neutralize_control_markup(p["text"])
+            if t != p["text"]:
+                p, changed = {**p, "text": t}, True
+        parts.append(p)
+    return {**m, "content": parts} if changed else m
 
 
 # Set per request by the chat endpoint from ChatRequest.conversation_id.
@@ -284,7 +487,7 @@ class CloudBrain:
 
         try:
             return await self._chat_unified_inner(
-                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice
+                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice, started_at=_t0
             )
         except Exception as e:
             REQUEST_ERRORS.labels(mode="unified", error_type=type(e).__name__).inc()
@@ -292,9 +495,13 @@ class CloudBrain:
         finally:
             elapsed = time.time() - _t0
             ACTIVE_REQUESTS.dec()
-            REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
-            if is_voice:
-                VOICE_PIPELINE_LATENCY.observe(elapsed)
+            # A real-streamed turn returns before the loop has run; its
+            # generator counts it as active and records the request and voice
+            # latency when the stream ends.
+            if routing_info.get("streaming") != "real":
+                REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
+                if is_voice:
+                    VOICE_PIPELINE_LATENCY.labels(path="buffered").observe(elapsed)
 
     async def _chat_unified_inner(
         self,
@@ -305,8 +512,17 @@ class CloudBrain:
         user_text: str,
         routing_info: Dict,
         is_voice: bool = False,
+        started_at: Optional[float] = None,
     ) -> Any:
         """Inner unified flow (separated for clean metrics wrapping)."""
+        # First, so no path below (the health-check fallback included) can
+        # hand a loop a client-supplied system/tool turn or unneutralized
+        # markup. `user_text` was read from the raw list: it only drives the
+        # mode router, tone request, fast path and RAG query, never model
+        # input — anything that sends user text to a model takes it from
+        # `messages`.
+        messages = _sanitize_client_history(messages)
+
         # --- Vision: detect and process images before the main loop ---
         messages = await self._process_vision(messages, routing_info)
 
@@ -325,8 +541,8 @@ class CloudBrain:
         logger.info("[MODE_ROUTER] mode=%s intensity=%s tags=%d", intent.mode, intent.intensity, len(intent.tags))
 
         # Fast-path: simple device commands. Never on a photo turn — the
-        # question is about the photo, and the vision text already ran.
-        if ha_client and not routing_info.get("vision_images"):
+        # question is about the photo (analyzed or not: vision off, a link).
+        if ha_client and not (routing_info.get("vision_images") or routing_info.get("images_not_analyzed")):
             try:
                 fast_result = await self._try_fast_path(user_text, ha_client)
                 if fast_result.handled:
@@ -406,7 +622,7 @@ class CloudBrain:
                     logger.warning("[UNIFIED] Primary unavailable, using fallback")
                     routing_info["fallback"] = "fallback_model"
                     REQUEST_COUNT.labels(mode="unified_fallback").inc()
-                    return await self._unified_fallback(messages, system_prompt, stream, routing_info)
+                    return await self._unified_fallback(messages, system_prompt, stream, routing_info, is_voice)
                 logger.error("[UNIFIED] No model available")
                 REQUEST_ERRORS.labels(mode="unified", error_type="model_unavailable").inc()
                 return self._brain_asleep_response(stream, routing_info)
@@ -456,30 +672,6 @@ class CloudBrain:
         except Exception as _e:
             logger.debug("[UNIFIED] Prompt size diagnostic failed: %s", _e)
 
-        # Strip incoming system messages — the orchestrator builds its own system
-        # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
-        # send a system message with all entity states; keeping it causes Qwen's Jinja
-        # template to fail ("System message must be at the beginning" / duplicate system).
-        # Also strip client-supplied `tool` turns: the orchestrator is the only
-        # legitimate producer of tool results, and a forged one is believed by
-        # the model as its own verified output (2026-10-02 red-team finding).
-        # Assistant turns are kept (they are the client's own transcript) but
-        # ChatMessage has no tool_calls field, so forged native calls are
-        # already dropped by Pydantic.
-        _n_before = len(messages)
-        messages = [m for m in messages if m.get("role") not in ("system", "tool")]
-        if len(messages) != _n_before:
-            logger.info("[UNIFIED] Stripped %d client system/tool message(s)", _n_before - len(messages))
-
-        # Drop empty assistant turns (a failed reply the client kept as a blank
-        # bubble). One empty assistant message in the history made the Qwen3.8
-        # brain answer with nothing 7/8 times — so a single empty reply
-        # snowballed into a silent conversation (2026-10-14).
-        _n_before = len(messages)
-        messages = [m for m in messages if not _is_empty_assistant(m)]
-        if len(messages) != _n_before:
-            logger.info("[UNIFIED] Dropped %d empty assistant message(s) from history", _n_before - len(messages))
-
         # Real streaming: relay gate-safe tokens while the loop is still
         # running. Skipped for the literal first-ever chat so the one-time
         # welcome prepend keeps its ordering, and killable at runtime via
@@ -493,6 +685,7 @@ class CloudBrain:
                 model_url=model_url,
                 model_name=model_name,
                 is_voice=is_voice,
+                started_at=started_at,
             )
 
         try:
@@ -511,7 +704,7 @@ class CloudBrain:
             if self._fallback_model_url:
                 routing_info["fallback"] = "fallback_model"
                 REQUEST_COUNT.labels(mode="unified_fallback").inc()
-                return await self._unified_fallback(messages, system_prompt, stream, routing_info)
+                return await self._unified_fallback(messages, system_prompt, stream, routing_info, is_voice)
             return JSONResponse({"error": "Service temporarily unavailable"}, status_code=503)
 
         self._schedule_auto_learn(messages)
@@ -538,9 +731,13 @@ class CloudBrain:
         )
 
     async def _unified_fallback(
-        self, messages: List[Dict], system_prompt: str, stream: bool, routing_info: Dict
+        self, messages: List[Dict], system_prompt: str, stream: bool, routing_info: Dict, is_voice: bool = False
     ) -> Any:
-        """Fallback to secondary model using the same unified loop."""
+        """Fallback to secondary model using the same unified loop.
+
+        is_voice keeps the voice generation settings and tool budgets (the 5 s
+        web_search deadline) on the fallback model too; the tool list stays
+        the full one, as on the streamed fallback."""
         logger.info("[UNIFIED-FALLBACK] Using fallback model: %s", self._fallback_model_name)
         try:
             result = await self._run_unified_loop(
@@ -550,6 +747,7 @@ class CloudBrain:
                 model_url=self._fallback_model_url,
                 model_name=self._fallback_model_name,
                 http_client=None,
+                is_voice=is_voice,
             )
         except Exception as e:
             logger.error("[UNIFIED-FALLBACK] Fallback also failed: %s", e)
@@ -580,107 +778,87 @@ class CloudBrain:
     # --- Vision processing ---
 
     async def _process_vision(self, messages: List[Dict], routing_info: Dict) -> List[Dict]:
-        """Detect images in messages, analyze via vision model, replace with text descriptions.
+        """Turn every image in the history into text before any loop sees it.
 
         Images go to the vision model (VISION_MODEL_URL — the Helios brain on the
         live deployment). Each description is neutralized and framed as untrusted
         PHOTO CONTENT, then replaces the image so the text-only loop can use it.
         If the vision model is unreachable no analysis is attempted (no
         VISION_TIMEOUT wait); the turn carries a NOT ANALYZED note instead.
+        Always ends with _flatten_content, vision on or off: no image part (a
+        link included) is ever forwarded to the brain.
         """
-        if not shared.VISION_ENABLED:
-            return messages
-
-        from orchestrator.metrics import VISION_REQUEST_COUNT
         from orchestrator.vision_handler import (
             UNREACHABLE_PLACEHOLDER,
             analyze_image,
             check_vision_health,
             extract_images_from_messages,
-            frame_photo_description,
         )
 
-        images = extract_images_from_messages(messages)
-        if not images:
-            return messages
+        vision_on = shared.VISION_ENABLED
+        images = extract_images_from_messages(messages) if vision_on else []
+        descriptions: Dict[tuple[int, int], str] = {}
 
-        logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
-        routing_info["vision_images"] = len(images)
+        if images:
+            logger.info("[VISION] Found %d image(s) in messages, routing to vision model", len(images))
+            routing_info["vision_images"] = len(images)
 
-        # Probe first: with Helios asleep each analyze_image call would wait out
-        # VISION_TIMEOUT before the brain-asleep reply (and its wake) ever ran.
-        vision_up = await check_vision_health()
-        if not vision_up:
-            routing_info["vision_skipped"] = "unreachable"
-            # Expected while Helios sleeps: INFO, and counted (no analyze_image call).
-            VISION_REQUEST_COUNT.labels(status="skipped_unreachable").inc(len(images))
-            logger.info("[VISION] Vision model unreachable — skipping %d image(s)", len(images))
+            # Probe first: with Helios asleep each analyze_image call would wait out
+            # VISION_TIMEOUT before the brain-asleep reply (and its wake) ever ran.
+            vision_up = await check_vision_health()
+            if not vision_up:
+                routing_info["vision_skipped"] = "unreachable"
+                # Expected while Helios sleeps: INFO, and counted (no analyze_image call).
+                VISION_REQUEST_COUNT.labels(status="skipped_unreachable").inc(len(images))
+                logger.info("[VISION] Vision model unreachable — skipping %d image(s)", len(images))
 
-        # Process images and collect descriptions per message index
-        processed_msgs = [m.copy() for m in messages]
-        descriptions_by_idx: Dict[int, list] = {}
+            for img_info in images:
+                prompt = img_info["text"] or "Describe this image in detail, including any text visible."
+                image_url = img_info["image_url"]
 
-        for img_info in images:
-            idx = img_info["msg_index"]
-            prompt = img_info["text"] or "Describe this image in detail, including any text visible."
-            image_url = img_info["image_url"]
+                # Cache the image for follow-up analyze_image tool calls. Key from
+                # the WHOLE data URI: canvas JPEGs share their first ~200 chars.
+                # Re-insert so the newest image is last (the tool reads the last).
+                cache_key = hashlib.sha256(image_url.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+                shared._vision_image_cache.pop(cache_key, None)
+                shared._vision_image_cache[cache_key] = image_url
+                # Cap cache at 5 entries
+                while len(shared._vision_image_cache) > 5:
+                    oldest = next(iter(shared._vision_image_cache))
+                    shared._vision_image_cache.pop(oldest, None)
 
-            # Cache the image for follow-up analyze_image tool calls. Key from
-            # the WHOLE data URI: canvas JPEGs share their first ~200 chars.
-            # Re-insert so the newest image is last (the tool reads the last).
-            cache_key = hashlib.sha256(image_url.encode()).hexdigest()[:16]
-            shared._vision_image_cache.pop(cache_key, None)
-            shared._vision_image_cache[cache_key] = image_url
-            # Cap cache at 5 entries
-            while len(shared._vision_image_cache) > 5:
-                oldest = next(iter(shared._vision_image_cache))
-                shared._vision_image_cache.pop(oldest, None)
+                if vision_up:
+                    # thinking=False: on a busy photo the brain can spend the whole
+                    # token budget reasoning and return nothing (seen on pantry scans).
+                    description = await analyze_image(image_url, prompt, thinking=False)
+                else:
+                    description = UNREACHABLE_PLACEHOLDER
+                descriptions[(img_info["msg_index"], img_info["part_index"])] = description
 
-            if vision_up:
-                # thinking=False: on a busy photo the brain can spend the whole
-                # token budget reasoning and return nothing (seen on pantry scans).
-                description = await analyze_image(image_url, prompt, thinking=False)
-            else:
-                description = UNREACHABLE_PLACEHOLDER
-            descriptions_by_idx.setdefault(idx, []).append(description)
+            logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
 
-        # Replace multipart content with all image descriptions for that message
-        for idx, descs in descriptions_by_idx.items():
-            original_text = ""
-            for img in images:
-                if img["msg_index"] == idx and img["text"]:
-                    original_text = img["text"]
-                    break
-            analysis_parts = [frame_photo_description(i + 1, d) for i, d in enumerate(descs)]
-            replacement = "\n\n".join(analysis_parts)
-            if original_text:
-                replacement = f"{original_text}\n\n{replacement}"
+        # Every content list becomes a string, including history the client
+        # resent with old images: the loop only ever gets text.
+        processed, counts = _flatten_content(messages, descriptions, vision_on)
 
-            processed_msgs[idx] = {
-                "role": "user",
-                "content": replacement,
-            }
+        not_analyzed = counts["not_inline"] + counts["disabled"] + counts["over_cap"]
+        if not_analyzed:
+            routing_info["images_not_analyzed"] = not_analyzed
+        if counts["not_inline"]:
+            VISION_REQUEST_COUNT.labels(status="rejected_url").inc(counts["not_inline"])
+            logger.warning(
+                "[VISION] %d image part(s) were links or empty, not inline data — not fetched, not forwarded",
+                counts["not_inline"],
+            )
+        if counts["disabled"]:
+            VISION_REQUEST_COUNT.labels(status="disabled").inc(counts["disabled"])
+            logger.info("[VISION] Vision disabled — %d image(s) not analyzed", counts["disabled"])
+        if counts["over_cap"]:
+            VISION_REQUEST_COUNT.labels(status="skipped_cap").inc(counts["over_cap"])
+        if counts["other_parts"]:
+            logger.info("[VISION] Dropped %d non-text, non-image content part(s)", counts["other_parts"])
 
-        logger.info("[VISION] Processed %d image(s), injected descriptions into messages", len(images))
-
-        # Strip any remaining base64/image content from ALL messages before sending to text-only LLM
-        # Clients may resend full conversation history including old images
-        for i, msg in enumerate(processed_msgs):
-            content = msg.get("content")
-            if isinstance(content, list):
-                text_parts = []
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                    elif isinstance(part, dict) and part.get("type") == "image_url":
-                        text_parts.append("[Previously shared image]")
-                if text_parts:
-                    processed_msgs[i] = {
-                        "role": msg.get("role", "user"),
-                        "content": "\n".join(text_parts),
-                    }
-
-        return processed_msgs
+        return processed
 
     # --- Helpers ---
 
@@ -831,9 +1009,15 @@ class CloudBrain:
         model_url: str,
         model_name: str,
         is_voice: bool,
+        started_at: Optional[float] = None,
     ):
         """Real streaming: run the unified loop in a producer task and relay
         its gate-safe deltas as OpenAI SSE chunks while it executes.
+
+        started_at is when the request reached _chat_unified: the turn records
+        bgw_request_duration_seconds (and, for voice, bgw_voice_pipeline_seconds)
+        from it when the stream ends, and counts in bgw_active_requests while
+        the stream runs.
 
         Semantics parity with the buffered path:
         - Loop failure with NOTHING emitted yet → try the fallback model
@@ -922,24 +1106,31 @@ class CloudBrain:
                 + "\n\n"
             )
 
+        ttft = CHAT_TTFT.labels(voice="true" if is_voice else "false")
+
         async def generate():
             task = asyncio.create_task(producer())
             emitted = False
             t0 = time.time()
+            # _chat_unified stopped counting the turn when it returned this
+            # response; count it again while the stream runs. Counted here, not
+            # carried over, so a stream that never starts (client gone before
+            # the first chunk) can't leave the gauge stuck high.
+            ACTIVE_REQUESTS.inc()
             try:
                 while True:
                     kind, payload = await queue.get()
                     if kind == "delta":
                         if not emitted:
                             emitted = True
-                            CHAT_TTFT.observe(time.time() - t0)
+                            ttft.observe(time.time() - t0)
                         yield _sse({"content": payload})
                     elif kind == "final":
                         # Fully-buffered turns (fallback model, non-stream-capable
                         # backend edge cases) produced no deltas — send the whole
                         # answer as one chunk so behavior matches _stream_text.
                         if not emitted and payload:
-                            CHAT_TTFT.observe(time.time() - t0)
+                            ttft.observe(time.time() - t0)
                             yield _sse({"content": payload})
                         yield _sse({}, finish_reason="stop")
                         yield "data: [DONE]\n\n"
@@ -958,8 +1149,17 @@ class CloudBrain:
                 # retrieved".
                 if not task.done():
                     task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                finally:
+                    # Stream over (answered, failed or client gone): the whole
+                    # turn, tool rounds included.
+                    elapsed = time.time() - (started_at if started_at is not None else t0)
+                    ACTIVE_REQUESTS.dec()
+                    REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
+                    if is_voice:
+                        VOICE_PIPELINE_LATENCY.labels(path="streamed").observe(elapsed)
 
         return StreamingResponse(
             generate(),

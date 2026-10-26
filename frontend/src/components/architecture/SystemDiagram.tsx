@@ -331,7 +331,7 @@ export default function SystemDiagram() {
 
   return (
     <Card padding="none" className="p-4 md:p-6">
-      <h2 className="text-lg md:text-xl font-bold text-white mb-1">
+      <h2 className="text-lg md:text-xl font-bold text-content-primary mb-1">
         How Jess Works
       </h2>
       <p className="text-xs md:text-sm text-content-secondary mb-3">
@@ -365,7 +365,7 @@ export default function SystemDiagram() {
             onClick={() => { setActiveFlow(i); setActiveStep(-1); setIsPlaying(true); }}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${
               i === activeFlow
-                ? 'text-white shadow-lg scale-105'
+                ? 'text-content-primary shadow-lg scale-105'
                 : 'bg-surface-raised/60 text-content-secondary hover:bg-surface-overlay/60 hover:text-content-primary'
             }`}
             style={i === activeFlow ? { background: f.color + '30', boxShadow: `0 0 20px ${f.color}30`, border: `1px solid ${f.color}60` } : {}}
@@ -375,7 +375,7 @@ export default function SystemDiagram() {
         ))}
         <button
           onClick={() => setIsPlaying(!isPlaying)}
-          className="ml-auto px-3 py-1.5 rounded-full text-xs font-medium bg-surface-raised/60 text-content-secondary hover:text-white transition-colors"
+          className="ml-auto px-3 py-1.5 rounded-full text-xs font-medium bg-surface-raised/60 text-content-secondary hover:text-content-primary transition-colors"
         >
           {isPlaying ? '⏸ Pause' : '▶ Play'}
         </button>
@@ -436,7 +436,7 @@ export default function SystemDiagram() {
 
           {/* Background region for background jobs */}
           <rect x="688" y="108" width="174" height="386" rx="12"
-            fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.09)" strokeDasharray="4 4" />
+            style={{ fill: 'rgb(var(--c-ink) / 0.02)', stroke: 'var(--line)' }} strokeDasharray="4 4" />
 
           {/* Edges (draw all potential edges dimly, active ones brightly) */}
           {flow.edges.map((edge, i) => {
@@ -452,7 +452,7 @@ export default function SystemDiagram() {
                 <path
                   d={path}
                   fill="none"
-                  stroke={isActive ? flow.color : 'rgba(255,255,255,0.09)'}
+                  style={{ stroke: isActive ? flow.color : 'var(--line)' }}
                   strokeWidth={isActive ? 2.5 : 1}
                   strokeOpacity={isActive ? 0.8 : 0.3}
                   markerEnd={isActive ? 'url(#arrow)' : undefined}
@@ -512,8 +512,10 @@ export default function SystemDiagram() {
                   x={node.x} y={node.y}
                   width={node.w} height={node.h}
                   rx="10"
-                  fill={lit ? node.color + '25' : '#14151fe6'}
-                  stroke={lit ? node.color : node.disabled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.09)'}
+                  style={{
+                    fill: lit ? node.color + '25' : 'rgb(var(--c-surface-raised) / 0.9)',
+                    stroke: lit ? node.color : node.disabled ? 'rgb(var(--c-ink) / 0.35)' : 'var(--line)',
+                  }}
                   strokeWidth={lit ? 1.5 : 0.5}
                   strokeDasharray={node.disabled ? '4 3' : undefined}
                   className="transition-all duration-300"
@@ -533,7 +535,7 @@ export default function SystemDiagram() {
                   x={node.x + 30} y={node.y + node.h / 2 - 5}
                   dominantBaseline="middle"
                   className="text-[11px] font-bold"
-                  fill={lit ? '#fff' : '#aaa9b8'}
+                  style={{ fill: lit ? 'rgb(var(--c-content-primary))' : 'rgb(var(--c-content-secondary))' }}
                 >
                   {node.label}
                 </text>
@@ -543,7 +545,7 @@ export default function SystemDiagram() {
                   x={node.x + 30} y={node.y + node.h / 2 + 9}
                   dominantBaseline="middle"
                   className="text-[8px]"
-                  fill={lit ? node.color : '#84838f'}
+                  style={{ fill: lit ? node.color : 'rgb(var(--c-content-muted))' }}
                 >
                   {sub}
                 </text>
@@ -574,7 +576,7 @@ export default function SystemDiagram() {
             return (
               <g key={`label-${i}`}>
                 <rect x={lx - edge.label.length * 3.2} y={ly - 9} width={edge.label.length * 6.4} height={16}
-                  rx="4" fill="#14151fd9" stroke={flow.color + '40'} strokeWidth={0.5} />
+                  rx="4" style={{ fill: 'rgb(var(--c-surface-raised) / 0.85)' }} stroke={flow.color + '40'} strokeWidth={0.5} />
                 <text x={lx} y={ly + 3} textAnchor="middle"
                   className="text-[9px]" fill={flow.color} opacity={i === activeStep ? 1 : 0.7}>
                   {edge.label}
@@ -605,7 +607,7 @@ export default function SystemDiagram() {
             key={i}
             className="h-1 rounded-full transition-all duration-300 flex-1"
             style={{
-              background: i <= activeStep ? flow.color : 'rgba(255,255,255,0.09)',
+              background: i <= activeStep ? flow.color : 'var(--line)',
               opacity: i <= activeStep ? 1 : 0.5,
             }}
           />

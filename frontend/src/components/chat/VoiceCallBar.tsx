@@ -43,7 +43,7 @@ export default function VoiceCallBar({ phase, speaking, onInterrupt, onEnd }: Vo
         className={`flex-1 flex items-center gap-3 min-h-11 px-4 rounded-xl border text-sm ${
           phase === 'hearing'
             ? 'border-brand/60 bg-brand/15 text-content-primary'
-            : 'border-line/50 bg-surface-raised/60 text-content-secondary'
+            : 'border-ink/50 bg-surface-raised/60 text-content-secondary'
         }`}
       >
         {busy ? (

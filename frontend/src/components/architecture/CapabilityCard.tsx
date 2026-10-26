@@ -25,7 +25,7 @@ export default function CapabilityCard({ icon, label, desc }: CapabilityCardProp
         <Icon size={20} />
       </div>
       <div>
-        <h3 className="text-sm font-semibold text-white">{label}</h3>
+        <h3 className="text-sm font-semibold text-content-primary">{label}</h3>
         <p className="text-xs text-content-muted">{desc}</p>
       </div>
     </Card>

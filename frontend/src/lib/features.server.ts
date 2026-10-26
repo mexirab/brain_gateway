@@ -12,6 +12,8 @@ export async function getFeatureFlags(): Promise<FeatureFlags> {
     const res = await fetch(`${base}/api/config/features`, {
       headers: { Authorization: `Bearer ${token}` },
       next: { revalidate: 30 },
+      // The private layout waits on this; fail open quickly instead of hanging.
+      signal: AbortSignal.timeout(2000),
     });
     if (!res.ok) throw new Error(`features ${res.status}`);
     return (await res.json()) as FeatureFlags;

@@ -79,11 +79,11 @@ export default function CalendarCard() {
           {events.map((event) => (
             <div
               key={`${event.id}|${event.start}`}
-              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-line/30"
+              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-ink/30"
             >
               <Clock size={14} className="text-content-muted shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">
+                <p className="text-sm font-medium text-content-primary truncate">
                   {event.title}
                 </p>
                 <p className="text-xs text-content-muted">

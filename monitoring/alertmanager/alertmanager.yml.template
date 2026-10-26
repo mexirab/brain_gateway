@@ -48,7 +48,7 @@ route:
     # they all fell through to "null" — the UPS exporter sat dead for three
     # months unnoticed.
     - matchers:
-        - alertname=~"UPSOnBattery|UPSLowBattery|OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
+        - alertname=~"UPSOnBattery|UPSLowBattery|OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|JessGristBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
@@ -56,13 +56,19 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|RadicaleDown|ActualDown|PaperlessDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|UPSExporterDown|UPSReplaceBattery|UPSOverload"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
     # day is enough.
     - matchers:
         - alertname="AnnouncementSpeakerUnavailable"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
+    # WebSearchFailing stays active until its failures age out of the 6h
+    # window, so the default 4h repeat would re-notify after the fix.
+    - matchers:
+        - alertname="WebSearchFailing"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # Helios unreachable with stale/unknown plug reads: the outage detector is

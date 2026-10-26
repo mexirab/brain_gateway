@@ -160,7 +160,7 @@ export default function VoiceStylePanel({ registerDirty }: PanelProps = {}) {
         className="rounded-lg border border-line bg-surface-base/40 p-3 sm:grid sm:grid-cols-[220px_1fr] sm:gap-4 sm:items-center"
       >
         <div className="mb-2 sm:mb-0">
-          <label htmlFor={id} className="block text-sm font-medium text-white">
+          <label htmlFor={id} className="block text-sm font-medium text-content-primary">
             {label}
           </label>
           {hint && (
@@ -196,7 +196,7 @@ export default function VoiceStylePanel({ registerDirty }: PanelProps = {}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white">Voice Style</h2>
+        <h2 className="text-lg font-semibold text-content-primary">Voice Style</h2>
         <p className="text-sm text-content-secondary mt-1">
           How Jess sounds when she speaks. Pick a default for each kind of conversation and each kind
           of announcement. You can also just ask her — “talk softer for an hour”, “be more upbeat”,
@@ -212,7 +212,7 @@ export default function VoiceStylePanel({ registerDirty }: PanelProps = {}) {
       {override && (
         <div className="rounded-lg border border-brand-500/40 bg-brand-500/10 p-3 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-white">
+            <p className="text-sm text-content-primary">
               You asked Jess to sound <strong>{presetLabel(override.style).toLowerCase()}</strong>{' '}
               (“{data.presets[override.style]}”) {untilText(override.until)}. It applies to
               everything she says.

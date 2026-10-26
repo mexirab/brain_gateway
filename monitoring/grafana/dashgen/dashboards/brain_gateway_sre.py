@@ -105,9 +105,15 @@ def build() -> dict:
                 ("histogram_quantile(0.50, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))", "p50"),
                 ("histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))", "p95"),
                 ("histogram_quantile(0.99, sum by (le) (rate(bgw_chat_ttft_seconds_bucket[5m])))", "p99"),
+                (
+                    'histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket{voice="true"}[5m])))',
+                    "p95 voice",
+                ),
             ],
             unit="s",
-            description="Time to first streamed token on /v1/chat/completions. If this "
+            description="Time to first streamed text on /v1/chat/completions, from when the tool loop "
+            "starts (p95 voice: streamed voice turns only; the first spoken word also waits for a whole "
+            "sentence and TTS). If this "
             "collapses toward Request Latency, streaming has silently degraded to the "
             "buffered path — cross-check the degradation panel.",
         ),
@@ -132,9 +138,10 @@ def build() -> dict:
             [("sum by (outcome) (rate(bgw_llm_empty_reply_total[5m])) * 60", "{{outcome}}")],
             unit="none",
             description="Rounds where the brain returned no text and no tool call. retried = "
-            "re-asked once with thinking on; recovered = the retry answered; still_empty = "
-            "the user got a blank. A sustained retried rate (>5% of voice turns) means the "
-            "voice no-think fast path no longer pays off.",
+            "re-asked once (with thinking on, unless VOICE_THINKING_ENABLED already has it on); "
+            "recovered = the retry answered; still_empty = the user got a blank. A sustained "
+            "retried rate (>5% of voice turns) means the voice no-think fast path no longer pays "
+            "off; with thinking on, check finish=length (reasoning ate the voice budget).",
         ),
         stat(
             "Blank Replies (still_empty, 24h)",
@@ -178,7 +185,11 @@ def build() -> dict:
     voice_desc = (
         "Text-in to text-out latency for voice-channel requests. Covers the "
         "LLM + tool-loop slice we control; excludes Whisper STT upstream and "
-        "TTS synthesis + speaker playback downstream. Target: keep p95 under "
+        "TTS synthesis + speaker playback downstream. path=streamed (dashboard "
+        "mic / call mode) is measured when the stream ends — the user hears the "
+        "first sentence much earlier; before 2026-10-25 these were recorded "
+        "before the tool loop ran. path=buffered (HA Assist) is the whole wait "
+        "in silence. Target: keep p95 under "
         "13s (prior floor). Investigate spikes with the logs row below."
     )
     voice_row = [
@@ -190,8 +201,8 @@ def build() -> dict:
                     "p50",
                 ),
                 (
-                    "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
-                    "p95",
+                    "histogram_quantile(0.95, sum by (le, path) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+                    "p95 {{path}}",
                 ),
                 (
                     "histogram_quantile(0.99, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
@@ -371,6 +382,40 @@ def build() -> dict:
     ]
     row, y = grid_row(llm_row, y, heights=[8, 8, 8, 8, 8])
     panels.extend(row)
+    # Prompt-injection defences firing: <tool_call>/<think>/<|im_start|> markup
+    # rewritten as quoted text before it reached the brain. Any non-zero is
+    # worth a look (live baseline 0); the content was defused, so no alert.
+    row, y = grid_row(
+        [
+            timeseries(
+                "Control Markup Neutralized (tool results + client chat)",
+                [
+                    (
+                        "sum by (tool) (increase(bgw_tool_result_markup_neutralized_total[1h]))",
+                        "tool:{{tool}}",
+                    ),
+                    (
+                        "sum by (role, position) (increase(bgw_client_markup_neutralized_total[1h]))",
+                        "client:{{role}}/{{position}}",
+                    ),
+                ],
+                unit="short",
+                stack=True,
+                description=(
+                    "Tool-call / chat-template markup rewritten as quoted text before it "
+                    "reached the brain. tool:* = a tool result (web page, email, calendar, "
+                    "photo description...). client:* = a chat turn the client sent: "
+                    "position=latest is the new turn (each event once); history turns are "
+                    "resent and counted again on every chat turn. client:assistant means "
+                    "text Jess didn't write — usually an announcement quoting an outside "
+                    "calendar title. Pasted code can trip it too."
+                ),
+            ),
+        ],
+        y,
+        heights=[7],
+    )
+    panels.extend(row)
 
     # -------------------------------------------------------- Brain Server (llama-server)
     # Scraped straight from llama-server's /metrics (Prometheus job
@@ -424,8 +469,8 @@ def build() -> dict:
             unit="none",
             span_nulls=False,
             description="Tokens per second while actually generating (decode) and prefilling (prompt), "
-            "averaged over 15 min of busy time — idle time is excluded. Baseline on the 5090 with MTP: "
-            "~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the "
+            "averaged over 15 min of busy time — idle time is excluded. Baseline (Qwen3.8-Flash-Next on "
+            "5090 + PRO 5000 with MTP, since 2026-10-24): ~135-180 decode, ~30-85 while TTS speaks on the shared GPU1; prefill ~2000-2200 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the "
             "model fell back to CPU (see BrainOnCPU).",
         ),
         timeseries(
@@ -446,7 +491,7 @@ def build() -> dict:
             description="Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). "
             "'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; "
             "pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos "
-            "lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, "
+            "lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.55-0.9 (Flash-Next: ~0.6 on prose, ~0.9 on code). A collapse means sampling drifted (temperature > 1, "
             "repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever "
             "is --spec-type none on the llama-server-primary unit.",
         ),
@@ -545,7 +590,8 @@ def build() -> dict:
             'and increase(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) >= 1',
             unit="none",
             thresholds=[(None, "red"), (30, "yellow"), (80, "green")],
-            description="Mean tok/s while generating. ~105-125 on the RTX 5090; under 30 = "
+            description="Mean tok/s while generating. ~135-180 on Flash-Next (5090 + PRO 5000), ~30-85 while "
+            "TTS speaks on the shared GPU1; under 30 with the GPUs empty = "
             "running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
         ),
         stat(
@@ -724,6 +770,28 @@ def build() -> dict:
             "chat and the fast path can't change these; the dashboard can. A burst on path=tool can mean a "
             "prompt-injection attempt.",
         ),
+        timeseries(
+            "HA: Unrequested calls blocked (/1h)",
+            [
+                ("sum by (domain) (increase(bgw_ha_unrequested_blocked_total[1h]))", "blocked {{domain}}"),
+                (
+                    'sum(increase(bgw_ha_intent_decision_total{result="allowed",via="confirmed"}[1h])) or vector(0)',
+                    "allowed after a yes",
+                ),
+                ('sum(increase(bgw_tool_calls_total{tool="home_assistant"}[1h])) or vector(0)', "executed"),
+                (
+                    'sum(increase(bgw_ha_intent_decision_total{result="shadow"}[1h])) or vector(0)',
+                    "would block (shadow mode)",
+                ),
+            ],
+            unit="none",
+            description="Chat-model home_assistant calls refused by the did-the-user-ask gate (ha_intent): the "
+            "user's message showed no device intent, so nothing ran and the model was told to ask. Blocked calls "
+            "never reach execute_tool, so 'executed' counts real executions. A rise after a brain change = the "
+            "model acts unasked; a rise after an ha_intent change = real requests refused ('allowed after a yes' "
+            "climbing too: the user had to confirm). A burst can mean injected content. With HA_INTENT_GATE=shadow "
+            "nothing is blocked; 'would block' shows what enforce would have refused.",
+        ),
         stat(
             "HA: Registry entities",
             "bgw_ha_registry_entities",
@@ -820,10 +888,16 @@ def build() -> dict:
             unit="none",
         ),
         timeseries(
-            "Dedup + Sensitive Filtered",
+            # "capped" growing = AUTO_LEARN_MAX_FACTS is losing real facts. For
+            # update_memory, "kept" far above "replaced" = corrections aren't
+            # replacing the old fact (both stay stored).
+            "Dedup / Filtered / Capped + update_memory",
             [
                 ("rate(bgw_auto_learn_duplicates_skipped_total[15m]) * 60", "dedup skipped"),
                 ("rate(bgw_auto_learn_sensitive_filtered_total[15m]) * 60", "sensitive filtered"),
+                ("rate(bgw_auto_learn_facts_capped_total[15m]) * 60", "capped"),
+                ("rate(bgw_memory_facts_replaced_total[15m]) * 60", "update_memory replaced"),
+                ("rate(bgw_memory_replace_skipped_total[15m]) * 60", "update_memory kept"),
             ],
             unit="none",
             stack=True,
@@ -1174,13 +1248,18 @@ def build() -> dict:
         timeseries(
             "Web Search Rate + Latency",
             [
-                ("rate(bgw_web_search_total[15m]) * 60", "searches/min"),
+                ("sum by (result) (rate(bgw_web_search_total[15m])) * 60", "{{result}}/min"),
                 (
                     "histogram_quantile(0.95, sum by (le) (rate(bgw_web_search_duration_seconds_bucket[15m])))",
                     "p95 latency (s)",
                 ),
             ],
             unit="none",
+            description="Searches per minute split by result and p95 search latency. ok; no_results "
+            "(every engine answered, nothing found — not a failure); empty (no results and SearXNG "
+            "reported engines suspended or failing); error; timeout. Failures reach the model as text, "
+            "so this is the only place they show (alert WebSearchFailing). Voice searches give up "
+            "after 5 s, typed ones after 15 s.",
         ),
     ]
     row, y = grid_row(vwstts_row_1, y, heights=[8, 8, 8, 8])
@@ -1211,8 +1290,22 @@ def build() -> dict:
             "TTS Errors by Type (24h)",
             "sum by (error_type) (increase(bgw_tts_errors_total[24h]))",
         ),
+        timeseries(
+            "SearXNG Engines Unresponsive (6h)",
+            [
+                (
+                    "sum by (engine, reason) (increase(bgw_web_search_engine_unresponsive_total[6h]))",
+                    "{{engine}} ({{reason}})",
+                )
+            ],
+            unit="none",
+            description="Upstream engines SearXNG reported as unresponsive, counted once per search. "
+            "'suspended' means SearXNG paused the engine after it was blocked or rate-limited — it "
+            "recovers on its own; never burst-test real searches. Engine series are created on first "
+            "sight, so the first report per engine after an orchestrator restart doesn't show here.",
+        ),
     ]
-    row, y = grid_row(vwstts_row_2, y, heights=[8, 8, 8])
+    row, y = grid_row(vwstts_row_2, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Reminders + Fast Path
@@ -1373,6 +1466,44 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(inbox_row, y, heights=[8, 8, 8, 8])
+    panels.extend(row)
+
+    # ------------------------------------------------- Research Helper (look_it_up)
+    # Jess's sandboxed research helper (research_helper.py, off by default):
+    # its own tool loop over Context7 / SearXNG / public pages, inside the chat
+    # turn. Duration is what the user waits; screened_* = questions refused for
+    # personal/system details; not_from_results = read_page refused a URL the
+    # lookup's own results didn't produce (an injected page trying to exfiltrate).
+    r, y = row_divider("Research Helper (look_it_up)", y)
+    panels.append(r)
+    research_row = [
+        timeseries(
+            "Lookups by Result (6h)",
+            [("sum by (result) (increase(bgw_research_lookups_total[6h]))", "{{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Lookup Duration p50 / p95 (6h)",
+            [
+                (
+                    "histogram_quantile(0.5, sum by (le) (rate(bgw_research_lookup_duration_seconds_bucket[6h])))",
+                    "p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (le) (rate(bgw_research_lookup_duration_seconds_bucket[6h])))",
+                    "p95",
+                ),
+            ],
+            unit="s",
+            description="Wall time of a lookup; the chat turn shows nothing meanwhile. Budget 75 s.",
+        ),
+        timeseries(
+            "Source Calls by Tool / Result (6h)",
+            [("sum by (tool, result) (increase(bgw_research_source_calls_total[6h]))", "{{tool}} / {{result}}")],
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(research_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Telegram Bot

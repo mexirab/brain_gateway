@@ -70,8 +70,9 @@ Before you start:
 
 ```bash
 # All tests (from the worktree root). No pytest.ini, pyproject.toml not mounted → asyncio_mode on the CLI.
+# The data/ mount is needed by test_palace_system_wing.py (reads data/palace.yaml).
 docker run --rm -m 6g --name unit-test-$$ \
-  -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -w /app \
+  -v "$PWD/orchestrator:/app/orchestrator:ro" -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/data:/app/data_repo:ro" -w /app \
   gateway_nerves-orchestrator \
   sh -c "pip install -q pytest pytest-asyncio respx && python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q"
 

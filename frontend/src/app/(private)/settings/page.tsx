@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell, AudioLines, Bell } from 'lucide-react';
+import { User, Heart, Moon, Repeat, Sunrise, Volume2, Dumbbell, AudioLines, Bell, Palette } from 'lucide-react';
+import AppearancePanel from '@/components/settings/AppearancePanel';
 import IdentityPanel from '@/components/settings/IdentityPanel';
 import SelfcarePanel from '@/components/settings/SelfcarePanel';
 import QuietHoursPanel from '@/components/settings/QuietHoursPanel';
@@ -17,6 +18,7 @@ import type { LucideIcon } from 'lucide-react';
 // is a single-file change here, not a hand-edit across every component.
 export type PanelKey =
   | 'identity'
+  | 'appearance'
   | 'selfcare'
   | 'quiet'
   | 'routines'
@@ -35,6 +37,7 @@ interface Tab {
 
 const TABS: Tab[] = [
   { key: 'identity', label: 'Identity & Tone', icon: User, description: 'Names, ADHD mode, tone' },
+  { key: 'appearance', label: 'Appearance', icon: Palette, description: 'Light, dark or follow the device' },
   { key: 'selfcare', label: 'Selfcare Nudges', icon: Heart, description: 'Meals, water, meds, movement' },
   { key: 'quiet', label: 'Quiet Hours', icon: Moon, description: 'Do-not-disturb window' },
   { key: 'routines', label: 'Routines', icon: Sunrise, description: 'Morning + evening step-by-step flows' },
@@ -56,6 +59,7 @@ export default function SettingsPage() {
   // shell-state churn.
   const dirtyRef = useRef<Record<PanelKey, boolean>>({
     identity: false,
+    appearance: false,
     selfcare: false,
     quiet: false,
     routines: false,
@@ -100,9 +104,9 @@ export default function SettingsPage() {
   return (
     <div className="max-w-5xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
+        <h1 className="text-2xl font-bold text-content-primary">Settings</h1>
         <p className="text-sm text-content-secondary mt-1">
-          Configure how Jess behaves. Changes apply immediately — no restart.
+          Configure how your assistant behaves. Changes apply immediately — no restart.
         </p>
       </header>
 
@@ -120,7 +124,7 @@ export default function SettingsPage() {
                 className={`w-full text-left flex items-start gap-3 px-3 py-2 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
                   isActive
                     ? 'bg-brand-500/10 border border-brand-500/40 text-brand-500'
-                    : 'border border-transparent text-content-primary hover:bg-surface-raised/40 hover:text-white'
+                    : 'border border-transparent text-content-primary hover:bg-surface-raised/40 hover:text-content-primary'
                 }`}
               >
                 <Icon size={18} className="mt-0.5 flex-shrink-0" />
@@ -136,6 +140,7 @@ export default function SettingsPage() {
         {/* Active panel */}
         <section className="glass p-5">
           {active === 'identity' && <IdentityPanel registerDirty={registerDirty} />}
+          {active === 'appearance' && <AppearancePanel />}
           {active === 'selfcare' && <SelfcarePanel registerDirty={registerDirty} />}
           {active === 'quiet' && <QuietHoursPanel registerDirty={registerDirty} />}
           {active === 'routines' && <RoutinesPanel registerDirty={registerDirty} />}

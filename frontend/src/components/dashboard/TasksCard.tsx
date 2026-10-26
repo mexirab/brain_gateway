@@ -59,7 +59,7 @@ export default function TasksCard() {
             <ArrowRight size={16} className="text-brand-400 shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-[11px] uppercase tracking-wider text-content-muted">Start here</p>
-              <p className="text-sm font-medium text-white truncate">{next.text}</p>
+              <p className="text-sm font-medium text-content-primary truncate">{next.text}</p>
             </div>
             <button
               onClick={() => handleComplete(next.id)}
@@ -73,7 +73,7 @@ export default function TasksCard() {
           {rest.slice(0, 3).map((t) => (
             <div
               key={t.id}
-              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-line/30"
+              className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-raised/40 border border-ink/30"
             >
               <span className="flex-1 min-w-0 text-sm text-content-primary truncate">{t.text}</span>
               <button

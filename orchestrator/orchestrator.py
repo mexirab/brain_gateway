@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from orchestrator.log_config import configure_logging
@@ -53,7 +54,7 @@ from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
 from orchestrator.background_jobs import evening_briefing, morning_briefing, poll_calendar, process_emails_for_events
-from orchestrator.bearer_auth import bearer_token_matches
+from orchestrator.bearer_auth import bearer_token_matches, is_public_segment
 from orchestrator.calendar_sources import get_calendar
 from orchestrator.cloud_brain import CloudBrain
 
@@ -133,22 +134,43 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     # Exact paths that also accept a scoped (non-API_TOKEN) bearer token.
     WEBHOOK_TOKEN_PATHS = frozenset({"/api/self_audit/alert"})
 
+    @classmethod
+    def is_public_path(cls, path: str) -> bool:
+        """True iff the routed ``path`` needs no bearer token.
+
+        A public prefix exempts exactly ONE segment after it (every route
+        behind these prefixes takes one). uvicorn percent-decodes the path, so
+        "/api/audio/..%2f..%2fmemory" arrives as "/api/audio/../../memory",
+        which a plain startswith() would exempt; ``is_public_segment`` refuses it.
+        """
+        if path in cls.PUBLIC_PATHS:
+            return True
+        return any(path.startswith(p) and is_public_segment(path[len(p) :]) for p in cls.PUBLIC_PREFIXES)
+
     async def dispatch(self, request: Request, call_next):
-        # CORS preflight must pass through
-        if request.method == "OPTIONS":
+        # CORS preflight must pass through. Only a real one (Origin plus
+        # Access-Control-Request-Method): CORSMiddleware, inside this one,
+        # answers exactly those itself without calling a route. Any other
+        # OPTIONS needs the token like every other method.
+        if (
+            request.method == "OPTIONS"
+            and "origin" in request.headers
+            and "access-control-request-method" in request.headers
+        ):
             return await call_next(request)
-        # Public endpoints don't require auth
-        if request.url.path in self.PUBLIC_PATHS:
-            return await call_next(request)
-        # Prefix-based public paths (audio served to speakers)
-        if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
+        # Decide on the string the router matches, not request.url.path: that
+        # one is rebuilt through urlsplit, which drops a decoded \t, \r or \n
+        # ("/api/au%09dio/x" would read as "/api/audio/x").
+        path = request.scope["path"]
+        # Public endpoints (health, speaker audio, HMAC-signed reminder taps)
+        if self.is_public_path(path):
             return await call_next(request)
         # Check Bearer token (scheme case-insensitive, constant-time compare)
         if bearer_token_matches(request.headers.get("authorization", ""), API_TOKEN):
             return await call_next(request)
         # Scoped token: SELF_AUDIT_WEBHOOK_TOKEN (held by Alertmanager) opens
         # exactly one path and nothing else. Empty token never matches.
-        if request.url.path in self.WEBHOOK_TOKEN_PATHS and bearer_token_matches(
+        if path in self.WEBHOOK_TOKEN_PATHS and bearer_token_matches(
             request.headers.get("authorization", ""), _cfg.self_audit_webhook_token
         ):
             return await call_next(request)
@@ -185,18 +207,44 @@ _PATH_UPLOAD_LIMITS = {
 _LENGTH_REQUIRED_PATHS = {"/api/pantry/scan", "/api/documents/suggest-name", "/api/self_audit/alert"}
 
 
+def _routed_path(request: Request) -> str:
+    """The path the router will serve, for the exact-path sets below.
+
+    Not request.url.path: Starlette rebuilds that through urlsplit, which drops
+    a decoded \\t, \\r or \\n, so "/metrics%09" read as "/metrics" (rate-limit
+    exempt) and "/api/documents%09" got the 100 MB upload cap. One trailing
+    "\\n" is dropped because the router's path regexes end in "$", which also
+    matches before a final newline: "/api/self_audit/alert%0a" IS served by
+    the alert handler and must keep its 411 and 64 KB cap. Assumes uvicorn
+    runs without --root-path (as BearerAuthMiddleware does): with one,
+    scope["path"] would carry the prefix, so none of the sets would match —
+    /health + /metrics would lose their exemptions and the alert webhook its
+    411 + 64 KB cap.
+    """
+    return request.scope["path"].removesuffix("\n")
+
+
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     """Reject request bodies larger than MAX_BODY_SIZE (or MAX_UPLOAD_SIZE for file uploads)."""
 
     async def dispatch(self, request: Request, call_next):
+        path = _routed_path(request)
         content_length = request.headers.get("content-length")
         # A chunked body has no Content-Length and would skip the cap entirely.
         # Enforced for the pantry upload (other routes predate this check).
-        if not content_length and request.method == "POST" and request.url.path in _LENGTH_REQUIRED_PATHS:
+        if not content_length and request.method == "POST" and path in _LENGTH_REQUIRED_PATHS:
             return JSONResponse({"error": "Content-Length required"}, status_code=411)
         if content_length:
-            path = request.url.path
-            limit = _PATH_UPLOAD_LIMITS.get(path) or (MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE)
+            if request.method == "POST":
+                limit = _PATH_UPLOAD_LIMITS.get(path) or (
+                    MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE
+                )
+            else:
+                # Every upload route is POST-only. Another method on the same
+                # path is a path-param route (PUT /api/documents/suggest-name
+                # is PUT /api/documents/{doc_id}): no larger cap, but a
+                # smaller per-path one (the 64 KB webhook) still applies.
+                limit = min(_PATH_UPLOAD_LIMITS.get(path, MAX_BODY_SIZE), MAX_BODY_SIZE)
             try:
                 if int(content_length) > limit:
                     return JSONResponse(
@@ -220,7 +268,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     EXEMPT_PATHS = {"/health", "/metrics"}
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.EXEMPT_PATHS:
+        if _routed_path(request) in self.EXEMPT_PATHS:
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"
@@ -395,6 +443,21 @@ def _resolve_backend(url: str, model: str):
 # =============================================================================
 
 
+_LOGGED_ROLES = frozenset({"system", "developer", "user", "assistant", "tool", "function"})
+
+
+def _logged_role(m: dict) -> str:
+    """A message's role for the log: one of a fixed set, else "other" (role is free text)."""
+    role = m.get("role")
+    return role if isinstance(role, str) and role in _LOGGED_ROLES else "other"
+
+
+def _reject_chat(reason: str, error: str) -> JSONResponse:
+    """400 for a malformed chat request; logs only the fixed reason."""
+    logger.info("[CHAT] Rejected chat request: %s", reason)
+    return JSONResponse({"error": error}, status_code=400)
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
     """
@@ -407,15 +470,19 @@ async def chat_completions(req: Request):
     try:
         body = await req.json()
     except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        return _reject_chat("bad_json", "Invalid JSON body")
+    if not isinstance(body, dict):
+        return _reject_chat("body_not_object", "body must be an object")
     raw_msgs = body.get("messages", [])
     if not isinstance(raw_msgs, list):
-        return JSONResponse({"error": "messages must be an array"}, status_code=400)
-    # log-safe: roles and lengths only
+        return _reject_chat("messages_not_array", "messages must be an array")
+    if not all(isinstance(m, dict) for m in raw_msgs):
+        return _reject_chat("message_not_object", "each message must be an object")
+    # log-safe: roles from a fixed set ("other" for the rest) and lengths; the slice keeps the newest 10 messages
     logger.info(
         "[CHAT] Incoming %d messages: %s",
         len(raw_msgs),
-        [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
+        [(_logged_role(m), len(str(m.get("content", "")))) for m in raw_msgs[-10:]],
     )
 
     # --- Voice-mode detection ---
@@ -439,10 +506,10 @@ async def chat_completions(req: Request):
             if isinstance(content, list):
                 parts = []
                 for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        parts.append(item.get("text", ""))
+                    if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
                 content = " ".join(parts)
-            if msg.get("role") == "user" and content.strip():
+            if msg.get("role") == "user" and isinstance(content, str) and content.strip():
                 user_text = content
                 break
         # Check if user query is embedded in the system prompt via {{ user_input }}
@@ -468,7 +535,11 @@ async def chat_completions(req: Request):
 
     from orchestrator.cloud_brain import conversation_id_var
 
-    chat_req = ChatRequest(**body)
+    try:
+        chat_req = ChatRequest.model_validate(body)
+    except ValidationError:
+        # Reason only: the error text quotes the offending input.
+        return _reject_chat("validation", "Invalid chat request")
     conversation_id_var.set(chat_req.conversation_id)
 
     return await cloud_brain.chat(
@@ -715,7 +786,11 @@ async def _startup_logic():
         fallback_model_url=FALLBACK_MODEL_URL,
         fallback_model_name=FALLBACK_MODEL_NAME,
     )
-    logger.info("[orchestrator] CloudBrain initialized (mode=unified_v7)")
+    logger.info(
+        "[orchestrator] CloudBrain initialized (mode=unified_v7, real_streaming=%s, voice_thinking=%s)",
+        shared.REAL_STREAMING_ENABLED,
+        shared.VOICE_THINKING_ENABLED,
+    )
 
     # Reload pending reminders from DB and re-schedule. Past-due ones are
     # late-delivered or marked missed (they used to be silently dropped —

@@ -216,16 +216,14 @@ export default function HomePage() {
         )}
 
         {roomsAvailable && hasAny && (
-          <div role="group" aria-label="Group by" className="inline-flex p-1 mb-4 rounded-xl bg-surface-raised/50 border border-line/30">
+          <div role="group" aria-label="Group by" className="segmented inline-flex mb-4">
             {(['rooms', 'type'] as const).map((m) => (
               <button
                 key={m}
                 type="button"
                 aria-pressed={mode === m}
                 onClick={() => changeMode(m)}
-                className={`min-h-[44px] px-5 rounded-lg text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${
-                  mode === m ? 'bg-brand/20 text-white font-medium' : 'text-content-muted hover:text-white'
-                }`}
+                className={`segmented-item min-h-[44px] px-5 ${mode === m ? 'segmented-item-active' : ''}`}
               >
                 {m === 'rooms' ? 'Rooms' : 'Type'}
               </button>

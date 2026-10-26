@@ -587,6 +587,18 @@
           "range": true,
           "instant": false,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket{voice=\"true\"}[5m])))",
+          "legendFormat": "p95 voice",
+          "range": true,
+          "instant": false,
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -645,7 +657,7 @@
           "sort": "desc"
         }
       },
-      "description": "Time to first streamed token on /v1/chat/completions. If this collapses toward Request Latency, streaming has silently degraded to the buffered path \u2014 cross-check the degradation panel.",
+      "description": "Time to first streamed text on /v1/chat/completions, from when the tool loop starts (p95 voice: streamed voice turns only; the first spoken word also waits for a whole sentence and TTS). If this collapses toward Request Latency, streaming has silently degraded to the buffered path \u2014 cross-check the degradation panel.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -885,7 +897,7 @@
           "sort": "desc"
         }
       },
-      "description": "Rounds where the brain returned no text and no tool call. retried = re-asked once with thinking on; recovered = the retry answered; still_empty = the user got a blank. A sustained retried rate (>5% of voice turns) means the voice no-think fast path no longer pays off.",
+      "description": "Rounds where the brain returned no text and no tool call. retried = re-asked once (with thinking on, unless VOICE_THINKING_ENABLED already has it on); recovered = the retry answered; still_empty = the user got a blank. A sustained retried rate (>5% of voice turns) means the voice no-think fast path no longer pays off; with thinking on, check finish=length (reasoning ate the voice budget).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1184,8 +1196,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
-          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{path}}",
           "range": true,
           "instant": false,
           "refId": "B"
@@ -1271,7 +1283,7 @@
           "sort": "desc"
         }
       },
-      "description": "Text-in to text-out latency for voice-channel requests. Covers the LLM + tool-loop slice we control; excludes Whisper STT upstream and TTS synthesis + speaker playback downstream. Target: keep p95 under 13s (prior floor). Investigate spikes with the logs row below.",
+      "description": "Text-in to text-out latency for voice-channel requests. Covers the LLM + tool-loop slice we control; excludes Whisper STT upstream and TTS synthesis + speaker playback downstream. path=streamed (dashboard mic / call mode) is measured when the stream ends \u2014 the user hears the first sentence much earlier; before 2026-10-25 these were recorded before the tool loop ran. path=buffered (HA Assist) is the whole wait in silence. Target: keep p95 under 13s (prior floor). Investigate spikes with the logs row below.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -2387,6 +2399,104 @@
       "id": 29
     },
     {
+      "type": "timeseries",
+      "title": "Control Markup Neutralized (tool results + client chat)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (tool) (increase(bgw_tool_result_markup_neutralized_total[1h]))",
+          "legendFormat": "tool:{{tool}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (role, position) (increase(bgw_client_markup_neutralized_total[1h]))",
+          "legendFormat": "client:{{role}}/{{position}}",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Tool-call / chat-template markup rewritten as quoted text before it reached the brain. tool:* = a tool result (web page, email, calendar, photo description...). client:* = a chat turn the client sent: position=latest is the new turn (each event once); history turns are resent and counted again on every chat turn. client:assistant means text Jess didn't write \u2014 usually an announcement quoting an outside calendar title. Pasted code can trip it too.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "id": 30
+    },
+    {
       "type": "row",
       "title": "Brain Server (llama-server)",
       "collapsed": false,
@@ -2395,9 +2505,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 71
       },
-      "id": 30
+      "id": 31
     },
     {
       "type": "timeseries",
@@ -2483,9 +2593,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 65
+        "y": 72
       },
-      "id": 31
+      "id": 32
     },
     {
       "type": "timeseries",
@@ -2576,14 +2686,14 @@
           "sort": "desc"
         }
       },
-      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline on the 5090 with MTP: ~105-120 decode; prefill ~2500 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
+      "description": "Tokens per second while actually generating (decode) and prefilling (prompt), averaged over 15 min of busy time \u2014 idle time is excluded. Baseline (Qwen3.8-Flash-Next on 5090 + PRO 5000 with MTP, since 2026-10-24): ~135-180 decode, ~30-85 while TTS speaks on the shared GPU1; prefill ~2000-2200 on large cold prompts, much lower on small cached turns (normal). Decode well below that = MTP acceptance collapsed or the model fell back to CPU (see BrainOnCPU).",
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 65
+        "y": 72
       },
-      "id": 32
+      "id": 33
     },
     {
       "type": "timeseries",
@@ -2676,14 +2786,14 @@
           "sort": "desc"
         }
       },
-      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.7-0.9. A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
+      "description": "Share of MTP draft tokens the main model accepted (--spec-draft-n-max 2). 'pos N' = share of draft steps that accepted at least N+1 tokens (pos 1 = both accepted; pos0 + pos1 = mean tokens accepted per step), so the overall line is not their average. The pos lines read low for ~1h after a Helios wake (first sample missed); trust the overall line. Healthy: ~0.55-0.9 (Flash-Next: ~0.6 on prose, ~0.9 on code). A collapse means sampling drifted (temperature > 1, repeat_penalty != 1) or the weights/template changed; if output also garbles, the first lever is --spec-type none on the llama-server-primary unit.",
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 65
+        "y": 72
       },
-      "id": 33
+      "id": 34
     },
     {
       "type": "timeseries",
@@ -2779,9 +2889,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 65
+        "y": 72
       },
-      "id": 34
+      "id": 35
     },
     {
       "type": "row",
@@ -2792,9 +2902,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 73
+        "y": 80
       },
-      "id": 35
+      "id": 36
     },
     {
       "type": "stat",
@@ -2875,9 +2985,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 74
+        "y": 81
       },
-      "id": 36
+      "id": 37
     },
     {
       "type": "stat",
@@ -2951,9 +3061,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 74
+        "y": 81
       },
-      "id": 37
+      "id": 38
     },
     {
       "type": "timeseries",
@@ -3048,9 +3158,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 74
+        "y": 81
       },
-      "id": 38
+      "id": 39
     },
     {
       "type": "row",
@@ -3061,9 +3171,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 82
+        "y": 89
       },
-      "id": 39
+      "id": 40
     },
     {
       "type": "stat",
@@ -3140,9 +3250,9 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 83
+        "y": 90
       },
-      "id": 40
+      "id": 41
     },
     {
       "type": "stat",
@@ -3207,14 +3317,14 @@
           "values": false
         }
       },
-      "description": "Mean tok/s while generating. ~105-125 on the RTX 5090; under 30 = running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
+      "description": "Mean tok/s while generating. ~135-180 on Flash-Next (5090 + PRO 5000), ~30-85 while TTS speaks on the shared GPU1; under 30 with the GPUs empty = running on CPU -> BrainOnCPU. 'No data' = idle or asleep.",
       "gridPos": {
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 83
+        "y": 90
       },
-      "id": 41
+      "id": 42
     },
     {
       "type": "stat",
@@ -3296,9 +3406,9 @@
         "h": 5,
         "w": 6,
         "x": 12,
-        "y": 83
+        "y": 90
       },
-      "id": 42
+      "id": 43
     },
     {
       "type": "stat",
@@ -3364,9 +3474,9 @@
         "h": 5,
         "w": 6,
         "x": 18,
-        "y": 83
+        "y": 90
       },
-      "id": 43
+      "id": 44
     },
     {
       "type": "logs",
@@ -3405,9 +3515,9 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 88
+        "y": 95
       },
-      "id": 44
+      "id": 45
     },
     {
       "type": "logs",
@@ -3446,9 +3556,9 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 88
+        "y": 95
       },
-      "id": 45
+      "id": 46
     },
     {
       "type": "row",
@@ -3459,9 +3569,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 97
+        "y": 104
       },
-      "id": 46
+      "id": 47
     },
     {
       "type": "stat",
@@ -3542,9 +3652,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 98
+        "y": 105
       },
-      "id": 47
+      "id": 48
     },
     {
       "type": "timeseries",
@@ -3628,9 +3738,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 98
+        "y": 105
       },
-      "id": 48
+      "id": 49
     },
     {
       "type": "timeseries",
@@ -3749,9 +3859,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 98
+        "y": 105
       },
-      "id": 49
+      "id": 50
     },
     {
       "type": "stat",
@@ -3812,9 +3922,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 98
+        "y": 105
       },
-      "id": 50
+      "id": 51
     },
     {
       "type": "row",
@@ -3825,9 +3935,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 106
+        "y": 113
       },
-      "id": 51
+      "id": 52
     },
     {
       "type": "timeseries",
@@ -3908,11 +4018,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 4,
+        "w": 3,
         "x": 0,
-        "y": 107
+        "y": 114
       },
-      "id": 52
+      "id": 53
     },
     {
       "type": "timeseries",
@@ -4005,11 +4115,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 4,
-        "y": 107
+        "w": 3,
+        "x": 3,
+        "y": 114
       },
-      "id": 53
+      "id": 54
     },
     {
       "type": "timeseries",
@@ -4090,11 +4200,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 8,
-        "y": 107
+        "w": 3,
+        "x": 6,
+        "y": 114
       },
-      "id": 54
+      "id": 55
     },
     {
       "type": "timeseries",
@@ -4176,11 +4286,11 @@
       "description": "home_assistant calls refused because the entity_id doesn't exist (the model guessed; closest matches were returned). Sustained non-zero = the schema listing is over its budget ('+N more not listed') or entities were renamed in HA.",
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 12,
-        "y": 107
+        "w": 3,
+        "x": 9,
+        "y": 114
       },
-      "id": 55
+      "id": 56
     },
     {
       "type": "timeseries",
@@ -4274,11 +4384,133 @@
       "description": "Steerable HA calls refused by ha_guard. 'device setting' = config/diagnostic entity (registry), camera/motion/LED-style name (name) or a scene/group containing one (member) - chat and the fast path can't change these; the dashboard can. A burst on path=tool can mean a prompt-injection attempt.",
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 16,
-        "y": 107
+        "w": 3,
+        "x": 12,
+        "y": 114
       },
-      "id": 56
+      "id": 57
+    },
+    {
+      "type": "timeseries",
+      "title": "HA: Unrequested calls blocked (/1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (domain) (increase(bgw_ha_unrequested_blocked_total[1h]))",
+          "legendFormat": "blocked {{domain}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_ha_intent_decision_total{result=\"allowed\",via=\"confirmed\"}[1h])) or vector(0)",
+          "legendFormat": "allowed after a yes",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_tool_calls_total{tool=\"home_assistant\"}[1h])) or vector(0)",
+          "legendFormat": "executed",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_ha_intent_decision_total{result=\"shadow\"}[1h])) or vector(0)",
+          "legendFormat": "would block (shadow mode)",
+          "range": true,
+          "instant": false,
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Chat-model home_assistant calls refused by the did-the-user-ask gate (ha_intent): the user's message showed no device intent, so nothing ran and the model was told to ask. Blocked calls never reach execute_tool, so 'executed' counts real executions. A rise after a brain change = the model acts unasked; a rise after an ha_intent change = real requests refused ('allowed after a yes' climbing too: the user had to confirm). A burst can mean injected content. With HA_INTENT_GATE=shadow nothing is blocked; 'would block' shows what enforce would have refused.",
+      "gridPos": {
+        "h": 8,
+        "w": 3,
+        "x": 15,
+        "y": 114
+      },
+      "id": 58
     },
     {
       "type": "stat",
@@ -4338,11 +4570,11 @@
       "description": "Entities in the last good HA registry read (rooms + entity categories). 0 = never read since start: the guard's device-setting check runs on entity names only.",
       "gridPos": {
         "h": 8,
-        "w": 4,
-        "x": 20,
-        "y": 107
+        "w": 6,
+        "x": 18,
+        "y": 114
       },
-      "id": 57
+      "id": 59
     },
     {
       "type": "row",
@@ -4353,9 +4585,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 122
       },
-      "id": 58
+      "id": 60
     },
     {
       "type": "timeseries",
@@ -4438,9 +4670,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 116
+        "y": 123
       },
-      "id": 59
+      "id": 61
     },
     {
       "type": "timeseries",
@@ -4535,9 +4767,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 116
+        "y": 123
       },
-      "id": 60
+      "id": 62
     },
     {
       "type": "stat",
@@ -4598,9 +4830,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 116
+        "y": 123
       },
-      "id": 61
+      "id": 63
     },
     {
       "type": "timeseries",
@@ -4695,9 +4927,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 116
+        "y": 123
       },
-      "id": 62
+      "id": 64
     },
     {
       "type": "stat",
@@ -4774,9 +5006,9 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 124
+        "y": 131
       },
-      "id": 63
+      "id": 65
     },
     {
       "type": "timeseries",
@@ -4859,9 +5091,9 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 124
+        "y": 131
       },
-      "id": 64
+      "id": 66
     },
     {
       "type": "row",
@@ -4872,9 +5104,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 130
+        "y": 137
       },
-      "id": 65
+      "id": 67
     },
     {
       "type": "timeseries",
@@ -4993,13 +5225,13 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 131
+        "y": 138
       },
-      "id": 66
+      "id": 68
     },
     {
       "type": "timeseries",
-      "title": "Dedup + Sensitive Filtered",
+      "title": "Dedup / Filtered / Capped + update_memory",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"
@@ -5028,6 +5260,42 @@
           "range": true,
           "instant": false,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_auto_learn_facts_capped_total[15m]) * 60",
+          "legendFormat": "capped",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_memory_facts_replaced_total[15m]) * 60",
+          "legendFormat": "update_memory replaced",
+          "range": true,
+          "instant": false,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_memory_replace_skipped_total[15m]) * 60",
+          "legendFormat": "update_memory kept",
+          "range": true,
+          "instant": false,
+          "refId": "E"
         }
       ],
       "fieldConfig": {
@@ -5090,9 +5358,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 131
+        "y": 138
       },
-      "id": 67
+      "id": 69
     },
     {
       "type": "timeseries",
@@ -5187,9 +5455,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 131
+        "y": 138
       },
-      "id": 68
+      "id": 70
     },
     {
       "type": "timeseries",
@@ -5272,9 +5540,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 139
+        "y": 146
       },
-      "id": 69
+      "id": 71
     },
     {
       "type": "timeseries",
@@ -5369,9 +5637,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 139
+        "y": 146
       },
-      "id": 70
+      "id": 72
     },
     {
       "type": "row",
@@ -5382,9 +5650,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 147
+        "y": 154
       },
-      "id": 71
+      "id": 73
     },
     {
       "type": "timeseries",
@@ -5467,9 +5735,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 148
+        "y": 155
       },
-      "id": 72
+      "id": 74
     },
     {
       "type": "timeseries",
@@ -5552,9 +5820,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 148
+        "y": 155
       },
-      "id": 73
+      "id": 75
     },
     {
       "type": "timeseries",
@@ -5649,9 +5917,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 148
+        "y": 155
       },
-      "id": 74
+      "id": 76
     },
     {
       "type": "row",
@@ -5662,9 +5930,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 156
+        "y": 163
       },
-      "id": 75
+      "id": 77
     },
     {
       "type": "timeseries",
@@ -5759,9 +6027,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 157
+        "y": 164
       },
-      "id": 76
+      "id": 78
     },
     {
       "type": "timeseries",
@@ -5856,9 +6124,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 157
+        "y": 164
       },
-      "id": 77
+      "id": 79
     },
     {
       "type": "timeseries",
@@ -5941,9 +6209,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 157
+        "y": 164
       },
-      "id": 78
+      "id": 80
     },
     {
       "type": "row",
@@ -5954,9 +6222,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 165
+        "y": 172
       },
-      "id": 79
+      "id": 81
     },
     {
       "type": "stat",
@@ -6025,9 +6293,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 166
+        "y": 173
       },
-      "id": 80
+      "id": 82
     },
     {
       "type": "timeseries",
@@ -6135,9 +6403,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 166
+        "y": 173
       },
-      "id": 81
+      "id": 83
     },
     {
       "type": "timeseries",
@@ -6220,9 +6488,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 166
+        "y": 173
       },
-      "id": 82
+      "id": 84
     },
     {
       "type": "row",
@@ -6233,9 +6501,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 174
+        "y": 181
       },
-      "id": 83
+      "id": 85
     },
     {
       "type": "timeseries",
@@ -6318,9 +6586,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 175
+        "y": 182
       },
-      "id": 84
+      "id": 86
     },
     {
       "type": "timeseries",
@@ -6403,9 +6671,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 175
+        "y": 182
       },
-      "id": 85
+      "id": 87
     },
     {
       "type": "row",
@@ -6416,9 +6684,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 183
+        "y": 190
       },
-      "id": 86
+      "id": 88
     },
     {
       "type": "timeseries",
@@ -6513,9 +6781,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 184
+        "y": 191
       },
-      "id": 87
+      "id": 89
     },
     {
       "type": "gauge",
@@ -6582,9 +6850,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 184
+        "y": 191
       },
-      "id": 88
+      "id": 90
     },
     {
       "type": "timeseries",
@@ -6679,9 +6947,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 184
+        "y": 191
       },
-      "id": 89
+      "id": 91
     },
     {
       "type": "row",
@@ -6692,9 +6960,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 192
+        "y": 199
       },
-      "id": 90
+      "id": 92
     },
     {
       "type": "timeseries",
@@ -6777,9 +7045,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 193
+        "y": 200
       },
-      "id": 91
+      "id": 93
     },
     {
       "type": "timeseries",
@@ -6862,9 +7130,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 193
+        "y": 200
       },
-      "id": 92
+      "id": 94
     },
     {
       "type": "timeseries",
@@ -6947,9 +7215,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 193
+        "y": 200
       },
-      "id": 93
+      "id": 95
     },
     {
       "type": "stat",
@@ -7019,9 +7287,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 201
+        "y": 208
       },
-      "id": 94
+      "id": 96
     },
     {
       "type": "timeseries",
@@ -7104,9 +7372,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 201
+        "y": 208
       },
-      "id": 95
+      "id": 97
     },
     {
       "type": "timeseries",
@@ -7189,9 +7457,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 201
+        "y": 208
       },
-      "id": 96
+      "id": 98
     },
     {
       "type": "timeseries",
@@ -7286,9 +7554,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 201
+        "y": 208
       },
-      "id": 97
+      "id": 99
     },
     {
       "type": "row",
@@ -7299,9 +7567,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 209
+        "y": 216
       },
-      "id": 98
+      "id": 100
     },
     {
       "type": "timeseries",
@@ -7396,9 +7664,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 210
+        "y": 217
       },
-      "id": 99
+      "id": 101
     },
     {
       "type": "timeseries",
@@ -7481,9 +7749,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 210
+        "y": 217
       },
-      "id": 100
+      "id": 102
     },
     {
       "type": "timeseries",
@@ -7578,9 +7846,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 210
+        "y": 217
       },
-      "id": 101
+      "id": 103
     },
     {
       "type": "timeseries",
@@ -7663,9 +7931,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 218
+        "y": 225
       },
-      "id": 102
+      "id": 104
     },
     {
       "type": "timeseries",
@@ -7760,9 +8028,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 218
+        "y": 225
       },
-      "id": 103
+      "id": 105
     },
     {
       "type": "row",
@@ -7773,9 +8041,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 226
+        "y": 233
       },
-      "id": 104
+      "id": 106
     },
     {
       "type": "timeseries",
@@ -7858,9 +8126,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 227
+        "y": 234
       },
-      "id": 105
+      "id": 107
     },
     {
       "type": "timeseries",
@@ -7943,9 +8211,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 227
+        "y": 234
       },
-      "id": 106
+      "id": 108
     },
     {
       "type": "timeseries",
@@ -8028,9 +8296,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 227
+        "y": 234
       },
-      "id": 107
+      "id": 109
     },
     {
       "type": "timeseries",
@@ -8046,8 +8314,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(bgw_web_search_total[15m]) * 60",
-          "legendFormat": "searches/min",
+          "expr": "sum by (result) (rate(bgw_web_search_total[15m])) * 60",
+          "legendFormat": "{{result}}/min",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -8121,13 +8389,14 @@
           "sort": "desc"
         }
       },
+      "description": "Searches per minute split by result and p95 search latency. ok; no_results (every engine answered, nothing found \u2014 not a failure); empty (no results and SearXNG reported engines suspended or failing); error; timeout. Failures reach the model as text, so this is the only place they show (alert WebSearchFailing). Voice searches give up after 5 s, typed ones after 15 s.",
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 227
+        "y": 234
       },
-      "id": 108
+      "id": 110
     },
     {
       "type": "timeseries",
@@ -8208,11 +8477,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
-        "y": 235
+        "y": 242
       },
-      "id": 109
+      "id": 111
     },
     {
       "type": "timeseries",
@@ -8317,11 +8586,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 235
+        "w": 6,
+        "x": 6,
+        "y": 242
       },
-      "id": 110
+      "id": 112
     },
     {
       "type": "piechart",
@@ -8388,11 +8657,97 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 235
+        "w": 6,
+        "x": 12,
+        "y": 242
       },
-      "id": 111
+      "id": 113
+    },
+    {
+      "type": "timeseries",
+      "title": "SearXNG Engines Unresponsive (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (engine, reason) (increase(bgw_web_search_engine_unresponsive_total[6h]))",
+          "legendFormat": "{{engine}} ({{reason}})",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Upstream engines SearXNG reported as unresponsive, counted once per search. 'suspended' means SearXNG paused the engine after it was blocked or rate-limited \u2014 it recovers on its own; never burst-test real searches. Engine series are created on first sight, so the first report per engine after an orchestrator restart doesn't show here.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 242
+      },
+      "id": 114
     },
     {
       "type": "row",
@@ -8403,9 +8758,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 243
+        "y": 250
       },
-      "id": 112
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8488,9 +8843,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 244
+        "y": 251
       },
-      "id": 113
+      "id": 116
     },
     {
       "type": "timeseries",
@@ -8585,9 +8940,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 244
+        "y": 251
       },
-      "id": 114
+      "id": 117
     },
     {
       "type": "timeseries",
@@ -8682,9 +9037,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 244
+        "y": 251
       },
-      "id": 115
+      "id": 118
     },
     {
       "type": "row",
@@ -8695,9 +9050,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 252
+        "y": 259
       },
-      "id": 116
+      "id": 119
     },
     {
       "type": "timeseries",
@@ -8805,9 +9160,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 253
+        "y": 260
       },
-      "id": 117
+      "id": 120
     },
     {
       "type": "stat",
@@ -8872,9 +9227,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 253
+        "y": 260
       },
-      "id": 118
+      "id": 121
     },
     {
       "type": "stat",
@@ -8939,9 +9294,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 253
+        "y": 260
       },
-      "id": 119
+      "id": 122
     },
     {
       "type": "timeseries",
@@ -9036,9 +9391,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 253
+        "y": 260
       },
-      "id": 120
+      "id": 123
     },
     {
       "type": "timeseries",
@@ -9157,9 +9512,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 261
+        "y": 268
       },
-      "id": 121
+      "id": 124
     },
     {
       "type": "timeseries",
@@ -9282,9 +9637,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 261
+        "y": 268
       },
-      "id": 122
+      "id": 125
     },
     {
       "type": "timeseries",
@@ -9380,9 +9735,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 261
+        "y": 268
       },
-      "id": 123
+      "id": 126
     },
     {
       "type": "row",
@@ -9393,9 +9748,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 269
+        "y": 276
       },
-      "id": 124
+      "id": 127
     },
     {
       "type": "stat",
@@ -9461,9 +9816,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 270
+        "y": 277
       },
-      "id": 125
+      "id": 128
     },
     {
       "type": "timeseries",
@@ -9546,9 +9901,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 270
+        "y": 277
       },
-      "id": 126
+      "id": 129
     },
     {
       "type": "timeseries",
@@ -9631,9 +9986,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 270
+        "y": 277
       },
-      "id": 127
+      "id": 130
     },
     {
       "type": "timeseries",
@@ -9716,9 +10071,290 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 270
+        "y": 277
       },
-      "id": 128
+      "id": 131
+    },
+    {
+      "type": "row",
+      "title": "Research Helper (look_it_up)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 285
+      },
+      "id": 132
+    },
+    {
+      "type": "timeseries",
+      "title": "Lookups by Result (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_research_lookups_total[6h]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 286
+      },
+      "id": 133
+    },
+    {
+      "type": "timeseries",
+      "title": "Lookup Duration p50 / p95 (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(bgw_research_lookup_duration_seconds_bucket[6h])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_research_lookup_duration_seconds_bucket[6h])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Wall time of a lookup; the chat turn shows nothing meanwhile. Budget 75 s.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 286
+      },
+      "id": 134
+    },
+    {
+      "type": "timeseries",
+      "title": "Source Calls by Tool / Result (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (tool, result) (increase(bgw_research_source_calls_total[6h]))",
+          "legendFormat": "{{tool}} / {{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 286
+      },
+      "id": 135
     },
     {
       "type": "row",
@@ -9729,9 +10365,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 278
+        "y": 294
       },
-      "id": 129
+      "id": 136
     },
     {
       "type": "timeseries",
@@ -9814,9 +10450,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 279
+        "y": 295
       },
-      "id": 130
+      "id": 137
     },
     {
       "type": "timeseries",
@@ -9900,9 +10536,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 279
+        "y": 295
       },
-      "id": 131
+      "id": 138
     },
     {
       "type": "timeseries",
@@ -9986,9 +10622,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 279
+        "y": 295
       },
-      "id": 132
+      "id": 139
     },
     {
       "type": "row",
@@ -9999,9 +10635,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 287
+        "y": 303
       },
-      "id": 133
+      "id": 140
     },
     {
       "type": "stat",
@@ -10067,9 +10703,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 288
+        "y": 304
       },
-      "id": 134
+      "id": 141
     },
     {
       "type": "stat",
@@ -10135,9 +10771,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 288
+        "y": 304
       },
-      "id": 135
+      "id": 142
     },
     {
       "type": "timeseries",
@@ -10221,9 +10857,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 288
+        "y": 304
       },
-      "id": 136
+      "id": 143
     },
     {
       "type": "stat",
@@ -10289,9 +10925,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 288
+        "y": 304
       },
-      "id": 137
+      "id": 144
     },
     {
       "type": "row",
@@ -10302,9 +10938,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 296
+        "y": 312
       },
-      "id": 138
+      "id": 145
     },
     {
       "type": "stat",
@@ -10374,9 +11010,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 297
+        "y": 313
       },
-      "id": 139
+      "id": 146
     },
     {
       "type": "timeseries",
@@ -10460,9 +11096,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 297
+        "y": 313
       },
-      "id": 140
+      "id": 147
     },
     {
       "type": "logs",
@@ -10501,9 +11137,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 297
+        "y": 313
       },
-      "id": 141
+      "id": 148
     },
     {
       "type": "row",
@@ -10514,9 +11150,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 305
+        "y": 321
       },
-      "id": 142
+      "id": 149
     },
     {
       "type": "timeseries",
@@ -10600,9 +11236,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 306
+        "y": 322
       },
-      "id": 143
+      "id": 150
     },
     {
       "type": "timeseries",
@@ -10710,9 +11346,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 306
+        "y": 322
       },
-      "id": 144
+      "id": 151
     },
     {
       "type": "timeseries",
@@ -10808,9 +11444,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 306
+        "y": 322
       },
-      "id": 145
+      "id": 152
     },
     {
       "type": "logs",
@@ -10849,9 +11485,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 306
+        "y": 322
       },
-      "id": 146
+      "id": 153
     },
     {
       "type": "timeseries",
@@ -10935,9 +11571,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 306
+        "y": 322
       },
-      "id": 147
+      "id": 154
     },
     {
       "type": "timeseries",
@@ -11021,9 +11657,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 306
+        "y": 322
       },
-      "id": 148
+      "id": 155
     },
     {
       "type": "timeseries",
@@ -11119,9 +11755,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 314
+        "y": 330
       },
-      "id": 149
+      "id": 156
     },
     {
       "type": "timeseries",
@@ -11229,9 +11865,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 314
+        "y": 330
       },
-      "id": 150
+      "id": 157
     },
     {
       "type": "stat",
@@ -11301,9 +11937,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 314
+        "y": 330
       },
-      "id": 151
+      "id": 158
     },
     {
       "type": "row",
@@ -11314,9 +11950,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 322
+        "y": 338
       },
-      "id": 152
+      "id": 159
     },
     {
       "type": "stat",
@@ -11377,9 +12013,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 323
+        "y": 339
       },
-      "id": 153
+      "id": 160
     },
     {
       "type": "timeseries",
@@ -11463,9 +12099,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 323
+        "y": 339
       },
-      "id": 154
+      "id": 161
     },
     {
       "type": "stat",
@@ -11526,9 +12162,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 323
+        "y": 339
       },
-      "id": 155
+      "id": 162
     },
     {
       "type": "timeseries",
@@ -11616,9 +12252,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 331
+        "y": 347
       },
-      "id": 156
+      "id": 163
     },
     {
       "type": "stat",
@@ -11684,9 +12320,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 331
+        "y": 347
       },
-      "id": 157
+      "id": 164
     },
     {
       "type": "stat",
@@ -11752,9 +12388,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 331
+        "y": 347
       },
-      "id": 158
+      "id": 165
     },
     {
       "type": "stat",
@@ -11820,9 +12456,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 339
+        "y": 355
       },
-      "id": 159
+      "id": 166
     },
     {
       "type": "timeseries",
@@ -11906,9 +12542,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 339
+        "y": 355
       },
-      "id": 160
+      "id": 167
     },
     {
       "type": "timeseries",
@@ -12016,9 +12652,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 339
+        "y": 355
       },
-      "id": 161
+      "id": 168
     },
     {
       "type": "row",
@@ -12029,9 +12665,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 347
+        "y": 363
       },
-      "id": 162
+      "id": 169
     },
     {
       "type": "logs",
@@ -12070,9 +12706,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 348
+        "y": 364
       },
-      "id": 163
+      "id": 170
     },
     {
       "type": "logs",
@@ -12111,9 +12747,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 348
+        "y": 364
       },
-      "id": 164
+      "id": 171
     }
   ]
 }

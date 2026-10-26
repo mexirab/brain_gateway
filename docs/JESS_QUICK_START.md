@@ -128,9 +128,11 @@ Requires the wizard's Home Assistant integration.
 |----------|--------------|
 | "Turn off the bedroom lights" | Controls any HA device |
 | "Set the office fan to 50%" | Brightness, temperature, scenes |
-| "Movie time" | Triggers a scene if you have one named "movie" or similar |
+| "Movie time please" / "Turn on movie time" | Triggers a scene if you have one named "movie" or similar (a bare "Movie time" gets a "want me to…?" first) |
 
 The assistant infers entity IDs from natural language; it doesn't need exact HA syntax.
+
+Jess only changes a device when your message asks for it. Hints ("I'm cold", "it's dark in here") or anything she read in an email, web page or photo get a question instead — "Want me to turn up the heat?" — and "yes" does it.
 
 ---
 
@@ -215,6 +217,18 @@ Styles: calm, gentle, soothing, quiet, warm, thoughtful, encouraging, upbeat, pr
 | Dashboard → Documents → Upload → "Take photo" | Photographs a paper document; Jess suggests a title + category (when Helios is awake), you edit and Save |
 | Drop a PDF in the inbox + "Save the lease for OCR" | Pushed to Paperless-ngx for OCR + auto-tagging (requires the wizard's Paperless integration) |
 | *"When does my car insurance renew?"* / *"Find my last water bill"* | Searches your Paperless archive (titles + scanned text) and reads the matching document. Read-only; text chat, not voice |
+
+---
+
+## Looking things up (optional)
+
+Off unless `RESEARCH_HELPER_ENABLED=true` in `.env`. Text chat only, not voice.
+
+| Say this | What happens |
+|----------|--------------|
+| "Look up how to do X in the latest version of <library>" / "What does this error mean: …" | Jess hands the technical question to a research helper that checks current docs (Context7) and the web, then answers with sources. Usually 10–15 s, up to about a minute; the chat shows nothing meanwhile. For questions Jess already knows, she just answers |
+
+The question leaves the house, so the helper never sees your memory, meds or calendar, and questions containing your name, medication names, email addresses, phone numbers, passwords/keys or home-network addresses are refused. Answers can still be wrong in details — check the listed sources before running a command.
 
 ---
 

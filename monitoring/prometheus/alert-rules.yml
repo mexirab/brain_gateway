@@ -150,7 +150,7 @@ groups:
           severity: warning
         annotations:
           summary: "TTS service {{ $labels.service }} (Helios) is down"
-          description: "{{ $labels.service }} has not responded for 5 minutes (tts = Qwen3-TTS :8002, tts-voxcpm = VoxCPM2 :8004; whichever TTS_URL points at is the live voice). Diagnose with journalctl -u qwen-tts / voxcpm-tts on Helios."
+          description: "{{ $labels.service }} has not responded for 5 minutes (tts-voxcpm = VoxCPM2 :8004, the live voice; the Qwen3-TTS :8002 rollback is disabled since 2026-10-24 and no longer probed). Diagnose with journalctl -u voxcpm-tts on Helios."
 
       - alert: STTDown
         expr: probe_success{service="stt"} == 0
@@ -159,7 +159,7 @@ groups:
           severity: warning
         annotations:
           summary: "STT service (Helios) is down"
-          description: "Whisper STT has not responded for 5 minutes. Voice input unavailable."
+          description: "Parakeet STT (stt-onnx.service, CPU) has not responded for 5 minutes. Voice input unavailable."
 
       # -- Error Rates ----------------------------------------------------------
       - alert: HighErrorRate
@@ -181,14 +181,28 @@ groups:
           description: "Tool {{ $labels.tool }} is failing at {{ $value | humanizePercentage }}."
 
       # -- Latency --------------------------------------------------------------
+      # Whole chat turns, tool rounds included. Since 2026-10-25 a real-streamed
+      # turn (dashboard chat, the main path) is timed to the end of its stream;
+      # before, it was recorded when the StreamingResponse was returned (81 of
+      # 91 turns in a week at <=0.5 s), so this alert only ever saw HA Assist /
+      # Telegram. 30 s / 10m kept on purpose: streamed TTFT p95 was ~8-13 s
+      # over 86 turns, plus a few seconds to decode the reply, so normal turns
+      # sit well under 30 s (rebuilt from logs: p95 ~10 s, slowest 13 s). At a
+      # few turns a day a 5m window holds 0-3 turns, so one slow turn (a
+      # meal-plan swap, a multi-photo turn) can't hold the condition for 10m —
+      # it takes a >30 s turn at least every 5 min for 15 min. No `streaming`
+      # label: "is Jess slow end to end" is the same question on both paths;
+      # bgw_chat_ttft_seconds already separates the streamed wait for the
+      # first word. Not in any Alertmanager route, so it notifies nobody
+      # (Prometheus / Grafana only).
       - alert: HighRequestLatency
         expr: histogram_quantile(0.95, rate(bgw_request_duration_seconds_bucket[5m])) > 30
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "P95 request latency >30s"
-          description: "95th percentile request latency is {{ $value | humanizeDuration }}."
+          summary: "P95 chat turn latency >30s"
+          description: "95th percentile chat turn time is {{ $value | humanizeDuration }} (whole turn, tool rounds included; streamed turns timed to the end of the stream). Check the Chat TTFT panel (slow before the first word, or slow to finish?) and the Tool Latency p95 panel for the tool holding turns up (photo turns also wait for vision before the stream starts); brain on CPU or a busy shared GPU1 slows every turn — `journalctl -u llama-server-primary` on Helios."
 
       # -- Resource Alerts ------------------------------------------------------
       - alert: HighGPUTemp
@@ -209,18 +223,20 @@ groups:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
           description: "{{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
 
-      # Helios GPU0 (RTX 5090) is included again since 2026-10-02: the brain is
-      # llama.cpp (llama-server-primary.service), whose ~92% is real allocation
-      # (weights + 131K q8_0 KV), not a vLLM pre-allocation. Creep past 95%
-      # (e.g. vision encoder buffers on top of the static set) is a real signal.
+      # Both Helios GPUs carry the brain since 2026-10-24 (Qwen3.8-Flash-Next split
+      # across the 5090 + PRO 5000 by llama-server-primary.service): ~90% GPU0 and
+      # ~92% GPU1 (with voxcpm-tts), peak 92.8% with TTS + vision + generation at
+      # once. That is real allocation (weights + 64K q8_0 KV + MTP head), not a vLLM
+      # pre-allocation, so creep past 95% is a real signal — and on GPU1 it can
+      # starve the live voice.
       - alert: HighVRAMUsage
         expr: nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes > 0.95
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "VRAM >95% on {{ $labels.node }}"
-          description: "VRAM usage is {{ $value | humanizePercentage }} on {{ $labels.node }}."
+          summary: "VRAM >95% on {{ $labels.node }} (GPU {{ $labels.uuid }})"
+          description: "VRAM usage is {{ $value | humanizePercentage }} on {{ $labels.node }} GPU {{ $labels.uuid }}. On Helios both GPUs carry the brain and GPU1 also the live TTS — creep here can starve the voice."
 
       # Memory offline: the embedding model can't encode (startup self-test).
       # Memory search, RAG context, palace writes and auto_learn all fail per
@@ -330,7 +346,48 @@ groups:
           severity: warning
         annotations:
           summary: "Jess answered with nothing — even after the empty-reply retry"
-          description: "{{ $value | humanize }} turn(s) in the last hour returned a blank reply. The brain ended its turn immediately (look for 1-token completions in `journalctl -u llama-server-primary` on Helios and '[UNIFIED] Empty reply after thinking retry' in Loki). If it persists, the voice-mode enable_thinking=false path is the first suspect."
+          description: "{{ $value | humanize }} turn(s) in the last hour returned a blank reply. The brain ended its turn immediately (look for 1-token completions in `journalctl -u llama-server-primary` on Helios and '[UNIFIED] Empty reply after retry' in Loki). If it persists, the voice-mode enable_thinking=false path is the first suspect (or, with VOICE_THINKING_ENABLED=true, reasoning eating the voice max_tokens budget — finish_reason=length)."
+
+      # web_search failures come back to the model as text, so the tool-error
+      # counters never see them; bgw_web_search_total{result} is the only
+      # signal. "empty" = no results AND SearXNG reported unresponsive engines
+      # (suspended after a burst, as Brave/Startpage/DuckDuckGo were on
+      # 2026-10-25); "no_results" (every engine answered, nothing found — an
+      # obscure query, maybe rephrased a few times) is deliberately not a
+      # failure. Needs 3+ failed searches: increase() extrapolates past the
+      # last sample, so exactly 2 reads as ~2.003 — hence > 2.5, not > 2.
+      # Silent when nobody searches; SearXNGDown covers a dead container.
+      # Stays active until the failures age out of the 6h window, so its
+      # route repeats once a day, not every 4h.
+      - alert: WebSearchFailing
+        expr: |
+          (
+            sum(increase(bgw_web_search_total{result=~"empty|error|timeout"}[6h]))
+              / sum(increase(bgw_web_search_total[6h]))
+          ) > 0.5
+          and sum(increase(bgw_web_search_total{result=~"empty|error|timeout"}[6h])) > 2.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most web searches failed in the last 6h"
+          description: "{{ $value | humanizePercentage }} of Jess's web searches in the last 6h failed (empty, error or timeout), so she can't look things up. Split by result in Grafana (Web Search panel). empty: SearXNG's engines are suspended or blocked — check the SearXNG Engines Unresponsive panel and `docker logs searxng`; suspensions lift on their own (minutes to a day), and don't test with bursts of real searches. timeout/error: SearXNG is slow or down — `docker ps --filter name=searxng`, `docker logs brain-orchestrator | grep WEB_SEARCH`. Voice searches give up after 5 s, typed ones after 15 s. Clears up to 6 h after recovery."
+
+      # The did-the-user-ask gate (orchestrator/ha_intent.py) refused chat-model
+      # home_assistant calls. Nothing changed on any device — the gate worked —
+      # but repeated blocks mean either the brain is acting unasked (after a
+      # brain swap / with voice thinking off) or the detector misses real
+      # requests. 6h window + >= 3: traffic is sparse (~3 HA calls/day), and a
+      # single block is normal. Quiet tier, not the self-investigator: the log
+      # lines carry no user text, so it couldn't tell the two apart.
+      - alert: HAUnrequestedCallsBlocked
+        expr: sum(increase(bgw_ha_unrequested_blocked_total[6h])) >= 3
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Jess tried device changes nobody asked for (blocked)"
+          description: "{{ $value | humanize }} home_assistant call(s) refused in 6h because the user's message showed no device intent. Nothing was changed. Check Loki for 'Blocked unrequested home_assistant call' (domain/entity only) and bgw_ha_intent_decision_total: blocked{via=none} rising after a brain change = the model acts unasked (check voice thinking); allowed{via=confirmed} rising alongside = real requests being refused, the user had to say yes (ha_intent detector miss). HA_INTENT_GATE=shadow|off in .env + `docker compose up -d --force-recreate orchestrator` relaxes the gate."
 
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
@@ -363,6 +420,18 @@ groups:
         annotations:
           summary: "Radicale (calendar server) is down"
           description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
+      - alert: SearXNGDown
+        # Self-hosted web search. /healthz only proves the container answers —
+        # it stays 200 while every upstream engine is suspended (that case is
+        # WebSearchFailing). Never point a probe at /search: real searches in
+        # bulk are what got the engines suspended on 2026-10-25.
+        expr: probe_success{service="searxng"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SearXNG (web search) is down"
+          description: "SearXNG on Jupiter has failed its /healthz probe for 10 minutes, so Jess's web_search fails. Check `docker ps --filter name=searxng` and `docker logs searxng`, then `docker compose up -d searxng` from ~/gateway_nerves. Restarting with 'server.secret_key is not changed' in the log = SEARXNG_SECRET missing from .env. Running and `curl -s 127.0.0.1:8090/healthz` says OK: check the probe path with `curl -s 'http://127.0.0.1:9115/probe?module=http_2xx&target=http://searxng:8080/healthz&debug=true' | tail -20` — 'no such host' = blackbox-exporter is off searxng-probe-net: `cd ~/gateway_nerves/monitoring && docker compose --env-file ../.env up -d --force-recreate blackbox-exporter`. A green probe doesn't prove a Tailscale Serve URL works."
       - alert: FrontendDown
         # The dashboard. The orchestrator can be healthy while the Next.js
         # server is crashed or hung, and nothing else would say so; CI's
@@ -398,6 +467,38 @@ groups:
         annotations:
           summary: "Paperless-ngx is down"
           description: "Paperless (container paperless-webserver, probed at :8777/accounts/login/) has failed its HTTP probe for 5 minutes. The document archive web UI and Jess's paperless_search/paperless_read/paperless_save tools are down. Check `docker logs paperless-webserver --tail 50`, confirm /mnt/documents is mounted (`findmnt /mnt/documents` — it holds Paperless's media AND its Postgres data; if it isn't, follow DocumentsMountMissing's runbook before starting anything), then `cd /opt/paperless && docker compose up -d`."
+
+      - alert: GristDown
+        # Grist (self-hosted spreadsheet, grist/ compose project). Same shape as
+        # ActualDown: the spreadsheet UI and Jess's spreadsheet tool are down.
+        expr: probe_success{service="grist"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grist spreadsheet server is down"
+          description: "Grist (container grist, probed over grist-probe-net) has failed its HTTP probe for 5 minutes. The spreadsheet UI and Jess's spreadsheet tool are down. Check `docker logs grist` and `cd ~/gateway_nerves/grist && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
+
+      - alert: ResearchHelperFailing
+        # look_it_up (research_helper.py) keeps failing with no success: the
+        # brain, its budget or every source is broken. Silent when unused.
+        expr: (sum(increase(bgw_research_lookups_total{result=~"brain_error|error|timeout|no_answer"}[24h])) >= 3) unless (sum(increase(bgw_research_lookups_total{result=~"ok|retry_ok|budget"}[24h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jess's research helper (look_it_up) has failed every lookup today"
+          description: "At least 3 look_it_up lookups failed in the last 24h and none answered. See `sum by (result) (increase(bgw_research_lookups_total[24h]))`, `bgw_research_source_calls_total` and `docker logs brain-orchestrator 2>&1 | grep '\\[RESEARCH\\]'`. timeout/brain_error = the brain (Helios) is slow or busy; no_answer = the model returns nothing. Turn it off with RESEARCH_HELPER_ENABLED=false + `docker compose up -d --force-recreate orchestrator`."
+      - alert: ResearchSourceFailing
+        # One source (library_docs = Context7, web_search = SearXNG, read_page)
+        # keeps failing with no success.
+        expr: (sum by (tool) (increase(bgw_research_source_calls_total{result=~"error|timeout"}[24h])) >= 5) unless on(tool) (sum by (tool) (increase(bgw_research_source_calls_total{result="ok"}[24h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Research helper source {{ $labels.tool }} is failing"
+          description: "Every {{ $labels.tool }} call from look_it_up failed in the last 24h. library_docs = Context7 (context7.com: an 'unavailable' answer means its API changed; a key is set with RESEARCH_CONTEXT7_API_KEY), web_search = local SearXNG (`docker logs searxng`), read_page = outbound HTTPS from Jupiter. `docker logs brain-orchestrator 2>&1 | grep '\\[RESEARCH\\]'`."
 
   # ===========================================================================
   # UPS / Power Chain
@@ -506,6 +607,17 @@ groups:
         annotations:
           summary: "Actual Budget sync has not succeeded in 6h"
           description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
+      - alert: BudgetHistoryRefreshFailing
+        # The Actual sync itself succeeded but rewriting query_budget's
+        # "actual" dataset failed every time for 6h, so Jess answers budget
+        # history questions from stale rows. Same shape as BudgetSyncFailing.
+        expr: (sum(increase(bgw_budget_history_refresh_total{result="error"}[6h])) > 0) unless (sum(increase(bgw_budget_history_refresh_total{result="ok"}[6h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "query_budget history (Actual) not refreshed in 6h"
+          description: "Every refresh of the query_budget 'actual' dataset after an Actual sync failed in the last 6h. Check `docker logs brain-orchestrator | grep 'query_budget history'`. A CSV import named 'actual' blocks it (rename that dataset)."
       - alert: WebPushFailing
         # Web Push counts as phone delivery while a device is recently healthy,
         # so a push service that started rejecting us (VAPID key replaced →
@@ -652,6 +764,16 @@ groups:
         annotations:
           summary: "Actual Budget backup is stale (>36h)"
           description: "The nightly Actual Budget backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/actual/backup_actual.sh (log: /home/labadmin/actual/backup.log)."
+      - alert: JessGristBackupStale
+        # Grist spreadsheets on Jupiter. grist/backup_grist.sh runs nightly and
+        # writes this. >36h stale = the sheets are unprotected.
+        expr: time() - jess_grist_backup_success_timestamp_seconds > 129600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grist backup is stale (>36h)"
+          description: "The nightly Grist backup hasn't succeeded in {{ $value | humanizeDuration }}. Check the cron + /home/labadmin/gateway_nerves/grist/backup_grist.sh (log: /home/labadmin/grist/backup.log)."
       - alert: ExchangeCalendarSyncStale
         # The work (Exchange) calendar only reaches Jess through the iPhone
         # Shortcut → POST /api/calendar/sync. If it stops (Shortcut disabled,
@@ -669,10 +791,10 @@ groups:
           summary: "Work calendar hasn't synced from the iPhone in over a day"
           description: "Last iPhone calendar push was {{ $value | humanizeDuration }} ago — check the 'Sync work calendar to Jess' Shortcut automation (docs/CALENDAR.md → Work calendar)."
       - alert: JessBackupOffboxFailing
-        # Covers all four nightly backups: state (jess_backup_*), HA
-        # (jess_ha_backup_*), the Radicale calendar (jess_calendar_backup_*) and
-        # Actual Budget (jess_actual_backup_*).
-        expr: '{__name__=~"jess_(ha_|calendar_|actual_)?backup_offbox_success"} == 0'
+        # Covers all five nightly backups: state (jess_backup_*), HA
+        # (jess_ha_backup_*), the Radicale calendar (jess_calendar_backup_*),
+        # Actual Budget (jess_actual_backup_*) and Grist (jess_grist_backup_*).
+        expr: '{__name__=~"jess_(ha_|calendar_|actual_|grist_)?backup_offbox_success"} == 0'
         for: 3d
         labels:
           severity: info
@@ -704,8 +826,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Model tool calls are being silently dropped (Qwen3.8 TURBO Q6_K on llama.cpp)"
-          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-02): DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (llama-server-primary.service on Helios GPU0), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the cutover session saw no drops. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~45% slower). Rollback to the vLLM NVFP4 brain: on Helios `systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary`, on Jupiter `cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator` (see tts/llama-server-primary.service header)."
+          summary: "Model tool calls are being silently dropped (Qwen3.8-Flash-Next on llama.cpp)"
+          description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-24): Qwen3.8-Flash-Next UD-Q3_K_XL GGUF on llama.cpp (llama-server-primary.service on Helios, split across GPU0 + GPU1), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the trial saw no drops. On any thinking-on turn (all text turns, and voice turns with VOICE_THINKING_ENABLED=true) a `<tool_call` written only inside the reasoning also counts as dropped. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~25-40% slower: ~105 tok/s measured). Rollback to the 27B brain: see the header of tts/llama-server-primary-27b-q6k.service."
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded
@@ -760,14 +882,19 @@ groups:
           summary: "The orchestrator can't query Loki for the Helios log check"
           description: "bgw_helios_log_check_total{result=\"error\"} keeps rising, so HeliosLogsSilent can't see anything and the next self-audit will likely report Loki unreachable. Check `docker ps --filter name=loki`, `docker logs loki --tail 50`, and that SELF_AUDIT_LOKI_URL (http://loki:3100) resolves from brain-orchestrator."
 
-      # Jess's brain is generating, but at CPU speed. Normal decode on the 5090
-      # is ~105-125 tok/s; CPU fallback measured ~6 tok/s on 2026-10-15 (driver
+      # Jess's brain is generating, but at CPU speed. Normal decode (Flash-Next on
+      # the 5090 + PRO 5000 since 2026-10-24) is ~135-180 tok/s, but only ~30-85 while the
+      # live TTS synthesizes on the shared GPU1 (spoken replies); CPU fallback measured ~6 tok/s on 2026-10-15 (driver
       # swap under a loaded module). Ratio of the two llama.cpp counters = mean
       # decode speed over the window. An idle brain gives 0/0 = NaN, and
       # NaN < 30 is false, so no traffic floor is needed — a floor hid the
       # 10-15 incident, where a CPU-bound brain produced only 7 tokens in 10 min
-      # before chat timed out. Backtest 2026-10-03..17: the only 10-min windows
-      # under 60 tok/s were that incident (6.8) and its restart (58).
+      # before chat timed out. Backtest 2026-10-03..17 (27B on GPU0 alone): the only
+      # 10-min windows under 60 tok/s were that incident (6.8) and its restart (58).
+      # The `unless` clause: a brain really on GPU holds >=90 % of both cards, so a slow
+      # window while either Helios GPU is >50 % full is TTS contention, not CPU fallback.
+      # When the driver is broken the nvidia_smi series are absent, the `unless` matches
+      # nothing, and the alert still fires.
       # HeliosGpuDriverBroken below fires hours earlier, without traffic.
       - alert: BrainOnCPU
         expr: |
@@ -776,13 +903,14 @@ groups:
               / rate(llamacpp:tokens_predicted_seconds_total{job="llama-primary"}[15m])
           ) < 30
           and increase(llamacpp:tokens_predicted_total{job="llama-primary"}[15m]) >= 1
+          unless on() (max(nvidia_smi_memory_used_bytes{node="helios"} / nvidia_smi_memory_total_bytes{node="helios"}) > 0.5)
         for: 2m
         labels:
           severity: warning
           node: helios
         annotations:
           summary: "Jess's brain is generating at {{ $value | printf \"%.0f\" }} tok/s — likely on CPU"
-          description: "Mean decode speed over 10 min is far below the ~110 tok/s the RTX 5090 does. Check `nvidia-smi` and `journalctl -u llama-server-primary -b | grep -i cuda` on Helios; a driver/library mismatch is fixed by a reboot."
+          description: "Mean decode speed over 15 min is far below the ~135+ tok/s the brain does on Helios's two GPUs, and neither GPU holds the model. Check `nvidia-smi` and `journalctl -u llama-server-primary -b | grep -i cuda` on Helios; a driver/library mismatch is fixed by a reboot."
 
       # nvidia-smi on Helios is failing while the box is up. Exit 18 is NVML's
       # "driver/library version mismatch": on 2026-10-15 unattended-upgrades

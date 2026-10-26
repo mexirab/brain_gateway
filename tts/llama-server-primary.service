@@ -1,40 +1,62 @@
 # /etc/systemd/system/llama-server-primary.service
-# Primary brain on GPU0 (RTX 5090), port 8080 — DavidAU Qwen3.8-27B TURBO Fable
-# Cold-Fusion (Heretic/uncensored, NEO-CODER-MAX) Q6_K **MTP** GGUF on llama.cpp.
-# Installed 2026-10-02, replacing vllm-primary.service (Qwen3.8-27B NVFP4 on vLLM
-# 0.27.1; unit left on disk, disabled). Measured on the 5090 with these flags:
-# 106 prose / 122 code / 121 tool-call tok/s, draft acceptance 70–88 %, ~4 s load.
+# Primary brain split across GPU0 (RTX 5090) + GPU1 (RTX PRO 5000), port 8080 —
+# Qwen3.8-Flash-Next (125B MoE, ~6B active per token, llama.cpp arch `qwen4exp`),
+# Unsloth UD-Q3_K_XL GGUF + standalone Q8_0 MTP head + F16 mmproj (vision).
+# Live since 2026-10-24, replacing the Qwen3.8-27B Q6_K unit (rollback reference:
+# tts/llama-server-primary-27b-q6k.service). Trial + measurements: docs/internal/FLASH_NEXT_TRIAL.md.
+# Measured with these flags: 137–140 prose / 174–179 code tok/s (MTP acceptance ~60–93 %),
+# warm streaming TTFT 0.4–0.5 s via Jess, load 7–9 s from page cache, 27 s cold.
+# REQUIRES Jupiter .env VOICE_THINKING_ENABLED=true: with thinking off on voice turns this
+# brain took unrequested Home Assistant actions (4/8 on a voice "tell me a fun fact"; 0/80
+# with it on). Nothing enforces the flag (it defaults false), and it is a model-behavior
+# mitigation, not a control — the blocking control is a deterministic "did the user ask?"
+# gate in front of home_assistant calls (separate change). Never restore an .env from before
+# 2026-10-24 while this unit is installed.
 #
-# Weights (sha256, verify after any re-download):
-#   ac011aabe685edbdf542e49351eb6c76c0e5531408f2507f2235ab10931e23a5  ...-MTP-Q6_K.gguf
-#   82e620db8cb83267e9775e5aad3e8d8aa5af7ace825e94c52d3d730eb35af88a  mmproj-F16.gguf
+# Weights in /home/labadmin/models/Qwen3.8-Flash-Next-Unsloth (HF unsloth/Qwen3.8-Flash-Next-GGUF
+# @ 766911a6b7369840a91dbcd95f9f997acaab6cd6; `sha256sum -c SHA256SUMS` next to them covers all of these):
+#   f2ef4328929d8b8c8930e2856eef52128dd4ce3425302f04bc3c657431cc4c49  UD-Q3_K_XL/...-00001-of-00003.gguf
+#   7d230e7c9421d868b89eebaf23033af0ea1a4e046956df00fb156814fb62346e  UD-Q3_K_XL/...-00002-of-00003.gguf
+#   21d4f90f9cd7b7c3a1582667c20cb22f7b03de895b88a23bb20aaeaa44f2c199  UD-Q3_K_XL/...-00003-of-00003.gguf
+#   58a47d6a216307e9b97172d5bfdc3436a8994b632f5e436b9bb6edf8951da8d1  MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf
+#   1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980  mmproj-F16.gguf
+# Use the STANDALONE MTP file: the "shared" one (mtp-…-shared-Q8_0.gguf) fails on this build
+# with "tensor 'token_embd.weight' not found" and the server exits; it is on disk but unused.
 #
-# Engine: /home/labadmin/llama.cpp-mtp (build 11358, 2026-10-02). The older
-# /home/labadmin/llama.cpp checkout (April 2026) is what the retired llama-server-coder uses;
-# it cannot load Qwen3.8 GGUFs and has no --spec-type — do not point this unit at it.
+# Engine: /home/labadmin/llama.cpp-mtp (2026-10-02, has qwen4exp + "Qwen4Exp: add MTP").
+# The 28.8 GB n-gram table (per_layer_token_embd) is an input GET_ROWS tensor loaded
+# lazily from mmap, so it stays in host RAM / page cache, not VRAM.
 #
-# Rollback to vLLM NVFP4:
-#   systemctl disable --now llama-server-primary && systemctl enable --now vllm-primary
-#   then on Jupiter: cp .env.bak-qwen38-nvfp4 .env && docker compose up -d --force-recreate orchestrator
+# Memory: ~29 GiB on GPU0 and ~37 GiB on GPU1 (plus voxcpm-tts ~7.7 GiB there):
+# 90 % / 92 % used, peak 92.8 % on GPU1 with TTS + vision + generation at once (under the
+# 95 % HighVRAMUsage line). -c 65536 (not 131072) leaves room for the MTP head: 131072 would add
+# ~2.5–3 GiB and push GPU1 to ~98 %. Chat prompts are ~10–15K tokens, but the self-audit
+# investigator once reached ~70K (2026-10-21) — a run that large is rejected at this context and
+# the audit comes back partial. GPU1 is shared with the live TTS; After=voxcpm-tts.service only
+# orders process start (voxcpm-tts is Type=simple, no readiness), so it does NOT guarantee the
+# TTS has loaded first — at boot they can still race for GPU1. qwen-tts (rollback TTS, ~4.5 GiB)
+# must stay disabled.
+# Generation drops to ~30-85 tok/s while the TTS synthesizes on GPU1 (spoken replies).
 #
-# Tunables: --spec-draft-n-max 2 (3 was ~equal on the PRO 5000; sweep on the 5090).
-# --parallel 1 keeps the MTP gain (it evaporates past ~4 slots); background LLM
-# callers (auto_learn, session_miner, task_decomposition, email→calendar, vision)
-# queue behind chat instead of running alongside it — watch llamacpp:requests_deferred.
-# Sampling: temperature must stay <= 1.0 and repeat_penalty 1.0 for MTP to help
-# (llama.cpp's wire name is repeat_penalty, not repetition_penalty).
-# If output garbles, first lever is --spec-type none (disable MTP), not --enforce-eager
-# (that was a vLLM flag). Never add --verbose or --slot-save-path: both would put
-# prompt text (medical facts, conversations) into the journal / on disk.
+# Rollback to the 27B: see the header of tts/llama-server-primary-27b-q6k.service.
 #
-# Sandbox: runs as the nologin `llama` user (useradd -r -M -s /usr/sbin/nologin llama)
-# with read-only binds of the binary + weights and only the NVIDIA device nodes
-# (/dev/nvidia* are 0666; nvidia-persistenced creates them at boot). Do NOT add
-# MemoryDenyWriteExecute (CUDA JITs PTX into W+X pages) or PrivateDevices=yes
-# (hides /dev/nvidia*). Check with: systemd-analyze security llama-server-primary
+# Same rules as before: --parallel 1 keeps the MTP gain; temperature <= 1.0 and
+# repeat_penalty 1.0 for MTP; keep --chat-template-kwargs reasoning_effort=low (voice turns
+# with VOICE_THINKING_ENABLED=true send no kwarg, so this flag sets their thinking depth) and
+# --reasoning-format auto (keeps reasoning out of `content`). If output garbles, first lever
+# is --spec-type none. Never add --verbose or --slot-save-path: both would put prompt text
+# (medical facts, conversations) into the journal / on disk. The startup warning about
+# "preserving reasoning" is harmless: Jess never sends reasoning back in history.
+# --fit off: every placement arg is set explicitly; with the default --fit on, a boot that finds
+# GPU1 short of memory could silently shrink the setup — off makes it fail loudly instead
+# (Loki alert BrainFailedToStart).
+#
+# Sandbox: as the 27B unit (nologin `llama` user, read-only binds, only NVIDIA device
+# nodes — now /dev/nvidia0 AND /dev/nvidia1). Do NOT add MemoryDenyWriteExecute or
+# PrivateDevices=yes (both break CUDA). Check with: systemd-analyze security llama-server-primary
 [Unit]
-Description=llama.cpp primary — Qwen3.8-27B TURBO Fable Q6_K MTP (GPU0 RTX 5090, port 8080)
-After=network-online.target nvidia-persistenced.service
+Description=llama.cpp primary — Qwen3.8-Flash-Next UD-Q3_K_XL MTP (GPU0+GPU1 split, port 8080)
+After=network-online.target nvidia-persistenced.service voxcpm-tts.service
 Wants=network-online.target
 Conflicts=vllm-primary.service
 
@@ -42,21 +64,21 @@ Conflicts=vllm-primary.service
 Type=simple
 Restart=on-failure
 RestartSec=10
-# Model loads in ~4 s from page cache, ~60 s cold from NVMe. Must exceed the
-# readiness loop below (240 × ≥1 s) so a stuck load fails as "readiness check
-# failed", not as a systemd start timeout.
+# Loads in 7–9 s from page cache, 27 s cold from NVMe. Must exceed the readiness loop
+# below (240 × ≥1 s) so a stuck load fails as "readiness check failed", not a start timeout.
 TimeoutStartSec=360
-Environment=CUDA_VISIBLE_DEVICES=0
+Environment=CUDA_VISIBLE_DEVICES=0,1
 
 User=llama
 Group=llama
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/labadmin/llama.cpp-mtp/build/bin /home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU
+BindReadOnlyPaths=/home/labadmin/llama.cpp-mtp/build/bin /home/labadmin/models/Qwen3.8-Flash-Next-Unsloth
 PrivateTmp=yes
 DevicePolicy=closed
 DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidia1 rw
 DeviceAllow=/dev/nvidiactl rw
 DeviceAllow=/dev/nvidia-uvm rw
 DeviceAllow=/dev/nvidia-uvm-tools rw
@@ -81,21 +103,29 @@ IPAddressDeny=any
 IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12
 
 ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
-  -m /home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q6_K.gguf \
-  --mmproj /home/labadmin/models/Qwen3.8-27B-TurboFCF-DavidAU/mmproj-F16.gguf \
-  --alias qwen3.8-27b-turbo-q6k \
+  -m /home/labadmin/models/Qwen3.8-Flash-Next-Unsloth/UD-Q3_K_XL/Qwen3.8-Flash-Next-UD-Q3_K_XL-00001-of-00003.gguf \
+  --mmproj /home/labadmin/models/Qwen3.8-Flash-Next-Unsloth/mmproj-F16.gguf \
+  -md /home/labadmin/models/Qwen3.8-Flash-Next-Unsloth/MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf \
+  -devd CUDA1 -ngld all -ctkd q8_0 -ctvd q8_0 \
+  --alias qwen3.8-flash-next-q3kxl \
   --host 0.0.0.0 --port 8080 \
   --no-webui --no-slots --metrics \
   -ngl 999 -fa on \
-  -c 131072 --cache-type-k q8_0 --cache-type-v q8_0 \
+  -sm layer -ts 44,56 \
+  -c 65536 --cache-type-k q8_0 --cache-type-v q8_0 \
   --parallel 1 \
   --spec-type draft-mtp --spec-draft-n-max 2 \
   --jinja --chat-template-kwargs '{"reasoning_effort":"low"}' \
-  --reasoning-format auto
+  --reasoning-format auto \
+  --fit off
 
-# Ready check: wait up to 4 min for /v1/models (503 while loading, 200 when ready —
-# the same path service_registry probes, so systemd-ready and orchestrator-healthy agree).
-ExecStartPost=/bin/bash -c "for i in {1..240}; do curl -fsS http://127.0.0.1:8080/v1/models >/dev/null && exit 0; sleep 1; done; exit 1"
+# Ready check: wait up to 240 s for /v1/models (503 while loading, 200 when ready — the same
+# path service_registry probes, so systemd-ready and orchestrator-healthy agree). Gives up at
+# once if the server process has died (kill -0 on the main PID), instead of curling a dead port
+# for the whole window, and stays quiet in the journal. `$$` is a literal `$` for bash: bash reads
+# MAINPID from the environment systemd gives ExecStartPost. A bare `$MAINPID` would be expanded
+# (to nothing) by systemd itself and fail the start on the first loop.
+ExecStartPost=/bin/bash -c "end=$$((SECONDS+240)); while ((SECONDS<end)); do kill -0 $$MAINPID 2>/dev/null || exit 1; curl -fs --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1"
 
 StandardOutput=journal
 StandardError=journal

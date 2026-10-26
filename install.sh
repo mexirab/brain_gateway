@@ -333,6 +333,17 @@ stage_2() {
         ok "Generated and wrote a fresh DASHBOARD_TOKEN (printed at end of install)"
     fi
 
+    say "Setting SEARXNG_SECRET (web search; SearXNG won't start without one)..."
+    if grep -qE '^SEARXNG_SECRET=[A-Za-z0-9_-]{32,}$' "${ENV_FILE}"; then
+        ok "SEARXNG_SECRET already set; leaving it alone"
+    else
+        local searxng_secret
+        searxng_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+        sed -i.bak '/^SEARXNG_SECRET=/d' "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+        echo "SEARXNG_SECRET=${searxng_secret}" >> "${ENV_FILE}"
+        ok "Generated and wrote a fresh SEARXNG_SECRET"
+    fi
+
     # GATEWAY_ROOT_PATH — the absolute path of this repo, used as the source
     # for several Docker bind-mounts (data/palace.yaml, searxng/settings.yml,
     # etc.). The .env.example default is empty so relative paths work, but

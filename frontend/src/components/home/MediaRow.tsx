@@ -47,13 +47,13 @@ export default function MediaRow({ entity }: { entity: HAEntity }) {
   const status = error || (entity.media_title && !off ? entity.media_title : stateLabel(entity.state));
 
   return (
-    <div className="min-w-0 rounded-xl border border-line/30 bg-surface-raised/40 px-3 py-2.5">
+    <div className="min-w-0 rounded-xl border border-ink/30 bg-surface-raised/40 px-3 py-2.5">
       <div className="flex items-center gap-2.5">
         <span className={`p-1.5 rounded-lg shrink-0 ${playing ? 'bg-brand/20 text-brand' : 'bg-surface-overlay/60 text-content-muted'}`}>
           <Speaker size={18} />
         </span>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-white truncate">{entity.friendly_name}</p>
+          <p className="text-sm font-medium text-content-primary truncate">{entity.friendly_name}</p>
           <p aria-live="polite" className={`text-xs truncate ${error ? 'text-danger' : 'text-content-muted'}`}>{status}</p>
         </div>
         {canPlayPause && (

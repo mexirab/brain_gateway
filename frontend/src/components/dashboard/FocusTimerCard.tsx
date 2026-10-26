@@ -57,7 +57,7 @@ export default function FocusTimerCard() {
       {!isLoading && !error && focus?.active && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-white">{focus.task}</p>
+            <p className="text-sm font-medium text-content-primary">{focus.task}</p>
             <span className="text-lg font-mono text-success">
               {Math.floor(focus.remaining_minutes || 0)}m
             </span>

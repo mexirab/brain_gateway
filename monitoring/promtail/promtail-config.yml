@@ -23,6 +23,8 @@ scrape_configs:
       # Keep only relevant containers (brain-* and monitoring containers).
       # Do NOT add loki-push-gw: its error log echoes attacker-chosen request
       # URIs from any LAN host, and these lines reach the self-audit LLM.
+      # Do NOT add searxng: its warnings log upstream request URLs, which
+      # carry the user's search text.
       - source_labels: ['__meta_docker_container_name']
         regex: '/(brain-.*|redis.*|grafana|prometheus|loki|promtail|node-exporter)'
         action: keep

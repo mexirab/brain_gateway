@@ -56,7 +56,32 @@ groups:
           summary: "Jess's brain started without the GPU"
           description: >-
             llama-server-primary logged a CUDA initialisation failure and is running on
-            CPU. Usual cause: NVIDIA driver/library version mismatch after a package
+            CPU (or, with the two-GPU unit's explicit placement, crash-looping — see
+            BrainFailedToStart). Usual cause: NVIDIA driver/library version mismatch after a package
             upgrade — check nvidia-smi on Helios; a reboot loads the matching module.
             This line is written once per start, so the alert RESOLVES after 15 min
             whatever the state — HeliosGpuDriverBroken tracks whether it is fixed.
+
+      # The brain failed to start while Helios is awake. The two-GPU unit pins its
+      # placement (-ts, -devd CUDA1, --fit off), so a missing/full GPU1 or a bad weight
+      # file makes llama-server exit and systemd retry, rather than fall back to CPU —
+      # BrainOnCPU and BrainCudaInitFailed would never fire. 2026-10-24: three failed
+      # starts (rejected MTP file) went unalerted before this rule.
+      - alert: BrainFailedToStart
+        expr: |
+          sum by (host) (
+            count_over_time({host="helios", service="llama-server-primary"}
+              |~ "Failed to start llama-server-primary|exiting due to model loading error" [15m])
+          ) > 0
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Jess's brain failed to start on Helios"
+          description: >-
+            llama-server-primary exited during startup (model loading error or readiness
+            check failed), so chat is down while Helios is awake. Check
+            `journalctl -u llama-server-primary -b` on Helios for the " E " lines — usual
+            causes: GPU1 out of memory (is qwen-tts running?), a missing GPU, or a bad/moved
+            weight file. Rollback to the 27B: header of tts/llama-server-primary-27b-q6k.service.
+            The alert resolves 15 min after the last failed start.
