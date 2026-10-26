@@ -147,8 +147,15 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         return any(path.startswith(p) and is_public_segment(path[len(p) :]) for p in cls.PUBLIC_PREFIXES)
 
     async def dispatch(self, request: Request, call_next):
-        # CORS preflight must pass through
-        if request.method == "OPTIONS":
+        # CORS preflight must pass through. Only a real one (Origin plus
+        # Access-Control-Request-Method): CORSMiddleware, inside this one,
+        # answers exactly those itself without calling a route. Any other
+        # OPTIONS needs the token like every other method.
+        if (
+            request.method == "OPTIONS"
+            and "origin" in request.headers
+            and "access-control-request-method" in request.headers
+        ):
             return await call_next(request)
         # Decide on the string the router matches, not request.url.path: that
         # one is rebuilt through urlsplit, which drops a decoded \t, \r or \n
@@ -199,18 +206,44 @@ _PATH_UPLOAD_LIMITS = {
 _LENGTH_REQUIRED_PATHS = {"/api/pantry/scan", "/api/documents/suggest-name", "/api/self_audit/alert"}
 
 
+def _routed_path(request: Request) -> str:
+    """The path the router will serve, for the exact-path sets below.
+
+    Not request.url.path: Starlette rebuilds that through urlsplit, which drops
+    a decoded \\t, \\r or \\n, so "/metrics%09" read as "/metrics" (rate-limit
+    exempt) and "/api/documents%09" got the 100 MB upload cap. One trailing
+    "\\n" is dropped because the router's path regexes end in "$", which also
+    matches before a final newline: "/api/self_audit/alert%0a" IS served by
+    the alert handler and must keep its 411 and 64 KB cap. Assumes uvicorn
+    runs without --root-path (as BearerAuthMiddleware does): with one,
+    scope["path"] would carry the prefix, so none of the sets would match —
+    /health + /metrics would lose their exemptions and the alert webhook its
+    411 + 64 KB cap.
+    """
+    return request.scope["path"].removesuffix("\n")
+
+
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     """Reject request bodies larger than MAX_BODY_SIZE (or MAX_UPLOAD_SIZE for file uploads)."""
 
     async def dispatch(self, request: Request, call_next):
+        path = _routed_path(request)
         content_length = request.headers.get("content-length")
         # A chunked body has no Content-Length and would skip the cap entirely.
         # Enforced for the pantry upload (other routes predate this check).
-        if not content_length and request.method == "POST" and request.url.path in _LENGTH_REQUIRED_PATHS:
+        if not content_length and request.method == "POST" and path in _LENGTH_REQUIRED_PATHS:
             return JSONResponse({"error": "Content-Length required"}, status_code=411)
         if content_length:
-            path = request.url.path
-            limit = _PATH_UPLOAD_LIMITS.get(path) or (MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE)
+            if request.method == "POST":
+                limit = _PATH_UPLOAD_LIMITS.get(path) or (
+                    MAX_UPLOAD_SIZE if path in _LARGE_UPLOAD_PATHS else MAX_BODY_SIZE
+                )
+            else:
+                # Every upload route is POST-only. Another method on the same
+                # path is a path-param route (PUT /api/documents/suggest-name
+                # is PUT /api/documents/{doc_id}): no larger cap, but a
+                # smaller per-path one (the 64 KB webhook) still applies.
+                limit = min(_PATH_UPLOAD_LIMITS.get(path, MAX_BODY_SIZE), MAX_BODY_SIZE)
             try:
                 if int(content_length) > limit:
                     return JSONResponse(
@@ -234,7 +267,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     EXEMPT_PATHS = {"/health", "/metrics"}
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.EXEMPT_PATHS:
+        if _routed_path(request) in self.EXEMPT_PATHS:
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"

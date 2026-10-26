@@ -12,6 +12,10 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 - The middleware decides on the routed `scope["path"]` (public check + `WEBHOOK_TOKEN_PATHS`), not `request.url.path`, which drops decoded `\t`/`\r`/`\n`.
 - `reminder_manager._build_callback_url` warns when a minted reminder id falls outside the charset (its taps would 401). All current id formats fit.
 - New `tests/test_auth_public_paths.py`: traversal matrix via raw ASGI scopes, pinned prefix set, one-segment route shapes, no OPTIONS/websocket/mounted routes. Rule: `TECHNICAL_REFERENCE.md` → Tokenless paths.
+- `OPTIONS` skips the bearer check only as a real CORS preflight (`Origin` + `Access-Control-Request-Method`, which `CORSMiddleware` answers without a route); other `OPTIONS` get 401 without a token (was 405 from the router).
+- `RequestSizeLimitMiddleware` + `RateLimitMiddleware` look up `_routed_path()` (`scope["path"]` minus one trailing `\n`) instead of `request.url.path`: `/metrics%09` is no longer rate-limit exempt, `/api/self_audit/alert%0a` keeps its 411 + 64 KB cap. The 16 MB / 100 MB upload caps apply to POST only. See `TECHNICAL_REFERENCE.md` → Body-size + rate limits.
+- `ha_guard`: `play_media` of `{ORCHESTRATOR_URL}/api/audio/<file>` needs `<file>` to pass `is_public_segment` (encoded traversal, a second segment, `?`/`#` refused).
+- `StripQueryStringFilter` also cuts access-line paths at a client-encoded `%3F` (any case, `%253F`…): uvicorn logs the re-quoted path, so query text followed it.
 
 ---
 

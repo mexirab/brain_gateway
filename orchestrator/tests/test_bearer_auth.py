@@ -196,16 +196,123 @@ class TestOptionsPassThrough:
         assert r.headers["access-control-allow-origin"] == ORIGIN
         assert cors_client.calls == []
 
-    def test_options_never_runs_a_get_handler(self, cors_client):
-        # Not a preflight (no Origin): passes the middleware, then the router
-        # finds no OPTIONS method on the route.
-        r = cors_client.options("/api/private")
+    def test_preflight_from_other_origin_is_refused_by_cors(self, cors_client):
+        # Passes the bearer check (it is a preflight); CORSMiddleware refuses it.
+        r = cors_client.options(
+            "/api/private", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"}
+        )
+        assert r.status_code == 400
+        assert "access-control-allow-origin" not in r.headers
+        assert cors_client.calls == []
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {},
+            {"Origin": ORIGIN},
+            {"Access-Control-Request-Method": "POST"},
+            {"Origin": ORIGIN, "Access-Control-Request-Headers": "authorization"},
+        ],
+        ids=["bare", "origin-only", "acrm-only", "no-acrm"],
+    )
+    def test_options_that_is_not_a_preflight_needs_the_token(self, cors_client, headers):
+        r = cors_client.options("/api/private", headers=headers)
+        assert r.status_code == 401
+        assert cors_client.calls == []
+
+    def test_non_preflight_options_with_token_reaches_the_router(self, cors_client):
+        # The route has no OPTIONS method, so the router answers 405.
+        r = cors_client.options("/api/private", headers={"Authorization": f"Bearer {TOKEN}"})
         assert r.status_code == 405
         assert cors_client.calls == []
 
     def test_other_methods_still_need_the_token(self, cors_client):
         assert cors_client.get("/api/private", headers={"Origin": ORIGIN}).status_code == 401
         assert cors_client.calls == []
+
+
+@pytest.fixture
+def options_route_client(monkeypatch):
+    """cors_client's stack, but the route ALSO accepts OPTIONS. With the
+    GET-only route above, a tokenless OPTIONS that slipped past CORS would just
+    405 and leave ``calls`` empty; here it would run the handler."""
+    from fastapi.middleware.cors import CORSMiddleware
+
+    import orchestrator.orchestrator as orch
+
+    monkeypatch.setattr(orch, "API_TOKEN", TOKEN)
+    app = FastAPI()
+    app.add_middleware(CORSMiddleware, allow_origins=[ORIGIN], allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(orch.BearerAuthMiddleware)
+    calls: list[str] = []
+
+    @app.api_route("/api/private", methods=["GET", "OPTIONS"])
+    async def private():
+        calls.append("private")
+        return {"ok": True}
+
+    c = TestClient(app)
+    c.calls = calls
+    return c
+
+
+class TestTokenlessPreflightNeverRunsARoute:
+    """What the pass-through relies on: whatever it lets through tokenless,
+    CORSMiddleware answers itself. Includes present-but-empty header values,
+    which both checks treat as present."""
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {"Origin": ORIGIN, "Access-Control-Request-Method": "GET"},
+            {"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
+            {"Origin": "null", "Access-Control-Request-Method": "GET"},
+            {"Origin": "", "Access-Control-Request-Method": "GET"},
+            {"Origin": ORIGIN, "Access-Control-Request-Method": ""},
+        ],
+        ids=["allowed", "other-origin", "null-origin", "empty-origin", "empty-acrm"],
+    )
+    def test_preflight_shaped_options_is_answered_by_cors(self, options_route_client, headers):
+        r = options_route_client.options("/api/private", headers=headers)
+        assert r.status_code in (200, 400), r.text
+        assert options_route_client.calls == []
+
+    def test_options_route_runs_with_the_token(self, options_route_client):
+        # The route is reachable, so the assertion above has teeth.
+        r = options_route_client.options("/api/private", headers={"Authorization": f"Bearer {TOKEN}"})
+        assert r.status_code == 200
+        assert options_route_client.calls == ["private"]
+
+
+@pytest.fixture
+def real_app_client(monkeypatch):
+    """The real orchestrator app and middleware stack (no lifespan: TestClient
+    is not entered, so nothing starts), with a fresh rate-limit window."""
+    import orchestrator.orchestrator as orch
+
+    monkeypatch.setattr(orch, "API_TOKEN", TOKEN)
+    monkeypatch.setattr(orch, "_rate_limit_store", {})
+    return TestClient(orch.app), orch._cors_origins[0].strip()
+
+
+class TestRealAppCors:
+    def test_dashboard_preflight_still_works(self, real_app_client):
+        client, origin = real_app_client
+        r = client.options(
+            "/api/memory/search",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == origin
+        assert r.headers["access-control-allow-credentials"] == "true"
+
+    def test_bare_options_needs_the_token(self, real_app_client):
+        client, _ = real_app_client
+        assert client.options("/api/memory/search").status_code == 401
 
 
 @pytest.fixture
