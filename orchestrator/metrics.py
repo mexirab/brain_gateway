@@ -128,6 +128,23 @@ TOOL_RESULT_MARKUP_NEUTRALIZED = Counter(
     ["tool"],
 )
 
+# Same rewrite on the client's own history (2026-10-25): a typed
+# <tool_call>…</tool_call> + <tool_response> pair rendered byte-identical to a
+# real tool round, and <|im_start|> in content is a real special token on the
+# live llama.cpp build. position="latest" is the turn the request adds (each
+# event once); "history" turns are resent by the client and counted again on
+# every chat turn (e.g. an announcement quoting an outside calendar title).
+# Jess never emits these tags, so role="assistant" is text she didn't write
+# (an announcement quoting outside text, or a forged turn).
+CLIENT_MARKUP_NEUTRALIZED = Counter(
+    "bgw_client_markup_neutralized_total",
+    "Client user/assistant chat turns in which tool-call / chat-template control markup was neutralized",
+    ["role", "position"],
+)
+for _role in ("user", "assistant"):
+    for _position in ("latest", "history"):
+        CLIENT_MARKUP_NEUTRALIZED.labels(role=_role, position=_position)
+
 TOOL_CALLS_CAPPED = Counter(
     "bgw_tool_calls_capped_total",
     "Model rounds whose tool-call batch exceeded MAX_TOOL_CALLS_PER_ROUND and was truncated",

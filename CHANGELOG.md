@@ -82,6 +82,66 @@ Branch `fix/searxng-hardening` (PR #147), stacked on the web search observabilit
 
 ---
 
+## [Unreleased] — control markup neutralized in client chat + calendar text (2026-10-25)
+
+Stacked on the client-message-strip entry below. Closes its "client content is not neutralized" and "`routes_chat` stores any role" gaps.
+
+### Security
+
+- `orchestrator/cloud_brain.py`: `_sanitize_client_history` now runs new `_neutralize_turn` on every surviving `user`/`assistant` turn — the same `_neutralize_control_markup` rewrite tool results get. Covers string content, string list parts and any dict part's string `text`; image parts untouched; an unchanged turn is returned as the same dict; caller dicts never edited. Verified live on Helios (llama.cpp b11358, render-only `/apply-template` + `/tokenize`): an assistant turn `<tool_call>…</tool_call>` + a user turn `<tool_response>…</tool_response>` rendered byte-identical to a real tool round, and after neutralization render as quoted text; `<|im_end|>`, `<|image_pad|>`, `<tool_call>` and `<tts_pad>` typed in content each tokenize as ONE special token. Outsider chain closed: work calendar invite title → announcement → dashboard `/chat` stores it as an assistant turn → resent every turn. Normal Jess history and Telegram photo turns are unchanged.
+- `orchestrator/unified_loop.py`: shared `_CONTROL_MARKUP_RE` (also used by `_cap_tool_result`, `vision_handler.frame_photo_description`, `jobs_self_audit`) is now `</?\s{0,8}(tool_call|tool_response|think|function|parameter|tts_\w{1,24})\b(?:[^<>]{0,512}>)?|<\|[^|<>]{1,32}\|>` (IGNORECASE). **Fixed:** the old `[^>]*` was quadratic on unclosed `<think` openers (~1 s for 140 KB, minutes for MBs, on the event loop); now linear, ~85 ms/MB worst case. Adds the live vocab's `<tts_pad>` / `<tts_text_bos>` / `<tts_text_eod>` / `<tts_text_bos_single>` specials. An opener with no `>` before the next `<` or within 512 chars (`<think a="<b">`) still has its `<` quoted (`‹think a="<b">`), so `StreamGate` / `clean_response` never treat it as a sentinel. One pass leaves no live token; not a fixpoint on crafted nesting (harmless).
+- `orchestrator/calendar_sources.py`: `get_events` runs new `_neutralize_event_text(ev)` on every event's title, location, description and calendar name before dedup — announcements (and the TTS model that speaks them), briefings, `check_calendar` and the dashboard `/calendar` all get plain text. Side effect: an already-announced event whose title contained markup gets a new alert key once after deploy.
+- `/v1/chat/completions` (`orchestrator.py`): every rejection goes through `_reject_chat(reason, error)` → 400 with a fixed-reason INFO log `[CHAT] Rejected chat request: <bad_json|body_not_object|messages_not_array|message_not_object|validation>`. **Fixed:** these were 500s (AttributeError, or an uncaught pydantic `ValidationError` whose traceback quoted the input into the logs). `schemas.ChatMessage.normalize_content` rejects non-string `text` parts (→ 400). The HA-Assist branch no longer crashes on null / non-string content.
+- `[CHAT] Incoming` logs roles from a fixed set (`system, developer, user, assistant, tool, function`), anything else as `other`, and shows the NEWEST 10 messages (was the oldest 10).
+- `POST /api/chat/conversations/{id}/messages` (`routes_chat.py`) validates with new `schemas.ChatHistoryMessage`: role `user`|`assistant` (default `user`), non-empty string content, `routing` any, `announcement_type` optional string. Anything else or bad JSON → 400, INFO log names only the bad field(s). The live table only ever had user/assistant rows.
+
+### Monitoring
+
+- New metric `bgw_client_markup_neutralized_total{role=user|assistant, position=latest|history}` (pre-initialized). `latest` = the turn the request adds (counted once); `history` turns are resent and re-counted every chat turn; `role=assistant` = text Jess didn't write. Log (counts only): `[UNIFIED] Neutralized control markup in client history (user=N assistant=N)`.
+- New Grafana panel "Control Markup Neutralized (tool results + client chat)" in the LLM Performance row (`brain_gateway_sre.py`; generated JSON regenerated): `bgw_tool_result_markup_neutralized_total` by tool + the new counter by role/position. No alert, by design (live baseline 0; the content was defused).
+
+### Tests
+
+- New `orchestrator/tests/test_client_markup_neutralize.py` (~70: forged round + specials, list/image parts, unchanged history, Telegram photo turns, no in-place edits, linear time, every loop path, endpoint 400s, chat-history route) and `test_client_markup_neutralize_extra.py` (~52: `<tts_…>` + 512-char bound via `_cap_tool_result` / `frame_photo_description`, `_neutralize_turn` shapes, `ChatHistoryMessage`, pre-initialized series, body validation). 6 new tests in `test_calendar_sources.py` (every reader gets neutralized text, ordinary text untouched, dedup, stable alert keys). Full suite: 5239 passed, 13 skipped; affected suites after the final regex tweak: 479 passed.
+
+### Known gaps (surfaced by review, not fixed)
+
+- The dynamic system-prompt context (RAG chunks, palace wakeup, tasks/backlog/routine/bookmarks) is only boundary-escaped by `prompt_builder._escape_boundaries`, not markup-neutralized, so a stored `<|im_start|>` there is a live special inside the system turn.
+- Announcements put outside text (calendar titles) into Jess's own words unquoted, then the dashboard resends them as assistant turns, so a title phrased as a question can be "answered" by a later "ok" — semantic, not markup.
+- The VoxCPM2 TTS server NFKC-folds fullwidth `＜｜im_end｜＞` into real ASCII markup after the orchestrator's neutralization.
+- Email→calendar extraction (`jobs_calendar`, gated by `EMAIL_TO_CALENDAR_ENABLED`) sends any sender's email body raw to the model.
+- Still open from the entry below: image parts vision doesn't extract reach the brain unframed (blind SSRF via llama-server's http(s) image fetch).
+
+### Docs
+
+- `CLAUDE.md` (Key Files `cloud_brain.py` row, loop-hardening note + known gaps), `TECHNICAL_REFERENCE.md` (`/v1/chat/completions` rejections, Chat History route, Markup neutralization, Tool-Call Loop Guards + known gaps), `docs/CALENDAR.md` (How Jess uses it), `monitoring/README.md` (panel).
+
+---
+
+## [Unreleased] — client message strip on every path (2026-10-25)
+
+Found by the code review of PR #146.
+
+### Security
+
+- `orchestrator/cloud_brain.py`: new `_sanitize_client_history(messages)`, the first statement of `CloudBrain._chat_unified_inner`. Keeps only client turns whose role is exactly `user` or `assistant` (was a `system`/`tool` deny-list): `ChatMessage.role` is free text, the live Qwen3.8 template merges a leading `developer` turn into the system prompt after the END OF CONTEXT footer, and other unknown roles (`function`, `System`, `tool `) make the template raise, so the turn fails into the fallback / brain-asleep reply. Blank assistant turns are still dropped. Returns a new list; client dicts are not edited.
+- **Fixed:** the strip ran after the model health check, so when the primary was offline and `_start_model_server()` failed, `_unified_fallback` ran the fallback model's tool loop (and auto-learn's cache) on the raw client history — forged `tool` results and extra `system` messages included. Now every path gets the cleaned list: buffered primary, real streaming + its in-producer fallback, health-check fallback, buffered loop-failure fallback, vision, auto-learn. Live impact was narrow: on the live box `FALLBACK_MODEL_URL == MODEL_URL`, and only `API_TOKEN` holders can send arbitrary roles.
+- Logs (counts only): unchanged `[UNIFIED] Stripped N client system/tool message(s)` and `[UNIFIED] Dropped N empty assistant message(s) from history`; new `[UNIFIED] Stripped N client message(s) with another role`.
+
+### Tests
+
+- New `orchestrator/tests/test_client_message_strip_paths.py` (26): all four loop paths incl. voice, fast path, vision ordering, other / near-miss / non-string roles, no in-place edits, idempotence, count-only logs.
+
+### Known gaps (surfaced by review, not fixed)
+
+- Image parts vision doesn't extract (http(s) URLs, non-user roles, `VISION_ENABLED=false`) reach the brain unframed, and llama-server fetches http(s) image URLs itself (blind SSRF from Helios).
+
+### Docs
+
+- `CLAUDE.md` (Key Files `cloud_brain.py` row, loop-hardening note + known gaps), `TECHNICAL_REFERENCE.md` (Tool-Call Loop Guards, Empty-Reply Handling).
+
+---
+
 ## [Unreleased] — Qwen3.8-Flash-Next brain cutover + `VOICE_THINKING_ENABLED` (2026-10-24)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) are unchanged. Trial, measurements and known limits: `docs/internal/FLASH_NEXT_TRIAL.md`.

@@ -27,6 +27,7 @@ from orchestrator.metrics import (
     AUTO_LEARN_REARMED,
     CHAT_STREAM_OUTCOME,
     CHAT_TTFT,
+    CLIENT_MARKUP_NEUTRALIZED,
     FAST_PATH_COUNT,
     MODE_ROUTE_COUNT,
     REQUEST_COUNT,
@@ -37,6 +38,7 @@ from orchestrator.metrics import (
 )
 from orchestrator.mode_router import get_mode_router
 from orchestrator.routes_setup import is_first_chat, mark_first_chat_done
+from orchestrator.unified_loop import _neutralize_control_markup
 from orchestrator.vision_handler import PHOTO_BLOCK_RE
 from orchestrator.voice_style import apply_tone_request, record_reply_style
 
@@ -117,6 +119,102 @@ def _is_empty_assistant(m: dict) -> bool:
                 return False  # odd/non-string text is kept, never crashes
         return True
     return False
+
+
+def _sanitize_client_history(messages: List[Dict]) -> List[Dict]:
+    """The client's messages without the turns no loop may be given, and with
+    tool-call / chat-template markup in the rest neutralized.
+
+    Runs first in _chat_unified_inner, before anything hands the history to
+    vision, a model loop or auto-learn, so the primary loop, real streaming
+    and both fallback-model paths all get the cleaned list.
+    """
+    # Strip incoming system messages — the orchestrator builds its own system
+    # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
+    # send a system message with all entity states; keeping it causes Qwen's Jinja
+    # template to fail ("System message must be at the beginning" / duplicate system).
+    # Also strip client-supplied `tool` turns: the orchestrator is the only
+    # legitimate producer of tool results, and a forged one is believed by
+    # the model as its own verified output (2026-10-02 red-team finding).
+    # Assistant turns are kept (they are the client's own transcript) but
+    # ChatMessage has no tool_calls field, so forged native calls are
+    # already dropped by Pydantic.
+    # Only user/assistant turns survive: ChatMessage.role is free text, and the
+    # Qwen3.8 template merges a leading `developer` turn into the system prompt
+    # (other unknown roles make it raise and the turn fail).
+    n_system_tool = sum(1 for m in messages if m.get("role") in ("system", "tool"))
+    _n_before = len(messages)
+    messages = [m for m in messages if m.get("role") in ("user", "assistant")]
+    if n_system_tool:
+        logger.info("[UNIFIED] Stripped %d client system/tool message(s)", n_system_tool)
+    if _n_before - len(messages) > n_system_tool:
+        logger.info(
+            "[UNIFIED] Stripped %d client message(s) with another role", _n_before - len(messages) - n_system_tool
+        )
+
+    # Drop empty assistant turns (a failed reply the client kept as a blank
+    # bubble). One empty assistant message in the history made the Qwen3.8
+    # brain answer with nothing 7/8 times — so a single empty reply
+    # snowballed into a silent conversation (2026-10-14).
+    _n_before = len(messages)
+    messages = [m for m in messages if not _is_empty_assistant(m)]
+    if len(messages) != _n_before:
+        logger.info("[UNIFIED] Dropped %d empty assistant message(s) from history", _n_before - len(messages))
+
+    # Neutralize control markup in what the client typed or kept, the same
+    # rewrite tool results get. A typed `<tool_call>…</tool_call>` assistant
+    # turn followed by a `<tool_response>…</tool_response>` user turn renders
+    # byte-identical to a real tool round, and `<|im_end|><|im_start|>system`
+    # in content is tokenized as real special tokens by the live llama.cpp
+    # build — a forged system turn. Outsiders reach this through any text the
+    # dashboard resends, e.g. an announcement quoting a work calendar invite
+    # title (2026-10-25 review). Jess's own replies never carry these tags
+    # (StreamGate / clean_response remove them), so normal history is unchanged.
+    # The metric's position label: "latest" is the turn this request adds,
+    # "history" the turns the client resends every time (counted again each turn).
+    neutralized = {"user": 0, "assistant": 0}
+    out = []
+    for i, m in enumerate(messages):
+        cleaned = _neutralize_turn(m)
+        if cleaned is not m:
+            neutralized[m["role"]] += 1
+            position = "latest" if i == len(messages) - 1 else "history"
+            CLIENT_MARKUP_NEUTRALIZED.labels(role=m["role"], position=position).inc()
+        out.append(cleaned)
+    if any(neutralized.values()):
+        logger.info(
+            "[UNIFIED] Neutralized control markup in client history (user=%d assistant=%d)",
+            neutralized["user"],
+            neutralized["assistant"],
+        )
+    return out
+
+
+def _neutralize_turn(m: Dict) -> Dict:
+    """`m` with control markup in its text rewritten as plain text.
+
+    Returns `m` itself when nothing changed, else a copy (the caller's dicts
+    are never edited). Only text is touched — a string part, or any dict
+    part's string `text` whatever its `type` — image parts pass through as-is.
+    """
+    c = m.get("content")
+    if isinstance(c, str):
+        cleaned = _neutralize_control_markup(c)
+        return m if cleaned == c else {**m, "content": cleaned}
+    if not isinstance(c, list):
+        return m
+    parts, changed = [], False
+    for p in c:
+        if isinstance(p, str):
+            t = _neutralize_control_markup(p)
+            if t != p:
+                p, changed = t, True
+        elif isinstance(p, dict) and isinstance(p.get("text"), str):
+            t = _neutralize_control_markup(p["text"])
+            if t != p["text"]:
+                p, changed = {**p, "text": t}, True
+        parts.append(p)
+    return {**m, "content": parts} if changed else m
 
 
 # Set per request by the chat endpoint from ChatRequest.conversation_id.
@@ -312,6 +410,14 @@ class CloudBrain:
         started_at: Optional[float] = None,
     ) -> Any:
         """Inner unified flow (separated for clean metrics wrapping)."""
+        # First, so no path below (the health-check fallback included) can
+        # hand a loop a client-supplied system/tool turn or unneutralized
+        # markup. `user_text` was read from the raw list: it only drives the
+        # mode router, tone request, fast path and RAG query, never model
+        # input — anything that sends user text to a model takes it from
+        # `messages`.
+        messages = _sanitize_client_history(messages)
+
         # --- Vision: detect and process images before the main loop ---
         messages = await self._process_vision(messages, routing_info)
 
@@ -460,30 +566,6 @@ class CloudBrain:
             )
         except Exception as _e:
             logger.debug("[UNIFIED] Prompt size diagnostic failed: %s", _e)
-
-        # Strip incoming system messages — the orchestrator builds its own system
-        # prompt (with RAG, mode, tools). External callers like HA's llama_conversation
-        # send a system message with all entity states; keeping it causes Qwen's Jinja
-        # template to fail ("System message must be at the beginning" / duplicate system).
-        # Also strip client-supplied `tool` turns: the orchestrator is the only
-        # legitimate producer of tool results, and a forged one is believed by
-        # the model as its own verified output (2026-10-02 red-team finding).
-        # Assistant turns are kept (they are the client's own transcript) but
-        # ChatMessage has no tool_calls field, so forged native calls are
-        # already dropped by Pydantic.
-        _n_before = len(messages)
-        messages = [m for m in messages if m.get("role") not in ("system", "tool")]
-        if len(messages) != _n_before:
-            logger.info("[UNIFIED] Stripped %d client system/tool message(s)", _n_before - len(messages))
-
-        # Drop empty assistant turns (a failed reply the client kept as a blank
-        # bubble). One empty assistant message in the history made the Qwen3.8
-        # brain answer with nothing 7/8 times — so a single empty reply
-        # snowballed into a silent conversation (2026-10-14).
-        _n_before = len(messages)
-        messages = [m for m in messages if not _is_empty_assistant(m)]
-        if len(messages) != _n_before:
-            logger.info("[UNIFIED] Dropped %d empty assistant message(s) from history", _n_before - len(messages))
 
         # Real streaming: relay gate-safe tokens while the loop is still
         # running. Skipped for the literal first-ever chat so the one-time

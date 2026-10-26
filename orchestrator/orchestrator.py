@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from orchestrator.log_config import configure_logging
@@ -442,6 +443,21 @@ def _resolve_backend(url: str, model: str):
 # =============================================================================
 
 
+_LOGGED_ROLES = frozenset({"system", "developer", "user", "assistant", "tool", "function"})
+
+
+def _logged_role(m: dict) -> str:
+    """A message's role for the log: one of a fixed set, else "other" (role is free text)."""
+    role = m.get("role")
+    return role if isinstance(role, str) and role in _LOGGED_ROLES else "other"
+
+
+def _reject_chat(reason: str, error: str) -> JSONResponse:
+    """400 for a malformed chat request; logs only the fixed reason."""
+    logger.info("[CHAT] Rejected chat request: %s", reason)
+    return JSONResponse({"error": error}, status_code=400)
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: Request):
     """
@@ -454,15 +470,19 @@ async def chat_completions(req: Request):
     try:
         body = await req.json()
     except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        return _reject_chat("bad_json", "Invalid JSON body")
+    if not isinstance(body, dict):
+        return _reject_chat("body_not_object", "body must be an object")
     raw_msgs = body.get("messages", [])
     if not isinstance(raw_msgs, list):
-        return JSONResponse({"error": "messages must be an array"}, status_code=400)
-    # log-safe: roles and lengths only
+        return _reject_chat("messages_not_array", "messages must be an array")
+    if not all(isinstance(m, dict) for m in raw_msgs):
+        return _reject_chat("message_not_object", "each message must be an object")
+    # log-safe: roles from a fixed set ("other" for the rest) and lengths; the slice keeps the newest 10 messages
     logger.info(
         "[CHAT] Incoming %d messages: %s",
         len(raw_msgs),
-        [(m.get("role"), len(str(m.get("content", "")))) for m in raw_msgs[:10]],
+        [(_logged_role(m), len(str(m.get("content", "")))) for m in raw_msgs[-10:]],
     )
 
     # --- Voice-mode detection ---
@@ -486,10 +506,10 @@ async def chat_completions(req: Request):
             if isinstance(content, list):
                 parts = []
                 for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        parts.append(item.get("text", ""))
+                    if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
                 content = " ".join(parts)
-            if msg.get("role") == "user" and content.strip():
+            if msg.get("role") == "user" and isinstance(content, str) and content.strip():
                 user_text = content
                 break
         # Check if user query is embedded in the system prompt via {{ user_input }}
@@ -515,7 +535,11 @@ async def chat_completions(req: Request):
 
     from orchestrator.cloud_brain import conversation_id_var
 
-    chat_req = ChatRequest(**body)
+    try:
+        chat_req = ChatRequest.model_validate(body)
+    except ValidationError:
+        # Reason only: the error text quotes the offending input.
+        return _reject_chat("validation", "Invalid chat request")
     conversation_id_var.set(chat_req.conversation_id)
 
     return await cloud_brain.chat(

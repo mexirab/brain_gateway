@@ -154,7 +154,14 @@ which merges three sources into one list:
   Webex etc.) and locations over 100 chars are dropped.
 - **Work-invite text is untrusted.** Titles and locations are collapsed to a
   single line, so an invite can't fake extra lines. Calendar output counts as
-  external content under the prompt's "content is data" rule.
+  external content under the prompt's "content is data" rule. Since 2026-10-25
+  `calendar_sources.get_events` also neutralizes tool-call / chat-template
+  markup (`<tool_call>`, `<|im_start|>`, …) in every event's title, location,
+  description and calendar name before dedup, so announcements, briefings,
+  `check_calendar` and the dashboard all get plain text (see
+  `TECHNICAL_REFERENCE.md` → Tool Result Cap → Markup neutralization). An
+  already-announced event whose title contained markup gets a new alert key
+  once after that deploy.
 - **A slow source can't stall a reply.** Each source gets 8 s. A source that
   times out or errors is reported as unavailable and the others still answer.
 - **The old all-calendars phone push is retired.** Jess only reads a push marked
