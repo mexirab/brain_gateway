@@ -721,6 +721,59 @@ daily:
 
 `selfcare_manager._check_meds` and `evening_meds_status` skip a med whose `days` excludes today (drug-holiday support, e.g. weekends-off stimulants); a malformed/empty `days` fails open (still reminds). The compact renderer (`get_data` + injected prompt block) surfaces a schedule hint — `Vyvanse 30mg (Mon–Fri)` — and the `/personal-facts` page shows it as a badge. `update_medication` also relocates a med between buckets when `schedule` changes, and returns an honest "nothing to update" (without writing) when a found med has no changed field.
 
+### calculate
+```json
+{"program": "bill = 84.50\ntip = bill * 0.20\n(bill + tip) / 3"}
+```
+→ `result: 33.8` / `bill = 84.5` / `tip = 16.9`
+
+Exact math for the brain (3-bit MoE, `reasoning_effort` low — it got arithmetic wrong). `orchestrator/calculator.py`; handler `_reg_calculate` in `tool_handlers.py`.
+
+- **Input.** `program` (string, required), one statement per line. The handler also accepts `expression`, and a list of lines (joined with `\n`). Result = last line's value, plus every variable (variables are not repeated for a single-assignment program).
+- **Execution.** `ast.parse` → every node checked against an allow-list (`_validate`, whole program refused up front) → interpreted node by node by `_Interpreter`. Never eval/exec. Calls resolve only to the built-in table, by bare name, so a variable may be named `hours` or `e`. Runs in `asyncio.to_thread` (the meds YAML read is file I/O). Non-terminal; in `VOICE_TOOL_NAMES`.
+- **Language.**
+
+| Area | Available |
+|------|-----------|
+| Values | plain numbers (`1_250` ok), `True`/`False`, `[list]` of numbers/dates/durations (no nesting) |
+| Operators | `+ - * / // % **`, unary `+ -`, `== != < <= > >=`, `a if c else b`, `and or not`; `x = …`, `x += …` (one target per assignment; names ASCII letters/digits/`_`, start with a letter, ≤ 32 chars) |
+| Functions | `abs round int float floor ceil sqrt cbrt pow exp ln log(x, base) log10 log2 sin cos tan asin acos atan degrees radians hypot factorial comb perm gcd lcm min max sum mean median` (`min`/`max`/`sum`/`mean`/`median` take numbers or one list) |
+| Constants | `pi e tau` |
+| Date/time | `today() now() date(y, m, d) datetime(y, m, d, hour, minute) at(hour, minute)` (= today at that time); durations `days(n) weeks(n) hours(n) minutes(n)`; `in_days(x) in_hours(x) in_minutes(x)` turn a duration into a number |
+| Not available | strings, imports, attributes, subscripts, loops, `if` statements, `def`/`lambda`, comprehensions, `:=`, `*args`/`**kwargs`, bitwise operators, `in`/`is` |
+
+- **Rounding.** `round()` rounds halves up (away from zero), as for money: `round(2.675, 2)` → 2.68, `round(2.5)` → 3. Unlike Python's banker's rounding.
+- **Dates and times.** Local, naive: `today()`/`now()` read the same `datetime.now()` as the prompt's CURRENT DATE/TIME (`now()` truncated to the minute). The handler passes `ZoneInfo(shared.TIMEZONE)` (bad TZ → clock-time math), so date-time arithmetic is real elapsed time across DST: 9 pm Oct 31 → 9 am Nov 1, 2026 = `13 hours` in America/Chicago. A plain date next to a date-time counts as midnight (`date(2026, 12, 25) - now()` = hours until Christmas). Adding hours/minutes to a plain date is refused with a hint (Python would silently drop them). Output: dates `2026-10-25 (Sunday)`, date-times `2026-10-25 17:50 (5:50 PM, Sunday)`, durations `60 days 7 hours 20 minutes (= 1447.333 hours)`.
+- **Hints for common slips.** `1,250` → "write 1250 (or 1_250)"; `^` → "use `**`"; `$` / `%` → syntax hint (plain numbers, `*`, `**`); `×` `÷` `−` are translated and accepted.
+- **Caps** (checked before the operation that could blow up):
+
+| Cap | Value |
+|-----|-------|
+| `MAX_PROGRAM_CHARS` / `MAX_STATEMENTS` / `MAX_NODES` / `MAX_DEPTH` | 2000 / 40 / 2500 / 200 |
+| `MAX_INT_BITS` | 4096 (~1233 digits); integer `**` prechecked |
+| `MAX_FACTORIAL_N` | `factorial`/`comb`/`perm` n ≤ 1000 (the result must still fit `MAX_INT_BITS`) |
+| `MAX_ROUND_DIGITS` / `MAX_GCD_ARGS` / `MAX_LIST_LEN` | 20 / 20 / 200 |
+| `MAX_OUTPUT_CHARS` | 3000, built against a budget (`… (more variables not shown)`) |
+| `EXACT_INT_BITS` | 132: integers over ~40 digits shown short, e.g. `≈1.318204e+1204 (1205 digits)` |
+
+  No loops, so cost is bounded by program size; every program runs in a few ms.
+- **Medication-dose backstop (SOFT, not a control)** for the MEDICATION SAFETY rule. Refused when a variable name (split on `_`, digits and camelCase) contains a word in `calculator.DOSE_WORDS` (`dose`, `dosage`, `pill`, `meds`, `medication`, `prescription`, … — not `med`, `mg`, `tablet`) or a 4+ letter word of the user's own medication names (`medication_name_tokens(data_manager.get_medications())`, accents folded, `GENERIC_NAME_WORDS` such as `time`, `extra`, `fish`, `vitamin` dropped). Fixed refusal text pointing to the prescriber; never names the matched med, never asks the model to recite meds. Bare numbers and neutral names still compute.
+- **Result categories** (`calculator.CATEGORIES` = metric labels; failures return as `calculate error (line N): …` text, never raised):
+
+| `result` | Meaning |
+|----------|---------|
+| `ok` | computed |
+| `empty` | no program, or comments only (often dropped tool-call arguments) |
+| `invalid` | syntax error, unknown name/function, wrong arguments or types |
+| `not_allowed` | construct outside the language (import, loop, `^`, `1,250` tuple, string, …), or nesting past `MAX_DEPTH` |
+| `too_large` | any other cap above, float overflow, date out of range |
+| `math_error` | domain error (`sqrt(-1)`), division by zero, NaN |
+| `refused_dose_word` / `refused_med_name` | dose backstop |
+
+- **Metric** `bgw_calculate_total{result}`, all 8 labels pre-initialised. Not in `bgw_tool_call_errors_total` (failures are text). Grafana "calculate: outcomes (/1h)" (Tools row, `brain_gateway_sre.py`); no alert (low volume, user present on failure).
+- **Logging.** Non-ok only: INFO `[CALCULATE] <category> (program N chars)`, `extra` `component=tool`, `tool_name=calculate`. Program text, values and med tokens are never logged (`program`/`expression`/`med_tokens` are SENSITIVE in `test_no_user_content_in_logs.py`).
+- **Prompt cost.** Schema ~351 tokens + MATH rule ~74 tokens, in the cached static prefix. Tests: `orchestrator/tests/test_calculator.py`.
+
 ### set_reminder
 ```json
 {"reminder_text": "call mom", "time": "in 30 minutes", "target": "both"}

@@ -310,6 +310,37 @@ STATIC_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "calculate",
+            "description": (
+                "Do math exactly instead of in your head: tips, splitting a bill, percentages, scaling a "
+                'recipe, interest, and date/time math ("when do I leave", "how many days until"). Write a '
+                "short program, one statement per line, with plain numbers (1250, not 1,250 or $1,250); "
+                "variables are allowed, the last line's value is the result and every variable is reported. "
+                "Numbers: + - * / // % ** (not ^), comparisons, `a if cond else b`, abs round (halves round "
+                "up) int float floor ceil sqrt cbrt pow exp ln log(x, base) log10 log2 sin cos tan asin acos "
+                "atan degrees radians hypot factorial comb perm gcd lcm, and min max sum mean median of "
+                "numbers or a [list]; constants pi e tau. Dates and times are local: today(), now(), "
+                "date(y, m, d), datetime(y, m, d, hour, minute), at(hour, minute) = today at that time; "
+                "durations days(n) weeks(n) hours(n) minutes(n); subtracting dates or times gives a "
+                "duration; in_days(x) in_hours(x) in_minutes(x) turn a duration into a number. No strings, "
+                "loops, imports or files.\nExample:\nbill = 84.50\ntip = bill * 0.20\n(bill + tip) / 3\n"
+                "Leave-by: at(18, 15) - minutes(25). Never use it for medication doses or dose timing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "program": {
+                        "type": "string",
+                        "description": "The program, one statement per line.",
+                    },
+                },
+                "required": ["program"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_reminder",
             "description": "Set a reminder for the user. The reminder will be announced via voice on home speakers and/or sent as a mobile notification at the specified time.",
             "parameters": {
@@ -1745,6 +1776,7 @@ VOICE_TOOL_NAMES: frozenset = frozenset(
         "search_memory",
         "update_memory",
         "get_data",  # read meds/projects/profile from source-of-truth by voice
+        "calculate",  # "what's 18% of 64", "when do I need to leave" are spoken asks
         "brain_dump",
         "shopping_list",
         "set_reminder",

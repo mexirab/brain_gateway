@@ -910,6 +910,7 @@ def generate_workout(location_id: Optional[int] = None) -> Dict[str, Any]:
     plan = [_add_exercise_sets(workout_id, ex, goal, limits, deload=deload) for ex in exercises]
     WORKOUT_GENERATED.labels(result="ok").inc()
 
+    # log-safe: program and location are logged by numeric id only
     logger.info(
         "[WORKOUT] Generated %s (id=%d, %d exercises, program=%s, location=%s, deload=%s, %d notes)",
         workout_type,
