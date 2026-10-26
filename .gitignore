@@ -94,6 +94,7 @@ Thumbs.db
 monitoring/prometheus/prometheus.yml
 monitoring/prometheus/api_token
 monitoring/alertmanager/self_audit_webhook_token
+monitoring/alertmanager/deadman_webhook_token
 monitoring/alertmanager/alertmanager.yml
 monitoring/**/*.bak-*
 # Homepage secrets (env holds HOMEPAGE_VAR_BRAIN_TOKEN) — keep .env.example.

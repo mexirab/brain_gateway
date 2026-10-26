@@ -10,6 +10,13 @@ inhibit_rules:
       - alertname="EmbeddingErrors"
     target_matchers:
       - alertname="AutoLearnFailing"
+  # Saturn down pages as NodeDown; the dead-man's switch on it being
+  # unreachable is the same outage, not a second notice.
+  - source_matchers:
+      - alertname="NodeDown"
+    target_matchers:
+      - alertname="DeadmanSwitchBroken"
+    equal: ["node"]
 
 route:
   receiver: "null"
@@ -18,6 +25,21 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # BEGIN deadman — generate-configs.sh strips this block (and the receiver
+    # below) unless .env has DEADMAN_WEBHOOK_TOKEN (>= 24 chars).
+    # The Watchdog (alert-rules.yml; fires while Jupiter can page) is re-sent
+    # about every 2 min (the first flush after repeat_interval has passed, so
+    # 2x group_interval) to the dead-man's switch on Saturn (monitoring/deadman/), which pages over
+    # its own Pushover when the heartbeats stop — the only page left when this
+    # whole box, Docker, or this monitoring stack is down. First and without
+    # `continue`, so the Watchdog never reaches a Pushover receiver here.
+    - matchers:
+        - alertname="Watchdog"
+      receiver: "deadman"
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+    # END deadman
     # BEGIN self-investigator — generate-configs.sh strips this block (and the
     # receiver below) unless .env has SELF_AUDIT_WEBHOOK_TOKEN (>= 24 chars) AND
     # SELF_AUDIT_INVESTIGATE=true.
@@ -56,7 +78,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|DeadmanSwitchBroken"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
@@ -85,6 +107,22 @@ route:
       repeat_interval: 24h
 receivers:
   - name: "null"
+  # BEGIN deadman
+  # Off-box (Saturn, LAN). The token file is written by generate-configs.sh
+  # from DEADMAN_WEBHOOK_TOKEN; Saturn's /etc/jupiter-deadman.env holds the
+  # same value. send_resolved: false — the Watchdog only "resolves" when
+  # Prometheus stops, and silence is exactly what Saturn watches for.
+  - name: "deadman"
+    webhook_configs:
+      - url: "http://${DEADMAN_HOST}:${DEADMAN_PORT}/heartbeat"
+        send_resolved: false
+        max_alerts: 1
+        timeout: 10s
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/deadman_webhook_token
+  # END deadman
   # BEGIN self-investigator
   # Same path Prometheus uses to scrape the orchestrator (its published,
   # bearer-gated port) — Alertmanager stays off gateway-net. The token file is

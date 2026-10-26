@@ -70,9 +70,11 @@ groups:
       # the mount is gone but Prometheus is still running on its open file
       # descriptors. Once Prometheus restarts it cannot start, and a dead
       # Prometheus evaluates no rules — same circular problem as
-      # AlertmanagerUnreachable below. Closing that gap needs an EXTERNAL deadman
-      # (Alertmanager Watchdog -> healthchecks.io or similar), which does not
-      # exist yet. Treat this as "catches the common case", not "cannot miss".
+      # AlertmanagerUnreachable below. The EXTERNAL deadman closes that gap: the
+      # Watchdog heartbeat stops reaching Saturn and Saturn pages (group
+      # jupiter_deadman, monitoring/deadman/) — once it is installed and
+      # DEADMAN_WEBHOOK_TOKEN is set. Treat this rule as "catches the common
+      # case early, with the right diagnosis", not "cannot miss".
       # Sharper still: `for: 5m` restarts its timer on every Prometheus restart,
       # so the real window is not "until Prometheus dies" but "until Prometheus
       # first restarts" — after that the pending period can never complete.
@@ -84,7 +86,7 @@ groups:
       # earlier at for: 3m). Tradeoff being accepted knowingly: if the `node`
       # label is ever renamed, the guard breaks too and this goes SILENT rather
       # than paging forever. For a page, fail-silent beats fail-screaming — but
-      # it is still a blind spot that only an external deadman would catch.
+      # it is still a blind spot that only the external deadman catches.
       #
       # job="node-exporter" is not redundant: prometheus.yml.template scrapes
       # netdata with honor_labels: true, so a colliding node_filesystem_* series
@@ -133,7 +135,8 @@ groups:
       # Dashboard-only by design: when this fires Prometheus can't deliver
       # notifications at all, so routing it anywhere via alertmanager is
       # circular. It exists so the failure is visible in Grafana instead of
-      # every alert silently going nowhere.
+      # every alert silently going nowhere. The page for this case comes from
+      # off-box: the Watchdog stops reaching Saturn (group jupiter_deadman).
       - alert: AlertmanagerUnreachable
         expr: prometheus_notifications_alertmanagers_discovered < 1
         for: 5m
@@ -1000,3 +1003,54 @@ groups:
         annotations:
           summary: "Helios is unreachable and its plug reading is stale or unknown"
           description: "Helios's node exporter is down, but the smart-plug reads are missing (no successful read in 10 min) or contradictory (power sensor unavailable), so Jess can't tell whether Helios is asleep or hung. Check HELIOS_PLUG_MONITOR_ENABLED / HELIOS_WAKE_ENABLED on the orchestrator, the plug and its power sensor in Home Assistant, and `docker logs brain-orchestrator | grep HELIOS`."
+
+  # -- Off-box dead-man's switch (monitoring/deadman/, runs on Saturn) --------
+  # Every alert in this file is evaluated and delivered ON Jupiter, so a
+  # whole-box or whole-Docker outage pages nobody — dockerd crashed on
+  # 2026-10-26 and Prometheus + Alertmanager stayed down 2.5 h in silence.
+  # Watchdog fires while Jupiter can page; Alertmanager re-sends it about
+  # every 2 min to Saturn, which pages over its own Pushover when the
+  # heartbeats stop. Its route and
+  # the jupiter-deadman scrape job only render when DEADMAN_WEBHOOK_TOKEN is
+  # set in .env; until then Watchdog falls through to "null" and
+  # DeadmanSwitchBroken has no series to fire on.
+  - name: jupiter_deadman
+    interval: 30s
+    rules:
+      # Fires while Jupiter can actually page you, not merely while rules run:
+      # a bare vector(1) would keep beating with ingestion dead (TSDB appends
+      # failing on a full /mnt/logging, a wedged scrape loop) — and then every
+      # `up == 0` rule goes quiet, because absent is not 0. So it needs a
+      # Prometheus self-scrape sample younger than 3 min, and it stops when
+      # Jupiter's own Pushover deliveries keep failing (revoked app token, bad
+      # user key, quota): Saturn then pages over its own Pushover app.
+      # alertmanager_notifications_failed_total counts notifications that
+      # failed after Alertmanager's retries; absent (no alertmanager scrape)
+      # leaves the heartbeat alone.
+      - alert: Watchdog
+        expr: >-
+          max(time() - timestamp(up{job="prometheus"})) < 180
+          unless on() (sum(increase(alertmanager_notifications_failed_total{job="alertmanager", integration="pushover"}[30m])) > 2)
+        labels:
+          severity: none
+        annotations:
+          summary: "Always firing: heartbeat to the off-box dead-man's switch on Saturn"
+          description: "This alert is meant to fire forever. It stops when Prometheus stops ingesting or Jupiter's Pushover deliveries keep failing; if it stops reaching Saturn for 10 minutes, Saturn pages that Jupiter's alerts can't reach you. Never silence or inhibit it — that pages the owner. See monitoring/README.md → Dead-man's switch."
+
+      # Watching the watcher. Saturn being down entirely is NodeDown{node="saturn"}
+      # (pages); this catches the switch itself being dead (up == 0), its
+      # checker thread being stuck (no check for 5 min), or it being left in
+      # dry-run after install (pages logged, never sent). Quiet: the switch
+      # only matters during a Jupiter outage, so fixing it can wait for the
+      # morning — but it must not stay broken unnoticed.
+      - alert: DeadmanSwitchBroken
+        expr: >-
+          up{job="jupiter-deadman"} == 0
+          or (time() - jupiter_deadman_last_check_timestamp_seconds{job="jupiter-deadman"} > 300)
+          or (jupiter_deadman_dry_run{job="jupiter-deadman"} == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The off-box dead-man's switch on Saturn is not armed"
+          description: "Jupiter can't scrape the switch on Saturn (:9466), its checker has not run for 5 minutes, or DEADMAN_DRY_RUN is still on — so a Jupiter outage would page nobody. On Saturn: `systemctl status jupiter-deadman`, `journalctl -u jupiter-deadman -n 50`, `curl -s localhost:9466/metrics | grep dry_run`. See monitoring/deadman/README.md."
