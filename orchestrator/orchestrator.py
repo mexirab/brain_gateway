@@ -1408,6 +1408,23 @@ async def _startup_logic():
         )
         logger.info("[SCHEDULER] Helios power-state poll every 60s")
 
+    # Deploy drift (DeployDrift alert): the commit the CI deploy job last
+    # shipped here vs. main's newer commits that passed CI. Only for boxes the
+    # CI deploys to, so off unless DEPLOY_DRIFT_REPO is set.
+    if _cfg.deploy_drift_repo:
+        from orchestrator.jobs_deploy_drift import CHECK_INTERVAL_MINUTES, check_deploy_drift
+
+        scheduler.add_job(
+            check_deploy_drift,
+            trigger="interval",
+            minutes=CHECK_INTERVAL_MINUTES,
+            next_run_time=datetime.now(scheduler.timezone) + timedelta(seconds=60),
+            id="deploy_drift_check",
+            name="Deploy drift check",
+            replace_existing=True,
+        )
+        logger.info(f"[SCHEDULER] Deploy drift check every {CHECK_INTERVAL_MINUTES} min")
+
     # Finance jobs (Actual Budget sync + spending announcements). Gated on the
     # sync being configured: the weekly summary / mid-month warning read the
     # local finance DB and would announce meaningless "$0 of $1000" updates via

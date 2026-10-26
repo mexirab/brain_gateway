@@ -1000,3 +1000,46 @@ groups:
         annotations:
           summary: "Helios is unreachable and its plug reading is stale or unknown"
           description: "Helios's node exporter is down, but the smart-plug reads are missing (no successful read in 10 min) or contradictory (power sensor unavailable), so Jess can't tell whether Helios is asleep or hung. Check HELIOS_PLUG_MONITOR_ENABLED / HELIOS_WAKE_ENABLED on the orchestrator, the plug and its power sensor in Home Assistant, and `docker logs brain-orchestrator | grep HELIOS`."
+
+  # Deploys: the CI deploy job (self-hosted runner on Jupiter) ships pushes to
+  # main. GitHub keeps only one pending deploy run and cancels it when another
+  # arrives, a deploy can fail or time out, and a stopped runner deploys
+  # nothing, so a commit can pass CI and never go live. The orchestrator's
+  # deploy drift check (jobs_deploy_drift.py, every 10 min, only while
+  # DEPLOY_DRIFT_REPO is set) compares the deploy job's .last-deployed-sha
+  # marker with main's push runs on GitHub. Runbook: monitoring/README.md →
+  # Deploy Drift.
+  - name: deploy_health
+    rules:
+      # A commit on main passed CI 40+ min ago (+ for: 10m, so ~50 min) and the
+      # deployed commit still hasn't reached it. Deploys normally land ~3 min
+      # after CI passes. The gauge is the OLDEST undeployed green commit's
+      # CI-pass time, so new merges don't reset the clock. NaN (no check yet,
+      # check failing after a new deploy) and 0 (in sync) never fire.
+      # $value = seconds since that commit passed CI.
+      - alert: DeployDrift
+        expr: |
+          (time() - bgw_deploy_undeployed_green_since_timestamp_seconds{job="orchestrator"}) > 2400
+          and bgw_deploy_undeployed_green_since_timestamp_seconds{job="orchestrator"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jupiter is running an old commit: main has passed CI but did not deploy"
+          description: "A commit on main passed CI {{ $value | humanizeDuration }} ago and is still not deployed on Jupiter. In GitHub Actions, find the newest main run: deploy job cancelled → re-run it; failed or timed out → read its log, fix, re-run; still queued → the runner is down (on Jupiter: systemctl status actions.runner.mexirab-brain_gateway.jupiter.service). Holding deploys on purpose → silence this alert. Deployed commit: bgw_deployed_commit_info."
+
+      # The drift check itself can't tell (marker missing or unreadable, the
+      # deploy job renamed, GitHub unreachable, or rate limited). `partial` (job
+      # lookups ran out during a burst of pushes) is not a failure. While this
+      # fires DeployDrift is
+      # blind: its gauges keep the last values, or go NaN after a new deploy.
+      # ~6 checks an hour; 4 failures in an hour for 30 min = sustained.
+      - alert: DeployDriftCheckFailing
+        expr: |
+          sum(increase(bgw_deploy_drift_check_total{job="orchestrator", result=~"marker_missing|marker_invalid|deploy_job_missing|github_error|rate_limited"}[1h])) >= 4
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The deploy drift check is failing, so DeployDrift can't see a stuck deploy"
+          description: "bgw_deploy_drift_check_total keeps counting failures. marker_missing/marker_invalid: no readable .last-deployed-sha at DEPLOY_MARKER_PATH (no CI deploy has completed on this checkout, or the repo mount at /opt/gateway_mvp is broken). github_error: api.github.com unreachable from brain-orchestrator, or DEPLOY_DRIFT_REPO / DEPLOY_DRIFT_GITHUB_TOKEN wrong (Loki {container=\"brain-orchestrator\"} |= \"[DEPLOY_DRIFT]\" shows the HTTP status). deploy_job_missing: the CI deploy job was renamed; update DEPLOY_JOB_NAME in orchestrator/jobs_deploy_drift.py. rate_limited: something else on this IP is using the unauthenticated GitHub API budget; set DEPLOY_DRIFT_GITHUB_TOKEN."

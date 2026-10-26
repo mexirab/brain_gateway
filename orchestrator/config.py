@@ -568,6 +568,19 @@ class Settings(BaseSettings):
     self_audit_webhook_token: str = ""
     self_audit_alert_lookback_hours: int = 3
 
+    # -- Deploy drift (jobs_deploy_drift.py) -------------------------------------
+    # Which commit the CI deploy job last shipped (its .last-deployed-sha marker,
+    # read through the read-only repo mount) vs. the newest commit on main whose
+    # CI passed, from the GitHub REST API. Feeds the DeployDrift alert.
+    # "owner/name" of the repo the CI deploys from; empty = check off.
+    deploy_drift_repo: str = ""
+    deploy_marker_path: str = "/opt/gateway_mvp/.last-deployed-sha"
+    # Optional. Unauthenticated works for a public repo (60 requests/h per
+    # public IP, shared with the LAN; the check uses ~6/h, up to ~42/h during
+    # bursts of pushes). A fine-grained token with public-repo read-only access
+    # and no permissions raises that to 5000/h. Only ever sent to api.github.com.
+    deploy_drift_github_token: str = ""
+
     # ---- Computed properties ---------------------------------------------------
 
     @property
@@ -810,6 +823,25 @@ class Settings(BaseSettings):
         object.__setattr__(
             self, "self_audit_investigate_max_seconds", min(max(self.self_audit_investigate_max_seconds, 60), 1800)
         )
+        return self
+
+    @model_validator(mode="after")
+    def validate_deploy_drift_config(self) -> "Settings":
+        """Turn the deploy drift check off on a malformed repo. The value is
+        interpolated into GitHub API paths. Log + disable, never raise."""
+        import logging
+        import re
+
+        repo = self.deploy_drift_repo.strip()
+        if repo and (
+            not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}", repo)
+            or repo.split("/")[1] in (".", "..")
+        ):
+            logging.getLogger(__name__).error(
+                "[CONFIG] DEPLOY_DRIFT_REPO must be 'owner/name'; disabling the deploy drift check."
+            )
+            repo = ""
+        object.__setattr__(self, "deploy_drift_repo", repo)
         return self
 
     @model_validator(mode="after")

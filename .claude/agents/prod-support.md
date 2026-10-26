@@ -310,7 +310,11 @@ Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or 
 |--------|------|--------|---------|
 | `bgw_temperature_fahrenheit` | Gauge | location | Sensor readings (closet, kitchen) |
 | `bgw_temperature_delta_fahrenheit` | Gauge | | Closet − kitchen delta |
-| `bgw_build` | Info | | Build info (version, commit) |
+| `bgw_deployed_commit_info` | Gauge | commit | Commit the CI deploy job last shipped (`.last-deployed-sha`); one series |
+| `bgw_deployed_commit_timestamp_seconds` | Gauge | | Deploy marker mtime |
+| `bgw_deploy_undeployed_green_commits` | Gauge | | Newer green pushes to main not deployed (0 = in sync, NaN = unknown) |
+| `bgw_deploy_undeployed_green_since_timestamp_seconds` | Gauge | | CI-pass time of the oldest undeployed green commit (`DeployDrift`) |
+| `bgw_deploy_drift_check_total` | Counter | result | Drift check outcomes (`DeployDriftCheckFailing`) |
 
 ### Adding New Metrics
 
