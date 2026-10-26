@@ -14,11 +14,20 @@ REQUEST_COUNT = Counter(
     ["mode"],  # unified, unified_fallback, fast_path
 )
 
+# Whole chat turn. A real-streamed turn is observed when its SSE stream ends
+# (cloud_brain _stream_loop_response), tool rounds included, and counts in
+# ACTIVE_REQUESTS until then; before 2026-10-25 both were recorded when the
+# StreamingResponse was returned, before the loop ran. A client that hangs up
+# mid-reply records the shorter time; one gone before the stream starts
+# records nothing, so _count can sit slightly under bgw_requests_total.
+# Whole turns mostly take 2-13 s, so the buckets follow the voice-pipeline
+# edges there (a 10 -> 30 gap read a 12 s turn as p95 ~28 s); 10 and 30 stay
+# edges for the Grafana thresholds and HighRequestLatency.
 REQUEST_LATENCY = Histogram(
     "bgw_request_duration_seconds",
     "End-to-end request latency",
     ["mode"],
-    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 13.0, 17.0, 22.0, 30.0, 45.0, 60.0, 120.0, 300.0],
 )
 
 REQUEST_ERRORS = Counter(
@@ -936,6 +945,24 @@ AUTO_LEARN_DUPLICATES_SKIPPED = Counter(
     "Facts skipped by auto-learn dedup",
 )
 
+# Facts that passed every filter but were cut by AUTO_LEARN_MAX_FACTS. Steady
+# growth means the cap is losing real facts from long conversations.
+AUTO_LEARN_FACTS_CAPPED = Counter(
+    "bgw_auto_learn_facts_capped_total",
+    "Extracted facts dropped by the AUTO_LEARN_MAX_FACTS cap (per extraction window)",
+)
+
+# update_memory: older facts replaced by a correction, and replacements it
+# held back because the new text wasn't about the same thing.
+MEMORY_FACTS_REPLACED = Counter(
+    "bgw_memory_facts_replaced_total",
+    "Facts deleted by update_memory as superseded by a correction",
+)
+MEMORY_REPLACE_SKIPPED = Counter(
+    "bgw_memory_replace_skipped_total",
+    "update_memory search hits kept because the correction text did not match them",
+)
+
 AUTO_LEARN_SENSITIVE_FILTERED = Counter(
     "bgw_auto_learn_sensitive_filtered_total",
     "Facts rejected by sensitive data filter",
@@ -999,7 +1026,8 @@ AUTO_LEARN_REARMED = Counter(
 AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
     "bgw_auto_learn_extraction_duration_seconds",
     "Auto-learn extraction pipeline latency",
-    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0],
+    # 120/300: a long conversation is extracted in up to 4 windows (~20 s each).
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
 )
 
 # -- Brain Dump ---------------------------------------------------------------

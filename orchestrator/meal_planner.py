@@ -476,7 +476,7 @@ async def _ask(
 
     ``wait_for_idle=False`` for calls made from inside a chat turn (swap via
     the meal_plan tool / dashboard): that turn is itself counted in
-    ACTIVE_REQUESTS on non-streaming paths (HA Assist, Telegram), so waiting
+    ACTIVE_REQUESTS (streamed turns until their stream ends), so waiting
     for "idle" would wait on itself for the full CHAT_IDLE_WAIT_S. A tool runs
     between the turn's model rounds, when the slot is free anyway.
     """

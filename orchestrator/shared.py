@@ -170,6 +170,11 @@ CHROMA_PERSIST = settings.chroma_persist
 CHROMA_COLLECTION = settings.palace_collection
 MIN_COS = settings.min_cos
 TOP_K = settings.top_k
+MEMORY_FACT_MIN_COS = settings.memory_fact_min_cos
+MEMORY_SEARCH_MIN_COS = settings.memory_search_min_cos
+# Collection `source` values that are short facts about the user (as opposed to
+# document chunks, vault entries or audit notes).
+MEMORY_FACT_SOURCES = ("auto_learn", "user_correction")
 
 chroma = chromadb.PersistentClient(
     path=os.path.expanduser(CHROMA_PERSIST),
