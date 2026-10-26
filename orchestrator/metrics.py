@@ -1619,6 +1619,32 @@ HA_DEVICE_SETTING_REFUSED = Counter(
 for _p in ("tool", "nlp"):
     for _s in ("registry", "name", "member"):
         HA_DEVICE_SETTING_REFUSED.labels(path=_p, source=_s)
+# Chat-model home_assistant calls refused before execution because the user's
+# message showed no device intent (ha_intent). domain: the call's entity
+# domain, "other" when it isn't a listed one.
+HA_UNREQUESTED_BLOCKED = Counter(
+    "bgw_ha_unrequested_blocked_total",
+    "home_assistant calls from the chat model refused because the user didn't ask for a device change",
+    ["domain"],
+)
+for _d in ("light", "switch", "fan", "climate", "cover", "scene", "lock", "media_player", "other"):
+    HA_UNREQUESTED_BLOCKED.labels(domain=_d)
+# Every gate decision on a chat-model home_assistant call. result: allowed |
+# blocked | shadow (HA_INTENT_GATE=shadow: would block, executed anyway).
+# via (allowed): verb | device_word | name | short | confirmed — which signal
+# counted as the user asking; via (blocked/shadow): none | untrusted_content
+# (only an explicit request counts once web/mail/memory/... text was read).
+# Allowed via=confirmed soon after blocks = the gate cost the user a question.
+HA_INTENT_DECISION = Counter(
+    "bgw_ha_intent_decision_total",
+    "Decisions of the did-the-user-ask gate on chat-model home_assistant calls",
+    ["result", "via"],
+)
+for _v in ("verb", "device_word", "name", "short", "confirmed"):
+    HA_INTENT_DECISION.labels(result="allowed", via=_v)
+for _r in ("blocked", "shadow"):
+    for _v in ("none", "untrusted_content"):
+        HA_INTENT_DECISION.labels(result=_r, via=_v)
 
 # ---------------------------------------------------------------------------
 # Document vault — photo name suggestion (routes_documents)

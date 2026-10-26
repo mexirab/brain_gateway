@@ -128,9 +128,11 @@ Requires the wizard's Home Assistant integration.
 |----------|--------------|
 | "Turn off the bedroom lights" | Controls any HA device |
 | "Set the office fan to 50%" | Brightness, temperature, scenes |
-| "Movie time" | Triggers a scene if you have one named "movie" or similar |
+| "Movie time please" / "Turn on movie time" | Triggers a scene if you have one named "movie" or similar (a bare "Movie time" gets a "want me to…?" first) |
 
 The assistant infers entity IDs from natural language; it doesn't need exact HA syntax.
+
+Jess only changes a device when your message asks for it. Hints ("I'm cold", "it's dark in here") or anything she read in an email, web page or photo get a question instead — "Want me to turn up the heat?" — and "yes" does it.
 
 ---
 
