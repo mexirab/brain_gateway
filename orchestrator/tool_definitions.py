@@ -1569,6 +1569,30 @@ STATIC_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "look_it_up",
+            "description": (
+                "Ask a research helper to look something up in current documentation and on the web, when your "
+                "own knowledge may be missing or out of date (a library's current API, an error message, a "
+                "recent version, a config option). Slow (up to ~1 min) — answer directly when you already know. "
+                "Returns a summary with sources, framed as untrusted. The question leaves the house: put ONLY "
+                "the technical question in it — never names, health, money, schedule or other personal details."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The self-contained technical question (max 400 characters).",
+                    },
+                    "topic": {"type": "string", "enum": ["coding"], "description": "Which kind of sources to use."},
+                },
+                "required": ["question", "topic"],
+            },
+        },
+    },
 ]
 
 # Expert model tool — added dynamically when enabled
@@ -1644,6 +1668,10 @@ PAPERLESS_TOOL_NAMES: frozenset[str] = frozenset({"paperless_save", "paperless_s
 # on incomplete config); the handler stays registered and self-gates.
 GRIST_TOOL_NAMES: frozenset[str] = frozenset({"spreadsheet"})
 
+# Research helper — hidden unless RESEARCH_HELPER_ENABLED; the handler stays
+# registered and self-gates. Not in the voice subset (a lookup takes ~1 min).
+RESEARCH_TOOL_NAMES: frozenset[str] = frozenset({"look_it_up"})
+
 # Assembled tool-list cache. Rebuilt only when the HA tool cache refreshes
 # (every ~5 min) or a feature flag flips — get_all_tools/get_voice_tools are
 # called on every LLM round, including tool-continuation rounds. The cache key
@@ -1666,6 +1694,7 @@ def _refresh_tool_caches() -> None:
         getattr(shared, "HELIOS_WAKE_ENABLED", False),
         getattr(shared, "PAPERLESS_ENABLED", False),
         getattr(shared, "GRIST_ENABLED", False),
+        getattr(shared, "RESEARCH_HELPER_ENABLED", False),
     )
     if key != _tools_cache_key:
         static = STATIC_TOOLS
@@ -1683,6 +1712,8 @@ def _refresh_tool_caches() -> None:
             static = [t for t in static if t.get("function", {}).get("name") not in PAPERLESS_TOOL_NAMES]
         if not getattr(shared, "GRIST_ENABLED", False):
             static = [t for t in static if t.get("function", {}).get("name") not in GRIST_TOOL_NAMES]
+        if not getattr(shared, "RESEARCH_HELPER_ENABLED", False):
+            static = [t for t in static if t.get("function", {}).get("name") not in RESEARCH_TOOL_NAMES]
         tools = [ha_tool] + static
         if shared.EXPERT_ENABLED and shared.JESS_ADVANCED:
             tools.append(_EXPERT_TOOL)

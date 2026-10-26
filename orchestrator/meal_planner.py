@@ -343,10 +343,12 @@ async def _wait_for_idle_chat() -> None:
     """Interactive chat and the planner share one model slot. Let any chat
     request in flight finish first (bounded) so a planner call never makes the
     user wait — including the chat turn that asked for the plan."""
+    from orchestrator.research_helper import lookup_active
+
     deadline = time.monotonic() + CHAT_IDLE_WAIT_S
     while time.monotonic() < deadline:
         try:
-            if ACTIVE_REQUESTS._value.get() <= 0:
+            if ACTIVE_REQUESTS._value.get() <= 0 and not lookup_active():
                 return
         except Exception:
             return

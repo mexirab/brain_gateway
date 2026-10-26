@@ -2166,6 +2166,15 @@ async def _spreadsheet_call(action: str, coro) -> dict:
         return {"success": False, "error": reason}
 
 
+@register_tool("look_it_up")
+async def _reg_look_it_up(arguments: dict) -> str:
+    """Sandboxed research helper (research_helper.py): own tool loop over
+    read-only docs/web sources, no personal context; self-gates when off."""
+    from orchestrator import research_helper
+
+    return await research_helper.look_it_up(arguments.get("question"), arguments.get("topic"))
+
+
 @register_tool("spreadsheet")
 async def _reg_spreadsheet(arguments: dict) -> str:
     """Read/append/edit rows in allow-listed Grist documents (grist_client).

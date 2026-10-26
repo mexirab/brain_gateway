@@ -1700,3 +1700,29 @@ WEBPUSH_SUBSCRIPTIONS = Gauge(
     "bgw_webpush_subscriptions",
     "Devices currently subscribed to Web Push",
 )
+
+# Research helper (orchestrator/research_helper.py, `look_it_up`) — default off.
+# result: ok | retry_ok (empty first reply, the no-tools retry answered) | budget (answered
+#         after the time/tool budget ran out) | no_answer | brain_error | timeout (outer cap) |
+#         cancelled (chat client went away) | error | busy | rate_limited | bad_request |
+#         disabled | screened_<secret|contact|private_host|private_address|path|personal>
+RESEARCH_LOOKUPS_TOTAL = Counter(
+    "bgw_research_lookups_total",
+    "look_it_up research-helper lookups",
+    ["topic", "result"],
+)
+# tool: web_search | read_page | library_docs | unknown
+# result: ok | empty | refused (read_page: non-public address, bad URL, non-text, HTTP error,
+#         bad encoding) | not_from_results (read_page: URL not from this lookup's results) |
+#         error | timeout | rate_limited | denied | duplicate | capped
+RESEARCH_LOOKUP_DURATION = Histogram(
+    "bgw_research_lookup_duration_seconds",
+    "Wall time of a look_it_up lookup (the chat turn waits on it)",
+    ["topic"],
+    buckets=(5, 10, 20, 30, 45, 60, 75, 90, 105, 120),
+)
+RESEARCH_SOURCE_CALLS_TOTAL = Counter(
+    "bgw_research_source_calls_total",
+    "Source-tool calls made by the research helper",
+    ["tool", "result"],
+)

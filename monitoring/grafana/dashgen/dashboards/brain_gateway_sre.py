@@ -1468,6 +1468,44 @@ def build() -> dict:
     row, y = grid_row(inbox_row, y, heights=[8, 8, 8, 8])
     panels.extend(row)
 
+    # ------------------------------------------------- Research Helper (look_it_up)
+    # Jess's sandboxed research helper (research_helper.py, off by default):
+    # its own tool loop over Context7 / SearXNG / public pages, inside the chat
+    # turn. Duration is what the user waits; screened_* = questions refused for
+    # personal/system details; not_from_results = read_page refused a URL the
+    # lookup's own results didn't produce (an injected page trying to exfiltrate).
+    r, y = row_divider("Research Helper (look_it_up)", y)
+    panels.append(r)
+    research_row = [
+        timeseries(
+            "Lookups by Result (6h)",
+            [("sum by (result) (increase(bgw_research_lookups_total[6h]))", "{{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Lookup Duration p50 / p95 (6h)",
+            [
+                (
+                    "histogram_quantile(0.5, sum by (le) (rate(bgw_research_lookup_duration_seconds_bucket[6h])))",
+                    "p50",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (le) (rate(bgw_research_lookup_duration_seconds_bucket[6h])))",
+                    "p95",
+                ),
+            ],
+            unit="s",
+            description="Wall time of a lookup; the chat turn shows nothing meanwhile. Budget 75 s.",
+        ),
+        timeseries(
+            "Source Calls by Tool / Result (6h)",
+            [("sum by (tool, result) (increase(bgw_research_source_calls_total[6h]))", "{{tool}} / {{result}}")],
+            unit="none",
+        ),
+    ]
+    row, y = grid_row(research_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Telegram Bot
     # The away-from-home surface: inbound updates, media (voice→STT / photo→vision
     # / spoken walkie-talkie reply), and Done/Snooze button taps. The callback

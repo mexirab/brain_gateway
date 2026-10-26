@@ -220,6 +220,18 @@ Styles: calm, gentle, soothing, quiet, warm, thoughtful, encouraging, upbeat, pr
 
 ---
 
+## Looking things up (optional)
+
+Off unless `RESEARCH_HELPER_ENABLED=true` in `.env`. Text chat only, not voice.
+
+| Say this | What happens |
+|----------|--------------|
+| "Look up how to do X in the latest version of <library>" / "What does this error mean: …" | Jess hands the technical question to a research helper that checks current docs (Context7) and the web, then answers with sources. Usually 10–15 s, up to about a minute; the chat shows nothing meanwhile. For questions Jess already knows, she just answers |
+
+The question leaves the house, so the helper never sees your memory, meds or calendar, and questions containing your name, medication names, email addresses, phone numbers, passwords/keys or home-network addresses are refused. Answers can still be wrong in details — check the listed sources before running a command.
+
+---
+
 ## Workouts (optional)
 
 | Say this | What happens |

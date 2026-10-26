@@ -467,6 +467,27 @@ groups:
           summary: "Grist spreadsheet server is down"
           description: "Grist (container grist, probed over grist-probe-net) has failed its HTTP probe for 5 minutes. The spreadsheet UI and Jess's spreadsheet tool are down. Check `docker logs grist` and `cd ~/gateway_nerves/grist && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
 
+      - alert: ResearchHelperFailing
+        # look_it_up (research_helper.py) keeps failing with no success: the
+        # brain, its budget or every source is broken. Silent when unused.
+        expr: (sum(increase(bgw_research_lookups_total{result=~"brain_error|error|timeout|no_answer"}[24h])) >= 3) unless (sum(increase(bgw_research_lookups_total{result=~"ok|retry_ok|budget"}[24h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jess's research helper (look_it_up) has failed every lookup today"
+          description: "At least 3 look_it_up lookups failed in the last 24h and none answered. See `sum by (result) (increase(bgw_research_lookups_total[24h]))`, `bgw_research_source_calls_total` and `docker logs brain-orchestrator 2>&1 | grep '\\[RESEARCH\\]'`. timeout/brain_error = the brain (Helios) is slow or busy; no_answer = the model returns nothing. Turn it off with RESEARCH_HELPER_ENABLED=false + `docker compose up -d --force-recreate orchestrator`."
+      - alert: ResearchSourceFailing
+        # One source (library_docs = Context7, web_search = SearXNG, read_page)
+        # keeps failing with no success.
+        expr: (sum by (tool) (increase(bgw_research_source_calls_total{result=~"error|timeout"}[24h])) >= 5) unless on(tool) (sum by (tool) (increase(bgw_research_source_calls_total{result="ok"}[24h])) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Research helper source {{ $labels.tool }} is failing"
+          description: "Every {{ $labels.tool }} call from look_it_up failed in the last 24h. library_docs = Context7 (context7.com: an 'unavailable' answer means its API changed; a key is set with RESEARCH_CONTEXT7_API_KEY), web_search = local SearXNG (`docker logs searxng`), read_page = outbound HTTPS from Jupiter. `docker logs brain-orchestrator 2>&1 | grep '\\[RESEARCH\\]'`."
+
   # ===========================================================================
   # UPS / Power Chain
   # ===========================================================================
