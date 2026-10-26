@@ -10,6 +10,7 @@ Replaces plain text logging with JSON lines. Each log entry includes:
 
 import json
 import logging
+import re
 import uuid
 from contextvars import ContextVar
 from typing import Any, Dict
@@ -90,6 +91,12 @@ def content_shape(text: Any) -> str:
     return "text"
 
 
+# Where the query text starts in an access line's path: a "?", or one the
+# client percent-encoded. uvicorn re-quotes the decoded path, so a "%3F" sent
+# by the client is logged as "%3F" and a "%253F" as "%253F", text following.
+_QUERY_START_RE = re.compile(r"\?|%(?:25)*3f", re.IGNORECASE)
+
+
 class StripQueryStringFilter(logging.Filter):
     """Uvicorn access lines: drop the query string. Search endpoints carry the
     user's search text there (?search=, ?query=), and access lines go to Loki."""
@@ -97,8 +104,10 @@ class StripQueryStringFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
         # uvicorn.access args: (client_addr, method, full_path, http_version, status_code)
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "?" in args[2]:
-            record.args = args[:2] + (args[2].split("?", 1)[0] + "?…",) + args[3:]
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            start = _QUERY_START_RE.search(args[2])
+            if start:
+                record.args = args[:2] + (args[2][: start.start()] + "?…",) + args[3:]
         return True
 
 

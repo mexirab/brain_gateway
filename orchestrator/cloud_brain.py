@@ -325,7 +325,7 @@ class CloudBrain:
 
         try:
             return await self._chat_unified_inner(
-                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice
+                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice, started_at=_t0
             )
         except Exception as e:
             REQUEST_ERRORS.labels(mode="unified", error_type=type(e).__name__).inc()
@@ -333,9 +333,13 @@ class CloudBrain:
         finally:
             elapsed = time.time() - _t0
             ACTIVE_REQUESTS.dec()
-            REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
-            if is_voice:
-                VOICE_PIPELINE_LATENCY.observe(elapsed)
+            # A real-streamed turn returns before the loop has run; its
+            # generator counts it as active and records the request and voice
+            # latency when the stream ends.
+            if routing_info.get("streaming") != "real":
+                REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
+                if is_voice:
+                    VOICE_PIPELINE_LATENCY.labels(path="buffered").observe(elapsed)
 
     async def _chat_unified_inner(
         self,
@@ -346,6 +350,7 @@ class CloudBrain:
         user_text: str,
         routing_info: Dict,
         is_voice: bool = False,
+        started_at: Optional[float] = None,
     ) -> Any:
         """Inner unified flow (separated for clean metrics wrapping)."""
         # First, so no path below (the health-check fallback included) can
@@ -451,7 +456,7 @@ class CloudBrain:
                     logger.warning("[UNIFIED] Primary unavailable, using fallback")
                     routing_info["fallback"] = "fallback_model"
                     REQUEST_COUNT.labels(mode="unified_fallback").inc()
-                    return await self._unified_fallback(messages, system_prompt, stream, routing_info)
+                    return await self._unified_fallback(messages, system_prompt, stream, routing_info, is_voice)
                 logger.error("[UNIFIED] No model available")
                 REQUEST_ERRORS.labels(mode="unified", error_type="model_unavailable").inc()
                 return self._brain_asleep_response(stream, routing_info)
@@ -514,6 +519,7 @@ class CloudBrain:
                 model_url=model_url,
                 model_name=model_name,
                 is_voice=is_voice,
+                started_at=started_at,
             )
 
         try:
@@ -532,7 +538,7 @@ class CloudBrain:
             if self._fallback_model_url:
                 routing_info["fallback"] = "fallback_model"
                 REQUEST_COUNT.labels(mode="unified_fallback").inc()
-                return await self._unified_fallback(messages, system_prompt, stream, routing_info)
+                return await self._unified_fallback(messages, system_prompt, stream, routing_info, is_voice)
             return JSONResponse({"error": "Service temporarily unavailable"}, status_code=503)
 
         self._schedule_auto_learn(messages)
@@ -559,9 +565,13 @@ class CloudBrain:
         )
 
     async def _unified_fallback(
-        self, messages: List[Dict], system_prompt: str, stream: bool, routing_info: Dict
+        self, messages: List[Dict], system_prompt: str, stream: bool, routing_info: Dict, is_voice: bool = False
     ) -> Any:
-        """Fallback to secondary model using the same unified loop."""
+        """Fallback to secondary model using the same unified loop.
+
+        is_voice keeps the voice generation settings and tool budgets (the 5 s
+        web_search deadline) on the fallback model too; the tool list stays
+        the full one, as on the streamed fallback."""
         logger.info("[UNIFIED-FALLBACK] Using fallback model: %s", self._fallback_model_name)
         try:
             result = await self._run_unified_loop(
@@ -571,6 +581,7 @@ class CloudBrain:
                 model_url=self._fallback_model_url,
                 model_name=self._fallback_model_name,
                 http_client=None,
+                is_voice=is_voice,
             )
         except Exception as e:
             logger.error("[UNIFIED-FALLBACK] Fallback also failed: %s", e)
@@ -852,9 +863,15 @@ class CloudBrain:
         model_url: str,
         model_name: str,
         is_voice: bool,
+        started_at: Optional[float] = None,
     ):
         """Real streaming: run the unified loop in a producer task and relay
         its gate-safe deltas as OpenAI SSE chunks while it executes.
+
+        started_at is when the request reached _chat_unified: the turn records
+        bgw_request_duration_seconds (and, for voice, bgw_voice_pipeline_seconds)
+        from it when the stream ends, and counts in bgw_active_requests while
+        the stream runs.
 
         Semantics parity with the buffered path:
         - Loop failure with NOTHING emitted yet → try the fallback model
@@ -943,24 +960,31 @@ class CloudBrain:
                 + "\n\n"
             )
 
+        ttft = CHAT_TTFT.labels(voice="true" if is_voice else "false")
+
         async def generate():
             task = asyncio.create_task(producer())
             emitted = False
             t0 = time.time()
+            # _chat_unified stopped counting the turn when it returned this
+            # response; count it again while the stream runs. Counted here, not
+            # carried over, so a stream that never starts (client gone before
+            # the first chunk) can't leave the gauge stuck high.
+            ACTIVE_REQUESTS.inc()
             try:
                 while True:
                     kind, payload = await queue.get()
                     if kind == "delta":
                         if not emitted:
                             emitted = True
-                            CHAT_TTFT.observe(time.time() - t0)
+                            ttft.observe(time.time() - t0)
                         yield _sse({"content": payload})
                     elif kind == "final":
                         # Fully-buffered turns (fallback model, non-stream-capable
                         # backend edge cases) produced no deltas — send the whole
                         # answer as one chunk so behavior matches _stream_text.
                         if not emitted and payload:
-                            CHAT_TTFT.observe(time.time() - t0)
+                            ttft.observe(time.time() - t0)
                             yield _sse({"content": payload})
                         yield _sse({}, finish_reason="stop")
                         yield "data: [DONE]\n\n"
@@ -979,8 +1003,17 @@ class CloudBrain:
                 # retrieved".
                 if not task.done():
                     task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                finally:
+                    # Stream over (answered, failed or client gone): the whole
+                    # turn, tool rounds included.
+                    elapsed = time.time() - (started_at if started_at is not None else t0)
+                    ACTIVE_REQUESTS.dec()
+                    REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
+                    if is_voice:
+                        VOICE_PIPELINE_LATENCY.labels(path="streamed").observe(elapsed)
 
         return StreamingResponse(
             generate(),

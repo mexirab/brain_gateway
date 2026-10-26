@@ -13,6 +13,7 @@ Usage:
 """
 
 import asyncio
+import functools
 import hashlib
 import logging
 import re
@@ -32,6 +33,50 @@ from orchestrator.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Fact categories that describe the user's own life (see MemPalace.route_fact).
+# Covers the auto-learn extractor's labels and update_memory's enum.
+PERSONAL_FACT_CATEGORIES = frozenset(
+    {
+        "identity",
+        "work",
+        "career",
+        "education",
+        "relationship",
+        "relationships",
+        "family",
+        "history",
+        "background",
+        "biography",
+        "emotion",
+        "goal",
+        "goals",
+        "finance",
+        "health",
+        "routine",
+    }
+)
+# The subset that says who the user is; filed in personal/identity, which the
+# wakeup block reads first, so Jess knows the basics without a search.
+IDENTITY_FACT_CATEGORIES = frozenset({"identity", "work", "career", "education", "history", "background", "biography"})
+
+
+@functools.lru_cache(maxsize=512)
+def _keyword_re(keyword: str) -> "re.Pattern[str]":
+    """Whole word plus common inflections: "prefer" → "preferred"/"preference",
+    "plan" → "planning", "family" → "families" — never another word that merely
+    starts or contains it ("lora" ≠ "exploration", "port" ≠ "Portland", "med" ≠ "media")."""
+    kw = keyword.lower()
+    # Optional doubled last letter before a suffix (prefer-r-ed, plan-n-ing).
+    forms = re.escape(kw) + re.escape(kw[-1:]) + r"?(?:s|es|d|ed|ing|er|ers|ence|ences|ment|ments)?"
+    if kw.endswith("y"):
+        forms += "|" + re.escape(kw[:-1]) + "ies"
+    return re.compile(r"\b(?:" + forms + r")\b")
+
+
+# The wakeup block is in every prompt: one entry may not take over its budget,
+# and longer text isn't filed under personal/identity in the first place.
+WAKEUP_ENTRY_MAX_CHARS = 300
 
 
 class MemPalace:
@@ -353,16 +398,46 @@ class MemPalace:
                 return "brain_gateway", ""
 
         # 3. Keyword fallback — score each wing/room by keyword hits
+        return self._best_keyword_room(text_lower)
+
+    def route_fact(self, text: str, category: str = "") -> Tuple[str, str]:
+        """Route a conversation fact about the user (auto-learn, update_memory).
+
+        A fact in a category about the user's own life always lands in the
+        `personal` wing, whatever its words happen to match elsewhere (an
+        employer like "Acme Systems" hit brain_gateway/architecture's "system").
+        Background facts (IDENTITY_FACT_CATEGORIES, at most
+        WAKEUP_ENTRY_MAX_CHARS long) go to personal/identity;
+        for the rest the room is picked by keyword. Other categories route
+        as usual.
+        """
+        category = str(category or "").lower().strip()
+        if category in IDENTITY_FACT_CATEGORIES and len(text.strip()) <= WAKEUP_ENTRY_MAX_CHARS:
+            rooms = (self._config.get("wings", {}).get("personal") or {}).get("rooms") or {}
+            if "identity" in rooms:
+                return "personal", "identity"
+        if category in PERSONAL_FACT_CATEGORIES:
+            return "personal", self._best_keyword_room(text.lower(), only_wing="personal")[1]
+        return self.route_to_room(text)
+
+    def _best_keyword_room(self, text_lower: str, only_wing: str = "") -> Tuple[str, str]:
+        """Wing/room with the most keyword hits; ("personal", "") if none.
+
+        Keywords match as whole words with common inflections (_keyword_re); as
+        plain substrings "lora" matched "exploration" and "ip" matched "trip".
+        """
         wings = self._config.get("wings", {})
-        best_wing = "personal"
+        best_wing = only_wing or "personal"
         best_room = ""
         best_score = 0
 
         for wing_name, wing_data in wings.items():
-            rooms = wing_data.get("rooms", {})
+            if only_wing and wing_name != only_wing:
+                continue
+            rooms = wing_data.get("rooms") or {}
             for room_name, room_data in rooms.items():
-                keywords = room_data.get("keywords", [])
-                score = sum(1 for kw in keywords if kw in text_lower)
+                keywords = (room_data or {}).get("keywords") or []
+                score = sum(1 for kw in keywords if _keyword_re(str(kw)).search(text_lower))
                 if score > best_score:
                     best_score = score
                     best_wing = wing_name
@@ -424,7 +499,7 @@ class MemPalace:
 
     def generate_wakeup_context(self) -> str:
         """
-        Generate a compressed identity block (~170 tokens) from priority rooms.
+        Generate a compressed identity block (wakeup.max_tokens) from priority rooms.
 
         Cached and refreshed every 30 minutes or on new store.
         """
@@ -438,11 +513,16 @@ class MemPalace:
             return self._wakeup_cache
 
         priority_rooms = wakeup_cfg.get("priority_rooms", [])
+        room_limits = wakeup_cfg.get("room_limits") or {}
+        if not isinstance(room_limits, dict):
+            logger.warning("[PALACE] wakeup.room_limits must be a mapping of room → count; ignoring it")
+            room_limits = {}
         max_tokens = wakeup_cfg.get("max_tokens", 170)
         # Rough chars-per-token estimate
         max_chars = max_tokens * 4
 
         lines = []
+        per_room: Dict[str, int] = {}
         for room_path in priority_rooms:
             parts = room_path.split("/")
             if len(parts) != 2:
@@ -450,20 +530,38 @@ class MemPalace:
             wing, room = parts
 
             try:
-                where_filter: Dict[str, Any] = {"$and": [{"wing": wing}, {"room": room}]}
-                results = self._collection.get(
-                    where=where_filter,
-                    limit=5,
-                    include=["documents", "metadatas"],
+                try:
+                    limit = int(room_limits.get(room_path, 5))
+                except (TypeError, ValueError):
+                    logger.warning("[PALACE] wakeup.room_limits[%s] is not a number; using 5", room_path)
+                    limit = 5
+                # Facts only (auto-learn, update_memory): text other writers put in
+                # these rooms (palace_store, /api/palace/store) never reaches
+                # every prompt through here.
+                where_filter: Dict[str, Any] = {
+                    "$and": [{"wing": wing}, {"room": room}, {"source": {"$in": list(shared.MEMORY_FACT_SOURCES)}}]
+                }
+                results = self._collection.get(where=where_filter, include=["documents", "metadatas"])
+                # Newest first (get() returns insertion order): a correction or a
+                # newly learned fact must not sit behind the first `limit` ever stored.
+                rows = sorted(
+                    zip(results.get("documents") or [], results.get("metadatas") or [], strict=False),
+                    key=lambda r: str((r[1] or {}).get("learned_at") or (r[1] or {}).get("updated_at") or ""),
+                    reverse=True,
                 )
-                docs = results.get("documents", [])
-                doc_metas = results.get("metadatas", [])
-                for doc, dmeta in zip(docs, doc_metas, strict=False):
+                taken = 0
+                for doc, dmeta in rows:
+                    if taken >= limit:
+                        break
                     if doc:
-                        text = maybe_decrypt(doc, dmeta)
+                        text = maybe_decrypt(doc, dmeta).strip()
+                        if len(text) > WAKEUP_ENTRY_MAX_CHARS:
+                            text = text[:WAKEUP_ENTRY_MAX_CHARS].rstrip() + "…"
                         lines.append(f"- {text}")
+                        taken += 1
+                per_room[room_path] = taken
             except Exception as e:
-                logger.debug("[PALACE] Wakeup context fetch failed for %s: %s", room_path, e)
+                logger.warning("[PALACE] Wakeup context fetch failed for %s: %s", room_path, type(e).__name__)
 
         if not lines:
             self._wakeup_cache = ""
@@ -474,10 +572,22 @@ class MemPalace:
         context = "\n".join(lines)
         if len(context) > max_chars:
             context = context[:max_chars].rsplit("\n", 1)[0]
+        # log-safe: sizes and configured room names only
+        logger.info(
+            "[PALACE] Wakeup context refreshed: %d chars, %d of %d entries (%s)",
+            len(context),
+            context.count("\n") + 1,
+            len(lines),
+            ", ".join(f"{k}={v}" for k, v in per_room.items()),
+        )
 
         self._wakeup_cache = context
         self._wakeup_cache_time = time.time()
         return context
+
+    def invalidate_wakeup_cache(self):
+        """For writers that bypass store()/delete() (auto-learn, update_memory)."""
+        self._invalidate_wakeup_cache()
 
     def _invalidate_wakeup_cache(self):
         """Invalidate the wakeup context cache (called after store/delete)."""

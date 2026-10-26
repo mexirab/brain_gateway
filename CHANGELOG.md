@@ -4,6 +4,84 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — bearer-auth public-path hardening (2026-10-26)
+
+### Security
+
+- `BearerAuthMiddleware` used `startswith()` on `/api/audio/`, `/api/reminder/ack/`, `/api/reminder/snooze/`. uvicorn percent-decodes paths, so `/api/audio/..%2f..%2fmemory%2flearned` skipped the bearer check (it 404'd here, but any path-normalizing layer in front would have made it a bypass). Now `is_public_path` exempts exact `/health` or one segment after a prefix that passes `bearer_auth.is_public_segment` (`[A-Za-z0-9._-]+`, not `.`/`..`); everything else gets 401 without a token.
+- The middleware decides on the routed `scope["path"]` (public check + `WEBHOOK_TOKEN_PATHS`), not `request.url.path`, which drops decoded `\t`/`\r`/`\n`.
+- `reminder_manager._build_callback_url` warns when a minted reminder id falls outside the charset (its taps would 401). All current id formats fit.
+- New `tests/test_auth_public_paths.py`: traversal matrix via raw ASGI scopes, pinned prefix set, one-segment route shapes, no OPTIONS/websocket/mounted routes. Rule: `TECHNICAL_REFERENCE.md` → Tokenless paths.
+- `OPTIONS` skips the bearer check only as a real CORS preflight (`Origin` + `Access-Control-Request-Method`, which `CORSMiddleware` answers without a route); other `OPTIONS` get 401 without a token (was 405 from the router).
+- `RequestSizeLimitMiddleware` + `RateLimitMiddleware` look up `_routed_path()` (`scope["path"]` minus one trailing `\n`) instead of `request.url.path`: `/metrics%09` is no longer rate-limit exempt, `/api/self_audit/alert%0a` keeps its 411 + 64 KB cap. The 16 MB / 100 MB upload caps apply to POST only. See `TECHNICAL_REFERENCE.md` → Body-size + rate limits.
+- `ha_guard`: `play_media` of `{ORCHESTRATOR_URL}/api/audio/<file>` needs `<file>` to pass `is_public_segment` (encoded traversal, a second segment, `?`/`#` refused).
+- `StripQueryStringFilter` also cuts access-line paths at a client-encoded `%3F` (any case, `%253F`…): uvicorn logs the re-quoted path, so query text followed it.
+
+---
+
+## [Unreleased] — Memory recall fix (2026-10-26)
+
+Branch `fix/memory-recall`. After a long voice conversation about the user's past, Jess could not recall it although auto_learn had stored facts from it. Detail: `docs/MEMPALACE.md`.
+
+### Orchestrator
+
+- **Retrieval floors:** fact docs (`source` `auto_learn` / `user_correction`, `shared.MEMORY_FACT_SOURCES`) get `MEMORY_FACT_MIN_COS` (0.35) per turn and `MEMORY_SEARCH_MIN_COS` (0.30) in `search_memory` + `GET /api/memory/search`, never above `MIN_COS`. Short facts score ~0.35–0.45 against the question they answer, so the 0.50 document floor hid all of them. Document chunks keep `MIN_COS`. `file_marker` rows and undecryptable rows are skipped; the 100-char minimum now applies to ingested file chunks only (10 for memories), measured on decrypted text.
+- `search_memory`: an empty wing/room-filtered search retries once unfiltered.
+- **Fact routing:** new room `personal/identity` (`data/palace.yaml`, no keywords). `MemPalace.route_fact` files background facts (identity, work, career, education, history, background, biography; ≤300 chars) there and other personal categories in `personal`; used by auto_learn and `update_memory`. Keyword routing matches whole words + inflections (substrings like "lora" in "exploration" no longer match).
+- **Wakeup / IDENTITY CONTEXT block:** moved first after the dynamic marker (stays in the llama.cpp cached prefix), relabelled as facts that may be outdated, `personal/identity` first with up to 25 entries, `max_tokens` 170 → 600, fact docs only, newest first, entries ≤300 chars, cache invalidated on every fact write.
+- Retrieved memory and the identity block are markup-neutralized (`_frame_memory`, `bgw_tool_result_markup_neutralized_total{tool="memory_context"}`); more section headers defanged.
+- **auto_learn:** long conversations extracted in up to 4 windows of ≤12k chars (was: cut to the last 12k), each waiting for in-flight chat; `AUTO_LEARN_MAX_FACTS` 5 → 20, now per window and after filtering.
+- **update_memory:** only fact docs are replacement candidates, and only when ≥0.60 to both the search query and the new text (was: any doc ≥0.60 to the query, whole collection); reply says when similar facts were kept.
+
+### Monitoring
+
+- New counters `bgw_auto_learn_facts_capped_total`, `bgw_memory_facts_replaced_total`, `bgw_memory_replace_skipped_total` (Grafana Auto-Learn panel "Dedup / Filtered / Capped + update_memory"); `bgw_auto_learn_extraction_duration_seconds` buckets gained 120/300 s.
+
+### Repair
+
+- One-off (2026-10-26): existing fact docs re-filed with `route_fact` (wing/room metadata only) and the affected conversation re-extracted.
+
+### Docs
+
+- `CLAUDE.md`, `docs/MEMPALACE.md`, `docs/ENV_VARS.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
+## [Unreleased] — SearXNG hardening (2026-10-25)
+
+Branch `fix/searxng-hardening` (PR #147), stacked on the web search observability change (PR #145), plus `fix/searxng-own-network` on top. Jess's web search URL (`SEARXNG_URL=http://searxng:8080`) is unchanged; it now resolves over the new `searxng-net` instead of `gateway-net`.
+
+### Upgrade action (required)
+
+- Add `SEARXNG_SECRET` to `.env` **before** `searxng` is next recreated: `python3 -c 'import secrets; print("SEARXNG_SECRET=" + secrets.token_hex(32))' >> .env`, then re-run the CI deploy job, or by hand `docker compose up -d --build orchestrator && docker compose up -d searxng`. Without it SearXNG refuses to start (`server.secret_key is not changed`) and web search is down; nothing else is affected. The CI deploy fails before rebuilding anything when `searxng/` or `docker-compose.yml` changed and `.env` lacks it. The previously committed key was public (it signs `/image_proxy` URLs), so this also rotates it.
+- **Deploy order:** the orchestrator must join `searxng-net` before searxng leaves `gateway-net`. CI rebuilds the orchestrator first; by hand use the command above (or `docker compose up -d --build`). Never `docker compose up -d searxng` alone on a freshly pulled checkout: the old orchestrator can't resolve `searxng`, web search fails with `ConnectError`, and `SearXNGDown` stays green. Recovery: `docker network connect gateway_nerves_searxng-net brain-orchestrator` (no restart) or `docker compose up -d orchestrator`. Rollback is the reverse order: searxng back on `gateway-net` first, then drop `searxng-net` from the orchestrator (a CI revert recreates the orchestrator first, so web search is down until the SearXNG step; a leftover empty `gateway_nerves_searxng-net` is harmless).
+
+### Security
+
+- `server.secret_key` removed from `searxng/settings.yml`; it now comes from `SEARXNG_SECRET` (compose `${SEARXNG_SECRET:-ultrasecretkey}` — unset/empty gives the placeholder SearXNG refuses, so a missing secret fails closed). `install.sh` and `scripts/byo-setup.sh` generate it. Never set `SEARXNG_DEBUG` (debug mode skips the refusal).
+- Host port published on `127.0.0.1:${SEARXNG_PORT:-8090}` only (was all interfaces, with no auth and the limiter off). The browser UI answers on the host only; `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` puts it back on the tailnet (still no auth) — not set up on the maintainer's Jupiter.
+- Image digest-pinned (`searxng/searxng:2026.8.17-374939b88`, was `:latest`). On a bump, re-check the `unresponsive_engines` JSON shape `web_search.py` parses and the placeholder-key refusal.
+- Container: user `977:977`, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs + 64 MB `/tmp` tmpfs, `mem_limit: 1g`, `pids_limit: 256`.
+- `searxng` left `gateway-net` (where it could reach `loki:3100` with no auth — read every log, push lines the self-audit LLM reads — plus redis, brain-frontend, actual-budget and radicale). It now joins only the new `searxng-net` (fixed name `gateway_nerves_searxng-net`, plain bridge, not internal — its route to the upstream engines; created by the main compose; shared only with the orchestrator, its one client) and `searxng-probe-net`.
+- Known, accepted: `searxng-net` is a NAT'd bridge, so searxng can still reach the LAN, tailnet peers and Jupiter's non-loopback host ports (e.g. HA :8123, orchestrator :8888, Helios llama-server :8080) — loopback-only publishes and Tailscale Serve endpoints are out of reach. Through `searxng-probe-net` it can drive blackbox's GET-only `/probe`, which reaches `monitoring-net`: no push or POST, but probe metrics (status code, body length) are a blind read path.
+- Blackbox modules `http_post_2xx` and `tcp_connect` removed (unused; any probe-network neighbour can call `/probe` with any module — POST could reach `prometheus:9090/-/quit`, tcp is a port scanner).
+
+### Monitoring
+
+- `SearXNGDown` probe target is now `http://searxng:8080/healthz` over the new `gateway_nerves_searxng-probe-net` (`internal: true`, created by the main compose; blackbox-exporter joins it as external — bring the main stack up first). `generate-configs.sh` no longer renders `SEARXNG_PORT`. The alert's runbook text covers the missing-secret log line and the probe-path debug.
+- SearXNG logs stay out of Loki (its warnings log upstream URLs carrying the search text); `promtail-config.yml` says so.
+
+### CI
+
+- New deploy step (after the frontend, before monitoring): `docker compose up -d searxng` (`--force-recreate` only when `searxng/` changed — `settings.yml` is a single-file mount; a recreate resets engine suspensions), waits ≤60 s for `/healthz`, prints container state only on failure (never its logs — CI logs are public). Runs after the orchestrator rebuild, which creates `searxng-net`. It then GETs `$SEARXNG_URL/healthz` from inside brain-orchestrator (the host-port check and `SearXNGDown` can't see the orchestrator missing `searxng-net`) and checks runtime membership: searxng on exactly `searxng-net` + `searxng-probe-net`, only brain-orchestrator + searxng on `searxng-net`, at most blackbox-exporter beside searxng on the probe net. Either failure fails the deploy.
+- `orchestrator/tests/test_searxng_hardening.py`: 21 static guards (was 14) over the compose/monitoring YAML (skip without a full checkout). New: searxng on exactly `searxng-net` + `searxng-probe-net`; `searxng-net` fixed name, not internal, not external, declared by no other compose file; across every repo compose file (`network_mode` sidecars included) `searxng-net` holds only orchestrator + searxng and `searxng-probe-net` only searxng + blackbox-exporter; both plain IPv4 bridges; the orchestrator on `searxng-net` with the `SEARXNG_URL` default.
+
+### Docs
+
+- `CLAUDE.md`, `monitoring/README.md`, `docs/ENV_VARS.md` (new Web search section), `docs/UPGRADE.md`, `docs/INSTALL.md`, `docs/BYO_MODEL.md`, `docs/TRY_IT_RENTED_GPU.md`, `docs/PRIVACY.md`, `docs/SPREADSHEETS.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
 ## [Unreleased] — client message strip on every path (2026-10-25)
 
 Found by the code review of PR #146.

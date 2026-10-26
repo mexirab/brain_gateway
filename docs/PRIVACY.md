@@ -54,7 +54,7 @@ You can verify any of this by watching the orchestrator container's egress with 
 
 ## Logs
 
-Log lines describe *what happened*, not *what you said*: they record lengths, ids (reminder, calendar event, email message, task), categories, counts and dict keys. Chat and voice text, search/memory queries, reminder and announcement text, calendar titles/locations, travel destinations, medication names, meal descriptions, task and brain-dump text, document/file names, finance names, Home Assistant call values, tool arguments, your name, and mood/distress signals from the mode router are never logged — at any level, DEBUG included. HTTP access logs drop query strings. A test (`orchestrator/tests/test_no_user_content_in_logs.py`) fails the build if a log call reintroduces personal content.
+Log lines describe *what happened*, not *what you said*: they record lengths, ids (reminder, calendar event, email message, task), categories, counts and dict keys. Chat and voice text, search/memory queries, reminder and announcement text, calendar titles/locations, travel destinations, medication names, meal descriptions, task and brain-dump text, document/file names, finance names, Home Assistant call values, tool arguments, your name, and mood/distress signals from the mode router are never logged — at any level, DEBUG included. HTTP access logs drop query strings, including one behind a percent-encoded `?` (`%3F`). A test (`orchestrator/tests/test_no_user_content_in_logs.py`) fails the build if a log call reintroduces personal content.
 
 This matters because logs travel further than the database: Loki keeps them for 30 days, and the optional self-audit sends warning/error lines to the local LLM and a one-line digest to Pushover and the dashboard inbox (the memory palace only gets a line of counts, never log text).
 
@@ -90,8 +90,8 @@ Brain Gateway listens on these ports by default:
 | 8888 | Orchestrator API | LAN, bearer-token gated |
 | 8080 / 8002 / 8003 | Model layer (vLLM / TTS / STT) | **Loopback only** (`127.0.0.1`) by default |
 | 10300 / 10301 | Wyoming bridges (HA voice pipeline) | LAN |
-| 8090 | SearXNG | LAN |
-| 9090 / 3000 / 3100 | Prometheus / Grafana / Loki | LAN (advanced profile only) |
+| 8090 | SearXNG browser UI | **Loopback only** (`127.0.0.1`; no auth). Jess reaches it over the Docker network |
+| 9090 / 3000 / 3100 | Prometheus / Grafana / Loki | **Loopback only** (`127.0.0.1`; separate `monitoring/` compose project) |
 
 The model layer's loopback binding is set via `${MODEL_BIND_ADDR:-127.0.0.1}` in `docker-compose.yml`. Change it to `0.0.0.0` only if you have a deliberate reason to expose model weights to your LAN.
 

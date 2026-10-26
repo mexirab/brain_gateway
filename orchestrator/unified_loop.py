@@ -1047,11 +1047,14 @@ async def run_unified_tool_loop(
             if arguments is None:
                 return (call_id, tool_name, f"Unknown tool: {tool_name}")
             # Metrics are recorded inside execute_tool() — no double-counting here
+            voice_token = shared.voice_turn_var.set(is_voice)
             try:
                 result = await execute_tool(tool_name, arguments)
             except Exception as e:
                 logger.error("[%s] Tool %s failed: %s", label, tool_name, e, exc_info=True)
                 result = f"The {tool_name} tool encountered an error. Please try again."
+            finally:
+                shared.voice_turn_var.reset(voice_token)
             return (call_id, tool_name, _cap_tool_result(result, tool_name))
 
         if len(parsed_calls) > 1 and not has_terminal:

@@ -60,7 +60,7 @@
 | Say this | What Jess does |
 |---|---|
 | **"What's on my calendar?"** | Today's events read aloud |
-| **"Add pickleball Thursday at 7pm"** | Creates a Google Calendar event |
+| **"Add pickleball Thursday at 7pm"** | Adds it to your personal calendar |
 | **"Any new emails?"** | Read-only check of Primary inbox |
 
 ## Routines
