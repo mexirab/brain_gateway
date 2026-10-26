@@ -4,6 +4,32 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — CI + deploy hardening (2026-10-26)
+
+A deploy failed with "Cannot fast-forward to multiple branches" (a `git fetch` in the live checkout rewrote `.git/FETCH_HEAD` under the job's `git pull`), deploys could ship commits whose CI hadn't finished, and two tests with ~1 MB parametrize ids stalled the test job 25+ min. Detail: `docs/DEV.md` → CI and auto-deploy.
+
+### CI
+
+- `timeout-minutes` on every job (lint/dashboards/theme 10, tests 15, frontend 15, docker build 25, deploy 45).
+- Deploy step "Fast-forward the deploy checkout": refuses a checkout off `main`, with modified tracked files or untracked files under `orchestrator/`/`frontend/`/root compose overrides (count only); `git fetch --no-write-fetch-head` (3 tries) + `git merge --ff-only <github.sha>` — ships the commit whose CI passed, only while it is on `origin/main`. Catch-up: also fast-forwards to the newest first-parent commit (≤20 back) whose push run passed every non-deploy job and whose `ci.yml` is identical (read-only `GITHUB_TOKEN`, `actions: read`); API failure → only `github.sha` ships.
+- Deploy step "Rebuild changed services": `git diff --no-renames`; an `orchestrator/tests/`-only change no longer recreates the orchestrator; curl timeouts on the Grist/Loki waits.
+
+### Operator notes
+
+- The live checkout can show "behind origin/main" while newer commits are in CI — don't `git pull` it by hand.
+- Hold deploys by stopping the runner service; cancelling a deploy run no longer holds its commit back if an older deploy is still to run.
+- New CI jobs must be added to the deploy job's `needs:`.
+
+### Tests
+
+- `orchestrator/tests/conftest.py` fails collection (exit 4) on any test node id over 300 chars, printing only function names/counts/lengths. Ten long cases in 8 files now use `pytest.param(..., id=...)`. Guard tests: `tests/test_nodeid_length_guard.py`.
+
+### Docs
+
+- `CLAUDE.md`, `docs/DEV.md`.
+
+---
+
 ## [Unreleased] — bearer-auth public-path hardening (2026-10-26)
 
 ### Security

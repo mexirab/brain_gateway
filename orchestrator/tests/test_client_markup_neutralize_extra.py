@@ -124,7 +124,12 @@ def test_overlong_pseudo_tag_has_its_opener_quoted_and_cannot_run():
 
 @pytest.mark.parametrize(
     "tag",
-    ['<think title="a<b">', '<tool_call id="<x>">', "<think " + "a" * 300 + ">", "<think\n"],
+    [
+        '<think title="a<b">',
+        '<tool_call id="<x>">',
+        pytest.param("<think " + "a" * 300 + ">", id="think-300-char-body"),
+        "<think\n",
+    ],
 )
 def test_every_open_tag_streamgate_hides_is_neutralized_in_tool_results(tag):
     # StreamGate._OPEN_RE / clean_response treat any `<think\b…>` /

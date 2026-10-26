@@ -10,6 +10,7 @@ jobs:
   lint-python:
     name: Python Lint & Format
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # `src` must be set: ruff-action appends it to the command and defaults
@@ -30,6 +31,7 @@ jobs:
   check-dashboards:
     name: Grafana Dashboards In Sync
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -57,6 +59,7 @@ jobs:
   check-theme:
     name: Suite Theme In Sync
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -86,6 +89,10 @@ jobs:
   test-python:
     name: Python Tests
     runs-on: ubuntu-latest
+    # Usually ~4 min (max ~7 min). A stuck run otherwise holds the runner for
+    # GitHub's 360-min default: two tests with MB-long ids stalled "Run tests"
+    # for 25+ min (conftest.py now refuses ids over 300 chars).
+    timeout-minutes: 15
     needs: lint-python
     steps:
       - uses: actions/checkout@v7
@@ -102,6 +109,7 @@ jobs:
   lint-frontend:
     name: Frontend Lint & Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -125,6 +133,7 @@ jobs:
   docker-build:
     name: Docker Build (orchestrator)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: [lint-python, test-python]
     steps:
       - uses: actions/checkout@v7
@@ -140,38 +149,193 @@ jobs:
     # post power-tiering) so auto-deploy is reliable. The orchestrator + frontend
     # now run on Jupiter; Helios is model-layer only.
     runs-on: [self-hosted, linux, jupiter]
+    # List EVERY other job here: the fast-forward step's catch-up treats a
+    # commit as passed only once all non-deploy jobs succeeded, and counts
+    # them against this list.
     needs: [lint-python, test-python, lint-frontend, docker-build, check-dashboards, check-theme]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     # Serialize deploys. The runner deploys from ONE shared checkout at
     # /home/labadmin/gateway_nerves; rapid successive merges must not race on it
     # (two concurrent `git pull`s advancing the checkout past each other made the
     # old rebuild decision see an empty diff and silently skip). cancel-in-progress
-    # is false so every merge's deploy is queued and processed, never dropped.
+    # is false so a running deploy is never killed. But GitHub keeps only ONE
+    # pending run per group and cancels it when another arrives, in any commit
+    # order: the catch-up in the fast-forward step deploys a newer commit whose
+    # own run was dropped that way. So cancelling a deploy run no longer holds
+    # its commit back once an older deploy is still to run; to hold deploys,
+    # stop the runner service on Jupiter instead.
     concurrency:
       group: deploy-jupiter
       cancel-in-progress: false
+    # The catch-up reads other commits' CI runs. The repo's default token is
+    # contents-only; nothing in this job writes to GitHub.
+    permissions:
+      contents: read
+      actions: read
+    # Usually under 3 min; a requirements.txt change rebuilds the orchestrator's
+    # pip layer and a frontend change runs a full Next.js build, plus up to
+    # ~4 min of SearXNG/Grist/Loki health waits. A hung step otherwise holds
+    # the deploy-jupiter group, and every deploy pending behind it, for
+    # GitHub's 360-min default. A timed-out deploy writes no marker, so a
+    # re-run (or the next push's deploy) rebuilds the same changes; until then
+    # the box may be half-deployed.
+    timeout-minutes: 45
     # The runner runs on Jupiter with docker access, so we don't need a checkout
     # step — we operate directly on the live checkout at /home/labadmin/gateway_nerves.
     steps:
-      - name: Pull + rebuild changed services
+      - name: Fast-forward the deploy checkout
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          # Never fall back to the runner user's own gh login.
+          GH_CONFIG_DIR: ${{ runner.temp }}/gh-empty
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          cd /home/labadmin/gateway_nerves
+
+          WANT="$(jq length <<<"$NEEDS_JSON")"
+          # Did commit $1's push run of this workflow pass every job but the
+          # deploy? 0 = yes, 1 = no / not yet / no such run, 2 = couldn't ask.
+          gh_api() { timeout 30 gh api "$@" || { sleep 3; timeout 30 gh api "$@"; }; }
+          ci_passed() {
+            local run ok
+            run="$(gh_api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=$1&event=push&per_page=100" \
+              --jq "[.workflow_runs[] | select(.path == \".github/workflows/ci.yml\" and .head_sha == \"$1\" and .event == \"push\" and .head_branch == \"main\")] | max_by(.run_number) | .id // empty")" || return 2
+            [ -n "$run" ] || return 1
+            # Keep "Deploy to Jupiter" in sync with this job's name.
+            ok="$(gh_api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs?per_page=100" \
+              --jq "[.jobs[] | select(.name != \"Deploy to Jupiter\")] | length >= ${WANT} and all(.conclusion == \"success\")")" || return 2
+            [ "$ok" = true ]
+          }
+          # Step 2 below is THIS run's copy of the deploy logic, so it may only
+          # build a tree whose deploy job is the same.
+          same_deploy_job() { git diff --quiet "$DEPLOY_SHA" "$1" -- .github/workflows/ci.yml; }
+
+          BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+          if [ "$BRANCH" != main ]; then
+            echo "::error::The deploy checkout at /home/labadmin/gateway_nerves is not on main (on '${BRANCH:-detached HEAD}'). Run: cd /home/labadmin/gateway_nerves && git status"
+            exit 1
+          fi
+          # docker compose builds from the working tree, so a local edit would
+          # ship without CI, and an untracked compose(.override) file at the
+          # root would be merged into every `docker compose up`. Gitignored
+          # files (.env, renders, node_modules) don't count. Only a count is
+          # printed: this repo's CI logs are public.
+          DIRTY="$( { git status --porcelain --untracked-files=no
+                      git status --porcelain --untracked-files=normal -- orchestrator frontend \
+                        compose.yaml compose.yml compose.override.yaml compose.override.yml \
+                        docker-compose.override.yaml docker-compose.override.yml; } | sort -u | wc -l)"
+          if [ "$DIRTY" -ne 0 ]; then
+            echo "::error::The deploy checkout at /home/labadmin/gateway_nerves has $DIRTY local change(s) (tracked files, new files under orchestrator/ or frontend/, or a compose override) that would be deployed without CI. Run: cd /home/labadmin/gateway_nerves && git status"
+            exit 1
+          fi
+
+          # Fetch without writing .git/FETCH_HEAD and merge explicit SHAs, so
+          # nothing here reads FETCH_HEAD: a fetch run in this checkout by
+          # something else (linked worktrees keep their own FETCH_HEAD)
+          # rewrote it under `git pull` and failed a deploy ("Cannot
+          # fast-forward to multiple branches"). Retried because a concurrent
+          # fetch can hold the shared origin/main ref lock for a moment.
+          fetched=false
+          for attempt in 1 2 3; do
+            if timeout 60 git fetch --quiet --no-write-fetch-head origin main; then fetched=true; break; fi
+            echo "::warning::git fetch origin main failed (attempt $attempt of 3)"
+            [ "$attempt" = 3 ] || sleep 5
+          done
+          if [ "$fetched" != true ]; then
+            echo "::error::Could not fetch origin main into the deploy checkout. Re-run this job once github.com is reachable from Jupiter."
+            exit 1
+          fi
+
+          # Ship the commit whose checks passed (DEPLOY_SHA), not whatever
+          # main's tip is by now, and only while it is still on main.
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" refs/remotes/origin/main 2>/dev/null; then
+            echo "::error::Commit $DEPLOY_SHA is not on origin/main (was main force-pushed?), so it is not deployed."
+            exit 1
+          fi
+          BEFORE="$(git rev-parse HEAD)"
+          # A no-op when HEAD already contains DEPLOY_SHA (an earlier deploy
+          # caught up past it).
+          if ! git merge --ff-only --quiet "$DEPLOY_SHA"; then
+            echo "::error::git merge --ff-only $DEPLOY_SHA failed — the deploy checkout at /home/labadmin/gateway_nerves is dirty or diverged (or another git process holds its lock). Run: cd /home/labadmin/gateway_nerves && git status"
+            git status --short --untracked-files=no || true
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::The deploy checkout at /home/labadmin/gateway_nerves has commits that are not on origin/main. Run: cd /home/labadmin/gateway_nerves && git status"
+            exit 1
+          fi
+          # The checkout was already past DEPLOY_SHA and the last deploy: a
+          # manual pull, or a deploy that stopped partway. Build it only on
+          # the same terms as the catch-up below.
+          if ! git merge-base --is-ancestor "$BEFORE" "$DEPLOY_SHA" \
+              && [ "$BEFORE" != "$(cat .last-deployed-sha 2>/dev/null || true)" ]; then
+            rc=0
+            ci_passed "$BEFORE" || rc=$?
+            if [ "$rc" = 1 ] || ! same_deploy_job "$BEFORE"; then
+              echo "::error::The checkout is already at $BEFORE, past $DEPLOY_SHA and the last deploy (a manual pull, or a deploy that stopped partway), and that commit's CI has not passed or it changes the deploy job. Its own deploy run deploys it: wait for that, or re-run it if it shows as cancelled or failed."
+              exit 1
+            fi
+            echo "::warning::The checkout was already $(git rev-list --count "$DEPLOY_SHA..$BEFORE") commit(s) past $DEPLOY_SHA and the last deploy (a manual pull, or a deploy that stopped partway). They deploy too."
+          fi
+
+          # Catch-up: also fast-forward to the newest commit on main whose CI
+          # jobs (all but this deploy) passed and whose deploy job is this
+          # one. Its own deploy may have been cancelled as the pending run (see
+          # concurrency above); when it does run it finds nothing to do, so a
+          # burst of merges also recreates containers once. Best effort: if
+          # GitHub can't be asked, only DEPLOY_SHA ships.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          TIP="$(git rev-parse refs/remotes/origin/main)"
+          if [ "$TIP" != "$HEAD_SHA" ]; then
+            outcome="none"
+            for c in $(git rev-list --first-parent --max-count=20 "${HEAD_SHA}..${TIP}"); do
+              # Newest first, so once one commit changes the deploy job every
+              # newer one does too: skip down to the commits before it.
+              if ! same_deploy_job "$c"; then
+                if [ "$outcome" = none ]; then
+                  echo "::warning::A newer commit on main changes the deploy job, so this run does not deploy it or anything after it; their own deploy runs do. If one shows as cancelled, re-run it."
+                  outcome="deploy_job_changed"
+                fi
+                continue
+              fi
+              rc=0
+              ci_passed "$c" || rc=$?
+              if [ "$rc" = 0 ]; then
+                if git merge --ff-only --quiet "$c"; then
+                  echo "Also deploying $c: newer on main, and its CI passed."
+                  outcome="caught_up"
+                else
+                  echo "::warning::Could not fast-forward to $c (newer on main, CI passed), so only $DEPLOY_SHA deploys. If its deploy run shows as cancelled, re-run it."
+                  outcome="merge_failed"
+                fi
+                break
+              elif [ "$rc" = 2 ]; then
+                echo "::warning::Could not read newer commits' CI from GitHub, so only $DEPLOY_SHA deploys. If a newer commit's deploy run shows as cancelled, re-run it."
+                outcome="unknown"
+                break
+              fi
+            done
+            if [ "$outcome" = none ]; then
+              echo "main is at $TIP; its newer commits are still in CI (or failed) and deploy on their own runs."
+            fi
+          fi
+
+      - name: Rebuild changed services
         run: |
           set -euo pipefail
           cd /home/labadmin/gateway_nerves
 
           # Decide what to rebuild by diffing against the LAST-DEPLOYED commit
-          # (recorded in .last-deployed-sha), NOT against this job's own pull.
-          # The checkout is shared and can be advanced out-of-band (a concurrent
-          # deploy, or a manual `git pull` during ops), so a no-op pull does NOT
-          # mean nothing changed relative to what's actually running. The marker
-          # is the source of truth for "what's currently deployed."
+          # (recorded in .last-deployed-sha), NOT against the fast-forward
+          # above. The checkout is shared and can be advanced out-of-band (a
+          # deploy that stopped partway, or a manual `git pull` during ops), so
+          # a no-op fast-forward does NOT mean nothing changed relative to
+          # what's actually running. The marker is the source of truth for
+          # "what's currently deployed."
           MARKER=.last-deployed-sha
           LAST="$(cat "$MARKER" 2>/dev/null || true)"
-
-          if ! git pull --ff-only; then
-            echo "::error::git pull --ff-only failed — the deploy checkout at /home/labadmin/gateway_nerves is dirty or diverged. Run: cd /home/labadmin/gateway_nerves && git status"
-            git status --short || true
-            exit 1
-          fi
           HEAD_SHA="$(git rev-parse HEAD)"
 
           # First run (no/invalid marker): fall back to the parent so we still
@@ -186,7 +350,9 @@ jobs:
           fi
 
           echo "Rebuilding for changes ${LAST}..${HEAD_SHA}:"
-          CHANGED="$(git diff --name-only "$LAST" "$HEAD_SHA")"
+          # --no-renames: a rename lists only its new path, so a file moved out
+          # of a trigger path would otherwise skip the rebuild it needs.
+          CHANGED="$(git diff --no-renames --name-only "$LAST" "$HEAD_SHA")"
           echo "$CHANGED"
 
           # SearXNG takes server.secret_key from SEARXNG_SECRET in .env and won't
@@ -204,13 +370,18 @@ jobs:
           # Keep this before the SearXNG step: the recreate puts the
           # orchestrator on searxng-net (and creates that network), so searxng
           # can then leave gateway-net without cutting Jess's web search off.
-          if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$"; then
+          # orchestrator/tests/ is not in the image (the Dockerfile copies only
+          # requirements.txt and orchestrator/*.py), and a recreate drops
+          # RAM-only state (pending auto_learn jobs, one-reply voice styles),
+          # so a tests-only change does not rebuild.
+          ORCH_CHANGED="$(grep -vE '^orchestrator/tests/' <<<"$CHANGED" || true)"
+          if grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$" <<<"$ORCH_CHANGED"; then
             echo "::group::Rebuilding orchestrator"
             docker compose up -d --build --force-recreate orchestrator
             echo "::endgroup::"
           fi
 
-          if echo "$CHANGED" | grep -qE "^frontend/|^docker-compose\.yml$"; then
+          if grep -qE "^frontend/|^docker-compose\.yml$" <<<"$CHANGED"; then
             echo "::group::Rebuilding frontend"
             docker compose up -d --build --force-recreate frontend
             echo "::endgroup::"
@@ -283,8 +454,8 @@ jobs:
           if grep -qE "^grist/docker-compose\.yml$|^theme/dist/grist\.css$" <<<"$CHANGED"; then
             echo "::group::Recreating Grist"
             docker compose -f grist/docker-compose.yml up -d --force-recreate grist
-            for i in $(seq 1 30); do curl -sf http://127.0.0.1:8484/status >/dev/null && break; sleep 2; done
-            curl -sf http://127.0.0.1:8484/status >/dev/null || { echo "Grist not up after 60s"; docker logs --tail 30 grist; exit 1; }
+            for i in $(seq 1 30); do curl -sf -m 5 http://127.0.0.1:8484/status >/dev/null && break; sleep 2; done
+            curl -sf -m 5 http://127.0.0.1:8484/status >/dev/null || { echo "Grist not up after 60s"; docker logs --tail 30 grist; exit 1; }
             echo "::endgroup::"
           fi
 
@@ -326,8 +497,8 @@ jobs:
             # fail the deploy instead of going green with logging down.
             if grep -qE "^monitoring/(loki|loki-push-gw)/|^monitoring/docker-compose\.yml$" <<<"$CHANGED"; then
               echo "::group::Checking Loki + loki-push-gw health"
-              for i in $(seq 1 30); do curl -sf http://127.0.0.1:3100/ready >/dev/null && break; sleep 2; done
-              curl -sf http://127.0.0.1:3100/ready >/dev/null || { echo "Loki not ready after 60s"; docker logs --tail 30 loki; exit 1; }
+              for i in $(seq 1 30); do curl -sf -m 5 http://127.0.0.1:3100/ready >/dev/null && break; sleep 2; done
+              curl -sf -m 5 http://127.0.0.1:3100/ready >/dev/null || { echo "Loki not ready after 60s"; docker logs --tail 30 loki; exit 1; }
               # The gateway fails closed with no server block if its template
               # didn't render (e.g. tmpfs not writable) — check it rendered.
               docker exec loki-push-gw nginx -T 2>/dev/null | grep -q "location = /loki/api/v1/push" \
