@@ -68,11 +68,12 @@ OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # OpenAI-compatible API on :11434
 
 ```bash
 cp .env.example .env
-# generate the two tokens the app needs:
+# generate the secrets the app needs (SEARXNG_SECRET: web search won't start without it):
 python3 - <<'PY' >> .env
 import secrets
 print("API_TOKEN=" + secrets.token_urlsafe(32))
 print("DASHBOARD_TOKEN=" + secrets.token_urlsafe(24))
+print("SEARXNG_SECRET=" + secrets.token_hex(32))
 PY
 ```
 
@@ -227,6 +228,9 @@ GPU box you'd rather not run 24/7.
   window"). (2) your model is too weak at tool calling — switch to one from the
   table above. Tell them apart in the logs: `docker compose logs orchestrator |
   grep 'LLM probe'` — if `prompt_toks` is pinned near 4096, it's truncation.
+- **Web search fails; `searxng` keeps restarting:** if `docker logs searxng`
+  says `server.secret_key is not changed`, `SEARXNG_SECRET` is missing or empty
+  in `.env`. Add one (the `.env` step above), then `docker compose up -d searxng`.
 - **Logs:** `docker compose logs -f orchestrator`.
 
 See also: `docs/internal/BYO_MODEL_SPEC.md` (design + the env-var reference).

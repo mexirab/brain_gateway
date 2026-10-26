@@ -41,7 +41,7 @@ The script runs in two stages, separated by one reboot. **You don't have to re-r
 | Stage | What it does |
 |-------|--------------|
 | **1** | Installs Docker + docker-compose-v2, adds the NVIDIA container toolkit apt repo, installs `nvidia-driver-580-open` + `nvidia-container-toolkit`, configures the runtime, adds you to the `docker` group, installs a bash-profile auto-resume hook, then prompts you to reboot. |
-| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `DASHBOARD_TOKEN`, `JESS_LAN_IP`, `GATEWAY_ROOT_PATH`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); removes the auto-resume hook; hands off to the setup CLI. |
+| **2 (auto-resumes on next login)** | Verifies `nvidia-smi` works, smoke-tests Docker+GPU integration, writes `API_TOKEN`, `DASHBOARD_TOKEN`, `SEARXNG_SECRET`, `JESS_LAN_IP`, `GATEWAY_ROOT_PATH`, and `COMPOSE_PROFILES=models` to `.env`; runs `scripts/detect_hardware.sh` to pick the right vLLM model for your GPU (auto-substitutes `VLLM_MODEL=Qwen/Qwen3-8B-AWQ` + `VLLM_EXTRA_ARGS=--tool-call-parser hermes` + `VLLM_MAX_MODEL_LEN=16384` if your card is below the 20 GiB tier-24 floor); brings up the **full local-AI base**: orchestrator + vLLM (LLM) + qwen-tts (TTS) + parakeet-stt (STT) + dashboard; waits up to 15 min for all four to report healthy (model weights are ~50 GB the first time); removes the auto-resume hook; hands off to the setup CLI. |
 | **Setup CLI** | 2 questions: your name, your timezone. Everything else takes auto-defaults — `assistant_name=Jess`, `adhd_mode=true`, `tone=warm`, `TTS_VOICE=aiden`. Saves identity via `/api/config/identity`, marks setup complete (kill switch flips), `docker compose up -d --force-recreate orchestrator` (recreate, not restart — env-file changes need it), prints the dashboard URL **and the auto-generated `DASHBOARD_TOKEN` login password**. ~30 seconds. |
 
 ### After install — Jess greets you
@@ -168,11 +168,12 @@ cd /opt/gateway_mvp
 cp .env.example .env
 ```
 
-You need two secrets in `.env` before first boot — the orchestrator's API token and the dashboard login password. Generate both:
+You need three secrets in `.env` before first boot — the orchestrator's API token, the dashboard login password, and SearXNG's secret key (web search won't start without it). Generate all three:
 
 ```bash
 python3 -c "import secrets; print('API_TOKEN=' + secrets.token_urlsafe(32))" >> .env
 python3 -c "import secrets; print('DASHBOARD_TOKEN=' + secrets.token_urlsafe(24))" >> .env
+python3 -c "import secrets; print('SEARXNG_SECRET=' + secrets.token_hex(32))" >> .env
 ```
 
 You'll also want to set `GATEWAY_ROOT_PATH=$(pwd)` so the Docker bind-mounts resolve to absolute paths (the `.env.example` default is empty so the `install.sh` path can fill it in). And, optionally, `JESS_LAN_IP=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')` so the first-chat welcome renders a clickable `/settings` URL.
@@ -323,6 +324,7 @@ sudo tailscale cert --cert-file /opt/gateway_mvp/certs/<host>.crt \
 | `Failed to initialize NVML: Driver/library version mismatch` | Prebuilt NVIDIA module pinned to wrong kernel | Purge + reinstall DKMS variant (Step 1, troubleshooting) |
 | `Error 804: forward compatibility was attempted on non supported HW` (vLLM on Blackwell) | Driver too old | Install driver 580+ |
 | `brain-orchestrator` keeps restarting | `API_TOKEN` not set | Check `.env` has `API_TOKEN=...`; run `docker compose up -d` again |
+| `searxng` keeps restarting; `docker logs searxng` says `server.secret_key is not changed` | `SEARXNG_SECRET` not set (or empty) | Add one (Step 3 command), then `docker compose up -d searxng` |
 | Wizard returns 410 on `/api/setup/env` | Setup already marked complete | This is by design (kill switch). Edit `data/app/setup_state.json` → `setup_completed: false` to re-run, or use `/settings`. |
 | `qwen-tts` crash-loops with HF 401 | Stale model name in env | Confirm `QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` (or unset to use compose default) |
 | Setup CLI can't reach orchestrator | `docker compose up -d` hasn't finished | `docker compose logs orchestrator`; wait until `curl http://localhost:8888/health` returns 200 |
