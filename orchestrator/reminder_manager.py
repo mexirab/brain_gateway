@@ -18,6 +18,7 @@ from urllib.parse import quote
 import httpx
 
 from orchestrator import state_store
+from orchestrator.bearer_auth import is_public_segment
 from orchestrator.user_profile import get_profile
 from orchestrator.voice_style import style_for_announcement
 
@@ -742,6 +743,11 @@ def _build_callback_url(
     `signed_extra` is bound into the HMAC so its corresponding query param
     is tamper-evident (used for snooze's `minutes`).
     """
+    if not is_public_segment(reminder_id):
+        # The URL is tokenless; BearerAuthMiddleware only exempts ids in its
+        # one-segment charset, so this tap would 401 instead of acking.
+        # log-safe: code-minted reminder id, never user text
+        logger.warning(f"[NTFY] Reminder id {reminder_id[:40]!r} is outside the public-path charset; its taps will 401")
     exp = int(time.time()) + _settings.ntfy_ack_exp_seconds
     sig = _sign_callback(reminder_id, action, exp, signed_extra)
     base = _settings.ntfy_callback_base_url.rstrip("/")

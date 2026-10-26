@@ -256,9 +256,10 @@ Checks:
   times out while holding the degraded slot.
 - **Alert runs are gentler.** They wait for the slot to be idle for 3 min (up to 30 min),
   then run with at most 6 rounds and 300 s. "Idle" now also reads llama-server's own
-  `llamacpp:requests_processing`, because `bgw_active_requests` drops before a
-  streaming reply finishes. Per-call timeouts are clipped to the run's deadline, with
-  90 s reserved for the forced final report.
+  `llamacpp:requests_processing`, because `bgw_active_requests` counts only chat
+  turns (streamed ones until their stream ends, since 2026-10-25), not other brain
+  callers such as auto_learn, photo scans or the meal planner. Per-call timeouts
+  are clipped to the run's deadline, with 90 s reserved for the forced final report.
 - **Honesty about blind spots.** A source group whose query failed makes the run
   `partial` (`reason=sources_failed`), and the digest never says "All clean" while a
   source didn't answer. Only daily runs feed `bgw_self_audit_runs_total` /

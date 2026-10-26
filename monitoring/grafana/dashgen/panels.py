@@ -330,6 +330,10 @@ TEMP_THRESHOLDS = [(None, "green"), (75, "yellow"), (80, "orange"), (85, "red")]
 # thresholds (sensors.temperature.warning 90 / critical 95; re-arm below 87).
 CLOSET_TEMP_THRESHOLDS = [(None, "green"), (87, "yellow"), (90, "orange"), (95, "red")]
 LATENCY_THRESHOLDS_S = [(None, "green"), (1, "yellow"), (5, "orange"), (15, "red")]
+# Whole chat turns (bgw_request_duration_seconds — streamed turns timed to the
+# end of the stream, tool rounds included): a tool turn of 10-30 s is normal
+# use, red matches HighRequestLatency (p95 > 30 s). Bucket edges 10 / 30.
+CHAT_TURN_LATENCY_THRESHOLDS_S = [(None, "green"), (10, "yellow"), (30, "red")]
 # Voice-pipeline specific: green at/under current p50 target (13s), yellow
 # when p95 slips, orange past prior floor (17s), red past the old 22s regime.
 # Snaps to histogram bucket edges so threshold colors match quantile bins.

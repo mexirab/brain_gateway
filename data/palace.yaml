@@ -67,6 +67,13 @@ wings:
   personal:
     description: "Personal information, health, routines, life"
     rooms:
+      # Who the user is: where they grew up, school, work history. Filled only
+      # by MemPalace.route_fact from a fact's category (identity, work,
+      # education, ...) — no keywords, so keyword routing never sends other
+      # text here. First in the wakeup block below.
+      identity:
+        description: "Background: where they grew up, school, work history"
+        keywords: []
       health:
         description: "Medications, conditions, appointments"
         keywords: ["medication", "med", "health", "doctor", "adhd", "vyvanse", "prescription"]
@@ -132,9 +139,16 @@ routing_rules:
 # Wakeup context: compressed identity block injected into system prompts
 wakeup:
   enabled: true
-  max_tokens: 170
+  # Was 170 (~680 chars): too small to hold anything about who the user is.
+  # The block sits first after the dynamic marker and changes only on refresh,
+  # so it stays in llama.cpp's cached prefix — size costs ~nothing per turn.
+  max_tokens: 600
   refresh_interval_minutes: 30
+  # Docs taken per room (default 5), newest first. A life story is more than 5 facts.
+  room_limits:
+    personal/identity: 25
   priority_rooms:
+    - personal/identity
     - personal/health
     - personal/routines
     - jess/preferences

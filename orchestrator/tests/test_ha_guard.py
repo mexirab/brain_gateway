@@ -144,6 +144,7 @@ class TestCheckHaCall:
             "media-source://media_source/local/song.mp3",
             "https://stream.example/lofi.mp3",
             "http://10.0.0.248:8888/api/audio/abc123.wav",
+            "http://10.0.0.248:8888/api/audio/3f9a1c2e.mp3",
         ],
     )
     def test_play_media_allowed(self, media_id):
@@ -161,6 +162,18 @@ class TestCheckHaCall:
             "http://10.0.0.1/admin",
             "https://evil.example/x.mp3",
             "http://10.0.0.248:8888/api/audio/../health",
+            # encoded traversal / a second segment / not a bare filename
+            "http://10.0.0.248:8888/api/audio/%2e%2e%2fhealth",
+            "http://10.0.0.248:8888/api/audio/%2E%2E%2Fmemory%2Flearned",
+            "http://10.0.0.248:8888/api/audio/a.wav%2f..%2f..%2fhealth",
+            "http://10.0.0.248:8888/api/audio/%252e%252e%252fhealth",
+            "http://10.0.0.248:8888/api/audio/a.wav/x",
+            "http://10.0.0.248:8888/api/audio/a.wav?x=1",
+            "http://10.0.0.248:8888/api/audio/a.wav#x",
+            "http://10.0.0.248:8888/api/audio/a.wav%00",
+            "http://10.0.0.248:8888/api/audio/a%5cb.wav",
+            "http://10.0.0.248:8888/api/audio/",
+            "http://10.0.0.248:8888/api/audio/.",
             "http://10.0.0.248:8888/api/audiox/a.wav",
             "http://10.0.0.248:8888.evil.example/api/audio/a.wav",
             "file:///etc/passwd",
@@ -206,6 +219,18 @@ class TestCheckHaCall:
         monkeypatch.setattr(shared, "HELIOS_PLUG_ENTITY", "switch.Helios_Test_Plug")
         refusal, _ = check_ha_call(PLUG, "turn_off", {})
         assert refusal and "can't be controlled" in refusal
+
+    def test_play_media_clip_rule_with_trailing_slash_base(self, monkeypatch):
+        # The clip segment is sliced off the rstripped base: a configured
+        # "…:8888/" still accepts a clip URL and still checks its segment.
+        monkeypatch.setattr(ha_guard.settings, "orchestrator_url", "http://10.0.0.248:8888/")
+        speaker = "media_player.living_room_speaker"
+        ok = "http://10.0.0.248:8888/api/audio/3f9a1c2e.wav"
+        refusal, _ = check_ha_call(speaker, "play_media", {"media_content_id": ok, "media_content_type": "music"})
+        assert refusal is None
+        for bad in ("http://10.0.0.248:8888/api/audio/%2e%2e%2fhealth", "http://10.0.0.248:8888//api/audio/a.wav"):
+            refusal, _ = check_ha_call(speaker, "play_media", {"media_content_id": bad, "media_content_type": "music"})
+            assert refusal and refusal.startswith("Failed:"), bad
 
     def test_play_media_ignores_unset_stream_url(self, monkeypatch):
         monkeypatch.setattr(ha_guard.settings, "orchestrator_url", "")
