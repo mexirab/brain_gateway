@@ -181,14 +181,28 @@ groups:
           description: "Tool {{ $labels.tool }} is failing at {{ $value | humanizePercentage }}."
 
       # -- Latency --------------------------------------------------------------
+      # Whole chat turns, tool rounds included. Since 2026-10-25 a real-streamed
+      # turn (dashboard chat, the main path) is timed to the end of its stream;
+      # before, it was recorded when the StreamingResponse was returned (81 of
+      # 91 turns in a week at <=0.5 s), so this alert only ever saw HA Assist /
+      # Telegram. 30 s / 10m kept on purpose: streamed TTFT p95 was ~8-13 s
+      # over 86 turns, plus a few seconds to decode the reply, so normal turns
+      # sit well under 30 s (rebuilt from logs: p95 ~10 s, slowest 13 s). At a
+      # few turns a day a 5m window holds 0-3 turns, so one slow turn (a
+      # meal-plan swap, a multi-photo turn) can't hold the condition for 10m —
+      # it takes a >30 s turn at least every 5 min for 15 min. No `streaming`
+      # label: "is Jess slow end to end" is the same question on both paths;
+      # bgw_chat_ttft_seconds already separates the streamed wait for the
+      # first word. Not in any Alertmanager route, so it notifies nobody
+      # (Prometheus / Grafana only).
       - alert: HighRequestLatency
         expr: histogram_quantile(0.95, rate(bgw_request_duration_seconds_bucket[5m])) > 30
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "P95 request latency >30s"
-          description: "95th percentile request latency is {{ $value | humanizeDuration }}."
+          summary: "P95 chat turn latency >30s"
+          description: "95th percentile chat turn time is {{ $value | humanizeDuration }} (whole turn, tool rounds included; streamed turns timed to the end of the stream). Check the Chat TTFT panel (slow before the first word, or slow to finish?) and the Tool Latency p95 panel for the tool holding turns up (photo turns also wait for vision before the stream starts); brain on CPU or a busy shared GPU1 slows every turn — `journalctl -u llama-server-primary` on Helios."
 
       # -- Resource Alerts ------------------------------------------------------
       - alert: HighGPUTemp

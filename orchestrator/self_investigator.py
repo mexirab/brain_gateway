@@ -549,10 +549,10 @@ async def brain_ready() -> bool:
 async def _slot_busy() -> bool:
     """True if chat (or anything) is using the brain right now.
 
-    ``bgw_active_requests`` alone misses streaming chat (the gauge drops when
-    the StreamingResponse is returned, before tokens flow), so also ask
-    llama-server itself: ``llamacpp:requests_processing`` on its /metrics.
-    If that can't be read, fall back to the gauge alone.
+    ``bgw_active_requests`` counts chat turns, streamed ones until their
+    stream ends, but not other brain callers (auto_learn, photo scans, the meal
+    planner), so also ask llama-server itself: ``llamacpp:requests_processing``
+    on its /metrics. If that can't be read, fall back to the gauge alone.
     """
     try:
         if ACTIVE_REQUESTS._value.get() > 0:
