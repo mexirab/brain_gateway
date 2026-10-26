@@ -118,6 +118,37 @@ Stacked on the client-message-strip entry below. Closes its "client content is n
 
 ---
 
+## [Unreleased] — image parts never forwarded to the brain (2026-10-25)
+
+Found by the security review of PR #148. Branch `fix/image-parts-untrusted-ssrf`.
+
+### Security
+
+- **Fixed:** some image parts reached the multimodal brain without vision's untrusted PHOTO CONTENT framing, and llama-server downloads http(s) image URLs itself (blind GET SSRF from Helios). `CloudBrain._process_vision` returned early when `VISION_ENABLED=false` or extraction found nothing, so http(s) `image_url` parts in user turns, image parts in assistant turns, and every image with vision off were forwarded unchanged.
+- `orchestrator/cloud_brain.py`: `_sanitize_client_history` flattens assistant list content to text. Image parts there are dropped (WARNING `[UNIFIED] Dropped N image part(s) from client assistant turns — not forwarded` + `bgw_vision_requests_total{status="rejected_assistant"}`); other parts INFO.
+- `_process_vision` always ends with `_flatten_content`: every content list becomes a string. Each user image is either its framed description (keyed by `(msg_index, part_index)`) or a `[PHOTO N NOT ANALYZED] <reason>` note after the text: link / not inline (`NOT_ANALYZED_NOT_INLINE`), vision off (`NOT_ANALYZED_DISABLED`), past `MAX_IMAGES_PER_REQUEST` (`NOT_ANALYZED_OVER_CAP`). Only the first 3 notes in a request carry a reason, then bare notes, so empty image parts can't grow the prompt. Other part types (`input_audio`, `video_url`, `input_video`) are dropped. The old `[Previously shared image]` marker is gone.
+- `routing_info["images_not_analyzed"]` (in `_routing`); the HA fast path is now skipped on any photo turn, analyzed or not.
+- `orchestrator/vision_handler.py`: `_is_safe_image_url` accepts only a `data:` prefix or strict raw base64, so `HTTP://`, `//host.example/x` and `gopher:` are links. New helpers `image_part_url`, `photo_not_analyzed`. Extraction records `part_index` and skips non-string text parts; `prompt_builder.last_user_text` does too (both were 500s); the image-cache key encodes with `surrogatepass` (a lone surrogate was a 500). `analyze_image` shows a malformed data-URI MIME as `malformed` in its log and reply.
+- `POST /api/vision/analyze` (`routes_vision.py`) JSON branch: a link or non-string `image` → 400 `Only inline image data (a data: URI or plain base64) accepted, not URLs`; a non-object JSON body → 400 `JSON body must be an object` (was a 500).
+- `bgw_vision_requests_total{status}` gains `rejected_url` (chat image part that is a link, empty, malformed, or not plain base64; never fetched or forwarded), `skipped_cap` and `rejected_assistant`; `disabled` is now also counted once per chat image while `VISION_ENABLED=false`. Rare statuses are pre-created. The chat path counts per image part in the request, so a client that resends history counts the same old image every turn.
+- Logs (counts only): WARNING `[VISION] N image part(s) were links or empty, not inline data — not fetched, not forwarded`; INFO `[VISION] Vision disabled — N image(s) not analyzed`; INFO `[VISION] Dropped N non-text, non-image content part(s)`. The per-URL WARNING `Rejected non-data-URI image URL (SSRF prevention)` is gone.
+
+### Tests
+
+- New `orchestrator/tests/test_image_parts_never_forwarded.py` (65): links, vision off, the cap, assistant-turn images, other part types, per-part description keys, bounded notes, every loop path incl. the buffered + streamed loop-failure fallback, fast-path gate, auto-learn snapshot.
+- New `orchestrator/tests/test_vision_analyze_route.py` (21): links, odd casing, non-string and non-object bodies → 400 without reaching `analyze_image`; inline data is analyzed.
+- Full suite: 5246 passed, 13 skipped.
+
+### Known gaps (surfaced by review, not fixed)
+
+- Brain side unchanged: llama-server :8080 has no API key, so any host that can reach it directly (LAN, tailnet, Docker networks) can still make Helios fetch a URL. This build has no remote-media off switch. Options (narrow `IPAddressAllow` to `localhost 10.0.0.248/32`, `--api-key-file`, a Loki alert on llama-server's `downloading image from` line) are in the new `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md` — recommendation only, the owner decides.
+
+### Docs
+
+- New `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`. `CLAUDE.md` (Tools `analyze_image` row, Key Files `cloud_brain.py` row, router table, loop-hardening known gaps), `TECHNICAL_REFERENCE.md` (Vision: route table, new "Only text reaches the loop" paragraph, `bgw_vision_requests_total` statuses; Tool-Call Loop Guards `_sanitize_client_history` row + known gaps), `docs/ENV_VARS.md` (`VISION_ENABLED` off behavior), `.claude/agents/prod-support.md` (Vision metric row + log lines).
+
+---
+
 ## [Unreleased] — client message strip on every path (2026-10-25)
 
 Found by the code review of PR #146.
@@ -134,7 +165,7 @@ Found by the code review of PR #146.
 
 ### Known gaps (surfaced by review, not fixed)
 
-- Image parts vision doesn't extract (http(s) URLs, non-user roles, `VISION_ENABLED=false`) reach the brain unframed, and llama-server fetches http(s) image URLs itself (blind SSRF from Helios).
+- Image parts vision doesn't extract (http(s) URLs, non-user roles, `VISION_ENABLED=false`) reach the brain unframed, and llama-server fetches http(s) image URLs itself (blind SSRF from Helios). — **Fixed** in the entry above (orchestrator side; llama-server itself still fetches URLs for direct callers).
 
 ### Docs
 

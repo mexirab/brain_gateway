@@ -87,6 +87,8 @@ async def vision_analyze(request: Request):
 
     elif "application/json" in content_type:
         body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON body must be an object"}, status_code=400)
         image_data = body.get("image", "")
         prompt = body.get("prompt", "Describe this image in detail, including any text visible.")
         if not image_data:
@@ -96,7 +98,7 @@ async def vision_analyze(request: Request):
 
         if not _is_safe_image_url(image_data):
             return JSONResponse(
-                {"ok": False, "error": "Only base64 image data or data: URIs accepted (not URLs)"},
+                {"ok": False, "error": "Only inline image data (a data: URI or plain base64) accepted, not URLs"},
                 status_code=400,
             )
         # Size guard: ~1.33x base64 overhead; check before expensive processing

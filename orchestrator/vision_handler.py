@@ -102,6 +102,7 @@ _FAILURE_SENTENCES = frozenset(
         UNREACHABLE_PLACEHOLDER,
     }
 )
+_MIME_SHAPE_RE = re.compile(r"[\w/.+-]{1,64}")
 _VARIABLE_FAILURE_RE = re.compile(
     r"\[(?:Unsupported image type: [\w/.+-]{1,64}\. Supported: JPEG, PNG, WebP, GIF\."
     r"|Image too large \(\d+\.\dMB\)\. Maximum: \d+MB\.)\]"
@@ -117,6 +118,20 @@ def is_vision_failure(text: str) -> bool:
     return not t or t in _FAILURE_SENTENCES or bool(_VARIABLE_FAILURE_RE.fullmatch(t))
 
 
+# Why a chat image got no analysis. cloud_brain puts one of these in the turn
+# (as a NOT ANALYZED block) in place of the image part.
+NOT_ANALYZED_NOT_INLINE = (
+    "[Not an attached photo (a link or empty image), so it was not opened. To look at it, attach the photo itself.]"
+)
+NOT_ANALYZED_DISABLED = _FAIL_DISABLED
+NOT_ANALYZED_OVER_CAP = f"[Only the first {MAX_IMAGES_PER_REQUEST} photos in a request are analyzed.]"
+
+
+def photo_not_analyzed(n: int, reason: str = "") -> str:
+    """The block a turn carries for a photo that has no description."""
+    return f"[PHOTO {n} NOT ANALYZED] {reason}" if reason else f"[PHOTO {n} NOT ANALYZED]"
+
+
 def frame_photo_description(n: int, description: str) -> str:
     """Wrap one vision description as clearly-labelled untrusted photo content.
 
@@ -129,7 +144,7 @@ def frame_photo_description(n: int, description: str) -> str:
 
     if is_vision_failure(description):
         reason = (description or "").strip() or "[Image analysis returned nothing.]"
-        return f"[PHOTO {n} NOT ANALYZED] {reason}"
+        return photo_not_analyzed(n, reason)
     # NFKC first: fullwidth "＜｜im_start｜＞" / "［END PHOTO" fold to ASCII and
     # are then caught by the neutralizer / frame escape below.
     text = _FORMAT_CHARS_RE.sub("", unicodedata.normalize("NFKC", description)).strip()
@@ -144,19 +159,43 @@ def frame_photo_description(n: int, description: str) -> str:
     )
 
 
-def _is_safe_image_url(url: str) -> bool:
-    """Validate that an image URL is a data URI or raw base64, not an HTTP URL (SSRF prevention)."""
+_RAW_BASE64_RE = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+
+
+def _is_safe_image_url(url: object) -> bool:
+    """True for inline image data (a data: URI or raw base64), False for a link or anything else.
+
+    SSRF prevention: a link is never fetched here, and never forwarded to the
+    brain either (llama-server downloads http(s) image URLs itself). Raw base64
+    must be base64 characters only, so "HTTP://...", "//host.example/x" or
+    "gopher:" count as links. A string that happens to be all base64
+    characters ("//host/x") passes: analyze_image sends it to the vision
+    model as inline data (which fails to load as an image), never fetched.
+    """
+    if not isinstance(url, str):
+        return False
     if url.startswith("data:"):
         return True
-    # Raw base64 — no protocol prefix — is safe
-    return not url.startswith(("http://", "https://", "ftp://", "file://"))
+    return bool(_RAW_BASE64_RE.fullmatch(url))
+
+
+def image_part_url(part: dict) -> str:
+    """The URL of an OpenAI image_url part ("" when missing or malformed).
+
+    Accepts {"image_url": {"url": ...}} and the plain-string form some clients send.
+    """
+    url_data = part.get("image_url", {})
+    url = url_data.get("url", "") if isinstance(url_data, dict) else url_data
+    return url if isinstance(url, str) else ""
 
 
 def extract_images_from_messages(messages: list[dict]) -> list[dict]:
     """Extract image_url content parts from OpenAI-format messages.
 
-    Returns list of dicts: [{"image_url": "data:...", "text": "user prompt", "msg_index": 0}]
-    Only accepts data URIs and raw base64 — rejects http:// URLs to prevent SSRF.
+    Returns list of dicts:
+    [{"image_url": "data:...", "text": "user prompt", "msg_index": 0, "part_index": 1}]
+    Only accepts data URIs and raw base64 — skips links (SSRF prevention;
+    cloud_brain turns each skipped one into a NOT ANALYZED note and counts it).
     Caps at MAX_IMAGES_PER_REQUEST images to prevent resource exhaustion.
     """
     images = []
@@ -167,23 +206,21 @@ def extract_images_from_messages(messages: list[dict]) -> list[dict]:
         if not isinstance(content, list):
             continue
         text_parts = []
-        for part in content:
+        for j, part in enumerate(content):
             if isinstance(part, dict):
-                if part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
                 elif part.get("type") == "image_url":
-                    url_data = part.get("image_url", {})
-                    url = url_data.get("url", "") if isinstance(url_data, dict) else url_data
-                    if url and _is_safe_image_url(url):
+                    url = image_part_url(part)
+                    if _is_safe_image_url(url):
                         images.append(
                             {
                                 "image_url": url,
                                 "text": "",  # filled after collecting all text parts
                                 "msg_index": i,
+                                "part_index": j,
                             }
                         )
-                    elif url:
-                        logger.warning("[VISION] Rejected non-data-URI image URL (SSRF prevention)")
         # Attach collected text to all images from this message
         combined_text = " ".join(text_parts).strip()
         for img in images:
@@ -228,9 +265,12 @@ async def analyze_image(
     # Parse and validate image
     mime_type, b64_data = _parse_data_uri(image_data)
     if mime_type not in SUPPORTED_MIME_TYPES:
-        logger.warning("[VISION] Unsupported MIME type: %s", mime_type)
+        # The data-URI header is client text: shown only when it looks like a
+        # MIME type (also keeps the reply a recognised failure sentence).
+        shown = mime_type if _MIME_SHAPE_RE.fullmatch(mime_type) else "malformed"
+        logger.warning("[VISION] Unsupported MIME type: %s", shown)
         VISION_REQUEST_COUNT.labels(status="rejected_mime").inc()
-        return f"[Unsupported image type: {mime_type}. Supported: JPEG, PNG, WebP, GIF.]"
+        return f"[Unsupported image type: {shown}. Supported: JPEG, PNG, WebP, GIF.]"
 
     img_size = _estimate_image_size(b64_data)
     if img_size == 0:
