@@ -219,6 +219,13 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
         return f"Failed: {result.message}"
 
 
+def _is_known_wing(wing: str) -> bool:
+    try:
+        return shared.get_palace().is_known_wing(wing)
+    except Exception:
+        return True
+
+
 async def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
     """Search the personal knowledge base (memory palace)."""
     if not query:
@@ -227,12 +234,22 @@ async def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
     filter_desc = f" (wing={wing}, room={room})" if wing or room else ""
     # log-safe: memory wing/room filter names
     logger.info(f"[MEMORY] Searching ({len(query)} chars){filter_desc}")
-    context = await rag_context(query, wing=wing, room=room)
-
+    # An explicit search: the model asked, so facts get the looser search floor
+    # rather than the per-turn one (which hid facts scoring ~0.4).
+    floor = shared.MEMORY_SEARCH_MIN_COS
+    context = await rag_context(query, wing=wing, room=room, fact_min_cos=floor)
     if context:
         return f"Found relevant information:\n{context}"
-    else:
-        return "No relevant information found in memory."
+
+    if room or (wing and _is_known_wing(wing)):  # an unknown wing was already ignored above
+        # Wing/room come from keyword routing, so the fact may be filed
+        # elsewhere — an answer from another wing beats "nothing found".
+        logger.info("[MEMORY] Nothing under the filter — searching all wings")
+        context = await rag_context(query, fact_min_cos=floor)
+        if context:
+            return f"Nothing under that filter, but found this elsewhere in memory:\n{context}"
+
+    return "No relevant information found in memory."
 
 
 async def tool_web_search(query: str, category: str = "general", time_range: str = None) -> str:

@@ -15,6 +15,7 @@ Flow:
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -27,11 +28,13 @@ from typing import Any, Dict, List, Optional
 
 from orchestrator import shared
 from orchestrator.metrics import (
+    ACTIVE_REQUESTS,
     AUTO_LEARN_CATEGORY_BLOCKED,
     AUTO_LEARN_DUPLICATES_SKIPPED,
     AUTO_LEARN_ERRORS,
     AUTO_LEARN_EXTRACTION_LATENCY,
     AUTO_LEARN_EXTRACTIONS_TOTAL,
+    AUTO_LEARN_FACTS_CAPPED,
     AUTO_LEARN_FACTS_STORED,
     AUTO_LEARN_RUNS,
     AUTO_LEARN_SENSITIVE_FILTERED,
@@ -116,6 +119,9 @@ def encrypt_text(text: str) -> str:
 _FAILED_TOKENS: set[str] = set()
 
 
+DECRYPT_FAILED_PLACEHOLDER = "[encrypted — decryption failed]"
+
+
 def decrypt_text(token: str) -> str:
     """Decrypt a Fernet token. Returns plaintext, or a redacted placeholder on failure."""
     cipher = _get_cipher()
@@ -136,7 +142,7 @@ def decrypt_text(token: str) -> str:
                 "returning redacted placeholder (further failures for this token will be silent)",
                 fingerprint,
             )
-        return "[encrypted — decryption failed]"
+        return DECRYPT_FAILED_PLACEHOLDER
 
 
 def maybe_decrypt(doc: str, meta: Optional[Dict[str, Any]] = None) -> str:
@@ -270,10 +276,16 @@ JSON ARRAY:"""
 
 
 _EXTRACTION_MAX_CHARS = 12000
+# A long conversation is extracted in windows of _EXTRACTION_MAX_CHARS instead
+# of being cut to its last 12k chars (a 45-minute voice call about the user's
+# past lost its first half that way). Each window is one call on the single
+# llama slot (~20 s); beyond this many, the most recent windows are kept.
+_EXTRACTION_MAX_WINDOWS = 4
+_CHAT_IDLE_WAIT_S = 60  # how long a window waits for interactive chat to finish
 
 
-def _format_conversation(messages: List[Dict], assistant_max_chars: Optional[int] = None) -> str:
-    """Format messages into a readable conversation string for extraction."""
+def _conversation_lines(messages: List[Dict], assistant_max_chars: Optional[int] = None) -> List[str]:
+    """One "User: …" / "Assistant: …" entry per message, for extraction."""
     lines = []
     for msg in messages:
         role = msg.get("role", "")
@@ -284,14 +296,58 @@ def _format_conversation(messages: List[Dict], assistant_max_chars: Optional[int
             # Multi-part content (e.g., with images)
             text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
             content = " ".join(text_parts)
-        if not content or not content.strip():
+        if not isinstance(content, str) or not content.strip():
             continue
         content = content.strip()
         if role == "assistant" and assistant_max_chars and len(content) > assistant_max_chars:
             content = content[:assistant_max_chars] + " [...]"
         label = "User" if role == "user" else "Assistant"
         lines.append(f"{label}: {content}")
-    return "\n".join(lines)
+    return lines
+
+
+def _format_conversation(messages: List[Dict], assistant_max_chars: Optional[int] = None) -> str:
+    """Format messages into a readable conversation string for extraction."""
+    return "\n".join(_conversation_lines(messages, assistant_max_chars))
+
+
+def _conversation_windows(messages: List[Dict]) -> List[str]:
+    """Split a conversation into extraction windows of at most _EXTRACTION_MAX_CHARS.
+
+    Short conversations are one window, as before. Over budget, assistant
+    replies are shortened first (facts come from what the USER said), then the
+    messages are packed into consecutive windows; each window after the first
+    repeats the previous message so an answer keeps its question.
+    """
+    lines = _conversation_lines(messages)
+    if len("\n".join(lines)) <= _EXTRACTION_MAX_CHARS:
+        return ["\n".join(lines)] if lines else []
+
+    lines = [line[:_EXTRACTION_MAX_CHARS] for line in _conversation_lines(messages, assistant_max_chars=300)]
+    windows: List[List[str]] = []
+    current: List[str] = []
+    size = 0
+    for line in lines:
+        if current and size + len(line) + 1 > _EXTRACTION_MAX_CHARS:
+            windows.append(current)
+            previous = current[-1]
+            current = [previous] if len(previous) + len(line) + 1 <= _EXTRACTION_MAX_CHARS else []
+            size = sum(len(x) + 1 for x in current)
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        windows.append(current)
+
+    texts = ["\n".join(w) for w in windows]
+    if len(texts) > _EXTRACTION_MAX_WINDOWS:
+        logger.info(
+            "[AUTO_LEARN] Conversation needs %d windows — the earliest %d are not extracted",
+            len(texts),
+            len(texts) - _EXTRACTION_MAX_WINDOWS,
+        )
+        texts = texts[-_EXTRACTION_MAX_WINDOWS:]
+        texts[0] = "[...earlier conversation omitted...]\n" + texts[0]
+    return texts
 
 
 async def extract_facts(messages: List[Dict]) -> List[Dict]:
@@ -300,23 +356,45 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
 
     Returns a list of fact dicts: [{fact, category, confidence, source_quote}]
     """
-    conversation_text = _format_conversation(messages)
-    if not conversation_text or len(conversation_text) < 50:
+    windows = _conversation_windows(messages)
+    if not windows or sum(len(w) for w in windows) < 50:
         logger.info("[AUTO_LEARN] Conversation too short for extraction")
         return []
+    if len(windows) > 1:
+        logger.info("[AUTO_LEARN] Long conversation — extracting in %d windows", len(windows))
 
-    # Each conversation is extracted once, so fit as much of it as is cheap
-    # (~3k tokens; prefill is seconds). Over budget: shorten assistant replies
-    # first (facts come from what the USER said), then keep the most recent.
-    if len(conversation_text) > _EXTRACTION_MAX_CHARS:
-        conversation_text = _format_conversation(messages, assistant_max_chars=300)
-    if len(conversation_text) > _EXTRACTION_MAX_CHARS:
-        cut = len(conversation_text) - _EXTRACTION_MAX_CHARS
-        start = conversation_text.find("\n", cut)
-        if start == -1:
-            start = cut
-        conversation_text = "[...earlier conversation omitted...]\n" + conversation_text[start:].lstrip("\n")
+    filtered: List[Dict] = []
+    raw_count = 0
+    for window in windows:
+        await _wait_for_idle_chat()
+        facts = await _extract_window(window)
+        if facts is None:
+            break  # brain unreachable/timed out: don't tie up the slot with the rest
+        raw_count += len(facts)
+        filtered.extend(_filter_facts(facts))
 
+    if raw_count:
+        logger.info("[AUTO_LEARN] Extracted %d facts (from %d raw)", len(filtered), raw_count)
+    return filtered
+
+
+async def _wait_for_idle_chat() -> None:
+    """Extraction and interactive chat share one model slot (--parallel 1). Let a
+    chat request in flight finish first (bounded), so a long conversation's
+    several extraction calls never make the user wait."""
+    deadline = time.monotonic() + _CHAT_IDLE_WAIT_S
+    while time.monotonic() < deadline:
+        try:
+            if ACTIVE_REQUESTS._value.get() <= 0:
+                return
+        except Exception:
+            return
+        await asyncio.sleep(1.0)
+
+
+async def _extract_window(conversation_text: str) -> Optional[List[Dict]]:
+    """One extraction call. Failures are recorded (_record_error); a failed call
+    to the brain returns None, an unusable reply []."""
     # Use replace instead of .format() to avoid crashing on curly braces in conversation
     prompt = _EXTRACTION_PROMPT.replace("{conversation}", conversation_text)
 
@@ -344,7 +422,7 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
         # unexpected failure mode.
         logger.warning("[AUTO_LEARN] LLM extraction call failed: %r", e, exc_info=True)
         _record_error("llm")
-        return []
+        return None
 
     # Parse JSON from response (reuse pattern from background_jobs._parse_event_json)
     if not raw.strip():
@@ -365,19 +443,29 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
             return []
         logger.info("[AUTO_LEARN] No facts extracted from conversation")
         return []
+    return facts
 
-    # Apply limits and filters
+
+def _filter_facts(facts: List[Dict]) -> List[Dict]:
+    """Drop unusable/blocked/sensitive facts, then apply the per-window cap.
+
+    Filter first, then cap — so rejected facts don't use up the cap.
+    """
     filtered = []
-    for fact in facts[: shared.AUTO_LEARN_MAX_FACTS]:
-        fact_text = fact.get("fact", "").strip()
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if not isinstance(fact.get("fact"), str):
+            continue
+        fact_text = fact["fact"].strip()
         if len(fact_text) < 10:
             continue
-        if fact.get("confidence", "").lower() not in ("high", "medium"):
+        if str(fact.get("confidence") or "").lower() not in ("high", "medium"):
             continue
         # Structured domains (meds/health/schedule/routine) are owned by YAML —
         # auto-learn must never shadow them. First of two gates (the other is in
         # store_fact, so a caller bypassing extract_facts still can't persist one).
-        category = str(fact.get("category", "")).lower().strip()
+        category = str(fact.get("category") or "").lower().strip()
         if category in shared.AUTO_LEARN_BLOCKED_CATEGORIES:
             AUTO_LEARN_CATEGORY_BLOCKED.labels(category=category).inc()
             logger.info("[AUTO_LEARN] Dropped structured-domain fact (category=%s) — owned by YAML", category)
@@ -388,13 +476,26 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
             logger.info("[AUTO_LEARN] Filtered sensitive data from extraction (category: %s)", fact.get("category"))
             continue
         # Also check source_quote for sensitive data
-        source_quote = fact.get("source_quote", "")
+        source_quote = str(fact.get("source_quote") or "")
         if source_quote and _contains_sensitive_data(source_quote):
             AUTO_LEARN_SENSITIVE_FILTERED.inc()
             continue
-        filtered.append(fact)
+        # Normalized so the store path can rely on plain strings.
+        filtered.append(
+            {
+                **fact,
+                "fact": fact_text,
+                "category": category or "general",
+                "confidence": str(fact.get("confidence")).lower(),
+                "source_quote": source_quote,
+            }
+        )
 
-    logger.info("[AUTO_LEARN] Extracted %d facts (from %d raw)", len(filtered), len(facts))
+    cap = shared.AUTO_LEARN_MAX_FACTS
+    if len(filtered) > cap:
+        AUTO_LEARN_FACTS_CAPPED.inc(len(filtered) - cap)
+        logger.info("[AUTO_LEARN] Fact cap (%d) dropped %d facts", cap, len(filtered) - cap)
+        filtered = filtered[:cap]
     return filtered
 
 
@@ -525,7 +626,7 @@ async def store_fact(fact: Dict) -> Optional[str]:
     if shared.PALACE_ENABLED:
         try:
             palace = shared.get_palace()
-            wing, room = palace.route_to_room(fact_text)
+            wing, room = palace.route_fact(fact_text, category)
         except Exception as e:
             logger.warning("[AUTO_LEARN] Palace routing failed (non-fatal): %s", e)
 
@@ -555,6 +656,10 @@ async def store_fact(fact: Dict) -> Optional[str]:
     # Optional markdown file
     if shared.AUTO_LEARN_MARKDOWN:
         _append_to_monthly_markdown(fact_text, category, confidence, now)
+
+    if shared.PALACE_ENABLED:
+        with contextlib.suppress(Exception):
+            shared.get_palace().invalidate_wakeup_cache()  # a new identity fact shows up next turn
 
     AUTO_LEARN_FACTS_STORED.labels(category=category).inc()
     PALACE_STORES_TOTAL.labels(wing=wing or "unrouted", room=room or "unrouted").inc()
