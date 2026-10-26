@@ -201,6 +201,9 @@ jobs:
 
           # data/palace.yaml is a single-file bind mount read once at startup:
           # a git pull swaps its inode, so only a recreate picks the change up.
+          # Keep this before the SearXNG step: the recreate puts the
+          # orchestrator on searxng-net (and creates that network), so searxng
+          # can then leave gateway-net without cutting Jess's web search off.
           if echo "$CHANGED" | grep -qE "^orchestrator/|^docker-compose\.yml$|^data/palace\.yaml$"; then
             echo "::group::Rebuilding orchestrator"
             docker compose up -d --build --force-recreate orchestrator
@@ -213,8 +216,9 @@ jobs:
             echo "::endgroup::"
           fi
 
-          # Runs before the monitoring step: it creates searxng-probe-net,
-          # which blackbox-exporter joins as external. settings.yml is a
+          # Runs after the orchestrator step (searxng-net, above) and before the
+          # monitoring step: it creates searxng-probe-net, which
+          # blackbox-exporter joins as external. settings.yml is a
           # single-file mount (a git pull swaps its inode), so a change there
           # needs --force-recreate; for compose edits a plain `up` recreates
           # only if searxng's own config changed (a recreate also resets
@@ -239,6 +243,34 @@ jobs:
             if [ "$searxng_ok" != true ]; then
               echo "::error::SearXNG not up after 60s. Read 'docker logs searxng' on Jupiter."
               docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' searxng || true
+              exit 1
+            fi
+            # The check above goes through the host port. Jess calls
+            # SEARXNG_URL over searxng-net, which only the orchestrator shares,
+            # and SearXNGDown probes over searxng-probe-net, so neither would
+            # notice the orchestrator missing that network. /healthz only.
+            orch_ok=false
+            for i in $(seq 1 10); do
+              if docker exec brain-orchestrator python -c "import os, httpx; httpx.get(os.environ['SEARXNG_URL'].rstrip('/') + '/healthz', timeout=5).raise_for_status()" >/dev/null 2>&1; then orch_ok=true; break; fi
+              sleep 3
+            done
+            if [ "$orch_ok" != true ]; then
+              echo "::error::brain-orchestrator can't reach SearXNG at \$SEARXNG_URL (web search is down). Is it on gateway_nerves_searxng-net? docker inspect -f '{{json .NetworkSettings.Networks}}' brain-orchestrator; fix with: docker compose up -d orchestrator"
+              exit 1
+            fi
+            # Runtime twin of test_searxng_hardening.py: a manual `docker
+            # network connect` or a leftover container would give searxng a
+            # neighbour the compose files don't show. blackbox-exporter joins
+            # the probe network in the monitoring step below, so it may be
+            # missing here.
+            sorted_words() { xargs -n1 | sort | xargs; }
+            sx_nets="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' searxng | sorted_words)"
+            sx_peers="$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' gateway_nerves_searxng-net | sorted_words)"
+            probe_peers="$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' gateway_nerves_searxng-probe-net | sorted_words)"
+            if [ "$sx_nets" != "gateway_nerves_searxng-net gateway_nerves_searxng-probe-net" ] \
+                || [ "$sx_peers" != "brain-orchestrator searxng" ] \
+                || ! grep -qxE 'searxng|blackbox-exporter searxng' <<<"$probe_peers"; then
+              echo "::error::Unexpected SearXNG networking: searxng is on [$sx_nets], gateway_nerves_searxng-net holds [$sx_peers], gateway_nerves_searxng-probe-net holds [$probe_peers]. Expected searxng on gateway_nerves_searxng-net + gateway_nerves_searxng-probe-net only, brain-orchestrator + searxng alone on searxng-net, and at most blackbox-exporter beside searxng on the probe network. Remove the extra with docker network disconnect <network> <container>."
               exit 1
             fi
             echo "::endgroup::"

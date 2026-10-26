@@ -1105,6 +1105,6 @@ See `.env.example` for full list. Key vars:
 |-----|----------|------|
 | Home Assistant | http://10.0.0.248:8123/api | Bearer token |
 | Google Calendar | https://www.googleapis.com/calendar/v3 | OAuth2 bearer token |
-| SearXNG | http://searxng:8080 (`SEARXNG_URL`, over `gateway-net`; host port is loopback-only) | None |
+| SearXNG | http://searxng:8080 (`SEARXNG_URL`, over `searxng-net` — orchestrator + searxng only; host port is loopback-only) | None |
 | Context7 (`look_it_up` → `library_docs`, only when `RESEARCH_HELPER_ENABLED`) | https://context7.com/api/v3/search | Optional bearer `RESEARCH_CONTEXT7_API_KEY` (anonymous = low rate limit) |
 | Actual Budget (via `actualpy`, read-only) | http://actual-budget:5006 (Jupiter `actual-budget`, over `gateway-net`; host port is loopback-only) | Server password (`ACTUAL_PASSWORD`) |

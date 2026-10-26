@@ -241,6 +241,7 @@ services:
     networks:
       - gateway-net
       - grist-net
+      - searxng-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
@@ -326,7 +327,7 @@ services:
     # inactive on Jupiter, so the old all-interfaces publish let any LAN or
     # tailnet host burst searches through it (and get the upstream engines
     # suspended) and use /image_proxy. Jess uses http://searxng:8080 over
-    # gateway-net; the blackbox probe uses searxng:8080 over searxng-probe-net.
+    # searxng-net; the blackbox probe uses searxng:8080 over searxng-probe-net.
     # The browser UI answers on Jupiter only. To open it from other devices:
     # `sudo tailscale serve --bg --https=8091 http://127.0.0.1:8090` — that
     # puts it back on the tailnet, still without auth.
@@ -347,8 +348,14 @@ services:
       # (SearXNGDown) instead of breaking every compose command or running with
       # an empty key.
       - SEARXNG_SECRET=${SEARXNG_SECRET:-ultrasecretkey}
+    # Not on gateway-net: it parses untrusted pages, and from there it could
+    # reach Loki (no auth: read every log, push lines the self-audit LLM
+    # reads), redis, the frontend, Actual and Radicale. searxng-net holds only
+    # the orchestrator (its one client) and is its route to the internet.
+    # Like any NAT'd bridge it can still reach the LAN and Jupiter's
+    # non-loopback ports (HA :8123, orchestrator :8888, Helios :8080).
     networks:
-      - gateway-net
+      - searxng-net
       - searxng-probe-net
 
   # --------------------------------------------------------------------------
@@ -613,7 +620,7 @@ networks:
     driver: bridge
   # Only brain-frontend + the monitoring stack's blackbox-exporter, so the
   # unauthenticated /probe proxy can check the dashboard without joining
-  # gateway-net (which would let searxng/redis/orchestrator drive /probe, and
+  # gateway-net (which would let every container there drive /probe, and
   # through it Prometheus' lifecycle API). Fixed name: monitoring joins it as
   # external. Absent on installs without the monitoring stack — harmless.
   frontend-probe-net:
@@ -622,17 +629,25 @@ networks:
   # Only searxng + blackbox-exporter, for the /healthz probe now that searxng
   # publishes on loopback only. Same reasoning as frontend-probe-net (blackbox
   # stays off gateway-net). Internal: no gateway, so searxng's upstream traffic
-  # keeps using gateway-net. Fixed name: monitoring joins it as external.
+  # uses searxng-net. Fixed name: monitoring joins it as external.
   searxng-probe-net:
     name: gateway_nerves_searxng-probe-net
     driver: bridge
     internal: true
   # Only the orchestrator + Grist (grist/docker-compose.yml joins it as
   # external). Grist trusts a forwarded login header that needs no secret, so it
-  # must not sit on gateway-net, where a compromised frontend/searxng could send
-  # that header. Empty (harmless) on installs without Grist.
+  # must not sit on gateway-net, where a compromised frontend could send that
+  # header. Empty (harmless) on installs without Grist.
   grist-net:
     name: gateway_nerves_grist-net
+    driver: bridge
+  # Only the orchestrator + searxng. Same idea as grist-net: searxng parses
+  # untrusted internet HTML, so it gets the one neighbour that calls it instead
+  # of all of gateway-net. Not internal: it is searxng's way out to the
+  # upstream engines. Compose creates it with whichever of the two starts first
+  # (CI rebuilds the orchestrator before it updates searxng).
+  searxng-net:
+    name: gateway_nerves_searxng-net
     driver: bridge
 
 volumes:
