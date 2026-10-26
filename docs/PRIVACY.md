@@ -91,8 +91,8 @@ Brain Gateway listens on these ports by default:
 | 8888 | Orchestrator API | LAN, bearer-token gated |
 | 8080 / 8002 / 8003 | Model layer (vLLM / TTS / STT) | **Loopback only** (`127.0.0.1`) by default |
 | 10300 / 10301 | Wyoming bridges (HA voice pipeline) | LAN |
-| 8090 | SearXNG | LAN |
-| 9090 / 3000 / 3100 | Prometheus / Grafana / Loki | LAN (advanced profile only) |
+| 8090 | SearXNG browser UI | **Loopback only** (`127.0.0.1`; no auth). Jess reaches it over the Docker network |
+| 9090 / 3000 / 3100 | Prometheus / Grafana / Loki | **Loopback only** (`127.0.0.1`; separate `monitoring/` compose project) |
 
 The model layer's loopback binding is set via `${MODEL_BIND_ADDR:-127.0.0.1}` in `docker-compose.yml`. Change it to `0.0.0.0` only if you have a deliberate reason to expose model weights to your LAN.
 

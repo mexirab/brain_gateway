@@ -25,15 +25,8 @@ modules:
       preferred_ip_protocol: "ip4"
       ip_protocol_fallback: false
 
-  http_post_2xx:
-    prober: http
-    timeout: 10s
-    http:
-      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
-      valid_status_codes: [200]
-      method: POST
-      preferred_ip_protocol: "ip4"
-
-  tcp_connect:
-    prober: tcp
-    timeout: 5s
+  # Only the modules Prometheus uses. Every container sharing a network with
+  # blackbox (monitoring-net, plus brain-frontend, grist and searxng on their
+  # probe networks) can call /probe with any module: a POST module would let one POST prometheus:9090/-/quit, and a
+  # tcp module would make blackbox a port scanner (http_post_2xx and
+  # tcp_connect were removed 2026-10-25 for that reason).
