@@ -587,6 +587,18 @@
           "range": true,
           "instant": false,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_chat_ttft_seconds_bucket{voice=\"true\"}[5m])))",
+          "legendFormat": "p95 voice",
+          "range": true,
+          "instant": false,
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -645,7 +657,7 @@
           "sort": "desc"
         }
       },
-      "description": "Time to first streamed token on /v1/chat/completions. If this collapses toward Request Latency, streaming has silently degraded to the buffered path \u2014 cross-check the degradation panel.",
+      "description": "Time to first streamed text on /v1/chat/completions, from when the tool loop starts (p95 voice: streamed voice turns only; the first spoken word also waits for a whole sentence and TTS). If this collapses toward Request Latency, streaming has silently degraded to the buffered path \u2014 cross-check the degradation panel.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -1184,8 +1196,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
-          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(bgw_voice_pipeline_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{path}}",
           "range": true,
           "instant": false,
           "refId": "B"
@@ -1271,7 +1283,7 @@
           "sort": "desc"
         }
       },
-      "description": "Text-in to text-out latency for voice-channel requests. Covers the LLM + tool-loop slice we control; excludes Whisper STT upstream and TTS synthesis + speaker playback downstream. Target: keep p95 under 13s (prior floor). Investigate spikes with the logs row below.",
+      "description": "Text-in to text-out latency for voice-channel requests. Covers the LLM + tool-loop slice we control; excludes Whisper STT upstream and TTS synthesis + speaker playback downstream. path=streamed (dashboard mic / call mode) is measured when the stream ends \u2014 the user hears the first sentence much earlier; before 2026-10-25 these were recorded before the tool loop ran. path=buffered (HA Assist) is the whole wait in silence. Target: keep p95 under 13s (prior floor). Investigate spikes with the logs row below.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -8082,8 +8094,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(bgw_web_search_total[15m]) * 60",
-          "legendFormat": "searches/min",
+          "expr": "sum by (result) (rate(bgw_web_search_total[15m])) * 60",
+          "legendFormat": "{{result}}/min",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -8157,6 +8169,7 @@
           "sort": "desc"
         }
       },
+      "description": "Searches per minute split by result and p95 search latency. ok; no_results (every engine answered, nothing found \u2014 not a failure); empty (no results and SearXNG reported engines suspended or failing); error; timeout. Failures reach the model as text, so this is the only place they show (alert WebSearchFailing). Voice searches give up after 5 s, typed ones after 15 s.",
       "gridPos": {
         "h": 8,
         "w": 6,
@@ -8244,7 +8257,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
         "y": 235
       },
@@ -8353,8 +8366,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 6,
         "y": 235
       },
       "id": 110
@@ -8424,11 +8437,97 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 6,
+        "x": 12,
         "y": 235
       },
       "id": 111
+    },
+    {
+      "type": "timeseries",
+      "title": "SearXNG Engines Unresponsive (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (engine, reason) (increase(bgw_web_search_engine_unresponsive_total[6h]))",
+          "legendFormat": "{{engine}} ({{reason}})",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Upstream engines SearXNG reported as unresponsive, counted once per search. 'suspended' means SearXNG paused the engine after it was blocked or rate-limited \u2014 it recovers on its own; never burst-test real searches. Engine series are created on first sight, so the first report per engine after an orchestrator restart doesn't show here.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 235
+      },
+      "id": 112
     },
     {
       "type": "row",
@@ -8441,7 +8540,7 @@
         "x": 0,
         "y": 243
       },
-      "id": 112
+      "id": 113
     },
     {
       "type": "timeseries",
@@ -8526,7 +8625,7 @@
         "x": 0,
         "y": 244
       },
-      "id": 113
+      "id": 114
     },
     {
       "type": "timeseries",
@@ -8623,7 +8722,7 @@
         "x": 8,
         "y": 244
       },
-      "id": 114
+      "id": 115
     },
     {
       "type": "timeseries",
@@ -8720,7 +8819,7 @@
         "x": 16,
         "y": 244
       },
-      "id": 115
+      "id": 116
     },
     {
       "type": "row",
@@ -8733,7 +8832,7 @@
         "x": 0,
         "y": 252
       },
-      "id": 116
+      "id": 117
     },
     {
       "type": "timeseries",
@@ -8843,7 +8942,7 @@
         "x": 0,
         "y": 253
       },
-      "id": 117
+      "id": 118
     },
     {
       "type": "stat",
@@ -8910,7 +9009,7 @@
         "x": 6,
         "y": 253
       },
-      "id": 118
+      "id": 119
     },
     {
       "type": "stat",
@@ -8977,7 +9076,7 @@
         "x": 12,
         "y": 253
       },
-      "id": 119
+      "id": 120
     },
     {
       "type": "timeseries",
@@ -9074,7 +9173,7 @@
         "x": 18,
         "y": 253
       },
-      "id": 120
+      "id": 121
     },
     {
       "type": "timeseries",
@@ -9195,7 +9294,7 @@
         "x": 0,
         "y": 261
       },
-      "id": 121
+      "id": 122
     },
     {
       "type": "timeseries",
@@ -9320,7 +9419,7 @@
         "x": 8,
         "y": 261
       },
-      "id": 122
+      "id": 123
     },
     {
       "type": "timeseries",
@@ -9418,7 +9517,7 @@
         "x": 16,
         "y": 261
       },
-      "id": 123
+      "id": 124
     },
     {
       "type": "row",
@@ -9431,7 +9530,7 @@
         "x": 0,
         "y": 269
       },
-      "id": 124
+      "id": 125
     },
     {
       "type": "stat",
@@ -9499,7 +9598,7 @@
         "x": 0,
         "y": 270
       },
-      "id": 125
+      "id": 126
     },
     {
       "type": "timeseries",
@@ -9584,7 +9683,7 @@
         "x": 6,
         "y": 270
       },
-      "id": 126
+      "id": 127
     },
     {
       "type": "timeseries",
@@ -9669,7 +9768,7 @@
         "x": 12,
         "y": 270
       },
-      "id": 127
+      "id": 128
     },
     {
       "type": "timeseries",
@@ -9754,7 +9853,7 @@
         "x": 18,
         "y": 270
       },
-      "id": 128
+      "id": 129
     },
     {
       "type": "row",
@@ -9767,7 +9866,7 @@
         "x": 0,
         "y": 278
       },
-      "id": 129
+      "id": 130
     },
     {
       "type": "timeseries",
@@ -9852,7 +9951,7 @@
         "x": 0,
         "y": 279
       },
-      "id": 130
+      "id": 131
     },
     {
       "type": "timeseries",
@@ -9938,7 +10037,7 @@
         "x": 8,
         "y": 279
       },
-      "id": 131
+      "id": 132
     },
     {
       "type": "timeseries",
@@ -10024,7 +10123,7 @@
         "x": 16,
         "y": 279
       },
-      "id": 132
+      "id": 133
     },
     {
       "type": "row",
@@ -10037,7 +10136,7 @@
         "x": 0,
         "y": 287
       },
-      "id": 133
+      "id": 134
     },
     {
       "type": "stat",
@@ -10105,7 +10204,7 @@
         "x": 0,
         "y": 288
       },
-      "id": 134
+      "id": 135
     },
     {
       "type": "stat",
@@ -10173,7 +10272,7 @@
         "x": 6,
         "y": 288
       },
-      "id": 135
+      "id": 136
     },
     {
       "type": "timeseries",
@@ -10259,7 +10358,7 @@
         "x": 12,
         "y": 288
       },
-      "id": 136
+      "id": 137
     },
     {
       "type": "stat",
@@ -10327,7 +10426,7 @@
         "x": 18,
         "y": 288
       },
-      "id": 137
+      "id": 138
     },
     {
       "type": "row",
@@ -10340,7 +10439,7 @@
         "x": 0,
         "y": 296
       },
-      "id": 138
+      "id": 139
     },
     {
       "type": "stat",
@@ -10412,7 +10511,7 @@
         "x": 0,
         "y": 297
       },
-      "id": 139
+      "id": 140
     },
     {
       "type": "timeseries",
@@ -10498,7 +10597,7 @@
         "x": 8,
         "y": 297
       },
-      "id": 140
+      "id": 141
     },
     {
       "type": "logs",
@@ -10539,7 +10638,7 @@
         "x": 16,
         "y": 297
       },
-      "id": 141
+      "id": 142
     },
     {
       "type": "row",
@@ -10552,7 +10651,7 @@
         "x": 0,
         "y": 305
       },
-      "id": 142
+      "id": 143
     },
     {
       "type": "timeseries",
@@ -10638,7 +10737,7 @@
         "x": 0,
         "y": 306
       },
-      "id": 143
+      "id": 144
     },
     {
       "type": "timeseries",
@@ -10748,7 +10847,7 @@
         "x": 4,
         "y": 306
       },
-      "id": 144
+      "id": 145
     },
     {
       "type": "timeseries",
@@ -10846,7 +10945,7 @@
         "x": 8,
         "y": 306
       },
-      "id": 145
+      "id": 146
     },
     {
       "type": "logs",
@@ -10887,7 +10986,7 @@
         "x": 12,
         "y": 306
       },
-      "id": 146
+      "id": 147
     },
     {
       "type": "timeseries",
@@ -10973,7 +11072,7 @@
         "x": 16,
         "y": 306
       },
-      "id": 147
+      "id": 148
     },
     {
       "type": "timeseries",
@@ -11059,7 +11158,7 @@
         "x": 20,
         "y": 306
       },
-      "id": 148
+      "id": 149
     },
     {
       "type": "timeseries",
@@ -11157,7 +11256,7 @@
         "x": 0,
         "y": 314
       },
-      "id": 149
+      "id": 150
     },
     {
       "type": "timeseries",
@@ -11267,7 +11366,7 @@
         "x": 8,
         "y": 314
       },
-      "id": 150
+      "id": 151
     },
     {
       "type": "stat",
@@ -11339,7 +11438,7 @@
         "x": 16,
         "y": 314
       },
-      "id": 151
+      "id": 152
     },
     {
       "type": "row",
@@ -11352,7 +11451,7 @@
         "x": 0,
         "y": 322
       },
-      "id": 152
+      "id": 153
     },
     {
       "type": "stat",
@@ -11415,7 +11514,7 @@
         "x": 0,
         "y": 323
       },
-      "id": 153
+      "id": 154
     },
     {
       "type": "timeseries",
@@ -11501,7 +11600,7 @@
         "x": 8,
         "y": 323
       },
-      "id": 154
+      "id": 155
     },
     {
       "type": "stat",
@@ -11564,7 +11663,7 @@
         "x": 16,
         "y": 323
       },
-      "id": 155
+      "id": 156
     },
     {
       "type": "timeseries",
@@ -11654,7 +11753,7 @@
         "x": 0,
         "y": 331
       },
-      "id": 156
+      "id": 157
     },
     {
       "type": "stat",
@@ -11722,7 +11821,7 @@
         "x": 8,
         "y": 331
       },
-      "id": 157
+      "id": 158
     },
     {
       "type": "stat",
@@ -11790,7 +11889,7 @@
         "x": 16,
         "y": 331
       },
-      "id": 158
+      "id": 159
     },
     {
       "type": "stat",
@@ -11858,7 +11957,7 @@
         "x": 0,
         "y": 339
       },
-      "id": 159
+      "id": 160
     },
     {
       "type": "timeseries",
@@ -11944,7 +12043,7 @@
         "x": 8,
         "y": 339
       },
-      "id": 160
+      "id": 161
     },
     {
       "type": "timeseries",
@@ -12054,7 +12153,7 @@
         "x": 16,
         "y": 339
       },
-      "id": 161
+      "id": 162
     },
     {
       "type": "row",
@@ -12067,7 +12166,7 @@
         "x": 0,
         "y": 347
       },
-      "id": 162
+      "id": 163
     },
     {
       "type": "logs",
@@ -12108,7 +12207,7 @@
         "x": 0,
         "y": 348
       },
-      "id": 163
+      "id": 164
     },
     {
       "type": "logs",
@@ -12149,7 +12248,7 @@
         "x": 12,
         "y": 348
       },
-      "id": 164
+      "id": 165
     }
   ]
 }

@@ -298,9 +298,10 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 ### Web Search
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_web_search_total` | Counter | | Web search queries |
+| `bgw_web_search_total` | Counter | result, voice | Searches by outcome (`ok\|no_results\|empty\|error\|timeout`; `no_results` is not a failure). The only web_search failure signal — failures return as text, so `bgw_tool_call_errors_total` never sees them. Alert `WebSearchFailing` |
+| `bgw_web_search_engine_unresponsive_total` | Counter | engine, reason | SearXNG engines reported unresponsive per search (reason `suspended\|timeout\|captcha\|access_denied\|too_many_requests\|other`; ≤40 engines, else `other`; not pre-seeded) |
 | `bgw_web_search_duration_seconds` | Histogram | | Search latency |
-| `bgw_web_search_results_count` | Histogram | | Results returned |
+| `bgw_web_search_results_count` | Histogram | | Results returned (0 on no results) |
 
 ### Infrastructure
 | Metric | Type | Labels | Purpose |

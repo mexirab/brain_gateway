@@ -284,7 +284,7 @@ class CloudBrain:
 
         try:
             return await self._chat_unified_inner(
-                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice
+                messages, stream, external_tools, ha_client, user_text, routing_info, is_voice, started_at=_t0
             )
         except Exception as e:
             REQUEST_ERRORS.labels(mode="unified", error_type=type(e).__name__).inc()
@@ -293,8 +293,10 @@ class CloudBrain:
             elapsed = time.time() - _t0
             ACTIVE_REQUESTS.dec()
             REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
-            if is_voice:
-                VOICE_PIPELINE_LATENCY.observe(elapsed)
+            # A real-streamed turn returns before the loop has run; its
+            # generator records the voice latency when the stream ends.
+            if is_voice and routing_info.get("streaming") != "real":
+                VOICE_PIPELINE_LATENCY.labels(path="buffered").observe(elapsed)
 
     async def _chat_unified_inner(
         self,
@@ -305,6 +307,7 @@ class CloudBrain:
         user_text: str,
         routing_info: Dict,
         is_voice: bool = False,
+        started_at: Optional[float] = None,
     ) -> Any:
         """Inner unified flow (separated for clean metrics wrapping)."""
         # --- Vision: detect and process images before the main loop ---
@@ -493,6 +496,7 @@ class CloudBrain:
                 model_url=model_url,
                 model_name=model_name,
                 is_voice=is_voice,
+                started_at=started_at,
             )
 
         try:
@@ -831,9 +835,13 @@ class CloudBrain:
         model_url: str,
         model_name: str,
         is_voice: bool,
+        started_at: Optional[float] = None,
     ):
         """Real streaming: run the unified loop in a producer task and relay
         its gate-safe deltas as OpenAI SSE chunks while it executes.
+
+        started_at is when the request reached _chat_unified: voice turns
+        record bgw_voice_pipeline_seconds from it when the stream ends.
 
         Semantics parity with the buffered path:
         - Loop failure with NOTHING emitted yet → try the fallback model
@@ -922,6 +930,8 @@ class CloudBrain:
                 + "\n\n"
             )
 
+        ttft = CHAT_TTFT.labels(voice="true" if is_voice else "false")
+
         async def generate():
             task = asyncio.create_task(producer())
             emitted = False
@@ -932,14 +942,14 @@ class CloudBrain:
                     if kind == "delta":
                         if not emitted:
                             emitted = True
-                            CHAT_TTFT.observe(time.time() - t0)
+                            ttft.observe(time.time() - t0)
                         yield _sse({"content": payload})
                     elif kind == "final":
                         # Fully-buffered turns (fallback model, non-stream-capable
                         # backend edge cases) produced no deltas — send the whole
                         # answer as one chunk so behavior matches _stream_text.
                         if not emitted and payload:
-                            CHAT_TTFT.observe(time.time() - t0)
+                            ttft.observe(time.time() - t0)
                             yield _sse({"content": payload})
                         yield _sse({}, finish_reason="stop")
                         yield "data: [DONE]\n\n"
@@ -958,8 +968,16 @@ class CloudBrain:
                 # retrieved".
                 if not task.done():
                     task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                finally:
+                    # Stream over (answered, failed or client gone): the whole
+                    # turn, tool rounds included.
+                    if is_voice:
+                        VOICE_PIPELINE_LATENCY.labels(path="streamed").observe(
+                            time.time() - (started_at if started_at is not None else t0)
+                        )
 
         return StreamingResponse(
             generate(),
