@@ -6,6 +6,10 @@ API specs and schemas for implementation.
 
 All orchestrator endpoints live on port 8888. Many endpoints require `Authorization: Bearer $API_TOKEN` when `API_TOKEN` is set in `.env` — if you get a 401, that's why. The check (`orchestrator/bearer_auth.py` `bearer_token_matches`, shared by `BearerAuthMiddleware` and the `/health` detail gate) accepts the scheme in any case (`bearer`/`Bearer`, RFC 7235), compares the token in constant time, and never matches an empty `API_TOKEN`. `/health` reads the token from `settings.api_token` (includes the setup-wizard overlay), same as the middleware.
 
+**Tokenless paths.** `BearerAuthMiddleware.is_public_path` exempts exact `/health` plus exactly ONE segment after each `PUBLIC_PREFIXES` entry (`/api/audio/`, `/api/reminder/ack/`, `/api/reminder/snooze/`). The segment must pass `bearer_auth.is_public_segment`: fullmatch `[A-Za-z0-9._-]+`, not `.`/`..`. Everything else needs the token: nested segments, encoded or double-encoded traversal (uvicorn percent-decodes, so `..%2f` arrives as `../`), backslash, NUL, whitespace/control chars, non-ASCII. The middleware decides on the routed `request.scope["path"]`, not `request.url.path` (rebuilt via urlsplit, which drops a decoded `\t`/`\r`/`\n`); the `WEBHOOK_TOKEN_PATHS` scoped-token check uses the same string. `OPTIONS` is tokenless only as a real CORS preflight (both `Origin` and `Access-Control-Request-Method` headers, the case Starlette's `CORSMiddleware`, inside `BearerAuthMiddleware`, answers itself without running a route); any other `OPTIONS` gets 401 without a token. Constraint on new code: a new reminder-id or audio-filename format, or a nested / `{x:path}` route under a public prefix, must fit this rule or its tokenless callers (speakers, ntfy/Pushover taps) get 401. `reminder_manager._build_callback_url` logs a WARNING when it mints a non-conforming id. `tests/test_auth_public_paths.py` pins the prefix set, fails if a real route serves more than one segment under a public prefix, and fails on any route the middleware never checks (OPTIONS-accepting, websocket, mounted sub-app).
+
+**Body-size + rate limits.** `RequestSizeLimitMiddleware` caps bodies on Content-Length at `MAX_BODY_SIZE` (default 1 MB). POST only: `_PATH_UPLOAD_LIMITS` (16 MB `/api/documents/suggest-name`, 64 KB `/api/self_audit/alert`), else `_LARGE_UPLOAD_PATHS` (`DOCUMENT_MAX_SIZE_MB`, default 100 MB); a length-less POST to `_LENGTH_REQUIRED_PATHS` gets 411. Other methods get 1 MB, or a smaller per-path cap (every upload route is POST-only; `PUT /api/documents/suggest-name` is really `PUT /api/documents/{doc_id}`). `RateLimitMiddleware`: `RATE_LIMIT_MAX` (default 30) requests per `RATE_LIMIT_WINDOW` (default 60 s) per client IP, then 429; exact `/health` + `/metrics` exempt. Both look up `orchestrator._routed_path()` = `scope["path"]` minus ONE trailing `\n` (route regexes end in `$`, which matches before a final newline, so `/api/self_audit/alert%0a` is served by the alert handler and keeps its 411 + 64 KB cap), not `request.url.path` (`/metrics%09` used to read as the exempt `/metrics`). Assumes uvicorn runs without `--root-path`, like the bearer check.
+
 ### Core
 
 | Method | Path | Purpose |
@@ -56,7 +60,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/memory/search` | Flat semantic search |
+| GET | `/api/memory/search` | Flat semantic search (`?query=`; `n` is accepted but unused — `TOP_K` applies). Fact docs use the `MEMORY_SEARCH_MIN_COS` floor (0.30), document chunks `MIN_COS`. Returns `{query, results}` (one text block). See `docs/MEMPALACE.md` → Retrieval |
 | GET | `/api/memory/stats` | Collection stats |
 | POST | `/api/memory/add` | Add document (optional `tags` array) |
 | GET | `/api/memory/learned` | List auto-learned facts (optional `?category=`, `?limit=`) |
@@ -92,7 +96,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | POST | `/api/stt/transcribe` | Dashboard mic button + hands-free call utterances. Multipart `file` (max 10 MB) → `STT_URL` `/v1/audio/transcriptions`; forwarded filename/content-type pinned to an allowlist (webm/ogg/mp4/mpeg/wav, else `application/octet-stream`). 200 = STT JSON (`{text}`); voice activity (`shared.mark_voice_activity()` + next-chat voice flag) marked only when `text` is non-empty. Errors `{ok:false, error}`: **413** > 10 MB; **503** not configured or STT unreachable (Helios asleep — call mode ends); **504** STT read/write/pool timeout; **502** STT HTTP error, non-JSON or non-object body, unexpected exception. Metric `bgw_dashboard_stt_total{result}`. See `docs/VOICE_AND_TTS.md` → Hands-free call mode. |
 | POST | `/api/tts/synthesize` | Dashboard chat voice replies (one call per sentence; the client splits segments at ≤ 400 chars and speaks ≤ 1200 chars per reply). Body `{text}`. 200 audio (media type = TTS backend `audio_format`, ~150 ms WAV silence pre-pad via `TTS_SILENCE_PAD_MS`, `Cache-Control: no-store`; calls `shared.mark_voice_activity()` so house-speaker reminder announcements defer while the browser speaks — speakers only, +2 min, max ~10 min; phone push is not held). Errors `{ok:false, error}`: **400** invalid JSON / non-object / missing, blank or non-string `text` / not UTF-8 encodable (lone surrogate); **413** > 1000 chars (`TTS_SYNTH_MAX_CHARS`) or > 2000 UTF-8 bytes (`TTS_SYNTH_MAX_BYTES`); **503** TTS unreachable (connect failure — Helios asleep) or not configured; **504** TTS read/write/pool timeout; **502** TTS HTTP error or unexpected exception. Sends the current reply style note (`voice_style.current_reply_style()`). Metric `bgw_dashboard_tts_total{result}`. See `docs/VOICE_AND_TTS.md` → Dashboard chat voice replies. |
 | POST | `/api/announce` | Trigger TTS announcement via voice system (`{text, speaker?}`, `announcement_type="manual"`). 200 `{ok:true, text, speaker}`; 200 `{ok:true, suppressed:true, reason}` under DND; **502** `{ok:false, error, unavailable:[...]}` when delivery fails (e.g. named speaker is `unavailable` in HA — manual announcements never fall back to another speaker). Speaker must match `media_player\.[a-z0-9_]+`. |
-| GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS) |
+| GET | `/api/audio/{filename}` | Serve audio files (reminders, TTS). Bearer-exempt for a single `<uuid8>.<ext>` segment (see Tokenless paths) |
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
 | GET | `/api/announcements/stats` | Success rates, per-speaker breakdown, latency |
 
@@ -109,7 +113,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | POST | `/api/focus/start` | Start focus session via API |
 | POST | `/api/focus/stop` | Stop focus session via API |
 
-**Ntfy callback HMAC scheme.** Both `/api/reminder/ack/{id}` and `/api/reminder/snooze/{id}` are registered in `BearerAuthMiddleware.PUBLIC_PREFIXES` (bearer-exempt) and gated instead by an HMAC-SHA256 signature. Signature construction: `sig = hmac.new(NTFY_HMAC_SECRET, f"{id}|{action}|{exp}|{extra}".encode(), sha256).hexdigest()[:32]` where `action` is `ack` or `snooze`, `exp` is a Unix timestamp, and `extra` is the snooze-`minutes` value for snooze callbacks (empty string for ack). Requests are rejected when the signature mismatches, `exp` is in the past, the reminder doesn't exist, or (snooze only) `snooze_count >= NTFY_MAX_SNOOZE_COUNT`. Rejections increment `bgw_ntfy_callback_rejected_total{reason}`. On successful ack/snooze, if `NTFY_CONFIRM_ENABLED=true` the routes fire `asyncio.create_task(reminder_manager.deliver_ack_confirm(...))` to push a low-priority (priority=1) confirm message back to the same topic ("✓ Logged" / "💤 Snoozed until ..."). The confirm title stays generic (topic is open-tailnet; titles render on lockscreen). `bgw_ntfy_push_total` and `bgw_ntfy_push_latency_seconds` carry a `kind` label (`reminder|confirm`) to distinguish the two paths.
+**Ntfy callback HMAC scheme.** Both `/api/reminder/ack/{id}` and `/api/reminder/snooze/{id}` are registered in `BearerAuthMiddleware.PUBLIC_PREFIXES` (bearer-exempt for a single id segment only; see API Endpoints → Tokenless paths) and gated instead by an HMAC-SHA256 signature. Signature construction: `sig = hmac.new(NTFY_HMAC_SECRET, f"{id}|{action}|{exp}|{extra}".encode(), sha256).hexdigest()[:32]` where `action` is `ack` or `snooze`, `exp` is a Unix timestamp, and `extra` is the snooze-`minutes` value for snooze callbacks (empty string for ack). Requests are rejected when the signature mismatches, `exp` is in the past, the reminder doesn't exist, or (snooze only) `snooze_count >= NTFY_MAX_SNOOZE_COUNT`. Rejections increment `bgw_ntfy_callback_rejected_total{reason}`. On successful ack/snooze, if `NTFY_CONFIRM_ENABLED=true` the routes fire `asyncio.create_task(reminder_manager.deliver_ack_confirm(...))` to push a low-priority (priority=1) confirm message back to the same topic ("✓ Logged" / "💤 Snoozed until ..."). The confirm title stays generic (topic is open-tailnet; titles render on lockscreen). `bgw_ntfy_push_total` and `bgw_ntfy_push_latency_seconds` carry a `kind` label (`reminder|confirm`) to distinguish the two paths.
 
 **Feature-flag gate (F-013 widening).** The routes' bearer-exempt / feature-enabled gate widens to `if not (ntfy_enabled or pushover_enabled)` on BOTH ack and snooze so that pushover-only deployments (`NTFY_ENABLED=false`, `PUSHOVER_ENABLED=true`) still process callbacks. On success the routes fire both `_fire_and_forget(deliver_ack_confirm(...))` (F-011) and `_fire_and_forget(deliver_pushover_confirm(...))` (F-013) — each channel is independently gated by its own enable flag inside its manager, so users who run only one channel get exactly one confirm.
 
@@ -493,7 +497,7 @@ All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orche
 
 ## Tool Result Cap
 
-The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (static prefix ~1.7k tokens + per-turn dynamic block 0.3–1k tokens including RAG injection; the tool schemas add ~33k chars on top, ~10k tokens total), turn history, and several concurrent tool results within the 64K context window (`-c 65536` on the Flash-Next brain since 2026-10-24; was 131K). Chat prompts run ~10–15K tokens; the self-audit investigator's growing history is the exception — one run reached ~70K tokens (2026-10-21), and a run that large is rejected at 64K, so the audit comes back `partial`.
+The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (static prefix ~1.7k tokens + per-turn dynamic block ~0.3–1.5k tokens including RAG injection and the ≤600-token IDENTITY CONTEXT block; the tool schemas add ~33k chars on top, ~10k tokens total), turn history, and several concurrent tool results within the 64K context window (`-c 65536` on the Flash-Next brain since 2026-10-24; was 131K). Chat prompts run ~10–15K tokens; the self-audit investigator's growing history is the exception — one run reached ~70K tokens (2026-10-21), and a run that large is rejected at 64K, so the audit comes back `partial`.
 
 **Markup neutralization (2026-10-02):** before the cap, `_cap_tool_result()` runs `_neutralize_control_markup()` on the stringified result. `<tool_call>`, `<tool_response>`, `<think>`, `<function=…>`, `<parameter=…>` tags (open or close, any attributes) and `<|…|>` chat-template specials are rewritten with Unicode angle quotes (`‹tool_call›`) so the text stays readable but can no longer be parsed as a call, fool the `StreamGate`, or forge a chat turn at token level. Tool results are untrusted (web pages, email, calendar descriptions, document notes, OCR, auto-learned memory). Emits a `WARNING` with the tool name and increments `bgw_tool_result_markup_neutralized_total{tool}`.
 
@@ -621,7 +625,7 @@ Allowed services: light/switch `turn_on|turn_off|toggle`; fan adds `set_percenta
 
 Re-targeting keys are stripped from `data` before the call: `entity_id, area_id, device_id, label_id, floor_id, target, entities, snapshot_entities, scene_id`.
 
-Media limits: `play_media` keeps only `media_content_id`, `media_content_type`, `announce`, `enqueue` (nested `media` / `extra` dropped); `media_content_id` (≤2048, no whitespace, no `..`) must be `media-source://media_source/…` or `media-source://radio_browser/…` (not `tts`/camera), an exact `FOCUS_AUDIO_*_URL` stream, or `{ORCHESTRATOR_URL}/api/audio/…`. Chat can't play arbitrary URLs — focus audio goes through `start_focus`. `join` keeps only `group_members`: 1–16 non-denied `media_player.*` ids.
+Media limits: `play_media` keeps only `media_content_id`, `media_content_type`, `announce`, `enqueue` (nested `media` / `extra` dropped); `media_content_id` (≤2048, no whitespace, no `..`) must be `media-source://media_source/…` or `media-source://radio_browser/…` (not `tts`/camera), an exact `FOCUS_AUDIO_*_URL` stream, or `{ORCHESTRATOR_URL}/api/audio/<file>` with `<file>` one segment passing `bearer_auth.is_public_segment` (the tokenless-route rule; encoded traversal, a second segment, `?`/`#` refused). Chat can't play arbitrary URLs — focus audio goes through `start_focus`. `join` keeps only `group_members`: 1–16 non-denied `media_player.*` ids.
 
 Refusals: metric `bgw_ha_call_refused_total{path}` (`tool`, `nlp`, `api`).
 
@@ -631,6 +635,21 @@ Device-setting threat: prompt-injected content (email, web page) steering the mo
 ```json
 {"query": "current projects"}
 ```
+- `query` (string, required); `wing` (enum `personal|brain_gateway|conjure|infrastructure|jess`, optional; an unknown wing is ignored); `room` (string, optional)
+- Floors: fact docs (`source` = `auto_learn` | `user_correction`) `MEMORY_SEARCH_MIN_COS` (0.30, never above `MIN_COS`); document chunks `MIN_COS` (0.50 in compose)
+- Empty filtered result with a known wing or any room → one unfiltered retry, prefixed "Nothing under that filter, but found this elsewhere in memory:"; otherwise "No relevant information found in memory."
+- Up to `TOP_K` (10 in compose) entries, each ≤800 chars plus a palace/source line and relevance score — a full set of long document chunks can reach the 8000-char tool-result cap (see Tool Result Cap); facts are short
+- Detail: `docs/MEMPALACE.md` → Retrieval
+
+### update_memory
+```json
+{"correction": "Favorite color is now green", "search_query": "favorite color", "category": "preference"}
+```
+- `correction` (string, required), `search_query` (string, required; empty → the correction is used), `category` (enum `identity|preference|health|routine|project|technical|general`, default `general`)
+- Replaces only fact docs (`auto_learn`, `user_correction`) that score ≥0.60 against BOTH the search query and the correction text; document chunks and vault entries are never deleted. Stored plaintext as `source="user_correction"` with `replaced_ids`, routed by `MemPalace.route_fact` (`identity` → `personal/identity`)
+- Reply quotes the replaced text; similar-but-not-replaced facts → "Kept N similar older fact(s) that the new text doesn't clearly replace — both are now stored; ask the user if one is outdated."
+- Medication/project changes go through `update_data`, never this tool (prompt rule)
+- Metrics `bgw_memory_facts_replaced_total`, `bgw_memory_replace_skipped_total`. Detail: `docs/MEMPALACE.md` → update_memory
 
 ### update_data
 ```json
@@ -684,6 +703,22 @@ daily:
 ```json
 {"query": "weather Houston today", "category": "general", "time_range": "day"}
 ```
+- `query` (string, required)
+- `category` (string, optional): `general` (default) or `news`. `time_range` (string, optional): `day`, `week`, `month`, `year`. `_reg_web_search` clamps both to these enums (anything else → `general` / no time filter), since the schema enums aren't enforced on the wire.
+- **Deadline:** whole-request (`asyncio.timeout`, connect + read — not httpx's per-phase timeout). Typed turns `web_search.DEFAULT_TIMEOUT_SECONDS` = 15 s; voice turns `VOICE_TIMEOUT_SECONDS` = 5 s, read from `shared.voice_turn_var` (a ContextVar set by `unified_loop._run_one` around each tool call — per task, so it reaches parallel calls and never leaks into a typed turn; other tools can read it to tighten budgets). Applies when `web_search` is in `VOICE_TOOL_NAMES`. SearXNG's own per-engine timeout is 3 s. A turn can search in several rounds, so the worst case is rounds × deadline. The fallback model also gets `is_voice` (buffered `cloud_brain._unified_fallback` since 2026-10-25, and the streamed fallback), so a voice turn there keeps the 5 s deadline.
+- **Outcomes** (`SearchResponse.outcome` → `bgw_web_search_total{result}`):
+
+| result | Meaning | Model sees |
+|--------|---------|-----------|
+| `ok` | Results returned | `Web search results for '<query>':` + list |
+| `no_results` | Every engine answered, nothing found — not a failure | `No results found for '<query>'` |
+| `empty` | No results AND SearXNG listed `unresponsive_engines` (suspended, timeout, CAPTCHA…) — search is broken | `No results found for '<query>'` |
+| `timeout` | Deadline hit | `Web search failed: Search timed out after N seconds` |
+| `error` | HTTP error or other exception | `Web search failed: Search service error: <status>` / `Search service unavailable (<ExceptionClass>)` |
+
+- Failures are returned as text, so `bgw_tool_call_errors_total{tool="web_search"}` never rises — `bgw_web_search_total{result,voice}` is the only failure signal.
+- **Metrics:** `bgw_web_search_total{result,voice}` (pre-seeded at 0; `voice` = `true|false`); `bgw_web_search_engine_unresponsive_total{engine,reason}` from SearXNG's `unresponsive_engines` (`web_search._parse_unresponsive`; reason `suspended|timeout|captcha|access_denied|too_many_requests|other`; engine names regex-checked, ≤40 distinct, else `other`; not pre-seeded); `bgw_web_search_duration_seconds`; `bgw_web_search_results_count` (records 0 on no results). Alerts `WebSearchFailing`, `SearXNGDown` — see `monitoring/README.md`.
+- **Logs:** query length only, never query text. Exception class names only (httpx error text carries the URL with `?q=`). One line per failed search from `web_search.py` (WARNING on timeout, ERROR otherwise; the tool's own "Failed" line is INFO); `empty` logs a WARNING with engine=reason pairs; `no_results` logs at INFO.
 
 ### check_calendar
 ```json
@@ -952,6 +987,8 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 }
 ```
 
+**Fact docs** (`source` in `shared.MEMORY_FACT_SOURCES` = `auto_learn`, `user_correction`): metadata `source`, `category`, `wing`, `room`, `kind: "chunk"`, plus `learned_at` + `confidence` (auto_learn; text Fernet-encrypted, detected by the `gAAAAAB` prefix) or `updated_at` + `replaced_ids` + `encrypted: "false"` (update_memory, plaintext). `source` selects the retrieval floor, the wakeup block's rows and update_memory's replacement candidates (`docs/MEMPALACE.md`). Ingest bookkeeping rows (`kind: "file_marker"`) are never returned as context.
+
 ## SQLite Schema (`brain_state.db`)
 
 Defined in `orchestrator/state_store.py::SCHEMA_SQL`. Listing only the tables not covered elsewhere in this doc.
@@ -1044,7 +1081,7 @@ See `.env.example` for full list. Key vars:
 | HA_TOKEN | Home Assistant token |
 | API_TOKEN | Orchestrator API auth |
 | CHROMA_PERSIST | ChromaDB path |
-| MIN_COS, TOP_K | RAG params |
+| MIN_COS, TOP_K, MEMORY_FACT_MIN_COS, MEMORY_SEARCH_MIN_COS | RAG params: document floor, candidates per query, fact floors (per turn / explicit search) — see `docs/ENV_VARS.md` |
 | GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |
 | GOOGLE_TOKEN_PATH | OAuth2 token JSON path |
 | CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 5) |

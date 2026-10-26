@@ -184,9 +184,9 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file â
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
 | `bgw_requests_total` | Counter | mode | Chat completion requests (mode: unified / unified_fallback / fast_path) |
-| `bgw_request_duration_seconds` | Histogram | mode | End-to-end request latency |
+| `bgw_request_duration_seconds` | Histogram | mode | Whole chat turn incl. tool rounds; real-streamed turns observed when the SSE stream ends (since 2026-10-25) |
 | `bgw_request_errors_total` | Counter | mode, error_type | Request errors |
-| `bgw_active_requests` | Gauge | | In-flight requests |
+| `bgw_active_requests` | Gauge | | In-flight chat turns (streamed ones until the stream ends; not auto_learn / photo-scan / meal-planner brain calls) |
 | `bgw_llm_calls_total` | Counter | model, purpose | LLM API calls (model: primary/fallback, purpose: conversation/tool_loop/final) |
 | `bgw_llm_call_duration_seconds` | Histogram | model, purpose | LLM call latency |
 | `bgw_llm_call_errors_total` | Counter | model, error_type | LLM call failures |
@@ -298,9 +298,10 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file â
 ### Web Search
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `bgw_web_search_total` | Counter | | Web search queries |
+| `bgw_web_search_total` | Counter | result, voice | Searches by outcome (`ok\|no_results\|empty\|error\|timeout`; `no_results` is not a failure). The only web_search failure signal â€” failures return as text, so `bgw_tool_call_errors_total` never sees them. Alert `WebSearchFailing` |
+| `bgw_web_search_engine_unresponsive_total` | Counter | engine, reason | SearXNG engines reported unresponsive per search (reason `suspended\|timeout\|captcha\|access_denied\|too_many_requests\|other`; â‰¤40 engines, else `other`; not pre-seeded) |
 | `bgw_web_search_duration_seconds` | Histogram | | Search latency |
-| `bgw_web_search_results_count` | Histogram | | Results returned |
+| `bgw_web_search_results_count` | Histogram | | Results returned (0 on no results) |
 
 ### Infrastructure
 | Metric | Type | Labels | Purpose |
@@ -345,7 +346,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file â
 ### "Chat is slow"
 1. Check `/health` â€” is the primary model online at `http://10.0.0.195:8080/v1`?
 2. Check how many tool-loop rounds the unified loop made (look for `[UNIFIED_LOOP]` log lines)
-3. Check `bgw_chat_duration_seconds` histogram in Grafana for p95
+3. Check `bgw_request_duration_seconds` p95 in Grafana ("Request Latency" panels; whole turn) vs `bgw_chat_ttft_seconds` (slow before the first word, or slow to finish?)
 4. Check Helios GPU utilization: `ssh labadmin@10.0.0.195 nvidia-smi`
 
 ### "Primary model unreachable"

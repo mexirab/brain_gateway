@@ -181,14 +181,28 @@ groups:
           description: "Tool {{ $labels.tool }} is failing at {{ $value | humanizePercentage }}."
 
       # -- Latency --------------------------------------------------------------
+      # Whole chat turns, tool rounds included. Since 2026-10-25 a real-streamed
+      # turn (dashboard chat, the main path) is timed to the end of its stream;
+      # before, it was recorded when the StreamingResponse was returned (81 of
+      # 91 turns in a week at <=0.5 s), so this alert only ever saw HA Assist /
+      # Telegram. 30 s / 10m kept on purpose: streamed TTFT p95 was ~8-13 s
+      # over 86 turns, plus a few seconds to decode the reply, so normal turns
+      # sit well under 30 s (rebuilt from logs: p95 ~10 s, slowest 13 s). At a
+      # few turns a day a 5m window holds 0-3 turns, so one slow turn (a
+      # meal-plan swap, a multi-photo turn) can't hold the condition for 10m —
+      # it takes a >30 s turn at least every 5 min for 15 min. No `streaming`
+      # label: "is Jess slow end to end" is the same question on both paths;
+      # bgw_chat_ttft_seconds already separates the streamed wait for the
+      # first word. Not in any Alertmanager route, so it notifies nobody
+      # (Prometheus / Grafana only).
       - alert: HighRequestLatency
         expr: histogram_quantile(0.95, rate(bgw_request_duration_seconds_bucket[5m])) > 30
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "P95 request latency >30s"
-          description: "95th percentile request latency is {{ $value | humanizeDuration }}."
+          summary: "P95 chat turn latency >30s"
+          description: "95th percentile chat turn time is {{ $value | humanizeDuration }} (whole turn, tool rounds included; streamed turns timed to the end of the stream). Check the Chat TTFT panel (slow before the first word, or slow to finish?) and the Tool Latency p95 panel for the tool holding turns up (photo turns also wait for vision before the stream starts); brain on CPU or a busy shared GPU1 slows every turn — `journalctl -u llama-server-primary` on Helios."
 
       # -- Resource Alerts ------------------------------------------------------
       - alert: HighGPUTemp
@@ -334,6 +348,31 @@ groups:
           summary: "Jess answered with nothing — even after the empty-reply retry"
           description: "{{ $value | humanize }} turn(s) in the last hour returned a blank reply. The brain ended its turn immediately (look for 1-token completions in `journalctl -u llama-server-primary` on Helios and '[UNIFIED] Empty reply after retry' in Loki). If it persists, the voice-mode enable_thinking=false path is the first suspect (or, with VOICE_THINKING_ENABLED=true, reasoning eating the voice max_tokens budget — finish_reason=length)."
 
+      # web_search failures come back to the model as text, so the tool-error
+      # counters never see them; bgw_web_search_total{result} is the only
+      # signal. "empty" = no results AND SearXNG reported unresponsive engines
+      # (suspended after a burst, as Brave/Startpage/DuckDuckGo were on
+      # 2026-10-25); "no_results" (every engine answered, nothing found — an
+      # obscure query, maybe rephrased a few times) is deliberately not a
+      # failure. Needs 3+ failed searches: increase() extrapolates past the
+      # last sample, so exactly 2 reads as ~2.003 — hence > 2.5, not > 2.
+      # Silent when nobody searches; SearXNGDown covers a dead container.
+      # Stays active until the failures age out of the 6h window, so its
+      # route repeats once a day, not every 4h.
+      - alert: WebSearchFailing
+        expr: |
+          (
+            sum(increase(bgw_web_search_total{result=~"empty|error|timeout"}[6h]))
+              / sum(increase(bgw_web_search_total[6h]))
+          ) > 0.5
+          and sum(increase(bgw_web_search_total{result=~"empty|error|timeout"}[6h])) > 2.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most web searches failed in the last 6h"
+          description: "{{ $value | humanizePercentage }} of Jess's web searches in the last 6h failed (empty, error or timeout), so she can't look things up. Split by result in Grafana (Web Search panel). empty: SearXNG's engines are suspended or blocked — check the SearXNG Engines Unresponsive panel and `docker logs searxng`; suspensions lift on their own (minutes to a day), and don't test with bursts of real searches. timeout/error: SearXNG is slow or down — `docker ps --filter name=searxng`, `docker logs brain-orchestrator | grep WEB_SEARCH`. Voice searches give up after 5 s, typed ones after 15 s. Clears up to 6 h after recovery."
+
   # ===========================================================================
   # Self-Hosted App Server (Jupiter)
   # ===========================================================================
@@ -364,6 +403,18 @@ groups:
         annotations:
           summary: "Radicale (calendar server) is down"
           description: "The CalDAV server on Jupiter has failed its HTTP probe for 5 minutes. iPhone calendar sync and Jess's calendar access are down. Check `docker logs radicale` and `cd ~/gateway_nerves/radicale && docker compose up -d` (also the fix for 'network not found' after a network was pruned)."
+      - alert: SearXNGDown
+        # Self-hosted web search. /healthz only proves the container answers —
+        # it stays 200 while every upstream engine is suspended (that case is
+        # WebSearchFailing). Never point a probe at /search: real searches in
+        # bulk are what got the engines suspended on 2026-10-25.
+        expr: probe_success{service="searxng"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SearXNG (web search) is down"
+          description: "SearXNG on Jupiter has failed its /healthz probe for 10 minutes, so Jess's web_search fails. Check `docker ps --filter name=searxng` and `docker logs searxng`, then `docker compose up -d searxng` from ~/gateway_nerves."
       - alert: FrontendDown
         # The dashboard. The orchestrator can be healthy while the Next.js
         # server is crashed or hung, and nothing else would say so; CI's

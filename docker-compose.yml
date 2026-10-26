@@ -109,8 +109,13 @@ services:
       # ~600 tokens on every voice turn. 0.50 keeps only chunks with clear
       # semantic match, dropping moderate-similarity noise.
       - MIN_COS=${MIN_COS:-0.50}
-      # TOP_K is the retrieval size AND the floor on chunks returned per
-      # turn (see prompt_builder.py: MIN_RESULTS = TOP_K). 25 floods the
+      # Short personal facts (auto-learn, update_memory) score ~0.35-0.45
+      # against the question they answer, so they get their own, lower
+      # floors: per-turn context, and the explicit search_memory tool.
+      # Document chunks keep MIN_COS in both.
+      - MEMORY_FACT_MIN_COS=${MEMORY_FACT_MIN_COS:-0.35}
+      - MEMORY_SEARCH_MIN_COS=${MEMORY_SEARCH_MIN_COS:-0.30}
+      # TOP_K is the retrieval size (candidates per query). 25 floods the
       # primary LLM's prefill context and was contributing ~10s of turn
       # latency in voice conversation mode.
       - TOP_K=${TOP_K:-10}
@@ -173,7 +178,7 @@ services:
       # Auto-learn from conversations
       - AUTO_LEARN_ENABLED=${AUTO_LEARN_ENABLED:-true}
       - AUTO_LEARN_DELAY_MINUTES=${AUTO_LEARN_DELAY_MINUTES:-10}
-      - AUTO_LEARN_MAX_FACTS=${AUTO_LEARN_MAX_FACTS:-5}
+      - AUTO_LEARN_MAX_FACTS=${AUTO_LEARN_MAX_FACTS:-20}
       - AUTO_LEARN_DEDUP_THRESHOLD=${AUTO_LEARN_DEDUP_THRESHOLD:-0.85}
       - AUTO_LEARN_MARKDOWN=${AUTO_LEARN_MARKDOWN:-true}
       - AUTO_LEARN_ENCRYPT=${AUTO_LEARN_ENCRYPT:-true}

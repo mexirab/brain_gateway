@@ -42,6 +42,7 @@ from orchestrator.metrics import (
     REMINDERS_MISSED,
     REMINDERS_SET,
     WEB_SEARCH_COUNT,
+    WEB_SEARCH_ENGINE_UNRESPONSIVE,
     WEB_SEARCH_LATENCY,
     WEB_SEARCH_RESULTS,
 )
@@ -70,7 +71,7 @@ from orchestrator.task_decomposition import (
     skip_step,
 )
 from orchestrator.tool_definitions import ha_entity_token
-from orchestrator.web_search import get_search_client
+from orchestrator.web_search import DEFAULT_TIMEOUT_SECONDS, VOICE_TIMEOUT_SECONDS, get_search_client
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,13 @@ async def tool_home_assistant(entity_id: str, service: str, data: Dict[str, Any]
         return f"Failed: {result.message}"
 
 
+def _is_known_wing(wing: str) -> bool:
+    try:
+        return shared.get_palace().is_known_wing(wing)
+    except Exception:
+        return True
+
+
 async def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
     """Search the personal knowledge base (memory palace)."""
     if not query:
@@ -227,12 +235,22 @@ async def tool_search_memory(query: str, wing: str = "", room: str = "") -> str:
     filter_desc = f" (wing={wing}, room={room})" if wing or room else ""
     # log-safe: memory wing/room filter names
     logger.info(f"[MEMORY] Searching ({len(query)} chars){filter_desc}")
-    context = await rag_context(query, wing=wing, room=room)
-
+    # An explicit search: the model asked, so facts get the looser search floor
+    # rather than the per-turn one (which hid facts scoring ~0.4).
+    floor = shared.MEMORY_SEARCH_MIN_COS
+    context = await rag_context(query, wing=wing, room=room, fact_min_cos=floor)
     if context:
         return f"Found relevant information:\n{context}"
-    else:
-        return "No relevant information found in memory."
+
+    if room or (wing and _is_known_wing(wing)):  # an unknown wing was already ignored above
+        # Wing/room come from keyword routing, so the fact may be filed
+        # elsewhere — an answer from another wing beats "nothing found".
+        logger.info("[MEMORY] Nothing under the filter — searching all wings")
+        context = await rag_context(query, fact_min_cos=floor)
+        if context:
+            return f"Nothing under that filter, but found this elsewhere in memory:\n{context}"
+
+    return "No relevant information found in memory."
 
 
 async def tool_web_search(query: str, category: str = "general", time_range: str = None) -> str:
@@ -240,22 +258,39 @@ async def tool_web_search(query: str, category: str = "general", time_range: str
     if not query:
         return "No search query provided"
 
-    WEB_SEARCH_COUNT.inc()
+    # Voice turns get a tighter deadline: the user is waiting in silence, and
+    # the loop may search more than once per turn.
+    voice = shared.voice_turn_var.get()
+    timeout = VOICE_TIMEOUT_SECONDS if voice else DEFAULT_TIMEOUT_SECONDS
     _ws_t0 = time.time()
     logger.info(
-        f"[WEB_SEARCH] Searching ({len(query)} chars, category={category}, time_range={time_range})",
+        f"[WEB_SEARCH] Searching ({len(query)} chars, category={category}, time_range={time_range}, "
+        f"voice={voice}, timeout={timeout:g}s)",
         extra={"component": "web_search"},
     )
     client = get_search_client(http_client=shared._http)
-    response = await client.search(query=query, category=category, time_range=time_range)
+    response = await client.search(query=query, category=category, time_range=time_range, timeout=timeout)
     WEB_SEARCH_LATENCY.observe(time.time() - _ws_t0)
+    # Failures come back as text, so bgw_tool_call_errors_total never sees
+    # them — this counter is the only failure signal (WebSearchFailing).
+    WEB_SEARCH_COUNT.labels(result=response.outcome, voice="true" if voice else "false").inc()
+    for engine, reason in response.unresponsive_engines:
+        WEB_SEARCH_ENGINE_UNRESPONSIVE.labels(engine=engine, reason=reason).inc()
 
     if not response.success:
-        logger.error(f"[WEB_SEARCH] Failed ({len(query)}-char query): {response.error}")
+        # INFO: web_search.py already logged the failure at WARNING/ERROR.
+        logger.info(f"[WEB_SEARCH] Failed ({len(query)}-char query, result={response.outcome}): {response.error}")
         return f"Web search failed: {response.error}"
 
     if not response.results:
-        logger.warning(f"[WEB_SEARCH] No results ({len(query)}-char query)")
+        WEB_SEARCH_RESULTS.observe(0)
+        if response.outcome == "empty":
+            # Engine names and bounded reasons from the SearXNG config — not content.
+            engines = ", ".join(f"{e}={r}" for e, r in response.unresponsive_engines)
+            logger.warning(f"[WEB_SEARCH] No results ({len(query)}-char query); unresponsive engines: {engines}")
+        else:
+            # Every engine answered: an obscure query, not a broken search.
+            logger.info(f"[WEB_SEARCH] No results ({len(query)}-char query); all engines answered")
         return f"No results found for '{query}'"
 
     lines = [f"Web search results for '{query}':"]
@@ -1415,8 +1450,14 @@ async def _reg_focus_sprint(arguments: dict) -> str:
 
 @register_tool("web_search")
 async def _reg_web_search(arguments: dict) -> str:
+    # The schema enums aren't enforced on the wire; anything else would reach
+    # SearXNG and the log line as free text.
+    category = arguments.get("category")
+    time_range = arguments.get("time_range")
     return await tool_web_search(
-        arguments.get("query", ""), arguments.get("category", "general"), arguments.get("time_range")
+        arguments.get("query", ""),
+        category if category in ("general", "news") else "general",
+        time_range if time_range in ("day", "week", "month", "year") else None,
     )
 
 

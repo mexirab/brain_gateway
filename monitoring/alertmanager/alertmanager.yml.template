@@ -56,13 +56,19 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|ResearchHelperFailing|ResearchSourceFailing|UPSExporterDown|UPSReplaceBattery|UPSOverload"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|ResearchHelperFailing|ResearchSourceFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
     # day is enough.
     - matchers:
         - alertname="AnnouncementSpeakerUnavailable"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
+    # WebSearchFailing stays active until its failures age out of the 6h
+    # window, so the default 4h repeat would re-notify after the fix.
+    - matchers:
+        - alertname="WebSearchFailing"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # Helios unreachable with stale/unknown plug reads: the outage detector is

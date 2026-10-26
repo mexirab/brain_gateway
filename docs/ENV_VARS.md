@@ -108,7 +108,9 @@ An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.ex
 | `PALACE_COLLECTION` | `mempalace` | ChromaDB collection name for palace |
 | `PALACE_YAML_PATH` | `/app/config/palace.yaml` | Palace structure config file |
 | `PALACE_WAKEUP_ENABLED` | `true` | Inject wakeup identity context into system prompts |
-| `PALACE_WAKEUP_MAX_TOKENS` | `170` | Max tokens for wakeup context block |
+| `PALACE_WAKEUP_MAX_TOKENS` | `170` | Not read by the code. The IDENTITY CONTEXT block's size is `wakeup.max_tokens` in `data/palace.yaml` (600 since 2026-10-26) |
+| `MEMORY_FACT_MIN_COS` | `0.35` | Cosine floor for fact docs (`source` = `auto_learn` \| `user_correction`) in the per-turn RETRIEVED MEMORY block. Never above `MIN_COS` (the lower of the two applies). Document chunks keep `MIN_COS` |
+| `MEMORY_SEARCH_MIN_COS` | `0.30` | Cosine floor for fact docs in explicit searches (`search_memory` tool, `GET /api/memory/search`). Never above `MIN_COS`. Document chunks keep `MIN_COS` |
 | `PALACE_DEDUP_THRESHOLD` | `0.85` | Cosine similarity threshold for dedup |
 | `PALACE_SESSION_MINE_PATH` | (empty) | Path to Claude Code session logs for mining |
 
@@ -118,7 +120,7 @@ An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.ex
 |----------|---------|---------|
 | `AUTO_LEARN_ENABLED` | `true` | Enable/disable background fact extraction |
 | `AUTO_LEARN_DELAY_MINUTES` | `10` | Minutes after the conversation's LAST turn (conversation gone quiet) before its single extraction job fires; each new turn re-arms it |
-| `AUTO_LEARN_MAX_FACTS` | `5` | Max facts extracted per conversation |
+| `AUTO_LEARN_MAX_FACTS` | `20` | Max facts kept per extraction window (≤12k chars; a long conversation is read in up to 4 windows). Applied after the confidence/category/sensitive filters, so rejected facts don't use it up. Drops counted by `bgw_auto_learn_facts_capped_total`. Was `5` per conversation until 2026-10-26 |
 | `AUTO_LEARN_DEDUP_THRESHOLD` | `0.85` | Cosine similarity threshold for deduplication |
 | `AUTO_LEARN_MARKDOWN` | `false` | Also append facts to a markdown file |
 | `AUTO_LEARN_ENCRYPT` | `true` | Encrypt stored facts at rest (Fernet) |
@@ -290,7 +292,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 | `HA_TOOL_DENY_ENTITIES` | Comma-separated entity ids / `fnmatch` globs (lowercased) no user/model-steerable HA call may target or list (`ha_guard.py`: chat `home_assistant` tool, fast-path/NLP commands, dashboard `/home` via `POST /api/ha/command`, and `GET /api/ha/entities`), e.g. `switch.router_*,switch.*_camera_enabled`. Default empty. The Helios plug (`HELIOS_PLUG_ENTITY`, its object id in any domain) is always denied on top of this list. Recreate the orchestrator after changing. |
 | `API_TOKEN` | Orchestrator API bearer auth (also required for `/metrics`, `/api/rag/ingest`, `/api/claude_code/turn`) |
 | `CHROMA_PERSIST` | ChromaDB persistence path |
-| `MIN_COS`, `TOP_K` | RAG retrieval params |
+| `MIN_COS`, `TOP_K` | RAG retrieval params. `MIN_COS` = cosine floor for document chunks everywhere (compose default `0.50`, `config.py` `0.30`); fact docs use `MEMORY_FACT_MIN_COS` / `MEMORY_SEARCH_MIN_COS` (MemPalace section). `TOP_K` = candidates per query (compose `10`) |
 | `GOOGLE_CREDENTIALS_PATH` | OAuth2 client credentials JSON |
 | `GOOGLE_TOKEN_PATH` | OAuth2 refresh token JSON |
 | `CALENDAR_POLL_INTERVAL` | Minutes between calendar polls (default 5) |

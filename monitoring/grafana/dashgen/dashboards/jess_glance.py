@@ -18,10 +18,10 @@ from __future__ import annotations
 from ..dashboard import dashboard
 from ..layout import assign_ids, grid_row
 from ..panels import (
+    CHAT_TURN_LATENCY_THRESHOLDS_S,
+    CLOSET_TEMP_THRESHOLDS,
     GREEN_RED_BINARY,
     GREEN_YELLOW_RED,
-    LATENCY_THRESHOLDS_S,
-    CLOSET_TEMP_THRESHOLDS,
     TEMP_THRESHOLDS,
     logs,
     stat,
@@ -49,7 +49,7 @@ def build() -> dict:
             "histogram_quantile(0.95, sum by (le) (rate(bgw_request_duration_seconds_bucket[5m])))",
             unit="s",
             decimals=1,
-            thresholds=LATENCY_THRESHOLDS_S,
+            thresholds=CHAT_TURN_LATENCY_THRESHOLDS_S,
         ),
         stat(
             "Error %",

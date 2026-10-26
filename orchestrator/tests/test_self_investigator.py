@@ -701,6 +701,36 @@ class TestWebhook:
         assert _post(client, _payload(("EmptyRepliesReachingUsers", "firing")), token="wrong").status_code == 401
         assert _post(client, _payload(("EmptyRepliesReachingUsers", "firing")), token=API).status_code == 202
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            # decoded \t / \n: urlsplit drops them, so a check on request.url.path
+            # would read these as the exact webhook path
+            "/api/self_audit/alert%09",
+            "/api/self_audit/alert%0a",
+            "/api/self_audit/alert/",
+            "/api/self_audit/alert%2f",
+            "/API/self_audit/alert",
+            "/api/self_audit/run",
+            "/api/private",
+        ],
+    )
+    def test_scoped_token_refused_off_the_exact_routed_path(self, client, path):
+        r = _post(client, _payload(("EmptyRepliesReachingUsers", "firing")), path=path)
+        assert r.status_code == 401
+        assert client.run_mock.await_count == 0
+
+    def test_tab_variant_is_not_the_webhook_route_either(self, client):
+        # The 401 above is the middleware: with the full token the same path
+        # passes auth and the router serves nothing there.
+        r = _post(client, _payload(("EmptyRepliesReachingUsers", "firing")), token=API, path="/api/self_audit/alert%09")
+        assert r.status_code == 404
+        assert client.run_mock.await_count == 0
+
+    def test_scoped_token_ignores_query_string(self, client):
+        r = _post(client, _payload(("EmptyRepliesReachingUsers", "firing")), path="/api/self_audit/alert?src=am")
+        assert r.status_code == 202
+
     def test_empty_webhook_token_never_matches(self, client, audit_on, monkeypatch):
         monkeypatch.setattr(audit_on, "self_audit_webhook_token", "", raising=False)
         r = client.post("/api/self_audit/alert", content=b"{}", headers={"Authorization": "Bearer "})
