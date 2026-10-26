@@ -358,10 +358,12 @@ def _leaf_routes(routes):
 
 
 def test_real_app_has_no_route_the_middleware_lets_through_unchecked():
-    """BearerAuthMiddleware passes every OPTIONS request through (CORS
-    preflight) and, as a BaseHTTPMiddleware, never sees websocket scopes. So a
-    route accepting OPTIONS, a websocket route or a mounted sub-app would be
-    reachable without a token; each needs its own auth story first."""
+    """BearerAuthMiddleware passes CORS preflights through tokenless (the
+    CORSMiddleware inside it answers those itself, so no route runs) and, as a
+    BaseHTTPMiddleware, never sees websocket scopes. A route accepting OPTIONS
+    would sit one CORS-config change away from tokenless, and a websocket
+    route or a mounted sub-app would be reachable without a token; each needs
+    its own auth story first."""
     from starlette.routing import Route
 
     import orchestrator.orchestrator as orch
@@ -371,3 +373,178 @@ def test_real_app_has_no_route_the_middleware_lets_through_unchecked():
     for route in leaves:
         assert isinstance(route, Route), f"{type(route).__name__} {getattr(route, 'path', '?')}"
         assert route.methods is not None and "OPTIONS" not in route.methods, route.path
+
+
+# --- RequestSizeLimitMiddleware / RateLimitMiddleware ----------------------
+# They key on exact paths too, so they must read the same string the router
+# matches. request.url.path drops a decoded \t \r \n; the router's "$"
+# matches before ONE final \n, so "/x%0a" is still served by the /x route.
+
+MAX_BODY = 1_000_000  # orchestrator.MAX_BODY_SIZE default
+
+
+@pytest.fixture
+def limits_app(monkeypatch):
+    """The real size + rate middlewares (in the app's order) in front of a
+    catch-all, standing in for the path-param routes a mangled exact path can
+    still reach (e.g. "/api/documents/suggest-name%09" -> PUT
+    /api/documents/{doc_id})."""
+    import orchestrator.orchestrator as orch
+
+    monkeypatch.setattr(orch, "MAX_BODY_SIZE", MAX_BODY)
+    monkeypatch.setattr(orch, "RATE_LIMIT_MAX", 3)
+    monkeypatch.setattr(orch, "_rate_limit_store", {})
+    app = FastAPI()
+    app.add_middleware(orch.RequestSizeLimitMiddleware)
+    app.add_middleware(orch.RateLimitMiddleware)
+
+    @app.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def served(rest: str):
+        return {"route": "served"}
+
+    return app
+
+
+# Exact upload paths that get MORE than MAX_BODY_SIZE (orchestrator
+# _LARGE_UPLOAD_PATHS + the 16 MB suggest-name cap).
+LARGE_UPLOAD_PATHS = [
+    "/api/documents",
+    "/api/documents/suggest-name",
+    "/api/stt/transcribe",
+    "/api/vision/analyze",
+    "/api/meals/photo",
+    "/api/pantry/scan",
+    "/api/paperless/upload",
+    "/v1/chat/completions",
+    "/chat/completions",
+]
+
+
+def test_large_upload_path_list_matches_the_app():
+    import orchestrator.orchestrator as orch
+
+    large = {p for p, cap in orch._PATH_UPLOAD_LIMITS.items() if cap > orch.MAX_BODY_SIZE}
+    assert set(LARGE_UPLOAD_PATHS) == orch._LARGE_UPLOAD_PATHS | large
+
+
+class TestLimitsUseTheRoutedPath:
+    @pytest.mark.parametrize(
+        "target",
+        ["/metrics%09", "/health%09", "/metrics%0d", "/%09metrics", "/metr%0aics", "/metrics%0a%0a", "/health%0d%0a"],
+    )
+    async def test_mangled_exempt_path_is_rate_limited(self, limits_app, target):
+        # Counted like any path (served or 404 — the catch-all's "." skips a
+        # mid-path "\n"), so the 4th request in the window is refused.
+        statuses = [(await _asgi_status(limits_app, target))[0] for _ in range(4)]
+        assert 429 not in statuses[:3] and statuses[3] == 429
+
+    @pytest.mark.parametrize("target", ["/metrics", "/health", "/metrics%0a"])
+    async def test_exempt_paths_stay_exempt(self, limits_app, target):
+        # "/metrics%0a" is served by the /metrics route, so it is /metrics.
+        statuses = [(await _asgi_status(limits_app, target))[0] for _ in range(5)]
+        assert statuses == [200] * 5
+
+    # "%0a%0a": only ONE trailing "\n" is the router's (see the two-newline
+    # router test below), so _routed_path must not rstrip them all.
+    @pytest.mark.parametrize("suffix", ["%09", "%0d", "%0d%0a", "%0a%0a"])
+    @pytest.mark.parametrize("path", LARGE_UPLOAD_PATHS)
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    async def test_mangled_upload_path_gets_the_default_cap(self, limits_app, path, suffix, method):
+        headers = {"content-length": str(MAX_BODY + 1)}
+        status, body = await _asgi_status(limits_app, path + suffix, headers=headers, method=method)
+        assert status == 413, body
+
+    @pytest.mark.parametrize("suffix", ["", "%0a"])
+    @pytest.mark.parametrize("path", LARGE_UPLOAD_PATHS)
+    @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+    async def test_larger_caps_are_post_only(self, limits_app, path, suffix, method):
+        # Upload routes are POST-only; PUT /api/documents/suggest-name is
+        # served by PUT /api/documents/{doc_id} and gets the default cap.
+        headers = {"content-length": str(MAX_BODY + 1)}
+        status, body = await _asgi_status(limits_app, path + suffix, headers=headers, method=method)
+        assert status == 413, body
+
+    @pytest.mark.parametrize("method", ["PUT", "PATCH"])
+    async def test_webhook_cap_applies_to_every_method(self, limits_app, method):
+        headers = {"content-length": str(64 * 1024 + 1)}
+        status, _ = await _asgi_status(limits_app, "/api/self_audit/alert", headers=headers, method=method)
+        assert status == 413
+
+    @pytest.mark.parametrize(
+        "path,method,cap",
+        [
+            ("/api/documents", "PUT", MAX_BODY),
+            ("/api/documents/suggest-name", "PATCH", MAX_BODY),
+            ("/api/pantry/items", "PATCH", MAX_BODY),
+            ("/api/self_audit/alert", "PUT", 64 * 1024),
+            ("/api/self_audit/alert", "POST", 64 * 1024),
+        ],
+    )
+    async def test_body_at_the_cap_passes(self, limits_app, path, method, cap):
+        # The 413 tests above only probe cap + 1; a non-POST cap of 0 (every
+        # PUT/PATCH body refused) or a ">=" would pass them.
+        at, _ = await _asgi_status(limits_app, path, headers={"content-length": str(cap)}, method=method)
+        over, _ = await _asgi_status(limits_app, path, headers={"content-length": str(cap + 1)}, method=method)
+        assert (at, over) == (200, 413)
+
+    @pytest.mark.parametrize(
+        "path,method",
+        [("/api/documents", "POST"), ("/api/self_audit/alert", "POST"), ("/api/documents", "PUT"), ("/x", "PATCH")],
+    )
+    async def test_non_numeric_content_length_is_400(self, limits_app, path, method):
+        status, body = await _asgi_status(limits_app, path, headers={"content-length": "12abc"}, method=method)
+        assert status == 400, body
+        assert b"Invalid Content-Length" in body
+
+    @pytest.mark.parametrize("path", LARGE_UPLOAD_PATHS)
+    async def test_upload_path_keeps_its_larger_cap(self, limits_app, path):
+        headers = {"content-length": str(MAX_BODY + 1)}
+        for target in (path, path + "%0a"):
+            status, body = await _asgi_status(limits_app, target, headers=headers, method="POST")
+            assert status == 200, (target, body)
+
+    @pytest.mark.parametrize("target", ["/api/self_audit/alert%0a", "/api/self_audit/alert"])
+    async def test_webhook_cap_survives_a_trailing_newline(self, limits_app, target):
+        headers = {"content-length": str(64 * 1024 + 1)}
+        status, _ = await _asgi_status(limits_app, target, headers=headers, method="POST")
+        assert status == 413
+
+    @pytest.mark.parametrize("path", ["/api/pantry/scan", "/api/documents/suggest-name", "/api/self_audit/alert"])
+    @pytest.mark.parametrize("suffix", ["", "%0a"])
+    async def test_length_required_survives_a_trailing_newline(self, limits_app, path, suffix):
+        # Chunked (no Content-Length) upload to a route the router serves.
+        status, body = await _asgi_status(limits_app, path + suffix, method="POST")
+        assert status == 411, body
+
+
+@pytest.mark.parametrize("path", ["/api/self_audit/alert", "/v1/chat/completions", "/api/stt/transcribe"])
+def test_router_serves_a_path_with_one_trailing_newline(path):
+    """Why ``_routed_path`` drops one trailing "\\n": the real app serves
+    "<path>\\n" at <path>'s handler (Starlette's route regexes end in "$").
+    If a Starlette upgrade stops doing that, this fails and the removesuffix
+    in ``_routed_path`` can go."""
+    from starlette.routing import Match
+
+    import orchestrator.orchestrator as orch
+
+    scope = {"type": "http", "method": "POST", "path": path + "\n", "root_path": "", "headers": [], "query_string": b""}
+    served = [r.path for r in _leaf_routes(orch.app.router.routes) if r.matches(scope)[0] == Match.FULL]
+    assert served == [path]
+
+
+@pytest.mark.parametrize("path", ["/api/self_audit/alert", "/v1/chat/completions", "/metrics", "/health"])
+def test_router_does_not_serve_a_path_with_two_trailing_newlines(path):
+    """Why ``_routed_path`` drops exactly ONE "\\n" (removesuffix, not
+    rstrip): "$" only matches before a final newline, so "<path>\\n\\n" is not
+    <path>'s route and must not get its exemption or cap."""
+    from starlette.routing import Match
+
+    import orchestrator.orchestrator as orch
+
+    def matched(suffix):
+        scope = {"type": "http", "method": "GET", "path": path + suffix, "root_path": "", "headers": []}
+        # != NONE: a method mismatch (PARTIAL) still means the path matched.
+        return [r.path for r in _leaf_routes(orch.app.router.routes) if r.matches(scope)[0] != Match.NONE]
+
+    assert path in matched("\n")  # the route exists and takes one newline
+    assert path not in matched("\n\n")
