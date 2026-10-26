@@ -1,4 +1,5 @@
-"""Bearer auth: case-insensitive scheme (RFC 7235), constant-time token compare."""
+"""Bearer auth: case-insensitive scheme (RFC 7235), constant-time token compare,
+the one-segment charset for tokenless paths, and CORS preflight pass-through."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from orchestrator.bearer_auth import bearer_token_matches
+from orchestrator.bearer_auth import bearer_token_matches, is_public_segment
 
 TOKEN = "test-bearer-token-0123456789"  # nosec B105 — test-only constant
 
@@ -51,6 +52,62 @@ class TestBearerTokenMatches:
         assert not bearer_token_matches("Bearer tökén", TOKEN)
 
 
+class TestIsPublicSegment:
+    """The one segment a tokenless caller may put after a public prefix."""
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "3f9a1c2e",  # uuid4()[:8] reminder id
+            "0f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a",  # full uuid4
+            "rec_0123456789ab_1767225600",  # recurring rule occurrence
+            "mp-0123456789",  # meal-plan cooking reminder
+            "pc-abcdef0123",  # pantry fridge check
+            "3f9a1c2e.wav",  # speaker audio clip
+            "ABC",
+            "a.b.c",
+            "_",
+            "-",
+        ],
+    )
+    def test_accepts_minted_ids_and_filenames(self, segment):
+        assert is_public_segment(segment)
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "",
+            ".",
+            "..",
+            "/",
+            "a/b",
+            "../x",
+            "a\\b",
+            "%2e%2e",  # still-encoded: a later decoder would see ".."
+            "a%2fb",
+            "a b",
+            "a\tb",
+            "abc\n",  # a trailing newline slips past a `^...$` regex, not fullmatch
+            "\nabc",
+            "a\rb",
+            "a\x00",
+            "a?b",
+            "a#b",
+            "a;b",  # path parameters
+            "a:b",
+            "a+b",
+            "a~b",
+            "a@b",
+            "caf\u00e9",
+            "\uff0e\uff0e",  # fullwidth full stops
+            "\u0661\u0662",  # Arabic-Indic digits: \d would accept them, [0-9] must not
+            "\u212a",  # Kelvin sign: [A-Za-z] under re.IGNORECASE would accept it
+        ],
+    )
+    def test_rejects_traversal_separators_and_non_ascii(self, segment):
+        assert not is_public_segment(segment)
+
+
 @pytest.fixture
 def client(monkeypatch):
     import orchestrator.orchestrator as orch
@@ -89,6 +146,66 @@ class TestBearerAuthMiddleware:
 
     def test_public_path_needs_no_token(self, client):
         assert client.get("/health").status_code == 200
+
+
+ORIGIN = "http://dashboard.test:3001"
+
+
+@pytest.fixture
+def cors_client(monkeypatch):
+    """Middleware stack in the real app's order: CORSMiddleware is added first,
+    so it sits INSIDE the bearer check and a preflight only reaches it through
+    the middleware's OPTIONS pass-through."""
+    from fastapi.middleware.cors import CORSMiddleware
+
+    import orchestrator.orchestrator as orch
+
+    monkeypatch.setattr(orch, "API_TOKEN", TOKEN)
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[ORIGIN],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(orch.BearerAuthMiddleware)
+    calls: list[str] = []
+
+    @app.get("/api/private")
+    async def private():
+        calls.append("private")
+        return {"ok": True}
+
+    c = TestClient(app)
+    c.calls = calls
+    return c
+
+
+class TestOptionsPassThrough:
+    def test_cors_preflight_needs_no_token(self, cors_client):
+        r = cors_client.options(
+            "/api/private",
+            headers={
+                "Origin": ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == ORIGIN
+        assert cors_client.calls == []
+
+    def test_options_never_runs_a_get_handler(self, cors_client):
+        # Not a preflight (no Origin): passes the middleware, then the router
+        # finds no OPTIONS method on the route.
+        r = cors_client.options("/api/private")
+        assert r.status_code == 405
+        assert cors_client.calls == []
+
+    def test_other_methods_still_need_the_token(self, cors_client):
+        assert cors_client.get("/api/private", headers={"Origin": ORIGIN}).status_code == 401
+        assert cors_client.calls == []
 
 
 @pytest.fixture

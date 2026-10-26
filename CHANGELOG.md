@@ -4,6 +4,17 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — bearer-auth public-path hardening (2026-10-26)
+
+### Security
+
+- `BearerAuthMiddleware` used `startswith()` on `/api/audio/`, `/api/reminder/ack/`, `/api/reminder/snooze/`. uvicorn percent-decodes paths, so `/api/audio/..%2f..%2fmemory%2flearned` skipped the bearer check (it 404'd here, but any path-normalizing layer in front would have made it a bypass). Now `is_public_path` exempts exact `/health` or one segment after a prefix that passes `bearer_auth.is_public_segment` (`[A-Za-z0-9._-]+`, not `.`/`..`); everything else gets 401 without a token.
+- The middleware decides on the routed `scope["path"]` (public check + `WEBHOOK_TOKEN_PATHS`), not `request.url.path`, which drops decoded `\t`/`\r`/`\n`.
+- `reminder_manager._build_callback_url` warns when a minted reminder id falls outside the charset (its taps would 401). All current id formats fit.
+- New `tests/test_auth_public_paths.py`: traversal matrix via raw ASGI scopes, pinned prefix set, one-segment route shapes, no OPTIONS/websocket/mounted routes. Rule: `TECHNICAL_REFERENCE.md` → Tokenless paths.
+
+---
+
 ## [Unreleased] — Memory recall fix (2026-10-26)
 
 Branch `fix/memory-recall`. After a long voice conversation about the user's past, Jess could not recall it although auto_learn had stored facts from it. Detail: `docs/MEMPALACE.md`.

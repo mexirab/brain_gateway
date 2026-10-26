@@ -53,7 +53,7 @@ from orchestrator.api_routes import router as api_router
 
 # Background scheduler jobs
 from orchestrator.background_jobs import evening_briefing, morning_briefing, poll_calendar, process_emails_for_events
-from orchestrator.bearer_auth import bearer_token_matches
+from orchestrator.bearer_auth import bearer_token_matches, is_public_segment
 from orchestrator.calendar_sources import get_calendar
 from orchestrator.cloud_brain import CloudBrain
 
@@ -133,22 +133,36 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     # Exact paths that also accept a scoped (non-API_TOKEN) bearer token.
     WEBHOOK_TOKEN_PATHS = frozenset({"/api/self_audit/alert"})
 
+    @classmethod
+    def is_public_path(cls, path: str) -> bool:
+        """True iff the routed ``path`` needs no bearer token.
+
+        A public prefix exempts exactly ONE segment after it (every route
+        behind these prefixes takes one). uvicorn percent-decodes the path, so
+        "/api/audio/..%2f..%2fmemory" arrives as "/api/audio/../../memory",
+        which a plain startswith() would exempt; ``is_public_segment`` refuses it.
+        """
+        if path in cls.PUBLIC_PATHS:
+            return True
+        return any(path.startswith(p) and is_public_segment(path[len(p) :]) for p in cls.PUBLIC_PREFIXES)
+
     async def dispatch(self, request: Request, call_next):
         # CORS preflight must pass through
         if request.method == "OPTIONS":
             return await call_next(request)
-        # Public endpoints don't require auth
-        if request.url.path in self.PUBLIC_PATHS:
-            return await call_next(request)
-        # Prefix-based public paths (audio served to speakers)
-        if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
+        # Decide on the string the router matches, not request.url.path: that
+        # one is rebuilt through urlsplit, which drops a decoded \t, \r or \n
+        # ("/api/au%09dio/x" would read as "/api/audio/x").
+        path = request.scope["path"]
+        # Public endpoints (health, speaker audio, HMAC-signed reminder taps)
+        if self.is_public_path(path):
             return await call_next(request)
         # Check Bearer token (scheme case-insensitive, constant-time compare)
         if bearer_token_matches(request.headers.get("authorization", ""), API_TOKEN):
             return await call_next(request)
         # Scoped token: SELF_AUDIT_WEBHOOK_TOKEN (held by Alertmanager) opens
         # exactly one path and nothing else. Empty token never matches.
-        if request.url.path in self.WEBHOOK_TOKEN_PATHS and bearer_token_matches(
+        if path in self.WEBHOOK_TOKEN_PATHS and bearer_token_matches(
             request.headers.get("authorization", ""), _cfg.self_audit_webhook_token
         ):
             return await call_next(request)
