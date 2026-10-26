@@ -5,7 +5,7 @@ All API endpoints should use these models instead of raw dicts.
 """
 
 import re
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator, model_validator
@@ -69,6 +69,13 @@ class ChatMessage(BaseModel):
         HA's llama_conversation sends: [{"type": "text", "text": "..."}]
         """
         if isinstance(v, list):
+            # ValueError → a 400. A non-string text would otherwise raise a
+            # TypeError (a 500) here on join, or later in last_user_text.
+            if any(
+                isinstance(item, dict) and item.get("type") == "text" and not isinstance(item.get("text", ""), str)
+                for item in v
+            ):
+                raise ValueError("text part must be a string")
             has_image = any(isinstance(item, dict) and item.get("type") == "image_url" for item in v)
             if has_image:
                 # Preserve the full multipart content (images + text)
@@ -85,6 +92,19 @@ class ChatMessage(BaseModel):
 
 
 _CONVERSATION_ID_RE = re.compile(r"[A-Za-z0-9:_.\-]+")
+
+
+class ChatHistoryMessage(BaseModel):
+    """One dashboard chat bubble to save (POST /api/chat/conversations/{id}/messages).
+
+    The dashboard resends saved turns as chat history, where only user and
+    assistant turns are legitimate (cloud_brain drops the rest anyway).
+    """
+
+    role: Literal["user", "assistant"] = "user"
+    content: str = Field(min_length=1)
+    routing: Any = None
+    announcement_type: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
