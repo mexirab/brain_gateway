@@ -184,6 +184,9 @@ def test_clean_photo_description_is_not_counted():
         "<|" * 500_000,
         ("</ tts_x" + " " * 600) * 1_500,
     ],
+    # Short ids: pytest names a str case after the whole string, and CI runs
+    # -v, so each MB-long id became a MB-long log line and stalled the job.
+    ids=["tts_word_flood", "tts_openers", "unclosed_specials", "bare_special_openers", "spaced_closers"],
 )
 def test_rewrite_is_linear_for_tts_and_special_floods(payload):
     t0 = time.perf_counter()

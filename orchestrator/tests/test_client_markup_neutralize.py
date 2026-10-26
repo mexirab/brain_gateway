@@ -188,6 +188,9 @@ def test_one_pass_leaves_no_live_token_on_crafted_nesting(content):
         ("<parameter=" + "a" * 600) * 1_500,
         "<" + " " * 1_000_000,
     ],
+    # Short ids: pytest names a str case after the whole string, and CI runs
+    # -v, so each MB-long id became a MB-long log line and stalled the job.
+    ids=["think_openers", "function_spaces", "parameter_runs", "bare_lt_spaces"],
 )
 def test_rewrite_is_linear_on_huge_unclosed_input(payload):
     # ~1 MB each. Runs on the event loop for every chat turn, so a slow regex
