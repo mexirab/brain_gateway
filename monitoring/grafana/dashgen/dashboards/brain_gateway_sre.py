@@ -822,10 +822,16 @@ def build() -> dict:
             unit="none",
         ),
         timeseries(
-            "Dedup + Sensitive Filtered",
+            # "capped" growing = AUTO_LEARN_MAX_FACTS is losing real facts. For
+            # update_memory, "kept" far above "replaced" = corrections aren't
+            # replacing the old fact (both stay stored).
+            "Dedup / Filtered / Capped + update_memory",
             [
                 ("rate(bgw_auto_learn_duplicates_skipped_total[15m]) * 60", "dedup skipped"),
                 ("rate(bgw_auto_learn_sensitive_filtered_total[15m]) * 60", "sensitive filtered"),
+                ("rate(bgw_auto_learn_facts_capped_total[15m]) * 60", "capped"),
+                ("rate(bgw_memory_facts_replaced_total[15m]) * 60", "update_memory replaced"),
+                ("rate(bgw_memory_replace_skipped_total[15m]) * 60", "update_memory kept"),
             ],
             unit="none",
             stack=True,

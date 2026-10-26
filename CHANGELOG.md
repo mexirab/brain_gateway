@@ -4,6 +4,34 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Memory recall fix (2026-10-26)
+
+Branch `fix/memory-recall`. After a long voice conversation about the user's past, Jess could not recall it although auto_learn had stored facts from it. Detail: `docs/MEMPALACE.md`.
+
+### Orchestrator
+
+- **Retrieval floors:** fact docs (`source` `auto_learn` / `user_correction`, `shared.MEMORY_FACT_SOURCES`) get `MEMORY_FACT_MIN_COS` (0.35) per turn and `MEMORY_SEARCH_MIN_COS` (0.30) in `search_memory` + `GET /api/memory/search`, never above `MIN_COS`. Short facts score ~0.35–0.45 against the question they answer, so the 0.50 document floor hid all of them. Document chunks keep `MIN_COS`. `file_marker` rows and undecryptable rows are skipped; the 100-char minimum now applies to ingested file chunks only (10 for memories), measured on decrypted text.
+- `search_memory`: an empty wing/room-filtered search retries once unfiltered.
+- **Fact routing:** new room `personal/identity` (`data/palace.yaml`, no keywords). `MemPalace.route_fact` files background facts (identity, work, career, education, history, background, biography; ≤300 chars) there and other personal categories in `personal`; used by auto_learn and `update_memory`. Keyword routing matches whole words + inflections (substrings like "lora" in "exploration" no longer match).
+- **Wakeup / IDENTITY CONTEXT block:** moved first after the dynamic marker (stays in the llama.cpp cached prefix), relabelled as facts that may be outdated, `personal/identity` first with up to 25 entries, `max_tokens` 170 → 600, fact docs only, newest first, entries ≤300 chars, cache invalidated on every fact write.
+- Retrieved memory and the identity block are markup-neutralized (`_frame_memory`, `bgw_tool_result_markup_neutralized_total{tool="memory_context"}`); more section headers defanged.
+- **auto_learn:** long conversations extracted in up to 4 windows of ≤12k chars (was: cut to the last 12k), each waiting for in-flight chat; `AUTO_LEARN_MAX_FACTS` 5 → 20, now per window and after filtering.
+- **update_memory:** only fact docs are replacement candidates, and only when ≥0.60 to both the search query and the new text (was: any doc ≥0.60 to the query, whole collection); reply says when similar facts were kept.
+
+### Monitoring
+
+- New counters `bgw_auto_learn_facts_capped_total`, `bgw_memory_facts_replaced_total`, `bgw_memory_replace_skipped_total` (Grafana Auto-Learn panel "Dedup / Filtered / Capped + update_memory"); `bgw_auto_learn_extraction_duration_seconds` buckets gained 120/300 s.
+
+### Repair
+
+- One-off (2026-10-26): existing fact docs re-filed with `route_fact` (wing/room metadata only) and the affected conversation re-extracted.
+
+### Docs
+
+- `CLAUDE.md`, `docs/MEMPALACE.md`, `docs/ENV_VARS.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
 ## [Unreleased] — Qwen3.8-Flash-Next brain cutover + `VOICE_THINKING_ENABLED` (2026-10-24)
 
 Maintainer-deployment change on Helios; fresh-install defaults (`docker-compose.yml` `models` profile, `.env.example`) are unchanged. Trial, measurements and known limits: `docs/internal/FLASH_NEXT_TRIAL.md`.

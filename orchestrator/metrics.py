@@ -908,6 +908,24 @@ AUTO_LEARN_DUPLICATES_SKIPPED = Counter(
     "Facts skipped by auto-learn dedup",
 )
 
+# Facts that passed every filter but were cut by AUTO_LEARN_MAX_FACTS. Steady
+# growth means the cap is losing real facts from long conversations.
+AUTO_LEARN_FACTS_CAPPED = Counter(
+    "bgw_auto_learn_facts_capped_total",
+    "Extracted facts dropped by the AUTO_LEARN_MAX_FACTS cap (per extraction window)",
+)
+
+# update_memory: older facts replaced by a correction, and replacements it
+# held back because the new text wasn't about the same thing.
+MEMORY_FACTS_REPLACED = Counter(
+    "bgw_memory_facts_replaced_total",
+    "Facts deleted by update_memory as superseded by a correction",
+)
+MEMORY_REPLACE_SKIPPED = Counter(
+    "bgw_memory_replace_skipped_total",
+    "update_memory search hits kept because the correction text did not match them",
+)
+
 AUTO_LEARN_SENSITIVE_FILTERED = Counter(
     "bgw_auto_learn_sensitive_filtered_total",
     "Facts rejected by sensitive data filter",
@@ -971,7 +989,8 @@ AUTO_LEARN_REARMED = Counter(
 AUTO_LEARN_EXTRACTION_LATENCY = Histogram(
     "bgw_auto_learn_extraction_duration_seconds",
     "Auto-learn extraction pipeline latency",
-    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0],
+    # 120/300: a long conversation is extracted in up to 4 windows (~20 s each).
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
 )
 
 # -- Brain Dump ---------------------------------------------------------------

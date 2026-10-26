@@ -72,6 +72,7 @@ from orchestrator.shared import (
     FOCUS_AUDIO_PLAYER,
     HA_TOKEN,
     HA_URL,
+    MEMORY_SEARCH_MIN_COS,
     MODEL_NAME,
     MODEL_URL,
     MORNING_BRIEFING_ENABLED,
@@ -381,7 +382,7 @@ async def add_memory(body: MemoryAddRequest):
 @router.get("/api/memory/search")
 async def search_memory_api(query: str, n: int = 5):
     """Search RAG memory."""
-    context = await rag_context(query)
+    context = await rag_context(query, fact_min_cos=MEMORY_SEARCH_MIN_COS)
     return JSONResponse({"query": query, "results": context})
 
 

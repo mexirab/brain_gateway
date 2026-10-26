@@ -4999,7 +4999,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Dedup + Sensitive Filtered",
+      "title": "Dedup / Filtered / Capped + update_memory",
       "datasource": {
         "type": "prometheus",
         "uid": "PBFA97CFB590B2093"
@@ -5028,6 +5028,42 @@
           "range": true,
           "instant": false,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_auto_learn_facts_capped_total[15m]) * 60",
+          "legendFormat": "capped",
+          "range": true,
+          "instant": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_memory_facts_replaced_total[15m]) * 60",
+          "legendFormat": "update_memory replaced",
+          "range": true,
+          "instant": false,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "rate(bgw_memory_replace_skipped_total[15m]) * 60",
+          "legendFormat": "update_memory kept",
+          "range": true,
+          "instant": false,
+          "refId": "E"
         }
       ],
       "fieldConfig": {

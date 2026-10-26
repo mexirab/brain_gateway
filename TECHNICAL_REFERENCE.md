@@ -56,7 +56,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/memory/search` | Flat semantic search |
+| GET | `/api/memory/search` | Flat semantic search (`?query=`; `n` is accepted but unused — `TOP_K` applies). Fact docs use the `MEMORY_SEARCH_MIN_COS` floor (0.30), document chunks `MIN_COS`. Returns `{query, results}` (one text block). See `docs/MEMPALACE.md` → Retrieval |
 | GET | `/api/memory/stats` | Collection stats |
 | POST | `/api/memory/add` | Add document (optional `tags` array) |
 | GET | `/api/memory/learned` | List auto-learned facts (optional `?category=`, `?limit=`) |
@@ -493,7 +493,7 @@ All bearer-gated. Reached from the frontend via `/api/proxy/*`. Backed by `orche
 
 ## Tool Result Cap
 
-The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (static prefix ~1.7k tokens + per-turn dynamic block 0.3–1k tokens including RAG injection; the tool schemas add ~33k chars on top, ~10k tokens total), turn history, and several concurrent tool results within the 64K context window (`-c 65536` on the Flash-Next brain since 2026-10-24; was 131K). Chat prompts run ~10–15K tokens; the self-audit investigator's growing history is the exception — one run reached ~70K tokens (2026-10-21), and a run that large is rejected at 64K, so the audit comes back `partial`.
+The unified loop enforces `MAX_TOOL_RESULT_CHARS = 8000` (~2000 tokens) on every tool result before it is appended to the conversation. This leaves context headroom for the system prompt (static prefix ~1.7k tokens + per-turn dynamic block ~0.3–1.5k tokens including RAG injection and the ≤600-token IDENTITY CONTEXT block; the tool schemas add ~33k chars on top, ~10k tokens total), turn history, and several concurrent tool results within the 64K context window (`-c 65536` on the Flash-Next brain since 2026-10-24; was 131K). Chat prompts run ~10–15K tokens; the self-audit investigator's growing history is the exception — one run reached ~70K tokens (2026-10-21), and a run that large is rejected at 64K, so the audit comes back `partial`.
 
 **Markup neutralization (2026-10-02):** before the cap, `_cap_tool_result()` runs `_neutralize_control_markup()` on the stringified result. `<tool_call>`, `<tool_response>`, `<think>`, `<function=…>`, `<parameter=…>` tags (open or close, any attributes) and `<|…|>` chat-template specials are rewritten with Unicode angle quotes (`‹tool_call›`) so the text stays readable but can no longer be parsed as a call, fool the `StreamGate`, or forge a chat turn at token level. Tool results are untrusted (web pages, email, calendar descriptions, document notes, OCR, auto-learned memory). Emits a `WARNING` with the tool name and increments `bgw_tool_result_markup_neutralized_total{tool}`.
 
@@ -560,6 +560,21 @@ Device-setting threat: prompt-injected content (email, web page) steering the mo
 ```json
 {"query": "current projects"}
 ```
+- `query` (string, required); `wing` (enum `personal|brain_gateway|conjure|infrastructure|jess`, optional; an unknown wing is ignored); `room` (string, optional)
+- Floors: fact docs (`source` = `auto_learn` | `user_correction`) `MEMORY_SEARCH_MIN_COS` (0.30, never above `MIN_COS`); document chunks `MIN_COS` (0.50 in compose)
+- Empty filtered result with a known wing or any room → one unfiltered retry, prefixed "Nothing under that filter, but found this elsewhere in memory:"; otherwise "No relevant information found in memory."
+- Up to `TOP_K` (10 in compose) entries, each ≤800 chars plus a palace/source line and relevance score — a full set of long document chunks can reach the 8000-char tool-result cap (see Tool Result Cap); facts are short
+- Detail: `docs/MEMPALACE.md` → Retrieval
+
+### update_memory
+```json
+{"correction": "Favorite color is now green", "search_query": "favorite color", "category": "preference"}
+```
+- `correction` (string, required), `search_query` (string, required; empty → the correction is used), `category` (enum `identity|preference|health|routine|project|technical|general`, default `general`)
+- Replaces only fact docs (`auto_learn`, `user_correction`) that score ≥0.60 against BOTH the search query and the correction text; document chunks and vault entries are never deleted. Stored plaintext as `source="user_correction"` with `replaced_ids`, routed by `MemPalace.route_fact` (`identity` → `personal/identity`)
+- Reply quotes the replaced text; similar-but-not-replaced facts → "Kept N similar older fact(s) that the new text doesn't clearly replace — both are now stored; ask the user if one is outdated."
+- Medication/project changes go through `update_data`, never this tool (prompt rule)
+- Metrics `bgw_memory_facts_replaced_total`, `bgw_memory_replace_skipped_total`. Detail: `docs/MEMPALACE.md` → update_memory
 
 ### update_data
 ```json
@@ -873,6 +888,8 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 }
 ```
 
+**Fact docs** (`source` in `shared.MEMORY_FACT_SOURCES` = `auto_learn`, `user_correction`): metadata `source`, `category`, `wing`, `room`, `kind: "chunk"`, plus `learned_at` + `confidence` (auto_learn; text Fernet-encrypted, detected by the `gAAAAAB` prefix) or `updated_at` + `replaced_ids` + `encrypted: "false"` (update_memory, plaintext). `source` selects the retrieval floor, the wakeup block's rows and update_memory's replacement candidates (`docs/MEMPALACE.md`). Ingest bookkeeping rows (`kind: "file_marker"`) are never returned as context.
+
 ## SQLite Schema (`brain_state.db`)
 
 Defined in `orchestrator/state_store.py::SCHEMA_SQL`. Listing only the tables not covered elsewhere in this doc.
@@ -965,7 +982,7 @@ See `.env.example` for full list. Key vars:
 | HA_TOKEN | Home Assistant token |
 | API_TOKEN | Orchestrator API auth |
 | CHROMA_PERSIST | ChromaDB path |
-| MIN_COS, TOP_K | RAG params |
+| MIN_COS, TOP_K, MEMORY_FACT_MIN_COS, MEMORY_SEARCH_MIN_COS | RAG params: document floor, candidates per query, fact floors (per turn / explicit search) — see `docs/ENV_VARS.md` |
 | GOOGLE_CREDENTIALS_PATH | OAuth2 credentials JSON path |
 | GOOGLE_TOKEN_PATH | OAuth2 token JSON path |
 | CALENDAR_POLL_INTERVAL | Minutes between calendar polls (default: 5) |
