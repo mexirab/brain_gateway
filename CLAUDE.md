@@ -111,7 +111,7 @@ Tools marked **[advanced]** are gated behind `JESS_ADVANCED=true` (default false
 | get_data | Read meds/projects/profile from the YAML source of truth (`{kind}`). The authoritative READ path — the model answers meds/schedule questions from here, never from RAG/`search_memory`. Non-terminal. A compact meds+projects block is also injected into every system prompt via `data_manager.get_structured_facts_block`. |
 | start_focus / stop_focus / focus_status | Focus sessions: sprints, check-ins, ambient audio. Pi-hole site blocking deprecated for this deployment (`FOCUS_BLOCKING_ENABLED=false`); only claimed when `pihole_client.blocking_confirmed()` |
 | focus_sprint | Continue next sprint, extend current, or end session with summary |
-| web_search | Search the web via SearXNG |
+| web_search | Search the web via SearXNG. Also on voice since 2026-10-25 — see `docs/VOICE_AND_TTS.md` → Voice tool subset |
 | check_calendar / create_calendar_event | Merged calendar read (CalDAV + work Exchange push + Google) via `calendar_sources`; says which source it couldn't reach instead of "clear". Create writes to CalDAV (`CALDAV_DEFAULT_CALENDAR`), Google only if CalDAV is off, never Exchange |
 | check_email / search_email | Gmail inbox (read-only) |
 | decompose_task / task_step | Break tasks into micro-steps, advance through them |
