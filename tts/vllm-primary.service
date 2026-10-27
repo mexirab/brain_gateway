@@ -6,6 +6,8 @@
 #           systemctl daemon-reload && systemctl restart vllm-primary,
 #           then set MODEL_NAME/FALLBACK_MODEL_NAME back to qwen3.6-27b-int4.
 # If output ever looks garbled, add --enforce-eager first (drops ~111 -> ~36 tok/s).
+# No API key here (the llama.cpp brain has --api-key-file since 2026-10-27): rolling back to
+# this unit turns key enforcement OFF. Add `--api-key <key>` via an EnvironmentFile first.
 [Unit]
 Description=vLLM primary — Qwen3.8-27B NVFP4 (GPU0 RTX 5090, port 8080)
 After=network-online.target docker.service

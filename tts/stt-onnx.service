@@ -12,9 +12,21 @@ Environment="CUDA_VISIBLE_DEVICES="
 Environment="STT_ONNX_MODEL=nemo-parakeet-tdt-0.6b-v2"
 Environment="STT_ONNX_QUANT=int8"
 Environment="PARAKEET_PORT=8003"
+# The model (istupakov/parakeet-tdt-0.6b-v2-onnx) loads from the HF cache in
+# ~/.cache/huggingface; never reach the Hub at startup. A model change means
+# downloading it first with HF_HUB_OFFLINE unset, outside this unit.
+Environment="HF_HUB_OFFLINE=1"
 ExecStart=/home/labadmin/parakeet-env/bin/python /home/labadmin/stt_server_onnx.py
 Restart=on-failure
 RestartSec=5
+# Network-only sandbox below: it still runs as labadmin (who has sudo) with no filesystem
+# sandbox. NoNewPrivileges at least stops a decoder exploit from using sudo/setuid.
+NoNewPrivileges=yes
+# No internet egress (2026-10-27 egress audit: it was the only model server on
+# Helios that could reach the internet). Same allow-list as
+# llama-server-primary: loopback, LAN, tailnet CGNAT range, Docker bridges.
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12
 
 [Install]
 WantedBy=multi-user.target
