@@ -1,7 +1,13 @@
 # One embedding outage must not send three notices: the boot self-test
 # (EmbeddingModelBroken) explains runtime encode() failures, and either one
-# explains auto_learn failing (dedup + store need embeddings).
+# explains auto_learn failing (dedup + store need embeddings) and the memory
+# tools failing (HighToolErrorRate on search_memory / update_memory).
 inhibit_rules:
+  - source_matchers:
+      - alertname=~"EmbeddingModelBroken|EmbeddingErrors"
+    target_matchers:
+      - alertname="HighToolErrorRate"
+      - tool=~"search_memory|update_memory"
   - source_matchers:
       - alertname="EmbeddingModelBroken"
     target_matchers:
@@ -63,21 +69,28 @@ route:
         - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown"
       receiver: "pushover-quiet"
     # Also non-paging. All of these fell through to "null" until the
-    # 2026-10-27 routing audit; kept in their own list so each reason sits
+    # 2026-10-27 routing audit; kept in their own lists so each reason sits
     # next to it:
-    #   DiskSpaceLow — / or /mnt/logging over 90 %. A full /mnt/logging stops
-    #     Prometheus + Loki writing, but disks fill over days, not minutes.
-    #   RuleEvaluationFailing — a Prometheus rule group errors at evaluation,
-    #     so its alerts can't fire; nothing else says so.
+    #   RuleEvaluationFailing — a Prometheus rule errors at evaluation, so it
+    #     can't fire; nothing else says so.
     #   TTSDown / STTDown — Jess can't speak / hear while Helios is awake
     #     (asleep doesn't count; a hung Helios pages as HeliosPoweredButUnreachable).
-    #   HighErrorRate — chat turns failing outright (brain asleep doesn't count).
-    #   HighToolErrorRate — one tool failing over 20 % of its calls.
-    #   HighGPUTemp / HighVRAMUsage — a GPU over 85 °C, or over 95 % VRAM
-    #     (on Helios GPU1 that starves the live TTS).
+    #   HighErrorRate — chat turns failing in the brain (asleep doesn't count).
+    #   HighToolErrorRate — one tool failing over 20 % of its calls, 2+ times.
+    #   HighGPUTemp — a GPU over 85 °C for 5 min.
     - matchers:
-        - alertname=~"DiskSpaceLow|RuleEvaluationFailing|TTSDown|STTDown|HighErrorRate|HighToolErrorRate|HighGPUTemp|HighVRAMUsage"
+        - alertname=~"RuleEvaluationFailing|TTSDown|STTDown|HighErrorRate|HighToolErrorRate|HighGPUTemp"
       receiver: "pushover-quiet"
+    # Standing conditions that stay until someone frees space or restarts a
+    # process, so once a day instead of every 4h:
+    #   DiskSpaceLow — / or a Jupiter USB disk over 90 %. A full /mnt/logging
+    #     stops Prometheus + Loki writing, but it fills over days, not minutes.
+    #   HighVRAMUsage — under 1 GiB free on a Helios GPU (on GPU1 that starves
+    #     the live TTS); cached GPU memory isn't given back until a restart.
+    - matchers:
+        - alertname=~"DiskSpaceLow|HighVRAMUsage"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
     # day is enough.

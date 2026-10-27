@@ -45,6 +45,11 @@ def register_tool(name: str):
             # log-safe: tool name
             logger.warning("[TOOL_REGISTRY] Overwriting existing handler for '%s'", name)
         _registry[name] = func
+        # Create the per-tool series at 0: increase()/rate() can't see a
+        # series' first sample, so HighToolErrorRate would miss the first
+        # failure of each tool after every restart.
+        TOOL_CALL_COUNT.labels(tool=name)
+        TOOL_CALL_ERRORS.labels(tool=name)
         return func
 
     return decorator
