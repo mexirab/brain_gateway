@@ -101,7 +101,7 @@ ssh labadmin@10.0.0.195 'sudo systemctl restart voxcpm-tts'
 ssh labadmin@10.0.0.195 'journalctl -u voxcpm-tts -f'
 ```
 
-**Monitoring:** blackbox probe `service="tts-voxcpm"` on `:8004/health` feeds `TTSDown`. The Qwen3-TTS :8002 probe (`service="tts"`) was removed 2026-10-24 when `qwen-tts` was disabled — restore it in `monitoring/prometheus/prometheus.yml.template` if it is re-enabled. No server-side `/metrics` yet.
+**Monitoring:** blackbox probe `service="tts-voxcpm"` on `:8004/health` feeds `TTSDown` (quiet Pushover since 2026-10-27; counts only while Helios's node-exporter is up, so a sleeping Helios is silent — `monitoring/README.md` → Routing coverage). The Qwen3-TTS :8002 probe (`service="tts"`) was removed 2026-10-24 when `qwen-tts` was disabled — restore it in `monitoring/prometheus/prometheus.yml.template` if it is re-enabled. No server-side `/metrics` yet.
 
 ## Voice style
 
