@@ -873,6 +873,25 @@ groups:
         annotations:
           summary: "Model tool calls are being silently dropped (Qwen3.8-Flash-Next on llama.cpp)"
           description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-24): Qwen3.8-Flash-Next UD-Q3_K_XL GGUF on llama.cpp (llama-server-primary.service on Helios, split across GPU0 + GPU1), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the trial saw no drops. On any thinking-on turn (all text turns, and voice turns with VOICE_THINKING_ENABLED=true) a `<tool_call` written only inside the reasoning also counts as dropped. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~25-40% slower: ~105 tok/s measured). Rollback to the 27B brain: see the header of tts/llama-server-primary-27b-q6k.service."
+  # Prometheus watching itself. A rule that errors at evaluation time (many-to-
+  # many matching after a label change, a function the upgraded Prometheus
+  # rejects, a query timeout) silently never fires; the rest of its group keeps
+  # evaluating, and promtool / reload-monitoring.sh only catch rules that don't
+  # load. Own group, so it never shares an evaluation with a broken rule.
+  # Groups evaluate every 15-60 s, so one broken rule fails 15+ times in
+  # 15 min; > 3 ignores a one-off query timeout. Prometheus rules only — Loki
+  # is not scraped, so a failing Loki ruler rule is still silent.
+  - name: prometheus_self
+    rules:
+      - alert: RuleEvaluationFailing
+        expr: sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[15m])) > 3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rules are failing to evaluate ({{ $labels.rule_group }})"
+          description: "{{ $value | printf \"%.0f\" }} failed evaluations in 15 min in {{ $labels.rule_group }}: at least one rule there can't fire. On Jupiter: `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[] | select(.lastError) | {name, lastError}'` names the rule and the error (also `docker logs prometheus 2>&1 | grep -i 'evaluating rule failed'`). Fix the expr in monitoring/prometheus/alert-rules.yml (try the query in Grafana Explore before pushing)."
+
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded
@@ -1045,22 +1064,3 @@ groups:
         annotations:
           summary: "Helios is unreachable and its plug reading is stale or unknown"
           description: "Helios's node exporter is down, but the smart-plug reads are missing (no successful read in 10 min) or contradictory (power sensor unavailable), so Jess can't tell whether Helios is asleep or hung. Check HELIOS_PLUG_MONITOR_ENABLED / HELIOS_WAKE_ENABLED on the orchestrator, the plug and its power sensor in Home Assistant, and `docker logs brain-orchestrator | grep HELIOS`."
-
-  # Prometheus watching itself. A rule that errors at evaluation time (many-to-
-  # many matching after a label change, a function the upgraded Prometheus
-  # rejects, a query timeout) silently never fires; the rest of its group keeps
-  # evaluating, and promtool / reload-monitoring.sh only catch rules that don't
-  # load. Own group, so it never shares an evaluation with a broken rule.
-  # Groups evaluate every 15-60 s, so one broken rule fails 15+ times in
-  # 15 min; > 3 ignores a one-off query timeout. Prometheus rules only — Loki
-  # is not scraped, so a failing Loki ruler rule is still silent.
-  - name: prometheus_self
-    rules:
-      - alert: RuleEvaluationFailing
-        expr: sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[15m])) > 3
-        for: 15m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Prometheus rules are failing to evaluate ({{ $labels.rule_group }})"
-          description: "{{ $value | printf \"%.0f\" }} failed evaluations in 15 min in {{ $labels.rule_group }}: at least one rule there can't fire. On Jupiter: `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[] | select(.lastError) | {name, lastError}'` names the rule and the error (also `docker logs prometheus 2>&1 | grep -i 'evaluating rule failed'`). Fix the expr in monitoring/prometheus/alert-rules.yml (try the query in Grafana Explore before pushing)."
