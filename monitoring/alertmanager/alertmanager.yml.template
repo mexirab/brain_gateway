@@ -38,6 +38,10 @@ route:
     # NOTE: routing here is an alertname ALLOW-LIST — the `severity:` label on a
     # rule is decorative and routes nothing. A new rule that is not named in one
     # of these regexes falls through to receiver "null" and notifies NOBODY.
+    # orchestrator/tests/test_alert_routing.py fails CI on any such rule unless
+    # its GRAFANA_ONLY list names it with a reason (and on alertnames here that
+    # no rule defines); `python3 orchestrator/tests/test_alert_routing.py`
+    # prints every alert with its receivers.
     # LoggingMountMissing pages because losing /mnt/logging kills the Prometheus
     # TSDB and therefore every other alert in this file; it went unnoticed for
     # 3 days on 2026-07-15 precisely because nothing was watching the watcher.
@@ -57,6 +61,22 @@ route:
     # informational, so it surfaces here rather than paging.
     - matchers:
         - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown"
+      receiver: "pushover-quiet"
+    # Also non-paging. All of these fell through to "null" until the
+    # 2026-10-27 routing audit; kept in their own list so each reason sits
+    # next to it:
+    #   DiskSpaceLow — / or /mnt/logging over 90 %. A full /mnt/logging stops
+    #     Prometheus + Loki writing, but disks fill over days, not minutes.
+    #   RuleEvaluationFailing — a Prometheus rule group errors at evaluation,
+    #     so its alerts can't fire; nothing else says so.
+    #   TTSDown / STTDown — Jess can't speak / hear while Helios is awake
+    #     (asleep doesn't count; a hung Helios pages as HeliosPoweredButUnreachable).
+    #   HighErrorRate — chat turns failing outright (brain asleep doesn't count).
+    #   HighToolErrorRate — one tool failing over 20 % of its calls.
+    #   HighGPUTemp / HighVRAMUsage — a GPU over 85 °C, or over 95 % VRAM
+    #     (on Helios GPU1 that starves the live TTS).
+    - matchers:
+        - alertname=~"DiskSpaceLow|RuleEvaluationFailing|TTSDown|STTDown|HighErrorRate|HighToolErrorRate|HighGPUTemp|HighVRAMUsage"
       receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a

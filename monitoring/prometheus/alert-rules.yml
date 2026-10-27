@@ -143,8 +143,13 @@ groups:
           summary: "Prometheus has no reachable Alertmanager"
           description: "prometheus_notifications_alertmanagers_discovered has been < 1 for 5 minutes — alerts are firing into the void. Check the alertmanager container in the monitoring compose project."
 
+      # TTSDown / STTDown only count while Helios's node-exporter answers: the
+      # probes fail whenever the power-tiered box sleeps (~20 % of Oct 2026,
+      # ~8,300 min of "down" in 30 days), which is why both sat unrouted.
+      # Guarded, the same 30 days held ~2 min of real voice-server downtime.
+      # A hung or unreachable Helios is HeliosPoweredButUnreachable's page.
       - alert: TTSDown
-        expr: probe_success{service=~"tts|tts-voxcpm"} == 0
+        expr: probe_success{service=~"tts|tts-voxcpm"} == 0 and on() up{job="node-exporter", node="helios"} == 1
         for: 5m
         labels:
           severity: warning
@@ -153,7 +158,7 @@ groups:
           description: "{{ $labels.service }} has not responded for 5 minutes (tts-voxcpm = VoxCPM2 :8004, the live voice; the Qwen3-TTS :8002 rollback is disabled since 2026-10-24 and no longer probed). Diagnose with journalctl -u voxcpm-tts on Helios."
 
       - alert: STTDown
-        expr: probe_success{service="stt"} == 0
+        expr: probe_success{service="stt"} == 0 and on() up{job="node-exporter", node="helios"} == 1
         for: 5m
         labels:
           severity: warning
@@ -162,14 +167,28 @@ groups:
           description: "Parakeet STT (stt-onnx.service, CPU) has not responded for 5 minutes. Voice input unavailable."
 
       # -- Error Rates ----------------------------------------------------------
+      # Chat turns that failed outright (an exception, or the tool loop and the
+      # fallback both failed). Until 2026-10-27 this divided
+      # errors{mode,error_type} by requests{mode} without sum(), so the label
+      # sets never matched and it could not fire. model_unavailable (brain
+      # asleep -> the friendly "Helios is asleep" reply) is left out: that is
+      # Helios's normal power-tiered state, and it is counted before
+      # bgw_requests_total, so it would divide by zero. 1h window + at least 2
+      # failures: at a few turns a day a 5-min ratio is one failed turn.
+      # 1.5 absorbs increase() extrapolation.
       - alert: HighErrorRate
-        expr: rate(bgw_request_errors_total[5m]) / rate(bgw_requests_total[5m]) > 0.10
+        expr: |
+          (
+            sum(increase(bgw_request_errors_total{error_type!="model_unavailable"}[1h]))
+              / sum(increase(bgw_requests_total[1h]))
+          ) > 0.10
+          and on() sum(increase(bgw_request_errors_total{error_type!="model_unavailable"}[1h])) > 1.5
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High error rate on Brain Gateway (>10%)"
-          description: "{{ $value | humanizePercentage }} of requests are failing over the last 5 minutes."
+          summary: "Jess's chat turns are failing ({{ $value | humanizePercentage }} in the last hour)"
+          description: "{{ $value | humanizePercentage }} of chat turns in the last hour failed outright (an exception, or the tool loop and the fallback model both failed); brain-asleep replies are not counted. Split by type: `sum by (error_type) (increase(bgw_request_errors_total[1h]))`. Then `docker logs brain-orchestrator --since 1h | grep -E 'UNIFIED|ERROR'` and, for tool_loop_failed, `journalctl -u llama-server-primary` on Helios."
 
       - alert: HighToolErrorRate
         expr: rate(bgw_tool_call_errors_total[10m]) / rate(bgw_tool_calls_total[10m]) > 0.20
@@ -214,14 +233,19 @@ groups:
           summary: "GPU temperature critical on {{ $labels.node }}"
           description: "GPU temp is {{ $value }}C on {{ $labels.node }}."
 
+      # / on every node, plus Jupiter's /mnt/logging (Prometheus TSDB, Loki,
+      # Grafana, Alertmanager state): a full /mnt/logging stops Prometheus and
+      # Loki writing, which can take all alerting down with them. Disks fill
+      # over days, so quiet tier, not a page. job= pinned for the netdata
+      # honor_labels reason given at LoggingMountMissing above.
       - alert: DiskSpaceLow
-        expr: (1 - node_filesystem_avail_bytes{mountpoint=~"/|/mnt/logging"} / node_filesystem_size_bytes{mountpoint=~"/|/mnt/logging"}) > 0.90
+        expr: (1 - node_filesystem_avail_bytes{job="node-exporter", mountpoint=~"/|/mnt/logging"} / node_filesystem_size_bytes{job="node-exporter", mountpoint=~"/|/mnt/logging"}) > 0.90
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
-          description: "{{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
+          description: "{{ $labels.mountpoint }} on {{ $labels.node }} is {{ $value | humanizePercentage }} full. Find the space with `sudo du -xh --max-depth=2 {{ $labels.mountpoint }} | sort -h | tail -20` and `docker system df`. On /mnt/logging, Prometheus (30d) and Loki (720h) are time-retained only, with no size cap — if `du` points at loki/, find the noisy container in Grafana Explore with `topk(10, sum by (container) (bytes_over_time({container=~\".+\"}[24h])))`. Free space before it hits 100 %: a full /mnt/logging stops Prometheus and Loki writing, which can take all alerting down with them."
 
       # Both Helios GPUs carry the brain since 2026-10-24 (Qwen3.8-Flash-Next split
       # across the 5090 + PRO 5000 by llama-server-primary.service): ~90% GPU0 and
@@ -1000,3 +1024,22 @@ groups:
         annotations:
           summary: "Helios is unreachable and its plug reading is stale or unknown"
           description: "Helios's node exporter is down, but the smart-plug reads are missing (no successful read in 10 min) or contradictory (power sensor unavailable), so Jess can't tell whether Helios is asleep or hung. Check HELIOS_PLUG_MONITOR_ENABLED / HELIOS_WAKE_ENABLED on the orchestrator, the plug and its power sensor in Home Assistant, and `docker logs brain-orchestrator | grep HELIOS`."
+
+  # Prometheus watching itself. A rule that errors at evaluation time (many-to-
+  # many matching after a label change, a function the upgraded Prometheus
+  # rejects, a query timeout) produces no alert at all: its group just goes
+  # quiet, and promtool / reload-monitoring.sh only catch rules that don't
+  # load. Own group, so a broken neighbour can't take this one down with it.
+  # Groups evaluate every 15-60 s, so one broken rule fails 15+ times in
+  # 15 min; > 3 ignores a one-off query timeout. Prometheus rules only — Loki
+  # is not scraped, so a failing Loki ruler rule is still silent.
+  - name: prometheus_self
+    rules:
+      - alert: RuleEvaluationFailing
+        expr: sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[15m])) > 3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rules are failing to evaluate ({{ $labels.rule_group }})"
+          description: "{{ $value | printf \"%.0f\" }} failed evaluations in 15 min in {{ $labels.rule_group }}, so alerts in that group may never fire. On Jupiter: `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[] | select(.lastError) | {name, lastError}'` names the rule and the error (also `docker logs prometheus 2>&1 | grep -i 'evaluating rule failed'`). Fix the expr in monitoring/prometheus/alert-rules.yml (try the query in Grafana Explore before pushing)."

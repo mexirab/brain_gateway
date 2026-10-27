@@ -4,6 +4,21 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — alert routing audit (2026-10-27)
+
+Branch `fix/alert-routing-audit`. Alertmanager routes by an alertname allow-list, and seven rules notified nobody. Detail: `monitoring/README.md` → Alertmanager → Routing coverage.
+
+### Monitoring
+
+- New `orchestrator/tests/test_alert_routing.py`: walks the Alertmanager route tree for every Prometheus + Loki rule and fails CI when one reaches only `null` / `self-investigator` without a reason in its `GRAFANA_ONLY` list (`UranusDown`, `AlertmanagerUnreachable`, `HighRequestLatency`, `AppDown`, `RoutineAutoEnded`), or when a route/inhibit matcher names an alert no rule defines. It gives the same receivers as `amtool config routes test` for all 70 alerts.
+- Routed to `pushover-quiet` (their own route, with a reason per alert): `DiskSpaceLow`, `TTSDown`, `STTDown`, `HighErrorRate`, `HighToolErrorRate`, `HighGPUTemp`, `HighVRAMUsage`.
+- `TTSDown` / `STTDown` only count while Helios's node-exporter is up: the probes fail every time the power-tiered box sleeps.
+- `HighErrorRate` could never fire. It divided `{mode,error_type}` by `{mode}` without `sum()`, so the label sets never matched. It now fires on ≥2 failed chat turns in 1h that are also >10 % of turns; brain-asleep replies don't count.
+- `DiskSpaceLow` pins `job="node-exporter"` and has a runbook.
+- New `RuleEvaluationFailing` (group `prometheus_self`, quiet): a Prometheus rule group keeps failing at evaluation time, so its alerts can't fire.
+
+---
+
 ## [Unreleased] — bearer-auth public-path hardening (2026-10-26)
 
 ### Security
