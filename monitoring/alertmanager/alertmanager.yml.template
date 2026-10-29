@@ -80,6 +80,10 @@ route:
     - matchers:
         - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|DeadmanSwitchBroken"
       receiver: "pushover-quiet"
+    # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.
+    - matchers:
+        - alertname=~"BrainAuthRejected|BrainMetricsScrapeRejected"
+      receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
     # day is enough.

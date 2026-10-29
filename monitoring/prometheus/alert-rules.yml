@@ -915,6 +915,37 @@ groups:
           summary: "Jess's brain is generating at {{ $value | printf \"%.0f\" }} tok/s — likely on CPU"
           description: "Mean decode speed over 15 min is far below the ~135+ tok/s the brain does on Helios's two GPUs, and neither GPU holds the model. Check `nvidia-smi` and `journalctl -u llama-server-primary -b | grep -i cuda` on Helios; a driver/library mismatch is fixed by a reboot."
 
+      # llama-server runs with --api-key-file (2026-10-27). A key mismatch looks
+      # exactly like "Helios asleep" to every probe, so it needs its own signals.
+      # Orchestrator side: keyed requests to the brain come back 401/403
+      # (orchestrator/model_auth.py). Probes run every few seconds, so a
+      # mismatch crosses 3 in minutes.
+      - alert: BrainAuthRejected
+        expr: increase(bgw_model_auth_rejected_total{job="orchestrator"}[15m]) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "The brain is rejecting Jess's API key — chat will say the brain is asleep"
+          description: "llama-server on Helios answered 401/403 to requests carrying MODEL_API_KEY. The key in Jupiter .env and /etc/llama-server/api-key on Helios differ (or a rotation is half done). Compare them, fix the wrong one, then `docker compose up -d --force-recreate orchestrator` and/or `sudo systemctl restart llama-server-primary`. See the header of tts/llama-server-primary.service."
+
+      # Prometheus side: the brain answers /health (probe up) but the
+      # /metrics scrape fails — missing/wrong monitoring/prometheus/llama_api_key
+      # or a render that stripped the scrape auth. While this fires, BrainOnCPU
+      # and HeliosLogsSilent are blind. Quiet while Helios sleeps or loads.
+      - alert: BrainMetricsScrapeRejected
+        expr: |
+          up{job="llama-primary"} == 0
+          and on() probe_success{job="blackbox-http", service="llama-primary"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          node: helios
+        annotations:
+          summary: "Prometheus can't scrape the brain's /metrics though the brain is up"
+          description: "llama-server answers /health but the llama-primary scrape fails, so BrainOnCPU and HeliosLogsSilent can't evaluate. Check `curl -s 'localhost:9090/api/v1/targets?scrapePool=llama-primary'` for lastError (401 = key). Re-run scripts/generate-configs.sh (needs MODEL_API_KEY in .env and MODEL_URL on Helios :8080) and scripts/reload-monitoring.sh."
+
       # nvidia-smi on Helios is failing while the box is up. Exit 18 is NVML's
       # "driver/library version mismatch": on 2026-10-15 unattended-upgrades
       # swapped the driver under the loaded kernel module, the brain restarted

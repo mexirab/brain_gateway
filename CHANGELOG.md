@@ -44,6 +44,40 @@ Every alert is evaluated and delivered on Jupiter, so the 2026-10-26 dockerd cra
 
 ---
 
+## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
+
+Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
+
+### Upgrade action (order matters)
+
+- The orchestrator must send the key before the brain requires it. 1) `MODEL_API_KEY=<openssl rand -hex 32>` in Jupiter `.env` (unquoted; leave `FALLBACK_MODEL_API_KEY` empty for a same-server fallback), `docker compose up -d --force-recreate orchestrator`, `scripts/generate-configs.sh && scripts/reload-monitoring.sh`. 2) Helios key file `/etc/llama-server/api-key` (`root:llama` 640), restart `voxcpm-tts`. 3) Install the new `llama-server-primary.service`, refresh the `.27b-q6k.bak` copy, `daemon-reload`, restart. Full steps: header of `tts/llama-server-primary.service`. Until step 3 nothing is enforced; a key the server doesn't require is ignored.
+
+### Security
+
+- `tts/llama-server-primary.service` + `tts/llama-server-primary-27b-q6k.service`: `--api-key-file /etc/llama-server/api-key` (every path but `/health` 401s without the key); `ExecStartPre` refuses a key file with no key line (llama-server would otherwise run with no auth); readiness checks poll `/health` instead of `/v1/models`. `tts/vllm-primary.service` header: rolling back to it turns key enforcement off.
+- New `orchestrator/model_auth.py`: `MODEL_SERVER_AUTH` (`httpx.Auth`) on the shared `_http` client and the service-registry probe clients adds `Bearer $MODEL_API_KEY` only to requests for the scheme/host/port of a configured `openai_compatible` model URL (`VISION_MODEL_URL` when it shares that origin). Other hosts never see it; a cloud backend's key is never sent to a local URL; existing `Authorization`/`X-Api-Key` and URL userinfo are left alone; redirects off-origin don't carry it.
+- `tts/stt-onnx.service`: `HF_HUB_OFFLINE=1`, `NoNewPrivileges=yes`, `IPAddressDeny=any` + LAN/tailnet/Docker allow-list (it was the only Helios model server with internet egress). `tts/voxcpm-tts.service`: `InaccessiblePaths=-/etc/llama-server` (same `llama` user as the brain).
+- Self-investigator path deny-list: `llama_api_key` + any `api[_-]?key` name.
+- Grafana: usage stats, version/plugin update checks, plugin key retrieval, plugin preinstall and the news feed off. Loki: `analytics.reporting_enabled: false`.
+- Host-side (not in the repo): Helios `mistral_proxy` / `openai_shim` (stale, unauthenticated :8000/:8001) disabled; Netdata anonymous statistics opted out on both boxes; Helios Netdata streaming to a nonexistent parent disabled; Jupiter `qwen` wrapper reads the key from a 600 file.
+- Known, accepted: the key crosses the LAN in plain HTTP; the brain's `IPAddressAllow` still spans LAN/tailnet/Docker (DNS via the LAN resolver is its one internet-bound path). Narrowing it remains open (`docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md` → Option A).
+
+### Monitoring
+
+- `scripts/generate-configs.sh` writes gitignored `monitoring/prometheus/llama_api_key` (644, truncated in place) and keeps the `# BEGIN/END llama-auth` `credentials_file` block on the `llama-primary` scrape only when `MODEL_API_KEY` is set, `MODEL_BACKEND` is `openai_compatible` and `MODEL_URL` is `http://${NODE_HELIOS_IP}:8080…`; otherwise it strips the block and deletes a stale key file. `llama-primary` has `follow_redirects: false`. Blackbox `llama-primary` probe moved to `/health`.
+- `render_template` fails explicitly on a failing `envsubst`/write instead of blanking the live render; key/token writes run with xtrace off.
+- New counter `bgw_model_auth_rejected_total{status}`. New quiet alerts (`helios_health`, `pushover-quiet`): `BrainAuthRejected` (≥3 keyed 401/403 in 15m) and `BrainMetricsScrapeRejected` (scrape down while the `/health` probe is up).
+
+### Tests
+
+- New `tests/test_model_auth.py` (origin matching, cloud-key isolation, redirects, 401/403 counting, real callers); `tests/test_generate_configs.py` (scrape-auth render/strip, lookalike URLs, `/health` probe, `bash -x` never echoes keys, failed renders leave the live file); `tests/test_self_investigator.py` (api-key names refused).
+
+### Docs
+
+- `CLAUDE.md`, `docs/ENV_VARS.md`, `.env.example`, `monitoring/README.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md`, `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`, `docs/PRIVACY.md`, `docs/VOICE_AND_TTS.md`, `COMMANDS.md`, `TECHNICAL_REFERENCE.md`, `.claude/agents/prod-support.md`; `setup_env.py` `MODEL_API_KEY` description no longer says cloud-only.
+
+---
+
 ## [Unreleased] — bearer-auth public-path hardening (2026-10-26)
 
 ### Security

@@ -119,6 +119,15 @@ scrape_configs:
   # node-exporter/gpu-exporter targets: dashboard signal only, no target-down alert.
   - job_name: 'llama-primary'
     scrape_interval: 30s
+    # llama-server never redirects; don't let anything at this address bounce the key elsewhere.
+    follow_redirects: false
+    # BEGIN llama-auth — /metrics needs the brain's API key (--api-key-file). Kept only when
+    # MODEL_API_KEY is set and MODEL_URL is this Helios brain; generate-configs.sh writes the
+    # key file (gitignored) and otherwise strips this block.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/llama_api_key
+    # END llama-auth
     static_configs:
       - targets: ['${NODE_HELIOS_IP}:8080']
         labels:
@@ -157,8 +166,9 @@ scrape_configs:
           service: 'stt'
           node: 'helios'
 
-      # Primary LLM (llama-server-primary on Helios, split across GPU0 + GPU1)
-      - targets: ['http://${NODE_HELIOS_IP}:8080/v1/models']
+      # Primary LLM (llama-server-primary on Helios, split across GPU0 + GPU1). /health: 503 while
+      # loading, 200 when ready, and the one path that answers without the API key.
+      - targets: ['http://${NODE_HELIOS_IP}:8080/health']
         labels:
           service: 'llama-primary'
           node: 'helios'

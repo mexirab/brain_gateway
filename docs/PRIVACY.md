@@ -74,6 +74,8 @@ This matters because logs travel further than the database: Loki keeps them for 
 - ❌ No ad networks, marketing pixels, or tracking
 - ❌ No model-provider phone-home (vLLM and llama.cpp do not call out)
 
+Bundled third-party components are configured not to phone home either. Grafana and Loki (optional monitoring stack) report usage stats and check for updates by default upstream; a 10-hour packet-capture egress audit on 2026-10-27 caught that, and both are now turned off in `monitoring/` (Grafana: usage stats, version/plugin update checks, plugin key download, plugin preinstall, news feed; Loki: usage reporting). The same audit saw no outbound connections from llama.cpp's server.
+
 If a future release adds any kind of telemetry, it will be:
 1. **Opt-in only**, defaulting to off
 2. **Explicitly disclosed** in the wizard before the box reaches a running state

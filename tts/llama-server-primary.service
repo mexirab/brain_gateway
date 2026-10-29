@@ -54,6 +54,36 @@
 # Sandbox: as the 27B unit (nologin `llama` user, read-only binds, only NVIDIA device
 # nodes — now /dev/nvidia0 AND /dev/nvidia1). Do NOT add MemoryDenyWriteExecute or
 # PrivateDevices=yes (both break CUDA). Check with: systemd-analyze security llama-server-primary
+#
+# API key (2026-10-27 egress audit): --api-key-file makes every path except /health answer 401
+# without `Authorization: Bearer <key>`, including /v1/models and /metrics. The ExecStartPre
+# check refuses to start on a key file with no key line: llama-server skips empty/`#` lines and
+# would run with NO auth, silently.
+# Enable / rotate (generate the key ONCE, on Jupiter; never pass it as a command argument):
+#   1. Jupiter: MODEL_API_KEY=<openssl rand -hex 32> in .env (no quotes; don't set
+#      FALLBACK_MODEL_API_KEY: model_auth sends MODEL_API_KEY to the shared origin), then
+#      `docker compose up -d --force-recreate orchestrator` and `scripts/generate-configs.sh &&
+#      scripts/reload-monitoring.sh` (CI only re-renders when monitoring files change).
+#      A key this server doesn't require yet is ignored, so step 1 is safe on its own.
+#   2. Helios, from the Jupiter checkout:
+#      grep '^MODEL_API_KEY=' .env | cut -d= -f2- | ssh labadmin@10.0.0.195 'umask 077; cat > ~/.llama-api-key.tmp'
+#      then on Helios: sudo install -d -m 750 -o root -g llama /etc/llama-server &&
+#      sudo install -m 640 -o root -g llama ~/.llama-api-key.tmp /etc/llama-server/api-key &&
+#      shred -u ~/.llama-api-key.tmp
+#      then `sudo systemctl restart voxcpm-tts`: its InaccessiblePaths=-/etc/llama-server only
+#      applies if the directory existed when it started (it runs as the same `llama` user).
+#   3. Install this unit (and refresh llama-server-primary.service.27b-q6k.bak from
+#      tts/llama-server-primary-27b-q6k.service so a rollback keeps the key), daemon-reload,
+#      restart. Check: curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/v1/models -> 401.
+# Rotating without an outage: the key file takes one key per line and accepts any of them.
+# Append the new key as a second line on Helios and restart the brain, switch MODEL_API_KEY in
+# .env + recreate the orchestrator + re-render monitoring, then drop the old line and restart
+# again. Changing .env first instead makes the brain look asleep (BrainAuthRejected) until
+# Helios catches up.
+# Other clients of :8080 need the key too: the `qwen` CLI wrapper on Jupiter
+# (~/.local/bin/qwen). A wrong key looks like "Helios asleep"; alerts BrainAuthRejected and
+# BrainMetricsScrapeRejected catch it. The key crosses the LAN in plain HTTP: it stops callers
+# without it, not someone reading LAN traffic.
 [Unit]
 Description=llama.cpp primary — Qwen3.8-Flash-Next UD-Q3_K_XL MTP (GPU0+GPU1 split, port 8080)
 After=network-online.target nvidia-persistenced.service voxcpm-tts.service
@@ -110,6 +140,7 @@ ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
   --alias qwen3.8-flash-next-q3kxl \
   --host 0.0.0.0 --port 8080 \
   --no-webui --no-slots --metrics \
+  --api-key-file /etc/llama-server/api-key \
   -ngl 999 -fa on \
   -sm layer -ts 44,56 \
   -c 65536 --cache-type-k q8_0 --cache-type-v q8_0 \
@@ -119,13 +150,16 @@ ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
   --reasoning-format auto \
   --fit off
 
-# Ready check: wait up to 240 s for /v1/models (503 while loading, 200 when ready — the same
-# path service_registry probes, so systemd-ready and orchestrator-healthy agree). Gives up at
+# Refuse to start without a real key line (see the API key note in the header).
+ExecStartPre=/usr/bin/grep -qvE '^[[:space:]]*(#.*)?$$' /etc/llama-server/api-key
+
+# Ready check: wait up to 240 s for /health (503 while loading, 200 when ready). Not /v1/models:
+# with --api-key-file that path needs the key, and /health is the one path that doesn't. Gives up at
 # once if the server process has died (kill -0 on the main PID), instead of curling a dead port
 # for the whole window, and stays quiet in the journal. `$$` is a literal `$` for bash: bash reads
 # MAINPID from the environment systemd gives ExecStartPost. A bare `$MAINPID` would be expanded
 # (to nothing) by systemd itself and fail the start on the first loop.
-ExecStartPost=/bin/bash -c "end=$$((SECONDS+240)); while ((SECONDS<end)); do kill -0 $$MAINPID 2>/dev/null || exit 1; curl -fs --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1"
+ExecStartPost=/bin/bash -c "end=$$((SECONDS+240)); while ((SECONDS<end)); do kill -0 $$MAINPID 2>/dev/null || exit 1; curl -fs --max-time 2 http://127.0.0.1:8080/health >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1"
 
 StandardOutput=journal
 StandardError=journal

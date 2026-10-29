@@ -93,6 +93,7 @@ Thumbs.db
 # ignore the rendered/secret file.
 monitoring/prometheus/prometheus.yml
 monitoring/prometheus/api_token
+monitoring/prometheus/llama_api_key
 monitoring/alertmanager/self_audit_webhook_token
 monitoring/alertmanager/deadman_webhook_token
 monitoring/alertmanager/alertmanager.yml
