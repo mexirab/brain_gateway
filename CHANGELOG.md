@@ -6,6 +6,8 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
 
+Key enforced on Helios 2026-10-29: PR #161 deployed, then the new `llama-server-primary.service` installed and the 27B rollback copy refreshed.
+
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
 
 ### Upgrade action (order matters)
