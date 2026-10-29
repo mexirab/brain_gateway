@@ -112,7 +112,7 @@ def test_endpoint_allowed(endpoint):
         ("https://evil.com?.push.apple.com", "push_service_not_allowed"),
         ("https://10.0.0.248/x", "push_service_not_allowed"),
         ("https://[::1]/x", "bad_endpoint"),  # urlsplit/urllib3 disagree on the bracketed host
-        ("https://web.push.apple.com/" + "a" * 1100, "bad_endpoint"),
+        pytest.param("https://web.push.apple.com/" + "a" * 1100, "bad_endpoint", id="endpoint-too-long"),
         ("https://web.push.apple.com:99999/x", "bad_endpoint"),
         ("https:///x", "bad_endpoint"),
         ("ftp://web.push.apple.com/x", "bad_endpoint"),

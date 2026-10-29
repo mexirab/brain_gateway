@@ -5,6 +5,7 @@ Shared test fixtures for Brain Gateway test suite.
 import os
 import sys
 import tempfile
+from collections.abc import Iterable
 
 # ---------------------------------------------------------------------------
 # Environment setup — MUST run before any orchestrator module import
@@ -35,6 +36,53 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import pytest  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Test-id length guard
+# ---------------------------------------------------------------------------
+# CI runs ``pytest -v``, which prints every node id. Before pytest 9.2 a test
+# parametrized with a big value and no ``ids=`` got the whole value as its id,
+# and two tests parametrized with ~1 MB strings stalled the GitHub test job for
+# 25+ minutes. 9.2 shortens auto-generated str ids over 100 chars by default,
+# but explicit ids, ``ids=`` callables and multi-argument ids are unbounded.
+# Fail collection instead, before anything runs or prints. 300 chars is ~2
+# terminal lines: an id built from a payload is unreadable (and useless with
+# ``-k``) long before that, so the cap catches the habit while the payload is
+# still small.
+MAX_NODEID_CHARS = 300
+
+
+def long_nodeid_report(nodeids: Iterable[str], limit: int = MAX_NODEID_CHARS) -> str | None:
+    """Describe every test whose node id is over ``limit`` chars, or return None.
+
+    Lists each offending test function once with its count and longest id,
+    never the id itself (printing the oversized id is the problem).
+    """
+    longest = {}
+    for nodeid in nodeids:
+        if len(nodeid) > limit:
+            base = nodeid.split("[", 1)[0][:200]
+            count, worst = longest.get(base, (0, 0))
+            longest[base] = (count + 1, max(worst, len(nodeid)))
+    if not longest:
+        return None
+    lines = [
+        f"{sum(c for c, _ in longest.values())} test id(s) are longer than {limit} chars. "
+        "A parametrize value is being used as the test id: give the long case a short id with "
+        'pytest.param(value, id="short-name"), or pass ids=[...] to @pytest.mark.parametrize.'
+    ]
+    for base, (count, worst) in sorted(longest.items()):
+        lines.append(f"  {base}: {count} id(s), longest {worst} chars")
+    return "\n".join(lines)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    report = long_nodeid_report(item.nodeid for item in items)
+    if report:
+        # `items` is session.items, which --collect-only still prints (from a
+        # finally) after this raises.
+        items.clear()
+        raise pytest.UsageError(report)
 
 
 @pytest.fixture(autouse=True)
