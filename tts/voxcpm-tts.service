@@ -71,6 +71,10 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=tmpfs
 BindReadOnlyPaths=/home/labadmin/voxcpm /home/labadmin/.local/share/uv/python /home/labadmin/tts-voices /home/labadmin/models/VoxCPM2
+# Same `llama` user/group as the brain, whose API key is root:llama 640 in /etc/llama-server:
+# keep it out of reach of this (unauthenticated, network-facing) server. The `-` skips a missing
+# path, so restart this unit after /etc/llama-server is first created.
+InaccessiblePaths=-/etc/llama-server
 PrivateTmp=yes
 DevicePolicy=closed
 # CUDA opens /dev/nvidia0 while enumerating even with CUDA_VISIBLE_DEVICES=1;
