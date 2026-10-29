@@ -149,6 +149,19 @@ For ADHD use, **the assistant never gives you a list when one answer will do.** 
 
 ---
 
+## Quick math
+
+| Say this | What happens |
+|----------|--------------|
+| "What's 18% of 64?" | Exact answer from a built-in calculator, not mental math |
+| "Split $84.50 three ways with a 20% tip" | Per-person amount (money rounds halves up) |
+| "When do I need to leave to be there at 6:15 if it's 25 minutes away?" | Leave-by time, in your local time |
+| "How many days until Christmas?" | Counts from today; "hours until…" works too, and is right across daylight-saving changes |
+
+Works by voice too. It won't do medication-dose or dose-timing math; that's a question for your prescriber.
+
+---
+
 ## Shopping lists
 
 | Say this | What happens |

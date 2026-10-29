@@ -512,6 +512,28 @@ SPREADSHEET_TOTAL = Counter(
     ["action", "result"],
 )
 
+CALCULATE_TOTAL = Counter(
+    "bgw_calculate_total",
+    "Programs run by the calculate tool (returned as text, so failures never reach bgw_tool_call_errors_total)",
+    # result: ok | empty (no program: often dropped tool-call args) | invalid
+    #         (syntax, unknown name, wrong arguments or types) | not_allowed (a
+    #         construct the calculator doesn't run) | too_large | math_error
+    #         (domain, division by zero) | refused_dose_word | refused_med_name
+    #         — calculator.CATEGORIES, kept in sync by test_calculator.py
+    ["result"],
+)
+for _result in (
+    "ok",
+    "empty",
+    "invalid",
+    "not_allowed",
+    "too_large",
+    "math_error",
+    "refused_dose_word",
+    "refused_med_name",
+):
+    CALCULATE_TOTAL.labels(result=_result)
+
 PAPERLESS_READ_TOTAL = Counter(
     "bgw_paperless_read_total",
     "Read-only Paperless-ngx API calls from the paperless_search / paperless_read tools",

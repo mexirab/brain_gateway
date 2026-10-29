@@ -4,6 +4,25 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — `calculate` tool (2026-10-25)
+
+Branch `feat/calculate`. The brain (a 3-bit MoE on `reasoning_effort` low) got arithmetic wrong, so it now writes a short program and the orchestrator works it out. Detail: `TECHNICAL_REFERENCE.md` → calculate.
+
+### Added
+
+- `calculate` tool (`{program}`; `expression` or a list of lines also accepted): one statement per line, the last line's value is the result and every variable is reported. Numbers, `+ - * / // % **`, comparisons, `a if c else b`, and/or/not, variables, math functions, `pi e tau`, local date/time (`today() now() date() datetime() at()`, `days() weeks() hours() minutes()`, `in_days() in_hours() in_minutes()`). Non-terminal; in `VOICE_TOOL_NAMES`.
+- `orchestrator/calculator.py`: `ast.parse` → node allow-list (`_validate`) → its own interpreter. Never eval/exec. No strings, imports, attributes, subscripts, loops, defs, comprehensions or `:=`. Size caps checked before the work (program 2000 chars / 40 statements / 2500 nodes, ints 4096 bits with a pow precheck, factorial ≤ 1000, output 3000 chars); every program runs in a few ms.
+- `round()` rounds halves up (money). Date-time math is real elapsed time across DST changes (handler passes `ZoneInfo(shared.TIMEZONE)`). Hints for `1,250`, `^`, `$`, `%`; `×` `÷` `−` accepted.
+- MATH rule in `prompt_builder` IMPORTANT RULES (static block): past one simple step, call `calculate`; never multi-step arithmetic in the head; never for medication doses or dose timing. ~425 more tokens per turn (schema ~351 + rule ~74), in the cached prefix.
+- Medication-dose refusal, a **soft** backstop for MEDICATION SAFETY, not a control: refused when a variable name contains a dose word (`calculator.DOSE_WORDS`) or a 4+ letter word of the user's own medication names (`GENERIC_NAME_WORDS` dropped). Fixed refusal text; never names the med. Bare numbers and neutral names still compute.
+- Metric `bgw_calculate_total{result}` (`ok|empty|invalid|not_allowed|too_large|math_error|refused_dose_word|refused_med_name`, pre-initialised); failures return as text, so they never reach `bgw_tool_call_errors_total`. Grafana panel "calculate: outcomes (/1h)" in the Tools row. No alert.
+- Non-ok runs log INFO `[CALCULATE] <category> (program N chars)`; no content. `program`, `expression`, `med_tokens` added to SENSITIVE in `test_no_user_content_in_logs.py`.
+- Tests: `orchestrator/tests/test_calculator.py`.
+
+No new env vars, routes, jobs or services.
+
+---
+
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
 
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.

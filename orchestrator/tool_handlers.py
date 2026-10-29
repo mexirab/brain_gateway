@@ -12,10 +12,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
-from orchestrator import shared
+from orchestrator import calculator, shared
 from orchestrator.brain_dump_manager import process_brain_dump
 from orchestrator.calendar_sources import get_calendar
-from orchestrator.data_manager import handle_get_data, handle_update_data
+from orchestrator.data_manager import get_medications, handle_get_data, handle_update_data
 from orchestrator.focus_manager import tool_focus_sprint, tool_focus_status, tool_start_focus, tool_stop_focus
 from orchestrator.google_gmail import get_gmail_client
 from orchestrator.ha_guard import (
@@ -28,6 +28,7 @@ from orchestrator.ha_guard import (
 )
 from orchestrator.ha_registry import ensure_fresh as ensure_ha_registry_fresh
 from orchestrator.metrics import (
+    CALCULATE_TOTAL,
     CALENDAR_API_CALLS,
     CALENDAR_API_ERRORS,
     CALENDAR_API_LATENCY,
@@ -1392,6 +1393,39 @@ async def _reg_get_data(arguments: dict) -> str:
     # the loop continues so the model answers from the returned data. Blocking
     # file I/O → to_thread.
     return await asyncio.to_thread(handle_get_data, arguments.get("kind", ""))
+
+
+@register_tool("calculate")
+async def _reg_calculate(arguments: dict) -> str:
+    # Exact arithmetic + date/time math (calculator.py). Non-terminal: the loop
+    # continues so the model answers from the result. Variable names are
+    # checked against dose words and the user's own medication names: a soft
+    # backstop for MEDICATION SAFETY (neutral names still compute). The meds
+    # YAML read is file I/O, so the whole call runs in a thread. The local
+    # zone makes date-time math real elapsed time across DST changes.
+    raw = arguments.get("program") or arguments.get("expression") or ""
+    if isinstance(raw, list):  # some models send one string per line
+        raw = "\n".join(map(str, raw))
+    program = str(raw)
+
+    def _run() -> calculator.CalcResult:
+        try:
+            zone = ZoneInfo(shared.TIMEZONE)
+        except (ValueError, KeyError):  # bad TZ setting: fall back to clock-time math
+            zone = None
+        med_tokens = calculator.medication_name_tokens(get_medications())
+        return calculator.evaluate(program, med_tokens=med_tokens, zone=zone)
+
+    result = await asyncio.to_thread(_run)
+    CALCULATE_TOTAL.labels(result=result.category).inc()
+    if not result.ok:
+        logger.info(
+            "[CALCULATE] %s (program %d chars)",
+            result.category,
+            len(program),
+            extra={"component": "tool", "tool_name": "calculate"},
+        )
+    return result.text
 
 
 @register_tool("update_memory")

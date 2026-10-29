@@ -803,6 +803,22 @@ def build() -> dict:
     row, y = grid_row(tools_row, y, heights=[8] * len(tools_row))
     panels.extend(row)
 
+    tools_row_2 = [
+        timeseries(
+            "calculate: outcomes (/1h)",
+            [("sum by (result) (increase(bgw_calculate_total[1h]))", "{{result}}")],
+            unit="none",
+            stack=True,
+            description="Outcomes of the calculate tool. Failures are returned to the model as text, so they "
+            "never show in Tool Errors. Sustained invalid / not_allowed = the brain can't write the "
+            "calculator's language (check after a model swap); empty = tool-call arguments dropped; "
+            "refused_* = the dose-math backstop (a refused_med_name spike may be a medication name that "
+            "contains an everyday word).",
+        ),
+    ]
+    row, y = grid_row(tools_row_2, y, heights=[8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Memory (Palace + RAG)
     r, y = row_divider("Memory (MemPalace + RAG)", y)
     panels.append(r)
