@@ -9,7 +9,11 @@
 # then on Jupiter: edit .env — MODEL_NAME / FALLBACK_MODEL_NAME / VISION_MODEL_NAME back to
 # qwen3.8-27b-turbo-q6k and VOICE_THINKING_ENABLED=false — then
 # docker compose up -d --force-recreate orchestrator. (.env.bak-27b-q6k is a 2026-10-24
-# snapshot: cp it only if nothing else in .env changed since, or it silently reverts later edits.)
+# snapshot: cp it only if nothing else in .env changed since, or it silently reverts later edits.
+# It and .env.bak-qwen38-nvfp4 predate MODEL_API_KEY: restoring one with this unit installed
+# means 401 on every brain call — keep the current MODEL_API_KEY line.)
+# Since 2026-10-27 this unit runs with --api-key-file like the live one; the Helios .bak copy
+# must be refreshed from this file when the key is enabled, or a rollback silently drops auth.
 # Re-enable qwen-tts monitoring too: restore its blackbox target in
 # monitoring/prometheus/prometheus.yml.template, then scripts/generate-configs.sh and
 # scripts/reload-monitoring.sh. The weights below are still on Helios.
@@ -101,6 +105,7 @@ ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
   --alias qwen3.8-27b-turbo-q6k \
   --host 0.0.0.0 --port 8080 \
   --no-webui --no-slots --metrics \
+  --api-key-file /etc/llama-server/api-key \
   -ngl 999 -fa on \
   -c 131072 --cache-type-k q8_0 --cache-type-v q8_0 \
   --parallel 1 \
@@ -108,9 +113,12 @@ ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
   --jinja --chat-template-kwargs '{"reasoning_effort":"low"}' \
   --reasoning-format auto
 
-# Ready check: wait up to 4 min for /v1/models (503 while loading, 200 when ready —
-# the same path service_registry probes, so systemd-ready and orchestrator-healthy agree).
-ExecStartPost=/bin/bash -c "for i in {1..240}; do curl -fsS http://127.0.0.1:8080/v1/models >/dev/null && exit 0; sleep 1; done; exit 1"
+# Refuse to start without a real key line (llama-server would run with no auth otherwise).
+ExecStartPre=/usr/bin/grep -qvE '^[[:space:]]*(#.*)?$$' /etc/llama-server/api-key
+# Ready check: wait up to 4 min for /health (503 while loading, 200 when ready). Not
+# /v1/models: with --api-key-file (added 2026-10-27, see the live unit's header) only
+# /health answers without the key. A rollback keeps the same key file and MODEL_API_KEY.
+ExecStartPost=/bin/bash -c "for i in {1..240}; do curl -fsS http://127.0.0.1:8080/health >/dev/null && exit 0; sleep 1; done; exit 1"
 
 StandardOutput=journal
 StandardError=journal

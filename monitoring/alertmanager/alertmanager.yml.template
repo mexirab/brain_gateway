@@ -91,6 +91,10 @@ route:
         - alertname=~"DiskSpaceLow|HighVRAMUsage"
       receiver: "pushover-quiet"
       repeat_interval: 24h
+    # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.
+    - matchers:
+        - alertname=~"BrainAuthRejected|BrainMetricsScrapeRejected"
+      receiver: "pushover-quiet"
     # A dead speaker is a physical fix that stays broken for days; speakers
     # get hit all day, so the default 4h repeat would nag 4-5x daily. Once a
     # day is enough.

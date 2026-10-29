@@ -3,6 +3,11 @@
 
 auth_enabled: false
 
+# Loki reports anonymous usage stats to stats.grafana.org every few hours by
+# default (seen in the 2026-10-27 egress audit). Off.
+analytics:
+  reporting_enabled: false
+
 server:
   http_listen_port: 3100
   grpc_listen_port: 9096

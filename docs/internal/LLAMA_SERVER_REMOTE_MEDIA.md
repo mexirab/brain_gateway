@@ -1,6 +1,6 @@
 # llama-server fetches image URLs: brain-side options
 
-Status: **recommendation only, nothing applied on Helios.** Changing the Helios unit is the owner's call.
+Status (2026-10-27): **Option B (`--api-key-file`) applied in the repo, not yet enforced on Helios.** The live and 27B units, the orchestrator and monitoring are done (see "Applied" under Option B); the key is enforced once `tts/llama-server-primary.service` is installed on Helios, after that change deploys (the orchestrator must send the key first; steps in the unit header). **Still open, owner's call:** Option A (narrow `IPAddressAllow`) and the Loki detection alert.
 
 Written 2026-10-25 after the security review of PR #148. The orchestrator side is fixed in `cloud_brain._process_vision` / `_flatten_content` (no image part, link or otherwise, ever reaches a model loop). This page covers what that fix cannot reach: llama-server itself.
 
@@ -10,7 +10,7 @@ Written 2026-10-25 after the security review of PR #148. The orchestrator side i
 
 For every OpenAI content part of type `image_url` (and `input_audio` / `input_video` / `video_url` when the mmproj supports them), `handle_media()` in `tools/server/server-common.cpp` does this:
 
-- a URL starting with `http` is downloaded: `common_remote_get_content`, cpp-httplib with OpenSSL (the build has `LLAMA_CURL=OFF`, `LLAMA_OPENSSL=ON`), 10 MB / 10 s hard-coded (a `TODO` says "maybe make these params configurable"). `common_http_client` sets `set_follow_location(true)`, so redirects are followed, and `user:pass@` in the URL becomes basic auth.
+- a URL starting with `http` is downloaded: `common_remote_get_content`, cpp-httplib (the build has `LLAMA_CURL=OFF`; `LLAMA_OPENSSL=ON` was requested but CMake found no OpenSSL — `OPENSSL_SSL_LIBRARY-NOTFOUND`, no ssl/crypto libs linked — so only plain `http://` URLs are fetched; an `https://` URL fails with "HTTPS is not supported", confirmed live 2026-10-27), 10 MB / 10 s hard-coded (a `TODO` says "maybe make these params configurable"). `common_http_client` sets `set_follow_location(true)`, so redirects are followed, and `user:pass@` in the URL becomes basic auth.
 - `file://` is refused unless `--media-path` is set (it is not; keep it that way).
 - `data:` and raw base64 are decoded locally.
 
@@ -76,6 +76,14 @@ What it does not cover: any process or container on Jupiter can still reach `:80
 
 ## Option B: `--api-key` (defence in depth; more work)
 
+**Applied 2026-10-27** (egress-audit hardening), differently from the plan below in three places:
+
+- Key file `/etc/llama-server/api-key` (`root:llama` 640, dir 750), one key. Both llama-server units carry `--api-key-file` + an `ExecStartPre` that refuses a file with no key line (llama-server skips blank/`#` lines and would run with no auth); readiness checks poll `/health`. `voxcpm-tts` (same `llama` user) has `InaccessiblePaths=-/etc/llama-server`.
+- Jupiter: instead of ~15 call sites, one origin-scoped `httpx.Auth` (`orchestrator/model_auth.py`) on the shared `_http` client and the service-registry probe clients. Every model call goes through `_http` or the chat backends (`call_model`, the one-off backend, vision, probes, `/models` checks), so `MODEL_API_KEY` reaches the model origin and nothing else; keyed 401/403 → `bgw_model_auth_rejected_total` + alert `BrainAuthRejected`.
+- Monitoring: scrape `credentials_file` written by `generate-configs.sh` (`monitoring/prometheus/llama_api_key`), blackbox probe on `/health`, alert `BrainMetricsScrapeRejected`. Qwen Code on Jupiter: its `qwen` wrapper reads the key from a 600 file in `~/.qwen/`.
+
+The original plan, kept for reference:
+
 With a key, every endpoint except `/health` and `/v1/health` returns 401 without `Authorization: Bearer <key>` (or `X-Api-Key`). In this build that includes `/v1/models`, `/metrics`, `/apply-template`, `/tokenize` and `/props`.
 
 Helios side:
@@ -95,7 +103,7 @@ Jupiter side, everything that talks to `MODEL_URL` / `VISION_MODEL_URL` must sen
 
 Rollback: remove the flag and restore the old readiness URL; the orchestrator keeps working with or without the key sent.
 
-What it does not cover: a caller that has the key (the orchestrator) can still make Helios fetch a URL. That is the hole this PR closes on the orchestrator side.
+What it does not cover: a caller that has the key (the orchestrator, Qwen Code on Jupiter) can still make Helios fetch a URL. That is the hole PR #148 closes on the orchestrator side. The key crosses the LAN in plain HTTP, so anyone who can read LAN traffic can take it. And the unit's `IPAddressAllow` still spans LAN/tailnet/Docker, so a fetch can still land anywhere there; DNS via the LAN resolver is the one internet-bound path it leaves. Option A narrows both.
 
 ## Detection (cheap, whichever option)
 
@@ -105,7 +113,7 @@ llama-server logs every fetch at INFO: `downloading image from '<url>'` (`server
 
 1. **Now:** Option A. One line, closes the LAN/tailnet exposure and shrinks where a fetch can land.
 2. **With it:** the Loki detection alert above. One rule, no Helios change.
-3. **Later, if wanted:** Option B for defence in depth. It is a code change across ~15 call sites plus monitoring, so it should be its own PR.
+3. ~~**Later, if wanted:** Option B for defence in depth.~~ Done in the repo 2026-10-27; enforced once the Helios unit is installed.
 4. **Skip** option C unless upstream adds a flag.
 
 Do not test any of this by sending chat traffic to the live brain. `GET /health` and a TCP connect are enough to check who can reach it.

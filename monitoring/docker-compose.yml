@@ -40,6 +40,18 @@ services:
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
       # Every browser path is HTTPS (Tailscale Serve); plain HTTP is loopback only.
       - GF_SECURITY_COOKIE_SECURE=true
+      # No phone-home: usage stats (stats.grafana.org) and the ~10-minute
+      # grafana.com version/plugin checks seen in the 2026-10-27 egress audit.
+      # Image upgrades are digest bumps here, not in-app prompts.
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+      # Also off: plugin-signing key download, plugin preinstall, and the
+      # grafana.com news feed (fetched server-side). Signing uses the key
+      # baked into the image.
+      - GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true
+      - GF_PLUGINS_PREINSTALL_DISABLED=true
+      - GF_NEWS_NEWS_FEED_ENABLED=false
     networks:
       - monitoring-net
 

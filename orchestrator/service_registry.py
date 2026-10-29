@@ -23,6 +23,7 @@ import httpx
 from prometheus_client import Gauge
 
 from orchestrator.config import settings
+from orchestrator.model_auth import MODEL_SERVER_AUTH
 from orchestrator.model_manager import _models_probe_url
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,8 @@ class ServiceRegistry:
             health_url = f"{url}/"
 
         try:
-            _client = client or httpx.AsyncClient(timeout=timeout)
+            # MODEL_SERVER_AUTH: llama-server 401s /v1/models without its key.
+            _client = client or httpx.AsyncClient(timeout=timeout, auth=MODEL_SERVER_AUTH)
             try:
                 r = await _client.get(health_url)
                 svc.healthy = r.status_code < 500
@@ -193,7 +195,7 @@ class ServiceRegistry:
         names = []
         tasks = []
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, auth=MODEL_SERVER_AUTH) as client:
             for name, svc in self._services.items():
                 if svc.url:
                     tasks.append(self.check_service(name, client=client))

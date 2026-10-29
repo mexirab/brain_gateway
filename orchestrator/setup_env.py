@@ -116,7 +116,7 @@ ALLOWED_KEYS: Dict[str, KeySpec] = {
     # Bring-Your-Own-Model: point at a local (Ollama/LM Studio) or cloud endpoint
     "MODEL_BACKEND": KeySpec(False, "model", "Wire protocol: openai_compatible | anthropic | openai"),
     "MODEL_URL": KeySpec(False, "model", "Primary model base URL"),
-    "MODEL_API_KEY": KeySpec(True, "model", "API key for a cloud model backend"),
+    "MODEL_API_KEY": KeySpec(True, "model", "API key for the model server (cloud, or a keyed local server)"),
     # Voice step (non-secret)
     "TTS_VOICE": KeySpec(False, "voice", "Default TTS voice id"),
     # Push channel — ntfy
