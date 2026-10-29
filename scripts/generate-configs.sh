@@ -121,6 +121,12 @@ validate_config() {
 # template braces in the alertmanager config — passes through untouched).
 render_template() {
     local template="$1" output="$2" subst_vars="$3" mode="${4:-}" validator="${5:-}"
+    local label="${6:-$(basename "$template")}"
+
+    # Every step below fails explicitly: callers use `render_template ... || rc=$?`
+    # (to clean up a temp template), and inside a `||` list bash ignores set -e,
+    # so an unchecked failing envsubst/cat would empty the live mount and still
+    # print OK.
 
     # These renders are load-bearing (compose bind-mounts them) — a missing
     # template means a broken checkout or a rename that skipped this script.
@@ -146,14 +152,18 @@ render_template() {
         return 1
     fi
 
-    mkdir -p "$(dirname "$output")"
+    mkdir -p "$(dirname "$output")" || return 1
 
     # Render to a temp file and validate BEFORE overwriting the live mount,
     # then `cat` (not mv) so the mounted inode is preserved.
     local tmp
-    tmp="$(mktemp)"
-    envsubst "$subst_vars" < "$template" > "$tmp"
-    chmod 644 "$tmp"  # validator containers run as nobody and must read it
+    tmp="$(mktemp)" || return 1
+    if ! envsubst "$subst_vars" < "$template" > "$tmp"; then
+        rm -f "$tmp"
+        echo -e "  ${RED}FAIL${NC}: envsubst failed for ${label} — live config left untouched"
+        return 1
+    fi
+    chmod 644 "$tmp" || { rm -f "$tmp"; return 1; }  # validator containers run as nobody and must read it
 
     if [[ -n "$validator" ]] && ! validate_config "$validator" "$tmp"; then
         rm -f "$tmp"
@@ -161,14 +171,18 @@ render_template() {
         return 1
     fi
 
-    cat "$tmp" > "$output"
+    if ! cat "$tmp" > "$output"; then
+        rm -f "$tmp"
+        echo -e "  ${RED}FAIL${NC}: could not write $(basename "$output") (disk full?) — check it before the next container restart"
+        return 1
+    fi
     rm -f "$tmp"
 
     if [[ -n "$mode" ]]; then
-        chmod "$mode" "$output"
+        chmod "$mode" "$output" || return 1
     fi
 
-    echo -e "  ${GREEN}OK${NC}: $(basename "$template") -> $(basename "$output")"
+    echo -e "  ${GREEN}OK${NC}: ${label} -> $(basename "$output")"
 }
 
 GENERATED_FILES=(
@@ -179,12 +193,46 @@ GENERATED_FILES=(
 # Process each template
 echo -e "${BLUE}Generating configs...${NC}"
 
+# llama-server /metrics needs the brain's API key once it runs with
+# --api-key-file (tts/llama-server-primary.service). Write MODEL_API_KEY to the
+# file the llama-primary job reads (644 + gitignored, same posture as
+# monitoring/prometheus/api_token; truncated in place, never mv'd) ONLY when
+# MODEL_URL is the OpenAI-compatible brain at ${NODE_HELIOS_IP}:8080 that the
+# job scrapes: on other installs MODEL_API_KEY can be a cloud key, which must
+# never be sent to that address. Otherwise strip the BEGIN/END llama-auth block.
+prom_template="${PROJECT_DIR}/monitoring/prometheus/prometheus.yml.template"
+llama_key_file="${PROJECT_DIR}/monitoring/prometheus/llama_api_key"
+prom_tmp_template=""
+model_url="${MODEL_URL:-}"
+model_url="${model_url%/}"
+model_backend="${MODEL_BACKEND:-openai_compatible}"
+# ${VAR:+set}, not "$VAR": under `bash -x` the test line itself would echo the key.
+if [[ -n "${MODEL_API_KEY:+set}" && -n "${NODE_HELIOS_IP:-}" && "${model_backend,,}" == "openai_compatible" \
+      && ( "$model_url" == "http://${NODE_HELIOS_IP}:8080" || "$model_url" == "http://${NODE_HELIOS_IP}:8080/"* ) ]]; then
+    # Never let xtrace echo the key (see the .env sourcing above).
+    xtrace_on=0; case $- in *x*) xtrace_on=1; set +x;; esac
+    printf '%s' "$MODEL_API_KEY" > "$llama_key_file"
+    if [[ "$xtrace_on" == 1 ]]; then set -x; fi
+    chmod 644 "$llama_key_file"
+    echo -e "  ${GREEN}OK${NC}: llama-server API key -> $(basename "$llama_key_file")"
+else
+    # Key removed or MODEL_URL moved: drop the stale copy (directory mount, so rm is safe).
+    rm -f "$llama_key_file"
+    prom_tmp_template="$(mktemp)"
+    sed '/# BEGIN llama-auth/,/# END llama-auth/d' "$prom_template" > "$prom_tmp_template"
+    prom_template="$prom_tmp_template"
+    echo -e "  ${YELLOW}SKIP${NC}: llama-primary scrape auth (needs MODEL_API_KEY in .env and MODEL_URL=http://\${NODE_HELIOS_IP}:8080/...)"
+fi
+prom_rc=0
 render_template \
-    "${PROJECT_DIR}/monitoring/prometheus/prometheus.yml.template" \
+    "$prom_template" \
     "${PROJECT_DIR}/monitoring/prometheus/prometheus.yml" \
     '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT}' \
     "" \
-    prometheus
+    prometheus \
+    prometheus.yml.template || prom_rc=$?
+[[ -n "$prom_tmp_template" ]] && rm -f "$prom_tmp_template"
+[[ "$prom_rc" -eq 0 ]] || exit "$prom_rc"
 
 # Rendered alertmanager.yml holds the Pushover credentials. 644 (not 600)
 # because the container runs as nobody(65534) and must read it across the
@@ -193,7 +241,7 @@ render_template \
 # With the keys unset the render is UNLOADABLE (amtool: "one of user_key
 # or user_key_file must be configured") — skip it and keep whatever render
 # exists rather than arming a crash-loop for the next container restart.
-if [[ -z "${PUSHOVER_USER_KEY:-}" || -z "${PUSHOVER_APP_TOKEN:-}" ]]; then
+if [[ -z "${PUSHOVER_USER_KEY:+set}" || -z "${PUSHOVER_APP_TOKEN:+set}" ]]; then
     echo -e "  ${YELLOW}SKIP${NC}: alertmanager.yml.template (PUSHOVER_USER_KEY/PUSHOVER_APP_TOKEN not set in .env;"
     echo "        the pushover receiver cannot render a loadable config — existing render left untouched)"
 else
@@ -211,11 +259,13 @@ else
     # token config.py won't discard (< 24 chars -> 401s nobody counts).
     investigate="${SELF_AUDIT_INVESTIGATE:-false}"
     investigate="${investigate,,}"
-    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:-}" && ${#SELF_AUDIT_WEBHOOK_TOKEN} -lt 24 ]]; then
+    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:+set}" && ${#SELF_AUDIT_WEBHOOK_TOKEN} -lt 24 ]]; then
         echo -e "  ${YELLOW}WARN${NC}: SELF_AUDIT_WEBHOOK_TOKEN is shorter than 24 chars — the orchestrator ignores it; webhook not rendered"
     fi
-    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:-}" && ${#SELF_AUDIT_WEBHOOK_TOKEN} -ge 24 && "$investigate" =~ ^(true|1|yes|on)$ ]]; then
+    if [[ -n "${SELF_AUDIT_WEBHOOK_TOKEN:+set}" && ${#SELF_AUDIT_WEBHOOK_TOKEN} -ge 24 && "$investigate" =~ ^(true|1|yes|on)$ ]]; then
+        xtrace_on=0; case $- in *x*) xtrace_on=1; set +x;; esac
         printf '%s' "$SELF_AUDIT_WEBHOOK_TOKEN" > "$am_token_file"
+        if [[ "$xtrace_on" == 1 ]]; then set -x; fi
         chmod 644 "$am_token_file"
         echo -e "  ${GREEN}OK${NC}: self-investigator webhook token -> $(basename "$am_token_file")"
     else
@@ -230,7 +280,8 @@ else
         "${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml" \
         '${PUSHOVER_USER_KEY} ${PUSHOVER_APP_TOKEN} ${NODE_JUPITER_IP} ${SERVICE_ORCHESTRATOR_PORT}' \
         644 \
-        alertmanager || am_rc=$?
+        alertmanager \
+        alertmanager.yml.template || am_rc=$?
     [[ -n "$am_tmp_template" ]] && rm -f "$am_tmp_template"
     [[ "$am_rc" -eq 0 ]] || exit "$am_rc"
 fi

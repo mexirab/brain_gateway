@@ -109,9 +109,18 @@ _DENY_PARTS = frozenset(
 # Rendered monitoring configs (gitignored; alertmanager.yml holds Pushover keys)
 # and token files.
 _DENY_NAMES = frozenset(
-    {"alertmanager.yml", "prometheus.yml", "api_token", "self_audit_webhook_token", "user_profile.yaml"}
+    {
+        "alertmanager.yml",
+        "prometheus.yml",
+        "api_token",
+        "self_audit_webhook_token",
+        "llama_api_key",
+        "user_profile.yaml",
+    }
 )
-_DENY_NAME_RE = re.compile(r"(^\.env|secret|token|credential|password|htpasswd|\.key$|\.pem$)", re.IGNORECASE)
+_DENY_NAME_RE = re.compile(
+    r"(^\.env|secret|token|credential|password|htpasswd|api[_-]?key|\.key$|\.pem$)", re.IGNORECASE
+)
 
 
 _NOT_READABLE = "no such file, or not in the readable allow-list"
