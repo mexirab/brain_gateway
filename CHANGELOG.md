@@ -4,6 +4,34 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — alert routing audit (2026-10-27)
+
+Branch `fix/alert-routing-audit`. Alertmanager routes by an alertname allow-list, and seven rules notified nobody. Detail: `monitoring/README.md` → Alertmanager → Routing coverage.
+
+### Monitoring
+
+- New `orchestrator/tests/test_alert_routing.py`. It walks the Alertmanager route tree for every Prometheus and Loki rule, with every optional block and with them stripped. It fails CI when:
+  - an alert reaches only `null` / `self-investigator` without a reason in its `GRAFANA_ONLY` list (`UranusDown`, `AlertmanagerUnreachable`, `HighRequestLatency`, `AppDown`, `RoutineAutoEnded`);
+  - a heartbeat receiver gets anything but its heartbeat;
+  - a route matches on a runtime label, or names an undefined receiver;
+  - a route or inhibit names an alert no rule defines.
+
+  It gives the same receivers as `amtool config routes test` for all 72 alerts.
+- Routed to `pushover-quiet` in two lists of their own: `RuleEvaluationFailing`, `TTSDown`, `STTDown`, `HighErrorRate`, `HighToolErrorRate` and `HighGPUTemp` (4h repeat); `DiskSpaceLow` and `HighVRAMUsage` (24h repeat, standing conditions).
+- `TTSDown` / `STTDown` only count while Helios's node-exporter is up: the probes fail every time the power-tiered box sleeps.
+- `HighErrorRate` could never fire: it divided `{mode,error_type}` by `{mode}` without `sum()`. It now fires on ≥2 chat turns that failed in the primary brain within 1h and are also >10 % of turns. Brain-asleep replies and the same turn's fallback retry don't count.
+- `HighToolErrorRate` is per tool over 1h, needs ≥2 failures, and names the tool in the notice. An embedding outage inhibits it for the memory tools.
+- `HighVRAMUsage` is Helios-only and fires under 1 GiB free. The old 95 % ratio sat 11 MiB from firing on GPU1.
+- `DiskSpaceLow` also covers `/mnt/documents` and `/mnt/media`, pins `job="node-exporter"`, and has a runbook.
+- `HighGPUTemp` puts the temperature in the notice.
+- New `RuleEvaluationFailing` (group `prometheus_self`): a Prometheus rule keeps failing at evaluation time, so it can't fire.
+
+### Orchestrator
+
+- `bgw_request_errors_total` series for the fixed error types are created at 0 in `metrics.py`, and each tool's `bgw_tool_calls_total` / `bgw_tool_call_errors_total` series at registration (`tool_registry.register_tool`). Without them, `increase()` missed the first failure after every restart, and the orchestrator restarted 111 times in 30 days.
+
+---
+
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
 
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
