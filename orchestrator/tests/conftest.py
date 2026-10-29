@@ -40,9 +40,11 @@ import pytest  # noqa: E402
 # ---------------------------------------------------------------------------
 # Test-id length guard
 # ---------------------------------------------------------------------------
-# A test parametrized with a big value and no ``ids=`` gets the whole value in
-# its node id, and CI runs ``pytest -v``, which prints every id. Two tests
-# parametrized with ~1 MB strings stalled the GitHub test job for 25+ minutes.
+# CI runs ``pytest -v``, which prints every node id. Before pytest 9.2 a test
+# parametrized with a big value and no ``ids=`` got the whole value as its id,
+# and two tests parametrized with ~1 MB strings stalled the GitHub test job for
+# 25+ minutes. 9.2 shortens auto-generated str ids over 100 chars by default,
+# but explicit ids, ``ids=`` callables and multi-argument ids are unbounded.
 # Fail collection instead, before anything runs or prints. 300 chars is ~2
 # terminal lines: an id built from a payload is unreadable (and useless with
 # ``-k``) long before that, so the cap catches the habit while the payload is

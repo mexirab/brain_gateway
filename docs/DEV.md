@@ -63,7 +63,7 @@ docker compose --profile models config
 
 **Post-change pipeline (mandatory).** Every code change runs through a two-phase review pipeline (code-reviewer + security + prod-support + frontend/hacker + unit-test + docs-updater). Full spec in [`CLAUDE.md`](../CLAUDE.md) → **Post-change review workflow**.
 
-**Test ids must stay ≤ 300 chars.** CI runs `pytest -v`, which prints every node id, and a parametrize value with no id becomes the id. `orchestrator/tests/conftest.py` (`MAX_NODEID_CHARS`) fails collection with exit code 4 when any id is longer, printing only the test function, count and length. Give big cases a short id: `pytest.param("9" * 400, id="400-digits")`, or `ids=[...]` on `@pytest.mark.parametrize`. Why: two tests parametrized with ~1 MB strings stalled the CI test job for 25+ min (2026-10-26). Guard tests: `orchestrator/tests/test_nodeid_length_guard.py`.
+**Test ids must stay ≤ 300 chars.** CI runs `pytest -v`, which prints every node id, and a parametrize value with no id becomes the id (pytest 9.2+ shortens a single str value over 100 chars by default, but explicit ids, `ids=` callables and multi-argument ids have no limit). `orchestrator/tests/conftest.py` (`MAX_NODEID_CHARS`) fails collection with exit code 4 when any id is longer, printing only the test function, count and length. Give big cases a short id: `pytest.param("9" * 400, id="400-digits")`, or `ids=[...]` on `@pytest.mark.parametrize`. Why: two tests parametrized with ~1 MB strings stalled the CI test job for 25+ min (2026-10-26). Guard tests: `orchestrator/tests/test_nodeid_length_guard.py`.
 
 ---
 

@@ -1,8 +1,11 @@
 """Tests for the test-id length guard in conftest.py.
 
-CI runs ``pytest -v``, which prints every node id. A test parametrized with a
-~1 MB string and no ``ids=`` gets the whole string as its id, and two such
-tests stalled the GitHub test job for 25+ minutes. conftest.py's
+CI runs ``pytest -v``, which prints every node id. Before pytest 9.2, a test
+parametrized with a ~1 MB string and no ``ids=`` got the whole string as its
+id, and two such tests stalled the GitHub test job for 25+ minutes. pytest 9.2
+replaces an auto-generated str/bytes part over 100 chars with ``argname+index``
+by default, but explicit ids, ``ids=`` callables and multi-argument ids joined
+with ``-`` still have no length limit. conftest.py's
 ``pytest_collection_modifyitems`` now raises ``pytest.UsageError`` with a short
 report (``long_nodeid_report``) when any id is over ``MAX_NODEID_CHARS``.
 
@@ -206,14 +209,26 @@ _INNER_CONFTEST = "from orchestrator.tests.conftest import pytest_collection_mod
 
 _PAYLOAD_SNIPPET = "zq7zq7zq7zq7zq7zq7"
 
-_INNER_TEST_NO_IDS = """
+# An ids= callable that returns the value: its result is used as-is on every
+# pytest version (9.2+ only shortens auto-generated str ids).
+_INNER_TEST_LONG_IDS = """
 import pytest
 
 PAYLOAD = "zq7" * 350_000  # ~1 MB
 
-@pytest.mark.parametrize("value", [PAYLOAD, "short"])
+@pytest.mark.parametrize("value", [PAYLOAD, "short"], ids=lambda value: value)
 def test_takes_a_payload(value):
     assert value
+"""
+
+# No ids= at all: four auto-generated parts, each under pytest 9.2's 100-char
+# cutoff, joined with "-" into one id over the limit.
+_INNER_TEST_JOINED_IDS = """
+import pytest
+
+@pytest.mark.parametrize("a,b,c,d", [("a" * 90, "b" * 90, "c" * 90, "d" * 90)])
+def test_four_args(a, b, c, d):
+    assert a
 """
 
 _INNER_TEST_WITH_IDS = """
@@ -253,7 +268,7 @@ def _run_inner(pytester, capsys, *args):
 )
 def test_megabyte_id_fails_collection_with_small_output(pytester, capsys, mode):
     pytester.makeconftest(_INNER_CONFTEST)
-    pytester.makepyfile(test_payload_ids=_INNER_TEST_NO_IDS)
+    pytester.makepyfile(test_payload_ids=_INNER_TEST_LONG_IDS)
 
     result, output = _run_inner(pytester, capsys, *mode)
 
@@ -267,6 +282,18 @@ def test_megabyte_id_fails_collection_with_small_output(pytester, capsys, mode):
     assert not listed_or_ran
     assert f"1 test id(s) are longer than {MAX_NODEID_CHARS} chars" in output
     assert "test_payload_ids.py::test_takes_a_payload: 1 id(s), longest" in output
+
+
+def test_joined_auto_ids_fail_collection(pytester, capsys):
+    # Still reachable with pytest 9.2's default id strategy and no ids= at all.
+    pytester.makeconftest(_INNER_CONFTEST)
+    pytester.makepyfile(test_joined_ids=_INNER_TEST_JOINED_IDS)
+
+    result, output = _run_inner(pytester, capsys, "-v")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "a" * 90 not in output
+    assert "test_joined_ids.py::test_four_args: 1 id(s), longest" in output
 
 
 def test_short_ids_let_the_session_run(pytester, capsys):
