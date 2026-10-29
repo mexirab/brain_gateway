@@ -66,6 +66,7 @@ from orchestrator.finance_manager import router as finance_router
 from orchestrator.focus_manager import deliver_focus_break
 
 # Model lifecycle management
+from orchestrator.model_auth import MODEL_SERVER_AUTH
 from orchestrator.model_manager import check_model_health, start_model_server
 from orchestrator.pihole_client import get_pihole_client
 
@@ -625,6 +626,9 @@ async def _startup_logic():
     _http = httpx.AsyncClient(
         timeout=httpx.Timeout(60, connect=10),
         limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        # Adds MODEL_API_KEY to requests bound for the model server only
+        # (probes, /metrics, vision); see model_auth.
+        auth=MODEL_SERVER_AUTH,
     )
     logger.info("[orchestrator] Initialized shared HTTP client")
 

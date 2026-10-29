@@ -84,7 +84,7 @@ Chipset IOMMU faults killed Helios's USB controller and NIC on 2026-10-16. Fix: 
 |-----|------|------|---------|
 | GPU0 | RTX 5090 | 32 GB | Primary brain, part 1 (`llama-server-primary.service`, port 8080, Qwen3.8-Flash-Next UD-Q3_K_XL MTP; `-ts 44,56` layer split): ~29 GiB, ~90 % |
 | GPU1 | RTX PRO 5000 Blackwell | 48 GB | Primary brain, part 2 + MTP draft head (`-devd CUDA1`) ~37 GiB, plus live TTS (`voxcpm-tts.service`, port 8004, VoxCPM2) ~7.7 GiB: ~92 % used, peak 92.8 % with TTS + vision + generation at once. `qwen-tts.service` (:8002, ~4.5 GiB) is **disabled** — it no longer fits. Coder retired 2026-10-16 (see below) |
-| CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`) |
+| CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`; offline + LAN-only IP sandbox since 2026-10-27, see Egress audit) |
 
 - **Shared GPU1:** brain generation drops from ~135–180 to ~30–85 tok/s while the TTS synthesizes (spoken replies). `After=voxcpm-tts.service` only orders process start (voxcpm-tts is `Type=simple`), so at boot the two can still race for GPU1; a cold-cache boot test had both ready in 27 s with no restarts. Never re-enable `qwen-tts` while Flash-Next is installed.
 - **Qwen3-TTS GPU1 drop-in (rollback TTS only):** `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that it silently ran on the 5090 because the unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`). Only matters if the 27B rollback re-enables `qwen-tts`.
@@ -114,16 +114,17 @@ The unit's header comments are the authoritative record (weight sha256s, flags, 
 | `--reasoning-format auto` | | Thinking routed to `reasoning_content` |
 | `--fit off` | | Every placement arg is explicit; a boot that finds GPU1 short fails loudly (Loki alert `BrainFailedToStart`) instead of silently shrinking |
 | `--no-webui --no-slots --metrics` | | `/metrics` scraped by Prometheus job `llama-primary` |
+| `--api-key-file` | `/etc/llama-server/api-key` | Added 2026-10-27 (repo unit; **not yet installed on Helios**). Every path but `/health` 401s without `Authorization: Bearer <key>`, incl. `/v1/models` and `/metrics`. File `root:llama` 640 in a 750 dir, same value as Jupiter `.env` `MODEL_API_KEY`. `ExecStartPre` refuses a file with no key line (llama-server would run with no auth). Enable/rotate steps + check (`/v1/models` → 401): unit header |
 
-Measured: decode ~135–180 tok/s (137–140 prose / 174–179 code), ~30–85 while the TTS synthesizes on GPU1; warm streaming TTFT through Jess 0.44–0.53 s (first turn after a restart ~8 s: cold prompt cache); loads in 6–9 s from page cache, 27 s cold (`TimeoutStartSec=360`; the readiness loop polls `/v1/models` for up to 240 s and gives up at once if the server process dies). A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
+Measured: decode ~135–180 tok/s (137–140 prose / 174–179 code), ~30–85 while the TTS synthesizes on GPU1; warm streaming TTFT through Jess 0.44–0.53 s (first turn after a restart ~8 s: cold prompt cache); loads in 6–9 s from page cache, 27 s cold (`TimeoutStartSec=360`; the readiness loop polls `/health` — the one unauthenticated path — for up to 240 s and gives up at once if the server process dies). A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
 
 - **Context limit:** 64K. Chat prompts are ~10–15K tokens, but the self-audit investigator once reached ~70K (2026-10-21); a run that large is rejected and the audit comes back `partial`.
 - **Sampling:** temperature ≤ 1.0 and `repeat_penalty` 1.0 (llama.cpp's wire name — not `repetition_penalty`) or MTP acceptance collapses.
 - **Garbled output / dropped tool calls:** first lever is `--spec-type none` (disables MTP, ~105 tok/s). `--enforce-eager` was a vLLM flag and means nothing here. Then `journalctl -u llama-server-primary`.
 - **Never add `--verbose` or `--slot-save-path`:** both put prompt text (medical facts, conversations) in the journal / on disk.
-- **`--api-key` NOT enabled:** `auto_learn.py`, `jobs_calendar.py`, `vision_handler.py`, `meal_manager.py` call `MODEL_URL` with bare httpx and have no api-key plumbing. Network exposure is bounded by the unit's `IPAddressAllow` instead.
+- **API key:** see `--api-key-file` above. The orchestrator sends it via `orchestrator/model_auth.py` (origin-scoped, all model calls); a mismatch looks like "Helios asleep" and fires `BrainAuthRejected` / `BrainMetricsScrapeRejected` (`monitoring/README.md` → Helios Health Alerts). Plain HTTP on the LAN: it stops callers without the key, not a LAN sniffer. Network exposure is still also bounded by `IPAddressAllow`.
 - **Sandbox:** runs as nologin `llama` (`useradd -r -M -s /usr/sbin/nologin llama`), `ProtectSystem=strict`, `ProtectHome=tmpfs` with read-only binds of the binary dir + weights dir, `PrivateTmp`, `DevicePolicy=closed` + `DeviceAllow` for `/dev/nvidia0`, `/dev/nvidia1`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` (0666 nodes created by `nvidia-persistenced` at boot), empty capability set, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (host-firewall substitute — ufw is inactive on Helios). Check with `systemd-analyze security llama-server-primary`. Do NOT add `MemoryDenyWriteExecute` (CUDA JITs PTX into W+X pages) or `PrivateDevices=yes` (hides `/dev/nvidia*`).
-- **Rollback to the 27B:** see the header of `tts/llama-server-primary-27b-q6k.service` (Helios copy `/etc/systemd/system/llama-server-primary.service.27b-q6k.bak`; also re-enables `qwen-tts` and needs the Jupiter `.env` model names + `VOICE_THINKING_ENABLED=false`). The 27B weights are still on Helios. `llama-server-primary` and `vllm-primary` carry `Conflicts=` so they cannot both hold port 8080.
+- **Rollback to the 27B:** see the header of `tts/llama-server-primary-27b-q6k.service` (Helios copy `/etc/systemd/system/llama-server-primary.service.27b-q6k.bak` — refresh it from the repo file when the key goes in, or a rollback silently drops auth; also re-enables `qwen-tts` and needs the Jupiter `.env` model names + `VOICE_THINKING_ENABLED=false`; keep the current `MODEL_API_KEY` line — the `.env.bak-*` snapshots predate it). Rolling back to `vllm-primary` turns key enforcement off (no key in that unit). The 27B weights are still on Helios. `llama-server-primary` and `vllm-primary` carry `Conflicts=` so they cannot both hold port 8080.
 - **Logs:** journal, shipped to Loki by `promtail-helios`'s journald job (`{host="helios", service="llama-server-primary"}`; level re-derived from llama.cpp's `E`/`W` prefixes). Startup failures fire `BrainFailedToStart`. See `monitoring/README.md` → Log Pipeline.
 
 ### 27B Q6_K unit — ROLLBACK (repo copy: `tts/llama-server-primary-27b-q6k.service`; live 2026-10-02 → 2026-10-24)
@@ -162,6 +163,28 @@ Full trial + acceptance record: `QWEN38_PREP_RESULTS.md` (same directory).
 2026-04-26 → 2026-09-28: `Lorbus/Qwen3.6-27B-int4-AutoRound` on vLLM 0.19.1, GPU0 (Plan A — a bench showed it at only 28–79% of GPU0 throughput on the PRO 5000; see `VLLM_PHASE_3_PLAN.md` → Outcome). By 2026-09 the unit had drifted to 16,384 ctx, `--gpu-memory-utilization 0.70`, `--enforce-eager`, no MTP, and TTS was sharing the 5090.
 
 Disabled units kept on disk: `qwen-tts.service` (rollback TTS, disabled 2026-10-24), `vllm-primary.service` (older rollback target), `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM; uses the old `/home/labadmin/llama.cpp` checkout), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
+
+## Egress audit (2026-10-27)
+
+~10 h of overnight packet capture on Helios and Jupiter. **Result: no phone-home by the Qwen model** — no China-linked IPs, ASNs or domains; llama-server's `llama` uid opened no connections; its systemd `IPAddressDeny=any` + LAN/tailnet/Docker allow-list held. The phone-home traffic it did find (Grafana and Loki usage stats / update checks) is off now, and so are Netdata's statistics (below).
+
+Repo changes (units take effect only when installed on Helios):
+
+| Item | Change |
+|------|--------|
+| `llama-server-primary` (+ 27B rollback unit) | `--api-key-file /etc/llama-server/api-key` — see the flags table above. Repo only until installed |
+| `stt-onnx.service` | `HF_HUB_OFFLINE=1` (model loads from `~/.cache/huggingface`; a model change = download first with it unset, outside the unit), `NoNewPrivileges=yes`, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (same list as the brain). It was the only model server on Helios that could reach the internet. Network-only sandbox: still runs as `labadmin` with no filesystem sandbox |
+| `voxcpm-tts.service` | `InaccessiblePaths=-/etc/llama-server` — runs as the same `llama` user as the brain, so it must not read the key. The `-` skips a missing path: restart `voxcpm-tts` after `/etc/llama-server` is first created |
+| `vllm-primary.service` | Header only: no API key in that unit, so rolling back to it turns key enforcement off |
+| Grafana / Loki (Jupiter) | Usage stats, update checks, plugin key download/preinstall and news feed off — `monitoring/README.md` → No phone-home |
+
+Host-side, outside the repo (done 2026-10-27):
+
+- **Helios `mistral_proxy` / `openai_shim`** (:8000 / :8001): stale Aug 2025 services, unauthenticated, nothing used them — disabled.
+- **Netdata** (Helios + Jupiter): opted out of anonymous statistics (`/etc/netdata/.opt-out-from-anonymous-statistics`). Helios Netdata was also streaming to a parent `ceres` that doesn't exist — streaming disabled.
+- **Jupiter `qwen` CLI wrapper** (`~/.local/bin/qwen`, Qwen Code driven by this brain): reads the brain key from `~/.qwen/brain-api-key` (mode 600).
+
+**Remaining gaps:** the key crosses the LAN in plain HTTP (stops callers without it, not a LAN sniffer). The brain's and STT's allow-lists still include the LAN, so DNS through the LAN resolver is the one internet-bound path they keep; narrowing `IPAddressAllow` (`LLAMA_SERVER_REMOTE_MEDIA.md` → Option A) is still open.
 
 ## Performance Notes
 

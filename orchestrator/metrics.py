@@ -1154,6 +1154,15 @@ BACKGROUND_LLM_ERRORS = Counter(
     ["caller", "error_type"],
 )
 
+# Requests model_auth sent WITH the model-server key that came back 401/403:
+# MODEL_API_KEY doesn't match llama-server's --api-key-file. Without this, a
+# mismatch looks exactly like "Helios asleep" (probes just return False).
+MODEL_AUTH_REJECTED = Counter(
+    "bgw_model_auth_rejected_total",
+    "Model-server requests sent with MODEL_API_KEY that were rejected (401/403)",
+    ["status"],
+)
+
 # -- Progress Tracking -------------------------------------------------------
 # -- TTS Announcements -------------------------------------------------------
 TTS_ANNOUNCEMENTS_TOTAL = Counter(
