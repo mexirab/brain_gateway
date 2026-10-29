@@ -181,7 +181,13 @@ Helios (the GPU model layer) is power-tiered — asleep most of the time and wok
 ### Check via API
 ```bash
 curl -s http://localhost:8888/health | jq .primary_status
-curl -s http://10.0.0.195:8080/v1/models
+curl -s http://10.0.0.195:8080/health    # no key needed: 503 while loading, 200 when ready
+
+# Every other :8080 path needs the brain key (llama-server --api-key-file, 2026-10-27; a key
+# the server doesn't require yet is ignored). Run from the repo root on Jupiter: reads
+# MODEL_API_KEY from .env without echoing it, and -H @<(...) keeps it out of `ps`.
+brain_auth() { printf 'Authorization: Bearer %s\n' "$(grep '^MODEL_API_KEY=' .env | cut -d= -f2-)"; }
+curl -s -H @<(brain_auth) http://10.0.0.195:8080/v1/models
 ```
 
 ### Manual start/stop (systemd on Helios, if needed)
@@ -191,8 +197,9 @@ ssh labadmin@10.0.0.195 "sudo systemctl restart llama-server-primary"
 
 ssh labadmin@10.0.0.195 "journalctl -u llama-server-primary --no-pager -n 100"
 
-# llama.cpp server metrics (queue depth; this build exports no kv_cache_usage_ratio)
-curl -s http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing)'
+# llama.cpp server metrics (queue depth; this build exports no kv_cache_usage_ratio); needs the key —
+# brain_auth from "Check via API" above, repo root on Jupiter
+curl -s -H @<(brain_auth) http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing)'
 
 # Both GPUs hold the brain; GPU1 also the live TTS (expect ~90 % / ~92 %)
 ssh labadmin@10.0.0.195 "nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv"

@@ -336,6 +336,52 @@ class TestPathAllowList:
         assert "alertmanager.yml" not in out
         assert "env_link.py" not in _list_dir("orchestrator")
 
+    # The brain's API key file rendered by generate-configs.sh, plus any
+    # *api-key* name with an otherwise-readable extension (only the name rule
+    # stops the .md/.py/.yml ones).
+    _API_KEY_PATHS = (
+        "monitoring/prometheus/llama_api_key",
+        "monitoring/prometheus/llama_api_key.yml",
+        "docs/foo_api-key.md",
+        "docs/foo_api_key.md",
+        "docs/APIKEY-notes.md",
+        "orchestrator/apikey.py",
+    )
+
+    @pytest.mark.parametrize("path", _API_KEY_PATHS)
+    def test_api_key_files_refused(self, fake_repo, path):
+        from orchestrator.self_investigator import PathDenied, resolve_repo_path
+
+        (fake_repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (fake_repo / path).write_text("SECRETAPIKEY\n")
+        with pytest.raises(PathDenied):
+            resolve_repo_path(path)
+
+    @pytest.mark.asyncio
+    async def test_api_key_files_hidden_from_list_grep_and_read(self, fake_repo):
+        from orchestrator.self_investigator import _list_dir, run_tool
+
+        for path in self._API_KEY_PATHS:
+            (fake_repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (fake_repo / path).write_text("SECRETAPIKEY\n")
+        listing = _list_dir("monitoring/prometheus").split("\n")
+        assert "llama_api_key" not in listing and "llama_api_key.yml" not in listing
+        assert "foo_api-key.md" not in _list_dir("docs").split("\n")
+        for root in ("", "monitoring", "docs", "orchestrator"):
+            assert "SECRETAPIKEY" not in await run_tool("grep", {"pattern": "SECRETAPIKEY", "path": root})
+        for path in self._API_KEY_PATHS:
+            out = await run_tool("read_file", {"path": path})
+            assert "Refused" in out and "SECRETAPIKEY" not in out
+
+    @pytest.mark.parametrize("path", ["docs/api_reference.md", "docs/keyboard.md", "orchestrator/apis.py"])
+    def test_api_key_rule_is_not_overbroad(self, fake_repo, path):
+        from orchestrator.self_investigator import resolve_repo_path
+
+        (fake_repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (fake_repo / path).write_text("fine\n")
+        full, _rel = resolve_repo_path(path)
+        assert full.is_file()
+
 
 # ===========================================================================
 # Tools
