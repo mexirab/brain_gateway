@@ -56,7 +56,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|DeployDrift|DeployDriftCheckFailing"
       receiver: "pushover-quiet"
     # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.
     - matchers:

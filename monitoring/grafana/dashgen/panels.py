@@ -58,12 +58,14 @@ def stat(
     text_mode: str = "auto",
     mappings: list[dict] | None = None,
     description: str | None = None,
+    legend: str = "",
 ) -> dict:
     """Single big-number stat panel.
 
     thresholds: list of (value, color). Use None for the base. e.g.
         [(None, "green"), (5, "yellow"), (20, "red")]
     mappings: Grafana value mappings, e.g. `[{"options": {"0": {"text": "DOWN", "color": "red"}}, "type": "value"}]`
+    legend: legendFormat, e.g. "{{commit}}" with text_mode="name" to show a label value.
     """
     steps = []
     if thresholds:
@@ -76,7 +78,7 @@ def stat(
         "type": "stat",
         "title": title,
         "datasource": PROMETHEUS,
-        "targets": [prom(query, instant=True)],
+        "targets": [prom(query, legend, instant=True)],
         "fieldConfig": {
             "defaults": {
                 "unit": unit,

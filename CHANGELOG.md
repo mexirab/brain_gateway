@@ -4,6 +4,36 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Deploy drift check (2026-10-26)
+
+A commit could pass CI on main and never deploy (GitHub drops a pending run when another arrives in the same concurrency group, a deploy can fail or time out, the runner can be stopped) with no signal. Detail + runbook: `monitoring/README.md` → Deploy Drift.
+
+### Upgrade action
+
+- On Jupiter add `DEPLOY_DRIFT_REPO=mexirab/brain_gateway` to `.env` **before** this merge's deploy recreates the orchestrator; added later → `docker compose up -d --force-recreate orchestrator`. Unset = check off (default).
+
+### Orchestrator
+
+- New `jobs_deploy_drift.py`: interval job `deploy_drift_check` (10 min, first run 60 s after start), registered only when `DEPLOY_DRIFT_REPO` is set. Reads the CI deploy job's `.last-deployed-sha` via the read-only repo mount (`DEPLOY_MARKER_PATH`) and lists main's latest 20 push runs of `ci.yml` from the GitHub REST API; a run passed CI when every job of its latest attempt except "Deploy to Jupiter" succeeded. Requests go to `api.github.com` only, no redirects, proxy env ignored; logs carry short SHAs, counts, status codes and exception class names only.
+- New env vars `DEPLOY_DRIFT_REPO` (validator `validate_deploy_drift_config`: malformed → disabled + ERROR), `DEPLOY_MARKER_PATH`, `DEPLOY_DRIFT_GITHUB_TOKEN` (optional, fine-grained public-repo read-only; unauthenticated = 60 req/h per public IP, the check uses ~6/h, up to ~42/h in bursts).
+- Removed the never-set `bgw_build` Info metric (`BUILD_INFO`).
+
+### Monitoring
+
+- Metrics `bgw_deployed_commit_info{commit}`, `bgw_deployed_commit_timestamp_seconds`, `bgw_deploy_undeployed_green_commits`, `bgw_deploy_undeployed_green_since_timestamp_seconds` (NaN until a check answers), `bgw_deploy_drift_check_total{result}` (pre-seeded).
+- Prometheus group `deploy_health`: `DeployDrift` (a green commit on main undeployed > 40 min, `for: 10m`) and `DeployDriftCheckFailing` (≥ 4 failed checks in 1 h, `for: 30m`), both `pushover-quiet`.
+- Grafana row "Deploys (CI → Jupiter)" (5 panels); dashgen `stat()` gained a `legend` kwarg.
+
+### Tests
+
+- `orchestrator/tests/test_deploy_drift.py` (135).
+
+### Docs
+
+- `CLAUDE.md`, `docs/ENV_VARS.md`, `TECHNICAL_REFERENCE.md`, `monitoring/README.md`, `.env.example`, `.claude/agents/prod-support.md`.
+
+---
+
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
 
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
