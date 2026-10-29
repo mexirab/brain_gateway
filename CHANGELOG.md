@@ -4,6 +4,46 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — off-box dead-man's switch on Saturn (2026-10-26)
+
+Every alert is evaluated and delivered on Jupiter, so the 2026-10-26 dockerd crash left Prometheus + Alertmanager down 2.5 h without a page. Saturn now watches for Jupiter's heartbeat. Detail + runbook: `monitoring/README.md` → Dead-man's switch; install + test plan: `monitoring/deadman/README.md`.
+
+### Monitoring (Jupiter)
+
+- New group `jupiter_deadman`: `Watchdog` fires while Jupiter can page, i.e. a Prometheus self-scrape sample younger than 3 min and not more than 2 failed Pushover notifications in 30 min (`alertmanager_notifications_failed_total{integration="pushover"}`). A bare `vector(1)` would keep beating with ingestion dead.
+- New unconditional scrape job `alertmanager` (`alertmanager:9093`).
+- First Alertmanager route: `Watchdog` → webhook receiver `deadman` at `http://${DEADMAN_HOST}:${DEADMAN_PORT}/heartbeat` (`group_interval` + `repeat_interval` 1m ≈ one POST every 2 min, no `continue`, `send_resolved: false`), bearer from `credentials_file: /etc/alertmanager/deadman_webhook_token`.
+- New scrape job `jupiter-deadman` (Saturn `:9466`, `node: saturn`) and quiet alert `DeadmanSwitchBroken` (scrape down, checker silent 5 min, or `DEADMAN_DRY_RUN` left on; `for: 30m`). Inhibit rule `NodeDown` → `DeadmanSwitchBroken` on equal `node`.
+- `scripts/generate-configs.sh`: the route, receiver and `jupiter-deadman` job sit in `# BEGIN deadman` / `# END deadman` blocks and render only with `DEADMAN_WEBHOOK_TOKEN` ≥ 24 chars in `.env` (writes `monitoring/alertmanager/deadman_webhook_token`, 644, gitignored). Otherwise they are stripped and the token file is emptied; a short token WARNs. New `DEADMAN_HOST` (default `NODE_SATURN_IP`) and `DEADMAN_PORT` (default 9466).
+- `strip_block` (now also used for the self-investigator blocks) refuses unpaired BEGIN/END markers. A lost `# END` used to make `sed` delete the rest of the template, and the truncated render still validated.
+
+### Saturn (hand-installed; CI deploys nothing there)
+
+- `monitoring/deadman/jupiter_deadman.py` (stdlib Python ≥ 3.10; `serve` / `probe` / `test-notify`), `jupiter-deadman.service` (`DynamicUser`, sandboxed, `StateDirectory`), `jupiter-deadman.env.example` (→ `/etc/jupiter-deadman.env`, 0600).
+- Pages over its own Pushover after `DEADMAN_HEARTBEAT_MAX_AGE_SECONDS` (600, min 300) without a heartbeat, re-pages every 4 h, and sends a priority-0 "heartbeat is back". Last heartbeat + alert state persist across restarts; 3-min start-up grace after a restart with saved state.
+- Every check (`DEADMAN_CHECK_INTERVAL_SECONDS` 60, max 120) probes Jupiter (orchestrator `/health`, HA `:8123/manifest.json`, `tcp :22`) so the page says what is down. Probes never page on their own.
+- Accept-time source allow-list (`DEADMAN_ALLOW_FROM`, default Jupiter, + loopback), bearer checked before the body is read, ≤ 4 connections, 15 s deadline per connection. Metrics `jupiter_deadman_*` on `/metrics`.
+
+### Upgrade action
+
+- Merging changes nothing live except the `alertmanager` scrape job and an always-firing `Watchdog` that falls through to `null`. To arm: install Saturn in dry-run, set `DEADMAN_WEBHOOK_TOKEN` in Jupiter's `.env`, `bash scripts/generate-configs.sh && bash scripts/reload-monitoring.sh`, check heartbeats, then `DEADMAN_DRY_RUN=false` on Saturn.
+- Planned Jupiter downtime: `sudo systemctl stop jupiter-deadman` on Saturn first. Never silence `Watchdog`; that pages.
+
+### Known limits
+
+- A whole-house power or internet outage, or Jupiter and Saturn down together, pages nobody. Only an off-site heartbeat would catch it, and none is built.
+- A broken Jupiter Pushover setup is noticed only once a page fails; the heartbeat resumes 30 min after the last failure.
+
+### Tests
+
+- `tests/test_generate_configs.py` covers the deadman gate, host/port override and marker pairing. `tests/test_jupiter_deadman.py` is host-only (`python3 -m pytest --noconftest orchestrator/tests/test_jupiter_deadman.py`); the orchestrator test container skips it.
+
+### Docs
+
+- `monitoring/README.md`, `monitoring/deadman/README.md`, `docs/ENV_VARS.md`, `.env.example`, `CLAUDE.md`, `COMMANDS.md`.
+
+---
+
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
 
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.

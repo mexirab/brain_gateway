@@ -69,6 +69,43 @@ export SERVICE_ORCHESTRATOR_PORT="${SERVICE_ORCHESTRATOR_PORT:-8888}"
 export SERVICE_TTS_PORT="${SERVICE_TTS_PORT:-8002}"
 export SERVICE_STT_PORT="${SERVICE_STT_PORT:-8003}"
 export MONITORING_GPU_EXPORTER_PORT="${MONITORING_GPU_EXPORTER_PORT:-9400}"
+# Off-box dead-man's switch (monitoring/deadman/, runs on Saturn).
+export DEADMAN_HOST="${DEADMAN_HOST:-${NODE_SATURN_IP}}"
+export DEADMAN_PORT="${DEADMAN_PORT:-9466}"
+
+# Temp templates (BEGIN/END blocks stripped) — removed on any exit.
+TMP_TEMPLATES=()
+trap 'rm -f "${TMP_TEMPLATES[@]}"' EXIT
+
+# Copy a template minus its "# BEGIN <name>" .. "# END <name>" lines into a
+# new temp file; sets STRIPPED to its path. Refuses unpaired markers: a lost
+# "# END" would make sed delete to the end of the file, and the truncated
+# render (still valid YAML) would pass validation with scrape jobs missing.
+strip_block() {
+    local name="$1" src="$2" begin end
+    local begin_re="^[[:space:]]*# BEGIN ${name}( |$)" end_re="^[[:space:]]*# END ${name}( |$)"
+    begin="$(grep -cE "$begin_re" "$src" || true)"
+    end="$(grep -cE "$end_re" "$src" || true)"
+    if [[ "$begin" == 0 || "$begin" != "$end" ]]; then
+        echo -e "  ${RED}FAIL${NC}: $(basename "$src") has ${begin} '# BEGIN ${name}' and ${end} '# END ${name}' markers — they must pair up"
+        exit 1
+    fi
+    STRIPPED="$(mktemp -t "$(basename "$src").XXXXXX")"
+    TMP_TEMPLATES+=("$STRIPPED")
+    sed -E "/${begin_re}/,/${end_re}/d" "$src" > "$STRIPPED"
+}
+
+# Dead-man's switch gate: the Watchdog route + receiver (alertmanager) and the
+# jupiter-deadman scrape job (prometheus) render only with a token Saturn will
+# accept. Without one, Alertmanager would post heartbeats that 401 every minute
+# and Prometheus would scrape a switch that isn't installed.
+DEADMAN_ON=0
+# ${VAR:+set}, not "$VAR": under `bash -x` the test line itself would echo the token.
+if [[ -n "${DEADMAN_WEBHOOK_TOKEN:+set}" && ${#DEADMAN_WEBHOOK_TOKEN} -lt 24 ]]; then
+    echo -e "  ${YELLOW}WARN${NC}: DEADMAN_WEBHOOK_TOKEN is shorter than 24 chars — Saturn refuses it; dead-man's switch not rendered"
+elif [[ -n "${DEADMAN_WEBHOOK_TOKEN:+set}" ]]; then
+    DEADMAN_ON=1
+fi
 
 echo ""
 echo "Using configuration:"
@@ -124,7 +161,7 @@ render_template() {
     local label="${6:-$(basename "$template")}"
 
     # Every step below fails explicitly: callers use `render_template ... || rc=$?`
-    # (to clean up a temp template), and inside a `||` list bash ignores set -e,
+    # (then exit with rc), and inside a `||` list bash ignores set -e,
     # so an unchecked failing envsubst/cat would empty the live mount and still
     # print OK.
 
@@ -202,7 +239,6 @@ echo -e "${BLUE}Generating configs...${NC}"
 # never be sent to that address. Otherwise strip the BEGIN/END llama-auth block.
 prom_template="${PROJECT_DIR}/monitoring/prometheus/prometheus.yml.template"
 llama_key_file="${PROJECT_DIR}/monitoring/prometheus/llama_api_key"
-prom_tmp_template=""
 model_url="${MODEL_URL:-}"
 model_url="${model_url%/}"
 model_backend="${MODEL_BACKEND:-openai_compatible}"
@@ -218,20 +254,25 @@ if [[ -n "${MODEL_API_KEY:+set}" && -n "${NODE_HELIOS_IP:-}" && "${model_backend
 else
     # Key removed or MODEL_URL moved: drop the stale copy (directory mount, so rm is safe).
     rm -f "$llama_key_file"
-    prom_tmp_template="$(mktemp)"
-    sed '/# BEGIN llama-auth/,/# END llama-auth/d' "$prom_template" > "$prom_tmp_template"
-    prom_template="$prom_tmp_template"
+    if [[ -f "$prom_template" ]]; then
+        strip_block llama-auth "$prom_template"
+        prom_template="$STRIPPED"
+    fi
     echo -e "  ${YELLOW}SKIP${NC}: llama-primary scrape auth (needs MODEL_API_KEY in .env and MODEL_URL=http://\${NODE_HELIOS_IP}:8080/...)"
 fi
+if [[ "$DEADMAN_ON" == 0 && -f "$prom_template" ]]; then
+    strip_block deadman "$prom_template"
+    prom_template="$STRIPPED"
+fi
+# Temp templates are removed by the EXIT trap, on this failure path too.
 prom_rc=0
 render_template \
     "$prom_template" \
     "${PROJECT_DIR}/monitoring/prometheus/prometheus.yml" \
-    '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT}' \
+    '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT} ${DEADMAN_HOST} ${DEADMAN_PORT}' \
     "" \
     prometheus \
     prometheus.yml.template || prom_rc=$?
-[[ -n "$prom_tmp_template" ]] && rm -f "$prom_tmp_template"
 [[ "$prom_rc" -eq 0 ]] || exit "$prom_rc"
 
 # Rendered alertmanager.yml holds the Pushover credentials. 644 (not 600)
@@ -253,7 +294,25 @@ else
     # Alertmanager never posts without a token.
     am_template="${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml.template"
     am_token_file="${PROJECT_DIR}/monitoring/alertmanager/self_audit_webhook_token"
-    am_tmp_template=""
+    deadman_token_file="${PROJECT_DIR}/monitoring/alertmanager/deadman_webhook_token"
+    if [[ "$DEADMAN_ON" == 1 ]]; then
+        # Same posture as the self-investigator token: 644 + gitignored,
+        # truncated in place, no trailing newline.
+        xtrace_on=0; case $- in *x*) xtrace_on=1; set +x;; esac
+        printf '%s' "$DEADMAN_WEBHOOK_TOKEN" > "$deadman_token_file"
+        if [[ "$xtrace_on" == 1 ]]; then set -x; fi
+        chmod 644 "$deadman_token_file"
+        echo -e "  ${GREEN}OK${NC}: dead-man's switch token -> $(basename "$deadman_token_file") (heartbeats to ${DEADMAN_HOST}:${DEADMAN_PORT})"
+    else
+        # Switch off: don't leave an old secret behind (truncated in place,
+        # like every file in the directory Alertmanager mounts).
+        if [[ -s "$deadman_token_file" ]]; then : > "$deadman_token_file"; fi
+        if [[ -f "$am_template" ]]; then
+            strip_block deadman "$am_template"
+            am_template="$STRIPPED"
+        fi
+        echo -e "  ${YELLOW}SKIP${NC}: dead-man's switch (needs DEADMAN_WEBHOOK_TOKEN >= 24 chars in .env — see monitoring/deadman/README.md)"
+    fi
     # Only when the orchestrator will accept it: investigate on (else every
     # delivery is a 409 and Alertmanager re-sends each group_interval) and a
     # token config.py won't discard (< 24 chars -> 401s nobody counts).
@@ -268,21 +327,19 @@ else
         if [[ "$xtrace_on" == 1 ]]; then set -x; fi
         chmod 644 "$am_token_file"
         echo -e "  ${GREEN}OK${NC}: self-investigator webhook token -> $(basename "$am_token_file")"
-    else
-        am_tmp_template="$(mktemp)"
-        sed '/# BEGIN self-investigator/,/# END self-investigator/d' "$am_template" > "$am_tmp_template"
-        am_template="$am_tmp_template"
+    elif [[ -f "$am_template" ]]; then
+        strip_block self-investigator "$am_template"
+        am_template="$STRIPPED"
         echo -e "  ${YELLOW}SKIP${NC}: self-investigator webhook (needs SELF_AUDIT_WEBHOOK_TOKEN >= 24 chars and SELF_AUDIT_INVESTIGATE=true in .env)"
     fi
     am_rc=0
     render_template \
         "$am_template" \
         "${PROJECT_DIR}/monitoring/alertmanager/alertmanager.yml" \
-        '${PUSHOVER_USER_KEY} ${PUSHOVER_APP_TOKEN} ${NODE_JUPITER_IP} ${SERVICE_ORCHESTRATOR_PORT}' \
+        '${PUSHOVER_USER_KEY} ${PUSHOVER_APP_TOKEN} ${NODE_JUPITER_IP} ${SERVICE_ORCHESTRATOR_PORT} ${DEADMAN_HOST} ${DEADMAN_PORT}' \
         644 \
         alertmanager \
         alertmanager.yml.template || am_rc=$?
-    [[ -n "$am_tmp_template" ]] && rm -f "$am_tmp_template"
     [[ "$am_rc" -eq 0 ]] || exit "$am_rc"
 fi
 
