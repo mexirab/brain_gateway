@@ -130,6 +130,14 @@ curl -s http://10.0.0.58:9466/metrics | grep -E 'heartbeats_total\{result="ok"\}
 {container="brain-orchestrator"} |~ "(?i)error|exception|failed"
 ```
 
+### USB disk dropout / containers on a dead `/mnt` disk (Jupiter)
+```bash
+sudo systemctl start usb-storage-remount.service   # mount -a, then stop+start containers still on the old disk
+journalctl -u usb-storage-restart-stale -n 40      # what it restarted / what failed
+journalctl -u usb-storage-stale-check -n 20        # latest 10-min check: which containers are stale
+```
+Never `docker compose start` a whole project. Manual fallback, verification, install: `monitoring/README.md` → USB Storage.
+
 ### Hardware audit across cluster
 ```bash
 /opt/gateway_mvp/monitoring/lab_hw_audit.sh

@@ -1,7 +1,7 @@
-# One embedding outage must not send three notices: the boot self-test
-# (EmbeddingModelBroken) explains runtime encode() failures, and either one
-# explains auto_learn failing (dedup + store need embeddings).
 inhibit_rules:
+  # One embedding outage must not send three notices: the boot self-test
+  # (EmbeddingModelBroken) explains runtime encode() failures, and either one
+  # explains auto_learn failing (dedup + store need embeddings).
   - source_matchers:
       - alertname="EmbeddingModelBroken"
     target_matchers:
@@ -17,6 +17,13 @@ inhibit_rules:
     target_matchers:
       - alertname="DeadmanSwitchBroken"
     equal: ["node"]
+  # While Prometheus stores nothing, absent()-based rules fire falsely (on
+  # 2026-10-31 ClosetTemperatureSensorMissing was the only alert that got
+  # through, and it was wrong). PrometheusNotIngesting is the real story.
+  - source_matchers:
+      - alertname="PrometheusNotIngesting"
+    target_matchers:
+      - alertname="ClosetTemperatureSensorMissing"
 
 route:
   receiver: "null"
@@ -63,6 +70,11 @@ route:
     # LoggingMountMissing pages because losing /mnt/logging kills the Prometheus
     # TSDB and therefore every other alert in this file; it went unnoticed for
     # 3 days on 2026-07-15 precisely because nothing was watching the watcher.
+    # PrometheusNotIngesting pages for the same reason: on 2026-10-31 the host
+    # remount worked but the running Prometheus kept the dead disk, so it stored
+    # nothing and every threshold alert was blind for 3 days. (The StaleMount*
+    # alerts are quiet: they can only be delivered once Prometheus and
+    # Alertmanager are fine, so what they report waits for the morning.)
     # HeliosPoweredButUnreachable pages because NodeDown excludes the
     # power-tiered Helios; it is the plug-aware "Helios is hung" signal.
     # UPSOnBattery / UPSLowBattery page: grid power is gone or the battery is
@@ -70,7 +82,7 @@ route:
     # they all fell through to "null" — the UPS exporter sat dead for three
     # months unnoticed.
     - matchers:
-        - alertname=~"UPSOnBattery|UPSLowBattery|OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|JessGristBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
+        - alertname=~"UPSOnBattery|UPSLowBattery|OrchestratorDown|NodeDown|MorningBriefingStale|EveningBriefingStale|GoogleTokenRefreshStale|SchedulerJobsMissed|JessBackupStale|JessHABackupStale|JessCalendarBackupStale|JessActualBackupStale|JessGristBackupStale|LoggingMountMissing|DocumentsMountMissing|MediaMountMissing|PrometheusNotIngesting|EmbeddingModelBroken|ClosetTemperatureCritical|HeliosPoweredButUnreachable"
       receiver: "pushover"
     # Non-paging tier: comfort-feature staleness that should surface without
     # a priority-1 page at midnight. Same Pushover creds, priority 0 (respects
@@ -78,7 +90,7 @@ route:
     # 3-day window — local backups are fine, only off-box redundancy is down) is
     # informational, so it surfaces here rather than paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|DeadmanSwitchBroken"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|StaleMountContainers|StaleMountRestartFailed|StaleMountCheckNotRunning|StaleMountContainersRestarted|DeadmanSwitchBroken"
       receiver: "pushover-quiet"
     # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.
     - matchers:

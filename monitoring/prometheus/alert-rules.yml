@@ -54,7 +54,8 @@ groups:
           description: "Known-dead since 2026-07-04 and excluded from NodeDown paging. This exists so the box does not vanish from monitoring; if it is genuinely back, drop \"uranus\" from the NodeDown node!~ matcher and delete this rule."
 
       # -- Storage substrate ----------------------------------------------------
-      # /mnt/logging is an EXTERNAL USB disk (WDC WD10EZEX, /dev/sde1) holding the
+      # /mnt/logging is an EXTERNAL USB disk (WDC WD10EZEX; its sdX letter changes on
+      # every re-enumeration — sde1 in July, sdc1 until 2026-10-31) holding the
       # Prometheus TSDB, Loki chunks, and Grafana state. On 2026-07-15 the USB hub
       # dropped for 65s ("usb 4-1: USB disconnect"); the disks re-enumerated under
       # new letters and nothing remounted. Prometheus then crashlooped on
@@ -108,7 +109,7 @@ groups:
           severity: critical
         annotations:
           summary: "Monitoring storage /mnt/logging is not mounted on Jupiter"
-          description: "node-exporter reports no filesystem at /mnt/logging while the node is up. The USB disk backing Prometheus/Loki/Grafana has dropped. Prometheus will crashloop on its next restart and ALL alerting dies with it. Check `dmesg | grep -i usb` for a disconnect, confirm the disk is present (`lsblk -o NAME,TRAN,SIZE`), then: STOP the monitoring stack first (`docker compose -f monitoring/docker-compose.yml stop`) — containers started while the mount was missing hold FDs on the root-filesystem path underneath, and mounting over them leaves Prometheus writing to the shadowed directory while the disk sits idle. Then `mount /mnt/logging`, start the stack, and confirm `docker inspect prometheus --format '{{.RestartCount}}'` is 0."
+          description: "node-exporter reports no filesystem at /mnt/logging while the node is up. The USB disk backing Prometheus/Loki/Grafana has dropped. Prometheus will crashloop on its next restart and ALL alerting dies with it. Check `dmesg | grep -i usb` for a disconnect, confirm the disk is present (`lsblk -o NAME,TRAN,SIZE`), then run `sudo systemctl start usb-storage-remount.service`: it runs `mount -a`, then stops+starts every container still holding the old disk or the bare root-filesystem directory underneath the mountpoint (mounting over a running Prometheus alone leaves it writing to that shadowed directory). `journalctl -u usb-storage-restart-stale -n 40` lists what it restarted; confirm `docker exec prometheus grep /prometheus /proc/mounts` shows the same device as `findmnt -n -o SOURCE /mnt/logging`."
 
       - alert: DocumentsMountMissing
         expr: >-
@@ -119,7 +120,7 @@ groups:
           severity: critical
         annotations:
           summary: "Document storage /mnt/documents is not mounted on Jupiter"
-          description: "node-exporter reports no filesystem at /mnt/documents while the node is up. This disk backs Paperless-ngx — scanned documents, its media/originals, AND its Postgres data directory. Losing it mid-write is what left paperless-db throwing 500s for three weeks after the 2026-07-15 dropout. usb-storage-remount.service should have remounted it automatically within ~10s; if this alert is firing, that recovery did NOT work — check `systemctl status usb-storage-remount.service` and `dmesg | grep -i usb`. Then stop paperless (`docker compose -f /opt/paperless/docker-compose.yml stop`), `mount /mnt/documents`, and start it again so Postgres runs crash recovery against the real disk."
+          description: "node-exporter reports no filesystem at /mnt/documents while the node is up. This disk backs Paperless-ngx — scanned documents, its media/originals, AND its Postgres data directory. Losing it mid-write is what left paperless-db throwing 500s for three weeks after the 2026-07-15 dropout. usb-storage-remount.service should have remounted it automatically within ~10s; if this alert is firing, that recovery did NOT work — check `systemctl status usb-storage-remount.service` and `dmesg | grep -i usb`. Once the disk is back (`lsblk`), `sudo systemctl start usb-storage-remount.service` mounts it and stops+starts the Paperless containers so Postgres runs crash recovery against the real disk (`journalctl -u usb-storage-restart-stale -n 40`)."
 
       - alert: MediaMountMissing
         expr: >-
@@ -130,7 +131,107 @@ groups:
           severity: critical
         annotations:
           summary: "Media storage /mnt/media is not mounted on Jupiter"
-          description: "node-exporter reports no filesystem at /mnt/media while the node is up. This disk holds the Immich photo library (~41GB) and its Postgres data directory, plus audiobooks/ebooks/podcasts. Immich Postgres logged 'could not open file global/pg_control: Input/output error' when this vanished on 2026-07-15. usb-storage-remount.service should have remounted it automatically; if this is firing, that recovery failed — check `systemctl status usb-storage-remount.service`. Then stop immich (`docker compose -f /opt/immich/docker-compose.yml stop`), `mount /mnt/media`, and start it so Postgres recovers cleanly."
+          description: "node-exporter reports no filesystem at /mnt/media while the node is up. This disk holds the Immich photo library (~41GB) and its Postgres data directory, plus audiobooks/ebooks/podcasts. Immich Postgres logged 'could not open file global/pg_control: Input/output error' when this vanished on 2026-07-15. usb-storage-remount.service should have remounted it automatically; if this is firing, that recovery failed — check `systemctl status usb-storage-remount.service`. Once the disk is back (`lsblk`), `sudo systemctl start usb-storage-remount.service` mounts it and stops+starts the Immich/Audiobookshelf containers so Postgres recovers cleanly (`journalctl -u usb-storage-restart-stale -n 40`). Never `docker compose start` the whole Immich project: its ML container cannot start on this host (no /dev/kfd) and aborts the command before immich_server."
+
+      # -- Containers still on a disconnected disk -----------------------------
+      # The *MountMissing rules above only check the HOST mount. On 2026-10-31
+      # the enclosure dropped for ~3s, usb-storage-remount.service remounted all
+      # three disks within 10s (so those stayed green) — but a bind mount is
+      # resolved at container start, so every running container kept the old,
+      # shut-down filesystem. Prometheus/Loki/Grafana, Paperless and Immich
+      # Postgres all hit I/O errors for 3 days. Since then the remount unit hands
+      # over to usb-storage-restart-stale.service, which stops+starts those
+      # containers (scripts/restart_stale_mount_containers.py --fix), and
+      # usb-storage-stale-check.timer re-counts them every 10 min. Both write
+      # node_exporter textfile metrics (jess_stale_mount*.prom). Absent metrics
+      # (units not installed) = none of these fire.
+      #
+      # Quiet tier, not paging (SRE review): by the time these can be delivered,
+      # Prometheus and Alertmanager themselves are fine, so what is left on a
+      # dead disk is Paperless/Immich/Audiobookshelf/Loki/Grafana — worth a
+      # morning notice, not a 3 am page. The blind case (Prometheus itself
+      # stale) is PrometheusNotIngesting below, which does page.
+      #
+      # Fires only when the automatic restart did not happen or did not work:
+      # the udev path fixes it within seconds, and `for: 15m` spans one more
+      # check.
+      - alert: StaleMountContainers
+        expr: jess_stale_mount_containers > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} container(s) on Jupiter still use a disconnected /mnt disk"
+          description: "Their /mnt bind mounts point at a disk that is no longer attached (the host remounted it under a new device name), so every read/write fails with an I/O error. Automatic recovery did not fix it. `journalctl -u usb-storage-stale-check -n 20` names them; `sudo systemctl start usb-storage-remount.service` remounts and stops+starts them (`journalctl -u usb-storage-restart-stale -n 40`). A container whose disk is still MISSING is never restarted — check `lsblk` and the *MountMissing alerts first. Manual fallback: `docker stop <name> && docker start <name>` per container, databases first — not `docker compose start` on a whole project."
+
+      # Kept until the container runs on the live disk again, however it got
+      # there: the 10-min check re-evaluates /var/lib/restart-stale-mount/failed.json,
+      # so a hand fix clears this within ~10 min. Needed because a failed
+      # restart can leave the container STOPPED, which the stale count above
+      # cannot see.
+      - alert: StaleMountRestartFailed
+        expr: jess_stale_mount_restart_failures > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Automatic restart after a USB disk reconnect failed for {{ $value }} container(s) on Jupiter"
+          description: "usb-storage-restart-stale.service found containers on a disconnected /mnt disk and could not move them onto the live disk (docker stop/start failed or hung, the container crashed or went unhealthy right after, or a disk vanished between stop and start — then it is deliberately left STOPPED so it cannot write onto the root filesystem). `journalctl -u usb-storage-restart-stale -n 40` names them. Fix them (`lsblk`, then `docker start <name>` once the disk is back), and this clears by itself at the next 10-min check once they run on the live disk."
+
+      # The safety-net check itself stopped reporting: timer disabled or
+      # failing, script removed, or dockerd down (the script then writes
+      # nothing). Without this a dead timer leaves jess_stale_mount_containers
+      # frozen at 0 forever.
+      - alert: StaleMountCheckNotRunning
+        expr: time() - jess_stale_mount_check_last_run_timestamp_seconds > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The stale-mount check on Jupiter has not run for over an hour"
+          description: "usb-storage-stale-check.timer should refresh jess_stale_mount_check_last_run_timestamp_seconds every 10 minutes; without it, containers stuck on a disconnected /mnt disk go unnoticed. `systemctl status usb-storage-stale-check.timer usb-storage-stale-check.service` and `journalctl -u usb-storage-stale-check -n 20`. The script writes nothing while docker.service is inactive, so a dockerd outage also lands here."
+
+      # FYI: the enclosure dropped and automatic recovery worked. Still worth a
+      # notice — every dropout is a hardware warning (2026-07-15, 2026-10-31:
+      # cable, enclosure power supply, USB controller), and logs written to the
+      # dead disk between the drop and the restart are gone. Fires for one hour
+      # after a --fix run that moved at least one container onto the live disk
+      # (Pushover sends the firing and the resolved notice).
+      - alert: StaleMountContainersRestarted
+        expr: >-
+          time() - jess_stale_mount_last_restart_timestamp_seconds < 3600
+          and jess_stale_mount_last_restart_timestamp_seconds > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "USB disks on Jupiter reconnected; containers were restarted automatically"
+          description: "The /mnt USB enclosure dropped and came back, and usb-storage-restart-stale.service stopped+started the containers that were still on the old disk. Nothing to do unless StaleMountContainers or StaleMountRestartFailed also fire. `journalctl -u usb-storage-restart-stale -n 40` lists them; `journalctl -k | grep -i 'usb disconnect'` shows the dropout. Repeated dropouts mean the enclosure, its cable or its power supply needs replacing."
+
+      # Prometheus is up and evaluating rules but cannot store samples. On
+      # 2026-10-31 the running Prometheus kept the dead /mnt/logging filesystem
+      # (see above) and every WAL write failed with EIO. Every query returned
+      # empty, so no threshold alert could fire for 3 days; the only alert that
+      # did was ClosetTemperatureSensorMissing — falsely, via absent().
+      #
+      # absent(up{job="prometheus"}) is that failure seen from inside: the
+      # self-scrape stops landing, the series goes stale after 5m and absent()
+      # turns 1. Rule evaluation and notification keep running from memory, so
+      # this still reaches Alertmanager (the false closet alert proved it).
+      # Deliberately NO `and on() up == 1` guard (cf. LoggingMountMissing): the
+      # guard reads the same broken TSDB and would be absent too.
+      #
+      # Does NOT cover a Prometheus that is dead or hung — nothing evaluates
+      # this then. That needs an external dead-man's switch (PR #159, Saturn).
+      # Fail-loud on purpose: if the self-scrape job is ever renamed, this pages
+      # until the expr is updated.
+      - alert: PrometheusNotIngesting
+        expr: absent(up{job="prometheus"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus is running but storing no data — every other alert is blind"
+          description: "Prometheus' own self-scrape (up{job=\"prometheus\"}) has not reached the TSDB for ~10 minutes, so every query returns empty, threshold alerts cannot fire, and absent()-based alerts may fire falsely. `docker logs prometheus --tail 20`: 'write to WAL ... input/output error' = its disk is gone (check `journalctl -k | grep -i 'usb disconnect'`, then `sudo systemctl start usb-storage-remount.service`); 'no space left on device' = /mnt/logging is full. Confirm `docker exec prometheus grep /prometheus /proc/mounts` shows the same device as `findmnt -n -o SOURCE /mnt/logging`."
 
       # Dashboard-only by design: when this fires Prometheus can't deliver
       # notifications at all, so routing it anywhere via alertmanager is
