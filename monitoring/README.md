@@ -173,7 +173,7 @@ Before reloading, `reload-monitoring.sh` also **fails if `alertmanager.yml` or `
 
 ## Alertmanager
 
-Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes alerts to Pushover in two tiers by alertname **allow-list** (the `severity` label routes nothing; a rule not named in a matcher falls through to the `null` receiver and notifies nobody): paging alerts (e.g. `OrchestratorDown`, `NodeDown` (excludes `helios` — power-tiered, asleep by design — and the dead `uranus`), the briefing/backup staleness alerts, mount-missing alerts, `EmbeddingModelBroken`, `ClosetTemperatureCritical`, `HeliosPoweredButUnreachable`, `UPSOnBattery`, `UPSLowBattery`) hit the `pushover` receiver (priority 1), while non-paging alerts (`WindDownNudgeStale`, `JessBackupOffboxFailing` (matches `jess_(ha_|calendar_|actual_|grist_)?backup_offbox_success` — state, HA, calendar, Actual Budget and Grist backups), `RadicaleDown`, `ActualDown`, `PaperlessDown`, `GristDown`, `FrontendDown`, `CalendarSourceFailing`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `BudgetSyncFailing`, `BudgetHistoryRefreshFailing`, `SelfAuditStale`, `SelfAuditFailing`, `SelfInvestigatorFailing`, `HeliosHardwareFault`, `BrainCudaInitFailed`, `BrainFailedToStart`, `BrainOnCPU`, `HeliosGpuDriverBroken`, `HeliosLogsSilent`, `HeliosLogCheckFailing`, `EmbeddingErrors`, `AutoLearnFailing`, `ClosetTemperatureSensorMissing`, `WebPushFailing`, `ResearchHelperFailing`, `ResearchSourceFailing`, `SearXNGDown`, `UPSExporterDown`, `UPSReplaceBattery`, `UPSOverload`, `HAUnrequestedCallsBlocked`, `DeployDrift`, `DeployDriftCheckFailing`, `BrainAuthRejected`, `BrainMetricsScrapeRejected` (own matcher) — see the matcher in `alertmanager/alertmanager.yml.template`) route to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). `AnnouncementSpeakerUnavailable` (per-`speaker` `increase(bgw_announcement_speaker_unavailable_total[24h]) > 0`, `for: 15m` — HA reports a routed speaker `unavailable`, so announcements skip it) has its own route: `pushover-quiet` with `repeat_interval: 24h` (a dead speaker stays dead for days and is hit all day; the default 4h repeat would nag several times daily). See `docs/VOICE_AND_TTS.md` → Speaker liveness. `ExchangeCalendarSyncStale` has the same `pushover-quiet` + `repeat_interval: 24h` route (the fix is the owner's iPhone Shortcut). So does `HeliosUnreachablePlugBlind` (the outage detector is blind — a config/HA fix). So does `WebSearchFailing` (it stays active until the failures age out of its 6h window, so the default 4h repeat would re-notify after the fix). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
+Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes alerts to Pushover in two tiers by alertname **allow-list** (the `severity` label routes nothing; a rule not named in a matcher falls through to the `null` receiver and notifies nobody): paging alerts (e.g. `OrchestratorDown`, `NodeDown` (excludes `helios` — power-tiered, asleep by design — and the dead `uranus`), the briefing/backup staleness alerts, mount-missing alerts, `PrometheusNotIngesting` (inhibits `ClosetTemperatureSensorMissing`, which an empty TSDB fires falsely via `absent()` — see USB Storage below), `EmbeddingModelBroken`, `ClosetTemperatureCritical`, `HeliosPoweredButUnreachable`, `UPSOnBattery`, `UPSLowBattery`) hit the `pushover` receiver (priority 1), while non-paging alerts (`WindDownNudgeStale`, `JessBackupOffboxFailing` (matches `jess_(ha_|calendar_|actual_|grist_)?backup_offbox_success` — state, HA, calendar, Actual Budget and Grist backups), `RadicaleDown`, `ActualDown`, `PaperlessDown`, `GristDown`, `FrontendDown`, `CalendarSourceFailing`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `BudgetSyncFailing`, `BudgetHistoryRefreshFailing`, `SelfAuditStale`, `SelfAuditFailing`, `SelfInvestigatorFailing`, `HeliosHardwareFault`, `BrainCudaInitFailed`, `BrainFailedToStart`, `BrainOnCPU`, `HeliosGpuDriverBroken`, `HeliosLogsSilent`, `HeliosLogCheckFailing`, `EmbeddingErrors`, `AutoLearnFailing`, `ClosetTemperatureSensorMissing`, `WebPushFailing`, `ResearchHelperFailing`, `ResearchSourceFailing`, `SearXNGDown`, `UPSExporterDown`, `UPSReplaceBattery`, `UPSOverload`, `HAUnrequestedCallsBlocked`, `StaleMountContainers`, `StaleMountRestartFailed`, `StaleMountCheckNotRunning`, `StaleMountContainersRestarted`, `DeployDrift`, `DeployDriftCheckFailing`, `BrainAuthRejected`, `BrainMetricsScrapeRejected` (own matcher) — see the matcher in `alertmanager/alertmanager.yml.template`) route to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). `AnnouncementSpeakerUnavailable` (per-`speaker` `increase(bgw_announcement_speaker_unavailable_total[24h]) > 0`, `for: 15m` — HA reports a routed speaker `unavailable`, so announcements skip it) has its own route: `pushover-quiet` with `repeat_interval: 24h` (a dead speaker stays dead for days and is hit all day; the default 4h repeat would nag several times daily). See `docs/VOICE_AND_TTS.md` → Speaker liveness. `ExchangeCalendarSyncStale` has the same `pushover-quiet` + `repeat_interval: 24h` route (the fix is the owner's iPhone Shortcut). So does `HeliosUnreachablePlugBlind` (the outage detector is blind — a config/HA fix). So does `WebSearchFailing` (it stays active until the failures age out of its 6h window, so the default 4h repeat would re-notify after the fix). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
 
 **`self-investigator` receiver (optional):** the first route copies `HeliosHardwareFault`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `EmbeddingErrors`, `AutoLearnFailing`, `SchedulerJobsMissed`, `HeliosLogsSilent` (`continue: true`, so their Pushover route still fires) to a webhook at `http://${NODE_JUPITER_IP}:${SERVICE_ORCHESTRATOR_PORT}/api/self_audit/alert` — the orchestrator's read-only investigator (`jess-features/F-014-self-audit.md`). Bearer from `credentials_file: /etc/alertmanager/self_audit_webhook_token`; the orchestrator accepts that token on that path only. `generate-configs.sh` keeps the `BEGIN/END self-investigator` blocks and writes `alertmanager/self_audit_webhook_token` (644, gitignored, truncated in place) **only when `.env` has `SELF_AUDIT_WEBHOOK_TOKEN` ≥ 24 chars AND `SELF_AUDIT_INVESTIGATE=true`**; otherwise it strips both blocks (every delivery would be a 401/409 that Alertmanager re-sends each group interval). Keep the matcher in sync with `ALERT_TRIGGERS` in `orchestrator/routes_self_audit.py`. Outcomes: `bgw_self_audit_alert_trigger_total{result}`.
 
@@ -244,6 +244,69 @@ Pushes to main deploy through the CI `deploy` job on Jupiter's self-hosted runne
 |-------|--------|-----------|-------------|
 | `DeployDrift` | Prometheus `deploy_health` | A commit on main passed CI > 40 min ago and the deployed commit hasn't reached it, for 10 m (~50 min after CI passed; deploys normally land ~3 min after) | GitHub Actions → the newest main run. Deploy job **cancelled** (dropped pending run) → re-run it. **Failed / timed out** → read its log, fix, re-run. **Queued** → runner down: `systemctl status actions.runner.mexirab-brain_gateway.jupiter.service` on Jupiter. Holding deploys on purpose → silence it |
 | `DeployDriftCheckFailing` | Prometheus `deploy_health` | ≥ 4 failed checks (`result=~"marker_missing\|marker_invalid\|deploy_job_missing\|github_error\|rate_limited"`) in 1 h, for 30 m. `DeployDrift` is blind meanwhile | Loki `{container="brain-orchestrator"} \|= "[DEPLOY_DRIFT]"` (HTTP status / cause; a repeat of the same cause logs at DEBUG only, a new cause at WARNING); the counter's `result` label names the current failure. `marker_*`: no `.last-deployed-sha` in the checkout, or the `/opt/gateway_mvp` mount is broken. `github_error`: api.github.com unreachable, or a wrong `DEPLOY_DRIFT_REPO` / token. `deploy_job_missing`: the CI deploy job was renamed — update `DEPLOY_JOB_NAME`. `rate_limited`: set `DEPLOY_DRIFT_GITHUB_TOKEN` |
+
+## USB Storage (Jupiter `/mnt` disks)
+
+One USB enclosure (SATA disks behind a JMicron JMS567 bridge) holds `/mnt/logging` (Prometheus TSDB, Loki, Grafana, Alertmanager), `/mnt/documents` (Paperless media + Postgres) and `/mnt/media` (Immich library + Postgres, Audiobookshelf). A dropout re-enumerates every disk under new `sdX` names. Two failure modes, both seen:
+
+| Date | What happened | Covered by |
+|------|---------------|-----------|
+| 2026-07-15 | Dropped 65 s, nothing remounted; Prometheus crashlooped on the bare mountpoint | `usb-storage-remount.service` + paging `LoggingMountMissing` / `DocumentsMountMissing` / `MediaMountMissing` |
+| 2026-10-31 | Dropped ~3 s, host remounted in 10 s (`*MountMissing` green) — but every running container kept the old, dead filesystem (a bind mount resolves at container start). Prometheus WAL writes failed with EIO, so no threshold alert fired for 3 days; Loki/Grafana/Paperless/Immich Postgres hit I/O errors | `usb-storage-restart-stale.service`, `usb-storage-stale-check.timer`, `PrometheusNotIngesting`, `StaleMount*` |
+
+**Host units** (repo copies in `scripts/usb-storage/`; installed by hand, CI never touches them):
+
+| Unit | Does |
+|------|------|
+| `usb-storage-remount.service` | Started by udev (`/etc/udev/rules.d/99-usb-storage-remount.rules`, matched by filesystem UUID — `ENV{ID_BUS}=="usb"` never fires behind the SATA bridge) when a disk appears: `sleep 5`, `mount -a`, then `--no-block` start of the restart unit. Kept fast on purpose (udev start requests merge into a running oneshot). |
+| `usb-storage-restart-stale.service` | `restart-stale-mount-containers --fix`: stop+start each RUNNING container whose `/mnt` bind is on a different device (mountinfo major:minor) than the host mount now holding it — monitoring first, then compose `depends_on` order. Re-checks before stop, re-checks the disk between stop and start (vanished → left STOPPED, counted as a failure, run ends), verifies after start. Never restarts a container with any bind on a missing disk, never starts a stopped container, skips paused/`--rm`/one-off. Up to 3 passes if the watched mounts change; 15-min deadline. Failures persist in `/var/lib/restart-stale-mount/failed.json`. |
+| `usb-storage-stale-check.service` + `.timer` | Check only, every 10 min: counts stale containers, re-evaluates `failed.json` (a hand fix clears `StaleMountRestartFailed`). Never restarts anything. |
+
+Script: `scripts/restart_stale_mount_containers.py` (stdlib, root; runs from the installed copy `/usr/local/sbin/restart-stale-mount-containers`, never from the checkout; docstring = spec). Textfile metrics in `/home/labadmin/node_exporter/textfile_collector`: `jess_stale_mount.prom` (`jess_stale_mount_containers`, `jess_stale_mount_restart_failures`, `jess_stale_mount_check_last_run_timestamp_seconds`) and `jess_stale_mount_restart.prom` (`jess_stale_mount_restarted_containers`, `jess_stale_mount_last_restart_timestamp_seconds` — only `--fix` runs that restarted something). Nothing is written while `docker.service` is inactive.
+
+**Alerts** (`brain_gateway_critical` group):
+
+| Alert | Tier | Fires when |
+|-------|------|-----------|
+| `PrometheusNotIngesting` | **pages** | `absent(up{job="prometheus"})` for 5m: Prometheus evaluates rules but stores nothing. Deliberately unguarded (a guard reads the same broken TSDB). Inhibits `ClosetTemperatureSensorMissing`. Does NOT cover a dead/hung Prometheus — that needs the external dead-man's switch (PR #159, not installed) |
+| `StaleMountContainers` | quiet | `jess_stale_mount_containers > 0` for 15m — automatic restart didn't run or didn't work |
+| `StaleMountRestartFailed` | quiet | `jess_stale_mount_restart_failures > 0` — a `--fix` restart failed and the container is still not on the live disk (may be STOPPED); clears at the next check once fixed |
+| `StaleMountCheckNotRunning` | quiet | Check timestamp > 1h old for 15m — timer dead, script missing, or dockerd down |
+| `StaleMountContainersRestarted` | quiet (FYI) | For 1h after a `--fix` run moved ≥ 1 container — recovery worked; every dropout is still a hardware warning (cable, enclosure PSU, USB controller), and logs written to the dead disk are gone |
+
+Until the units are installed the `jess_stale_mount*` metrics are absent and the four `StaleMount*` alerts cannot fire; `PrometheusNotIngesting` works as soon as the rules are reloaded.
+
+**Runbook** (Jupiter):
+
+```bash
+journalctl -k | grep -i 'usb disconnect'          # was there a dropout?
+lsblk -o NAME,TRAN,SIZE,MOUNTPOINT                # are the disks back?
+sudo systemctl start usb-storage-remount.service  # mount -a, then stop+start containers still on the old disk
+journalctl -u usb-storage-restart-stale -n 40     # what it restarted / what failed
+journalctl -u usb-storage-stale-check -n 20       # latest 10-min check: which containers are stale
+# Is a container on the live disk? These two must name the same device:
+docker exec prometheus grep /prometheus /proc/mounts
+findmnt -n -o SOURCE /mnt/logging
+```
+
+Manual fallback: `docker stop <name> && docker start <name>` per container, databases first (e.g. `paperless-db` before the Paperless app). Never `docker compose start` a whole project: it also starts services deliberately left stopped, and Immich's ML container cannot start on this host (no `/dev/kfd`), which aborts the command before `immich_server`. Never start a container whose disk is still missing — it would write onto the root filesystem under the mountpoint (an empty Postgres data dir = a fresh initdb). Known gap: with dockerd live-restore, containers outlive a dead dockerd, so a stale one is only seen by the first check after dockerd is back.
+
+**Install / update** (on Jupiter, from the live checkout, after merge; same steps as the header of `scripts/usb-storage/usb-storage-remount.service`):
+
+```bash
+sudo install -m 0755 -o root -g root scripts/restart_stale_mount_containers.py \
+    /usr/local/sbin/restart-stale-mount-containers
+sudo install -m 0644 -o root -g root scripts/usb-storage/usb-storage-remount.service \
+    scripts/usb-storage/usb-storage-restart-stale.service \
+    scripts/usb-storage/usb-storage-stale-check.service \
+    scripts/usb-storage/usb-storage-stale-check.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now usb-storage-stale-check.timer
+sudo systemctl start usb-storage-stale-check.service     # first check, no restarts
+journalctl -u usb-storage-stale-check -n 5               # expect "done: 0 stale, 0 unresolved failure(s)"
+```
+
+Re-run the `install` lines after any change to the script or units. The udev rule is unchanged; `scripts/usb-storage/99-usb-storage-remount.rules.example` shows its shape (UUIDs must match `/etc/fstab`; `sudo udevadm control --reload` after editing).
 
 ## Architecture
 
