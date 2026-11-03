@@ -1,0 +1,14 @@
+# Example of the live /etc/udev/rules.d/99-usb-storage-remount.rules on Jupiter
+# (the live file is unchanged by the stale-container fix; it is shown here so the
+# whole chain is in the repo). Replace the placeholder with the filesystem UUID
+# of each /mnt entry in /etc/fstab (`lsblk -o NAME,UUID,MOUNTPOINT`), one line
+# per disk, then `sudo udevadm control --reload`.
+#
+# Matched by UUID, deliberately. The obvious rule -- ENV{ID_BUS}=="usb" -- does
+# NOT work here: these are SATA disks behind a JMicron JMS567 USB bridge, so udev
+# reports ID_BUS=ata and the rule silently never fires.
+#
+# UUIDs must stay in sync with /etc/fstab. If a disk is ever reformatted, update
+# both. The service runs `mount -a` (fstab entries only), then hands over to
+# usb-storage-restart-stale.service for the containers still on the old disk.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_UUID}=="00000000-0000-0000-0000-000000000000", TAG+="systemd", ENV{SYSTEMD_WANTS}+="usb-storage-remount.service"
