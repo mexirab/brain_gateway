@@ -1,0 +1,41 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/usb-storage-restart-stale.service
+# Install steps: header of usb-storage-remount.service (same folder).
+#
+# Started by usb-storage-remount.service (ExecStartPost, --no-block) after every
+# `mount -a`. Stops+starts each RUNNING container whose /mnt bind mount still
+# points at the old, disconnected disk — monitoring first, then compose
+# depends_on order — and never one whose disk is still missing. Details and
+# guarantees: docstring of scripts/restart_stale_mount_containers.py.
+#
+# Outcome: journalctl -u usb-storage-restart-stale -n 40. A failed restart is
+# kept in /var/lib/restart-stale-mount/failed.json and drives
+# StaleMountRestartFailed until that container runs on the live disk again.
+[Unit]
+Description=Restart containers still bind-mounting a disconnected /mnt disk
+# Boot: udev coldplug starts the remount unit before docker. Ordering (not a
+# dependency) makes this run wait for docker when docker is starting anyway;
+# when it is not, the script sees docker inactive and writes nothing.
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -u /usr/local/sbin/restart-stale-mount-containers --fix --metrics-dir /home/labadmin/node_exporter/textfile_collector --state-file /var/lib/restart-stale-mount/failed.json
+# The script stops starting new restarts after 15 min (--deadline-seconds) and
+# turns SIGTERM into a clean exit that still writes metrics + state; this is
+# the backstop for a dockerd call that hangs past that.
+TimeoutStartSec=20min
+StateDirectory=restart-stale-mount
+# Talks only to the docker socket and D-Bus (systemctl is-active), reads
+# /proc/*/mountinfo, writes the textfile dir + its state dir. Still root with
+# the docker socket, so this only limits accidents.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/labadmin/node_exporter/textfile_collector
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any

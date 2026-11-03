@@ -4,6 +4,37 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — USB storage: containers left on a disconnected disk (2026-11-03)
+
+Branch `fix/usb-remount-stale-containers`. On 2026-10-31 Jupiter's USB enclosure (`/mnt/logging`, `/mnt/documents`, `/mnt/media`) dropped for ~3 s and re-enumerated. `usb-storage-remount.service` remounted all three disks within 10 s, so the `*MountMissing` alerts stayed green — but every running container kept the old, shut-down filesystem (a bind mount is resolved at container start). Prometheus kept running while every WAL write failed with EIO, so no threshold alert could fire for 3 days (the one alert that got through, `ClosetTemperatureSensorMissing`, was false); Loki, Grafana and the Paperless/Immich Postgres hit I/O errors. Recovered 2026-11-03 by stop+start of the affected containers. Detail: `monitoring/README.md` → USB Storage.
+
+### Upgrade action
+
+- Host install on Jupiter is manual (CI does not do it): steps in the header of `scripts/usb-storage/usb-storage-remount.service`. Until then the `jess_stale_mount*` metrics are absent and the `StaleMount*` alerts cannot fire; `PrometheusNotIngesting` works as soon as CI reloads the rules.
+
+### Host tooling
+
+- New `scripts/restart_stale_mount_containers.py` (stdlib, runs as root from the installed copy `/usr/local/sbin/restart-stale-mount-containers`; docstring = spec): finds running containers whose `/mnt` bind mount is on a different device (mountinfo major:minor) than the host mount now holding it. `--fix` stops+starts only those — monitoring first, then compose `depends_on` order; re-checked before stop, disk re-checked between stop and start (vanished → left STOPPED, counted as a failure, run ends), verified after start. Never restarts a container with any bind on a missing disk, never starts stopped containers, skips paused/`--rm`/one-off; up to 3 passes when the watched mounts change; 15-min deadline; SIGTERM still writes metrics + state; flock on the metrics dir.
+- `scripts/usb-storage/`: repo copy of the live `usb-storage-remount.service` (still a fast `mount -a`; `ExecStartPost` starts the restart unit with `--no-block`), `usb-storage-restart-stale.service` (`--fix`, sandboxed, failures kept in `/var/lib/restart-stale-mount/failed.json`), `usb-storage-stale-check.service` + `.timer` (check only, every 10 min), `99-usb-storage-remount.rules.example` (placeholder UUID).
+
+### Monitoring
+
+- Textfile metrics: `jess_stale_mount.prom` (`jess_stale_mount_containers`, `jess_stale_mount_restart_failures`, `jess_stale_mount_check_last_run_timestamp_seconds`) and `jess_stale_mount_restart.prom` (`jess_stale_mount_restarted_containers`, `jess_stale_mount_last_restart_timestamp_seconds`). Nothing is written while `docker.service` is inactive.
+- New paging alert `PrometheusNotIngesting` (`absent(up{job="prometheus"})`, 5m, deliberately unguarded). Does not cover a dead or hung Prometheus — that needs the external dead-man's switch (PR #159).
+- New quiet alerts (`pushover-quiet`): `StaleMountContainers` (> 0 for 15m), `StaleMountRestartFailed`, `StaleMountCheckNotRunning` (no check for > 1h), `StaleMountContainersRestarted` (FYI, for 1h after an automatic restart).
+- Inhibit rule: `PrometheusNotIngesting` mutes `ClosetTemperatureSensorMissing`.
+- `*MountMissing` runbooks now point at `sudo systemctl start usb-storage-remount.service`; the `MediaMountMissing` runbook warns never to `docker compose start` the whole Immich project (its ML container cannot start on this host and aborts the command).
+
+### Tests
+
+- New `orchestrator/tests/test_restart_stale_mount_containers.py` (121 tests).
+
+### Docs
+
+- `CLAUDE.md`, `monitoring/README.md` (new USB Storage section; Alertmanager tier lists), `COMMANDS.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md` (closet-sensor inhibit).
+
+---
+
 ## [Unreleased] — alert routing audit (2026-10-27)
 
 Branch `fix/alert-routing-audit`. Alertmanager routes by an alertname allow-list, and seven rules notified nobody. Detail: `monitoring/README.md` → Alertmanager → Routing coverage.
@@ -16,7 +47,7 @@ Branch `fix/alert-routing-audit`. Alertmanager routes by an alertname allow-list
   - a route matches on a runtime label, or names an undefined receiver;
   - a route or inhibit names an alert no rule defines.
 
-  It gives the same receivers as `amtool config routes test` for all 72 alerts.
+  It gives the same receivers as `amtool config routes test` for all 77 alerts.
 - Routed to `pushover-quiet` in two lists of their own: `RuleEvaluationFailing`, `TTSDown`, `STTDown`, `HighErrorRate`, `HighToolErrorRate` and `HighGPUTemp` (4h repeat); `DiskSpaceLow` and `HighVRAMUsage` (24h repeat, standing conditions).
 - `TTSDown` / `STTDown` only count while Helios's node-exporter is up: the probes fail every time the power-tiered box sleeps.
 - `HighErrorRate` could never fire: it divided `{mode,error_type}` by `{mode}` without `sum()`. It now fires on ≥2 chat turns that failed in the primary brain within 1h and are also >10 % of turns. Brain-asleep replies and the same turn's fallback retry don't count.

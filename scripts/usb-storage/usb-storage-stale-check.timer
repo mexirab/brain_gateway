@@ -1,0 +1,11 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/usb-storage-stale-check.timer
+# Install steps: header of usb-storage-remount.service (same folder).
+[Unit]
+Description=Check every 10 min for containers stuck on a dead USB disk
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
