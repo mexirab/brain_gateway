@@ -1,0 +1,68 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/usb-storage-remount.service
+#
+# Install / update (on Jupiter, from the live checkout, after the PR is merged):
+#   sudo install -m 0755 -o root -g root scripts/restart_stale_mount_containers.py \
+#       /usr/local/sbin/restart-stale-mount-containers
+#   sudo install -m 0644 -o root -g root scripts/usb-storage/usb-storage-remount.service \
+#       scripts/usb-storage/usb-storage-restart-stale.service \
+#       scripts/usb-storage/usb-storage-stale-check.service \
+#       scripts/usb-storage/usb-storage-stale-check.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now usb-storage-stale-check.timer
+#   sudo systemctl start usb-storage-stale-check.service     # first check, no restarts
+#   journalctl -u usb-storage-stale-check -n 5               # expect "done: 0 stale, 0 unresolved failure(s)"
+# The script is COPIED to /usr/local/sbin (root-owned), never run from the
+# checkout: CI rewrites the checkout, and this runs as root. Re-run the
+# `install` lines after any change to the script or units.
+#
+# Triggered by /etc/udev/rules.d/99-usb-storage-remount.rules (unchanged; see
+# 99-usb-storage-remount.rules.example next to this file) when one of the fstab
+# USB partitions appears. Also safe to run by hand — it is the runbook step of
+# the *MountMissing / StaleMount* alerts:
+#   sudo systemctl start usb-storage-remount.service
+#   journalctl -u usb-storage-remount -u usb-storage-restart-stale -n 40
+[Unit]
+Description=Re-mount fstab USB storage after a device re-appears
+# Why this exists: on 2026-07-15 the USB enclosure (JMicron JMS567, all four
+# disks) disconnected for 64s and re-enumerated under new device letters. The
+# fstab entries are UUID-based so they would have mounted fine — but nothing
+# ever retried, so /mnt/logging, /mnt/documents and /mnt/media stayed unmounted.
+# Prometheus crashlooped, Paperless and Immich Postgres broke, and it went
+# unnoticed for 3 days.
+#
+# Second half (2026-10-31): the enclosure dropped for ~3s, this unit remounted
+# all three disks within 10s — and every container started before the drop
+# kept the OLD, shut-down filesystem in its own mount namespace (a bind mount
+# is resolved once, at container start). Prometheus WAL writes failed with EIO,
+# Loki/Grafana/Paperless/Immich Postgres hit I/O errors, and the host-side
+# *MountMissing alerts stayed green. Blind for 3 days again. ExecStartPost now
+# hands over to usb-storage-restart-stale.service, which stops+starts exactly
+# those containers.
+#
+# This unit stays fast on purpose: while a oneshot is running, further udev
+# start requests merge into it and are NOT re-run, so a disk that appears
+# during a minutes-long restart queue would never be mounted. The restart unit
+# re-checks when the mounts change under it.
+#
+# `mount -a` is idempotent and only ever acts on fstab entries, so this cannot
+# mount anything unexpected; already-mounted filesystems are left alone.
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# Let the kernel finish partition scan + udev settle before mounting; the device
+# node can exist a moment before its partition table is readable.
+ExecStartPre=/bin/sleep 5
+# "-": a disk that is genuinely absent must not fail the unit or skip the
+# hand-over — nofail entries simply no-op, and a real mount failure is surfaced
+# by the *MountMissing Prometheus alerts, not by this unit retrying.
+ExecStart=-/bin/mount -a
+# --no-block: never wait on the restart unit (a blocking start from here could
+# deadlock against ordering at boot). If it is already running, this request
+# merges into that run, which re-checks after each pass.
+ExecStartPost=/bin/systemctl --no-block start usb-storage-restart-stale.service
+TimeoutStartSec=5min
+# No ProtectSystem/PrivateMounts-style hardening on purpose: they give the unit
+# its own mount namespace, and `mount -a` would then mount nothing on the host.
