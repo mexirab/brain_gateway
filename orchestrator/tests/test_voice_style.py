@@ -895,7 +895,7 @@ NOT_TONE_REQUESTS = [
     "Set the lights to a warm tone",
     "In a sad way, I miss my dad",
     "",
-    "say it angry " + "x" * 600,  # long = pasted content, not a request
+    pytest.param("say it angry " + "x" * 600, id="pasted-600-chars"),  # long = pasted content, not a request
 ]
 
 

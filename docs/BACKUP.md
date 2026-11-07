@@ -241,7 +241,7 @@ merging and do steps 4-5 right after.
    along with their discretionary overrides. Hard-refresh the UI (it caches
    the old app); Settings shows the version.
 6. **Rollback**, by a revert PR, not an edit in the live checkout (CI's
-   `git pull --ff-only` fails on a dirty tree). Save `docker logs actual-budget`
+   deploy refuses a dirty checkout). Save `docker logs actual-budget`
    first: a recreate deletes them, and they aren't shipped to Loki. Put the old
    image line back **before** running the Restore block above, whose last
    `up -d` starts whatever is pinned. Restore the pre-upgrade archive: once any

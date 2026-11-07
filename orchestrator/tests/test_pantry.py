@@ -90,7 +90,21 @@ class TestParseQty:
 
 class TestParseIntDays:
     @pytest.mark.parametrize(
-        "val", [None, "", True, 0, -3, 3651, "7.5", "x", float("inf"), float("nan"), 10**30, "9" * 400]
+        "val",
+        [
+            None,
+            "",
+            True,
+            0,
+            -3,
+            3651,
+            "7.5",
+            "x",
+            float("inf"),
+            float("nan"),
+            10**30,
+            pytest.param("9" * 400, id="400-digits"),
+        ],
     )
     def test_rejects(self, pm, val):
         assert pm._parse_int_days(val) is None
