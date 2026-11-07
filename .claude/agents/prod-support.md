@@ -197,6 +197,7 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file â
 | `bgw_mode_route_total` | Counter | mode, intensity | Mode router classifications |
 | `bgw_fast_path_total` | Counter | action | Requests handled by fast path |
 | `bgw_fast_path_bypass_total` | Counter | | Requests that fell through fast path to LLM |
+| `bgw_calculate_total` | Counter | result | `calculate` tool outcomes (`ok`/`empty`/`invalid`/`not_allowed`/`too_large`/`math_error`/`refused_dose_word`/`refused_med_name`). Failures are returned as text, so they never reach `bgw_tool_call_errors_total` |
 
 ### Model Health
 | Metric | Type | Labels | Purpose |
@@ -381,6 +382,12 @@ Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or 
 1. Check `curl -s http://localhost:8888/api/temperatures`
 2. If closet > 80F: check which GPU workloads are active on Helios (primary LLM across the RTX 5090 + RTX PRO 5000, plus TTS on the PRO 5000 = major heat)
 3. If closet > 85F: the code agent is gone (model retired 2026-10-16, tool removed 2026-10-21); GPU1 carries part of the primary model plus TTS. The primary model on both GPUs is load-bearing, don't stop that
+
+### "Jess got the math wrong" / `calculate` failing
+1. Outcomes: `curl -s localhost:8888/metrics | grep bgw_calculate_total` (Grafana: "calculate: outcomes (/1h)", Tools row). No alert by design.
+2. Non-ok runs: Loki `{container="brain-orchestrator"} |= "[CALCULATE]"` â†’ `[CALCULATE] <category> (program N chars)`. Program text is never logged; ask the user what they asked.
+3. Sustained `invalid` / `not_allowed` share, especially after a model swap = the brain can't write the calculator's dialect (check the schema in `tool_definitions.py`). `empty` = tool-call arguments dropped. No `calculate` calls at all on math questions = the brain is ignoring the MATH rule and doing it in its head.
+4. `refused_med_name` on a non-medication question = a med-name word collides with an everyday variable name. Check the token COUNT only, never print the tokens: `docker exec brain-orchestrator python -c "from orchestrator import calculator, data_manager; print(len(calculator.medication_name_tokens(data_manager.get_medications())))"`. Fix by adding the everyday word to `calculator.GENERIC_NAME_WORDS`. The refusal is a soft backstop for MEDICATION SAFETY, not a control.
 
 ### "Container keeps restarting"
 1. `docker logs brain-orchestrator --tail 100`
