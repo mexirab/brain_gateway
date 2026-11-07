@@ -872,6 +872,30 @@ _MANUAL_SYNC_COOLDOWN = 60
 # find it held get a "busy" result instead of queueing behind it.
 _sync_lock = asyncio.Lock()
 
+# Mass-delete guard. A snapshot that would remove at least MASS_DELETE_MIN_ROWS
+# synced rows AND more than MASS_DELETE_MAX_FRACTION of the window's synced
+# rows is refused whole (nothing applied). A short get_transactions result —
+# a partial or broken server response, the wrong budget file, a reset sync id
+# — would otherwise wipe the Quest Board mirror, and every per-row
+# discretionary_override with it (those are gone for good once the row is).
+# A real mass deletion in Actual is accepted once with POST
+# /api/finance/sync/accept-deletions (only while the last attempt was a
+# refusal): it fetches again and applies that snapshot with the guard off,
+# keeping older months and the overrides on rows that still exist. Do NOT use
+# /sync/reset for this — it deletes every synced row (months before the window
+# are never re-imported) and every override.
+MASS_DELETE_MIN_ROWS = 20
+MASS_DELETE_MAX_FRACTION = 0.5
+REFUSED_PREFIX = "refused:"
+
+
+class SnapshotRefused(RuntimeError):
+    """apply_snapshot refused a snapshot before writing anything."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason  # a bgw_budget_sync_degraded_total reason
+
 
 def _is_sync_configured() -> bool:
     """True when the Actual Budget sync has enough config to run."""
@@ -941,11 +965,14 @@ def _record_failure(error: str) -> None:
         logger.warning("[ACTUAL] Could not record sync failure: %s", e)
 
 
-def apply_snapshot(snapshot: ActualSnapshot) -> dict:
+def apply_snapshot(snapshot: ActualSnapshot, *, allow_mass_delete: bool = False) -> dict:
     """Mirror a snapshot into finance.db. Synchronous; pure DB work.
 
     Split out from the network fetch so it can be unit-tested with a
-    hand-built snapshot. Returns counts for logging/metrics.
+    hand-built snapshot. Returns counts for logging/metrics. Raises
+    ``SnapshotRefused`` (nothing written) when the snapshot would remove too
+    many synced rows — see MASS_DELETE_MIN_ROWS — unless ``allow_mass_delete``
+    (the operator accepted the deletions).
     """
     prefix = f"{SYNC_PROVIDER}:"
     window_start = snapshot.window_start
@@ -969,9 +996,24 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
         }
         touched = set(existing.values())
 
+        incoming = [prefix + t.id for t in outflows]
+        incoming_ids = set(incoming)
+        stale = [ext for ext in existing if ext not in incoming_ids]
+        if (
+            not allow_mass_delete
+            and len(stale) >= MASS_DELETE_MIN_ROWS
+            and len(stale) > MASS_DELETE_MAX_FRACTION * len(existing)
+        ):
+            raise SnapshotRefused(
+                "mass_delete",
+                f"{REFUSED_PREFIX} this sync would remove {len(stale)} of {len(existing)} synced transactions "
+                f"since {window_start} (it brought {len(outflows)}). Nothing was changed. Check the "
+                "budget in Actual (right budget file? account moved off-budget?); if those transactions "
+                "really were deleted, accept it once with POST /api/finance/sync/accept-deletions.",
+            )
+
         # Rows re-dated upstream from before the window into it are not in
         # `existing`, but their old month's total must be recomputed too.
-        incoming = [prefix + t.id for t in outflows]
         outside = [ext for ext in incoming if ext not in existing]
         for k in range(0, len(outside), 500):
             chunk = outside[k : k + 500]
@@ -992,11 +1034,9 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
             "DELETE FROM transactions WHERE source = 'ynab' AND date >= ?", (window_start,)
         ).rowcount
 
-        seen = set()
         inserted = updated = 0
         for t in outflows:
             ext = prefix + t.id
-            seen.add(ext)
             period = _month_of(t.date)
             touched.add(period)
             name = (t.payee or t.notes or t.category or "Actual transaction")[:200]
@@ -1039,7 +1079,6 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
                 else:
                     inserted += 1
 
-        stale = [ext for ext in existing if ext not in seen]
         for ext in stale:
             conn.execute("DELETE FROM transactions WHERE external_id = ?", (ext,))
 
@@ -1075,21 +1114,30 @@ def apply_snapshot(snapshot: ActualSnapshot) -> dict:
             "window_start": window_start,
             "fun_money_category": snapshot.fun_money_category,
             "fun_money_balance": float(snapshot.fun_money_balance) if snapshot.fun_money_balance is not None else None,
+            # Why this sync's data is incomplete (empty = clean). See
+            # ActualSnapshot.degraded / bgw_budget_sync_degraded_total.
+            "degraded": list(snapshot.degraded),
         }
         _record_sync_state(conn, ok=True, budget_name=snapshot.budget_name, error=None, result=result)
     return result
 
 
-async def sync_budget_transactions() -> dict:
+async def sync_budget_transactions(*, allow_mass_delete: bool = False) -> dict:
     """Pull spending from Actual Budget into finance.db. Never raises.
 
     Called by the APScheduler job, the dashboard Sync button and the settings
     page. Returns ``{"busy": True, ...}`` instead of queueing when another
-    sync holds the lock or a timed-out download is still running.
+    sync holds the lock or a timed-out download is still running, and
+    ``{"refused": True, ...}`` when the snapshot would mass-delete synced rows
+    (``allow_mass_delete`` = the operator accepted that, once).
     """
     from orchestrator import actual_client
     from orchestrator.config import settings
-    from orchestrator.metrics import BUDGET_SYNC_LAST_SUCCESS, BUDGET_SYNC_TOTAL
+    from orchestrator.metrics import (
+        BUDGET_SYNC_LAST_SUCCESS,
+        BUDGET_SYNC_TOTAL,
+        record_budget_sync_degraded,
+    )
 
     global _category_cache, _category_fail
 
@@ -1117,7 +1165,20 @@ async def sync_budget_transactions() -> dict:
             return {"synced": 0, "error": msg}
 
         try:
-            result = await asyncio.to_thread(apply_snapshot, snapshot)
+            result = await asyncio.to_thread(apply_snapshot, snapshot, allow_mass_delete=allow_mass_delete)
+        except SnapshotRefused as e:
+            # Not an "error": the fetch worked, the data looked wrong. Recorded
+            # as the last attempt's error so the dashboard stops saying
+            # "connected"; BudgetSyncDegraded alerts on it. The query_budget
+            # history refresh below is skipped too — same suspect snapshot.
+            msg = str(e)
+            # log-safe: refusal text built in apply_snapshot (row counts + window date only)
+            logger.warning("[ACTUAL] Sync %s", msg)
+            BUDGET_SYNC_TOTAL.labels(result="refused").inc()
+            record_budget_sync_degraded([*snapshot.degraded, e.reason])
+            _category_fail = (time.monotonic(), msg)
+            await asyncio.to_thread(_record_failure, msg)
+            return {"synced": 0, "refused": True, "error": msg}
         except Exception as e:  # noqa: BLE001
             msg = f"local database error: {type(e).__name__}"
             logger.error("[ACTUAL] Sync failed writing finance.db: %s", e, exc_info=True)
@@ -1145,6 +1206,12 @@ async def sync_budget_transactions() -> dict:
         _category_fail = None
         BUDGET_SYNC_TOTAL.labels(result="ok").inc()
         BUDGET_SYNC_LAST_SUCCESS.set(time.time())
+        record_budget_sync_degraded(snapshot.degraded)
+        if allow_mass_delete and result["deleted"]:
+            logger.warning(
+                "[ACTUAL] Applied a sync with the mass-delete guard off (accepted by the operator): %d rows removed",
+                result["deleted"],
+            )
         logger.info(
             "[ACTUAL] Synced budget in %.1fs: +%d new, %d updated, %d removed, %d inflows skipped%s%s%s",
             time.monotonic() - t0,
@@ -1154,11 +1221,27 @@ async def sync_budget_transactions() -> dict:
             result["skipped_inflows"],
             f", {result['legacy_removed']} legacy YNAB rows replaced" if result["legacy_removed"] else "",
             f", {result['history_rows']} history rows" if "history_rows" in result else "",
-            ""
-            if snapshot.fun_money_balance is not None
-            else f" — fun-money category '{settings.actual_fun_money_category}' not found",
+            _fun_money_note(snapshot, settings.actual_fun_money_category),
         )
         return result
+
+
+def _fun_money_note(snapshot: ActualSnapshot, configured: str | None) -> str:
+    """Why the health-bar budget was not refreshed this sync ("" when it was).
+
+    Until 2026-11 this always said the category was "not found", even when
+    the real cause was this month's budget figures failing to evaluate.
+    """
+    if snapshot.month_stats_error:
+        return (
+            f" — this month's budget figures could not be evaluated ({snapshot.month_stats_error});"
+            " fun-money balance not updated"
+        )
+    if snapshot.fun_money_balance is not None or not (configured or "").strip():
+        return ""
+    if snapshot.fun_money_category is None:
+        return f" — fun-money category '{configured}' not found"
+    return " — fun-money category has no budget figures this month; balance not updated"
 
 
 # ---- Budget sync API routes ----
@@ -1236,6 +1319,24 @@ async def trigger_sync() -> dict | JSONResponse:
                 return JSONResponse({"ok": False, "error": status["last_error"], "cooldown": True}, status_code=502)
             return {"ok": True, "cooldown": True, **(status.get("last_result") or {"synced": 0})}
     return _sync_response(await sync_budget_transactions())
+
+
+@router.post("/sync/accept-deletions", response_model=None)
+async def accept_sync_deletions() -> dict | JSONResponse:
+    """Accept a mass deletion the sync refused: fetch again and apply that
+    snapshot once with the mass-delete guard off.
+
+    Only while the last attempt was a refusal (409 otherwise), so it can't be
+    used to switch the guard off ahead of time. Keeps months before the window
+    and the overrides of surviving rows, unlike /sync/reset.
+    """
+    if not _is_sync_configured():
+        return _not_configured()
+    status = await asyncio.to_thread(_status_sync)
+    if not (status.get("last_error") or "").startswith(REFUSED_PREFIX):
+        return JSONResponse({"ok": False, "error": "nothing to accept: the last sync was not refused"}, status_code=409)
+    logger.warning("[ACTUAL] Operator accepted a refused mass deletion; syncing with the guard off once")
+    return _sync_response(await sync_budget_transactions(allow_mass_delete=True))
 
 
 @router.get("/categories", response_model=None)
@@ -1329,7 +1430,9 @@ async def update_category_mapping(body: CategoryMappingRequest) -> dict:
 async def reset_sync() -> dict:
     """Delete all synced rows and sync state; the next sync re-imports.
 
-    Per-transaction discretionary overrides (dashboard dot) go with the rows.
+    Per-transaction discretionary overrides (dashboard dot) go with the rows,
+    and synced rows older than the ACTUAL_SYNC_MONTHS window are not
+    re-imported. To accept a refused mass deletion use /sync/accept-deletions.
     """
 
     def _reset() -> None:

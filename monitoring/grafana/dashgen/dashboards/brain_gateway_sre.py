@@ -1631,22 +1631,37 @@ def build() -> dict:
             description="Seconds since the last successful Actual Budget sync (every "
             "ACTUAL_SYNC_INTERVAL, default 30 min). 'No data' means no success since "
             "the orchestrator last started, or the sync is not configured — check "
-            "Budget Sync Outcomes and GET /api/finance/sync/status (last_error).",
+            "Budget Sync Outcomes and GET /api/finance/sync/status (last_error). "
+            "Refused syncs (mass-delete guard) also make it climb.",
         ),
         timeseries(
             "Budget Sync Outcomes (/h)",
             [("sum by (result) (increase(bgw_budget_sync_total[1h]))", "{{result}}")],
             unit="none",
-            description="ok | error | busy per hour. 'busy' = a manual sync or the "
+            description="ok | error | busy | refused per hour. 'busy' = a manual sync or the "
             "settings page overlapped a running one (harmless); sustained 'error' "
-            "with no 'ok' triggers BudgetSyncFailing.",
+            "with no 'ok' triggers BudgetSyncFailing. 'refused' = the snapshot would "
+            "have mass-deleted synced rows, so nothing was applied (see Degraded).",
         ),
-        logs(
-            "Budget Sync Logs",
-            '{container="brain-orchestrator"} |= "[ACTUAL]"',
+        timeseries(
+            "Budget Sync Degraded (/h)",
+            [("sum by (reason) (increase(bgw_budget_sync_degraded_total[1h]))", "{{reason}}")],
+            unit="none",
+            description="Syncs that counted as ok but carried bad data, or were refused. "
+            "month_stats_failed = this month's budget figures could not be evaluated "
+            "(category figures 0, health bar not refreshed); fun_money_missing = "
+            "ACTUAL_FUN_MONEY_CATEGORY matched nothing; mass_delete = refused, the "
+            "Quest Board is frozen at the last good sync. Persisting 2h+ triggers "
+            "BudgetSyncDegraded (on the bgw_budget_sync_degraded_state gauge).",
         ),
     ]
     row, y = grid_row(budget_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+    row, y = grid_row(
+        [logs("Budget Sync Logs", '{container="brain-orchestrator"} |= "[ACTUAL]"')],
+        y,
+        heights=[8],
+    )
     panels.extend(row)
 
     # -------------------------------------------------------- Pantry & Meal Plan
