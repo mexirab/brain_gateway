@@ -112,7 +112,9 @@ def _vision(analyze, healthy=True):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("url", [DATA_URI, "data:image/png;base64,iVBORw0KGgo=", "/9j/4AAQSkZJRg=="])
+@pytest.mark.parametrize(
+    "url", [pytest.param(DATA_URI, id="jpeg-data-uri"), "data:image/png;base64,iVBORw0KGgo=", "/9j/4AAQSkZJRg=="]
+)
 def test_inline_image_data_is_safe(url):
     assert _is_safe_image_url(url)
 

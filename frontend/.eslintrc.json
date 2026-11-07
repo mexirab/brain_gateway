@@ -6,6 +6,10 @@
       "varsIgnorePattern": "^_"
     }],
     "no-console": ["warn", { "allow": ["warn", "error"] }],
-    "@typescript-eslint/no-explicit-any": "warn"
+    "@typescript-eslint/no-explicit-any": "warn",
+    "no-restricted-syntax": ["error", {
+      "selector": "ChainExpression > CallExpression > AwaitExpression",
+      "message": "`fn?.(await x())` / `o?.m(await x())` skips x() entirely when fn or o is missing. Await into a variable first, then call fn?.(result)."
+    }]
   }
 }

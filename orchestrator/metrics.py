@@ -5,7 +5,9 @@ All metric definitions in one place. Import individual metrics where needed.
 Uses bgw_ prefix to namespace all metrics.
 """
 
-from prometheus_client import Counter, Gauge, Histogram, Info
+from collections.abc import Iterable
+
+from prometheus_client import Counter, Gauge, Histogram
 
 # -- Request-level metrics ---------------------------------------------------
 REQUEST_COUNT = Counter(
@@ -35,6 +37,14 @@ REQUEST_ERRORS = Counter(
     "Total request errors",
     ["mode", "error_type"],
 )
+# The fixed error types start at 0 so increase() sees the first failure after
+# a restart (HighErrorRate). Unhandled exceptions use their class name and stay lazy.
+for _mode, _error_type in (
+    ("unified", "model_unavailable"),
+    ("unified", "tool_loop_failed"),
+    ("unified_fallback", "fallback_failed"),
+):
+    REQUEST_ERRORS.labels(mode=_mode, error_type=_error_type)
 
 ACTIVE_REQUESTS = Gauge(
     "bgw_active_requests",
@@ -961,11 +971,53 @@ TEMPERATURE_DELTA = Gauge(
     "Temperature difference between server closet and ambient (kitchen)",
 )
 
-# -- System info -------------------------------------------------------------
-BUILD_INFO = Info(
-    "bgw_build",
-    "Brain Gateway build information",
+# -- Deploys (CI deploy job -> this box) -------------------------------------
+# jobs_deploy_drift.py, every 10 min while DEPLOY_DRIFT_REPO is set. The source
+# of truth for "what is live" is the deploy job's .last-deployed-sha marker,
+# not the image: the orchestrator is only rebuilt when its own files change.
+DEPLOYED_COMMIT_INFO = Gauge(
+    "bgw_deployed_commit_info",
+    "Commit the CI deploy job last deployed (.last-deployed-sha); value is always 1",
+    ["commit"],  # 12-hex short SHA; the old series is dropped on change, so one at a time
 )
+
+DEPLOYED_COMMIT_TIMESTAMP = Gauge(
+    "bgw_deployed_commit_timestamp_seconds",
+    "When the deploy marker was last written (its mtime); NaN when there is no marker",
+)
+
+DEPLOY_UNDEPLOYED_GREEN_COMMITS = Gauge(
+    "bgw_deploy_undeployed_green_commits",
+    "Pushes to main newer than the deployed commit whose CI passed; 0 = in sync, NaN = unknown",
+)
+
+DEPLOY_UNDEPLOYED_GREEN_SINCE = Gauge(
+    "bgw_deploy_undeployed_green_since_timestamp_seconds",
+    "When the oldest undeployed green commit on main passed CI; 0 = in sync, NaN = unknown",
+)
+# NaN until a check says otherwise (also with the check off): an unset gauge
+# exports 0, which reads as "in sync" / "deployed in 1970".
+for _g in (DEPLOYED_COMMIT_TIMESTAMP, DEPLOY_UNDEPLOYED_GREEN_COMMITS, DEPLOY_UNDEPLOYED_GREEN_SINCE):
+    _g.set(float("nan"))
+
+DEPLOY_DRIFT_CHECK_TOTAL = Counter(
+    "bgw_deploy_drift_check_total",
+    "Deploy drift checks by result",
+    ["result"],
+)
+# Pre-seeded so increase() sees the first failure after a restart.
+for _r in (
+    "in_sync",
+    "behind",
+    "not_on_main",
+    "partial",
+    "marker_missing",
+    "marker_invalid",
+    "deploy_job_missing",
+    "github_error",
+    "rate_limited",
+):
+    DEPLOY_DRIFT_CHECK_TOTAL.labels(result=_r)
 
 # -- Auto-Learn ---------------------------------------------------------------
 AUTO_LEARN_EXTRACTIONS_TOTAL = Counter(
@@ -1418,12 +1470,51 @@ SELFCARE_LOGGED = Counter(
 BUDGET_SYNC_TOTAL = Counter(
     "bgw_budget_sync_total",
     "Actual Budget sync attempts by outcome.",
-    ["result"],  # ok | error | busy
+    # ok | error | busy | refused (snapshot would have mass-deleted synced
+    # rows, so nothing was applied — see bgw_budget_sync_degraded_total)
+    ["result"],
 )
 # Pre-create the series so increase()/unless in BudgetSyncFailing see 0, not
 # absent, before the first attempt of each label.
-for _r in ("ok", "error", "busy"):
+for _r in ("ok", "error", "busy", "refused"):
     BUDGET_SYNC_TOTAL.labels(result=_r)
+
+# A sync that "worked" but with bad data. One increment per affected sync per
+# reason. month_stats_failed: this month's budget figures could not be
+# evaluated (category figures 0, fun-money balance not updated);
+# fun_money_missing: ACTUAL_FUN_MONEY_CATEGORY matched no visible spending
+# category with figures this month; mass_delete: the snapshot would have
+# removed too many synced rows from the window, so it was refused
+# (bgw_budget_sync_total{result="refused"}). Alert: BudgetSyncDegraded (on the state gauge below).
+BUDGET_SYNC_DEGRADED_REASONS = ("month_stats_failed", "fun_money_missing", "mass_delete")
+BUDGET_SYNC_DEGRADED = Counter(
+    "bgw_budget_sync_degraded_total",
+    "Actual Budget syncs that applied incomplete data or were refused, by reason.",
+    ["reason"],
+)
+# The alertable state: 1 while the last applied or refused sync was degraded
+# for that reason, 0 once a sync is clean. Unchanged by fetch errors and busy
+# skips (no snapshot to judge). Unlike an increase() over the counter it works
+# at any ACTUAL_SYNC_INTERVAL and resolves on the first clean sync.
+BUDGET_SYNC_DEGRADED_STATE = Gauge(
+    "bgw_budget_sync_degraded_state",
+    "1 while the last applied or refused Actual Budget sync was degraded for this reason, else 0.",
+    ["reason"],
+)
+for _r in BUDGET_SYNC_DEGRADED_REASONS:
+    BUDGET_SYNC_DEGRADED.labels(reason=_r)
+    BUDGET_SYNC_DEGRADED_STATE.labels(reason=_r).set(0)
+
+
+def record_budget_sync_degraded(reasons: Iterable[str]) -> None:
+    """Record one applied or refused sync: count each degraded reason once and
+    set the state gauge for every reason. Unknown reasons are ignored (bounded labels)."""
+    current = set(reasons)
+    for reason in BUDGET_SYNC_DEGRADED_REASONS:
+        if reason in current:
+            BUDGET_SYNC_DEGRADED.labels(reason=reason).inc()
+        BUDGET_SYNC_DEGRADED_STATE.labels(reason=reason).set(1 if reason in current else 0)
+
 
 BUDGET_SYNC_LAST_SUCCESS = Gauge(
     "bgw_budget_sync_last_success_timestamp_seconds",

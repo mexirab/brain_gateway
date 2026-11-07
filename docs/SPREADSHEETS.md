@@ -18,7 +18,7 @@ Self-hosted [Grist](https://www.getgrist.com) on Jupiter: the local replacement 
 | Secrets | `/opt/apps/grist/grist.env` (chmod 600; template `grist/grist.env.example`) |
 | Data | `/opt/apps/grist/persist` (1000:1000, mode 700): `home.sqlite3` (users, orgs, API keys) + `docs/*.grist` (one SQLite per doc) |
 | Backup | nightly `grist/backup_grist.sh` → Saturn (see `docs/BACKUP.md` → Grist) |
-| Monitoring | blackbox probe `grist:8484/status` (`service=grist`) → `GristDown` (quiet); `JessGristBackupStale` (paging); `JessBackupOffboxFailing` (shared). See `monitoring/README.md` |
+| Monitoring | blackbox probe `grist:8484/status` (`service=grist`) → `GristDown` (quiet); `JessGristBackupStale` (paging); `JessBackupOffboxFailing` (`backup="grist"`, quiet). See `monitoring/README.md` |
 | Jess side | `orchestrator/grist_client.py` + `spreadsheet` tool, gated by `GRIST_ENABLED` (env: `docs/ENV_VARS.md` → Grist spreadsheet; schema: `TECHNICAL_REFERENCE.md` → spreadsheet) |
 
 ## Security model

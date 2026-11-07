@@ -53,7 +53,10 @@ install, and it runs whether or not the orchestrator container is up:
 5. Rotates: keeps the newest `JESS_BACKUP_KEEP` archives (default 30 — at ~15 MB
    each that's under half a gigabyte for a month of nightlies).
 6. Writes a Prometheus textfile metric so **`JessBackupStale` alerts if a
-   nightly is missed** (same mechanism as the Google-token refresh).
+   nightly is missed** (same mechanism as the Google-token refresh), and
+   `jess_backup_offbox_success`, which feeds the quiet `JessBackupOffboxFailing`
+   (`backup="state"`; no off-box copy in 3 days — every backup has its own
+   `backup` label; `monitoring/README.md` → Off-box backup alert).
 
 ## Install (on the always-on host — Jupiter)
 
@@ -141,7 +144,7 @@ orchestrator's `finance.db` mirror.
 | Off-box | rsync to `saturn:/home/labadmin/actual-backups/` (`JESS_ACTUAL_BACKUP_REMOTE`; plaintext, like the other backups) |
 | Log | `/home/labadmin/actual/backup.log` |
 | Metrics | textfile `jess_actual_backup.prom`: `jess_actual_backup_success_timestamp_seconds`, `jess_actual_backup_offbox_success`, `jess_actual_backup_files` |
-| Alerts | `JessActualBackupStale` (>36h, paging), `JessBackupOffboxFailing` (shared, quiet) |
+| Alerts | `JessActualBackupStale` (>36h, paging), `JessBackupOffboxFailing` (`backup="actual"`, quiet) |
 
 Overrides: `JESS_ACTUAL_DATA`, `JESS_ACTUAL_BACKUP_REMOTE`,
 `JESS_ACTUAL_BACKUP_METRICS_PATH`.
@@ -168,7 +171,13 @@ orchestrator's client) downloads the server's migration files and runs them on
 its own copy of the budget, so a server ahead of the client can break the sync.
 Check https://pypi.org/project/actualpy/ for a release that supports the new
 server; if there is none, dry-run first. Giving a new release about a week
-before upgrading is a cheap guard against a bad one.
+before upgrading is a cheap guard against a bad one. That migration SQL runs
+confined (`orchestrator/actual_client.py` → `_confine_actualpy`: no ATTACH /
+VACUUM, no PRAGMA); when bumping `actualpy` itself, re-read
+`Actual.run_migrations` in the new release and run
+`orchestrator/tests/test_actual_sqlite_confinement.py` — if the hook no longer
+fits, every sync fails closed with "cannot confine actualpy's SQLite
+connections" (`BudgetSyncFailing`).
 
 Merging the pin changes the live checkout (CI git-pulls it), and from then on
 any `docker compose up -d` in `actual/` (the `ActualDown` runbook, the
@@ -236,12 +245,17 @@ merging and do steps 4-5 right after.
    `last_synced_at` later than the upgrade, `last_result.deleted` about 0 and
    `last_result.fun_money_balance` not null. `bgw_budget_history_rows` should
    not drop, and Loki `{container="brain-orchestrator"} |= "[ACTUAL]" |= "Could not evaluate"`
-   should return nothing. A sync can report success with bad data: budget
-   figures fall back to 0, and rows that vanish are deleted from `finance.db`
-   along with their discretionary overrides. Hard-refresh the UI (it caches
-   the old app); Settings shows the version.
+   should return nothing. `last_result.degraded` must be `[]` (since
+   2026-11-07 a sync that applies bad data — budget figures fallen back to 0,
+   fun-money category unmatched — is listed there and in
+   `bgw_budget_sync_degraded_state{reason}`), and `last_error` must not start
+   with `refused:` (a snapshot that would delete most synced rows is refused
+   whole instead of wiping them and their discretionary overrides; if the
+   deletion is real, `POST /api/finance/sync/accept-deletions`, never
+   `/sync/reset`). Hard-refresh the UI (it caches the old app); Settings shows
+   the version.
 6. **Rollback**, by a revert PR, not an edit in the live checkout (CI's
-   `git pull --ff-only` fails on a dirty tree). Save `docker logs actual-budget`
+   deploy refuses a dirty checkout). Save `docker logs actual-budget`
    first: a recreate deletes them, and they aren't shipped to Loki. Put the old
    image line back **before** running the Restore block above, whose last
    `up -d` starts whatever is pinned. Restore the pre-upgrade archive: once any
@@ -272,7 +286,7 @@ Runbook: `docs/SPREADSHEETS.md`.
 | Off-box | rsync to `saturn:/home/labadmin/grist-backups/` (`JESS_GRIST_BACKUP_REMOTE`; plaintext, like the other backups — `home.sqlite3` holds the Grist API keys) |
 | Log | `/home/labadmin/grist/backup.log` |
 | Metrics | textfile `jess_grist_backup.prom`: `jess_grist_backup_success_timestamp_seconds`, `jess_grist_backup_offbox_success`, `jess_grist_backup_docs` |
-| Alerts | `JessGristBackupStale` (>36h, paging), `JessBackupOffboxFailing` (shared, quiet) |
+| Alerts | `JessGristBackupStale` (>36h, paging), `JessBackupOffboxFailing` (`backup="grist"`, quiet) |
 
 Overrides: `JESS_GRIST_DATA`, `JESS_GRIST_BACKUP_REMOTE`,
 `JESS_GRIST_BACKUP_METRICS_PATH`. Run it once by hand after install to seed the

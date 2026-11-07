@@ -1647,22 +1647,37 @@ def build() -> dict:
             description="Seconds since the last successful Actual Budget sync (every "
             "ACTUAL_SYNC_INTERVAL, default 30 min). 'No data' means no success since "
             "the orchestrator last started, or the sync is not configured — check "
-            "Budget Sync Outcomes and GET /api/finance/sync/status (last_error).",
+            "Budget Sync Outcomes and GET /api/finance/sync/status (last_error). "
+            "Refused syncs (mass-delete guard) also make it climb.",
         ),
         timeseries(
             "Budget Sync Outcomes (/h)",
             [("sum by (result) (increase(bgw_budget_sync_total[1h]))", "{{result}}")],
             unit="none",
-            description="ok | error | busy per hour. 'busy' = a manual sync or the "
+            description="ok | error | busy | refused per hour. 'busy' = a manual sync or the "
             "settings page overlapped a running one (harmless); sustained 'error' "
-            "with no 'ok' triggers BudgetSyncFailing.",
+            "with no 'ok' triggers BudgetSyncFailing. 'refused' = the snapshot would "
+            "have mass-deleted synced rows, so nothing was applied (see Degraded).",
         ),
-        logs(
-            "Budget Sync Logs",
-            '{container="brain-orchestrator"} |= "[ACTUAL]"',
+        timeseries(
+            "Budget Sync Degraded (/h)",
+            [("sum by (reason) (increase(bgw_budget_sync_degraded_total[1h]))", "{{reason}}")],
+            unit="none",
+            description="Syncs that counted as ok but carried bad data, or were refused. "
+            "month_stats_failed = this month's budget figures could not be evaluated "
+            "(category figures 0, health bar not refreshed); fun_money_missing = "
+            "ACTUAL_FUN_MONEY_CATEGORY matched nothing; mass_delete = refused, the "
+            "Quest Board is frozen at the last good sync. Persisting 2h+ triggers "
+            "BudgetSyncDegraded (on the bgw_budget_sync_degraded_state gauge).",
         ),
     ]
     row, y = grid_row(budget_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+    row, y = grid_row(
+        [logs("Budget Sync Logs", '{container="brain-orchestrator"} |= "[ACTUAL]"')],
+        y,
+        heights=[8],
+    )
     panels.extend(row)
 
     # -------------------------------------------------------- Pantry & Meal Plan
@@ -1901,6 +1916,72 @@ def build() -> dict:
         ),
     ]
     row, y = grid_row(self_audit_row, y, heights=[8, 8, 8])
+    panels.extend(row)
+
+    # -------------------------------------------------------- Deploys (CI → Jupiter)
+    # jobs_deploy_drift.py (every 10 min, only while DEPLOY_DRIFT_REPO is set):
+    # the commit in the deploy job's .last-deployed-sha marker vs. newer pushes
+    # to main whose CI passed. NaN / "No data" = check off or not run yet.
+    r, y = row_divider("Deploys (CI → Jupiter)", y)
+    panels.append(r)
+
+    # NaN = no check yet since the orchestrator started, or a check failed
+    # right after a new deploy.
+    nan_unknown = [{"type": "special", "options": {"match": "nan", "result": {"text": "unknown"}}}]
+
+    deploy_row = [
+        stat(
+            "Deployed Commit",
+            "bgw_deployed_commit_info",
+            legend="{{commit}}",
+            text_mode="name",
+            color_mode="none",
+            graph_mode="none",
+            description="The commit the CI deploy job last shipped to Jupiter (its "
+            ".last-deployed-sha marker). The orchestrator image is only rebuilt when its own "
+            "files change, so this, not the image, is what is live.",
+        ),
+        stat(
+            "Since Last Deploy",
+            "time() - bgw_deployed_commit_timestamp_seconds",
+            unit="s",
+            graph_mode="none",
+            mappings=nan_unknown,
+            description="Age of the deploy marker. Long stretches are normal when nothing "
+            "merges; what matters is the drift panels next to it.",
+        ),
+        stat(
+            "Undeployed Green Commits",
+            "bgw_deploy_undeployed_green_commits",
+            thresholds=[(None, "green"), (1, "orange")],
+            graph_mode="none",
+            mappings=nan_unknown,
+            description="Pushes to main newer than the deployed commit whose CI passed. "
+            "1 for a few minutes while a deploy runs is normal.",
+        ),
+        stat(
+            "Oldest Undeployed Green Commit",
+            "(time() - (bgw_deploy_undeployed_green_since_timestamp_seconds > 0))"
+            " or (bgw_deploy_undeployed_green_since_timestamp_seconds * 0)",
+            unit="s",
+            thresholds=[(None, "green"), (900, "orange"), (2400, "red")],
+            graph_mode="none",
+            mappings=nan_unknown,
+            description="How long ago the oldest undeployed green commit passed CI (0 = in sync). "
+            "Red (40 min) for 10 min = DeployDrift: a cancelled, failed or timed-out deploy, "
+            "or a stopped runner. Runbook: monitoring/README.md → Deploy drift.",
+        ),
+        timeseries(
+            "Drift Checks (by result, /h)",
+            [("sum by (result) (increase(bgw_deploy_drift_check_total[1h]))", "{{result}}")],
+            unit="none",
+            stack=True,
+            fill=40,
+            description="in_sync / behind / not_on_main = the check worked. marker_missing, "
+            "marker_invalid, github_error, rate_limited = it could not tell (DeployDriftCheckFailing).",
+        ),
+    ]
+    row, y = grid_row(deploy_row, y, heights=[6, 6, 6, 6, 6])
     panels.extend(row)
 
     # -------------------------------------------------------- Logs (with $request_id trace)

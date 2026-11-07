@@ -101,6 +101,18 @@ curl -s localhost:9093/api/v2/status | jq .
 docker exec alertmanager amtool alert query
 ```
 
+### Dead-man's switch (Saturn; once installed — `monitoring/deadman/README.md`)
+```bash
+# On Saturn
+systemctl status jupiter-deadman
+journalctl -u jupiter-deadman -n 50
+python3 -I /opt/jupiter-deadman/jupiter_deadman.py probe   # one probe round of Jupiter, sends nothing
+sudo systemctl stop jupiter-deadman    # BEFORE planned Jupiter downtime (never silence Watchdog — that pages)
+sudo systemctl start jupiter-deadman   # after; waits 3 min for a fresh heartbeat before it can page
+# On Jupiter: are heartbeats arriving? (only Jupiter's address may connect)
+curl -s http://10.0.0.58:9466/metrics | grep -E 'heartbeats_total\{result="ok"\}|last_heartbeat'
+```
+
 ### View logs in Grafana
 1. Open https://jupiter-amds.tail74fc4a.ts.net:3000 (tailnet) or http://localhost:3000 on Jupiter — login `GF_SECURITY_ADMIN_USER` / `GF_SECURITY_ADMIN_PASSWORD` from `.env`
 2. Go to Explore → Select Loki
@@ -175,6 +187,14 @@ docker compose up -d --force-recreate orchestrator
 # Sync status (configured / connected / last_error) and a manual sync (bearer-gated)
 curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status | jq .
 curl -s -X POST -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync | jq .
+
+# Accept a REFUSED sync (last_error starts "refused:" — mass-delete guard) once the deletion
+# is confirmed real in Actual. 409 unless the last attempt was a refusal. Not /sync/reset
+# (that drops months before the window + every discretionary override).
+curl -s -X POST -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/accept-deletions | jq .
+
+# After an actualpy bump: the SQLite confinement test (throwaway container, see Common Commands in CLAUDE.md)
+#   ... python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests/test_actual_sqlite_confinement.py -q
 
 # Sync logs
 docker logs brain-orchestrator 2>&1 | grep '\[ACTUAL\]' | tail -20

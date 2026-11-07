@@ -288,7 +288,7 @@ node_exporter textfile collector. The Saturn copies are not rotated.
 | Alert | When | Goes to |
 |-------|------|---------|
 | `JessCalendarBackupStale` | no successful local backup for 36 h (+1 h `for`) | Pushover (paging) |
-| `JessBackupOffboxFailing` | off-box copy failing for 3 days (now covers state, HA and calendar) | Pushover quiet |
+| `JessBackupOffboxFailing` | no successful off-box copy in 3 days (+1 h `for`); one alert per backup (`backup` label: state, ha, calendar, actual, grist) | Pushover quiet |
 | `RadicaleDown` | blackbox probe of `http://radicale:5232/.web/` failing for 5 min | Pushover quiet |
 | `ExchangeCalendarSyncStale` | no iPhone work-calendar push for 26 h (+30 min `for`); silent until the work Shortcut has synced once | Pushover quiet, at most once a day |
 | `CalendarSourceFailing` | Radicale or Google read errors/timeouts more than 6 times in 1 h, for 15 min. Catches what the probe can't, e.g. a 401 after a password change | Pushover quiet |
