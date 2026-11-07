@@ -23,6 +23,19 @@ No new env vars, routes, jobs or services.
 
 ---
 
+## [Unreleased] — Actual Budget server 26.9.0 → 26.11.0 (2026-11-06)
+
+Branch `chore/actual-server-26.11.0`. Image pin bump only; no orchestrator code change.
+
+- `actual/docker-compose.yml`: `actualbudget/actual-server:26.11.0@sha256:06cf1865…8da6` (digest checked with `docker buildx imagetools inspect`). `actualpy` stays at 0.22.4: it is the newest release (released against server 26.2.0; this deployment has run it on 26.9.0 since 2026-10).
+- Dry run 2026-11-06 on a copy of the nightly backup, private docker network, live server untouched: `fetch_snapshot()` returned an identical snapshot on 26.9.0 and 26.11.0; after the official 26.11.0 client (`@actual-app/api`) migrated the budget, added a marker transaction, synced and re-uploaded the file, `fetch_snapshot()` still worked and saw the marker. 26.11.0 adds one migration, `add_messages_pending.js` (a local, never-synced queue for sync messages from newer app versions). `actualpy` extracts no SQL from it, which doesn't matter for a read-only reader. Upstream release notes: 26.10 nanoid security update; 26.11 password change needs the current password and signs out sessions, credentials kept out of request logs, SimpleFIN private-bridge allowlist (not used here).
+- `docs/BACKUP.md` → Actual Budget → Upgrade: isolated dry run (copies only, throwaway password, internal network, npm install split from the run), backup, pin, upgrade, verify (incl. checks for a sync that succeeds with bad data), rollback (revert image before restore, re-download the budget on every device).
+
+### Upgrade action
+
+- Merging changes only the file (CI does not deploy `actual/`), but after that any `docker compose up -d` in `actual/` upgrades. So back up before merging, then right after: `cd actual && docker compose pull && docker compose up -d` and the verify step in `docs/BACKUP.md`.
+- The first time any Actual client opens the budget it posts scheduled transactions that came due since it was last opened, so Quest Board spending can jump. That happens with 26.9.0 too.
+
 ## [Unreleased] — USB storage: containers left on a disconnected disk (2026-11-03)
 
 Branch `fix/usb-remount-stale-containers`. On 2026-10-31 Jupiter's USB enclosure (`/mnt/logging`, `/mnt/documents`, `/mnt/media`) dropped for ~3 s and re-enumerated. `usb-storage-remount.service` remounted all three disks within 10 s, so the `*MountMissing` alerts stayed green — but every running container kept the old, shut-down filesystem (a bind mount is resolved at container start). Prometheus kept running while every WAL write failed with EIO, so no threshold alert could fire for 3 days (the one alert that got through, `ClosetTemperatureSensorMissing`, was false); Loki, Grafana and the Paperless/Immich Postgres hit I/O errors. Recovered 2026-11-03 by stop+start of the affected containers. Detail: `monitoring/README.md` → USB Storage.
