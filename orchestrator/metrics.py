@@ -5,7 +5,7 @@ All metric definitions in one place. Import individual metrics where needed.
 Uses bgw_ prefix to namespace all metrics.
 """
 
-from prometheus_client import Counter, Gauge, Histogram, Info
+from prometheus_client import Counter, Gauge, Histogram
 
 # -- Request-level metrics ---------------------------------------------------
 REQUEST_COUNT = Counter(
@@ -939,11 +939,53 @@ TEMPERATURE_DELTA = Gauge(
     "Temperature difference between server closet and ambient (kitchen)",
 )
 
-# -- System info -------------------------------------------------------------
-BUILD_INFO = Info(
-    "bgw_build",
-    "Brain Gateway build information",
+# -- Deploys (CI deploy job -> this box) -------------------------------------
+# jobs_deploy_drift.py, every 10 min while DEPLOY_DRIFT_REPO is set. The source
+# of truth for "what is live" is the deploy job's .last-deployed-sha marker,
+# not the image: the orchestrator is only rebuilt when its own files change.
+DEPLOYED_COMMIT_INFO = Gauge(
+    "bgw_deployed_commit_info",
+    "Commit the CI deploy job last deployed (.last-deployed-sha); value is always 1",
+    ["commit"],  # 12-hex short SHA; the old series is dropped on change, so one at a time
 )
+
+DEPLOYED_COMMIT_TIMESTAMP = Gauge(
+    "bgw_deployed_commit_timestamp_seconds",
+    "When the deploy marker was last written (its mtime); NaN when there is no marker",
+)
+
+DEPLOY_UNDEPLOYED_GREEN_COMMITS = Gauge(
+    "bgw_deploy_undeployed_green_commits",
+    "Pushes to main newer than the deployed commit whose CI passed; 0 = in sync, NaN = unknown",
+)
+
+DEPLOY_UNDEPLOYED_GREEN_SINCE = Gauge(
+    "bgw_deploy_undeployed_green_since_timestamp_seconds",
+    "When the oldest undeployed green commit on main passed CI; 0 = in sync, NaN = unknown",
+)
+# NaN until a check says otherwise (also with the check off): an unset gauge
+# exports 0, which reads as "in sync" / "deployed in 1970".
+for _g in (DEPLOYED_COMMIT_TIMESTAMP, DEPLOY_UNDEPLOYED_GREEN_COMMITS, DEPLOY_UNDEPLOYED_GREEN_SINCE):
+    _g.set(float("nan"))
+
+DEPLOY_DRIFT_CHECK_TOTAL = Counter(
+    "bgw_deploy_drift_check_total",
+    "Deploy drift checks by result",
+    ["result"],
+)
+# Pre-seeded so increase() sees the first failure after a restart.
+for _r in (
+    "in_sync",
+    "behind",
+    "not_on_main",
+    "partial",
+    "marker_missing",
+    "marker_invalid",
+    "deploy_job_missing",
+    "github_error",
+    "rate_limited",
+):
+    DEPLOY_DRIFT_CHECK_TOTAL.labels(result=_r)
 
 # -- Auto-Learn ---------------------------------------------------------------
 AUTO_LEARN_EXTRACTIONS_TOTAL = Counter(
