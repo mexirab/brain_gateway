@@ -4,6 +4,28 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — off-box backup alert that could never fire + rule-evaluation alert (2026-11-06)
+
+Branch `fix/backup-offbox-alert`.
+
+Found 2026-11-06: Saturn (the off-box backup target) had been offline since 2026-10-29, every nightly off-box copy had failed since the 2026-10-30 run, and no backup alert fired. (Saturn's `NodeDown` paged every 4h throughout, but it said nothing about backups and was tuned out.) `JessBackupOffboxFailing` matched the five `jess_*backup_offbox_success` gauges, which differ only by metric name. Alert labels drop `__name__`, so whenever two or more backups failed together the rule failed to evaluate ("vector contains metrics with the same labelset after applying alert labels"). It sat in `health=err` from 2026-10-30, with `prometheus_rule_evaluation_failures_total{rule_group=~".*brain_gateway_deadmans"}` rising ~60/h, and nothing watched that counter either.
+
+### Upgrade action
+
+- None beyond the normal merge: CI renders the Alertmanager config and reloads the rules. **`JessBackupOffboxFailing` will fire for all five backups (state, ha, calendar, actual, grist) about an hour after the reload**, and keep firing (quiet tier, default 4h repeat) until Saturn is back online and the next nightly copy succeeds. Bringing Saturn back is a manual owner step.
+
+### Monitoring
+
+- `JessBackupOffboxFailing` rewritten: `label_replace` copies the metric name into a `backup` label (`state|ha|calendar|actual|grist`), so each failing copy is its own alert, and any future `jess_<name>_backup_offbox_success` gauge is covered. The 3-day window moved from `for: 3d` into the query (`max_over_time(...[3d:5m]) == 0`, `for: 1h`): a Prometheus restart (or an edit that changes the rule's labels) no longer restarts a 3-day clock. Fires early (after the 1h `for`) when the stored data holds no 1 at all, e.g. a new backup whose first copy fails or an ingestion gap that swallowed the only good night. Summary/description use `{{ $labels.backup }}` (the old `{{ $labels.__name__ }}` was always empty). Same `pushover-quiet` route. Checked against live Prometheus: evaluates without error, five distinct series, true for each since 2026-11-02 (3 days after the gauges last read 1, before the 2026-10-30 nightly run), empty at 2026-10-29 and 2026-11-01.
+- New quiet alert `RuleEvaluationFailing` (own group `prometheus_self`): `sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[15m])) > 3` for 15m. A rule that keeps failing to evaluate fires within ~20 minutes. A one-off query timeout does not. On this deploy the `brain_gateway_deadmans` failures drop to ≤ 3 about 11 min after the reload, before the 15m `for`, so it should not notify. Over the previous 30 days, only `brain_gateway_deadmans` (this bug, from 2026-10-30 03:50) would have matched. Prometheus rules only, not the Loki ruler. Routed to `pushover-quiet`. The rule is byte-identical to the one in open PR #160 (alert-routing audit), so the two merge into one. #160 also routes it in a block of its own: when that PR is rebased, drop the name from one of the two matchers (same receiver either way).
+
+### Docs
+
+- `monitoring/README.md`: new "Off-box backup alert" and "Rule-evaluation failures" subsections under Alertmanager; tier list updated.
+- `CLAUDE.md` (backups + Alertmanager notes), `docs/BACKUP.md`, `docs/CALENDAR.md`, `docs/SPREADSHEETS.md`: `JessBackupOffboxFailing` described as per-backup (`backup` label) instead of shared.
+
+---
+
 ## [Unreleased] — Actual Budget server 26.9.0 → 26.11.0 (2026-11-06)
 
 Branch `chore/actual-server-26.11.0`. Image pin bump only; no orchestrator code change.
