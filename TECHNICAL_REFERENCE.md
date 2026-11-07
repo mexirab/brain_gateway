@@ -1146,6 +1146,7 @@ See `.env.example` for full list. Key vars:
 | WIND_DOWN_SHORT_NIGHT_HOURS | Short-night threshold for the gentle morning briefing (default: 6.5) |
 | ACTUAL_* | Actual Budget sync (URL, password, budget file, interval, window, fun-money category) — see `docs/ENV_VARS.md` → Finance |
 | RESEARCH_HELPER_ENABLED, RESEARCH_CONTEXT7_API_KEY | `look_it_up` research helper — see `docs/ENV_VARS.md` → Research helper |
+| DEPLOY_DRIFT_REPO, DEPLOY_MARKER_PATH, DEPLOY_DRIFT_GITHUB_TOKEN | Deploy drift check (`DeployDrift`; empty repo = off) — see `docs/ENV_VARS.md` → Deploy drift |
 
 ## External APIs
 
@@ -1157,3 +1158,4 @@ See `.env.example` for full list. Key vars:
 | SearXNG | http://searxng:8080 (`SEARXNG_URL`, over `searxng-net` — orchestrator + searxng only; host port is loopback-only) | None |
 | Context7 (`look_it_up` → `library_docs`, only when `RESEARCH_HELPER_ENABLED`) | https://context7.com/api/v3/search | Optional bearer `RESEARCH_CONTEXT7_API_KEY` (anonymous = low rate limit) |
 | Actual Budget (via `actualpy`, read-only) | http://actual-budget:5006 (Jupiter `actual-budget`, over `gateway-net`; host port is loopback-only) | Server password (`ACTUAL_PASSWORD`) |
+| GitHub REST (deploy drift check, only when `DEPLOY_DRIFT_REPO` is set; GET workflow runs/jobs + compare) | https://api.github.com (redirects not followed, proxy env ignored) | None (public repo, 60 req/h per IP) or optional bearer `DEPLOY_DRIFT_GITHUB_TOKEN` |

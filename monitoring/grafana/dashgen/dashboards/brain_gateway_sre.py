@@ -1887,6 +1887,72 @@ def build() -> dict:
     row, y = grid_row(self_audit_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # -------------------------------------------------------- Deploys (CI → Jupiter)
+    # jobs_deploy_drift.py (every 10 min, only while DEPLOY_DRIFT_REPO is set):
+    # the commit in the deploy job's .last-deployed-sha marker vs. newer pushes
+    # to main whose CI passed. NaN / "No data" = check off or not run yet.
+    r, y = row_divider("Deploys (CI → Jupiter)", y)
+    panels.append(r)
+
+    # NaN = no check yet since the orchestrator started, or a check failed
+    # right after a new deploy.
+    nan_unknown = [{"type": "special", "options": {"match": "nan", "result": {"text": "unknown"}}}]
+
+    deploy_row = [
+        stat(
+            "Deployed Commit",
+            "bgw_deployed_commit_info",
+            legend="{{commit}}",
+            text_mode="name",
+            color_mode="none",
+            graph_mode="none",
+            description="The commit the CI deploy job last shipped to Jupiter (its "
+            ".last-deployed-sha marker). The orchestrator image is only rebuilt when its own "
+            "files change, so this, not the image, is what is live.",
+        ),
+        stat(
+            "Since Last Deploy",
+            "time() - bgw_deployed_commit_timestamp_seconds",
+            unit="s",
+            graph_mode="none",
+            mappings=nan_unknown,
+            description="Age of the deploy marker. Long stretches are normal when nothing "
+            "merges; what matters is the drift panels next to it.",
+        ),
+        stat(
+            "Undeployed Green Commits",
+            "bgw_deploy_undeployed_green_commits",
+            thresholds=[(None, "green"), (1, "orange")],
+            graph_mode="none",
+            mappings=nan_unknown,
+            description="Pushes to main newer than the deployed commit whose CI passed. "
+            "1 for a few minutes while a deploy runs is normal.",
+        ),
+        stat(
+            "Oldest Undeployed Green Commit",
+            "(time() - (bgw_deploy_undeployed_green_since_timestamp_seconds > 0))"
+            " or (bgw_deploy_undeployed_green_since_timestamp_seconds * 0)",
+            unit="s",
+            thresholds=[(None, "green"), (900, "orange"), (2400, "red")],
+            graph_mode="none",
+            mappings=nan_unknown,
+            description="How long ago the oldest undeployed green commit passed CI (0 = in sync). "
+            "Red (40 min) for 10 min = DeployDrift: a cancelled, failed or timed-out deploy, "
+            "or a stopped runner. Runbook: monitoring/README.md → Deploy drift.",
+        ),
+        timeseries(
+            "Drift Checks (by result, /h)",
+            [("sum by (result) (increase(bgw_deploy_drift_check_total[1h]))", "{{result}}")],
+            unit="none",
+            stack=True,
+            fill=40,
+            description="in_sync / behind / not_on_main = the check worked. marker_missing, "
+            "marker_invalid, github_error, rate_limited = it could not tell (DeployDriftCheckFailing).",
+        ),
+    ]
+    row, y = grid_row(deploy_row, y, heights=[6, 6, 6, 6, 6])
+    panels.extend(row)
+
     # -------------------------------------------------------- Logs (with $request_id trace)
     r, y = row_divider("Logs", y)
     panels.append(r)
