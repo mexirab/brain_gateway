@@ -1,0 +1,74 @@
+# Off-box dead-man's switch for Jupiter — runs on SATURN, not Jupiter.
+#
+# Receives the Watchdog heartbeat from Jupiter's Alertmanager
+# and pages via Pushover when it stops (Jupiter frozen, powered off, Docker
+# dead, or its monitoring stack down). Script + docs: monitoring/deadman/.
+#
+# Install (step by step, with explanations): monitoring/deadman/README.md.
+#   sudo install -D -m 0644 jupiter_deadman.py /opt/jupiter-deadman/jupiter_deadman.py
+#   sudo install -m 0600 jupiter-deadman.env.example /etc/jupiter-deadman.env   # then edit it
+#   sudo install -m 0644 jupiter-deadman.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now jupiter-deadman
+#
+# Plain systemd + the system python3 (stdlib only): deliberately NOT a Docker
+# container, so a dockerd failure on Saturn can't take the switch down the
+# way dockerd took Jupiter's monitoring down on 2026-10-26.
+
+[Unit]
+Description=Off-box dead-man's switch for Jupiter (pages when Jupiter's monitoring goes silent)
+Documentation=https://github.com/mexirab/brain_gateway/blob/main/monitoring/deadman/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# -I: isolated mode (ignores PYTHON* env vars and the user site directory).
+ExecStart=/usr/bin/python3 -I /opt/jupiter-deadman/jupiter_deadman.py serve
+# Read by systemd as root before privileges drop, so the file stays 0600 root.
+EnvironmentFile=/etc/jupiter-deadman.env
+Restart=always
+RestartSec=10
+# Exit 2 = config error (bad /etc/jupiter-deadman.env): retrying every 10 s
+# can't fix it, so stop and let DeadmanSwitchBroken (on Jupiter) say so.
+RestartPreventExitStatus=2
+
+# --- Sandbox -----------------------------------------------------------------
+# Throwaway unprivileged user. Its only writable place is the state directory
+# (/var/lib/jupiter-deadman, passed in as $STATE_DIRECTORY), which keeps the
+# last-heartbeat time so a restart mid-outage doesn't reset the clock.
+DynamicUser=yes
+StateDirectory=jupiter-deadman
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateUsers=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# AF_UNIX for the glibc resolver plugins (api.pushover.net lookups).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+# ~25 MiB in normal use; headroom for a few concurrent requests at the
+# stdlib parser's header limits.
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

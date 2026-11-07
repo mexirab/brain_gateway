@@ -1,5 +1,6 @@
 """Tests for scripts/generate-configs.sh: the self-investigator webhook block,
-the llama-primary scrape auth, and render failures.
+the llama-primary scrape auth, render failures, and the off-box dead-man's
+switch blocks (see the section near the end).
 
 The alertmanager render keeps the BEGIN/END self-investigator blocks (and
 writes the token file the receiver reads) only when SELF_AUDIT_WEBHOOK_TOKEN
@@ -50,6 +51,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 TOKEN = "t" * 32
+DEADMAN_TOKEN = "deadman-" + "d" * 24
 
 
 @pytest.fixture
@@ -297,7 +299,7 @@ def test_blackbox_probes_llama_health_not_models(project, keyed):
 
 def test_xtrace_never_echoes_the_keys(project):
     """`bash -x generate-configs.sh` (debugging in the public CI log) must not
-    print MODEL_API_KEY or the webhook token."""
+    print MODEL_API_KEY or the webhook tokens."""
     r = _run(
         project,
         {
@@ -306,6 +308,7 @@ def test_xtrace_never_echoes_the_keys(project):
             "MODEL_API_KEY": LLAMA_KEY,
             "SELF_AUDIT_WEBHOOK_TOKEN": TOKEN,
             "SELF_AUDIT_INVESTIGATE": "true",
+            "DEADMAN_WEBHOOK_TOKEN": DEADMAN_TOKEN,
         },
         bash_args=("-x",),
     )
@@ -313,6 +316,9 @@ def test_xtrace_never_echoes_the_keys(project):
     out = r.stdout + r.stderr
     assert LLAMA_KEY not in out
     assert TOKEN not in out
+    assert DEADMAN_TOKEN not in out
+    root, _ = project
+    assert (root / "monitoring" / "alertmanager" / "deadman_webhook_token").read_text() == DEADMAN_TOKEN
     # Files still written, and xtrace was switched back on after each write.
     _, key_file = _prom(project)
     assert key_file.read_text() == LLAMA_KEY
@@ -376,3 +382,136 @@ def test_envsubst_failure_leaves_live_alertmanager_untouched(project, tmp_path):
     assert list(tmpdir.iterdir()) == []
     rendered, _ = _prom(project)
     assert "job_name: 'llama-primary'" in rendered  # the earlier render went through
+
+
+# -- Off-box dead-man's switch (monitoring/deadman/) --------------------------
+# The Watchdog route + "deadman" receiver (alertmanager) and the
+# jupiter-deadman scrape job (prometheus) render only with a
+# DEADMAN_WEBHOOK_TOKEN Saturn accepts (>= 24 chars). Otherwise Alertmanager
+# would post heartbeats that 401 every minute and Prometheus would scrape a
+# switch that isn't installed (DeadmanSwitchBroken).
+
+
+def _deadman_token_file(project) -> Path:
+    root, _ = project
+    return root / "monitoring" / "alertmanager" / "deadman_webhook_token"
+
+
+def test_deadman_token_renders_route_receiver_and_scrape(project):
+    r = _run(project, {**_PUSHOVER, "DEADMAN_WEBHOOK_TOKEN": TOKEN})
+    assert r.returncode == 0, r.stdout + r.stderr
+    rendered, _ = _am(project)
+    assert 'alertname="Watchdog"' in rendered and 'receiver: "deadman"' in rendered
+    assert 'url: "http://10.0.0.58:9466/heartbeat"' in rendered  # NODE_SATURN_IP default
+    assert "credentials_file: /etc/alertmanager/deadman_webhook_token" in rendered
+    assert TOKEN not in rendered
+    token_file = _deadman_token_file(project)
+    assert token_file.read_text() == TOKEN
+    assert oct(token_file.stat().st_mode & 0o777) == "0o644"
+    prom = _prom(project)[0]
+    assert "job_name: 'jupiter-deadman'" in prom and "targets: ['10.0.0.58:9466']" in prom
+    # Watchdog must be routed before anything that could page on it.
+    assert rendered.index('alertname="Watchdog"') < rendered.index('receiver: "pushover"')
+
+
+def test_deadman_host_and_port_override(project):
+    r = _run(
+        project, {**_PUSHOVER, "DEADMAN_WEBHOOK_TOKEN": TOKEN, "DEADMAN_HOST": "192.0.2.7", "DEADMAN_PORT": "9999"}
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'url: "http://192.0.2.7:9999/heartbeat"' in _am(project)[0]
+    assert "targets: ['192.0.2.7:9999']" in _prom(project)[0]
+
+
+@pytest.mark.parametrize("extra", [{}, {"DEADMAN_WEBHOOK_TOKEN": "d" * 23}])
+def test_deadman_stripped_without_usable_token(project, extra):
+    r = _run(project, {**_PUSHOVER, **extra})
+    assert r.returncode == 0, r.stdout + r.stderr
+    rendered, _ = _am(project)
+    assert 'receiver: "deadman"' not in rendered and "/heartbeat" not in rendered
+    assert 'alertname="Watchdog"' not in rendered  # falls through to "null"
+    assert not _deadman_token_file(project).exists()
+    assert "jupiter-deadman" not in _prom(project)[0]
+    # The rest of both configs survives the range delete.
+    assert 'name: "pushover"' in rendered and 'name: "pushover-quiet"' in rendered
+    assert "job_name: 'orchestrator'" in _prom(project)[0]
+    assert "job_name: 'netdata'" in _prom(project)[0]  # a job AFTER the block survives too
+    if extra:
+        assert "DEADMAN_WEBHOOK_TOKEN is shorter than 24 chars" in r.stdout
+
+
+def test_deadman_and_self_investigator_together(project):
+    r = _run(
+        project,
+        {
+            **_PUSHOVER,
+            "DEADMAN_WEBHOOK_TOKEN": TOKEN,
+            "SELF_AUDIT_WEBHOOK_TOKEN": "s" * 30,
+            "SELF_AUDIT_INVESTIGATE": "true",
+        },
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    rendered, sa_token = _am(project)
+    assert 'receiver: "deadman"' in rendered and 'receiver: "self-investigator"' in rendered
+    assert sa_token.read_text() == "s" * 30 and _deadman_token_file(project).read_text() == TOKEN
+
+
+def test_deadman_scrape_follows_token_even_without_pushover(project):
+    """No Pushover keys skips the alertmanager render, but prometheus still renders."""
+    r = _run(project, {"DEADMAN_WEBHOOK_TOKEN": TOKEN})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "jupiter-deadman" in _prom(project)[0]
+    r = _run(project, {})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "jupiter-deadman" not in _prom(project)[0]
+
+
+def test_deadman_token_file_cleared_when_switched_off(project):
+    _run(project, {**_PUSHOVER, "DEADMAN_WEBHOOK_TOKEN": TOKEN})
+    token_file = _deadman_token_file(project)
+    inode = token_file.stat().st_ino
+    r = _run(project, _PUSHOVER)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert token_file.read_text() == "" and token_file.stat().st_ino == inode
+
+
+@pytest.mark.parametrize("sub", ["prometheus", "alertmanager"])
+def test_begin_end_markers_pair_up_in_templates(sub):
+    """Guard for the real templates: every block strip_block may remove is closed."""
+    import re
+
+    text = (_MON / sub / f"{sub}.yml.template").read_text()
+    for kind in ("deadman", "self-investigator", "llama-auth"):
+        begins = len(re.findall(rf"^\s*# BEGIN {kind}( |$)", text, re.M))
+        ends = len(re.findall(rf"^\s*# END {kind}( |$)", text, re.M))
+        assert begins == ends, (sub, kind, begins, ends)
+
+
+def test_unpaired_marker_fails_the_render(project):
+    root, _ = project
+    tmpl = root / "monitoring" / "prometheus" / "prometheus.yml.template"
+    tmpl.write_text(tmpl.read_text().replace("# END deadman", "# (end marker lost)"))
+    r = _run(project, _PUSHOVER)
+    assert r.returncode != 0
+    assert "must pair up" in r.stdout
+    assert not (root / "monitoring" / "prometheus" / "prometheus.yml").exists()
+
+
+def test_failed_strip_keeps_the_live_render_and_cleans_temp_files(project, tmp_path):
+    """A lost marker in the alertmanager template fails the run after the
+    deadman blocks were already stripped into temp files (prometheus and
+    alertmanager): the live alertmanager.yml keeps its bytes and inode, and
+    the EXIT trap removes every temp template on the failure path too."""
+    root, _ = project
+    assert _run(project, _PUSHOVER).returncode == 0
+    out = root / "monitoring" / "alertmanager" / "alertmanager.yml"
+    before, inode = out.read_text(), out.stat().st_ino
+    tmpl = root / "monitoring" / "alertmanager" / "alertmanager.yml.template"
+    tmpl.write_text(tmpl.read_text().replace("# END self-investigator", "# (end marker lost)", 1))
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    r = _run(project, _PUSHOVER, extra_env={"TMPDIR": str(tmpdir)})
+    assert r.returncode != 0
+    assert "'# BEGIN self-investigator' and 1 '# END self-investigator' markers — they must pair up" in r.stdout
+    assert out.read_text() == before and out.stat().st_ino == inode
+    assert list(tmpdir.iterdir()) == []

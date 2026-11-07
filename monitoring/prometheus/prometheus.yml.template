@@ -278,6 +278,34 @@ scrape_configs:
           node: 'jupiter'
 
   # ============================================
+  # ALERTMANAGER
+  # ============================================
+  # Same compose network as Prometheus. alertmanager_notifications_failed_total
+  # {integration="pushover"} feeds the Watchdog (alert-rules.yml): when
+  # Jupiter's own pages keep failing, the heartbeat to Saturn stops.
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          node: 'jupiter'
+
+  # BEGIN deadman — generate-configs.sh strips this block unless .env has
+  # DEADMAN_WEBHOOK_TOKEN (>= 24 chars), the same gate as the Watchdog route.
+  # ============================================
+  # OFF-BOX DEAD-MAN'S SWITCH (Saturn)
+  # ============================================
+  # Watches the watcher: the switch on Saturn (monitoring/deadman/) pages when
+  # this stack goes silent, so this scrape is how a dead or misconfigured
+  # switch surfaces here (DeadmanSwitchBroken). No secrets on /metrics.
+  - job_name: 'jupiter-deadman'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['${DEADMAN_HOST}:${DEADMAN_PORT}']
+        labels:
+          node: 'saturn'
+  # END deadman
+
+  # ============================================
   # UPS METRICS (NUT exporter on Helios)
   # ============================================
   # The UPS is USB-attached to Helios; the NUT systemd service reads it
