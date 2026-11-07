@@ -5,6 +5,8 @@ All metric definitions in one place. Import individual metrics where needed.
 Uses bgw_ prefix to namespace all metrics.
 """
 
+from collections.abc import Iterable
+
 from prometheus_client import Counter, Gauge, Histogram, Info
 
 # -- Request-level metrics ---------------------------------------------------
@@ -1396,12 +1398,51 @@ SELFCARE_LOGGED = Counter(
 BUDGET_SYNC_TOTAL = Counter(
     "bgw_budget_sync_total",
     "Actual Budget sync attempts by outcome.",
-    ["result"],  # ok | error | busy
+    # ok | error | busy | refused (snapshot would have mass-deleted synced
+    # rows, so nothing was applied — see bgw_budget_sync_degraded_total)
+    ["result"],
 )
 # Pre-create the series so increase()/unless in BudgetSyncFailing see 0, not
 # absent, before the first attempt of each label.
-for _r in ("ok", "error", "busy"):
+for _r in ("ok", "error", "busy", "refused"):
     BUDGET_SYNC_TOTAL.labels(result=_r)
+
+# A sync that "worked" but with bad data. One increment per affected sync per
+# reason. month_stats_failed: this month's budget figures could not be
+# evaluated (category figures 0, fun-money balance not updated);
+# fun_money_missing: ACTUAL_FUN_MONEY_CATEGORY matched no visible spending
+# category with figures this month; mass_delete: the snapshot would have
+# removed too many synced rows from the window, so it was refused
+# (bgw_budget_sync_total{result="refused"}). Alert: BudgetSyncDegraded (on the state gauge below).
+BUDGET_SYNC_DEGRADED_REASONS = ("month_stats_failed", "fun_money_missing", "mass_delete")
+BUDGET_SYNC_DEGRADED = Counter(
+    "bgw_budget_sync_degraded_total",
+    "Actual Budget syncs that applied incomplete data or were refused, by reason.",
+    ["reason"],
+)
+# The alertable state: 1 while the last applied or refused sync was degraded
+# for that reason, 0 once a sync is clean. Unchanged by fetch errors and busy
+# skips (no snapshot to judge). Unlike an increase() over the counter it works
+# at any ACTUAL_SYNC_INTERVAL and resolves on the first clean sync.
+BUDGET_SYNC_DEGRADED_STATE = Gauge(
+    "bgw_budget_sync_degraded_state",
+    "1 while the last applied or refused Actual Budget sync was degraded for this reason, else 0.",
+    ["reason"],
+)
+for _r in BUDGET_SYNC_DEGRADED_REASONS:
+    BUDGET_SYNC_DEGRADED.labels(reason=_r)
+    BUDGET_SYNC_DEGRADED_STATE.labels(reason=_r).set(0)
+
+
+def record_budget_sync_degraded(reasons: Iterable[str]) -> None:
+    """Record one applied or refused sync: count each degraded reason once and
+    set the state gauge for every reason. Unknown reasons are ignored (bounded labels)."""
+    current = set(reasons)
+    for reason in BUDGET_SYNC_DEGRADED_REASONS:
+        if reason in current:
+            BUDGET_SYNC_DEGRADED.labels(reason=reason).inc()
+        BUDGET_SYNC_DEGRADED_STATE.labels(reason=reason).set(1 if reason in current else 0)
+
 
 BUDGET_SYNC_LAST_SUCCESS = Gauge(
     "bgw_budget_sync_last_success_timestamp_seconds",

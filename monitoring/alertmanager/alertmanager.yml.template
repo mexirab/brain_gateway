@@ -93,6 +93,12 @@ route:
         - alertname="HeliosUnreachablePlugBlind"
       receiver: "pushover-quiet"
       repeat_interval: 24h
+    # Every BudgetSyncDegraded reason needs an owner fix that can take days
+    # (accept a deletion, an actualpy bump, rename a category) — once a day.
+    - matchers:
+        - alertname="BudgetSyncDegraded"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
     # A stale work-calendar sync needs the owner to fix the iPhone Shortcut —
     # once a day is enough, like the dead-speaker notice.
     - matchers:

@@ -11005,7 +11005,7 @@
           "values": false
         }
       },
-      "description": "Seconds since the last successful Actual Budget sync (every ACTUAL_SYNC_INTERVAL, default 30 min). 'No data' means no success since the orchestrator last started, or the sync is not configured \u2014 check Budget Sync Outcomes and GET /api/finance/sync/status (last_error).",
+      "description": "Seconds since the last successful Actual Budget sync (every ACTUAL_SYNC_INTERVAL, default 30 min). 'No data' means no success since the orchestrator last started, or the sync is not configured \u2014 check Budget Sync Outcomes and GET /api/finance/sync/status (last_error). Refused syncs (mass-delete guard) also make it climb.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -11091,7 +11091,7 @@
           "sort": "desc"
         }
       },
-      "description": "ok | error | busy per hour. 'busy' = a manual sync or the settings page overlapped a running one (harmless); sustained 'error' with no 'ok' triggers BudgetSyncFailing.",
+      "description": "ok | error | busy | refused per hour. 'busy' = a manual sync or the settings page overlapped a running one (harmless); sustained 'error' with no 'ok' triggers BudgetSyncFailing. 'refused' = the snapshot would have mass-deleted synced rows, so nothing was applied (see Degraded).",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -11099,6 +11099,92 @@
         "y": 313
       },
       "id": 147
+    },
+    {
+      "type": "timeseries",
+      "title": "Budget Sync Degraded (/h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (increase(bgw_budget_sync_degraded_total[1h]))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Syncs that counted as ok but carried bad data, or were refused. month_stats_failed = this month's budget figures could not be evaluated (category figures 0, health bar not refreshed); fun_money_missing = ACTUAL_FUN_MONEY_CATEGORY matched nothing; mass_delete = refused, the Quest Board is frozen at the last good sync. Persisting 2h+ triggers BudgetSyncDegraded (on the bgw_budget_sync_degraded_state gauge).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 313
+      },
+      "id": 148
     },
     {
       "type": "logs",
@@ -11135,11 +11221,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 313
+        "w": 24,
+        "x": 0,
+        "y": 321
       },
-      "id": 148
+      "id": 149
     },
     {
       "type": "row",
@@ -11150,9 +11236,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 321
+        "y": 329
       },
-      "id": 149
+      "id": 150
     },
     {
       "type": "timeseries",
@@ -11236,9 +11322,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 322
+        "y": 330
       },
-      "id": 150
+      "id": 151
     },
     {
       "type": "timeseries",
@@ -11346,9 +11432,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 322
+        "y": 330
       },
-      "id": 151
+      "id": 152
     },
     {
       "type": "timeseries",
@@ -11444,9 +11530,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 322
+        "y": 330
       },
-      "id": 152
+      "id": 153
     },
     {
       "type": "logs",
@@ -11485,9 +11571,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 322
+        "y": 330
       },
-      "id": 153
+      "id": 154
     },
     {
       "type": "timeseries",
@@ -11571,9 +11657,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 322
+        "y": 330
       },
-      "id": 154
+      "id": 155
     },
     {
       "type": "timeseries",
@@ -11657,9 +11743,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 322
+        "y": 330
       },
-      "id": 155
+      "id": 156
     },
     {
       "type": "timeseries",
@@ -11755,9 +11841,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 330
+        "y": 338
       },
-      "id": 156
+      "id": 157
     },
     {
       "type": "timeseries",
@@ -11865,9 +11951,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 330
+        "y": 338
       },
-      "id": 157
+      "id": 158
     },
     {
       "type": "stat",
@@ -11937,9 +12023,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 330
+        "y": 338
       },
-      "id": 158
+      "id": 159
     },
     {
       "type": "row",
@@ -11950,9 +12036,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 338
+        "y": 346
       },
-      "id": 159
+      "id": 160
     },
     {
       "type": "stat",
@@ -12013,9 +12099,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 339
+        "y": 347
       },
-      "id": 160
+      "id": 161
     },
     {
       "type": "timeseries",
@@ -12099,9 +12185,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 339
+        "y": 347
       },
-      "id": 161
+      "id": 162
     },
     {
       "type": "stat",
@@ -12162,9 +12248,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 339
+        "y": 347
       },
-      "id": 162
+      "id": 163
     },
     {
       "type": "timeseries",
@@ -12252,9 +12338,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 347
+        "y": 355
       },
-      "id": 163
+      "id": 164
     },
     {
       "type": "stat",
@@ -12320,9 +12406,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 347
+        "y": 355
       },
-      "id": 164
+      "id": 165
     },
     {
       "type": "stat",
@@ -12388,9 +12474,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 347
+        "y": 355
       },
-      "id": 165
+      "id": 166
     },
     {
       "type": "stat",
@@ -12456,9 +12542,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 355
+        "y": 363
       },
-      "id": 166
+      "id": 167
     },
     {
       "type": "timeseries",
@@ -12542,9 +12628,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 355
+        "y": 363
       },
-      "id": 167
+      "id": 168
     },
     {
       "type": "timeseries",
@@ -12652,9 +12738,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 355
+        "y": 363
       },
-      "id": 168
+      "id": 169
     },
     {
       "type": "row",
@@ -12665,9 +12751,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 363
+        "y": 371
       },
-      "id": 169
+      "id": 170
     },
     {
       "type": "logs",
@@ -12706,9 +12792,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 364
+        "y": 372
       },
-      "id": 170
+      "id": 171
     },
     {
       "type": "logs",
@@ -12747,9 +12833,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 364
+        "y": 372
       },
-      "id": 171
+      "id": 172
     }
   ]
 }
