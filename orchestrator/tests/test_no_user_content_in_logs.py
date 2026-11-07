@@ -74,6 +74,11 @@ SENSITIVE = {
     "caption",
     "filename",
     "data",
+    # calculate: the program carries the user's figures and model-chosen names
+    # (which can be medication names); med_tokens are words of med names
+    "program",
+    "expression",
+    "med_tokens",
 }
 SENSITIVE_SUFFIXES = ("_text", "_query", "_title", "_message", "_content", "_desc")
 

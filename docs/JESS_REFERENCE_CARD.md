@@ -62,6 +62,7 @@
 | **"What's on my calendar?"** | Today's events read aloud |
 | **"Add pickleball Thursday at 7pm"** | Adds it to your personal calendar |
 | **"Any new emails?"** | Read-only check of Primary inbox |
+| **"When do I leave to be there at 6:15? It's 25 min away"** | Exact time math, no guessing (also tips, splits, "days until") |
 
 ## Routines
 
