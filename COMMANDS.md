@@ -188,6 +188,14 @@ docker compose up -d --force-recreate orchestrator
 curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status | jq .
 curl -s -X POST -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync | jq .
 
+# Accept a REFUSED sync (last_error starts "refused:" — mass-delete guard) once the deletion
+# is confirmed real in Actual. 409 unless the last attempt was a refusal. Not /sync/reset
+# (that drops months before the window + every discretionary override).
+curl -s -X POST -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/accept-deletions | jq .
+
+# After an actualpy bump: the SQLite confinement test (throwaway container, see Common Commands in CLAUDE.md)
+#   ... python -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests/test_actual_sqlite_confinement.py -q
+
 # Sync logs
 docker logs brain-orchestrator 2>&1 | grep '\[ACTUAL\]' | tail -20
 ```

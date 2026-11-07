@@ -96,6 +96,42 @@ Every alert is evaluated and delivered on Jupiter, so the 2026-10-26 dockerd cra
 
 ---
 
+## [Unreleased] — Actual Budget sync hardening: confined server SQL, degraded-sync visibility (2026-11-07)
+
+Branch `harden/actual-sync-confinement`. actualpy 0.22.4's `Actual.download_budget` runs migration files downloaded from the Actual server with `sqlite3.executescript()`, so a compromised actual-server (or anything answering as `actual-budget` on `gateway-net`) could `ATTACH DATABASE` orchestrator state such as `/app/data/brain_state.db`, or `VACUUM INTO` any path the orchestrator can write. Separately, several bad-data syncs counted as plain `ok`, and a short server response could wipe the Quest Board mirror and every per-row discretionary override.
+
+### Upgrade action
+
+- None required. On every actualpy bump (bump it together with the actual-server image; the 26.11.0 server bump kept actualpy 0.22.4): re-read `Actual.run_migrations` in the new version and run `tests/test_actual_sqlite_confinement.py`; never bypass the hook.
+
+### Security
+
+- `actual_client._confine_actualpy()` rebinds `sqlite3` / `create_engine` in actualpy's module globals so every connection it opens (migration + SQLAlchemy engine) gets `SQLITE_LIMIT_ATTACHED` = 0 (blocks `ATTACH`, `VACUUM INTO`, plain `VACUUM`), an authorizer (migration connection: no PRAGMA; engine: no process-global PRAGMA — `temp_store_directory`, `data_store_directory`, `hard_heap_limit`, `soft_heap_limit`) and a 120 s progress-handler deadline (`SNAPSHOT_TIMEOUT_SECONDS`). Before every sync a bytecode check confirms actualpy still opens connections that way; otherwise the sync fails closed with `ActualSandboxError` before any network call (counted `result="error"` → `BudgetSyncFailing`).
+- Known consequence: a budget that never ran Actual's 2021 `remove_cache.js` migration (ends in `VACUUM`) fails closed until opened once in the Actual web app.
+
+### Behavior
+
+- Mass-delete guard: `apply_snapshot` refuses a snapshot whole (writes nothing) when it would delete ≥ 20 synced rows AND > 50 % of the window's synced rows. Status shows the refusal as `last_error` (`refused: …`, not connected), `POST /api/finance/sync` returns 502 with that text, the `query_budget` history refresh is skipped.
+- New route `POST /api/finance/sync/accept-deletions` (bearer-gated; 409 unless the last attempt was a refusal, 400 unconfigured): fetches again and applies once with the guard off, keeping months before the window and the overrides of surviving rows. `/sync/reset` is not the accept path (deletes every synced row incl. months before the window, which are never re-imported, plus all overrides).
+- A month-stats evaluation failure (category figures 0, health bar not refreshed) is no longer silent: recorded as `month_stats_failed`; a configured fun-money category that matches nothing as `fun_money_missing`. The summary log no longer claims the fun-money category was "not found" in that case. `last_result` gains a `degraded` list.
+
+### Monitoring
+
+- New counter `bgw_budget_sync_degraded_total{reason}` and 0/1 gauge `bgw_budget_sync_degraded_state{reason}` (reasons `month_stats_failed`, `fun_money_missing`, `mass_delete`); `bgw_budget_sync_total` gains `result="refused"`.
+- New quiet alert `BudgetSyncDegraded` (`max by (reason) (bgw_budget_sync_degraded_state) > 0`, `for: 2h`, per-reason summary) → `pushover-quiet`, `repeat_interval: 24h`. `BudgetSyncFailing` description covers the sandbox error.
+- Grafana "Budget Sync (Actual)" row: new "Budget Sync Degraded (/h)" panel; the logs panel moved to its own full-width row.
+
+### Tests
+
+- New `orchestrator/tests/test_actual_sqlite_confinement.py` (23 tests): malicious SQL and `.js` migrations driven through the real actualpy `Actual` download path with only the network stubbed. `orchestrator/tests/test_actual_budget_sync.py` extended (mass-delete guard, accept-deletions, degraded reasons + state gauge, sandbox-error accounting; 118 tests).
+- Verified live before merge: one read-only `fetch_snapshot()` from a throwaway orchestrator-image container against the live Actual server — hook installed, month figures evaluated, fun-money category matched, no degradation.
+
+### Docs
+
+- `CLAUDE.md`, `TECHNICAL_REFERENCE.md` (Finance routes, confinement, guard, metrics), `docs/FRONTEND.md`, `docs/ENV_VARS.md`, `monitoring/README.md`, `COMMANDS.md`.
+
+---
+
 ## [Unreleased] — Actual Budget server 26.9.0 → 26.11.0 (2026-11-06)
 
 Branch `chore/actual-server-26.11.0`. Image pin bump only; no orchestrator code change.

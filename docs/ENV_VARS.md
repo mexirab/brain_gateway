@@ -359,9 +359,9 @@ Read-only sync of the Financial Quest Board from a self-hosted [Actual Budget](h
 | `ACTUAL_BUDGET_FILE` | (empty) | Budget name as shown in Actual's file picker, or its sync id. Required when the URL is set. |
 | `ACTUAL_ENCRYPTION_PASSWORD` | (empty) | Only for end-to-end-encrypted budget files. |
 | `ACTUAL_SYNC_INTERVAL` | `30` | Minutes between `budget_sync` runs (first run ~30 s after startup). Clamped to ≥5. |
-| `ACTUAL_SYNC_MONTHS` | `3` | Months mirrored into `finance.db`, including the current one. Clamped to 1–24. Inside the window Actual is the source of truth (rows deleted upstream are deleted locally; legacy `source='ynab'` rows are replaced). |
+| `ACTUAL_SYNC_MONTHS` | `3` | Months mirrored into `finance.db`, including the current one. Clamped to 1–24. Inside the window Actual is the source of truth (rows deleted upstream are deleted locally; legacy `source='ynab'` rows are replaced) — except that a snapshot deleting ≥ 20 rows AND > 50 % of the window's synced rows is refused whole until accepted (`TECHNICAL_REFERENCE.md` → Finance → Mass-delete guard). |
 | `ACTUAL_HISTORY_MONTHS` | `24` | Months (incl. the current one) of Actual history fetched each sync for `query_budget`'s reserved dataset `actual` in `brain_state.db` (only when `JESS_ADVANCED`). Clamped to 1–120; never shorter than `ACTUAL_SYNC_MONTHS`. Does not change `finance.db`. |
-| `ACTUAL_FUN_MONEY_CATEGORY` | `Fun Money` | Category whose balance drives the Quest Board health bar. Case-insensitive substring match, spending categories only. |
+| `ACTUAL_FUN_MONEY_CATEGORY` | `Fun Money` | Category whose balance drives the Quest Board health bar. Case-insensitive substring match, visible spending categories only. No match (or no budget figures for it this month) = degraded sync `fun_money_missing` → quiet `BudgetSyncDegraded` after 2h. Empty (after trimming) opts out of the health-bar sync and of that degradation (`docker-compose.yml` uses `${ACTUAL_FUN_MONEY_CATEGORY-Fun Money}` — no colon — so an empty `.env` value stays empty; only an unset one gets the default). |
 
 ## Training corpus drain
 

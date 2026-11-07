@@ -38,6 +38,8 @@ services:
     # read-only reader never needs. A sync failing with ActualError after a
     # future bump means actualpy is behind the server's schema. Repeat the dry
     # run before the next bump: docs/BACKUP.md -> Actual Budget -> Upgrade.
+    # Server-provided migration SQL runs confined (actual_client._confine_actualpy):
+    # on every actualpy bump run orchestrator/tests/test_actual_sqlite_confinement.py.
     image: actualbudget/actual-server:26.11.0@sha256:06cf186569cf58d93e12659ff1a517b65b5b0ebee7050a3991d4bd8a1d398da6
     user: "1000:1000"
     read_only: true

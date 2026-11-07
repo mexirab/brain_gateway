@@ -402,6 +402,9 @@ def _install_fake_actual(monkeypatch, cats, txns, stats):
     monkeypatch.setitem(sys.modules, "actual.budgets", budgets)
     monkeypatch.setitem(sys.modules, "actual.database", database)
     monkeypatch.setitem(sys.modules, "sqlmodel", sqlmodel)
+    # FakeActual has no run_migrations / create_engine to confine; the real
+    # hook is pinned against real actualpy in test_actual_sqlite_confinement.py.
+    monkeypatch.setattr(actual_client, "_confine_actualpy", lambda cls: None)
     monkeypatch.setattr(actual_client.settings, "actual_server_url", "http://fake:5006")
     monkeypatch.setattr(actual_client.settings, "actual_password", "p")
     monkeypatch.setattr(actual_client.settings, "actual_budget_file", "Fake Budget")
@@ -1218,3 +1221,413 @@ async def test_query_budget_handler_no_as_of_for_csv_and_no_note_on_error(fdb):
     assert "as_of" not in out and "note" in out
     err = json.loads(await tool_handlers._reg_query_budget({"question_type": "total"}))
     assert "error" in err and "note" not in err and "as_of" not in err
+
+
+# --------------------------------------------------------------------------- degraded syncs + mass-delete guard
+
+
+def _counter(name, **labels):
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def _seed_rows(fdb, n):
+    finance_manager.apply_snapshot(_snap([_tx(f"r{i}", "-1") for i in range(n)]))
+    assert len(_q(fdb, "SELECT 1 FROM transactions WHERE source='actual'")) == n
+
+
+def test_mass_delete_is_refused_and_nothing_changes(fdb):
+    _map(fdb, Dining_Out=True)
+    _seed_rows(fdb, 30)
+    conn = sqlite3.connect(fdb)
+    with conn:
+        conn.execute("UPDATE transactions SET discretionary_override = 0 WHERE external_id = 'actual:r7'")
+    conn.close()
+    before = _q(fdb, "SELECT external_id, amount, discretionary_override FROM transactions ORDER BY external_id")
+    with pytest.raises(finance_manager.SnapshotRefused) as exc:
+        # A short result (e.g. a partial server response): only 5 of 30 rows,
+        # plus one new row and an edit — none of it may be applied.
+        finance_manager.apply_snapshot(_snap([_tx(f"r{i}", "-2") for i in range(5)] + [_tx("new", "-3")]))
+    assert exc.value.reason == "mass_delete"
+    assert "25 of 30" in str(exc.value)
+    after = _q(fdb, "SELECT external_id, amount, discretionary_override FROM transactions ORDER BY external_id")
+    assert [tuple(r) for r in after] == [tuple(r) for r in before]
+
+
+@pytest.mark.parametrize(
+    "seeded,kept,refused",
+    [
+        (30, 11, False),  # 19 removed: below the 20-row floor
+        (40, 20, False),  # 20 removed = exactly half: not more than half
+        (41, 20, True),  # 21 of 41 removed: > half and >= 20
+        (10, 0, False),  # tiny window emptied: below the floor (old behaviour)
+    ],
+)
+def test_mass_delete_thresholds(fdb, seeded, kept, refused):
+    _seed_rows(fdb, seeded)
+    snap = _snap([_tx(f"r{i}", "-1") for i in range(kept)])
+    if refused:
+        with pytest.raises(finance_manager.SnapshotRefused):
+            finance_manager.apply_snapshot(snap)
+        assert len(_q(fdb, "SELECT 1 FROM transactions")) == seeded
+    else:
+        assert finance_manager.apply_snapshot(snap)["deleted"] == seeded - kept
+
+
+@pytest.mark.asyncio
+async def test_reset_accepts_a_refused_mass_delete(fdb):
+    _seed_rows(fdb, 30)
+    short = _snap([_tx("r0", "-1")])
+    with pytest.raises(finance_manager.SnapshotRefused):
+        finance_manager.apply_snapshot(short)
+    await finance_manager.reset_sync()
+    assert finance_manager.apply_snapshot(short)["inserted"] == 1
+
+
+def test_rows_leaving_the_window_at_month_rollover_are_not_counted_as_deletes(fdb):
+    """Rows before window_start are not part of `existing`, so a window that
+    moves forward never looks like a mass delete."""
+    old = _month(-3).replace(day=10)
+    conn = sqlite3.connect(fdb)
+    with conn:
+        for i in range(30):
+            conn.execute(
+                "INSERT INTO transactions (external_id, date, amount, name, is_discretionary, budget_period, source)"
+                " VALUES (?, ?, 1, 'x', 0, ?, 'actual')",
+                (f"actual:old{i}", old.isoformat(), old.strftime("%Y-%m")),
+            )
+    conn.close()
+    assert finance_manager.apply_snapshot(_snap([]))["deleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_refusal_is_counted_recorded_and_skips_history(fdb, monkeypatch):
+    from orchestrator.config import settings
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(settings, "jess_advanced", True)
+    _seed_rows(fdb, 30)
+    assert finance_manager._status_sync()["connected"] is True
+
+    async def short(today=None):
+        return _snap([])
+
+    history_calls = []
+    from orchestrator import budget_manager
+
+    monkeypatch.setattr(budget_manager, "refresh_actual_dataset", lambda s: history_calls.append(s))
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", short)
+    refused0 = _counter("bgw_budget_sync_total", result="refused")
+    ok0 = _counter("bgw_budget_sync_total", result="ok")
+    deg0 = _counter("bgw_budget_sync_degraded_total", reason="mass_delete")
+
+    res = await finance_manager.sync_budget_transactions()
+    assert res["refused"] is True and res["synced"] == 0 and res["error"].startswith("refused:")
+    assert _counter("bgw_budget_sync_total", result="refused") == refused0 + 1
+    assert _counter("bgw_budget_sync_total", result="ok") == ok0
+    assert _counter("bgw_budget_sync_degraded_total", reason="mass_delete") == deg0 + 1
+    assert history_calls == []  # the suspect snapshot never reaches query_budget's dataset
+    st = finance_manager._status_sync()
+    assert st["connected"] is False and st["last_error"].startswith("refused:")
+    assert len(_q(fdb, "SELECT 1 FROM transactions")) == 30
+    # The route reports it as an upstream problem, not a success.
+    resp = finance_manager._sync_response(res)
+    assert resp.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_degraded_sync_is_ok_but_counted_and_persisted(fdb, monkeypatch, caplog):
+    _configure(monkeypatch)
+    snap = _snap([_tx("a", "-4")], fun_balance=None)
+    snap.month_stats_error = "TypeError"
+    snap.degraded = ["month_stats_failed"]
+
+    async def ok(today=None):
+        return snap
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    ok0 = _counter("bgw_budget_sync_total", result="ok")
+    deg0 = _counter("bgw_budget_sync_degraded_total", reason="month_stats_failed")
+    fun0 = _counter("bgw_budget_sync_degraded_total", reason="fun_money_missing")
+    with caplog.at_level("INFO", logger="orchestrator.finance_manager"):
+        res = await finance_manager.sync_budget_transactions()
+    assert res["inserted"] == 1 and res["degraded"] == ["month_stats_failed"]
+    assert _counter("bgw_budget_sync_total", result="ok") == ok0 + 1
+    assert _counter("bgw_budget_sync_degraded_total", reason="month_stats_failed") == deg0 + 1
+    assert _counter("bgw_budget_sync_degraded_total", reason="fun_money_missing") == fun0  # one root cause
+    assert finance_manager._status_sync()["last_result"]["degraded"] == ["month_stats_failed"]
+    line = next(r.getMessage() for r in caplog.records if "Synced budget" in r.getMessage())
+    assert "could not be evaluated (TypeError)" in line and "not found" not in line
+
+
+@pytest.mark.asyncio
+async def test_clean_sync_reports_no_degradation(fdb, monkeypatch):
+    _configure(monkeypatch)
+
+    async def ok(today=None):
+        return _snap([_tx("a", "-4")])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", ok)
+    before = {
+        r: _counter("bgw_budget_sync_degraded_total", reason=r)
+        for r in ("month_stats_failed", "fun_money_missing", "mass_delete")
+    }
+    res = await finance_manager.sync_budget_transactions()
+    assert res["degraded"] == []
+    assert {r: _counter("bgw_budget_sync_degraded_total", reason=r) for r in before} == before
+
+
+def _fm_snap(**kw):
+    s = _snap([], fun_balance=None)
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s
+
+
+@pytest.mark.parametrize(
+    "snap_kw,configured,expected",
+    [
+        ({"month_stats_error": "KeyError"}, "Fun Money", "could not be evaluated (KeyError)"),
+        ({}, "Fun Money", "fun-money category 'Fun Money' not found"),
+        ({"fun_money_category": "🎮 Fun Money"}, "Fun Money", "has no budget figures this month"),
+        ({}, "", ""),  # fun money not configured: nothing to report
+        ({"fun_money_balance": Decimal(5), "fun_money_category": "🎮 Fun Money"}, "Fun Money", ""),
+    ],
+)
+def test_fun_money_note(snap_kw, configured, expected):
+    note = finance_manager._fun_money_note(_fm_snap(**snap_kw), configured)
+    assert (expected in note) if expected else note == ""
+
+
+def test_fetch_snapshot_records_month_stats_failure(monkeypatch):
+    import sys
+
+    fun = _FakeCat("c1", "🎮 Fun Money", "Wants")
+    _install_fake_actual(monkeypatch, [fun], [], {})
+
+    def broken(session, day):
+        raise TypeError("unsupported layout")
+
+    monkeypatch.setitem(sys.modules, "actual.budgets", types.SimpleNamespace(get_budget_history=broken))
+    snap = actual_client.fetch_snapshot(dt.date(2026, 10, 2))
+    assert snap.month_stats_error == "TypeError" and snap.degraded == ["month_stats_failed"]
+    assert snap.fun_money_category == "🎮 Fun Money" and snap.fun_money_balance is None
+    assert all(c.budgeted == 0 and c.balance == 0 for c in snap.categories)
+
+
+@pytest.mark.parametrize(
+    "configured,cats,expected",
+    [
+        ("fun money", [("c2", "Dining Out")], ["fun_money_missing"]),  # renamed in Actual
+        ("", [("c2", "Dining Out")], []),  # not configured: not degraded
+        ("fun money", [("c1", "🎮 Fun Money")], []),  # found with figures: clean
+    ],
+)
+def test_fetch_snapshot_fun_money_degradation(monkeypatch, configured, cats, expected):
+    fakes = [_FakeCat(cid, name, "Wants") for cid, name in cats]
+    stats = {cid: {"budgeted": Decimal(1), "spent": Decimal(0), "balance": Decimal(1)} for cid, _ in cats}
+    _install_fake_actual(monkeypatch, fakes, [], stats)
+    monkeypatch.setattr(actual_client.settings, "actual_fun_money_category", configured)
+    snap = actual_client.fetch_snapshot(dt.date(2026, 10, 2))
+    assert snap.degraded == expected and snap.month_stats_error is None
+
+
+def _state(reason):
+    return _counter("bgw_budget_sync_degraded_state", reason=reason)
+
+
+@pytest.mark.asyncio
+async def test_degraded_state_gauge_follows_the_last_judged_sync(fdb, monkeypatch):
+    _configure(monkeypatch)
+    snaps = []
+
+    async def next_snap(today=None):
+        return snaps.pop(0)
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", next_snap)
+    bad = _snap([_tx("a", "-4")], fun_balance=None)
+    bad.degraded = ["fun_money_missing"]
+    snaps.append(bad)
+    await finance_manager.sync_budget_transactions()
+    assert _state("fun_money_missing") == 1 and _state("month_stats_failed") == 0 and _state("mass_delete") == 0
+
+    async def down(today=None):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", down)
+    await finance_manager.sync_budget_transactions()
+    assert _state("fun_money_missing") == 1  # a fetch error judges nothing
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", next_snap)
+    snaps.append(_snap([_tx("a", "-4")]))
+    await finance_manager.sync_budget_transactions()
+    assert _state("fun_money_missing") == 0  # cleared by the first clean sync
+
+
+@pytest.mark.asyncio
+async def test_refusal_sets_mass_delete_state_and_unknown_reasons_are_ignored(fdb, monkeypatch):
+    from orchestrator.metrics import record_budget_sync_degraded
+
+    _configure(monkeypatch)
+    _seed_rows(fdb, 30)
+
+    async def short(today=None):
+        return _snap([])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", short)
+    await finance_manager.sync_budget_transactions()
+    assert _state("mass_delete") == 1
+    record_budget_sync_degraded(["not_a_reason"])  # bounded labels: dropped, others reset
+    assert _counter("bgw_budget_sync_degraded_state", reason="not_a_reason") == 0
+    assert _state("mass_delete") == 0
+
+
+def _route_json(resp):
+    import json as _json
+
+    if isinstance(resp, dict):
+        return 200, resp
+    return resp.status_code, _json.loads(resp.body)
+
+
+@pytest.mark.asyncio
+async def test_accept_deletions_needs_a_refusal_first(fdb, monkeypatch):
+    _configure(monkeypatch)
+    finance_manager.apply_snapshot(_snap([_tx("a", "-1")]))
+    called = []
+
+    async def fetch(today=None):
+        called.append(1)
+        return _snap([])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", fetch)
+    code, body = _route_json(await finance_manager.accept_sync_deletions())
+    assert code == 409 and body["ok"] is False and called == []
+
+
+@pytest.mark.asyncio
+async def test_accept_deletions_applies_once_keeping_old_months_and_surviving_overrides(fdb, monkeypatch):
+    _configure(monkeypatch)
+    _map(fdb, Dining_Out=True)
+    _seed_rows(fdb, 30)
+    old = _month(-5).replace(day=10)  # before the 3-month window
+    conn = sqlite3.connect(fdb)
+    with conn:
+        conn.execute(
+            "INSERT INTO transactions (external_id, date, amount, name, is_discretionary, budget_period, source)"
+            " VALUES ('actual:old', ?, 5, 'x', 0, ?, 'actual')",
+            (old.isoformat(), old.strftime("%Y-%m")),
+        )
+        conn.execute("UPDATE transactions SET discretionary_override = 0 WHERE external_id = 'actual:r1'")
+    conn.close()
+
+    async def short(today=None):
+        return _snap([_tx("r0", "-1"), _tx("r1", "-1")])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", short)
+    res = await finance_manager.sync_budget_transactions()
+    assert res["refused"] is True
+
+    code, body = _route_json(await finance_manager.accept_sync_deletions())
+    assert code == 200 and body["ok"] is True and body["deleted"] == 28
+    rows = {r["external_id"]: r for r in _q(fdb, "SELECT external_id, discretionary_override FROM transactions")}
+    assert set(rows) == {"actual:r0", "actual:r1", "actual:old"}  # older month untouched
+    assert rows["actual:r1"]["discretionary_override"] == 0  # surviving override kept
+    assert finance_manager._status_sync()["connected"] is True
+
+    # One-shot: the guard is back on for the next sync (and the route says no).
+    code, _ = _route_json(await finance_manager.accept_sync_deletions())
+    assert code == 409
+
+
+def test_accept_deletions_route_is_registered():
+    paths = {(r.path, tuple(sorted(r.methods))) for r in finance_manager.router.routes}
+    assert ("/api/finance/sync/accept-deletions", ("POST",)) in paths
+
+
+@pytest.mark.asyncio
+async def test_sandbox_refusal_is_a_counted_error_and_leaves_degraded_state_alone(fdb, monkeypatch):
+    """The real guard, through the real fetch path: an actualpy whose
+    run_migrations no longer uses sqlite3.connect fails the sync before any
+    network call (the configured URL is unreachable — a network attempt would
+    give a different error)."""
+    from actual import Actual
+
+    from orchestrator.metrics import record_budget_sync_degraded
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(Actual, "run_migrations", lambda self, migration_files: None)
+    record_budget_sync_degraded(["fun_money_missing"])  # state left by an earlier sync
+    error0 = _counter("bgw_budget_sync_total", result="error")
+    ok0 = _counter("bgw_budget_sync_total", result="ok")
+    deg0 = {r: _counter("bgw_budget_sync_degraded_total", reason=r) for r in ("fun_money_missing", "mass_delete")}
+    try:
+        res = await finance_manager.sync_budget_transactions()
+        assert res["synced"] == 0 and "refused" not in res
+        assert res["error"].startswith("ActualSandboxError:") and "cannot confine" in res["error"]
+        assert _counter("bgw_budget_sync_total", result="error") == error0 + 1
+        assert _counter("bgw_budget_sync_total", result="ok") == ok0
+        st = finance_manager._status_sync()
+        assert st["connected"] is False and "cannot confine" in st["last_error"]
+        # Not a refusal, so accept-deletions can't be used to push past it.
+        assert not st["last_error"].startswith(finance_manager.REFUSED_PREFIX)
+        # No snapshot was judged: degraded counters and state unchanged.
+        assert {r: _counter("bgw_budget_sync_degraded_total", reason=r) for r in deg0} == deg0
+        assert _state("fun_money_missing") == 1 and _state("mass_delete") == 0
+    finally:
+        record_budget_sync_degraded([])
+
+
+def _finance_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(finance_manager.router)
+    return TestClient(app)
+
+
+def test_accept_deletions_route_is_400_when_unconfigured(fdb, monkeypatch):
+    called = []
+
+    async def fetch(today=None):
+        called.append(1)
+        return _snap([])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", fetch)
+    monkeypatch.setattr(actual_client.settings, "actual_server_url", "")
+    r = _finance_client().post("/api/finance/sync/accept-deletions")
+    assert r.status_code == 400 and r.json()["ok"] is False and "not configured" in r.json()["error"]
+    assert called == []
+
+
+def test_sync_route_reports_a_refusal_as_502_until_accepted(fdb, monkeypatch):
+    """Dashboard flow: Sync -> 502 with the refusal text (also from the
+    cooldown path, without a second download) -> accept-deletions -> 200."""
+    _configure(monkeypatch)
+    _seed_rows(fdb, 30)
+    conn = sqlite3.connect(fdb)
+    with conn:  # the seeding sync was an hour ago: outside the manual-sync cooldown
+        conn.execute("UPDATE budget_sync_state SET last_attempt_at = datetime('now', 'localtime', '-1 hour')")
+    conn.close()
+    calls = []
+
+    async def empty(today=None):
+        calls.append(1)
+        return _snap([])
+
+    monkeypatch.setattr(actual_client, "fetch_snapshot_async", empty)
+    client = _finance_client()
+    r = client.post("/api/finance/sync")
+    assert r.status_code == 502 and r.json()["ok"] is False
+    assert r.json()["error"].startswith("refused:") and "30 of 30" in r.json()["error"]
+
+    r2 = client.post("/api/finance/sync")  # within the manual-sync cooldown
+    assert r2.status_code == 502 and r2.json()["cooldown"] is True
+    assert r2.json()["error"] == r.json()["error"] and len(calls) == 1
+    assert len(_q(fdb, "SELECT 1 FROM transactions")) == 30
+
+    r3 = client.post("/api/finance/sync/accept-deletions")
+    assert r3.status_code == 200 and r3.json()["ok"] is True and r3.json()["deleted"] == 30
+    assert len(calls) == 2 and _q(fdb, "SELECT 1 FROM transactions") == []

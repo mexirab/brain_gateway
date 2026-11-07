@@ -755,7 +755,7 @@ groups:
           severity: warning
         annotations:
           summary: "Actual Budget sync has not succeeded in 6h"
-          description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy."
+          description: "Every budget_sync attempt in the last 6h failed. Check `docker logs brain-orchestrator | grep '\\[ACTUAL\\]'`, GET /api/finance/sync/status (last_error), that the actual-budget container (:5006) is up, and that its version is compatible with the pinned actualpy. A last_error saying \"cannot confine actualpy's SQLite connections\" means the installed actualpy changed how it opens SQLite: re-check the hook in orchestrator/actual_client.py (_confine_actualpy) against it and run tests/test_actual_sqlite_confinement.py — never bypass it."
       - alert: BudgetHistoryRefreshFailing
         # The Actual sync itself succeeded but rewriting query_budget's
         # "actual" dataset failed every time for 6h, so Jess answers budget
@@ -767,6 +767,22 @@ groups:
         annotations:
           summary: "query_budget history (Actual) not refreshed in 6h"
           description: "Every refresh of the query_budget 'actual' dataset after an Actual sync failed in the last 6h. Check `docker logs brain-orchestrator | grep 'query_budget history'`. A CSV import named 'actual' blocks it (rename that dataset)."
+      - alert: BudgetSyncDegraded
+        # The sync "worked" but with bad data, or refused a snapshot outright
+        # (result="refused" is not "error", so BudgetSyncFailing stays silent
+        # for it). Before 2026-11 all of these counted as plain ok syncs.
+        # On the 0/1 state gauge (set by every applied or refused sync), not
+        # increase() over the counter: works at any ACTUAL_SYNC_INTERVAL and
+        # resolves on the first clean sync. for 2h = persistent, not one odd
+        # sync. Quiet receiver, 24h repeat (each reason needs an owner fix).
+        expr: max by (reason) (bgw_budget_sync_degraded_state) > 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            {{ if eq $labels.reason "mass_delete" }}Actual Budget syncs REFUSED for 2h+ (would delete most synced transactions) - Quest Board frozen{{ else if eq $labels.reason "month_stats_failed" }}Actual Budget sync: this month's budget figures unavailable for 2h+{{ else if eq $labels.reason "fun_money_missing" }}Actual Budget sync: fun-money category not found for 2h+{{ else }}Actual Budget sync degraded for 2h+ ({{ $labels.reason }}){{ end }}
+          description: "reason=mass_delete: every sync is REFUSED because it would remove most synced transactions, so the Quest Board stays at the last good sync. Check GET /api/finance/sync/status (last_error) and the budget in Actual (right ACTUAL_BUDGET_FILE? an account moved off-budget?). If the deletion is real, accept it once: POST /api/finance/sync/accept-deletions (keeps older months and the discretionary overrides of surviving rows; /sync/reset does not). reason=month_stats_failed: actualpy could not evaluate this month's budget (often an actual-server version the pinned actualpy can't read) — dashboard category figures show 0 and the health bar is not refreshed; Loki `{container=\"brain-orchestrator\"} |= \"Could not evaluate\"`. reason=fun_money_missing: ACTUAL_FUN_MONEY_CATEGORY matches no visible spending category with figures this month (renamed or hidden in Actual?) — fix the category or the env var; set it empty to opt out of the health-bar sync."
       - alert: WebPushFailing
         # Web Push counts as phone delivery while a device is recently healthy,
         # so a push service that started rejecting us (VAPID key replaced →
