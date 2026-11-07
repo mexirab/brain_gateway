@@ -71,9 +71,11 @@ groups:
       # the mount is gone but Prometheus is still running on its open file
       # descriptors. Once Prometheus restarts it cannot start, and a dead
       # Prometheus evaluates no rules — same circular problem as
-      # AlertmanagerUnreachable below. Closing that gap needs an EXTERNAL deadman
-      # (Alertmanager Watchdog -> healthchecks.io or similar), which does not
-      # exist yet. Treat this as "catches the common case", not "cannot miss".
+      # AlertmanagerUnreachable below. The EXTERNAL deadman closes that gap: the
+      # Watchdog heartbeat stops reaching Saturn and Saturn pages (group
+      # jupiter_deadman, monitoring/deadman/) — once it is installed and
+      # DEADMAN_WEBHOOK_TOKEN is set. Treat this rule as "catches the common
+      # case early, with the right diagnosis", not "cannot miss".
       # Sharper still: `for: 5m` restarts its timer on every Prometheus restart,
       # so the real window is not "until Prometheus dies" but "until Prometheus
       # first restarts" — after that the pending period can never complete.
@@ -85,7 +87,7 @@ groups:
       # earlier at for: 3m). Tradeoff being accepted knowingly: if the `node`
       # label is ever renamed, the guard breaks too and this goes SILENT rather
       # than paging forever. For a page, fail-silent beats fail-screaming — but
-      # it is still a blind spot that only an external deadman would catch.
+      # it is still a blind spot that only the external deadman catches.
       #
       # job="node-exporter" is not redundant: prometheus.yml.template scrapes
       # netdata with honor_labels: true, so a colliding node_filesystem_* series
@@ -234,7 +236,8 @@ groups:
       # Dashboard-only by design: when this fires Prometheus can't deliver
       # notifications at all, so routing it anywhere via alertmanager is
       # circular. It exists so the failure is visible in Grafana instead of
-      # every alert silently going nowhere.
+      # every alert silently going nowhere. The page for this case comes from
+      # off-box: the Watchdog stops reaching Saturn (group jupiter_deadman).
       - alert: AlertmanagerUnreachable
         expr: prometheus_notifications_alertmanagers_discovered < 1
         for: 5m
@@ -244,8 +247,13 @@ groups:
           summary: "Prometheus has no reachable Alertmanager"
           description: "prometheus_notifications_alertmanagers_discovered has been < 1 for 5 minutes — alerts are firing into the void. Check the alertmanager container in the monitoring compose project."
 
+      # TTSDown / STTDown only count while Helios's node-exporter answers: the
+      # probes fail whenever the power-tiered box sleeps (~20 % of Oct 2026,
+      # ~8,300 min of "down" in 30 days), which is why both sat unrouted.
+      # Guarded, the same 30 days held ~2 min of real voice-server downtime.
+      # A hung or unreachable Helios is HeliosPoweredButUnreachable's page.
       - alert: TTSDown
-        expr: probe_success{service=~"tts|tts-voxcpm"} == 0
+        expr: probe_success{service=~"tts|tts-voxcpm"} == 0 and on() up{job="node-exporter", node="helios"} == 1
         for: 5m
         labels:
           severity: warning
@@ -254,7 +262,7 @@ groups:
           description: "{{ $labels.service }} has not responded for 5 minutes (tts-voxcpm = VoxCPM2 :8004, the live voice; the Qwen3-TTS :8002 rollback is disabled since 2026-10-24 and no longer probed). Diagnose with journalctl -u voxcpm-tts on Helios."
 
       - alert: STTDown
-        expr: probe_success{service="stt"} == 0
+        expr: probe_success{service="stt"} == 0 and on() up{job="node-exporter", node="helios"} == 1
         for: 5m
         labels:
           severity: warning
@@ -263,23 +271,51 @@ groups:
           description: "Parakeet STT (stt-onnx.service, CPU) has not responded for 5 minutes. Voice input unavailable."
 
       # -- Error Rates ----------------------------------------------------------
+      # Chat turns whose primary path failed: the tool loop raised
+      # (tool_loop_failed) or an unhandled exception escaped (error_type = its
+      # class name). Until 2026-10-27 this divided errors{mode,error_type} by
+      # requests{mode} without sum(), so the label sets never matched and it
+      # could not fire. Left out so each failed turn counts once:
+      # fallback_failed (the same turn's fallback retry — on Jupiter the
+      # fallback URL is the same brain) and model_unavailable (brain asleep ->
+      # the friendly "Helios is asleep" reply: Helios's normal power-tiered
+      # state, counted before bgw_requests_total). The denominator leaves out
+      # unified_fallback for the same reason. The fixed error_type series are
+      # pre-created in metrics.py so the first failure after a restart counts.
+      # 1h window + at least 2 failed turns: at a few turns a day a 5-min ratio
+      # is one failure. 1.5 absorbs increase() extrapolation; clamp_max keeps
+      # an error with no counted request from reading as +Inf %.
       - alert: HighErrorRate
-        expr: rate(bgw_request_errors_total[5m]) / rate(bgw_requests_total[5m]) > 0.10
+        expr: |
+          clamp_max(
+            sum(increase(bgw_request_errors_total{error_type!~"model_unavailable|fallback_failed"}[1h]))
+              / sum(increase(bgw_requests_total{mode!="unified_fallback"}[1h])),
+            1
+          ) > 0.10
+          and on() sum(increase(bgw_request_errors_total{error_type!~"model_unavailable|fallback_failed"}[1h])) > 1.5
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High error rate on Brain Gateway (>10%)"
-          description: "{{ $value | humanizePercentage }} of requests are failing over the last 5 minutes."
+          summary: "Jess's chat turns are failing ({{ $value | humanizePercentage }} in the last hour)"
+          description: "{{ $value | humanizePercentage }} of chat turns in the last hour failed in the primary brain (tool loop error or an unhandled exception); brain-asleep replies are not counted. The fallback model may have answered some of them — `fallback_failed` says it didn't. Split by type: `sum by (error_type) (increase(bgw_request_errors_total[1h]))`. Then `docker logs brain-orchestrator --since 1h 2>&1 | grep -iE 'UNIFIED.*(fail|error)'` and, for tool_loop_failed, `journalctl -u llama-server-primary` on Helios."
 
+      # Per tool. At a few tool calls a day a 10-min ratio is one failed call,
+      # so: over 20 % of a tool's calls in 1h AND 2+ failures (1.5 absorbs
+      # increase() extrapolation). The per-tool series are created at 0 when the
+      # tool registers (tool_registry.register_tool), so the first failure after
+      # a restart counts. Memory-tool failures during an embedding outage are
+      # inhibited by EmbeddingModelBroken / EmbeddingErrors (alertmanager.yml.template).
       - alert: HighToolErrorRate
-        expr: rate(bgw_tool_call_errors_total[10m]) / rate(bgw_tool_calls_total[10m]) > 0.20
+        expr: |
+          sum by (tool) (increase(bgw_tool_call_errors_total[1h])) / sum by (tool) (increase(bgw_tool_calls_total[1h])) > 0.20
+          and on(tool) sum by (tool) (increase(bgw_tool_call_errors_total[1h])) > 1.5
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High tool failure rate (>20%)"
-          description: "Tool {{ $labels.tool }} is failing at {{ $value | humanizePercentage }}."
+          summary: "Jess's {{ $labels.tool }} tool is failing ({{ $value | humanizePercentage }} of calls in 1h)"
+          description: "{{ $labels.tool }} failed on {{ $value | humanizePercentage }} of its calls in the last hour (2 or more failures). `docker logs brain-orchestrator --since 1h 2>&1 | grep -i '{{ $labels.tool }}'` shows the failures; a memory tool failing alongside EmbeddingErrors is the embedding model, not the tool."
 
       # -- Latency --------------------------------------------------------------
       # Whole chat turns, tool rounds included. Since 2026-10-25 a real-streamed
@@ -312,32 +348,44 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "GPU temperature critical on {{ $labels.node }}"
+          summary: "A {{ $labels.node }} GPU is at {{ $value }}°C"
           description: "GPU temp is {{ $value }}C on {{ $labels.node }}."
 
+      # / on every node, plus Jupiter's USB disks: /mnt/logging (Prometheus
+      # TSDB, Loki, Grafana, Alertmanager state), /mnt/documents (Paperless and
+      # its Postgres), /mnt/media (Immich and its Postgres). A full /mnt/logging
+      # stops Prometheus and Loki writing, which can take all alerting down with
+      # them. Disks fill over days (/mnt/logging grew ~0.14 GiB/day in Oct
+      # 2026), so quiet tier with a 24h repeat, not a page. job= pinned for the
+      # netdata honor_labels reason given at LoggingMountMissing above.
       - alert: DiskSpaceLow
-        expr: (1 - node_filesystem_avail_bytes{mountpoint=~"/|/mnt/logging"} / node_filesystem_size_bytes{mountpoint=~"/|/mnt/logging"}) > 0.90
+        expr: (1 - node_filesystem_avail_bytes{job="node-exporter", mountpoint=~"/|/mnt/(logging|documents|media)"} / node_filesystem_size_bytes{job="node-exporter", mountpoint=~"/|/mnt/(logging|documents|media)"}) > 0.90
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Disk >90% full on {{ $labels.node }} {{ $labels.mountpoint }}"
-          description: "{{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
+          description: "{{ $labels.mountpoint }} on {{ $labels.node }} is {{ $value | humanizePercentage }} full. Find the space with `sudo du -xh --max-depth=2 {{ $labels.mountpoint }} | sort -h | tail -20` and `docker system df`. On /mnt/logging, Prometheus (30d) and Loki (720h) are time-retained only, with no size cap — if `du` points at loki/, find the noisy source in Grafana Explore with `topk(10, sum by (service_name, container, host) (bytes_over_time({service_name=~\".+\"}[24h])))`. Free space before it hits 100 %: a full /mnt/logging stops Prometheus and Loki writing, which can take all alerting down with them."
 
       # Both Helios GPUs carry the brain since 2026-10-24 (Qwen3.8-Flash-Next split
-      # across the 5090 + PRO 5000 by llama-server-primary.service): ~90% GPU0 and
-      # ~92% GPU1 (with voxcpm-tts), peak 92.8% with TTS + vision + generation at
-      # once. That is real allocation (weights + 64K q8_0 KV + MTP head), not a vLLM
-      # pre-allocation, so creep past 95% is a real signal — and on GPU1 it can
-      # starve the live voice.
+      # across the 5090 + PRO 5000 by llama-server-primary.service). Steady state
+      # in late Oct 2026: GPU0 ~91 % (low point 1.7 GiB free), GPU1 ~95 % with
+      # voxcpm-tts (2.4 GiB free, flat). That is real allocation (weights + 64K
+      # q8_0 KV + MTP head + the TTS's PyTorch cache), not a vLLM pre-allocation,
+      # so creep is a real signal — and on GPU1 it can starve the live voice.
+      # Absolute free memory, not a ratio: the old `> 0.95` sat 11 MiB from
+      # firing on GPU1, and 5 % is a different margin on a 32 and a 48 GB card.
+      # Under 1 GiB free the next TTS or vision allocation can fail; 0 minutes
+      # in the 30 days before 2026-10-27. Helios only: Saturn is a learning box
+      # whose experiments fill VRAM on purpose (llama.cpp auto-fit leaves ~1 GiB).
       - alert: HighVRAMUsage
-        expr: nvidia_smi_memory_used_bytes / nvidia_smi_memory_total_bytes > 0.95
+        expr: nvidia_smi_memory_total_bytes{node="helios"} - nvidia_smi_memory_used_bytes{node="helios"} < 2^30
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "VRAM >95% on {{ $labels.node }} (GPU {{ $labels.uuid }})"
-          description: "VRAM usage is {{ $value | humanizePercentage }} on {{ $labels.node }} GPU {{ $labels.uuid }}. On Helios both GPUs carry the brain and GPU1 also the live TTS — creep here can starve the voice."
+          summary: "Under 1 GiB VRAM free on a Helios GPU ({{ $value | humanize1024 }}B left)"
+          description: "Helios GPU {{ $labels.uuid }} has {{ $value | humanize1024 }}B of VRAM free. Both GPUs carry the brain and GPU1 also the live TTS, so the next synthesis or vision call can fail to allocate. Run `nvidia-smi` on Helios to see which process grew; restarting voxcpm-tts returns its cached memory."
 
       # Memory offline: the embedding model can't encode (startup self-test).
       # Memory search, RAG context, palace writes and auto_learn all fail per
@@ -910,14 +958,53 @@ groups:
       - alert: JessBackupOffboxFailing
         # Covers all five nightly backups: state (jess_backup_*), HA
         # (jess_ha_backup_*), the Radicale calendar (jess_calendar_backup_*),
-        # Actual Budget (jess_actual_backup_*) and Grist (jess_grist_backup_*).
-        expr: '{__name__=~"jess_(ha_|calendar_|actual_|grist_)?backup_offbox_success"} == 0'
-        for: 3d
+        # Actual Budget (jess_actual_backup_*) and Grist (jess_grist_backup_*),
+        # plus any future jess_<name>_backup_offbox_success gauge.
+        #
+        # The five gauges differ only by metric name, and alert labels drop
+        # __name__. Until 2026-11-06 this rule therefore errored ("vector
+        # contains metrics with the same labelset after applying alert labels")
+        # whenever two or more copies failed at once — exactly what happens when
+        # Saturn is down. Saturn went offline 2026-10-29, every copy failed from
+        # the 2026-10-30 nightly run, and the rule sat in health=err notifying
+        # nobody. label_replace now
+        # copies the name into a `backup` label (state|ha|calendar|actual|grist)
+        # so each failing copy is its own alert. RuleEvaluationFailing (group
+        # prometheus_self) catches this class of bug from now on.
+        #
+        # "No successful copy at any point in the last 3 days", via a subquery,
+        # instead of `== 0` + `for: 3d`: a 3-day `for` clock restarts on an edit
+        # that changes the rule's labels (this one adds `backup`) and on any
+        # Prometheus restart longer than the 1h outage tolerance (the stale-mount
+        # fixer restarts it). With the window in the query, the alert fires once
+        # the failure is 3 days old, even right after a deploy. 5m steps cannot
+        # miss a success: the scripts rewrite the gauge once a night, so a good
+        # night holds it at 1 for ~24h. `for: 1h` absorbs the nightly jitter when
+        # the window drops the last 1 just as the 4th night's run writes.
+        #
+        # Edges (early or extra quiet notices, never silence): the window only
+        # sees stored samples, so a gauge that has never read 1 in the data it
+        # has (a new backup whose first copy fails, Prometheus data loss, an
+        # ingestion gap that swallowed the only good night) fires after the 1h
+        # `for`; a gauge that disappears while reading 0 keeps firing for up to
+        # 3 days.
+        #
+        # Never name a gauge jess_state_backup_offbox_success: it would map to
+        # backup="state" like jess_backup_offbox_success, the two series would
+        # collide again and this rule would error (RuleEvaluationFailing).
+        expr: |
+          max_over_time(
+            label_replace(
+              label_replace({__name__=~"jess_(.+_)?backup_offbox_success"},
+                "backup", "$1", "__name__", "jess_(.+)_backup_offbox_success"),
+              "backup", "state", "backup", "")
+          [3d:5m]) == 0
+        for: 1h
         labels:
           severity: info
         annotations:
-          summary: "Off-box backup copy has been failing for 3 days ({{ $labels.__name__ }})"
-          description: "Local backups are fine, but the rsync to Saturn keeps failing for {{ $labels.__name__ }} — a single-disk loss would still take that data. Check SSH keys / the remote path and the backup's cron log."
+          summary: "{{ $labels.backup }} backup: no off-box copy in 3 days"
+          description: "The local {{ $labels.backup }} backup may be fine, but its nightly rsync to Saturn has not succeeded once in 3 days, so a disk loss on Jupiter would take that data. If every backup fires together, Saturn itself is down or off the tailnet (`tailscale status | grep saturn`, `ssh saturn true`). Otherwise check that backup's SSH key, remote path and cron log (docs/BACKUP.md lists each script and log)."
 
       # Fires only once bgw_tool_call_source_total exists (it ships on the
       # tool-call instrumentation branch); until then there is no series and this
@@ -945,6 +1032,25 @@ groups:
         annotations:
           summary: "Model tool calls are being silently dropped (Qwen3.8-Flash-Next on llama.cpp)"
           description: "A <tool_call> marker was present but no call parsed, so the loop ended the turn early and the user saw the assistant give up mid-task. Current stack (since 2026-10-24): Qwen3.8-Flash-Next UD-Q3_K_XL GGUF on llama.cpp (llama-server-primary.service on Helios, split across GPU0 + GPU1), --jinja tool/reasoning parsing, MTP speculative decoding (--spec-type draft-mtp); the trial saw no drops. On any thinking-on turn (all text turns, and voice turns with VOICE_THINKING_ENABLED=true) a `<tool_call` written only inside the reasoning also counts as dropped. Run `docker logs brain-orchestrator | grep 'SILENTLY DROPPED'` for the finish_reason, then `journalctl -u llama-server-primary` on Helios. If output also looks garbled, first lever is `--spec-type none` in the unit (disables MTP, ~25-40% slower: ~105 tok/s measured). Rollback to the 27B brain: see the header of tts/llama-server-primary-27b-q6k.service."
+  # Prometheus watching itself. A rule that errors at evaluation time (many-to-
+  # many matching after a label change, a function the upgraded Prometheus
+  # rejects, a query timeout) silently never fires; the rest of its group keeps
+  # evaluating, and promtool / reload-monitoring.sh only catch rules that don't
+  # load. Own group, so it never shares an evaluation with a broken rule.
+  # Groups evaluate every 15-60 s, so one broken rule fails 15+ times in
+  # 15 min; > 3 ignores a one-off query timeout. Prometheus rules only — Loki
+  # is not scraped, so a failing Loki ruler rule is still silent.
+  - name: prometheus_self
+    rules:
+      - alert: RuleEvaluationFailing
+        expr: sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[15m])) > 3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rules are failing to evaluate ({{ $labels.rule_group }})"
+          description: "{{ $value | printf \"%.0f\" }} failed evaluations in 15 min in {{ $labels.rule_group }}: at least one rule there can't fire. On Jupiter: `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[] | select(.lastError) | {name, lastError}'` names the rule and the error (also `docker logs prometheus 2>&1 | grep -i 'evaluating rule failed'`). Fix the expr in monitoring/prometheus/alert-rules.yml (try the query in Grafana Explore before pushing)."
+
   - name: brain_gateway_routine
     rules:
       - alert: RoutineAutoEnded
@@ -1148,3 +1254,97 @@ groups:
         annotations:
           summary: "Helios is unreachable and its plug reading is stale or unknown"
           description: "Helios's node exporter is down, but the smart-plug reads are missing (no successful read in 10 min) or contradictory (power sensor unavailable), so Jess can't tell whether Helios is asleep or hung. Check HELIOS_PLUG_MONITOR_ENABLED / HELIOS_WAKE_ENABLED on the orchestrator, the plug and its power sensor in Home Assistant, and `docker logs brain-orchestrator | grep HELIOS`."
+
+  # Deploys: the CI deploy job (self-hosted runner on Jupiter) ships pushes to
+  # main. GitHub keeps only one pending deploy run and cancels it when another
+  # arrives, a deploy can fail or time out, and a stopped runner deploys
+  # nothing, so a commit can pass CI and never go live. The orchestrator's
+  # deploy drift check (jobs_deploy_drift.py, every 10 min, only while
+  # DEPLOY_DRIFT_REPO is set) compares the deploy job's .last-deployed-sha
+  # marker with main's push runs on GitHub. Runbook: monitoring/README.md →
+  # Deploy Drift.
+  - name: deploy_health
+    rules:
+      # A commit on main passed CI 40+ min ago (+ for: 10m, so ~50 min) and the
+      # deployed commit still hasn't reached it. Deploys normally land ~3 min
+      # after CI passes. The gauge is the OLDEST undeployed green commit's
+      # CI-pass time, so new merges don't reset the clock. NaN (no check yet,
+      # check failing after a new deploy) and 0 (in sync) never fire.
+      # $value = seconds since that commit passed CI.
+      - alert: DeployDrift
+        expr: |
+          (time() - bgw_deploy_undeployed_green_since_timestamp_seconds{job="orchestrator"}) > 2400
+          and bgw_deploy_undeployed_green_since_timestamp_seconds{job="orchestrator"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jupiter is running an old commit: main has passed CI but did not deploy"
+          description: "A commit on main passed CI {{ $value | humanizeDuration }} ago and is still not deployed on Jupiter. In GitHub Actions, find the newest main run: deploy job cancelled → re-run it; failed or timed out → read its log, fix, re-run; still queued → the runner is down (on Jupiter: systemctl status actions.runner.mexirab-brain_gateway.jupiter.service). Holding deploys on purpose → silence this alert. Deployed commit: bgw_deployed_commit_info."
+
+      # The drift check itself can't tell (marker missing or unreadable, the
+      # deploy job renamed, GitHub unreachable, or rate limited). `partial` (job
+      # lookups ran out during a burst of pushes) is not a failure. While this
+      # fires DeployDrift is
+      # blind: its gauges keep the last values, or go NaN after a new deploy.
+      # ~6 checks an hour; 4 failures in an hour for 30 min = sustained.
+      - alert: DeployDriftCheckFailing
+        expr: |
+          sum(increase(bgw_deploy_drift_check_total{job="orchestrator", result=~"marker_missing|marker_invalid|deploy_job_missing|github_error|rate_limited"}[1h])) >= 4
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The deploy drift check is failing, so DeployDrift can't see a stuck deploy"
+          description: "bgw_deploy_drift_check_total keeps counting failures. marker_missing/marker_invalid: no readable .last-deployed-sha at DEPLOY_MARKER_PATH (no CI deploy has completed on this checkout, or the repo mount at /opt/gateway_mvp is broken). github_error: api.github.com unreachable from brain-orchestrator, or DEPLOY_DRIFT_REPO / DEPLOY_DRIFT_GITHUB_TOKEN wrong (Loki {container=\"brain-orchestrator\"} |= \"[DEPLOY_DRIFT]\" shows the HTTP status). deploy_job_missing: the CI deploy job was renamed; update DEPLOY_JOB_NAME in orchestrator/jobs_deploy_drift.py. rate_limited: something else on this IP is using the unauthenticated GitHub API budget; set DEPLOY_DRIFT_GITHUB_TOKEN."
+
+  # -- Off-box dead-man's switch (monitoring/deadman/, runs on Saturn) --------
+  # Every alert in this file is evaluated and delivered ON Jupiter, so a
+  # whole-box or whole-Docker outage pages nobody — dockerd crashed on
+  # 2026-10-26 and Prometheus + Alertmanager stayed down 2.5 h in silence.
+  # Watchdog fires while Jupiter can page; Alertmanager re-sends it about
+  # every 2 min to Saturn, which pages over its own Pushover when the
+  # heartbeats stop. Its route and
+  # the jupiter-deadman scrape job only render when DEADMAN_WEBHOOK_TOKEN is
+  # set in .env; until then Watchdog falls through to "null" and
+  # DeadmanSwitchBroken has no series to fire on.
+  - name: jupiter_deadman
+    interval: 30s
+    rules:
+      # Fires while Jupiter can actually page you, not merely while rules run:
+      # a bare vector(1) would keep beating with ingestion dead (TSDB appends
+      # failing on a full /mnt/logging, a wedged scrape loop) — and then every
+      # `up == 0` rule goes quiet, because absent is not 0. So it needs a
+      # Prometheus self-scrape sample younger than 3 min, and it stops when
+      # Jupiter's own Pushover deliveries keep failing (revoked app token, bad
+      # user key, quota): Saturn then pages over its own Pushover app.
+      # alertmanager_notifications_failed_total counts notifications that
+      # failed after Alertmanager's retries; absent (no alertmanager scrape)
+      # leaves the heartbeat alone.
+      - alert: Watchdog
+        expr: >-
+          max(time() - timestamp(up{job="prometheus"})) < 180
+          unless on() (sum(increase(alertmanager_notifications_failed_total{job="alertmanager", integration="pushover"}[30m])) > 2)
+        labels:
+          severity: none
+        annotations:
+          summary: "Always firing: heartbeat to the off-box dead-man's switch on Saturn"
+          description: "This alert is meant to fire forever. It stops when Prometheus stops ingesting or Jupiter's Pushover deliveries keep failing; if it stops reaching Saturn for 10 minutes, Saturn pages that Jupiter's alerts can't reach you. Never silence or inhibit it — that pages the owner. See monitoring/README.md → Dead-man's switch."
+
+      # Watching the watcher. Saturn being down entirely is NodeDown{node="saturn"}
+      # (pages); this catches the switch itself being dead (up == 0), its
+      # checker thread being stuck (no check for 5 min), or it being left in
+      # dry-run after install (pages logged, never sent). Quiet: the switch
+      # only matters during a Jupiter outage, so fixing it can wait for the
+      # morning — but it must not stay broken unnoticed.
+      - alert: DeadmanSwitchBroken
+        expr: >-
+          up{job="jupiter-deadman"} == 0
+          or (time() - jupiter_deadman_last_check_timestamp_seconds{job="jupiter-deadman"} > 300)
+          or (jupiter_deadman_dry_run{job="jupiter-deadman"} == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The off-box dead-man's switch on Saturn is not armed"
+          description: "Jupiter can't scrape the switch on Saturn (:9466), its checker has not run for 5 minutes, or DEADMAN_DRY_RUN is still on — so a Jupiter outage would page nobody. On Saturn: `systemctl status jupiter-deadman`, `journalctl -u jupiter-deadman -n 50`, `curl -s localhost:9466/metrics | grep dry_run`. See monitoring/deadman/README.md."

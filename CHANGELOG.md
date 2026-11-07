@@ -4,6 +4,98 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — off-box backup alert that could never fire + rule-evaluation alert (2026-11-06)
+
+Branch `fix/backup-offbox-alert`.
+
+Found 2026-11-06: Saturn (the off-box backup target) had been offline since 2026-10-29, every nightly off-box copy had failed since the 2026-10-30 run, and no backup alert fired. (Saturn's `NodeDown` paged every 4h throughout, but it said nothing about backups and was tuned out.) `JessBackupOffboxFailing` matched the five `jess_*backup_offbox_success` gauges, which differ only by metric name. Alert labels drop `__name__`, so whenever two or more backups failed together the rule failed to evaluate ("vector contains metrics with the same labelset after applying alert labels"). It sat in `health=err` from 2026-10-30, with `prometheus_rule_evaluation_failures_total{rule_group=~".*brain_gateway_deadmans"}` rising ~60/h, and nothing watched that counter either.
+
+### Upgrade action
+
+- None beyond the normal merge: CI renders the Alertmanager config and reloads the rules. **`JessBackupOffboxFailing` will fire for all five backups (state, ha, calendar, actual, grist) about an hour after the reload**, and keep firing (quiet tier, default 4h repeat) until Saturn is back online and the next nightly copy succeeds. Bringing Saturn back is a manual owner step.
+
+### Monitoring
+
+- `JessBackupOffboxFailing` rewritten: `label_replace` copies the metric name into a `backup` label (`state|ha|calendar|actual|grist`), so each failing copy is its own alert, and any future `jess_<name>_backup_offbox_success` gauge is covered. The 3-day window moved from `for: 3d` into the query (`max_over_time(...[3d:5m]) == 0`, `for: 1h`): a Prometheus restart (or an edit that changes the rule's labels) no longer restarts a 3-day clock. Fires early (after the 1h `for`) when the stored data holds no 1 at all, e.g. a new backup whose first copy fails or an ingestion gap that swallowed the only good night. Summary/description use `{{ $labels.backup }}` (the old `{{ $labels.__name__ }}` was always empty). Same `pushover-quiet` route. Checked against live Prometheus: evaluates without error, five distinct series, true for each since 2026-11-02 (3 days after the gauges last read 1, before the 2026-10-30 nightly run), empty at 2026-10-29 and 2026-11-01.
+- New quiet alert `RuleEvaluationFailing` (own group `prometheus_self`): `sum by (rule_group) (increase(prometheus_rule_evaluation_failures_total{job="prometheus"}[15m])) > 3` for 15m. A rule that keeps failing to evaluate fires within ~20 minutes. A one-off query timeout does not. On this deploy the `brain_gateway_deadmans` failures drop to ≤ 3 about 11 min after the reload, before the 15m `for`, so it should not notify. Over the previous 30 days, only `brain_gateway_deadmans` (this bug, from 2026-10-30 03:50) would have matched. Prometheus rules only, not the Loki ruler. Routed to `pushover-quiet`. The rule is byte-identical to the one in open PR #160 (alert-routing audit), so the two merge into one. #160 also routes it in a block of its own: when that PR is rebased, drop the name from one of the two matchers (same receiver either way).
+
+### Docs
+
+- `monitoring/README.md`: new "Off-box backup alert" and "Rule-evaluation failures" subsections under Alertmanager; tier list updated.
+- `CLAUDE.md` (backups + Alertmanager notes), `docs/BACKUP.md`, `docs/CALENDAR.md`, `docs/SPREADSHEETS.md`: `JessBackupOffboxFailing` described as per-backup (`backup` label) instead of shared.
+
+---
+
+## [Unreleased] — Deploy drift check (2026-10-26)
+
+A commit could pass CI on main and never deploy (GitHub drops a pending run when another arrives in the same concurrency group, a deploy can fail or time out, the runner can be stopped) with no signal. Detail + runbook: `monitoring/README.md` → Deploy Drift.
+
+### Upgrade action
+
+- On Jupiter add `DEPLOY_DRIFT_REPO=mexirab/brain_gateway` to `.env` **before** this merge's deploy recreates the orchestrator; added later → `docker compose up -d --force-recreate orchestrator`. Unset = check off (default).
+
+### Orchestrator
+
+- New `jobs_deploy_drift.py`: interval job `deploy_drift_check` (10 min, first run 60 s after start), registered only when `DEPLOY_DRIFT_REPO` is set. Reads the CI deploy job's `.last-deployed-sha` via the read-only repo mount (`DEPLOY_MARKER_PATH`) and lists main's latest 20 push runs of `ci.yml` from the GitHub REST API; a run passed CI when every job of its latest attempt except "Deploy to Jupiter" succeeded. Requests go to `api.github.com` only, no redirects, proxy env ignored; logs carry short SHAs, counts, status codes and exception class names only.
+- New env vars `DEPLOY_DRIFT_REPO` (validator `validate_deploy_drift_config`: malformed → disabled + ERROR), `DEPLOY_MARKER_PATH`, `DEPLOY_DRIFT_GITHUB_TOKEN` (optional, fine-grained public-repo read-only; unauthenticated = 60 req/h per public IP, the check uses ~6/h, up to ~42/h in bursts).
+- Removed the never-set `bgw_build` Info metric (`BUILD_INFO`).
+
+### Monitoring
+
+- Metrics `bgw_deployed_commit_info{commit}`, `bgw_deployed_commit_timestamp_seconds`, `bgw_deploy_undeployed_green_commits`, `bgw_deploy_undeployed_green_since_timestamp_seconds` (NaN until a check answers), `bgw_deploy_drift_check_total{result}` (pre-seeded).
+- Prometheus group `deploy_health`: `DeployDrift` (a green commit on main undeployed > 40 min, `for: 10m`) and `DeployDriftCheckFailing` (≥ 4 failed checks in 1 h, `for: 30m`), both `pushover-quiet`.
+- Grafana row "Deploys (CI → Jupiter)" (5 panels); dashgen `stat()` gained a `legend` kwarg.
+
+### Tests
+
+- `orchestrator/tests/test_deploy_drift.py` (135).
+
+### Docs
+
+- `CLAUDE.md`, `docs/ENV_VARS.md`, `TECHNICAL_REFERENCE.md`, `monitoring/README.md`, `.env.example`, `.claude/agents/prod-support.md`.
+
+---
+
+## [Unreleased] — off-box dead-man's switch on Saturn (2026-10-26)
+
+Every alert is evaluated and delivered on Jupiter, so the 2026-10-26 dockerd crash left Prometheus + Alertmanager down 2.5 h without a page. Saturn now watches for Jupiter's heartbeat. Detail + runbook: `monitoring/README.md` → Dead-man's switch; install + test plan: `monitoring/deadman/README.md`.
+
+### Monitoring (Jupiter)
+
+- New group `jupiter_deadman`: `Watchdog` fires while Jupiter can page, i.e. a Prometheus self-scrape sample younger than 3 min and not more than 2 failed Pushover notifications in 30 min (`alertmanager_notifications_failed_total{integration="pushover"}`). A bare `vector(1)` would keep beating with ingestion dead.
+- New unconditional scrape job `alertmanager` (`alertmanager:9093`).
+- First Alertmanager route: `Watchdog` → webhook receiver `deadman` at `http://${DEADMAN_HOST}:${DEADMAN_PORT}/heartbeat` (`group_interval` + `repeat_interval` 1m ≈ one POST every 2 min, no `continue`, `send_resolved: false`), bearer from `credentials_file: /etc/alertmanager/deadman_webhook_token`.
+- New scrape job `jupiter-deadman` (Saturn `:9466`, `node: saturn`) and quiet alert `DeadmanSwitchBroken` (scrape down, checker silent 5 min, or `DEADMAN_DRY_RUN` left on; `for: 30m`). Inhibit rule `NodeDown` → `DeadmanSwitchBroken` on equal `node`.
+- `scripts/generate-configs.sh`: the route, receiver and `jupiter-deadman` job sit in `# BEGIN deadman` / `# END deadman` blocks and render only with `DEADMAN_WEBHOOK_TOKEN` ≥ 24 chars in `.env` (writes `monitoring/alertmanager/deadman_webhook_token`, 644, gitignored). Otherwise they are stripped and the token file is emptied; a short token WARNs. New `DEADMAN_HOST` (default `NODE_SATURN_IP`) and `DEADMAN_PORT` (default 9466).
+- `strip_block` (now also used for the self-investigator blocks) refuses unpaired BEGIN/END markers. A lost `# END` used to make `sed` delete the rest of the template, and the truncated render still validated.
+
+### Saturn (hand-installed; CI deploys nothing there)
+
+- `monitoring/deadman/jupiter_deadman.py` (stdlib Python ≥ 3.10; `serve` / `probe` / `test-notify`), `jupiter-deadman.service` (`DynamicUser`, sandboxed, `StateDirectory`), `jupiter-deadman.env.example` (→ `/etc/jupiter-deadman.env`, 0600).
+- Pages over its own Pushover after `DEADMAN_HEARTBEAT_MAX_AGE_SECONDS` (600, min 300) without a heartbeat, re-pages every 4 h, and sends a priority-0 "heartbeat is back". Last heartbeat + alert state persist across restarts; 3-min start-up grace after a restart with saved state.
+- Every check (`DEADMAN_CHECK_INTERVAL_SECONDS` 60, max 120) probes Jupiter (orchestrator `/health`, HA `:8123/manifest.json`, `tcp :22`) so the page says what is down. Probes never page on their own.
+- Accept-time source allow-list (`DEADMAN_ALLOW_FROM`, default Jupiter, + loopback), bearer checked before the body is read, ≤ 4 connections, 15 s deadline per connection. Metrics `jupiter_deadman_*` on `/metrics`.
+
+### Upgrade action
+
+- Merging changes nothing live except the `alertmanager` scrape job and an always-firing `Watchdog` that falls through to `null`. To arm: install Saturn in dry-run, set `DEADMAN_WEBHOOK_TOKEN` in Jupiter's `.env`, `bash scripts/generate-configs.sh && bash scripts/reload-monitoring.sh`, check heartbeats, then `DEADMAN_DRY_RUN=false` on Saturn.
+- Planned Jupiter downtime: `sudo systemctl stop jupiter-deadman` on Saturn first. Never silence `Watchdog`; that pages.
+
+### Known limits
+
+- A whole-house power or internet outage, or Jupiter and Saturn down together, pages nobody. Only an off-site heartbeat would catch it, and none is built.
+- A broken Jupiter Pushover setup is noticed only once a page fails; the heartbeat resumes 30 min after the last failure.
+
+### Tests
+
+- `tests/test_generate_configs.py` covers the deadman gate, host/port override and marker pairing. `tests/test_jupiter_deadman.py` is host-only (`python3 -m pytest --noconftest orchestrator/tests/test_jupiter_deadman.py`); the orchestrator test container skips it.
+
+### Docs
+
+- `monitoring/README.md`, `monitoring/deadman/README.md`, `docs/ENV_VARS.md`, `.env.example`, `CLAUDE.md`, `COMMANDS.md`.
+
+---
+
 ## [Unreleased] — Actual Budget sync hardening: confined server SQL, degraded-sync visibility (2026-11-07)
 
 Branch `harden/actual-sync-confinement`. actualpy 0.22.4's `Actual.download_budget` runs migration files downloaded from the Actual server with `sqlite3.executescript()`, so a compromised actual-server (or anything answering as `actual-budget` on `gateway-net`) could `ATTACH DATABASE` orchestrator state such as `/app/data/brain_state.db`, or `VACUUM INTO` any path the orchestrator can write. Separately, several bad-data syncs counted as plain `ok`, and a short server response could wipe the Quest Board mirror and every per-row discretionary override.
@@ -84,7 +176,37 @@ Branch `fix/usb-remount-stale-containers`. On 2026-10-31 Jupiter's USB enclosure
 
 ---
 
+## [Unreleased] — alert routing audit (2026-10-27)
+
+Branch `fix/alert-routing-audit`. Alertmanager routes by an alertname allow-list, and seven rules notified nobody. Detail: `monitoring/README.md` → Alertmanager → Routing coverage.
+
+### Monitoring
+
+- New `orchestrator/tests/test_alert_routing.py`. It walks the Alertmanager route tree for every Prometheus and Loki rule, with every optional block and with them stripped. It fails CI when:
+  - an alert reaches only `null` / `self-investigator` without a reason in its `GRAFANA_ONLY` list (`UranusDown`, `AlertmanagerUnreachable`, `HighRequestLatency`, `AppDown`, `RoutineAutoEnded`);
+  - a heartbeat receiver gets anything but its heartbeat;
+  - a route matches on a runtime label, or names an undefined receiver;
+  - a route or inhibit names an alert no rule defines.
+
+  It gives the same receivers as `amtool config routes test` for all 77 alerts.
+- Routed to `pushover-quiet` in two lists of their own: `RuleEvaluationFailing`, `TTSDown`, `STTDown`, `HighErrorRate`, `HighToolErrorRate` and `HighGPUTemp` (4h repeat); `DiskSpaceLow` and `HighVRAMUsage` (24h repeat, standing conditions).
+- `TTSDown` / `STTDown` only count while Helios's node-exporter is up: the probes fail every time the power-tiered box sleeps.
+- `HighErrorRate` could never fire: it divided `{mode,error_type}` by `{mode}` without `sum()`. It now fires on ≥2 chat turns that failed in the primary brain within 1h and are also >10 % of turns. Brain-asleep replies and the same turn's fallback retry don't count.
+- `HighToolErrorRate` is per tool over 1h, needs ≥2 failures, and names the tool in the notice. An embedding outage inhibits it for the memory tools.
+- `HighVRAMUsage` is Helios-only and fires under 1 GiB free. The old 95 % ratio sat 11 MiB from firing on GPU1.
+- `DiskSpaceLow` also covers `/mnt/documents` and `/mnt/media`, pins `job="node-exporter"`, and has a runbook.
+- `HighGPUTemp` puts the temperature in the notice.
+- New `RuleEvaluationFailing` (group `prometheus_self`): a Prometheus rule keeps failing at evaluation time, so it can't fire.
+
+### Orchestrator
+
+- `bgw_request_errors_total` series for the fixed error types are created at 0 in `metrics.py`, and each tool's `bgw_tool_calls_total` / `bgw_tool_call_errors_total` series at registration (`tool_registry.register_tool`). Without them, `increase()` missed the first failure after every restart, and the orchestrator restarted 111 times in 30 days.
+
+---
+
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
+
+Key enforced on Helios 2026-10-29: PR #161 deployed, then the new `llama-server-primary.service` installed and the 27B rollback copy refreshed.
 
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
 
@@ -115,6 +237,32 @@ Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and J
 ### Docs
 
 - `CLAUDE.md`, `docs/ENV_VARS.md`, `.env.example`, `monitoring/README.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md`, `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`, `docs/PRIVACY.md`, `docs/VOICE_AND_TTS.md`, `COMMANDS.md`, `TECHNICAL_REFERENCE.md`, `.claude/agents/prod-support.md`; `setup_env.py` `MODEL_API_KEY` description no longer says cloud-only.
+
+---
+
+## [Unreleased] — CI + deploy hardening (2026-10-26)
+
+A deploy failed with "Cannot fast-forward to multiple branches" (a `git fetch` in the live checkout rewrote `.git/FETCH_HEAD` under the job's `git pull`), deploys could ship commits whose CI hadn't finished, and two tests with ~1 MB parametrize ids stalled the test job 25+ min. Detail: `docs/DEV.md` → CI and auto-deploy.
+
+### CI
+
+- `timeout-minutes` on every job (lint/dashboards/theme 10, tests 15, frontend 15, docker build 25, deploy 45).
+- Deploy step "Fast-forward the deploy checkout": refuses a checkout off `main`, with modified tracked files or untracked files under `orchestrator/`/`frontend/`/root compose overrides (count only); `git fetch --no-write-fetch-head` (3 tries) + `git merge --ff-only <github.sha>` — ships the commit whose CI passed, only while it is on `origin/main`. Catch-up: also fast-forwards to the newest first-parent commit (≤20 back) whose push run passed every non-deploy job and whose `ci.yml` is identical (read-only `GITHUB_TOKEN`, `actions: read`); API failure → only `github.sha` ships.
+- Deploy step "Rebuild changed services": `git diff --no-renames`; an `orchestrator/tests/`-only change no longer recreates the orchestrator; curl timeouts on the Grist/Loki waits.
+
+### Operator notes
+
+- The live checkout can show "behind origin/main" while newer commits are in CI — don't `git pull` it by hand.
+- Hold deploys by stopping the runner service; cancelling a deploy run no longer holds its commit back if an older deploy is still to run.
+- New CI jobs must be added to the deploy job's `needs:`.
+
+### Tests
+
+- `orchestrator/tests/conftest.py` fails collection (exit 4) on any test node id over 300 chars, printing only function names/counts/lengths. Ten long cases in 8 files now use `pytest.param(..., id=...)`. Guard tests: `tests/test_nodeid_length_guard.py`.
+
+### Docs
+
+- `CLAUDE.md`, `docs/DEV.md`.
 
 ---
 

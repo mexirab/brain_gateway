@@ -521,3 +521,18 @@ Monitoring compose (`monitoring/docker-compose.yml`) reads these from the main `
 | `LOKI_PUSH_TOKEN` | _empty_ | Shared bearer secret for Helios promtail → `loki-push-gw`. Same value in Jupiter `.env` and Helios `/opt/promtail-helios/.env` (chmod 600). Empty on Jupiter → every push 403; unset on Helios → promtail compose refuses to start (`:?`). |
 | `NODE_HELIOS_IP` | `10.0.0.10` (example) | Also the `loki-push-gw` source-IP allow-list (nginx `allow`, IP only). Unset → `127.0.0.1` (no off-box pushes). Must be set in Jupiter's `.env`. |
 | `NODE_JUPITER_IP` | _empty_ | Bind address for `loki-push-gw` :3101. Unset → `127.0.0.1` (not LAN-exposed). |
+
+## Deploy drift
+
+`orchestrator/jobs_deploy_drift.py` (job `deploy_drift_check`, every 10 min, first run 60 s after start) compares the commit in the CI deploy job's `.last-deployed-sha` marker with main's newer push runs of `ci.yml` whose CI passed, via the GitHub REST API (`api.github.com` only). Only for a box a CI deploy job ships to. Validator `validate_deploy_drift_config` (`config.py`). Metrics, alerts (`DeployDrift`, `DeployDriftCheckFailing`) and runbook: `monitoring/README.md` → Deploy Drift.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DEPLOY_DRIFT_REPO` | _empty (off)_ | `owner/name` of the GitHub repo the CI deploys from (this repo: `mexirab/brain_gateway`). Empty = job not registered. Malformed → check disabled + ERROR log at startup, never raises. Added to a running box: `docker compose up -d --force-recreate orchestrator`. |
+| `DEPLOY_MARKER_PATH` | `/opt/gateway_mvp/.last-deployed-sha` | Marker path inside the container (the checkout is mounted read-only at `/opt/gateway_mvp`). Absent/unreadable → `result="marker_missing"`; not a 40-hex SHA → `marker_invalid`. |
+| `DEPLOY_DRIFT_GITHUB_TOKEN` | _empty_ | Optional. Fine-grained token, public-repo read-only, no permissions; raises the limit to 5000 req/h. Empty = unauthenticated: 60 req/h per public IP, shared with the LAN; the check uses ~6/h, up to ~42/h during bursts of pushes (`result="rate_limited"` when exhausted). Never the runner's or the owner's `gh` login token. Never logged. |
+| `DEADMAN_WEBHOOK_TOKEN` | _empty_ | Bearer for the off-box dead-man's switch (`monitoring/deadman/`, on Saturn). ≥ 24 chars → `scripts/generate-configs.sh` writes `monitoring/alertmanager/deadman_webhook_token` (644, gitignored) and renders the `Watchdog` → `deadman` route + receiver and the `jupiter-deadman` scrape job; empty or shorter → all three are left out (short → WARN). Same value in Saturn's `/etc/jupiter-deadman.env`. Install Saturn first — `monitoring/deadman/README.md`. |
+| `DEADMAN_HOST` | `NODE_SATURN_IP` | Host the Watchdog heartbeat is posted to (`http://DEADMAN_HOST:DEADMAN_PORT/heartbeat`) and the `jupiter-deadman` job scrapes. |
+| `DEADMAN_PORT` | `9466` | Port of the dead-man's switch on that host. |
+
+The switch itself (on Saturn) reads its own `DEADMAN_*` + `PUSHOVER_*` variables from `/etc/jupiter-deadman.env` — listed in `monitoring/deadman/jupiter-deadman.env.example`.

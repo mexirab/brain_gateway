@@ -101,6 +101,18 @@ curl -s localhost:9093/api/v2/status | jq .
 docker exec alertmanager amtool alert query
 ```
 
+### Dead-man's switch (Saturn; once installed — `monitoring/deadman/README.md`)
+```bash
+# On Saturn
+systemctl status jupiter-deadman
+journalctl -u jupiter-deadman -n 50
+python3 -I /opt/jupiter-deadman/jupiter_deadman.py probe   # one probe round of Jupiter, sends nothing
+sudo systemctl stop jupiter-deadman    # BEFORE planned Jupiter downtime (never silence Watchdog — that pages)
+sudo systemctl start jupiter-deadman   # after; waits 3 min for a fresh heartbeat before it can page
+# On Jupiter: are heartbeats arriving? (only Jupiter's address may connect)
+curl -s http://10.0.0.58:9466/metrics | grep -E 'heartbeats_total\{result="ok"\}|last_heartbeat'
+```
+
 ### View logs in Grafana
 1. Open https://jupiter-amds.tail74fc4a.ts.net:3000 (tailnet) or http://localhost:3000 on Jupiter — login `GF_SECURITY_ADMIN_USER` / `GF_SECURITY_ADMIN_PASSWORD` from `.env`
 2. Go to Explore → Select Loki

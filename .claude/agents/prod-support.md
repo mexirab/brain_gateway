@@ -16,12 +16,12 @@ Trigger with "prod support", "check logs", "something's broken", "check monitori
 
 | Node | IP (LAN) | Role |
 |------|----------|------|
-| Helios | 10.0.0.195 (Tailscale: helios.tail74fc4a.ts.net) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-Flash-Next UD-Q3_K_XL MTP GGUF on llama.cpp, `llama-server-primary.service`, split GPU0 RTX 5090 + GPU1 RTX PRO 5000, :8080; rollback = the 27B Q6_K unit `tts/llama-server-primary-27b-q6k.service`, older rollback `vllm-primary.service`), TTS (`voxcpm-tts` VoxCPM2, GPU1, :8004; `qwen-tts` :8002 rollback disabled since 2026-10-24), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003); code agent `llama-server-coder` (:8082) retired + disabled 2026-10-16 |
+| Helios | 10.0.0.195 (LAN only — not on Tailscale by design) | **GPU model layer, power-tiered (NOT always-on)**: primary LLM + vision (Qwen3.8-Flash-Next UD-Q3_K_XL MTP GGUF on llama.cpp, `llama-server-primary.service`, split GPU0 RTX 5090 + GPU1 RTX PRO 5000, :8080; rollback = the 27B Q6_K unit `tts/llama-server-primary-27b-q6k.service`, older rollback `vllm-primary.service`), TTS (`voxcpm-tts` VoxCPM2, GPU1, :8004; `qwen-tts` :8002 rollback disabled since 2026-10-24), STT (`stt-onnx`, Parakeet v2 ONNX on CPU, :8003); code agent `llama-server-coder` (:8082) retired + disabled 2026-10-16 |
 | Jupiter | 10.0.0.248 | **Always-on hub**: orchestrator (`brain-orchestrator` :8888), frontend, Home Assistant (:8123), Pi-hole (idle, no clients — not the LAN resolver), monitoring host (Prometheus, Grafana, Alertmanager, Loki) |
 | Saturn | 10.0.0.58 | Pi-hole secondary (down; not the LAN resolver), backup target. Expert model (Qwen3-32B, RTX 3090, :8084) **deprecated 2026-09-28** (`EXPERT_ENABLED=false`) — registry reports it "Not configured (disabled)", which is expected. Former vision host (Qwen3-VL-8B :8010) — out of the runtime path since 2026-09-28 |
 | Uranus | 10.0.0.173 | Test box (2x RTX 5080), not in the runtime path |
 
-SSH access: `ssh labadmin@10.0.0.195` (Helios, LAN) or `ssh labadmin@helios.tail74fc4a.ts.net` (Tailscale). The orchestrator runs on Jupiter (`/home/labadmin/gateway_nerves`).
+SSH access: `ssh labadmin@10.0.0.195` (Helios, LAN only; from off the LAN `ssh -J labadmin@jupiter-amds labadmin@10.0.0.195`). The orchestrator runs on Jupiter (`/home/labadmin/gateway_nerves`).
 
 ---
 
@@ -310,7 +310,11 @@ Vision log lines (counts only): WARNING `[VISION] N image part(s) were links or 
 |--------|------|--------|---------|
 | `bgw_temperature_fahrenheit` | Gauge | location | Sensor readings (closet, kitchen) |
 | `bgw_temperature_delta_fahrenheit` | Gauge | | Closet − kitchen delta |
-| `bgw_build` | Info | | Build info (version, commit) |
+| `bgw_deployed_commit_info` | Gauge | commit | Commit the CI deploy job last shipped (`.last-deployed-sha`); one series |
+| `bgw_deployed_commit_timestamp_seconds` | Gauge | | Deploy marker mtime |
+| `bgw_deploy_undeployed_green_commits` | Gauge | | Newer green pushes to main not deployed (0 = in sync, NaN = unknown) |
+| `bgw_deploy_undeployed_green_since_timestamp_seconds` | Gauge | | CI-pass time of the oldest undeployed green commit (`DeployDrift`) |
+| `bgw_deploy_drift_check_total` | Counter | result | Drift check outcomes (`DeployDriftCheckFailing`) |
 
 ### Adding New Metrics
 
