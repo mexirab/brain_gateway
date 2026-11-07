@@ -114,7 +114,7 @@ The unit's header comments are the authoritative record (weight sha256s, flags, 
 | `--reasoning-format auto` | | Thinking routed to `reasoning_content` |
 | `--fit off` | | Every placement arg is explicit; a boot that finds GPU1 short fails loudly (Loki alert `BrainFailedToStart`) instead of silently shrinking |
 | `--no-webui --no-slots --metrics` | | `/metrics` scraped by Prometheus job `llama-primary` |
-| `--api-key-file` | `/etc/llama-server/api-key` | Added 2026-10-27 (repo unit; **not yet installed on Helios**). Every path but `/health` 401s without `Authorization: Bearer <key>`, incl. `/v1/models` and `/metrics`. File `root:llama` 640 in a 750 dir, same value as Jupiter `.env` `MODEL_API_KEY`. `ExecStartPre` refuses a file with no key line (llama-server would run with no auth). Enable/rotate steps + check (`/v1/models` → 401): unit header |
+| `--api-key-file` | `/etc/llama-server/api-key` | Added 2026-10-27, **enforced on Helios since 2026-10-29**. Every path but `/health` 401s without `Authorization: Bearer <key>`, incl. `/v1/models` and `/metrics`. File `root:llama` 640 in a 750 dir, same value as Jupiter `.env` `MODEL_API_KEY`. `ExecStartPre` refuses a file with no key line (llama-server would run with no auth). Enable/rotate steps + check (`/v1/models` → 401): unit header |
 
 Measured: decode ~135–180 tok/s (137–140 prose / 174–179 code), ~30–85 while the TTS synthesizes on GPU1; warm streaming TTFT through Jess 0.44–0.53 s (first turn after a restart ~8 s: cold prompt cache); loads in 6–9 s from page cache, 27 s cold (`TimeoutStartSec=360`; the readiness loop polls `/health` — the one unauthenticated path — for up to 240 s and gives up at once if the server process dies). A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
 
@@ -172,7 +172,7 @@ Repo changes (units take effect only when installed on Helios):
 
 | Item | Change |
 |------|--------|
-| `llama-server-primary` (+ 27B rollback unit) | `--api-key-file /etc/llama-server/api-key` — see the flags table above. Repo only until installed |
+| `llama-server-primary` (+ 27B rollback unit) | `--api-key-file /etc/llama-server/api-key` — see the flags table above. Installed 2026-10-29; the pre-key copies are `llama-server-primary.service.bak-pre-apikey-20261029` and `llama-server-primary.service.27b-q6k.bak.pre-apikey-20261029` in `/etc/systemd/system` |
 | `stt-onnx.service` | `HF_HUB_OFFLINE=1` (model loads from `~/.cache/huggingface`; a model change = download first with it unset, outside the unit), `NoNewPrivileges=yes`, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (same list as the brain). It was the only model server on Helios that could reach the internet. Network-only sandbox: still runs as `labadmin` with no filesystem sandbox |
 | `voxcpm-tts.service` | `InaccessiblePaths=-/etc/llama-server` — runs as the same `llama` user as the brain, so it must not read the key. The `-` skips a missing path: restart `voxcpm-tts` after `/etc/llama-server` is first created |
 | `vllm-primary.service` | Header only: no API key in that unit, so rolling back to it turns key enforcement off |
