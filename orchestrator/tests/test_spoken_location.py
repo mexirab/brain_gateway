@@ -74,7 +74,7 @@ class _E:
         ("Microsoft Teams Meeting", "", "Pull up the meeting link."),
         ("", "join at https://zoom.us/j/1", "Pull up the meeting link."),
         ("2 Example Ave", "", "Head out to 2 Example Ave."),
-        ("Building " + "A" * 200, "agenda attached", "Check the agenda."),
+        pytest.param("Building " + "A" * 200, "agenda attached", "Check the agenda.", id="overlong-location"),
     ],
 )
 def test_prep_hint(location, description, hint):
