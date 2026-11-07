@@ -53,7 +53,10 @@ install, and it runs whether or not the orchestrator container is up:
 5. Rotates: keeps the newest `JESS_BACKUP_KEEP` archives (default 30 — at ~15 MB
    each that's under half a gigabyte for a month of nightlies).
 6. Writes a Prometheus textfile metric so **`JessBackupStale` alerts if a
-   nightly is missed** (same mechanism as the Google-token refresh).
+   nightly is missed** (same mechanism as the Google-token refresh), and
+   `jess_backup_offbox_success`, which feeds the quiet `JessBackupOffboxFailing`
+   (`backup="state"`; no off-box copy in 3 days — every backup has its own
+   `backup` label; `monitoring/README.md` → Off-box backup alert).
 
 ## Install (on the always-on host — Jupiter)
 
@@ -141,7 +144,7 @@ orchestrator's `finance.db` mirror.
 | Off-box | rsync to `saturn:/home/labadmin/actual-backups/` (`JESS_ACTUAL_BACKUP_REMOTE`; plaintext, like the other backups) |
 | Log | `/home/labadmin/actual/backup.log` |
 | Metrics | textfile `jess_actual_backup.prom`: `jess_actual_backup_success_timestamp_seconds`, `jess_actual_backup_offbox_success`, `jess_actual_backup_files` |
-| Alerts | `JessActualBackupStale` (>36h, paging), `JessBackupOffboxFailing` (shared, quiet) |
+| Alerts | `JessActualBackupStale` (>36h, paging), `JessBackupOffboxFailing` (`backup="actual"`, quiet) |
 
 Overrides: `JESS_ACTUAL_DATA`, `JESS_ACTUAL_BACKUP_REMOTE`,
 `JESS_ACTUAL_BACKUP_METRICS_PATH`.
@@ -241,7 +244,7 @@ merging and do steps 4-5 right after.
    along with their discretionary overrides. Hard-refresh the UI (it caches
    the old app); Settings shows the version.
 6. **Rollback**, by a revert PR, not an edit in the live checkout (CI's
-   `git pull --ff-only` fails on a dirty tree). Save `docker logs actual-budget`
+   deploy refuses a dirty checkout). Save `docker logs actual-budget`
    first: a recreate deletes them, and they aren't shipped to Loki. Put the old
    image line back **before** running the Restore block above, whose last
    `up -d` starts whatever is pinned. Restore the pre-upgrade archive: once any
@@ -272,7 +275,7 @@ Runbook: `docs/SPREADSHEETS.md`.
 | Off-box | rsync to `saturn:/home/labadmin/grist-backups/` (`JESS_GRIST_BACKUP_REMOTE`; plaintext, like the other backups — `home.sqlite3` holds the Grist API keys) |
 | Log | `/home/labadmin/grist/backup.log` |
 | Metrics | textfile `jess_grist_backup.prom`: `jess_grist_backup_success_timestamp_seconds`, `jess_grist_backup_offbox_success`, `jess_grist_backup_docs` |
-| Alerts | `JessGristBackupStale` (>36h, paging), `JessBackupOffboxFailing` (shared, quiet) |
+| Alerts | `JessGristBackupStale` (>36h, paging), `JessBackupOffboxFailing` (`backup="grist"`, quiet) |
 
 Overrides: `JESS_GRIST_DATA`, `JESS_GRIST_BACKUP_REMOTE`,
 `JESS_GRIST_BACKUP_METRICS_PATH`. Run it once by hand after install to seed the

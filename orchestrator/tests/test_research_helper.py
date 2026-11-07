@@ -104,7 +104,7 @@ async def test_disabled_returns_off(monkeypatch):
     [
         (QUESTION, "astrology", "Unknown topic"),
         ("", "coding", "No question"),
-        ("x" * (rh.MAX_QUESTION_CHARS + 1), "coding", "too long"),
+        pytest.param("x" * (rh.MAX_QUESTION_CHARS + 1), "coding", "too long", id="question-too-long"),
     ],
 )
 async def test_bad_requests(enabled, question, topic, expect):
@@ -786,7 +786,8 @@ async def test_fetch_without_content_type_sniffs_html(monkeypatch):
     "body",
     [
         "Release notes: compare a < b, and write <b>bold</b> literally.\n",  # no <html: plain text
-        "x" * 2500 + "<html><p>late</p></html>",  # <html beyond the sniff window: not HTML
+        # <html beyond the sniff window: not HTML
+        pytest.param("x" * 2500 + "<html><p>late</p></html>", id="html-past-sniff-window"),
     ],
 )
 async def test_fetch_without_content_type_keeps_plain_text(monkeypatch, body):

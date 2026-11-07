@@ -35,6 +35,14 @@ REQUEST_ERRORS = Counter(
     "Total request errors",
     ["mode", "error_type"],
 )
+# The fixed error types start at 0 so increase() sees the first failure after
+# a restart (HighErrorRate). Unhandled exceptions use their class name and stay lazy.
+for _mode, _error_type in (
+    ("unified", "model_unavailable"),
+    ("unified", "tool_loop_failed"),
+    ("unified_fallback", "fallback_failed"),
+):
+    REQUEST_ERRORS.labels(mode=_mode, error_type=_error_type)
 
 ACTIVE_REQUESTS = Gauge(
     "bgw_active_requests",

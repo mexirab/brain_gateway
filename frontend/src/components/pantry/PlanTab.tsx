@@ -147,7 +147,10 @@ export default function PlanTab({ shown }: { shown: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      after?.(await fn());
+      // Not `after?.(await fn())`: an optional call skips its arguments when
+      // `after` is missing, so fn() never ran and Discard did nothing.
+      const result = await fn();
+      after?.(result);
     } catch (e) {
       setError(planError(e, 'That didn’t work — try again.'));
     } finally {
@@ -171,8 +174,13 @@ export default function PlanTab({ shown }: { shown: boolean }) {
     if (window.confirm('Throw away this draft and make a new plan?')) generate();
   };
 
+  // Say so: the draft just vanishes, and an accepted plan below expands into its place.
   const discard = (plan: MealPlan) => {
-    if (window.confirm('Throw away this draft plan?')) run(() => planApi.discard(plan.id));
+    if (!window.confirm('Throw away this draft plan?')) return;
+    run(
+      () => planApi.discard(plan.id),
+      () => setNotice(active ? 'Draft thrown away. Your accepted plan is unchanged.' : 'Draft thrown away.'),
+    );
   };
 
   // Consumption tracking (phase 4): only on the accepted plan.
@@ -311,7 +319,12 @@ export default function PlanTab({ shown }: { shown: boolean }) {
           plan={draft}
           hiccup={pollHiccup}
           busy={busy}
-          onDiscard={() => run(() => planApi.discard(draft.id))}
+          onDiscard={() =>
+            run(
+              () => planApi.discard(draft.id),
+              () => setNotice('Cancelled — you can start a new plan any time.'),
+            )
+          }
         />
       )}
       {draft?.status === 'failed' && (
