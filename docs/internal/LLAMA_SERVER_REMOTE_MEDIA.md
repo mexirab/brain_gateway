@@ -1,6 +1,6 @@
 # llama-server fetches image URLs: brain-side options
 
-Status (2026-10-27): **Option B (`--api-key-file`) applied in the repo, not yet enforced on Helios.** The live and 27B units, the orchestrator and monitoring are done (see "Applied" under Option B); the key is enforced once `tts/llama-server-primary.service` is installed on Helios, after that change deploys (the orchestrator must send the key first; steps in the unit header). **Still open, owner's call:** Option A (narrow `IPAddressAllow`) and the Loki detection alert.
+Status (2026-10-29): **Option B (`--api-key-file`) enforced on Helios since 2026-10-29** (PR #161 deployed first, then the unit installed). Verified that day: every path but `/health` answers 401 without the key, from Jupiter and from Helios loopback, and a wrong key is refused too; chat (buffered + streamed), vision, the orchestrator's startup service probes, the Prometheus `llama-primary` scrape and the `qwen` CLI all work with it. See "Applied" under Option B; rotation steps are in the unit header. **Still open, owner's call:** Option A (narrow `IPAddressAllow`) and the Loki detection alert.
 
 Written 2026-10-25 after the security review of PR #148. The orchestrator side is fixed in `cloud_brain._process_vision` / `_flatten_content` (no image part, link or otherwise, ever reaches a model loop). This page covers what that fix cannot reach: llama-server itself.
 

@@ -164,6 +164,102 @@ rm -rf /tmp/actual-restore
 Verify: `curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:8888/api/finance/sync/status`
 (or trigger a sync) and open the Actual UI at https://jupiter-amds.tail74fc4a.ts.net:5007 (tailnet only).
 
+### Upgrade
+
+The image is pinned by digest in `actual/docker-compose.yml`. `actualpy` (the
+orchestrator's client) downloads the server's migration files and runs them on
+its own copy of the budget, so a server ahead of the client can break the sync.
+Check https://pypi.org/project/actualpy/ for a release that supports the new
+server; if there is none, dry-run first. Giving a new release about a week
+before upgrading is a cheap guard against a bad one.
+
+Merging the pin changes the live checkout (CI git-pulls it), and from then on
+any `docker compose up -d` in `actual/` (the `ActualDown` runbook, the
+pruned-network fix) performs the upgrade. So take the backup (step 2) before
+merging and do steps 4-5 right after.
+
+1. **Dry run.** Use copies only: never the live container, its data dir, or the
+   live password.
+   - `umask 077; D=$(mktemp -d /home/labadmin/actual/dryrun.XXXXXX)`, outside
+     the repo (`*.sqlite` and `actual-*.tar.gz` aren't gitignored, and the repo
+     is public). Extract the newest `actual-*.tar.gz` twice, into `$D/old/` and
+     `$D/new/`.
+   - Give each copy a throwaway password so the live one never leaves `.env`:
+     `docker run --rm -it --network none --user 1000:1000 -v "$D/new/data:/data" <image> node /app/scripts/reset-password.js`
+     (on 26.11+ this also signs out the session tokens copied with the backup).
+     Never `--env-file .env`, and never put a password on the command line.
+   - `docker network create --internal actual-dryrun`. Every dry-run container
+     runs with `--network actual-dryrun` only: never gateway-net or
+     monitoring-net, never `--network host`, no `-p`. Use `docker run`, never
+     `docker compose` in `actual/` (that targets the live container and data).
+     Start the test server with the production settings:
+     `docker run -d --rm --name actual-dryrun --network actual-dryrun --user 1000:1000 --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /tmp:size=64m --memory 512m -v "$D/new/data:/data" <image>`.
+     Clients use `http://actual-dryrun:5006`.
+   - Run `orchestrator.actual_client.fetch_snapshot()` from a throwaway
+     orchestrator-image container on that network, given only
+     `ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD` (the throwaway one) and
+     `ACTUAL_BUDGET_FILE` from a mode-600 env file in `$D`. Do the same against
+     the current image on `$D/old/`. Compare the two by sha256 and row counts;
+     don't print snapshot contents.
+   - Let the new client touch the budget, in two steps. First install, with
+     nothing mounted but an empty dir:
+     `docker run --rm --user 1000:1000 -e HOME=/w -v "$D/node:/w" -w /w node:22-alpine npm install --no-audit --no-fund @actual-app/api@<exact server version>`.
+     Then run a script that calls `downloadBudget`, adds one marker
+     transaction and calls `sync`, with `--network actual-dryrun --user 1000:1000`
+     and its `dataDir` under `/w`. Run `fetch_snapshot()` again: it must still
+     work and see the marker.
+   - List the new migrations with `Actual.data_file_index()`. A `.js`
+     migration can yield no SQL in `actualpy`
+     (`actual.migrations.js_migration_statements`). Read every such file and
+     confirm it adds no table or column that clients sync. If it does, write to
+     it in the dry run: once a client syncs into an unknown table or column,
+     `actualpy` raises `ActualError` and the sync stops.
+   - Clean up with `docker rm -f actual-dryrun; docker network rm actual-dryrun; rm -rf "$D"`,
+     then check that `$D` is gone. The copies hold the full budget and every
+     session token.
+2. **Back up**: `bash actual/backup_actual.sh`, then copy the newest archive to
+   `pre-upgrade-<old version>.tar.gz` (rotation only deletes `actual-*.tar.gz`).
+   The script ships only its own archive off-box, so check that its last log
+   line says `offbox=1`, or copy the pre-upgrade file off-box by hand. Delete
+   it once the upgrade has synced cleanly for a week: it is a plaintext full
+   budget.
+3. **Pin**: take the digest from
+   `docker buildx imagetools inspect actualbudget/actual-server:<version>`,
+   update the image line + comment, merge. CI does not deploy `actual/`.
+4. **Upgrade**: `cd actual && docker compose pull && docker compose up -d`.
+   `docker logs actual-budget | head` should show `Migrations: DONE` and
+   `Listening on :::5006`, and `docker ps --filter name=actual-budget` usually
+   shows `(healthy)` within 5-10 s. Still `health: starting` after ~2.5 min
+   means it failed. The ~5 s outage is too short for `ActualDown` (5 min) or
+   `BudgetSyncFailing` (6 h).
+5. **Verify before entering anything new.** Wait 60 s after it is healthy
+   (manual syncs have a 60 s cooldown that returns the previous result), then
+   `POST /api/finance/sync` (bearer `API_TOKEN`); the response must not
+   say `"cooldown": true`. `GET /api/finance/sync/status` must show
+   `last_synced_at` later than the upgrade, `last_result.deleted` about 0 and
+   `last_result.fun_money_balance` not null. `bgw_budget_history_rows` should
+   not drop, and Loki `{container="brain-orchestrator"} |= "[ACTUAL]" |= "Could not evaluate"`
+   should return nothing. A sync can report success with bad data: budget
+   figures fall back to 0, and rows that vanish are deleted from `finance.db`
+   along with their discretionary overrides. Hard-refresh the UI (it caches
+   the old app); Settings shows the version.
+6. **Rollback**, by a revert PR, not an edit in the live checkout (CI's
+   deploy refuses a dirty checkout). Save `docker logs actual-budget`
+   first: a recreate deletes them, and they aren't shipped to Loki. Put the old
+   image line back **before** running the Restore block above, whose last
+   `up -d` starts whatever is pinned. Restore the pre-upgrade archive: once any
+   new client has opened the budget, the file records a migration the old app
+   doesn't know, and the old app refuses to load it. Then, on **every device**
+   that opened the budget on the new version, close the budget and download it
+   again from the server (or clear the site's data): its local copy is
+   migrated too, and would otherwise fail to load or push its newer changes
+   back. Anything entered after the upgrade is lost. Jess needs nothing:
+   `actualpy` keeps no copy between syncs.
+
+Opening the budget in any Actual client posts scheduled transactions that came
+due since it was last opened, so Quest Board spending can jump on the first
+open after an upgrade. That is not caused by the upgrade.
+
 ## Grist (spreadsheets)
 
 Separate nightly job for the Grist server (`grist/` compose project, container

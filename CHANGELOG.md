@@ -26,6 +26,19 @@ Found 2026-11-06: Saturn (the off-box backup target) had been offline since 2026
 
 ---
 
+## [Unreleased] — Actual Budget server 26.9.0 → 26.11.0 (2026-11-06)
+
+Branch `chore/actual-server-26.11.0`. Image pin bump only; no orchestrator code change.
+
+- `actual/docker-compose.yml`: `actualbudget/actual-server:26.11.0@sha256:06cf1865…8da6` (digest checked with `docker buildx imagetools inspect`). `actualpy` stays at 0.22.4: it is the newest release (released against server 26.2.0; this deployment has run it on 26.9.0 since 2026-10).
+- Dry run 2026-11-06 on a copy of the nightly backup, private docker network, live server untouched: `fetch_snapshot()` returned an identical snapshot on 26.9.0 and 26.11.0; after the official 26.11.0 client (`@actual-app/api`) migrated the budget, added a marker transaction, synced and re-uploaded the file, `fetch_snapshot()` still worked and saw the marker. 26.11.0 adds one migration, `add_messages_pending.js` (a local, never-synced queue for sync messages from newer app versions). `actualpy` extracts no SQL from it, which doesn't matter for a read-only reader. Upstream release notes: 26.10 nanoid security update; 26.11 password change needs the current password and signs out sessions, credentials kept out of request logs, SimpleFIN private-bridge allowlist (not used here).
+- `docs/BACKUP.md` → Actual Budget → Upgrade: isolated dry run (copies only, throwaway password, internal network, npm install split from the run), backup, pin, upgrade, verify (incl. checks for a sync that succeeds with bad data), rollback (revert image before restore, re-download the budget on every device).
+
+### Upgrade action
+
+- Merging changes only the file (CI does not deploy `actual/`), but after that any `docker compose up -d` in `actual/` upgrades. So back up before merging, then right after: `cd actual && docker compose pull && docker compose up -d` and the verify step in `docs/BACKUP.md`.
+- The first time any Actual client opens the budget it posts scheduled transactions that came due since it was last opened, so Quest Board spending can jump. That happens with 26.9.0 too.
+
 ## [Unreleased] — USB storage: containers left on a disconnected disk (2026-11-03)
 
 Branch `fix/usb-remount-stale-containers`. On 2026-10-31 Jupiter's USB enclosure (`/mnt/logging`, `/mnt/documents`, `/mnt/media`) dropped for ~3 s and re-enumerated. `usb-storage-remount.service` remounted all three disks within 10 s, so the `*MountMissing` alerts stayed green — but every running container kept the old, shut-down filesystem (a bind mount is resolved at container start). Prometheus kept running while every WAL write failed with EIO, so no threshold alert could fire for 3 days (the one alert that got through, `ClosetTemperatureSensorMissing`, was false); Loki, Grafana and the Paperless/Immich Postgres hit I/O errors. Recovered 2026-11-03 by stop+start of the affected containers. Detail: `monitoring/README.md` → USB Storage.
@@ -57,7 +70,37 @@ Branch `fix/usb-remount-stale-containers`. On 2026-10-31 Jupiter's USB enclosure
 
 ---
 
+## [Unreleased] — alert routing audit (2026-10-27)
+
+Branch `fix/alert-routing-audit`. Alertmanager routes by an alertname allow-list, and seven rules notified nobody. Detail: `monitoring/README.md` → Alertmanager → Routing coverage.
+
+### Monitoring
+
+- New `orchestrator/tests/test_alert_routing.py`. It walks the Alertmanager route tree for every Prometheus and Loki rule, with every optional block and with them stripped. It fails CI when:
+  - an alert reaches only `null` / `self-investigator` without a reason in its `GRAFANA_ONLY` list (`UranusDown`, `AlertmanagerUnreachable`, `HighRequestLatency`, `AppDown`, `RoutineAutoEnded`);
+  - a heartbeat receiver gets anything but its heartbeat;
+  - a route matches on a runtime label, or names an undefined receiver;
+  - a route or inhibit names an alert no rule defines.
+
+  It gives the same receivers as `amtool config routes test` for all 77 alerts.
+- Routed to `pushover-quiet` in two lists of their own: `RuleEvaluationFailing`, `TTSDown`, `STTDown`, `HighErrorRate`, `HighToolErrorRate` and `HighGPUTemp` (4h repeat); `DiskSpaceLow` and `HighVRAMUsage` (24h repeat, standing conditions).
+- `TTSDown` / `STTDown` only count while Helios's node-exporter is up: the probes fail every time the power-tiered box sleeps.
+- `HighErrorRate` could never fire: it divided `{mode,error_type}` by `{mode}` without `sum()`. It now fires on ≥2 chat turns that failed in the primary brain within 1h and are also >10 % of turns. Brain-asleep replies and the same turn's fallback retry don't count.
+- `HighToolErrorRate` is per tool over 1h, needs ≥2 failures, and names the tool in the notice. An embedding outage inhibits it for the memory tools.
+- `HighVRAMUsage` is Helios-only and fires under 1 GiB free. The old 95 % ratio sat 11 MiB from firing on GPU1.
+- `DiskSpaceLow` also covers `/mnt/documents` and `/mnt/media`, pins `job="node-exporter"`, and has a runbook.
+- `HighGPUTemp` puts the temperature in the notice.
+- New `RuleEvaluationFailing` (group `prometheus_self`): a Prometheus rule keeps failing at evaluation time, so it can't fire.
+
+### Orchestrator
+
+- `bgw_request_errors_total` series for the fixed error types are created at 0 in `metrics.py`, and each tool's `bgw_tool_calls_total` / `bgw_tool_call_errors_total` series at registration (`tool_registry.register_tool`). Without them, `increase()` missed the first failure after every restart, and the orchestrator restarted 111 times in 30 days.
+
+---
+
 ## [Unreleased] — egress-audit hardening + brain API key (2026-10-27)
+
+Key enforced on Helios 2026-10-29: PR #161 deployed, then the new `llama-server-primary.service` installed and the 27B rollback copy refreshed.
 
 Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and Jupiter found no phone-home by the Qwen model (no China-linked IPs/ASNs/domains; llama-server's uid opened no connections; its systemd IP sandbox held). This applies the audit's hardening recommendations. Detail: `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
 
@@ -88,6 +131,32 @@ Branch `harden/egress-fixes`. A 10-hour overnight packet capture on Helios and J
 ### Docs
 
 - `CLAUDE.md`, `docs/ENV_VARS.md`, `.env.example`, `monitoring/README.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md`, `docs/internal/LLAMA_SERVER_REMOTE_MEDIA.md`, `docs/PRIVACY.md`, `docs/VOICE_AND_TTS.md`, `COMMANDS.md`, `TECHNICAL_REFERENCE.md`, `.claude/agents/prod-support.md`; `setup_env.py` `MODEL_API_KEY` description no longer says cloud-only.
+
+---
+
+## [Unreleased] — CI + deploy hardening (2026-10-26)
+
+A deploy failed with "Cannot fast-forward to multiple branches" (a `git fetch` in the live checkout rewrote `.git/FETCH_HEAD` under the job's `git pull`), deploys could ship commits whose CI hadn't finished, and two tests with ~1 MB parametrize ids stalled the test job 25+ min. Detail: `docs/DEV.md` → CI and auto-deploy.
+
+### CI
+
+- `timeout-minutes` on every job (lint/dashboards/theme 10, tests 15, frontend 15, docker build 25, deploy 45).
+- Deploy step "Fast-forward the deploy checkout": refuses a checkout off `main`, with modified tracked files or untracked files under `orchestrator/`/`frontend/`/root compose overrides (count only); `git fetch --no-write-fetch-head` (3 tries) + `git merge --ff-only <github.sha>` — ships the commit whose CI passed, only while it is on `origin/main`. Catch-up: also fast-forwards to the newest first-parent commit (≤20 back) whose push run passed every non-deploy job and whose `ci.yml` is identical (read-only `GITHUB_TOKEN`, `actions: read`); API failure → only `github.sha` ships.
+- Deploy step "Rebuild changed services": `git diff --no-renames`; an `orchestrator/tests/`-only change no longer recreates the orchestrator; curl timeouts on the Grist/Loki waits.
+
+### Operator notes
+
+- The live checkout can show "behind origin/main" while newer commits are in CI — don't `git pull` it by hand.
+- Hold deploys by stopping the runner service; cancelling a deploy run no longer holds its commit back if an older deploy is still to run.
+- New CI jobs must be added to the deploy job's `needs:`.
+
+### Tests
+
+- `orchestrator/tests/conftest.py` fails collection (exit 4) on any test node id over 300 chars, printing only function names/counts/lengths. Ten long cases in 8 files now use `pytest.param(..., id=...)`. Guard tests: `tests/test_nodeid_length_guard.py`.
+
+### Docs
+
+- `CLAUDE.md`, `docs/DEV.md`.
 
 ---
 

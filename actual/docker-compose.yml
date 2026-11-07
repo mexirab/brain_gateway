@@ -26,10 +26,19 @@
 services:
   actual-budget:
     container_name: actual-budget
-    # 26.9.0 pinned by digest. Bump together with actualpy in
+    # 26.11.0 pinned by digest. Bump together with actualpy in
     # orchestrator/requirements.txt: actualpy runs server-provided migration SQL
     # locally, so a server ahead of the client can break (or steer) the sync.
-    image: actualbudget/actual-server:26.9.0@sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3
+    # 26.11.0 is ahead of actualpy 0.22.4, the newest release (released against
+    # 26.2.0; this deployment ran it on 26.9.0 from 2026-10). Dry run 2026-11-06
+    # on a backup copy: identical snapshot to 26.9.0, and the sync still works
+    # after the 26.11 client has migrated and re-uploaded the budget. The one new
+    # migration (add_messages_pending.js: a local, never-synced queue for sync
+    # messages from newer app versions) yields no SQL in actualpy, which a
+    # read-only reader never needs. A sync failing with ActualError after a
+    # future bump means actualpy is behind the server's schema. Repeat the dry
+    # run before the next bump: docs/BACKUP.md -> Actual Budget -> Upgrade.
+    image: actualbudget/actual-server:26.11.0@sha256:06cf186569cf58d93e12659ff1a517b65b5b0ebee7050a3991d4bd8a1d398da6
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
