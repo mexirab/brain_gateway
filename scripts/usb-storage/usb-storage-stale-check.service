@@ -1,0 +1,36 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/usb-storage-stale-check.service
+# Install steps: header of usb-storage-remount.service (same folder).
+#
+# Check-only safety net for the remount -> restart-stale chain: every 10 min
+# (via usb-storage-stale-check.timer) count running containers whose /mnt bind
+# mount points at a dead disk, re-evaluate earlier failed restarts, and publish
+# jess_stale_mount_containers / jess_stale_mount_restart_failures for the
+# StaleMountContainers / StaleMountRestartFailed alerts. Never restarts
+# anything. Covers a missed udev event, a restart run that died half-way, and
+# clears StaleMountRestartFailed once a container was fixed by hand. Skips
+# (exit 0) while a --fix run holds the lock.
+[Unit]
+Description=Check for containers whose /mnt bind mounts point at a dead disk (no restarts)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -u /usr/local/sbin/restart-stale-mount-containers --metrics-dir /home/labadmin/node_exporter/textfile_collector --state-file /var/lib/restart-stale-mount/failed.json
+# Exit 1 = stale containers or unresolved failures: the unit shows failed
+# (visible in `systemctl --failed`) and the metrics drive the alerts. The timer
+# keeps firing.
+TimeoutStartSec=5min
+# Read-only apart from the textfile directory (it reads, never writes, the
+# restart unit's state file). Still root with the docker socket, so this only
+# limits accidents.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/labadmin/node_exporter/textfile_collector
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any

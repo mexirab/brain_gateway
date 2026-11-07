@@ -37,7 +37,7 @@ After any change under `frontend/`, or when adding a new dashboard page, widget,
 
 ### Testing the change
 - Rebuild: `docker compose up -d --build --force-recreate frontend`
-- Hit it in a browser at `http://helios.tail74fc4a.ts.net:3001` and verify the happy path AND one error path (e.g., orchestrator down, empty response)
+- Hit it in a browser at `https://jupiter-amds.tail74fc4a.ts.net` (Tailscale Serve → Jupiter :3001) and verify the happy path AND one error path (e.g., orchestrator down, empty response)
 - Check the browser console for warnings/errors
 - If the change affects the Callisto kiosk, test at kiosk resolution (1920x1080 typically)
 

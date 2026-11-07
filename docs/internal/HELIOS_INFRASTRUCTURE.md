@@ -56,7 +56,7 @@ Server closet temperature monitoring with dashboard widget, TTS alerts, and Graf
 
 **Prometheus alerts:**
 - `ClosetTemperatureCritical` — closet ≥ 95°F for 10m, paging `pushover`. Hard-coded 95 matches the live profile critical; keep them together.
-- `ClosetTemperatureSensorMissing` — closet series absent for 2h, quiet `pushover-quiet`.
+- `ClosetTemperatureSensorMissing` — closet series absent for 2h, quiet `pushover-quiet`. Inhibited while `PrometheusNotIngesting` fires (an empty TSDB makes it fire falsely, as on 2026-10-31 — `monitoring/README.md` → USB Storage).
 
 **Grafana:** jess_glance "Closet Temp" + homelab_infra "Closet vs Ambient" use `CLOSET_TEMP_THRESHOLDS` (`dashgen/panels.py`): green / 87 yellow / 90 orange / 95 red.
 
