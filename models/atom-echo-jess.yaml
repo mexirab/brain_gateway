@@ -14,8 +14,8 @@
 # voice-assistant client; HA and Jess would fight over it).
 #
 # Files next to this YAML: secrets.yaml (gitignored — wifi_ssid, wifi_password,
-# api_encryption_key, ota_password, ap_password), hey_jess.json + hey_jess.tflite,
-# okay_jess.json + okay_jess.tflite.
+# api_encryption_key, ota_password, ap_password), hey_jess.json + hey_jess.tflite
+# (okay_jess.json + okay_jess.tflite only if you uncomment that model below).
 #
 # Build + flash: see docs/VOICE_AND_TTS.md → Voice satellite. The node name is
 # a substitution; the office unit keeps its existing identity with
@@ -208,16 +208,19 @@ micro_wake_word:
   stop_after_detection: false
   models:
     # Trained on Saturn 2026-01-26. Manifest = the TRAINER's values
-    # (probability_cutoff 0.97, tensor_arena_size 30000).
+    # (probability_cutoff 0.97, tensor_arena_size 30000). Tested on the
+    # device 2026-11-11: it also fires on "Okay Jess" (0.98–0.99) and on
+    # other "-ay Jess" phrases, so it covers both wake words on its own.
     - model: hey_jess.json
       id: hey_jess
-    # Trained on microwakeword.com 2026-11-10, "robust" variant. Manifest as
-    # delivered: probability_cutoff 0.35 is the threshold its benchmark was
-    # measured at (recall 86.2%, 0.38 false accepts/hour); its cutoff scale
-    # differs from hey_jess's, so don't copy 0.97 across. Leave
-    # tensor_arena_size / feature_step_size as delivered.
-    - model: okay_jess.json
-      id: okay_jess
+    # "Okay Jess" model (microwakeword.com 2026-11-10, "robust" variant;
+    # manifest as delivered: probability_cutoff 0.35 = the threshold its
+    # benchmark was measured at, recall 86.2% / 0.38 false accepts per hour;
+    # its cutoff scale differs from hey_jess's). Left out: hey_jess always
+    # fired first on "Okay Jess", so it added only a second way to wake by
+    # accident. Uncomment to bring it back:
+    # - model: okay_jess.json
+    #   id: okay_jess
     # (The stock okay_nabu model was a bring-up control only. Removed
     # 2026-11-10 once "Hey Jess" worked on the device: it is said in many
     # public Home Assistant videos, so it's an easy false/remote trigger.)

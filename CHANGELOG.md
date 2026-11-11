@@ -24,7 +24,7 @@ The ATOM Echo's HA Assist path had been broken since the HA migration (the conve
 
 ### Firmware
 
-- `models/atom-echo-jess.yaml` rewritten (validated + compiled with ESPHome 2026.10.2, flashed OTA, "Hey Jess" verified on-device 7/7): no HA bits, "Hey Jess" as a local model file, "Okay Jess" added as a second local model (microwakeword.com "robust" variant, manifest cutoff 0.35 as delivered), stock `okay_nabu` removed, wake word listens from boot, `api: reboot_timeout: 0s`, fallback-AP password from `!secret ap_password`, Voice PE sounds pinned to commit `a5429c2b` (CC BY 4.0), `on_error` maps the `jess-*` codes to sounds.
+- `models/atom-echo-jess.yaml` rewritten (validated + compiled with ESPHome 2026.10.2, flashed OTA, "Hey Jess" verified on-device 7/7): no HA bits, "Hey Jess" as a local model file (verified on the device to also wake on "Okay Jess"), a dedicated "Okay Jess" model (microwakeword.com, `models/okay_jess.*`) kept but commented out as redundant, stock `okay_nabu` removed, wake word listens from boot, `api: reboot_timeout: 0s`, fallback-AP password from `!secret ap_password`, Voice PE sounds pinned to commit `a5429c2b` (CC BY 4.0), `on_error` maps the `jess-*` codes to sounds.
 - `models/hey_jess.json`: the trainer's manifest values (`probability_cutoff` 0.97, `tensor_arena_size` 30000; was 0.5 / 26080).
 
 ### Monitoring
