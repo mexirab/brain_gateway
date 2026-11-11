@@ -1528,8 +1528,11 @@ def build() -> dict:
     # results tell unplugged (unreachable/timeout) from a wrong key or device.
     # no_speech + empty_transcript per wake word ≈ false wakes (tuning signal for
     # each wake word's probability_cutoff). Latency is split by helios=awake|woken
-    # so 60-180 s wake turns don't swamp normal ones; it ends when HA accepted
-    # play_media (Cast adds 1-3 s). No data at all = feature disabled.
+    # so 60-180 s wake turns don't swamp normal ones; it starts when listening
+    # ended and ends when HA accepted play_media (Cast adds 1-3 s). How listening
+    # ended is its own panel: a run that hits the 15 s cap still counts as an ok
+    # turn, so max_utterance is the only place the "she never heard me stop"
+    # failure of 2026-11-11 shows. No data at all = feature disabled.
     r, y = row_divider("Voice Satellite", y)
     panels.append(r)
     satellite_row = [
@@ -1562,7 +1565,16 @@ def build() -> dict:
             description="A wake followed by nothing said is almost always a false wake.",
         ),
         timeseries(
-            "Speech End → Reply Playing p50 / p95 (6h)",
+            "How Listening Ended (24h)",
+            [("sum by (reason) (increase(bgw_satellite_listen_end_total[24h]))", "{{reason}}")],
+            unit="none",
+            description=(
+                "speech_end = heard you stop (normal). max_utterance = ran to the 15 s cap: the VAD never "
+                "heard you stop (or a TV) — answers then come 15 s late. wall_timeout = audio stalled."
+            ),
+        ),
+        timeseries(
+            "Listening End → Reply Playing p50 / p95 (6h)",
             [
                 (
                     "histogram_quantile(0.5, sum by (le, helios) (rate(bgw_satellite_turn_seconds_bucket[6h])))",
@@ -1574,12 +1586,15 @@ def build() -> dict:
                 ),
             ],
             unit="s",
-            description="ok turns only, until HA accepted play_media; the Cast speaker adds 1-3 s.",
+            description=(
+                "ok turns only, from the VAD's end-of-listening decision until HA accepted play_media; "
+                "the time spent listening and the Cast speaker's 1-3 s are not included."
+            ),
         ),
     ]
     row, y = grid_row(satellite_row[:3], y, heights=[8, 8, 8])
     panels.extend(row)
-    row, y = grid_row(satellite_row[3:], y, heights=[8, 8])
+    row, y = grid_row(satellite_row[3:], y, heights=[8, 8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Telegram Bot

@@ -2,12 +2,12 @@
 
 ## Voice satellite (ATOM Echo → Jess)
 
-An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **without Home Assistant's voice pipeline**; HA only plays the reply. Code: `orchestrator/voice_satellite.py` (module docstring is authoritative). Firmware: `models/atom-echo-jess.yaml`. **Default off** (`VOICE_SATELLITE_ENABLED=false`). Status 2026-11-10: firmware flashed OTA to the real device, "Hey Jess" verified on-device (7/7 wakes, confidence 0.97–1.00).
+An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **without Home Assistant's voice pipeline**; HA only plays the reply. Code: `orchestrator/voice_satellite.py` (module docstring is authoritative). Firmware: `models/atom-echo-jess.yaml`. **Default off** (`VOICE_SATELLITE_ENABLED=false`). Status 2026-11-10: firmware flashed OTA to the real device, "Hey Jess" verified on-device (7/7 wakes, confidence 0.97–1.00). 2026-11-11, after the first live tests: VAD rebuilt for the measured room (below) and a firmware lock-up fixed (Firmware rules).
 
 ```
 "Hey Jess" (micro_wake_word on the device) → beep
   -> 16 kHz mono PCM over the ESPHome native API (:6053, noise-encrypted with the device API key)
-  -> voice_satellite.py (Jupiter): energy VAD (port of frontend/src/lib/vad.ts) ends the utterance
+  -> voice_satellite.py (Jupiter): energy VAD (EnergyVad, learns the room's level each run) ends the utterance
   -> RUN_END to the device (it goes straight back to wake-word listening)
   -> STT on Helios (STT_URL /v1/audio/transcriptions)
   -> cloud_brain.chat(messages, stream=False, is_voice=True)   one Jess voice turn, voice tool subset
@@ -42,15 +42,23 @@ Wake beep: `wake_word_triggered.flac`. Sounds are the Home Assistant Voice PE se
 
 ### Listening (VAD)
 
+`VadConfig` / `EnergyVad` in `voice_satellite.py`; their docstrings and comments are authoritative. Input: one level per 50 ms frame, RMS around the frame's own mean (DC removed), 0..1 of full scale.
+
 | Parameter | Value |
 |-----------|-------|
-| Calibration | first 200 ms after the beep; learned floor capped at 0.015 (a first word said into the beep can't become the floor) |
-| Speech threshold | `max(0.01, floor × 3)`; held at 0.6× while speaking |
-| Speech confirm | 200 ms above threshold |
-| End of utterance | 1.2 s of silence |
-| Cap | 15 s, then processed as is |
+| Smoothing | every decision uses the 200 ms moving mean of frame RMS ("smoothed level") |
+| Room level (`floor`) | 25th percentile of the smoothed level over the last 2 s. Starts at 0.045; nothing learned from the first 300 ms (mic start-up); held between 0.036 and 0.045 for the first 1.5 s (words straight after the beep can't become "the room"); frozen while speaking; never below 0.003 |
+| Speech start | smoothed ≥ `max(0.03, floor × 1.8)`, with ≥ 2 single frames above that bar in the last 200 ms (rejects clicks), for 150 ms |
+| End of utterance | for 1.2 s no smoothed level reached the speech bar **and** the mean frame level over those 1.2 s < `max(0.015, floor × 1.35)` |
+| Cap | 15 s, then processed as is (`max_utterance`) |
 | Nothing said | 5 s → `jess-no-speech` |
-| Backstops | no audio within 4 s → `no_audio` (`jess-error`); run wall clock 30 s |
+| Backstops | no audio within 4 s → `no_audio` (`jess-error`); run wall clock 30 s (`wall_timeout`) |
+
+**Why (2026-11-11):** measured on the device (per 50 ms frame), the room in silence reads 0.025–0.09 (median 0.042: fans, air, mic hiss) and a spoken question 0.19–0.24. The first VAD, a port of the dashboard's browser-mic VAD (`frontend/src/lib/vad.ts`), capped its learned floor at 0.015, so its end-of-speech bar (0.027) sat below the room itself: every question ran to the 15 s cap (answer ~15 s late) or was missed as no-speech. Grafana looked healthy, because a capped run still counts as an `ok` turn; `bgw_satellite_listen_end_total{reason}` now shows it. Simulated on the measured levels (400 runs per case): questions of 0.8–10 s caught 100 % with no cut-offs, end decided ~1.25–1.35 s after the last word; a quiet voice 95–99.5 %; nobody speaking ≥ 99.75 % correctly `no_speech`. Rejected alternatives: D13.
+
+**Not the cause (don't re-check):** ESPHome's `voice_assistant` `noise_suppression_level` / `auto_gain` / `volume_multiplier` are only hints sent to the server (HA applies them); the device streams raw audio and the bridge ignores them, so they were removed from the firmware. The mic's DC offset was ~0; the firmware keeps `correct_dc_offset: true` and `frame_rms` removes the frame mean anyway.
+
+**Diagnosing:** each run logs `listening ended (<reason>)` with the numbers the VAD decided on (room level, both bars, peak, tail mean). Fields, metric, LogQL: `monitoring/README.md` → Voice Satellite. **New room:** measure the room's levels first (bridge off); much louder than ~0.045 means expect `max_utterance` (Known limits).
 
 ### A turn
 
@@ -78,6 +86,7 @@ One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per 
 | D10 | `VOICE_SATELLITE_SPEAKER` required; no fallback to other rooms (`allow_fallback=False`) | Replies play under sleep mode, so they must never land in another room. Speaker unavailable in HA → `speaker_unavailable` + `jess-error` |
 | D11 | No multi-device arbitration | One device, env-configured. Two devices hearing one wake word would both answer |
 | D12 | Wake words run on the device only, never server-side | "Hey Jess" = local model (`models/hey_jess.json` + `.tflite`, the trainer's manifest: `probability_cutoff` 0.97, `tensor_arena_size` 30000). On the device (2026-11-11) the Hey Jess model also fires on "Okay Jess" (0.98–0.99) and on other "-ay Jess" phrases ("Play Jess", "May Jess"); owner-accepted, so it covers both wake words alone. A dedicated "Okay Jess" model (`models/okay_jess.json` + `.tflite`, microwakeword.com 2026-11-10, "robust" variant, manifest as delivered: `probability_cutoff` 0.35 = its benchmark threshold, recall 86.2% / 0.38 false accepts per hour in hard conditions; cutoff scale not comparable with Hey Jess's) is kept in the repo but commented out in the YAML: Hey Jess always fired first, so it only added a second way to wake by accident. The stock `okay_nabu` model was a bring-up control, removed 2026-11-10: it is said in many public HA videos, an easy false/remote trigger |
+| D13 | VAD = loudness only; the room level is learned fresh every run and frozen while speaking (2026-11-11) | Rejected in review, don't re-propose: (a) a "steady level = it's the room" escape hatch — speech from this device is steady too (smoothed p90/p25 ≈ 1.3), so it cut off questions longer than ~3.5 s; (b) remembering each room's level between runs — a cut-off run, a TV, Jess's own reply or a muted run can poison it, and it didn't help in the tuning room. Telling a loud room from speech needs a spectral VAD |
 
 **D8 — full access.** Room voices get the same voice tool subset as dashboard voice (`tool_definitions.VOICE_TOOL_NAMES`, filtered by the usual feature flags), and anyone in the room can use it: a visitor, a TV, a radio, someone on speakerphone. That includes reading meds/projects/profile (`get_data`) and memories (`search_memory`), storing a "fact" (`update_memory`), reading and creating calendar events (`check_calendar`, `create_calendar_event`), setting and cancelling reminders, logging meds/meals as done (`selfcare_log`, `log_meal`), sleep mode (mutes announcements until morning), focus sessions, routines (`start_routine`), tasks, shopping list, pantry/meal plan, web search, and device control (`home_assistant`, still behind `ha_guard` and the `ha_intent` did-the-user-ask gate, which checks that the transcript asked, not who asked). The meds block and IDENTITY CONTEXT are in every system prompt anyway, and every answer is spoken aloud in the room. Safeguards: these turns never feed auto_learn (`cloud_brain.skip_auto_learn_var`); replies are not written to `announcement_history` (not in the dashboard history, not replayed into `/chat`, and ha_intent's yes-path to Jess's own question still works — it treats history rows as announcements); replies play only on the room speaker; 6 turns / 5 min. Known limit, accepted by the owner.
 
@@ -113,7 +122,15 @@ docker run --rm -it -v <dir>:/config -v <dir>/.cache:/cache ghcr.io/esphome/esph
 esphome -s name atom-echo-office -s friendly_name "Office Mic" run atom-echo-jess.yaml --device <ip>
 ```
 
-First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API key = reflash + `.env` + recreate the orchestrator.
+First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API key = reflash + `.env` + recreate the orchestrator. Firmware is always flashed by hand; CI never flashes devices.
+
+**Firmware rules (lock-up fix, 2026-11-11).** In the first live test a second "Hey Jess" mid-run deadlocked the device: the speaker retried "Parent bus is busy" forever, and the device stayed connected (alert green) but deaf. Causes: the media player's `on_idle` restarted the wake word during the voice run, and the wake-detected automation waited for its beep with no timeout. Mic and speaker share one I2S bus, so the YAML now follows these rules (keep them when editing it):
+
+- Stop the wake word, and wait for it to stop, before any sound. `play_sound` also waits for the voice assistant to release the mic, and stops the wake word twice (a start already pending survives one stop).
+- Every wait is bounded; a sound that can't finish is cancelled, so the media player can't keep retrying it.
+- `start_wake_word` refuses while the speaker amp is on. No `on_idle` restart: whoever plays a sound restarts the wake word when done.
+- `on_end` waits for the voice assistant to go idle and leaves the restart to `play_sound` when a sound is playing. `on_client_disconnected` restarts the wake word (a run cut by a disconnect goes idle without `on_end`/`on_error`). Push-to-talk waits for the wake word to stop. A run that never starts (Jess not connected) goes back to the wake word.
+- Self-heal `interval:` (15 s): nothing running for two checks in a row → restart the wake word (WARN log); a voice run still "running" after ~60 s → `voice_assistant.stop`.
 
 ### False wakes
 
@@ -125,14 +142,15 @@ First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API 
 ### Known limits
 
 - One device, env-configured; no "two devices heard it" arbitration (D11).
-- Energy VAD can't tell the user from anyone else; a TV talking right after the wake word can run the utterance to its 15 s cap.
+- Energy VAD can't tell the user from a TV or another person talking.
+- A room much louder than ~0.045 RMS (TV on ≈ 0.075) false-starts and records to the 15 s cap (`max_utterance`, answer ~15 s late): loudness alone can't separate a loud room from steady speech (D13). Before enabling a satellite in a new room, measure the room's levels first; if it is much louder than ~0.045, expect `max_utterance`.
 - No follow-up listening: every question needs the wake word (or the button).
 - A turn that hits `CHAT_TIMEOUT_S` (300 s) may already have run tools (reminder set, light switched) before the device plays the error sound.
 - No error sound when nothing is connected (orchestrator down, bridge off): ESPHome logs `No API client connected`, so you hear the wake beep, then silence.
 - The reply audio sits in `/tmp/brain_audio`, reachable by its unguessable URL, like any announcement.
 - Anyone in the room has full access (D8). `jess-asleep` and `jess-error` share a sound.
 
-**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown). Needs an orchestrator image built with `aioesphomeapi`.
+**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; VAD cases built from the room levels measured 2026-11-11; the listen-end counter + log line; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown). Needs an orchestrator image built with `aioesphomeapi`.
 
 **Monitoring:** metrics, `VoiceSatelliteDisconnected`, Grafana row: `monitoring/README.md` → Voice Satellite.
 

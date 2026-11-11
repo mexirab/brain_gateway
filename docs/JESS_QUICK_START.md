@@ -202,7 +202,7 @@ Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-o
 
 A question you ask the voice puck (voice satellite) is still answered during quiet mode, on that room's speaker only.
 
-**Voice puck sounds** (voice satellite): a beep after the wake word; then a short sound if nothing was heard, if it's still busy with your last question, if the GPU box is waking up (the answer comes in a minute or two), or if something failed. Normal answers play on the room's speaker, not the puck.
+**Voice puck sounds** (voice satellite): a beep after the wake word; then a short sound if nothing was heard, if it's still busy with your last question, if the GPU box is waking up (the answer comes in a minute or two), or if something failed. Normal answers play on the room's speaker, not the puck. It stops listening about a second after you finish talking; with a TV or other loud noise on, it may keep listening for the full 15 seconds before answering.
 
 ---
 
