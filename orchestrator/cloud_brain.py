@@ -325,6 +325,11 @@ def _neutralize_turn(m: Dict) -> Dict:
 # Set per request by the chat endpoint from ChatRequest.conversation_id.
 conversation_id_var: ContextVar[Optional[str]] = ContextVar("conversation_id", default=None)
 
+# True for turns whose words may not be the owner's: the voice satellite hears
+# anyone in the room (TV, visitors). auto_learn would store their claims as
+# facts that land in every future prompt, so those turns are never extracted.
+skip_auto_learn_var: ContextVar[bool] = ContextVar("skip_auto_learn", default=False)
+
 # Photo-analysis blocks appended to a user turn (one definition, shared).
 _IMAGE_ANALYSIS_RE = PHOTO_BLOCK_RE
 
@@ -864,7 +869,7 @@ class CloudBrain:
 
     def _schedule_auto_learn(self, messages: List[Dict]):
         """Cache conversation and schedule auto-learn extraction after inactivity timeout."""
-        if not shared.AUTO_LEARN_ENABLED:
+        if not shared.AUTO_LEARN_ENABLED or skip_auto_learn_var.get():
             return
         try:
             cid = conversation_id_var.get()

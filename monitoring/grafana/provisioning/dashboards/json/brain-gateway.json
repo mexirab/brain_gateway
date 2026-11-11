@@ -10444,7 +10444,7 @@
     },
     {
       "type": "row",
-      "title": "Telegram Bot",
+      "title": "Voice Satellite",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -10454,6 +10454,471 @@
         "y": 302
       },
       "id": 137
+    },
+    {
+      "type": "timeseries",
+      "title": "Connected",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "max by (device) (bgw_satellite_connected)",
+          "legendFormat": "{{device}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "1 = the bridge holds the device's API connection. No data = VOICE_SATELLITE_ENABLED is off.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 303
+      },
+      "id": 138
+    },
+    {
+      "type": "timeseries",
+      "title": "Connect Attempts by Result (1h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_satellite_connect_total[1h]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 303
+      },
+      "id": 139
+    },
+    {
+      "type": "timeseries",
+      "title": "Turns by Result (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_satellite_turn_total[6h]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 303
+      },
+      "id": 140
+    },
+    {
+      "type": "timeseries",
+      "title": "Wakes vs. False Wakes by Wake Word (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (wake_word) (increase(bgw_satellite_turn_total[24h]))",
+          "legendFormat": "{{wake_word}} wakes",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (wake_word) (increase(bgw_satellite_turn_total{result=~\"no_speech|empty_transcript\"}[24h]))",
+          "legendFormat": "{{wake_word}} nothing said",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "A wake followed by nothing said is almost always a false wake.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 311
+      },
+      "id": 141
+    },
+    {
+      "type": "timeseries",
+      "title": "Speech End \u2192 Reply Playing p50 / p95 (6h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le, helios) (rate(bgw_satellite_turn_seconds_bucket[6h])))",
+          "legendFormat": "p50 {{helios}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, helios) (rate(bgw_satellite_turn_seconds_bucket[6h])))",
+          "legendFormat": "p95 {{helios}}",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "ok turns only, until HA accepted play_media; the Cast speaker adds 1-3 s.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 311
+      },
+      "id": 142
+    },
+    {
+      "type": "row",
+      "title": "Telegram Bot",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 319
+      },
+      "id": 143
     },
     {
       "type": "timeseries",
@@ -10536,9 +11001,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 303
+        "y": 320
       },
-      "id": 138
+      "id": 144
     },
     {
       "type": "timeseries",
@@ -10622,9 +11087,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 303
+        "y": 320
       },
-      "id": 139
+      "id": 145
     },
     {
       "type": "timeseries",
@@ -10708,9 +11173,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 303
+        "y": 320
       },
-      "id": 140
+      "id": 146
     },
     {
       "type": "row",
@@ -10721,9 +11186,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 311
+        "y": 328
       },
-      "id": 141
+      "id": 147
     },
     {
       "type": "stat",
@@ -10789,9 +11254,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 312
+        "y": 329
       },
-      "id": 142
+      "id": 148
     },
     {
       "type": "stat",
@@ -10857,9 +11322,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 312
+        "y": 329
       },
-      "id": 143
+      "id": 149
     },
     {
       "type": "timeseries",
@@ -10943,9 +11408,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 312
+        "y": 329
       },
-      "id": 144
+      "id": 150
     },
     {
       "type": "stat",
@@ -11011,9 +11476,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 312
+        "y": 329
       },
-      "id": 145
+      "id": 151
     },
     {
       "type": "row",
@@ -11024,9 +11489,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 320
+        "y": 337
       },
-      "id": 146
+      "id": 152
     },
     {
       "type": "stat",
@@ -11096,9 +11561,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 321
+        "y": 338
       },
-      "id": 147
+      "id": 153
     },
     {
       "type": "timeseries",
@@ -11182,9 +11647,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 321
+        "y": 338
       },
-      "id": 148
+      "id": 154
     },
     {
       "type": "timeseries",
@@ -11268,9 +11733,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 321
+        "y": 338
       },
-      "id": 149
+      "id": 155
     },
     {
       "type": "logs",
@@ -11309,9 +11774,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 329
+        "y": 346
       },
-      "id": 150
+      "id": 156
     },
     {
       "type": "row",
@@ -11322,9 +11787,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 337
+        "y": 354
       },
-      "id": 151
+      "id": 157
     },
     {
       "type": "timeseries",
@@ -11408,9 +11873,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 338
+        "y": 355
       },
-      "id": 152
+      "id": 158
     },
     {
       "type": "timeseries",
@@ -11518,9 +11983,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 338
+        "y": 355
       },
-      "id": 153
+      "id": 159
     },
     {
       "type": "timeseries",
@@ -11616,9 +12081,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 338
+        "y": 355
       },
-      "id": 154
+      "id": 160
     },
     {
       "type": "logs",
@@ -11657,9 +12122,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 338
+        "y": 355
       },
-      "id": 155
+      "id": 161
     },
     {
       "type": "timeseries",
@@ -11743,9 +12208,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 338
+        "y": 355
       },
-      "id": 156
+      "id": 162
     },
     {
       "type": "timeseries",
@@ -11829,9 +12294,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 338
+        "y": 355
       },
-      "id": 157
+      "id": 163
     },
     {
       "type": "timeseries",
@@ -11927,9 +12392,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 346
+        "y": 363
       },
-      "id": 158
+      "id": 164
     },
     {
       "type": "timeseries",
@@ -12037,9 +12502,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 346
+        "y": 363
       },
-      "id": 159
+      "id": 165
     },
     {
       "type": "stat",
@@ -12109,9 +12574,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 346
+        "y": 363
       },
-      "id": 160
+      "id": 166
     },
     {
       "type": "row",
@@ -12122,9 +12587,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 354
+        "y": 371
       },
-      "id": 161
+      "id": 167
     },
     {
       "type": "stat",
@@ -12185,9 +12650,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 355
+        "y": 372
       },
-      "id": 162
+      "id": 168
     },
     {
       "type": "timeseries",
@@ -12271,9 +12736,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 355
+        "y": 372
       },
-      "id": 163
+      "id": 169
     },
     {
       "type": "stat",
@@ -12334,9 +12799,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 355
+        "y": 372
       },
-      "id": 164
+      "id": 170
     },
     {
       "type": "timeseries",
@@ -12424,9 +12889,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 363
+        "y": 380
       },
-      "id": 165
+      "id": 171
     },
     {
       "type": "stat",
@@ -12492,9 +12957,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 363
+        "y": 380
       },
-      "id": 166
+      "id": 172
     },
     {
       "type": "stat",
@@ -12560,9 +13025,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 363
+        "y": 380
       },
-      "id": 167
+      "id": 173
     },
     {
       "type": "stat",
@@ -12628,9 +13093,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 371
+        "y": 388
       },
-      "id": 168
+      "id": 174
     },
     {
       "type": "timeseries",
@@ -12714,9 +13179,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 371
+        "y": 388
       },
-      "id": 169
+      "id": 175
     },
     {
       "type": "timeseries",
@@ -12824,9 +13289,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 371
+        "y": 388
       },
-      "id": 170
+      "id": 176
     },
     {
       "type": "row",
@@ -12837,9 +13302,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 379
+        "y": 396
       },
-      "id": 171
+      "id": 177
     },
     {
       "type": "stat",
@@ -12901,9 +13366,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 380
+        "y": 397
       },
-      "id": 172
+      "id": 178
     },
     {
       "type": "stat",
@@ -12975,9 +13440,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 380
+        "y": 397
       },
-      "id": 173
+      "id": 179
     },
     {
       "type": "stat",
@@ -13053,9 +13518,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 380
+        "y": 397
       },
-      "id": 174
+      "id": 180
     },
     {
       "type": "stat",
@@ -13135,9 +13600,9 @@
         "h": 6,
         "w": 4,
         "x": 12,
-        "y": 380
+        "y": 397
       },
-      "id": 175
+      "id": 181
     },
     {
       "type": "timeseries",
@@ -13221,9 +13686,9 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 380
+        "y": 397
       },
-      "id": 176
+      "id": 182
     },
     {
       "type": "row",
@@ -13234,9 +13699,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 386
+        "y": 403
       },
-      "id": 177
+      "id": 183
     },
     {
       "type": "logs",
@@ -13275,9 +13740,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 387
+        "y": 404
       },
-      "id": 178
+      "id": 184
     },
     {
       "type": "logs",
@@ -13316,9 +13781,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 387
+        "y": 404
       },
-      "id": 179
+      "id": 185
     }
   ]
 }

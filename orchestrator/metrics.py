@@ -625,6 +625,43 @@ TELEGRAM_MEDIA_TOTAL = Counter(
     ["kind", "result"],
 )
 
+# -- Voice satellite (orchestrator/voice_satellite.py) -------------------------
+SATELLITE_CONNECTED = Gauge(
+    "bgw_satellite_connected",
+    "1 while the voice satellite's ESPHome API connection is up (device = configured node name)",
+    ["device"],
+)
+
+SATELLITE_CONNECT_TOTAL = Counter(
+    "bgw_satellite_connect_total",
+    "Voice satellite connection attempts",
+    # result: ok | timeout | unreachable | bad_key | wrong_device | no_api_audio | error
+    ["result"],
+)
+
+SATELLITE_TURN_TOTAL = Counter(
+    "bgw_satellite_turn_total",
+    "Voice satellite runs by outcome and the wake word that started them",
+    # result: ok | no_speech | no_audio | empty_transcript | busy | rate_limited |
+    #         aborted | dropped | helios_asleep | wake_failed | wake_timeout |
+    #         service_down | stt_failed | chat_failed | speaker_unavailable |
+    #         tts_failed | error
+    #         (no_speech + empty_transcript per wake_word ~ false wakes)
+    # wake_word: hey_jess | okay_jess | okay_nabu | button | other
+    # helios: unchecked (run never got that far) | awake | woken (waited for it)
+    #         — "Helios booted for nothing": {helios="woken",result="empty_transcript"}
+    ["result", "wake_word", "helios"],
+)
+
+SATELLITE_TURN_SECONDS = Histogram(
+    "bgw_satellite_turn_seconds",
+    "Voice satellite: end of speech until HA accepted play_media (ok turns only; Cast adds 1-3 s)",
+    # helios: awake | woken — keep 60-180 s wake turns out of normal latency
+    ["helios"],
+    buckets=(2, 4, 6, 8, 10, 12, 15, 20, 30, 60, 120, 240),
+)
+
+
 # Last-persisted getUpdates offset — makes the poll loop's resume-across-restart
 # visible on a graph (a reset-to-0 or a stuck value is the failure signal for
 # the offset-persistence fix). Set on each _save_offset.

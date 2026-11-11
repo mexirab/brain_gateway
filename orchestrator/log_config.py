@@ -118,14 +118,41 @@ _URL_LOGGING_LIBS = ("httpx", "httpcore")
 
 
 def quiet_url_logging_libs() -> None:
-    for name in _URL_LOGGING_LIBS:
+    for name in (*_URL_LOGGING_LIBS, *_PAYLOAD_LOGGING_LIBS):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+# Third-party loggers whose records can interpolate raw payloads: aioesphomeapi
+# (voice satellite) logs decoded messages — mic audio included — at DEBUG and
+# dumps raw bytes in some ERROR lines ("Invalid protobuf message … data=%s").
+_PAYLOAD_LOGGING_LIBS = ("aioesphomeapi", "zeroconf")
+
+
+class DropPayloadArgsFilter(logging.Filter):
+    """Handler filter: keep only the format string of records from
+    _PAYLOAD_LOGGING_LIBS (and their child loggers); their arguments are
+    dropped, so no payload bytes reach Loki / the self-audit / Pushover."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name.split(".", 1)[0] not in _PAYLOAD_LOGGING_LIBS:
+            return True
+        if record.args:
+            record.msg = f"{record.msg} [args dropped]"
+            record.args = None
+        if record.exc_info:
+            # Exception text / traceback locals can carry payload bytes too.
+            exc = record.exc_info[1]
+            record.msg = f"{record.msg} [exc: {type(exc).__name__ if exc else '?'}]"
+            record.exc_info = None
+            record.exc_text = None
+        return True
 
 
 def configure_logging(level: str = "INFO"):
     """Replace the root logger's handler with JSON formatter."""
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter())
+    handler.addFilter(DropPayloadArgsFilter())
 
     root = logging.getLogger()
     root.handlers.clear()

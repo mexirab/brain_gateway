@@ -1,43 +1,72 @@
-# ATOM Echo S3R — Mic-Only Voice Satellite
-# ==========================================
-# M5Stack ATOM Echo S3R (ESP32-S3 + ES8311 codec + NS4150B amp)
-# Based on official M5Stack config (2026.1.2), customized for Brain Gateway.
+# ATOM Echo S3R — "Hey Jess" voice satellite (talks to Jess directly, no HA voice pipeline)
+# ======================================================================================
+# M5Stack ATOM Echo S3R (ESP32-S3 + 8 MB PSRAM + ES8311 codec + NS4150B amp).
+# Hardware section based on the official M5Stack config (2026.1.2).
 #
-# Role: Wake word detection + microphone only.
-# TTS responses are redirected to Google/Cast speakers via HA service call.
-# Confirmation beep plays on the ATOM Echo (amp toggled briefly).
+# Role: wake word ON the device + microphone. After "Hey Jess" / "Okay Jess"
+# the device beeps and streams its mic over the ESPHome native API to the
+# orchestrator's voice satellite bridge (orchestrator/voice_satellite.py), which
+# runs speech detection, STT, Jess, and plays the answer on the room's Google
+# speaker through Home Assistant. Nothing is spoken on the device itself except
+# short sounds.
 #
-# Flash (first time, USB):
-#   esphome run atom_echo.yaml --device /dev/ttyACM0
+# The device must NOT be in Home Assistant's ESPHome integration (it takes one
+# voice-assistant client; HA and Jess would fight over it).
 #
-# OTA updates after first flash.
+# Files next to this YAML: secrets.yaml (gitignored — wifi_ssid, wifi_password,
+# api_encryption_key, ota_password, ap_password), hey_jess.json + hey_jess.tflite
+# (okay_jess.json + okay_jess.tflite only if you uncomment that model below).
 #
-# Multi-room: override substitutions per device:
-#   esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jess"
-#   esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
+# Build + flash: see docs/VOICE_AND_TTS.md → Voice satellite. The node name is
+# a substitution; the office unit keeps its existing identity with
+#   esphome -s name atom-echo-office -s friendly_name "Office Mic" run atom-echo-jess.yaml --device <ip>
+# and VOICE_SATELLITE_NAME must match the name the device runs.
+#
+# Sounds the bridge asks for (VOICE_ASSISTANT_ERROR codes → on_error below):
+#   jess-no-speech  nothing heard after the wake word
+#   jess-busy       still answering the last question
+#   jess-waking     Helios (the GPU box) was asleep; waking it — answer comes later
+#   jess-asleep     Helios asleep and waking is turned off
+#   jess-error      something failed
+# Sound files: Home Assistant Voice PE sounds © 2024 Clayton Charles Tapp,
+# CC BY 4.0 (github.com/esphome/home-assistant-voice-pe/tree/dev/sounds).
+# The mapping below is a first guess — swap files by ear during bring-up.
 
 substitutions:
   name: atom-echo-jess
-  friendly_name: Jess Voice Assistant
-  tts_speaker: media_player.whole_home
+  friendly_name: Jess Voice Satellite
+  # Pinned to a commit (the dev branch can change under a rebuild)
+  sounds: https://github.com/esphome/home-assistant-voice-pe/raw/a5429c2b6d92e6c726b058dc5496d879c56374cd/sounds
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   project:
     name: brain-gateway.jess-voice
-    version: "1.0.0"
+    version: "2.0.0"
   min_version: 2026.1.0
   on_boot:
-    priority: 600
-    then:
-      # Safety timeout: if HA API never connects, clear init flag after 30s
-      - delay: 30s
-      - if:
-          condition:
-            lambda: return id(init_in_progress);
-          then:
-            - lambda: id(init_in_progress) = false;
+    - priority: 600
+      then:
+        # Safety timeout: if Jess never connects, clear the init flag after 30s
+        - delay: 30s
+        - if:
+            condition:
+              lambda: return id(init_in_progress);
+            then:
+              - lambda: id(init_in_progress) = false;
+    - priority: -100
+      then:
+        # Listen for the wake word from boot, even before Jess connects: you
+        # get the beep (and "Detected" in the log); with no client connected
+        # ESPHome only logs "No API client connected" — no error sound (its
+        # on_error doesn't fire for that). Lets the wake words be tested
+        # before the bridge is running.
+        - wait_until:
+            condition:
+              wifi.connected:
+            timeout: 60s
+        - script.execute: start_wake_word
 
 esp32:
   variant: esp32s3
@@ -60,6 +89,9 @@ logger:
 api:
   encryption:
     key: !secret api_encryption_key
+  # Don't reboot every 15 min while Jess isn't connected (Jupiter restart,
+  # bridge disabled, bring-up before the bridge exists).
+  reboot_timeout: 0s
 
 ota:
   - platform: esphome
@@ -71,7 +103,7 @@ wifi:
   power_save_mode: none
   ap:
     ssid: "Atom-Echo-Jess"
-    password: "jessvoice"
+    password: !secret ap_password
 
 captive_portal:
 
@@ -126,7 +158,8 @@ speaker:
     audio_dac: es8311_dac
 
 # Media player wraps the speaker for proper I2S bus arbitration
-# (mic and speaker share one bus — cannot run simultaneously)
+# (mic and speaker share one bus — cannot run simultaneously). Used for the
+# short sounds only; Jess's answers play on the Google speaker.
 media_player:
   - platform: speaker
     name: None
@@ -140,7 +173,15 @@ media_player:
       num_channels: 1
     files:
       - id: wake_sound
-        file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/wake_word_triggered.flac
+        file: ${sounds}/wake_word_triggered.flac
+      - id: no_speech_sound
+        file: ${sounds}/mute_switch_on.flac
+      - id: busy_sound
+        file: ${sounds}/center_button_double_press.flac
+      - id: waking_sound
+        file: ${sounds}/center_button_long_press.flac
+      - id: error_sound
+        file: ${sounds}/jack_disconnected.flac
     on_announcement:
       # Stop wake word listener to free the I2S bus for speaker playback
       - if:
@@ -149,7 +190,7 @@ media_player:
           then:
             - micro_wake_word.stop
     on_idle:
-      # Restart wake word after user-initiated media playback ends
+      # Restart wake word once a sound has finished
       - if:
           condition:
             not:
@@ -158,7 +199,7 @@ media_player:
             - script.execute: start_wake_word
 
 # =============================================================================
-# Voice: on-device wake word + HA voice pipeline
+# Voice: on-device wake words → Jess's voice satellite bridge
 # =============================================================================
 
 micro_wake_word:
@@ -166,13 +207,25 @@ micro_wake_word:
   microphone: echo_mic
   stop_after_detection: false
   models:
-    - model: okay_nabu
-      id: okay_nabu
-    # Custom "Hey Jess" wake word (served by model-server on Helios):
-    # - model: http://10.0.0.195:8085/hey_jess.json
-    #   id: hey_jess
+    # Trained on Saturn 2026-01-26. Manifest = the TRAINER's values
+    # (probability_cutoff 0.97, tensor_arena_size 30000). Tested on the
+    # device 2026-11-11: it also fires on "Okay Jess" (0.98–0.99) and on
+    # other "-ay Jess" phrases, so it covers both wake words on its own.
+    - model: hey_jess.json
+      id: hey_jess
+    # "Okay Jess" model (microwakeword.com 2026-11-10, "robust" variant;
+    # manifest as delivered: probability_cutoff 0.35 = the threshold its
+    # benchmark was measured at, recall 86.2% / 0.38 false accepts per hour;
+    # its cutoff scale differs from hey_jess's). Left out: hey_jess always
+    # fired first on "Okay Jess", so it added only a second way to wake by
+    # accident. Uncomment to bring it back:
+    # - model: okay_jess.json
+    #   id: okay_jess
+    # (The stock okay_nabu model was a bring-up control only. Removed
+    # 2026-11-10 once "Hey Jess" worked on the device: it is said in many
+    # public Home Assistant videos, so it's an easy false/remote trigger.)
   on_wake_word_detected:
-    # Amp on -> beep -> wait for beep -> amp off -> start VA
+    # Amp on -> beep -> wait for beep -> amp off -> start the voice run
     - switch.turn_on: speaker_amp
     - lambda: |-
         id(echo_media_player)
@@ -194,8 +247,8 @@ micro_wake_word:
 voice_assistant:
   id: va
   microphone: echo_mic
-  # No speaker configured — all TTS output goes to Google speakers via tts.speak.
-  # This avoids I2S bus contention (mic and speaker share one bus on ATOM Echo S3R).
+  # No speaker/media_player here: answers play on the Google speaker, and the
+  # mic + speaker share one I2S bus on the ATOM Echo S3R.
   micro_wake_word: mww
   noise_suppression_level: 2
   auto_gain: 31dBFS
@@ -204,34 +257,41 @@ voice_assistant:
   on_client_connected:
     - lambda: id(init_in_progress) = false;
     - script.execute: start_wake_word
-  on_client_disconnected:
-    - micro_wake_word.stop
-
-  on_tts_start:
-    # Response text available as 'x' — redirect to Google speakers via tts.speak
-    - homeassistant.service:
-        service: tts.speak
-        data:
-          entity_id: tts.jessica_tts
-          media_player_entity_id: ${tts_speaker}
-          message: !lambda 'return x;'
+  # No on_client_disconnected stop: the wake word keeps listening while Jess
+  # is away, so "Hey Jess" still beeps (the beep tells you the device heard
+  # you; no answer means Jess isn't connected — see the satellite alert).
 
   on_end:
-    # Pipeline ended — restart wake word detection
+    # The bridge ends the run as soon as it has your question — listen again
     - delay: 300ms
-    - lambda: id(va).set_use_wake_word(false);
-    - micro_wake_word.start:
+    - script.execute: start_wake_word
 
   on_error:
     - if:
         condition:
-          and:
-            - lambda: return !id(init_in_progress);
-            - lambda: return code != "duplicate_wake_up_detected";
-            - lambda: return code != "stt-no-text-recognized";
+          lambda: return id(init_in_progress);
         then:
-          - delay: 1s
-          - script.execute: start_wake_word
+          - logger.log: "voice error during init — ignored"
+        else:
+          - if:
+              condition:
+                lambda: return code == "jess-no-speech";
+              then:
+                - script.execute: { id: play_sound, sound: 1 }
+              else:
+                - if:
+                    condition:
+                      lambda: return code == "jess-busy";
+                    then:
+                      - script.execute: { id: play_sound, sound: 2 }
+                    else:
+                      - if:
+                          condition:
+                            lambda: return code == "jess-waking";
+                          then:
+                            - script.execute: { id: play_sound, sound: 3 }
+                          else:
+                            - script.execute: { id: play_sound, sound: 4 }
 
 # =============================================================================
 # Controls
@@ -246,7 +306,7 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_multi_click:
-      # Short press: manual voice trigger (push-to-talk)
+      # Short press: talk without the wake word (push-to-talk)
       - timing:
           - ON for at least 50ms
           - OFF for at least 50ms
@@ -260,7 +320,7 @@ binary_sensor:
           - button.press: factory_reset_btn
 
 switch:
-  # NS4150B amplifier — defaults OFF (mic-only device), toggled ON for confirmation beep
+  # NS4150B amplifier — defaults OFF (mic-only device), toggled ON for sounds
   - platform: gpio
     name: Speaker Enable
     id: speaker_amp
@@ -296,9 +356,35 @@ script:
                   voice_assistant.is_running:
               - switch.is_off: mute
           then:
-            # Disable HA-side wake word (we use on-device mWW only)
+            # The wake word runs on the device (never server-side)
             - lambda: id(va).set_use_wake_word(false);
             - micro_wake_word.start:
+
+  # sound: 1 no speech, 2 busy, 3 waking Helios, 4 error
+  - id: play_sound
+    mode: restart
+    parameters:
+      sound: int
+    then:
+      - switch.turn_on: speaker_amp
+      - lambda: |-
+          const audio::AudioFile *f = id(error_sound);
+          if (sound == 1) f = id(no_speech_sound);
+          else if (sound == 2) f = id(busy_sound);
+          else if (sound == 3) f = id(waking_sound);
+          id(echo_media_player)->play_file(f, true, false);
+      - wait_until:
+          condition:
+            media_player.is_announcing:
+          timeout: 0.5s
+      - wait_until:
+          - and:
+              - not:
+                  media_player.is_announcing:
+              - not:
+                  speaker.is_playing:
+      - switch.turn_off: speaker_amp
+      - script.execute: start_wake_word
 
 globals:
   - id: init_in_progress

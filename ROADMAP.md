@@ -117,8 +117,7 @@ Vision already works through the Qwen3.8 brain on Helios (meal-photo calories + 
 | Item | Why |
 |------|-----|
 | Speaker for the record player | Frees the Google Max aux input — the root cause of `all_speakers` HTTP 500s and TTS group failures |
-| ATOM Echo #2 (bedroom), #3 (kitchen) | Whole-house wake word |
-| Route voice replies to Google speakers | Replies still play on the ATOM Echo's tiny speaker (needs HA UI work) |
+| ATOM Echo #2 (bedroom), #3 (kitchen) | Whole-house wake word. The voice satellite handles one device today; more need multi-device config + "two devices heard it" arbitration (`docs/VOICE_AND_TTS.md` → Voice satellite, D11) |
 
 ### vLLM 262K context ⬜ (when worth it)
 

@@ -1522,6 +1522,66 @@ def build() -> dict:
     row, y = grid_row(research_row, y, heights=[8, 8, 8])
     panels.extend(row)
 
+    # ------------------------------------------------------ Voice Satellite
+    # ATOM Echo → Jess without HA's voice pipeline (voice_satellite.py, off by
+    # default). Connected = the bridge holds the device's API connection; connect
+    # results tell unplugged (unreachable/timeout) from a wrong key or device.
+    # no_speech + empty_transcript per wake word ≈ false wakes (tuning signal for
+    # each wake word's probability_cutoff). Latency is split by helios=awake|woken
+    # so 60-180 s wake turns don't swamp normal ones; it ends when HA accepted
+    # play_media (Cast adds 1-3 s). No data at all = feature disabled.
+    r, y = row_divider("Voice Satellite", y)
+    panels.append(r)
+    satellite_row = [
+        timeseries(
+            "Connected",
+            [("max by (device) (bgw_satellite_connected)", "{{device}}")],
+            unit="none",
+            description="1 = the bridge holds the device's API connection. No data = VOICE_SATELLITE_ENABLED is off.",
+        ),
+        timeseries(
+            "Connect Attempts by Result (1h)",
+            [("sum by (result) (increase(bgw_satellite_connect_total[1h]))", "{{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Turns by Result (6h)",
+            [("sum by (result) (increase(bgw_satellite_turn_total[6h]))", "{{result}}")],
+            unit="none",
+        ),
+        timeseries(
+            "Wakes vs. False Wakes by Wake Word (24h)",
+            [
+                ("sum by (wake_word) (increase(bgw_satellite_turn_total[24h]))", "{{wake_word}} wakes"),
+                (
+                    'sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript"}[24h]))',
+                    "{{wake_word}} nothing said",
+                ),
+            ],
+            unit="none",
+            description="A wake followed by nothing said is almost always a false wake.",
+        ),
+        timeseries(
+            "Speech End → Reply Playing p50 / p95 (6h)",
+            [
+                (
+                    "histogram_quantile(0.5, sum by (le, helios) (rate(bgw_satellite_turn_seconds_bucket[6h])))",
+                    "p50 {{helios}}",
+                ),
+                (
+                    "histogram_quantile(0.95, sum by (le, helios) (rate(bgw_satellite_turn_seconds_bucket[6h])))",
+                    "p95 {{helios}}",
+                ),
+            ],
+            unit="s",
+            description="ok turns only, until HA accepted play_media; the Cast speaker adds 1-3 s.",
+        ),
+    ]
+    row, y = grid_row(satellite_row[:3], y, heights=[8, 8, 8])
+    panels.extend(row)
+    row, y = grid_row(satellite_row[3:], y, heights=[8, 8])
+    panels.extend(row)
+
     # -------------------------------------------------------- Telegram Bot
     # The away-from-home surface: inbound updates, media (voice→STT / photo→vision
     # / spoken walkie-talkie reply), and Done/Snooze button taps. The callback

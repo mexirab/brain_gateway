@@ -1,40 +1,158 @@
 # Voice Assistant & TTS
 
-## Voice Assistant (ATOM Echo S3R)
+## Voice satellite (ATOM Echo → Jess)
 
-Hands-free "Hey Jess" voice control via M5Stack ATOM Echo S3R (ESP32-S3).
+An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **without Home Assistant's voice pipeline**; HA only plays the reply. Code: `orchestrator/voice_satellite.py` (module docstring is authoritative). Firmware: `models/atom-echo-jess.yaml`. **Default off** (`VOICE_SATELLITE_ENABLED=false`). Status 2026-11-10: firmware flashed OTA to the real device, "Hey Jess" verified on-device (7/7 wakes, confidence 0.97–1.00).
 
 ```
-"Hey Jess" (on-device microWakeWord)
-    -> ATOM Echo S3R (ESPHome voice_assistant)
-    -> Home Assistant voice pipeline
-    -> Wyoming Whisper STT (Docker on Jupiter :10300)
-    -> HA Conversation Agent -> Brain Gateway :8888
-    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> Helios TTS (`TTS_URL`: VoxCPM2 :8004; Qwen3-TTS :8002 disabled since 2026-10-24)
-    -> ATOM Echo S3R speaker (or Google speakers group)
+"Hey Jess" (micro_wake_word on the device) → beep
+  -> 16 kHz mono PCM over the ESPHome native API (:6053, noise-encrypted with the device API key)
+  -> voice_satellite.py (Jupiter): energy VAD (port of frontend/src/lib/vad.ts) ends the utterance
+  -> RUN_END to the device (it goes straight back to wake-word listening)
+  -> STT on Helios (STT_URL /v1/audio/transcriptions)
+  -> cloud_brain.chat(messages, stream=False, is_voice=True)   one Jess voice turn, voice tool subset
+  -> reminder_manager._announce_voice(...) -> VoxCPM2 (TTS_URL) -> HA play_media on VOICE_SATELLITE_SPEAKER
 ```
 
-**Current status:**
-- Office ATOM Echo S3R: flashed, online, wake word working
-- Voice pipeline: HA Conversation Agent calls the orchestrator (`:8888`), which runs the unified loop on Qwen3.8-Flash-Next UD-Q3_K_XL MTP GGUF (llama.cpp `llama-server-primary`, both Helios GPUs, since 2026-10-24; voice turns run with thinking on — `VOICE_THINKING_ENABLED=true`, see Voice mode below; DavidAU Qwen3.8-27B TURBO Q6_K on llama.cpp 2026-10-02 → 2026-10-24; RadixArk/Qwen3.8-27B-NVFP4 on vLLM 0.27.1 2026-09-28 → 2026-10-02; Lorbus/Qwen3.6-27B-int4-AutoRound 2026-04-26 → 2026-09-28; Qwen3.5-27B on llama.cpp before that). No Nemotron — that v6 hybrid path was removed. **Known gap (2026-10-02):** the HA Conversation Agent is still configured with `http://10.0.0.195:8888` (Helios), but the orchestrator has lived on Jupiter (`http://10.0.0.248:8888`) since the HA migration — ATOM Echo voice turns currently fail at the conversation step until the agent's base URL is repointed in the HA UI (Settings → Voice assistants → the Jess conversation agent).
-- TTS output: currently on ATOM Echo tiny speaker (TODO: route to Google speakers group)
-- No programmable RGB LED on S3R variant (GPIO35 conflicts with PSRAM)
+- **Connection:** outbound from the orchestrator to the device; no ports opened on Jupiter (`handle_start` returns port 0 = audio over the API connection). `expected_name` = `VOICE_SATELLITE_NAME` pins the node name so a DHCP reshuffle can't point it at another ESPHome device. The real device check is the noise key: anyone holding it (a lost device, the build box's `secrets.yaml`) can pose as the device on the LAN. Rotate it if lost.
+- **Lifecycle:** forever asyncio task started in `orchestrator.py` startup (like the Telegram bot; handle `shared.voice_satellite_task`), cancelled at shutdown; `log_loop_exit` logs an unexpected exit at ERROR. Reconnects with backoff 5 s → 120 s (back to 5 s after a session that stayed up > 60 s).
+- **Not in HA:** the device must NOT be added/enabled in HA's ESPHome integration. It takes one voice-assistant client; HA and Jess would fight over it.
+- **Hardware:** the on-device wake word needs the ESP32-S3 (not the original ATOM Echo). No programmable RGB LED on the S3R (GPIO35 conflicts with PSRAM). Mic and speaker share one I2S bus.
 
-**Key components:**
-- **Wake word:** `hey_jess.tflite` runs on-device (ESP32-S3 only, not original ATOM Echo)
-- **Wake word manifest:** `hey_jess.json` lives in `/opt/gateway_mvp/models/`. Was served via an nginx `model-server` Docker container at `http://10.0.0.195:${SERVICE_MODEL_SERVER_PORT}/hey_jess.json` until 2026-04-26 when the unfinished service was removed (port 8080 collided with the primary LLM, then llama-server, vllm-primary, now llama-server-primary). Re-enable by uncommenting the wake-word block in `models/atom-echo-jess.yaml:171`, restoring the `model-server` entry in `docker-compose.yml` on a non-conflicting port, and reflashing via ESPHome.
-- **STT:** `wyoming-faster-whisper` (base-int8 model, CPU on Helios)
-- **TTS bridge:** `wyoming-jessica-tts` (container/program-name retained for HA wiring back-compat) bridges Wyoming protocol -> HTTP TTS server on Helios. Default voice is configurable via `TTS_VOICE` env / `user_profile.yaml` `voice:` field; live deployment uses a personal reference clone (`voice: "jessica"`).
-  - **Fresh install note:** the Wyoming bridge advertises a voice named `jessica` (wire ID, kept for back-compat); the compose default `--voice` is `default`. Either set `TTS_VOICE=jessica` in `.env` (matching the wire ID) AND `POST /voices/load` to register a `jessica` voice on your TTS server, OR change the advertised wire ID in `tts/wyoming_jessica_bridge.py` to match your registered voice name. Without alignment, HA TTS calls return HTTP 400 from the TTS server with no audio (silent on the HA side).
-- **ESPHome:** `ha_automations/atom_echo.yaml` — multi-room via substitutions
+### Event contract (bridge → device)
 
-**Multi-room deployment:**
+| Event | When |
+|-------|------|
+| `RUN_START` + `STT_START` | first audio chunk arrives |
+| `STT_VAD_START` | VAD confirms speech |
+| `RUN_END` **alone** | utterance captured, nothing said, no audio, or 30 s run wall clock |
+| `VOICE_ASSISTANT_ERROR` `{code}` | an outcome the device should make audible (below). Also sent after the run has ended; ESPHome still fires `on_error` |
+
+**Gotcha:** never send `STT_VAD_END` before `RUN_END`. It leaves ESPHome 2026.x in STOP_MICROPHONE when `RUN_END` arrives, which ignores it; the device then sits in AWAITING_RESPONSE and never listens again (verified in ESPHome `voice_assistant.cpp`, 2026.10). From STREAMING_MICROPHONE, `RUN_END` stops the mic and goes IDLE.
+
+| Code | Means | Sound (firmware `on_error`) |
+|------|-------|------------------------------|
+| `jess-no-speech` | nothing (or no words) heard after the wake word | `mute_switch_on.flac` |
+| `jess-busy` | a turn from this device is still running, or the rate limit hit | `center_button_double_press.flac` |
+| `jess-waking` | Helios asleep (woken) or still booting; the answer comes when it's up. Not a failure, the turn continues | `center_button_long_press.flac` |
+| `jess-asleep` | Helios asleep and `HELIOS_WAKE_ENABLED` off | `jack_disconnected.flac` (same as error) |
+| `jess-error` | anything else failed (STT, brain, TTS, speaker, wake) | `jack_disconnected.flac` |
+
+Wake beep: `wake_word_triggered.flac`. Sounds are the Home Assistant Voice PE set, pinned to commit `a5429c2b` (CC BY 4.0, attributed in the YAML). The mapping is a first guess; swap files by ear.
+
+### Listening (VAD)
+
+| Parameter | Value |
+|-----------|-------|
+| Calibration | first 200 ms after the beep; learned floor capped at 0.015 (a first word said into the beep can't become the floor) |
+| Speech threshold | `max(0.01, floor × 3)`; held at 0.6× while speaking |
+| Speech confirm | 200 ms above threshold |
+| End of utterance | 1.2 s of silence |
+| Cap | 15 s, then processed as is |
+| Nothing said | 5 s → `jess-no-speech` |
+| Backstops | no audio within 4 s → `no_audio` (`jess-error`); run wall clock 30 s |
+
+### A turn
+
+1. **Helios check (D5):** `stt`, `model`, `tts` via `service_registry.check_service` (3 s each). All up → go. Nothing answering and the plug says off → wake (`HELIOS_WAKE_ENABLED`), `jess-waking`, wait ≤ `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` (180) → else `wake_timeout`. Helios on but a service down (boot, brain reload, crashed unit) → no wake, `jess-waking`, wait 90 s → else `service_down`. Wake off → `jess-asleep`. The plug is only read with `HELIOS_WAKE_ENABLED`, so with wake off a booting Helios also counts as asleep.
+2. **STT** (30 s). No words → `jess-no-speech`.
+3. **Brain:** `cloud_brain.chat(..., stream=False, is_voice=True)` with the short history (D7); 300 s backstop (`CHAT_TIMEOUT_S`). Counts in `bgw_voice_pipeline_seconds{path="buffered"}` like any buffered voice turn.
+4. **Speak:** `speakable()` keeps link text, drops URLs and markdown marks, caps at 1200 chars on a sentence end. One clip: `_announce_voice(spoken, speaker=VOICE_SATELLITE_SPEAKER, announcement_type="voice_reply", ignore_voice_session=True, ignore_dnd=True, style=current_reply_style(), allow_fallback=False, record_history=False)` (120 s).
+5. Only a turn whose reply played goes into the follow-up history.
+
+One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per device (`rate_limited`, `jess-busy`). Device button: short press = push-to-talk (wake word label `button`); 10 s press = factory reset.
+
+### Decisions
+
+| # | Decision | Why / consequence |
+|---|----------|-------------------|
+| D1 | Reply plays on the room's Google speaker via HA `play_media`, not on the device | The ATOM Echo speaker is tiny and shares the I2S bus with the mic; the device plays only short sounds |
+| D2 | Turn = in-process `cloud_brain.chat(..., is_voice=True)`, not HTTP to `/v1/chat/completions` | Same brain call the dashboard makes. The route only spots voice from HA's IP or the STT beacon, so a direct call is exact. No API token in the bridge |
+| D3 | One TTS clip per reply | One `play_media` per answer. The first word waits for the whole reply plus its synthesis (≤ 1200 chars) |
+| D4 | Answers even under sleep mode (`ignore_dnd`) | You asked out loud, so you want the answer. Announcements and reminders stay muted |
+| D5 | Helios asleep → wake it and answer late, capped | `jess-waking` says the answer is coming; capped by `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` |
+| D6 | Reply bypasses the mid-conversation guard (`ignore_voice_session`) | Each turn calls `shared.mark_voice_activity()` so reminders hold off while you talk; without the bypass the reply would hold itself off |
+| D7 | Short history: RAM, ≤ 12 messages, reset after 5 min of silence, only what was actually spoken | Follow-ups ("and tomorrow?") work; a restart loses it |
+| D8 | **Full access** (owner decision 2026-11-10) | Below |
+| D9 | Privacy | Below |
+| D10 | `VOICE_SATELLITE_SPEAKER` required; no fallback to other rooms (`allow_fallback=False`) | Replies play under sleep mode, so they must never land in another room. Speaker unavailable in HA → `speaker_unavailable` + `jess-error` |
+| D11 | No multi-device arbitration | One device, env-configured. Two devices hearing one wake word would both answer |
+| D12 | Wake words run on the device only, never server-side | "Hey Jess" = local model (`models/hey_jess.json` + `.tflite`, the trainer's manifest: `probability_cutoff` 0.97, `tensor_arena_size` 30000). On the device (2026-11-11) the Hey Jess model also fires on "Okay Jess" (0.98–0.99) and on other "-ay Jess" phrases ("Play Jess", "May Jess"); owner-accepted, so it covers both wake words alone. A dedicated "Okay Jess" model (`models/okay_jess.json` + `.tflite`, microwakeword.com 2026-11-10, "robust" variant, manifest as delivered: `probability_cutoff` 0.35 = its benchmark threshold, recall 86.2% / 0.38 false accepts per hour in hard conditions; cutoff scale not comparable with Hey Jess's) is kept in the repo but commented out in the YAML: Hey Jess always fired first, so it only added a second way to wake by accident. The stock `okay_nabu` model was a bring-up control, removed 2026-11-10: it is said in many public HA videos, an easy false/remote trigger |
+
+**D8 — full access.** Room voices get the same voice tool subset as dashboard voice (`tool_definitions.VOICE_TOOL_NAMES`, filtered by the usual feature flags), and anyone in the room can use it: a visitor, a TV, a radio, someone on speakerphone. That includes reading meds/projects/profile (`get_data`) and memories (`search_memory`), storing a "fact" (`update_memory`), reading and creating calendar events (`check_calendar`, `create_calendar_event`), setting and cancelling reminders, logging meds/meals as done (`selfcare_log`, `log_meal`), sleep mode (mutes announcements until morning), focus sessions, routines (`start_routine`), tasks, shopping list, pantry/meal plan, web search, and device control (`home_assistant`, still behind `ha_guard` and the `ha_intent` did-the-user-ask gate, which checks that the transcript asked, not who asked). The meds block and IDENTITY CONTEXT are in every system prompt anyway, and every answer is spoken aloud in the room. Safeguards: these turns never feed auto_learn (`cloud_brain.skip_auto_learn_var`); replies are not written to `announcement_history` (not in the dashboard history, not replayed into `/chat`, and ha_intent's yes-path to Jess's own question still works — it treats history rows as announcements); replies play only on the room speaker; 6 turns / 5 min. Known limit, accepted by the owner.
+
+**D9 — privacy.** Mic audio is held in RAM for one utterance and never written to disk. The spoken reply goes the announcement way: an audio file in `/tmp/brain_audio`, served to the Cast speaker by an unguessable URL (`/api/audio/<uuid8>.<ext>`, bearer-exempt) for up to an hour. Logs (`[SATELLITE]`) carry lengths, levels, outcomes, stage timings and the fixed wake-word label, never the transcript or the reply (`tests/test_no_user_content_in_logs.py`). The `aioesphomeapi` / `zeroconf` loggers are held at WARNING, and `log_config.DropPayloadArgsFilter` drops their arguments and exception text (their records can carry raw audio bytes).
+
+### Setup
+
+1. Deploy the change first (the `VoiceSatelliteDisconnected` alert and the Grafana row ship with it).
+2. Give the device a DHCP reservation. `VOICE_SATELLITE_HOST` must be an IP; `.local` names are rejected.
+3. Remove the device from HA's ESPHome integration (or don't add it when HA discovers it).
+4. Build and flash the firmware (below) with a fresh `api_encryption_key`.
+5. Jupiter `.env`: `VOICE_SATELLITE_ENABLED=true`, `VOICE_SATELLITE_HOST`, `VOICE_SATELLITE_API_KEY` (same value as the firmware's `api_encryption_key`), `VOICE_SATELLITE_NAME` (the node name the device runs), `VOICE_SATELLITE_SPEAKER` (e.g. `media_player.office_speaker`). Also needs `STT_URL`, `TTS_URL`, `HA_URL`, `HA_TOKEN`. Full table: `docs/ENV_VARS.md` → Voice satellite.
+6. `docker compose up -d --force-recreate orchestrator`. A bad config logs `[CONFIG] VOICE_SATELLITE_ENABLED=true but …; disabling the voice satellite.` and stays off.
+7. Check: `docker logs brain-orchestrator 2>&1 | grep SATELLITE` shows `connected, listening for runs`; "Hey Jess, what time is it?" answers on the room speaker.
+
+Turn off: `VOICE_SATELLITE_ENABLED=false` + `docker compose up -d --force-recreate orchestrator`.
+
+### Firmware build + flash
+
+`models/atom-echo-jess.yaml`: no HA bits; "Hey Jess" as a local model file (it also wakes on "Okay Jess"); wake word listens from boot; `api: reboot_timeout: 0s` (no reboot every 15 min while Jess isn't connected); `on_error` maps the `jess-*` codes to sounds; node name and friendly name are substitutions. Validated and compiled with ESPHome 2026.10.2.
+
+Build dir: `atom-echo-jess.yaml`, `hey_jess.json`, `hey_jess.tflite` (plus `okay_jess.json` + `okay_jess.tflite` only if that model is uncommented) (from `models/`) and a `secrets.yaml` (gitignored) with `wifi_ssid`, `wifi_password`, `api_encryption_key`, `ota_password`, `ap_password`. The fallback-AP password used to be a literal in the YAML (still in git history), so use a new value.
+
 ```bash
-esphome run atom_echo.yaml -s name atom-echo-office -s friendly_name "Office Jess"
-esphome run atom_echo.yaml -s name atom-echo-bedroom -s friendly_name "Bedroom Jess"
+# api_encryption_key / VOICE_SATELLITE_API_KEY: base64 of 32 random bytes
+python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
+
+# Build + flash over the air (<dir> = the build dir above)
+docker run --rm -it -v <dir>:/config -v <dir>/.cache:/cache ghcr.io/esphome/esphome:stable \
+  -s name <node> run atom-echo-jess.yaml --device <ip>
+
+# Keep an existing unit's identity (VOICE_SATELLITE_NAME must match the name):
+esphome -s name atom-echo-office -s friendly_name "Office Mic" run atom-echo-jess.yaml --device <ip>
 ```
 
-**Key files:** `ha_automations/atom_echo.yaml`, `ha_automations/hey_jess.tflite`, `ha_automations/hey_jess.json`, `tts/wyoming_jessica_bridge.py`, `tts/Dockerfile.wyoming-jessica`
+First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API key = reflash + `.env` + recreate the orchestrator.
+
+### False wakes
+
+- **Signal:** a wake followed by nothing said is almost always false. `sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript"}[24h]))` against all wakes; Grafana "Wakes vs. False Wakes by Wake Word (24h)". `{helios="woken",result="empty_transcript"}` = Helios booted for nothing.
+- **Tune:** `probability_cutoff` in the wake word's manifest (`models/hey_jess.json`), useful range 0.95–0.99: higher = fewer false wakes, more missed ones. Rebuild + OTA.
+- **Still bad:** retrain the model with more negatives from the room (TV, radio).
+- The rate limit (6 turns / 5 min) caps the damage from a TV that keeps waking it.
+
+### Known limits
+
+- One device, env-configured; no "two devices heard it" arbitration (D11).
+- Energy VAD can't tell the user from anyone else; a TV talking right after the wake word can run the utterance to its 15 s cap.
+- No follow-up listening: every question needs the wake word (or the button).
+- A turn that hits `CHAT_TIMEOUT_S` (300 s) may already have run tools (reminder set, light switched) before the device plays the error sound.
+- No error sound when nothing is connected (orchestrator down, bridge off): ESPHome logs `No API client connected`, so you hear the wake beep, then silence.
+- The reply audio sits in `/tmp/brain_audio`, reachable by its unguessable URL, like any announcement.
+- Anyone in the room has full access (D8). `jess-asleep` and `jess-error` share a sound.
+
+**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown). Needs an orchestrator image built with `aioesphomeapi`.
+
+**Monitoring:** metrics, `VoiceSatelliteDisconnected`, Grafana row: `monitoring/README.md` → Voice Satellite.
+
+### HA Assist pipeline (Wyoming; the ATOM Echo no longer uses it)
+
+HA's own voice pipeline, for HA Assist and for installs that flash `ha_automations/atom_echo.yaml` (mic-only template, TTS redirected to a Cast speaker by HA) instead of the satellite firmware:
+
+```
+wake word on the device -> HA voice pipeline
+    -> Wyoming Whisper STT (:10300, wyoming-faster-whisper)
+    -> HA Conversation Agent -> Brain Gateway :8888
+    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> Helios TTS (`TTS_URL`)
+```
+
+- **Known gap:** the HA Conversation Agent still points at `http://10.0.0.195:8888` (Helios); the orchestrator has lived on Jupiter (`http://10.0.0.248:8888`) since the HA migration, so HA Assist turns fail at the conversation step until the agent's base URL is repointed in the HA UI (Settings → Voice assistants → the Jess conversation agent). The ATOM Echo is not affected: it goes through the voice satellite.
+- **TTS bridge:** `wyoming-jessica-tts` (name kept for HA wiring back-compat) bridges Wyoming → the HTTP TTS server on Helios. Default voice: `TTS_VOICE` env / `user_profile.yaml` `voice:`; the live deployment uses a personal reference clone (`voice: "jessica"`).
+  - **Fresh install note:** the bridge advertises a voice named `jessica` (wire ID, kept for back-compat); the compose default `--voice` is `default`. Either set `TTS_VOICE=jessica` in `.env` (matching the wire ID) AND `POST /voices/load` to register a `jessica` voice on your TTS server, OR change the advertised wire ID in `tts/wyoming_jessica_bridge.py` to match your registered voice name. Without alignment, HA TTS calls return HTTP 400 from the TTS server with no audio (silent on the HA side).
+- `ha_automations/hey_jess.json` still carries the old manifest values (`probability_cutoff` 0.5); `models/hey_jess.json` has the trainer's.
+
+**Key files:** `ha_automations/atom_echo.yaml`, `ha_automations/hey_jess.{json,tflite}`, `tts/wyoming_jessica_bridge.py`, `tts/Dockerfile.wyoming-jessica`
 
 ## TTS Pacing
 
@@ -49,6 +167,16 @@ ssh labadmin@10.0.0.195 'sudo systemctl restart qwen-tts'
 
 TTS announcements support per-speaker targeting via `_announce_voice(text, speaker="media_player.bedroom_pair")`. Without an explicit `speaker=`, the target comes from the `/settings` Speakers panel (`announcement_routes.route_for(type)`), else the legacy `REMINDER_SPEAKER` / `MORNING_BRIEFING_SPEAKER` / `FOCUS_AUDIO_PLAYER` env vars (comma-separated = multi-room broadcast). Categories: `selfcare`, `reminder`, `calendar`, `ambient`, `progress`, `focus`, `briefing`, `temperature` (closet heat alerts; panel row "Server closet temperature"). `temperature` was added after the panel shipped: left unset it follows the panel `default` → `reminder` route (then legacy `REMINDER_SPEAKER`), as before it had a row.
 
+Other `_announce_voice` flags (defaults keep the announcement behaviour; the voice satellite sets all of them):
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `ignore_voice_session` | `False` | Play even while a voice session holds announcements (see Reminder Voice Retry) |
+| `ignore_dnd` | `False` | Play under Do Not Disturb. Only for the reply to something just asked out loud (voice satellite, D4); proactive announcements never set it |
+| `style` | `None` | TTS style note instead of the announcement-type default |
+| `allow_fallback` | `True` | `False` = report failure when every target is unavailable instead of falling back to the reminder speakers (like `manual`) |
+| `record_history` | `True` | `False` = metrics only, no `announcement_history` row (`_record_announcement(..., persist=False)`) |
+
 ### Speaker liveness (dead-speaker skip + fallback)
 
 HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speaker used to log as delivered. `_announce_voice` now checks each target's HA state BEFORE synthesizing TTS:
@@ -58,7 +186,7 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 | `unavailable` or 404 | dead — skipped |
 | `unknown`, `off`, any other state, HA error/timeout | live — attempted |
 
-- If every routed speaker is dead, falls back to the live reminder-route speakers — for every `announcement_type` except `manual` (`/api/announce` naming a speaker), which fails honestly (HTTP 502).
+- If every routed speaker is dead, falls back to the live reminder-route speakers — for every `announcement_type` except `manual` (`/api/announce` naming a speaker), which fails honestly (HTTP 502), and calls with `allow_fallback=False` (voice satellite replies).
 - Return dict may carry `unavailable` (dead targets) and `fallback` (speakers used instead).
 - Speaker ids must match `media_player\.[a-z0-9_]+` — enforced at announce time, in the Speakers panel validator (`announcement_routes._validate_speaker_string`), and on a routine's `speaker` (`routines_config`). The state GET URL-encodes the entity id.
 - Metrics: `bgw_announcement_speaker_unavailable_total{speaker}` (configured speakers, else `other`; pre-seeded at 0 by `seed_announcement_metrics` at startup) and `bgw_announcement_fallback_total{type}`. Alert `AnnouncementSpeakerUnavailable` — see `monitoring/README.md`.
@@ -125,7 +253,7 @@ How Jess *sounds* (not what she says), chosen per utterance by `orchestrator/voi
 
 **Where it applies:**
 - Chat replies: `cloud_brain` records the mode_router mode of the latest message (`record_reply_style`); the dashboard `/api/tts/synthesize`, Telegram voice replies and the `/v1/audio/speech` proxy read `current_reply_style()`. The proxy strips any client-sent `instructions` first.
-- Announcements: `reminder_manager._announce_voice` uses `style_for_announcement(type)`.
+- Announcements: `reminder_manager._announce_voice` uses `style_for_announcement(type)`, unless the caller passes `style=` (the voice satellite passes `current_reply_style()`, so its replies sound like dashboard replies).
 - `tts_backend.synthesize(..., style="")` on every backend; `LocalHTTPBackend` sends `emotion` only when non-empty.
 - Kill switch: `TTS_STYLE_ENABLED=false` (no notes sent anywhere).
 - `action=reset` clears both the one-reply style and the ongoing override.
@@ -249,14 +377,14 @@ Voice-only reminder failures (`set_reminder` with `target="voice"`) auto-retry o
 
 | Gate | Effect |
 |------|--------|
-| Voice session active (`shared.is_voice_session_active()`, 60 s window refreshed by dashboard STT + each `/api/tts/synthesize` sentence) | Phone channels (HA Companion, ntfy, Pushover, Telegram) delivered in the same run; only the speaker part re-armed +2 min, max `MAX_VOICE_SESSION_DEFERRALS` = 5 (~10 min, kwarg `voice_deferrals`). After the cap: speakers skipped if the push went out, else announced via `_announce_voice(..., ignore_voice_session=True)` (DND still applies). |
+| Voice session active (`shared.is_voice_session_active()`, 60 s window refreshed by dashboard STT + each `/api/tts/synthesize` sentence + each voice satellite turn) | Phone channels (HA Companion, ntfy, Pushover, Telegram) delivered in the same run; only the speaker part re-armed +2 min, max `MAX_VOICE_SESSION_DEFERRALS` = 5 (~10 min, kwarg `voice_deferrals`). After the cap: speakers skipped if the push went out, else announced via `_announce_voice(..., ignore_voice_session=True)` (DND still applies). |
 | DND active | Whole delivery (phone included) deferred 30 min. If DND starts after a voice-session push already went out, the speaker part is skipped, not replayed when DND lifts. |
 
 A failed re-arm does not strand the reminder `pending`: speakers are dropped if the push went out, else announced immediately. Tests: `orchestrator/tests/test_reminder_delivery.py`.
 
 ## HTTP STT Server (port 8003)
 
-Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT behind the orchestrator's `/api/stt/transcribe` + `/v1/audio/transcriptions` routes and any orchestrator-side transcription via `STT_URL=http://host.docker.internal:8003`.
+Separate from the Wyoming bridge above. This is the OpenAI-compatible HTTP STT behind the orchestrator's `/api/stt/transcribe` + `/v1/audio/transcriptions` routes and any orchestrator-side transcription (the voice satellite, Telegram voice notes) via `STT_URL=http://host.docker.internal:8003`.
 
 **Live engine:** `stt-onnx.service` — NVIDIA Parakeet TDT 0.6b **v2**, int8, ONNX Runtime on **CPU**. Same port and same endpoints (`/health`, `/transcribe`, `/v1/audio/transcriptions`). Source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service` (deployed on Helios as `/home/labadmin/stt_server_onnx.py`). Since 2026-10-27 the unit runs offline (`HF_HUB_OFFLINE=1`: a new `STT_ONNX_MODEL` must be downloaded into the HF cache first, outside the unit) and can't reach the internet (LAN/tailnet/Docker-only IP sandbox) — `docs/internal/HELIOS_INFRASTRUCTURE.md` → Egress audit.
 
@@ -286,10 +414,10 @@ ssh labadmin@10.0.0.195 'journalctl -u stt-onnx -f'
 
 ## Voice tool subset
 
-Voice turns (the dashboard chat mic, HA Assist / ATOM Echo) get a reduced tool list, `tool_definitions.VOICE_TOOL_NAMES`, because every tool schema is prefilled on each turn and voice is latency-sensitive. `prompt_builder` also drops the tool-guidance block on voice, so on voice the model routes by the schema descriptions alone. The voice list is filtered from the already-gated full list, so feature flags still apply. `tests/test_voice_tools.py` pins this down, and also catches a typo in the name list.
+Voice turns (the dashboard chat mic, the voice satellite, HA Assist) get a reduced tool list, `tool_definitions.VOICE_TOOL_NAMES`, because every tool schema is prefilled on each turn and voice is latency-sensitive. `prompt_builder` also drops the tool-guidance block on voice, so on voice the model routes by the schema descriptions alone. The voice list is filtered from the already-gated full list, so feature flags still apply. `tests/test_voice_tools.py` pins this down, and also catches a typo in the name list.
 - **Voice tool budgets:** While a tool runs for a voice turn, `shared.voice_turn_var` (a ContextVar that `unified_loop._run_one` sets per tool call, so it reaches parallel calls and never leaks into a typed turn) is `True`; tools read it to tighten their budgets. `web_search` (when on the voice list) uses a 5 s whole-request deadline on voice, 15 s typed (SearXNG gives each engine 3 s). A turn that searches in several rounds can still wait rounds × 5 s. The fallback model gets `is_voice` too (buffered `cloud_brain._unified_fallback` since 2026-10-25; the streamed fallback already did), so it keeps the voice generation settings and the 5 s deadline; its tool list stays the full one. Search outcomes, metrics and alerts (`bgw_web_search_total{result,voice}`, `WebSearchFailing`, `SearXNGDown`): `TECHNICAL_REFERENCE.md` → web_search; voice latency (`bgw_voice_pipeline_seconds{path}`): `monitoring/README.md`.
 
-What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss). Since 2026-10-25 it also includes **`web_search`** (SearXNG) (see below), and **`calculate`** (exact math + date/time math, `TECHNICAL_REFERENCE.md` → calculate): "what's 18% of 64" and "when do I need to leave" are spoken asks, and without the tool the brain did the arithmetic in its head and got it wrong. ~1.4k chars of schema; non-terminal, so Jess speaks the answer from the result.
+On the voice satellite this whole subset is open to anyone in the room (D8 above). What's included: device control, memory read/write, structured data (`get_data`), brain dump, the shopping list, reminders, calendar read/create, selfcare and meal logging, focus sessions, sleep mode, decision help, routines and tasks. Since 2026-10-14 it also includes **`pantry` and `meal_plan`**, when `PANTRY_ENABLED` is on. Without them a spoken "what can I cook with the ground turkey?" got "I don't have access to your pantry". They add ~2.2k chars of schema (≈0.2 s of extra prefill on a cache miss). Since 2026-10-25 it also includes **`web_search`** (SearXNG) (see below), and **`calculate`** (exact math + date/time math, `TECHNICAL_REFERENCE.md` → calculate): "what's 18% of 64" and "when do I need to leave" are spoken asks, and without the tool the brain did the arithmetic in its head and got it wrong. ~1.4k chars of schema; non-terminal, so Jess speaks the answer from the result.
 
 Notes for the pantry tools on voice:
 - The `pantry` description itself carries the hints the dropped guidance used to give: summarise `view` when speaking, and `out` already adds to the grocery list (don't also call `shopping_list`).
@@ -298,7 +426,7 @@ Notes for the pantry tools on voice:
 
 ### web_search on voice (since 2026-10-25)
 
-The dashboard mic, hands-free call mode and HA Assist can look things up (weather, sports scores, store hours, news). It used to be typed-chat only, left off for latency, and voice said it couldn't look things up 27 of 30 times. No new env vars, routes, metrics or jobs. `tests/test_voice_tools.py::test_web_search_offered_on_voice` keeps it on the voice list under every gating-flag combination.
+The dashboard mic, hands-free call mode, the voice satellite and HA Assist can look things up (weather, sports scores, store hours, news). It used to be typed-chat only, left off for latency, and voice said it couldn't look things up 27 of 30 times. No new env vars, routes, metrics or jobs. `tests/test_voice_tools.py::test_web_search_offered_on_voice` keeps it on the voice list under every gating-flag combination.
 
 Measured 2026-10-25 on the live brain (Qwen3.8 Flash-Next, `VOICE_THINKING_ENABLED=true`). The real voice prompt and tool schemas went straight to llama-server; only `web_search` ran for real.
 
@@ -313,7 +441,7 @@ Measured 2026-10-25 on the live brain (Qwen3.8 Flash-Next, `VOICE_THINKING_ENABL
 Behaviour:
 - No spoken preamble before searching: ~2 s of silence, then the answer.
 - News questions often search 2–3 times.
-- List answers (movies, events, news) can run 4–6 sentences. The dashboard TTS (`frontend/src/lib/speech-text.ts`) strips markdown and URLs and caps speech at 1200 chars; HA Assist has no such cleanup.
+- List answers (movies, events, news) can run 4–6 sentences. The dashboard TTS (`frontend/src/lib/speech-text.ts`) strips markdown and URLs and caps speech at 1200 chars; the voice satellite does the same (`voice_satellite.speakable`, 1200 chars); HA Assist has no such cleanup.
 
 Known limits (from the SRE and security reviews; not fixed):
 - Brave ("too many requests"), DuckDuckGo and Startpage (CAPTCHA) refuse this server's searches on most days (seen on every day with searches since at least 2026-10-14). Results come from the engines that still answer: Google CSE for general queries, Bing News for news. A burst of searches can also briefly leave news queries with no results.

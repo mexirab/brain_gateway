@@ -102,6 +102,8 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
 | GET | `/api/announcements/stats` | Success rates, per-speaker breakdown, latency |
 
+**Voice satellite** (ATOM Echo → Jess, `orchestrator/voice_satellite.py`, default off): no HTTP route. The orchestrator connects out to the device's ESPHome native API (:6053) and calls `cloud_brain.chat(..., stream=False, is_voice=True)` in-process. Replies go through `_announce_voice(..., announcement_type="voice_reply", record_history=False, …)`, so they never appear in `/api/announcements/history` or `/stats`; the Cast speaker fetches the reply from `/api/audio/{filename}`. Flags of `_announce_voice`: `docs/VOICE_AND_TTS.md` → TTS Pacing. Everything else: `docs/VOICE_AND_TTS.md` → Voice satellite.
+
 ### Reminders & Focus
 
 | Method | Path | Purpose |
@@ -663,7 +665,7 @@ How-to clauses are not read ("how do I turn off the lights?": the rest of the se
 
 **Strict mode.** Once someone else's text is in play this turn — a tool outside `ha_intent.TRUSTED_RESULT_TOOLS` has run (allow-list of tools whose results hold only orchestrator text or the user's own words; a new tool starts out untrusted), or the user's message carries a photo — only an explicit request counts: an action verb governing a device word or name, or a confirmed yes. "Check my email and turn off the lights" still works; "check my email and dim it" or "open the email about the heating bill" does not. Calls in the same round as the untrusted tool are judged before its result exists.
 
-**Yes-path.** The whole message is an affirmative ("yes", "ok", "yes please", "go ahead"), contains no negation, and the assistant message right before ENDS with its own question or offer about a device ("Want me to turn off the porch light?"). When finding that last sentence, quoted spans, readout lines (bullets, numbers, letters `a)`, table rows, lines starting with a time), how-to clauses and closing pleasantries are dropped. A spoken announcement — dashboard label `[Jess announced - …]` or text matching the last 50 announcement-history rows — is never Jess's question (calendar titles are read out verbatim; history unreadable → no yes-path). Needs the client to send the previous assistant turn (dashboard and Telegram do).
+**Yes-path.** The whole message is an affirmative ("yes", "ok", "yes please", "go ahead"), contains no negation, and the assistant message right before ENDS with its own question or offer about a device ("Want me to turn off the porch light?"). When finding that last sentence, quoted spans, readout lines (bullets, numbers, letters `a)`, table rows, lines starting with a time), how-to clauses and closing pleasantries are dropped. A spoken announcement — dashboard label `[Jess announced - …]` or text matching the last 50 announcement-history rows — is never Jess's question (calendar titles are read out verbatim; history unreadable → no yes-path). Needs the client to send the previous assistant turn (dashboard, Telegram and the voice satellite do; the satellite's replies are not in announcement history, so its own questions qualify).
 
 **Blocked call.** Not executed (never reaches `execute_tool`, so `bgw_tool_calls_total{tool="home_assistant"}` counts real executions), not terminal. Tool result:
 
@@ -1208,6 +1210,7 @@ See `.env.example` for full list. Key vars:
 | WIND_DOWN_SHORT_NIGHT_HOURS | Short-night threshold for the gentle morning briefing (default: 6.5) |
 | ACTUAL_* | Actual Budget sync (URL, password, budget file, interval, window, fun-money category) — see `docs/ENV_VARS.md` → Finance |
 | RESEARCH_HELPER_ENABLED, RESEARCH_CONTEXT7_API_KEY | `look_it_up` research helper — see `docs/ENV_VARS.md` → Research helper |
+| VOICE_SATELLITE_* | Voice satellite (ATOM Echo → Jess; host IP, port, API key, node name, room speaker, Helios wait) — see `docs/ENV_VARS.md` → Voice satellite |
 | DEPLOY_DRIFT_REPO, DEPLOY_MARKER_PATH, DEPLOY_DRIFT_GITHUB_TOKEN | Deploy drift check (`DeployDrift`; empty repo = off) — see `docs/ENV_VARS.md` → Deploy drift |
 
 ## External APIs

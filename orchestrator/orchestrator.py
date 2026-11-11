@@ -587,6 +587,16 @@ async def _shutdown_logic():
         shared.telegram_task = None
         logger.info("[orchestrator] Stopped Telegram long-poll task")
 
+    satellite_task = getattr(shared, "voice_satellite_task", None)
+    if satellite_task is not None:
+        import contextlib
+
+        satellite_task.cancel()
+        with contextlib.suppress(BaseException):
+            await satellite_task
+        shared.voice_satellite_task = None
+        logger.info("[orchestrator] Stopped voice satellite task")
+
     if _http:
         await _http.aclose()
         _http = None
@@ -1147,6 +1157,23 @@ async def _startup_logic():
         logger.info("[TELEGRAM] Bot enabled — long-poll task started")
     elif _cfg.telegram_enabled:
         logger.warning("[TELEGRAM] telegram_enabled but TELEGRAM_BOT_TOKEN is empty — bot not started")
+
+    # Voice satellite (ATOM Echo → Jess) — forever task like the Telegram bot.
+    # Each turn is the same brain call as /v1/chat/completions with is_voice=True
+    # (the route only spots voice from HA's IP or the STT beacon, so a direct
+    # call is exact). Cancelled in _shutdown_logic.
+    if _cfg.voice_satellite_enabled:
+        import asyncio as _asyncio_sat
+
+        from orchestrator.voice_satellite import log_loop_exit, satellite_loop
+
+        async def _satellite_chat(messages: List[Dict[str, Any]]) -> Any:
+            shared.mark_voice_activity()
+            return await cloud_brain.chat(messages, stream=False, ha_client=ha_client, is_voice=True)
+
+        shared.voice_satellite_task = _asyncio_sat.create_task(satellite_loop(_satellite_chat), name="voice-satellite")
+        shared.voice_satellite_task.add_done_callback(log_loop_exit)
+        logger.info("[SATELLITE] Voice satellite enabled — bridge task started")
 
     # Schedule progress tracking jobs (F-005)
     if shared.PROGRESS_ENABLED:

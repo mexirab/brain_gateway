@@ -172,7 +172,9 @@ class ServiceRegistry:
             # MODEL_SERVER_AUTH: llama-server 401s /v1/models without its key.
             _client = client or httpx.AsyncClient(timeout=timeout, auth=MODEL_SERVER_AUTH)
             try:
-                r = await _client.get(health_url)
+                # Per request: a caller's shared client may carry a much longer
+                # default (orchestrator's is 60 s read / 10 s connect).
+                r = await _client.get(health_url, timeout=timeout)
                 svc.healthy = r.status_code < 500
                 svc.last_error = "" if svc.healthy else f"HTTP {r.status_code}"
             finally:
