@@ -4,6 +4,44 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Voice satellite: VAD rebuilt for the real room + firmware lock-up fix (2026-11-11)
+
+Branch `fix/satellite-vad`, follow-up to PR #169 after the first live tests. Every question ran to the 15 s max-utterance cap (answers ~15 s late) or was missed as no-speech, while Grafana looked healthy (a capped run still counts as an `ok` turn). Measured on the device (per 50 ms frame, RMS 0..1): the room in silence 0.025–0.09 (median 0.042), a spoken question 0.19–0.24. The original VAD, a port of the dashboard's browser-mic VAD, capped its learned noise floor at 0.015, so its end-of-speech bar (0.027) sat below the room itself. Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Listening (VAD), D13, Firmware rules.
+
+### Upgrade action
+
+- Orchestrator: none beyond the normal merge (no new env vars).
+- Firmware: reflash the device by hand (OTA) with the new `models/atom-echo-jess.yaml`; CI never flashes devices.
+- Before enabling a satellite in a new room, measure that room's levels first: much louder than ~0.045 RMS means expect `max_utterance`.
+
+### Orchestrator
+
+- `voice_satellite.VadConfig` / `EnergyVad` rewritten: decisions on a 200 ms moving mean of frame RMS; room level = 25th percentile of the smoothed level over the last 2 s (not learned from the first 300 ms, held at 0.036–0.045 for the first 1.5 s, frozen while speaking); speech start = smoothed ≥ `max(0.03, floor × 1.8)` with ≥ 2 frames above that bar in 200 ms, for 150 ms; speech end = 1.2 s with no smoothed level at the speech bar AND the mean over those 1.2 s < `max(0.015, floor × 1.35)`. 15 s cap and 5 s no-speech unchanged. Simulated on the measured levels (400 runs per case): questions of 0.8–10 s caught 100 % with no cut-offs, end ~1.25–1.35 s after the last word; quiet voice 95–99.5 %; nobody speaking ≥ 99.75 % correctly `no_speech`.
+- Rejected in review (D13, don't re-propose): a "steady level = it's the room" escape hatch (this device's speech is steady too — it cut off questions over ~3.5 s), and remembering each room's level between runs (poisoned by cut-off runs, a TV, Jess's own reply or a muted run; no gain in the tuning room).
+- `frame_rms` removes the frame mean (DC offset).
+- `listening ended (<reason>)` log line now carries `audio`, `floor`, `start`/`end` bars, `peak`, `max`, `tail`, `quiet`, `speech_at`, `speech` (numbers only).
+- Known limit: a room much louder than ~0.045 RMS (TV on, ~0.075) false-starts and records to the 15 s cap; level alone can't separate it from steady speech (a spectral VAD would).
+
+### Firmware
+
+- Lock-up fix: a second "Hey Jess" mid-run deadlocked the device (speaker "Parent bus is busy" retried forever; connected but deaf). The media player's `on_idle` wake-word restart is gone; the wake word is stopped (and waited for) before any sound; every wait is bounded and a sound that can't finish is cancelled; `start_wake_word` refuses while the speaker amp is on; `on_end` waits for the voice assistant to idle and leaves the restart to `play_sound` when a sound plays; `play_sound` waits for the mic to be released and stops the wake word twice; `on_client_disconnected` restarts the wake word; push-to-talk waits for the wake word to stop; a 15 s `interval:` self-heal restarts a wake word that is off with nothing running (two checks) and stops a voice run still "running" after ~60 s.
+- Removed `voice_assistant` `noise_suppression_level` / `auto_gain` / `volume_multiplier` (server-side hints only: HA applies them; the device streams raw audio and the bridge ignores them). Mic `correct_dc_offset: true` added as hygiene (measured offset ~0).
+
+### Monitoring
+
+- New counter `bgw_satellite_listen_end_total{reason}` (`speech_end`, `max_utterance`, `no_speech`, `device_stop`, `wall_timeout`, `no_audio`, `aborted`; pre-seeded). No alert (design choice; the panel is the signal).
+- Grafana "Voice Satellite" row: new "How Listening Ended (24h)"; latency panel renamed "Listening End → Reply Playing". `bgw_satellite_turn_seconds` help text corrected: it starts at the VAD's end-of-listening decision.
+
+### Tests
+
+- `orchestrator/tests/test_voice_satellite.py`: VAD section rewritten with the measured room levels; bridge-level tests for the counter and the log line. Full suite: 7357 passed.
+
+### Docs
+
+- `docs/VOICE_AND_TTS.md` (Listening (VAD), D13, Firmware rules, Known limits), `monitoring/README.md` (metric, log fields, LogQL, Grafana row), `CLAUDE.md`, `COMMANDS.md`, `docs/JESS_QUICK_START.md`.
+
+---
+
 ## [Unreleased] — Voice satellite: ATOM Echo talks to Jess without HA's voice pipeline (2026-11-10)
 
 The ATOM Echo's HA Assist path had been broken since the HA migration (the conversation agent still points at Helios). The orchestrator now talks to the device itself. Detail, decisions D1–D12, setup, firmware runbook: `docs/VOICE_AND_TTS.md` → Voice satellite.

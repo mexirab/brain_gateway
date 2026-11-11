@@ -146,6 +146,10 @@ microphone:
     adc_type: external
     sample_rate: 16000
     bits_per_sample: 16bit
+    # Remove any constant DC offset (a ~2.5 Hz high-pass; no gain change).
+    # The bridge finds speech by loudness and also removes the offset per
+    # frame; measured 2026-11-11 this unit's offset was small (|dc| < 0.01).
+    correct_dc_offset: true
 
 speaker:
   - platform: i2s_audio
@@ -183,20 +187,18 @@ media_player:
       - id: error_sound
         file: ${sounds}/jack_disconnected.flac
     on_announcement:
-      # Stop wake word listener to free the I2S bus for speaker playback
+      # Safety net: stop the wake word listener to free the I2S bus for
+      # playback (the wake beep and play_sound already stop it first).
       - if:
           condition:
             microphone.is_capturing:
           then:
             - micro_wake_word.stop
-    on_idle:
-      # Restart wake word once a sound has finished
-      - if:
-          condition:
-            not:
-              voice_assistant.is_running:
-          then:
-            - script.execute: start_wake_word
+    # No on_idle restart of the wake word: after the wake beep it restarted
+    # listening during the voice run, so a second "Hey Jess" mid-run tried
+    # to beep while the mic held the bus — the speaker retried forever and
+    # the device went deaf (first live test, 2026-11-11). Whoever plays a
+    # sound restarts the wake word itself when done.
 
 # =============================================================================
 # Voice: on-device wake words → Jess's voice satellite bridge
@@ -225,7 +227,14 @@ micro_wake_word:
     # 2026-11-10 once "Hey Jess" worked on the device: it is said in many
     # public Home Assistant videos, so it's an easy false/remote trigger.)
   on_wake_word_detected:
-    # Amp on -> beep -> wait for beep -> amp off -> start the voice run
+    # Stop listening first (frees the shared I2S bus for the beep) -> amp on
+    # -> beep -> wait for it (bounded) -> amp off -> start the voice run.
+    - micro_wake_word.stop:
+    - wait_until:
+        condition:
+          not:
+            micro_wake_word.is_running:
+        timeout: 1s
     - switch.turn_on: speaker_amp
     - lambda: |-
         id(echo_media_player)
@@ -235,14 +244,35 @@ micro_wake_word:
           media_player.is_announcing:
         timeout: 0.5s
     - wait_until:
-        - and:
+        condition:
+          and:
             - not:
                 media_player.is_announcing:
             - not:
                 speaker.is_playing:
+        timeout: 3s
+    # A sound that still hasn't finished (bus taken) is cancelled, so the
+    # media player can't keep retrying it in the background.
+    - if:
+        condition:
+          media_player.is_announcing:
+        then:
+          - lambda: |-
+              id(echo_media_player)->make_call()
+                .set_command(media_player::MEDIA_PLAYER_COMMAND_STOP)
+                .set_announcement(true)
+                .perform();
     - switch.turn_off: speaker_amp
     - voice_assistant.start:
         wake_word: !lambda return wake_word;
+    # Jess not connected: the run never starts ("No API client connected",
+    # no error event) — go back to listening for the wake word.
+    - if:
+        condition:
+          not:
+            voice_assistant.is_running:
+        then:
+          - script.execute: start_wake_word
 
 voice_assistant:
   id: va
@@ -250,21 +280,42 @@ voice_assistant:
   # No speaker/media_player here: answers play on the Google speaker, and the
   # mic + speaker share one I2S bus on the ATOM Echo S3R.
   micro_wake_word: mww
-  noise_suppression_level: 2
-  auto_gain: 31dBFS
-  volume_multiplier: 2.0
+  # No noise_suppression_level / auto_gain / volume_multiplier: ESPHome only
+  # sends those to the server as hints (Home Assistant applies them); the
+  # device streams raw audio and the Jess bridge ignores them.
 
   on_client_connected:
     - lambda: id(init_in_progress) = false;
     - script.execute: start_wake_word
-  # No on_client_disconnected stop: the wake word keeps listening while Jess
-  # is away, so "Hey Jess" still beeps (the beep tells you the device heard
-  # you; no answer means Jess isn't connected — see the satellite alert).
+  # Jess went away (orchestrator restart, network): keep listening for the
+  # wake word, so "Hey Jess" still beeps (no answer = Jess isn't connected —
+  # see the satellite alert). A run cut off by the disconnect goes idle
+  # without on_end/on_error, so restart the wake word here.
+  on_client_disconnected:
+    - wait_until:
+        condition:
+          not:
+            voice_assistant.is_running:
+        timeout: 3s
+    - script.execute: start_wake_word
 
   on_end:
-    # The bridge ends the run as soon as it has your question — listen again
-    - delay: 300ms
-    - script.execute: start_wake_word
+    # The bridge ends the run as soon as it has your question — listen
+    # again once the voice assistant has actually let go of the mic. If an
+    # outcome sound is playing (on_error -> play_sound), leave it: play_sound
+    # restarts the wake word itself, and starting it now would take the
+    # bus from the sound.
+    - wait_until:
+        condition:
+          not:
+            voice_assistant.is_running:
+        timeout: 3s
+    - if:
+        condition:
+          not:
+            script.is_running: play_sound
+        then:
+          - script.execute: start_wake_word
 
   on_error:
     - if:
@@ -312,7 +363,21 @@ binary_sensor:
           - OFF for at least 50ms
         then:
           - micro_wake_word.stop
+          # stop() only flags the stop; wait for it, or a start_wake_word
+          # below would be ignored ("already running") and then stopped.
+          - wait_until:
+              condition:
+                not:
+                  micro_wake_word.is_running:
+              timeout: 1s
           - voice_assistant.start
+          # Jess not connected: the run never starts — listen again
+          - if:
+              condition:
+                not:
+                  voice_assistant.is_running:
+              then:
+                - script.execute: start_wake_word
       # Long press (10s): factory reset
       - timing:
           - ON for at least 10s
@@ -355,6 +420,8 @@ script:
               - not:
                   voice_assistant.is_running:
               - switch.is_off: mute
+              # never while a sound plays: the mic would take the shared bus
+              - switch.is_off: speaker_amp
           then:
             # The wake word runs on the device (never server-side)
             - lambda: id(va).set_use_wake_word(false);
@@ -366,6 +433,29 @@ script:
     parameters:
       sound: int
     then:
+      # Free the shared I2S bus first — from the voice assistant (an error
+      # can arrive while it still streams) and from the wake word (stopped
+      # twice: a start that was already pending when we stopped it takes
+      # effect a loop later). Every wait is bounded, so a sound that can't
+      # play never leaves the device deaf.
+      - wait_until:
+          condition:
+            not:
+              voice_assistant.is_running:
+          timeout: 1s
+      - micro_wake_word.stop:
+      - wait_until:
+          condition:
+            not:
+              micro_wake_word.is_running:
+          timeout: 1s
+      - delay: 100ms
+      - micro_wake_word.stop:
+      - wait_until:
+          condition:
+            not:
+              micro_wake_word.is_running:
+          timeout: 1s
       - switch.turn_on: speaker_amp
       - lambda: |-
           const audio::AudioFile *f = id(error_sound);
@@ -378,15 +468,87 @@ script:
             media_player.is_announcing:
           timeout: 0.5s
       - wait_until:
-          - and:
+          condition:
+            and:
               - not:
                   media_player.is_announcing:
               - not:
                   speaker.is_playing:
+          timeout: 3s
+      # A sound that still hasn't finished (bus taken) is cancelled, so the
+      # media player can't keep retrying it in the background.
+      - if:
+          condition:
+            media_player.is_announcing:
+          then:
+            - lambda: |-
+                id(echo_media_player)->make_call()
+                  .set_command(media_player::MEDIA_PLAYER_COMMAND_STOP)
+                  .set_announcement(true)
+                  .perform();
       - switch.turn_off: speaker_amp
       - script.execute: start_wake_word
 
+# Self-heal: whatever path forgot to restart the wake word, a device that is
+# connected but not listening is invisible from Jupiter (the connection
+# alert stays green). If nothing at all is running for two checks in a row,
+# listen again.
+interval:
+  - interval: 15s
+    then:
+      - if:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - not:
+                  micro_wake_word.is_running:
+              - switch.is_off: mute
+              - switch.is_off: speaker_amp
+              - not:
+                  script.is_running: play_sound
+          then:
+            - lambda: id(deaf_checks) += 1;
+            - if:
+                condition:
+                  lambda: return id(deaf_checks) >= 2;
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Wake word was off with nothing else running: restarting it"
+                  - lambda: id(deaf_checks) = 0;
+                  - script.execute: start_wake_word
+          else:
+            - lambda: id(deaf_checks) = 0;
+      # A voice run never legitimately lasts this long (Jess ends every run
+      # within 30 s): one still "running" after ~45-60 s is wedged — stop it
+      # (the check above then restarts the wake word).
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - lambda: id(va_busy_checks) += 1;
+            - if:
+                condition:
+                  lambda: return id(va_busy_checks) >= 4;
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Voice run stuck for ~60 s: stopping it"
+                  - lambda: id(va_busy_checks) = 0;
+                  - voice_assistant.stop:
+          else:
+            - lambda: id(va_busy_checks) = 0;
+
 globals:
+  - id: va_busy_checks
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: deaf_checks
+    type: int
+    restore_value: no
+    initial_value: "0"
   - id: init_in_progress
     type: bool
     restore_value: no

@@ -65,8 +65,12 @@ The device check is the noise key: ``expected_name`` only guards against a
 DHCP mix-up. Anyone holding the key (lost device, the build box's
 secrets.yaml) can pose as the device from the LAN — rotate it if lost.
 
-Known limits: one device (env-configured); energy VAD (a TV talking right after
-the wake word can run the utterance to its 15 s cap); no follow-up listening
+Known limits: one device (env-configured); energy VAD — it can't tell the user
+from a TV or another person talking, and a room much louder than the tuning
+room (~0.045 RMS; TV on) can false-start and record to the 15 s cap
+(``bgw_satellite_listen_end_total{reason="max_utterance"}``; level alone can't
+separate a loud room from this device's fairly steady speech — a spectral VAD
+would); no follow-up listening
 without the wake word; no "two devices heard it" arbitration (one device); a
 turn that hits CHAT_TIMEOUT_S may already have run tools (reminder set, light
 switched) before the device plays the error sound.
@@ -116,6 +120,15 @@ BACKOFF_MIN_S = 5.0
 BACKOFF_MAX_S = 120.0
 RATE_LIMIT_TURNS = 6  # turns per device per RATE_LIMIT_WINDOW_S (TV false-waking it)
 RATE_LIMIT_WINDOW_S = 300.0
+LISTEN_END_REASONS = (
+    "speech_end",
+    "max_utterance",
+    "no_speech",
+    "device_stop",
+    "wall_timeout",
+    "no_audio",
+    "aborted",
+)
 
 ERR_NO_SPEECH = "jess-no-speech"
 ERR_BUSY = "jess-busy"
@@ -144,81 +157,159 @@ def wake_word_label(phrase: Optional[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# End-of-speech detection — a port of the dashboard's EnergyVad
-# (frontend/src/lib/vad.ts), driven by audio time so it is deterministic.
+# End-of-speech detection — energy VAD driven by audio time (deterministic).
+#
+# The room's quiet level is LEARNED, never assumed. On the ATOM Echo S3R in a
+# real room (2026-11-11) silence read 0.025-0.09 RMS per 50 ms frame (median
+# 0.042: fans, air, mic hiss) and a spoken question 0.19-0.24. The first
+# version was a port of the dashboard's browser-mic VAD and capped the learned
+# quiet level at 0.015, so the room itself sat above its "you've stopped" bar:
+# every question ran to the 15 s cap, and a room level learned before speech
+# could hide a quieter question entirely.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class VadConfig:
-    min_speech_ms: int = 200  # level above threshold this long = speech
-    silence_ms: int = 1200  # silence after speech that ends the utterance
+    """Levels are frame RMS, 0..1 of full scale; times are audio milliseconds."""
+
+    smooth_ms: int = 200  # decide on the mean level over this window, not one frame
+    noise_window_ms: int = 2_000  # learn the room's quiet level from this much recent audio…
+    noise_percentile: float = 0.25  # …as a low percentile (pauses between words keep it honest)
+    # The mic can read near-silent while it starts: those frames (and the
+    # smoothed levels that still average them in) are not learned from.
+    skip_ms: int = 100
+    # The user often talks straight after the beep, so until bootstrap_ms the
+    # learned level is held between max_bootstrap_noise × bootstrap_floor_ratio
+    # and max_bootstrap_noise: their first words can't become "the room", and
+    # near-silent start-up frames can't make the room itself count as speech.
+    # 0.045 sits just above the measured room (0.042). Sim, 400 runs each: a
+    # quiet voice straight after the beep caught 99% (cap 0.06: 7%). Cost: a
+    # room much louder than that (TV on, ~0.075) can false-start in the first
+    # 1.5 s and then run to the 15 s cap (bgw_satellite_listen_end_total
+    # {reason="max_utterance"}).
+    bootstrap_ms: int = 1_500
+    max_bootstrap_noise: float = 0.045
+    bootstrap_floor_ratio: float = 0.8
+    min_noise: float = 0.003  # a silent room: don't let the bars collapse to zero
+    # Speech = smoothed level ≥ room × start_ratio, and at least
+    # min_start_level (a silent room: one 50 ms click averages to a quarter of
+    # its level and must stay under it), with min_loud_frames single frames
+    # above the bar in smooth_ms (a click has one), for min_speech_ms.
+    start_ratio: float = 1.8
+    min_start_level: float = 0.03
+    min_loud_frames: int = 2
+    min_speech_ms: int = 150
+    # Finished = for the last silence_ms nothing reached the speech bar AND the
+    # mean level over that time is below room × end_ratio (a mean, so one
+    # noise blip doesn't restart the clock). end_ratio well under start_ratio
+    # so soft words between the two bars keep the utterance alive. The room
+    # level stays frozen while speaking: speech from this device is too steady
+    # (smoothed p90/p25 ≈ 1.3) to tell it apart from a loud room by level
+    # alone, so any "re-learn while talking" cuts long questions off.
+    end_ratio: float = 1.35
+    min_end_level: float = 0.015  # end bar floor in a silent room
+    silence_ms: int = 1_200
     max_utterance_ms: int = 15_000  # cap: process what we have
     no_speech_ms: int = 5_000  # nothing said this long after the wake word
-    min_rms: float = 0.01  # absolute speech floor (0..1 full scale)
-    ratio: float = 3.0  # threshold = max(min_rms, floor × ratio)
-    hold_factor: float = 0.6  # hysteresis while speaking
-    floor_alpha: float = 0.05  # noise-floor EMA during silence
-    calibration_ms: int = 200  # measure the room first (after the beep)
-    # The user often starts talking right after the beep, inside the
-    # calibration window; cap what calibration may learn so their first word
-    # can't become the noise floor.
-    max_calibrated_floor: float = 0.015
+
+
+def _percentile(values: Any, fraction: float) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
 
 
 class EnergyVad:
     """Feed one RMS level per 50 ms frame; returns an event or None.
 
-    Events: ``speech-start``, ``speech-end`` (silence after speech),
+    Events: ``speech-start``, ``speech-end`` (quiet after speech),
     ``max-utterance`` (cap reached while talking), ``no-speech`` (nothing said
-    within ``no_speech_ms``).
+    within ``no_speech_ms``). ``floor`` is the room's learned quiet level; it
+    is frozen while speech is in progress, so a long sentence can't raise its
+    own bar.
     """
 
     def __init__(self, cfg: Optional[VadConfig] = None) -> None:
         self.cfg = cfg or VadConfig()
-        self.floor = self.cfg.min_rms / self.cfg.ratio
+        c = self.cfg
+        self.floor = c.max_bootstrap_noise  # until the room has been heard
+        self.level = 0.0  # smoothed level of the latest frames
+        self.max_level = 0.0  # highest smoothed level this run
         self.speaking = False
         self.heard_speech = False
         self.peak = 0.0
+        self.speech_at: Optional[int] = None  # audio ms of the first frame of speech
+        self._recent: collections.deque[float] = collections.deque(maxlen=max(1, c.smooth_ms // FRAME_MS))
+        self._history: collections.deque[float] = collections.deque(maxlen=max(1, c.noise_window_ms // FRAME_MS))
+        self._tail: collections.deque[float] = collections.deque(maxlen=max(1, c.silence_ms // FRAME_MS))
         self._above_since: Optional[int] = None
+        self._last_loud = 0
         self._started_at = 0
-        self._last_voice_at = 0
-        self._calib_sum = 0.0
-        self._calib_n = 0
+        self._now = 0
 
     @property
     def threshold(self) -> float:
-        return max(self.cfg.min_rms, self.floor * self.cfg.ratio)
+        """Smoothed level that counts as speech starting."""
+        return max(self.cfg.min_start_level, self.floor * self.cfg.start_ratio)
+
+    @property
+    def end_threshold(self) -> float:
+        """Mean level over the last ``silence_ms`` below which the speaker has stopped."""
+        return max(self.cfg.min_end_level, self.floor * self.cfg.end_ratio)
+
+    @property
+    def tail_mean(self) -> float:
+        """Mean frame level over the last ``silence_ms`` of speech (0 before speech)."""
+        return sum(self._tail) / len(self._tail) if self._tail else 0.0
+
+    @property
+    def quiet_ms(self) -> int:
+        """Audio ms since the smoothed level last reached the speech bar (0 before speech)."""
+        return self._now - self._last_loud if self.heard_speech else 0
+
+    def _learn_floor(self, now_ms: int) -> None:
+        c = self.cfg
+        estimate = _percentile(self._history, c.noise_percentile)
+        if now_ms < c.bootstrap_ms:
+            cap = c.max_bootstrap_noise
+            estimate = min(max(estimate, cap * c.bootstrap_floor_ratio), cap)
+        self.floor = max(c.min_noise, estimate)
 
     def feed(self, rms: float, now_ms: int) -> Optional[str]:
         c = self.cfg
+        self._now = now_ms
         self.peak = max(self.peak, rms)
-        if now_ms < c.calibration_ms:
-            self._calib_sum += rms
-            self._calib_n += 1
-            self.floor = min(self._calib_sum / self._calib_n, c.max_calibrated_floor)
-            return None
+        self._recent.append(rms)
+        self.level = sum(self._recent) / len(self._recent)
+        self.max_level = max(self.max_level, self.level)
         if not self.speaking:
-            if rms >= self.threshold:
+            if now_ms > c.skip_ms + c.smooth_ms:
+                self._history.append(self.level)
+                self._learn_floor(now_ms)
+            bar = self.threshold
+            # A click is one loud frame that smoothing stretches over
+            # smooth_ms; speech has several.
+            if self.level >= bar and sum(1 for r in self._recent if r >= bar) >= c.min_loud_frames:
                 if self._above_since is None:
                     self._above_since = now_ms
                 if now_ms - self._above_since >= c.min_speech_ms:
                     self.speaking = True
                     self.heard_speech = True
                     self._started_at = self._above_since
-                    self._last_voice_at = now_ms
+                    self.speech_at = self._above_since
                     self._above_since = None
+                    self._last_loud = now_ms
                     return "speech-start"
             else:
                 self._above_since = None
-                self.floor += c.floor_alpha * (rms - self.floor)
             if not self.heard_speech and self._above_since is None and now_ms >= c.no_speech_ms:
                 return "no-speech"
             return None
-        # Speaking: the floor is frozen so a long sentence can't raise its own bar.
-        if rms >= self.threshold * c.hold_factor:
-            self._last_voice_at = now_ms
-        if now_ms - self._last_voice_at >= c.silence_ms:
+        # Speaking: the floor is frozen.
+        self._tail.append(rms)
+        if self.level >= self.threshold:
+            self._last_loud = now_ms
+        if now_ms - self._last_loud >= c.silence_ms and self.tail_mean < self.end_threshold:
             self.speaking = False
             return "speech-end"
         if now_ms - self._started_at >= c.max_utterance_ms:
@@ -228,7 +319,12 @@ class EnergyVad:
 
 
 def frame_rms(frame: bytes) -> float:
-    """RMS of a little-endian int16 PCM frame, scaled to 0..1."""
+    """RMS of a little-endian int16 PCM frame around its own mean, scaled to 0..1.
+
+    The mean is removed so a mic's constant DC offset can't read as room
+    noise (the firmware also sets ``correct_dc_offset``; this covers devices
+    that don't).
+    """
     usable = len(frame) - (len(frame) % SAMPLE_WIDTH)
     if usable <= 0:
         return 0.0
@@ -236,10 +332,13 @@ def frame_rms(frame: bytes) -> float:
     samples.frombytes(frame[:usable])
     if sys.byteorder != "little":
         samples.byteswap()
-    total = 0
+    n = len(samples)
+    mean = sum(samples) / n
+    total = 0.0
     for s in samples:
-        total += s * s
-    return math.sqrt(total / len(samples)) / 32768.0
+        d = s - mean
+        total += d * d
+    return math.sqrt(total / n) / 32768.0
 
 
 def pcm_to_wav(pcm: bytes) -> bytes:
@@ -446,6 +545,9 @@ class Satellite:
             if run.watcher is not None:
                 run.watcher.cancel()
             logger.info("[SATELLITE] %s: run aborted by the device", self._node)
+            from orchestrator.metrics import SATELLITE_LISTEN_END_TOTAL
+
+            SATELLITE_LISTEN_END_TOTAL.labels(reason="aborted").inc()
             self._count("aborted", run.wake_word)
             return
         # Device ended its stream before our VAD did: use what we have.
@@ -473,15 +575,27 @@ class Satellite:
             run.watcher.cancel()
         # RUN_END alone — see the module docstring (STT_VAD_END first wedges the device).
         self._send("VOICE_ASSISTANT_RUN_END")
-        # log-safe: audio length in ms, RMS levels and a fixed reason string
+        from orchestrator.metrics import SATELLITE_LISTEN_END_TOTAL
+
+        vad = run.vad
+        SATELLITE_LISTEN_END_TOTAL.labels(reason=reason.replace("-", "_")).inc()
+        # log-safe: audio ms, RMS levels, counters and a fixed reason string —
+        # everything the VAD decided on, so a mis-tune shows in Loki
         logger.info(
-            "[SATELLITE] %s: listening ended (%s) audio=%dms floor=%.4f peak=%.4f speech=%s",
+            "[SATELLITE] %s: listening ended (%s) audio=%dms floor=%.4f start=%.4f end=%.4f "
+            "peak=%.4f max=%.4f tail=%.4f quiet=%dms speech_at=%dms speech=%s",
             self._node,
             reason,
             run.audio_ms,
-            run.vad.floor,
-            run.vad.peak,
-            run.vad.heard_speech,
+            vad.floor,
+            vad.threshold,
+            vad.end_threshold,
+            vad.peak,
+            vad.max_level,
+            vad.tail_mean,
+            vad.quiet_ms,
+            -1 if vad.speech_at is None else vad.speech_at,
+            vad.heard_speech,
         )
         if not captured:
             self._busy = False
@@ -958,12 +1072,14 @@ _CONNECT_RESULTS = ("ok", "timeout", "unreachable", "bad_key", "wrong_device", "
 async def satellite_loop(chat: ChatFn) -> None:
     """Long-running task started from orchestrator startup (like the Telegram
     bot: a forever task, not a scheduler job). Cancelled at shutdown."""
-    from orchestrator.metrics import SATELLITE_CONNECT_TOTAL, SATELLITE_CONNECTED
+    from orchestrator.metrics import SATELLITE_CONNECT_TOTAL, SATELLITE_CONNECTED, SATELLITE_LISTEN_END_TOTAL
 
     # Series exist from startup, so "never connected" is visible (and alertable).
     SATELLITE_CONNECTED.labels(device=_settings.voice_satellite_name).set(0)
     for result in _CONNECT_RESULTS:
         SATELLITE_CONNECT_TOTAL.labels(result=result)
+    for reason in LISTEN_END_REASONS:
+        SATELLITE_LISTEN_END_TOTAL.labels(reason=reason)
     sat = Satellite(
         chat=chat,
         host=_settings.voice_satellite_host,

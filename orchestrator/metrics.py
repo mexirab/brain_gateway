@@ -653,9 +653,19 @@ SATELLITE_TURN_TOTAL = Counter(
     ["result", "wake_word", "helios"],
 )
 
+SATELLITE_LISTEN_END_TOTAL = Counter(
+    "bgw_satellite_listen_end_total",
+    "Voice satellite: how each listening run ended",
+    # reason: speech_end (heard you stop — normal) | max_utterance (15 s cap: the
+    #         VAD never heard you stop, or a TV) | no_speech | device_stop |
+    #         wall_timeout (audio stalled) | no_audio | aborted (device cancelled)
+    ["reason"],
+)
+
 SATELLITE_TURN_SECONDS = Histogram(
     "bgw_satellite_turn_seconds",
-    "Voice satellite: end of speech until HA accepted play_media (ok turns only; Cast adds 1-3 s)",
+    "Voice satellite: end of listening (VAD decision) until HA accepted play_media "
+    "(ok turns only; listening time and Cast's 1-3 s are not included)",
     # helios: awake | woken — keep 60-180 s wake turns out of normal latency
     ["helios"],
     buckets=(2, 4, 6, 8, 10, 12, 15, 20, 30, 60, 120, 240),

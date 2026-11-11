@@ -286,6 +286,10 @@ docker logs brain-orchestrator 2>&1 | grep SATELLITE | tail -20
 curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result)(increase(bgw_satellite_connect_total[1h]))' | jq '.data.result'
 curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result,wake_word)(increase(bgw_satellite_turn_total[24h]))' | jq '.data.result'
 
+# How listening ended (max_utterance = answers ~15 s late) + the VAD's numbers per run
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (reason)(increase(bgw_satellite_listen_end_total[24h]))' | jq '.data.result'
+docker logs brain-orchestrator 2>&1 | grep "listening ended" | tail -10
+
 # New device API key (firmware api_encryption_key = VOICE_SATELLITE_API_KEY)
 python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
 
