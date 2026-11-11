@@ -1,0 +1,171 @@
+# VoxCPM2 TTS server (cloned voice + per-utterance style notes) — SATURN, on the RTX 5080.
+#
+# The live voice once the Saturn move is done (Jupiter TTS_URL=http://10.0.0.58:8004). It moved off
+# Helios GPU1 so the brain can run its native 262144 context (header of
+# tts/llama-server-primary.service). Same server and API as before (tts/voxcpm_server.py); only the
+# box changed. tts/voxcpm-tts.service is the Helios copy, kept installed but DISABLED as rollback.
+#
+# Why the 5080 (16 GB, Blackwell sm_120): VoxCPM2 takes ~7.4 GiB fresh and its PyTorch cache grows to
+# ~9.7 GiB after long texts, which is too tight for the 10 GB RTX 3080 it replaces. It is the same
+# GPU generation as Helios's RTX PRO 5000, so the Helios install (torch 2.8 cu128) carries over
+# unchanged. The 3090 stays free for experiments, but only if they are pinned to it: llama.cpp
+# auto-fit and most tools use every GPU they can see. Run experiments with
+# CUDA_VISIBLE_DEVICES=GPU-<3090 uuid> (e.g. in ~/.bashrc). An unpinned one fills this card,
+# synthesis then fails while /health stays 200, and only TTSGPUMemoryLow (quiet) says so.
+# Saturn's driver must be the OPEN kernel module (nvidia-580-open, already the case): Blackwell
+# cards need it. Unattended upgrades can swap the driver under the loaded module (Helios holds its
+# 580 packages for this reason: `apt-mark showhold`). SaturnGpuDriverBroken (quiet) catches it.
+#
+# What Jess's voice now depends on: Saturn being up. A Saturn outage pages as NodeDown; TTSDown
+# (quiet) fires when Saturn is up but this server isn't answering. Saturn kernel bumps have dropped
+# the NVIDIA module before (2026-11-07): if `nvidia-smi` fails after an upgrade, check
+# /lib/modules/$(uname -r)/kernel/nvidia-580-open and install linux-modules-nvidia-580-open-$(uname -r).
+# The server refuses to run on CPU (VOXCPM_REQUIRE_CUDA), so a lost driver shows up as TTSDown, not
+# as a ~7 s/sentence voice.
+#
+# Install on Saturn (one-time, as labadmin). Everything the server runs comes from the working Helios
+# install, checked by sha256, plus the pinned package list tts/requirements-voxcpm.txt; nothing is
+# piped from the internet into a shell. Keep /home/labadmin at mode 750: the service never needs to
+# traverse it (systemd bind-mounts the four dirs below into an otherwise empty /home).
+#   0. After the card swap: `nvidia-smi -L` must list the RTX 5080 and the RTX 3090. Note the 5080's
+#      UUID (GPU-xxxxxxxx-...).
+#   1. Service user (no login, no home):  sudo useradd -r -M -s /usr/sbin/nologin voxcpm
+#   2. Copy from Helios through Jupiter: the uv binary, uv's managed Python 3.11, the weights, and the
+#      voice config with the one clip it uses. Then copy the server, package list and this unit from
+#      git (the PR branch until it is merged, then main). git show reads a ref without touching the
+#      live checkout's files. Run these ON JUPITER, in /home/labadmin/gateway_nerves (~5 GB):
+#        ssh labadmin@10.0.0.195 'tar -C /home/labadmin -cf - .uv-pkg/bin/uv .local/share/uv/python models/VoxCPM2 tts-voices/voices.json tts-voices/jessica_sample.wav' \
+#          | ssh labadmin@10.0.0.58 'tar -C /home/labadmin -xf -'
+#        REF=origin/claude/upbeat-wescoff-4617d8; git fetch --no-write-fetch-head origin claude/upbeat-wescoff-4617d8
+#        ssh labadmin@10.0.0.58 'mkdir -p voxcpm'
+#        git show $REF:tts/voxcpm_server.py | ssh labadmin@10.0.0.58 'cat > voxcpm/voxcpm_server.py'
+#        git show $REF:tts/requirements-voxcpm.txt | ssh labadmin@10.0.0.58 'cat > voxcpm/requirements-voxcpm.txt'
+#        git show $REF:tts/voxcpm-tts-saturn.service | ssh labadmin@10.0.0.58 'cat > /tmp/voxcpm-tts-saturn.service'
+#      then on Saturn check the copies (must print OK three times):
+#        cd ~ && printf '%s\n' \
+#          'db919fb9428cc8ad04377ba3c898e0ec5fbee83700da5b982b1c9539f1e1b34f  .uv-pkg/bin/uv' \
+#          'f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d  models/VoxCPM2/model.safetensors' \
+#          '94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1  models/VoxCPM2/audiovae.pth' | sha256sum -c
+#   3. Python env: uv-managed Python 3.11, which uv finds in ~/.local/share/uv/python from step 2.
+#      Not the system 3.11: torch.compile needs Python.h, which the system 3.11 lacks. Exact versions
+#      come from Helios:
+#        cd ~/voxcpm && ~/.uv-pkg/bin/uv venv --python-preference only-managed --python 3.11 .venv
+#        VIRTUAL_ENV=$PWD/.venv ~/.uv-pkg/bin/uv pip install --index-strategy unsafe-best-match \
+#          --extra-index-url https://download.pytorch.org/whl/cu128 -r requirements-voxcpm.txt
+#   4. Let the service user read these files and nothing else. These are per-user ACLs, not
+#      world-readable files (`sudo apt install acl` if setfacl is missing):
+#        setfacl -R -m u:voxcpm:rX,d:u:voxcpm:rX ~/voxcpm ~/tts-voices ~/.local/share/uv/python ~/models/VoxCPM2
+#   5. Pick the card. CUDA takes a UUID, so the choice survives slot or PCI-order changes:
+#        echo 'CUDA_VISIBLE_DEVICES=GPU-<the 5080 UUID from step 0>' | sudo tee /etc/voxcpm-tts.env
+#   6. sudo cp /tmp/voxcpm-tts-saturn.service /etc/systemd/system/voxcpm-tts.service
+#      sudo systemctl daemon-reload && sudo systemctl enable --now voxcpm-tts
+#      The first start compiles kernels (torch.compile, a few minutes). They persist in
+#      /var/cache/voxcpm, so later starts take ~15 s. Watch: journalctl -u voxcpm-tts -f
+#      If it fails with "Permission denied" under /home/labadmin, re-run step 4. If anything inside
+#      needs loopback (not expected), the journal shows it as a refused connection to 127.0.0.1.
+#   7. Checks:
+#      - nvidia-smi: the python process is on the 5080 (~7.4 GiB), nothing on the 3090.
+#      - From Jupiter: curl -s http://10.0.0.58:8004/health returns ok with the voice listed.
+#      - From Jupiter over the tailnet, which is NOT allowed: curl -m 3 http://saturn-3090.tail74fc4a.ts.net:8004/health
+#        must fail. From any LAN device other than Jupiter (a laptop): the same check against
+#        10.0.0.58 must fail.
+#      - On Saturn: `journalctl -u voxcpm-tts | grep -i firewall` prints nothing. systemd starts
+#        WITHOUT the IP filter, and says so there, if BPF firewalling is unavailable.
+#        `systemctl show -p IPAddressAllow,IPAddressDeny voxcpm-tts` shows the two lines below.
+#      - Speed and memory comparison vs Helios: docs/VOICE_AND_TTS.md → VoxCPM2 on Saturn.
+#      Logs: this journal is NOT in Loki or the self-audit (Saturn runs no promtail).
+#
+# Weights: openbmb/VoxCPM2 (Apache-2.0), HF revision 32279effe8c19989596f05d353d1447f51d9e915, at
+# /home/labadmin/models/VoxCPM2, loaded offline (sha256s in step 4).
+# Logs: journalctl -u voxcpm-tts (Saturn journals are not shipped to Loki). Text is never logged.
+
+[Unit]
+Description=VoxCPM2 TTS Server for Brain Gateway (Saturn, RTX 5080)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+# Load ~15 s from a warm page cache; the first start also runs torch.compile.
+TimeoutStartSec=600
+
+# Card choice lives in /etc/voxcpm-tts.env (CUDA_VISIBLE_DEVICES=GPU-<uuid>, step 6). No `-` prefix:
+# a missing file must fail the start, not let CUDA pick whichever card comes first.
+EnvironmentFile=/etc/voxcpm-tts.env
+Environment="CUDA_DEVICE_ORDER=PCI_BUS_ID"
+Environment="HF_HUB_OFFLINE=1"
+Environment="VOXCPM_MODEL=/home/labadmin/models/VoxCPM2"
+Environment="VOXCPM_VOICES_DIR=/home/labadmin/tts-voices"
+Environment="VOXCPM_PORT=8004"
+# LAN address only, so nothing listens on Saturn's tailnet address. Needs Saturn's DHCP reservation
+# for 10.0.0.58 on the router (TTS_URL depends on it too).
+Environment="VOXCPM_HOST=10.0.0.58"
+Environment="VOXCPM_OUTPUT_SR=24000"
+# Writable state (torch.compile / triton kernels, any library home-dir cache) lives in
+# /var/cache/voxcpm; everything under /home is a read-only bind.
+CacheDirectory=voxcpm
+Environment="HOME=/var/cache/voxcpm"
+Environment="TORCHINDUCTOR_CACHE_DIR=/var/cache/voxcpm/inductor"
+Environment="TRITON_CACHE_DIR=/var/cache/voxcpm/triton"
+Environment="XDG_CACHE_HOME=/var/cache/voxcpm"
+# tqdm progress bars per synthesis turn the journal into "[blob data]".
+Environment="TQDM_DISABLE=1"
+# Peak RSS ~10.4 GiB during load + compile (Saturn has 62 GiB).
+MemoryMax=16G
+
+# Sandbox: as the Helios unit, with its own nologin user. ProtectHome=tmpfs hides the rest of /home,
+# including the Jess backups Saturn holds (/home/labadmin/*-backups).
+User=voxcpm
+Group=voxcpm
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/labadmin/voxcpm /home/labadmin/.local/share/uv/python /home/labadmin/tts-voices /home/labadmin/models/VoxCPM2
+PrivateTmp=yes
+ProtectProc=invisible
+# Saturn is also the backup target and an experiment box: keep its data mounts out of view.
+InaccessiblePaths=-/mnt -/media -/srv
+DevicePolicy=closed
+# CUDA opens every /dev/nvidiaN while enumerating, even with one card visible; without the node
+# torch silently falls back to CPU. CUDA_VISIBLE_DEVICES limits it to the 5080.
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidia1 rw
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+# Host-firewall substitute: Jupiter only. Jupiter's containers (the orchestrator, the blackbox probe)
+# reach the LAN through Jupiter's own address. No loopback either: nothing on Saturn needs to call
+# it, and loopback would admit anything tailscaled or a local service proxies, plus DNS through the
+# resolver stub. This is tighter than the Helios unit on purpose: Saturn is on the tailnet, and this
+# server is unauthenticated and speaks in the cloned voice. NEVER add Helios or the LAN here. The
+# Wyoming bridge (tts/wyoming_jessica_bridge.py, :10301, no auth) would then turn any LAN host into
+# a voice relay. Do NOT add MemoryDenyWriteExecute or PrivateDevices: both break CUDA.
+IPAddressDeny=any
+IPAddressAllow=10.0.0.248/32
+
+WorkingDirectory=/home/labadmin/voxcpm
+ExecStart=/home/labadmin/voxcpm/.venv/bin/python /home/labadmin/voxcpm/voxcpm_server.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voxcpm-tts
+
+[Install]
+WantedBy=multi-user.target

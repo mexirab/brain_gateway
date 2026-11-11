@@ -78,15 +78,16 @@ Migrated 2026-04-26 from `570.169` (NVIDIA UNIX Open Kernel Module from `.run` i
 
 Chipset IOMMU faults killed Helios's USB controller and NIC on 2026-10-16. Fix: `iommu=pt` added to the kernel cmdline in `/etc/default/grub`, and the box now boots kernel 6.8.0-147-generic. Rollback: restore `/etc/default/grub.bak-pre-iommu-pt` + `update-grub`, and/or pick the 6.8.0-60 entry under GRUB "Advanced options".
 
-## Helios GPU Layout (post Flash-Next cutover, 2026-10-24)
+## Helios GPU Layout (brain only, 262K context — since the Saturn TTS move)
 
 | GPU | Card | VRAM | Tenants |
 |-----|------|------|---------|
-| GPU0 | RTX 5090 | 32 GB | Primary brain, part 1 (`llama-server-primary.service`, port 8080, Qwen3.8-Flash-Next UD-Q3_K_XL MTP; `-ts 44,56` layer split): ~29 GiB, ~90 % |
-| GPU1 | RTX PRO 5000 Blackwell | 48 GB | Primary brain, part 2 + MTP draft head (`-devd CUDA1`) ~37 GiB, plus live TTS (`voxcpm-tts.service`, port 8004, VoxCPM2) ~7.7 GiB: ~92 % used, peak 92.8 % with TTS + vision + generation at once. `qwen-tts.service` (:8002, ~4.5 GiB) is **disabled** — it no longer fits. Coder retired 2026-10-16 (see below) |
+| GPU0 | RTX 5090 | 32 GB | Primary brain, part 1 (`llama-server-primary.service`, port 8080, Qwen3.8-Flash-Next UD-Q3_K_XL MTP; `-ts 40,60` layer split): 29.1 GiB at load, 29.5 GiB after a 200K-token prompt (2.3 GiB free; measured 2026-11-11) |
+| GPU1 | RTX PRO 5000 Blackwell | 48 GB | Primary brain, part 2 + MTP draft head (`-devd CUDA1`): 42.9 GiB at load, 43.7 GiB after a 200K-token prompt (4.1 GiB free). No TTS: `voxcpm-tts.service` (:8004) and `qwen-tts.service` (:8002) are **disabled** rollbacks — neither fits next to the 262K brain. Coder retired 2026-10-16 (see below) |
 | CPU | — | — | STT (`stt-onnx.service`, port 8003, Parakeet TDT 0.6b v2 int8 ONNX Runtime; source `tts/stt_server_onnx.py` + `tts/stt-onnx.service`; offline + LAN-only IP sandbox since 2026-10-27, see Egress audit) |
 
-- **Shared GPU1:** brain generation drops from ~135–180 to ~30–85 tok/s while the TTS synthesizes (spoken replies). `After=voxcpm-tts.service` only orders process start (voxcpm-tts is `Type=simple`), so at boot the two can still race for GPU1; a cold-cache boot test had both ready in 27 s with no restarts. Never re-enable `qwen-tts` while Flash-Next is installed.
+- **GPU1 is the brain's alone.** The live TTS runs on Saturn's RTX 5080 (`tts/voxcpm-tts-saturn.service`; runbook `docs/VOICE_AND_TTS.md` → VoxCPM2 on Saturn). **Never start `voxcpm-tts` or `qwen-tts` on Helios while the 262K unit is installed**: VoxCPM2 needs 7.4–9.7 GiB, GPU1 has ~4 GiB, and `--fit off` turns a short GPU1 into a failed brain start (`BrainFailedToStart`). Helios's `voxcpm-tts.service` has an `ExecStartPre` guard that refuses to start while `/etc/systemd/system/llama-server-primary.service` contains ` -c 262144 `.
+- **64K rollback (TTS back on GPU1, ~3 min):** header of `tts/llama-server-primary.service`; Helios keeps the 64K unit as `/etc/systemd/system/llama-server-primary.service.64k.bak`. Copy it in first, then enable `voxcpm-tts`, then start the brain. In that layout (`-ts 44,56 -c 65536`, until the Saturn move) GPU1 held ~37 GiB of brain plus VoxCPM2 (1.0–2.4 GiB free), and brain decode dropped from ~135–180 to ~30–85 tok/s while the TTS synthesized.
 - **Qwen3-TTS GPU1 drop-in (rollback TTS only):** `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"` (added 2026-09-28; before that it silently ran on the 5090 because the unit sets `QWEN_TTS_DEVICE=cuda:0` with no `CUDA_VISIBLE_DEVICES`). Only matters if the 27B rollback re-enables `qwen-tts`.
 - **Coder retired 2026-10-16:** `llama-server-coder.service` (port 8082, Qwen3-Coder-Next 80B/3B MoE Q4_K_XL, `CUDA_VISIBLE_DEVICES=1`, MoE expert tensors in CPU RAM via `-ot .ffn_.*_exps.=CPU`) is stopped + disabled. An agentic debugging eval on planted Jess bugs had the primary brain fix 6/6 with exact one-line fixes; the coder fixed 2/3, ran ~51 tok/s (experts on CPU, 32K ctx) and wandered on a symptom-only bug. Unit file and GGUF (`/home/labadmin/.cache/llama.cpp/Qwen3-Coder-Next-UD-Q4_K_XL.gguf`) are still on disk. `sudo systemctl enable --now llama-server-coder` would restart the server, but nothing in the app can use it: the `code_agent` tool and `CODE_AGENT_*` settings were removed 2026-10-21. The unit's Description says GPU0 — wrong; it ran on GPU1. It would not fit next to Flash-Next anyway.
 - `parakeet-stt.service` (NeMo, GPU, v3) is disabled; it is the GPU alternative to `stt-onnx`, same port + API.
@@ -103,9 +104,10 @@ The unit's header comments are the authoritative record (weight sha256s, flags, 
 | Flag | Value | Why |
 |------|-------|-----|
 | `CUDA_VISIBLE_DEVICES` | `0,1` | Both GPUs |
-| `-sm layer -ts 44,56` | layer split | Fits ~29 GiB on GPU0, ~37 GiB on GPU1 next to the TTS |
+| `-sm layer -ts 40,60` | layer split | At 262K, `44,56` runs GPU0 out of memory at load (on the mmproj); `40,60` moves 2 layers to GPU1 (`39,61` assigns the same layers) |
 | `-md … -devd CUDA1 -ngld all -ctkd/-ctvd q8_0` | MTP draft head on GPU1 | |
-| `-c` | `65536` | 131072 would add ~2.5–3 GiB and push GPU1 to ~98 % |
+| `-c` | `262144` | The model's native length. KV is small (12 of 48 layers are full attention: q8_0 K+V 3.2 GiB + 0.8 GiB indexer K + 0.3 GiB MTP KV); the compute buffers (scale with `-c` × `-ub`) are the big part. Was `65536` while the TTS shared GPU1 |
+| `-ub` | `384` | Trims the compute buffers (~0.7 GiB on GPU0, ~1 GiB on GPU1) for 16 % slower long prefill: 1436 vs 1701 tok/s at 200K tokens (256: 1254) |
 | `--cache-type-k/v` | `q8_0` | |
 | `-fa on`, `-ngl 999` | | Full GPU offload |
 | `--parallel 1` | single slot | MTP gain evaporates past ~4 slots. Background LLM callers (auto_learn, session_miner, task_decomposition, email→calendar, vision) QUEUE behind interactive chat — watch `llamacpp:requests_deferred` |
@@ -116,9 +118,9 @@ The unit's header comments are the authoritative record (weight sha256s, flags, 
 | `--no-webui --no-slots --metrics` | | `/metrics` scraped by Prometheus job `llama-primary` |
 | `--api-key-file` | `/etc/llama-server/api-key` | Added 2026-10-27, **enforced on Helios since 2026-10-29**. Every path but `/health` 401s without `Authorization: Bearer <key>`, incl. `/v1/models` and `/metrics`. File `root:llama` 640 in a 750 dir, same value as Jupiter `.env` `MODEL_API_KEY`. `ExecStartPre` refuses a file with no key line (llama-server would run with no auth). Enable/rotate steps + check (`/v1/models` → 401): unit header |
 
-Measured: decode ~135–180 tok/s (137–140 prose / 174–179 code), ~30–85 while the TTS synthesizes on GPU1; warm streaming TTFT through Jess 0.44–0.53 s (first turn after a restart ~8 s: cold prompt cache); loads in 6–9 s from page cache, 27 s cold (`TimeoutStartSec=360`; the readiness loop polls `/health` — the one unauthenticated path — for up to 240 s and gives up at once if the server process dies). A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
+Measured: short-prompt decode ~135–180 tok/s (137–140 prose / 174–179 code; unchanged at 262K, and no longer slowed by a TTS on GPU1); warm streaming TTFT through Jess 0.44–0.53 s (first turn after a restart ~8 s: cold prompt cache); loads in 6–9 s from page cache, 27 s cold (`TimeoutStartSec=360`; the readiness loop polls `/health` — the one unauthenticated path — for up to 240 s and gives up at once if the server process dies). A/B on Jess's real prompt + tool schemas: 66/66 vs 64/66 for the 27B.
 
-- **Context limit:** 64K. Chat prompts are ~10–15K tokens, but the self-audit investigator once reached ~70K (2026-10-21); a run that large is rejected and the audit comes back `partial`.
+- **Context:** 262K since the Saturn TTS move (64K before; the self-audit investigator's ~70K run on 2026-10-21 came back `partial` then). Planted fact found at 100K and 200K tokens. Decode 88 tok/s at 100K, 57 at 200K. A cold 200K-token prompt takes ~140 s to prefill, past the unified loop's 120 s per-round timeout; client chat history has no size cap, so a very long dashboard chat can get there. Detail: `FLASH_NEXT_TRIAL.md` → Known limits.
 - **Sampling:** temperature ≤ 1.0 and `repeat_penalty` 1.0 (llama.cpp's wire name — not `repetition_penalty`) or MTP acceptance collapses.
 - **Garbled output / dropped tool calls:** first lever is `--spec-type none` (disables MTP, ~105 tok/s). `--enforce-eager` was a vLLM flag and means nothing here. Then `journalctl -u llama-server-primary`.
 - **Never add `--verbose` or `--slot-save-path`:** both put prompt text (medical facts, conversations) in the journal / on disk.
@@ -156,13 +158,13 @@ Full trial + acceptance record: `QWEN38_PREP_RESULTS.md` (same directory).
 
 ### History
 
-2026-10-02 → 2026-10-24: DavidAU Qwen3.8-27B TURBO Q6_K MTP on llama.cpp, GPU0 alone (now the 27B rollback unit above). Replaced by Qwen3.8-Flash-Next for a better A/B score (66/66 vs 64/66), faster decode (~135–180 vs ~106–122 tok/s), ~0.5 s warm TTFT and a 27 s cold load; costs: 64K context instead of 131K, Qwen3-TTS no longer fits on GPU1, and voice turns need thinking on. See `FLASH_NEXT_TRIAL.md`.
+2026-10-02 → 2026-10-24: DavidAU Qwen3.8-27B TURBO Q6_K MTP on llama.cpp, GPU0 alone (now the 27B rollback unit above). Replaced by Qwen3.8-Flash-Next for a better A/B score (66/66 vs 64/66), faster decode (~135–180 vs ~106–122 tok/s), ~0.5 s warm TTFT and a 27 s cold load; costs: 64K context instead of 131K, Qwen3-TTS no longer fits on GPU1, and voice turns need thinking on. See `FLASH_NEXT_TRIAL.md`. Later the live TTS (VoxCPM2) moved from GPU1 to Saturn's RTX 5080, and the context went to 262K (`-ts 40,60 -ub 384`, measured 2026-11-11).
 
 2026-09-28 → 2026-10-02: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1, GPU0 (`vllm-primary.service`, now the older rollback unit above). Replaced by llama.cpp for ~equal decode speed (106–122 vs ~111 tok/s), a ~4 s warm start instead of ~2m50s, a systemd-sandboxed native process instead of a privileged `docker run`, and llama.cpp's `/metrics`.
 
 2026-04-26 → 2026-09-28: `Lorbus/Qwen3.6-27B-int4-AutoRound` on vLLM 0.19.1, GPU0 (Plan A — a bench showed it at only 28–79% of GPU0 throughput on the PRO 5000; see `VLLM_PHASE_3_PLAN.md` → Outcome). By 2026-09 the unit had drifted to 16,384 ctx, `--gpu-memory-utilization 0.70`, `--enforce-eager`, no MTP, and TTS was sharing the 5090.
 
-Disabled units kept on disk: `qwen-tts.service` (rollback TTS, disabled 2026-10-24), `vllm-primary.service` (older rollback target), `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM; uses the old `/home/labadmin/llama.cpp` checkout), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
+Disabled units kept on disk: `voxcpm-tts.service` (Helios TTS rollback since the Saturn move; `ExecStartPre` refuses next to the 262K brain), `qwen-tts.service` (older rollback TTS, disabled 2026-10-24), `vllm-primary.service` (older rollback target), `llama-server.service` (was the Qwen3.5-27B primary pre-vLLM; uses the old `/home/labadmin/llama.cpp` checkout), `llama-server-moe.service` (Qwen3-VL-30B-A3B trial).
 
 ## Egress audit (2026-10-27)
 
@@ -174,7 +176,7 @@ Repo changes (units take effect only when installed on Helios):
 |------|--------|
 | `llama-server-primary` (+ 27B rollback unit) | `--api-key-file /etc/llama-server/api-key` — see the flags table above. Installed 2026-10-29; the pre-key copies are `llama-server-primary.service.bak-pre-apikey-20261029` and `llama-server-primary.service.27b-q6k.bak.pre-apikey-20261029` in `/etc/systemd/system` |
 | `stt-onnx.service` | `HF_HUB_OFFLINE=1` (model loads from `~/.cache/huggingface`; a model change = download first with it unset, outside the unit), `NoNewPrivileges=yes`, `IPAddressDeny=any` + `IPAddressAllow=127.0.0.0/8 10.0.0.0/24 100.64.0.0/10 172.16.0.0/12` (same list as the brain). It was the only model server on Helios that could reach the internet. Network-only sandbox: still runs as `labadmin` with no filesystem sandbox |
-| `voxcpm-tts.service` | `InaccessiblePaths=-/etc/llama-server` — runs as the same `llama` user as the brain, so it must not read the key. The `-` skips a missing path: restart `voxcpm-tts` after `/etc/llama-server` is first created |
+| `voxcpm-tts.service` (Helios copy, now the disabled rollback; the live Saturn unit runs as its own `voxcpm` user) | `InaccessiblePaths=-/etc/llama-server` — runs as the same `llama` user as the brain, so it must not read the key. The `-` skips a missing path: restart `voxcpm-tts` after `/etc/llama-server` is first created |
 | `vllm-primary.service` | Header only: no API key in that unit, so rolling back to it turns key enforcement off |
 | Grafana / Loki (Jupiter) | Usage stats, update checks, plugin key download/preinstall and news feed off — `monitoring/README.md` → No phone-home |
 

@@ -238,7 +238,7 @@ def build() -> dict:
 
     # -------------------------------------------------------- TTS Synthesis
     tts_desc = (
-        "Successful TTS round-trips to the TTS server at TTS_URL on Helios (VoxCPM2 :8004 or Qwen3-TTS :8002), from the "
+        "Successful TTS round-trips to the TTS server at TTS_URL (VoxCPM2 :8004 on Saturn; Qwen3-TTS :8002 rollback on Helios), from the "
         "dashboard chat's /api/tts/synthesize (one call per spoken sentence) and "
         "the OpenAI-compatible /v1/audio/speech proxy. Failures are NOT in this "
         "histogram — see Dashboard TTS Outcomes. Excludes browser playback. Both "
@@ -281,8 +281,8 @@ def build() -> dict:
             unit="none",
             description=(
                 "Per-sentence /api/tts/synthesize results per minute. unreachable = "
-                "Helios asleep (chat shows 'Jess's voice is asleep'); timeout = TTS "
-                "awake but stuck; upstream_error = TTS returned an error."
+                "the TTS box (Saturn) down or the server stopped (chat shows 'Jess's voice is "
+                "asleep'); timeout = TTS up but stuck; upstream_error = TTS returned an error."
             ),
         ),
         stat(

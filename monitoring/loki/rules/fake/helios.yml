@@ -82,6 +82,6 @@ groups:
             llama-server-primary exited during startup (model loading error or readiness
             check failed), so chat is down while Helios is awake. Check
             `journalctl -u llama-server-primary -b` on Helios for the " E " lines — usual
-            causes: GPU1 out of memory (is qwen-tts running?), a missing GPU, or a bad/moved
+            causes: GPU1 out of memory (is voxcpm-tts or qwen-tts running on Helios? The 262K unit leaves no room for either), a missing GPU, or a bad/moved
             weight file. Rollback to the 27B: header of tts/llama-server-primary-27b-q6k.service.
             The alert resolves 15 min after the last failed start.

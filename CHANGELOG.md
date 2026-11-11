@@ -4,6 +4,52 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Brain at 262K context; live TTS moves to Saturn's RTX 5080
+
+Branch `claude/upbeat-wescoff-4617d8`, merged at cutover (after the RTX 5080 is in Saturn and the TTS is installed there). At its native 262144 context the brain needs ~43 GiB of Helios GPU1, where VoxCPM2 (7.4 GiB fresh, ~9.7 GiB after long texts) no longer fits, so the voice moves to Saturn. Runbook (install, compare, cutover, rollback): `docs/VOICE_AND_TTS.md` → VoxCPM2 on Saturn.
+
+### Upgrade action (owner, in order)
+
+- Before the merge: swap the RTX 5080 in for Saturn's RTX 3080, install the TTS per steps 0–7 in the header of `tts/voxcpm-tts-saturn.service`, run the Helios-vs-Saturn comparison (runbook step 2).
+- Merge (CI deploys the probe move, alerts and the satellite fix).
+- Jupiter: `TTS_URL=http://10.0.0.58:8004` in `.env`, then `docker compose up -d --force-recreate orchestrator`.
+- Helios: disable `voxcpm-tts`, install the new `llama-server-primary.service` + `voxcpm-tts.service`, restart the brain (the 64K unit is kept as `llama-server-primary.service.64k.bak`).
+- Verify a full-size vision photo at 262K (GPU0 must keep ≥ 1 GiB free), a spoken reply, an announcement, a satellite turn.
+
+### Brain (Helios, `tts/llama-server-primary.service`)
+
+- `-c 65536 -ts 44,56` → `-c 262144 -ts 40,60 -ub 384`; `After=voxcpm-tts.service` dropped. Measured 2026-11-11 with the TTS off GPU1: GPU0 29.1 GiB at load / 29.5 GiB after a 200K-token prompt (2.3 GiB free), GPU1 42.9 / 43.7 GiB (4.1 GiB free); planted fact found at 100K and 200K; short-prompt decode unchanged; prefill 1436 tok/s at 200K (−16 % vs ubatch 512). The unit header is authoritative and carries the ~3 min 64K rollback.
+- Known limits: decode 88 tok/s at 100K, 57 at 200K; a cold 200K-token prompt prefills in ~140 s, past the unified loop's 120 s per-round timeout; client chat history has no size cap (follow-up: a budget in `cloud_brain._sanitize_client_history`).
+
+### TTS (Saturn)
+
+- New `tts/voxcpm-tts-saturn.service` (installed as `voxcpm-tts.service`): nologin `voxcpm` user, binds `10.0.0.58` only, `IPAddressAllow` Jupiter (`10.0.0.248/32`) only, card picked by UUID in `/etc/voxcpm-tts.env`, `ProtectHome=tmpfs` hides the backups Saturn holds. New `tts/requirements-voxcpm.txt` pins the Helios venv's package set.
+- Helios `tts/voxcpm-tts.service` stays installed but disabled as rollback; new `ExecStartPre` refuses to start while the 262K brain unit is installed.
+- STT stays on Helios's CPU. The voice now depends on Helios **and** Saturn; if Saturn is down for more than ~1 h, run the 64K rollback. Announcements that used to fail while Helios slept now speak.
+- Known limits: Saturn's `voxcpm-tts` journal is not in Loki or the self-audit (no promtail on Saturn). The Wyoming bridge (HA Assist) gets no audio (Jupiter-only allow-list, by design).
+
+### Orchestrator
+
+- `voice_satellite.Satellite._on_brain_host`: only a service whose URL is a different IP literal from `MODEL_URL`'s counts as another box, and it no longer proves Helios is on (the Saturn TTS answering used to skip the wake). Helios not powered + an off-box service down → `service_down` at once, no wake.
+- Comment/prompt text only: `routes_vision.py` (unreachable TTS = Saturn down), `self_investigator.py` system prompt (TTS unit on Saturn, its journal not in Loki).
+
+### Monitoring
+
+- Blackbox probe `tts-voxcpm` → `${NODE_SATURN_IP}:8004/health`, `node: saturn`. Saturn `gpu` label `rtx5080+rtx3090`.
+- `TTSDown` = `probe_success{service=~"tts|tts-voxcpm"} == 0 and on(node) up{job="node-exporter"} == 1` (each probe gated on its own box).
+- New quiet alerts: `TTSSynthesisFailing` (≥ 5 synthesis errors in 30 min while the probe is up), `TTSGPUMemoryLow` (Saturn 5080 < 1.5 GiB free, 24h repeat — usually an unpinned experiment), `SaturnGpuDriverBroken`.
+- `HighVRAMUsage` text: Helios GPUs carry the brain only. `NodeDown` description: Saturn down = no voice. `BrainFailedToStart` text names `voxcpm-tts` on Helios. Grafana TTS panel descriptions point at Saturn.
+
+### Tests
+
+- `orchestrator/tests/test_voice_satellite.py`: `_on_brain_host` cases (IP literals, hostnames, empty URLs) and the wake paths with the TTS on another box (asleep + TTS up wakes; asleep + TTS down fails without a wake; Helios on + TTS down takes the grace path; same-host TTS still proves power).
+
+### Docs
+
+- `docs/VOICE_AND_TTS.md` (VoxCPM2 section, VoxCPM2 on Saturn runbook, D5, Wyoming bridge, dashboard TTS status), `docs/internal/FLASH_NEXT_TRIAL.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md` (GPU layout, flags, context), `monitoring/README.md` (new TTS on Saturn section, routing lists, probe), `CLAUDE.md`, `COMMANDS.md`, `tts/README.md`, `docs/ENV_VARS.md`, `docs/DEV.md`, `TECHNICAL_REFERENCE.md`.
+
+---
+
 ## [Unreleased] — Voice satellite: VAD rebuilt for the real room + firmware lock-up fix (2026-11-11)
 
 Branch `fix/satellite-vad`, follow-up to PR #169 after the first live tests. Every question ran to the 15 s max-utterance cap (answers ~15 s late) or was missed as no-speech, while Grafana looked healthy (a capped run still counts as an `ok` turn). Measured on the device (per 50 ms frame, RMS 0..1): the room in silence 0.025–0.09 (median 0.042), a spoken question 0.19–0.24. The original VAD, a port of the dashboard's browser-mic VAD, capped its learned noise floor at 0.015, so its end-of-speech bar (0.027) sat below the room itself. Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Listening (VAD), D13, Firmware rules.

@@ -108,22 +108,27 @@ route:
     # next to it:
     #   RuleEvaluationFailing — a Prometheus rule errors at evaluation, so it
     #     can't fire; nothing else says so.
-    #   TTSDown / STTDown — Jess can't speak / hear while Helios is awake
+    #   TTSSynthesisFailing / SaturnGpuDriverBroken — the voice server answers
+    #     /health but can't synthesize, or Saturn's NVIDIA driver is broken.
+    #   TTSDown / STTDown — Jess can't speak / hear. STT: while Helios is awake
     #     (asleep doesn't count; a hung Helios pages as HeliosPoweredButUnreachable).
+    #     TTS: while Saturn is up (a Saturn outage pages as NodeDown).
     #   HighErrorRate — chat turns failing in the brain (asleep doesn't count).
     #   HighToolErrorRate — one tool failing over 20 % of its calls, 2+ times.
     #   HighGPUTemp — a GPU over 85 °C for 5 min.
     - matchers:
-        - alertname=~"RuleEvaluationFailing|TTSDown|STTDown|HighErrorRate|HighToolErrorRate|HighGPUTemp"
+        - alertname=~"RuleEvaluationFailing|TTSDown|STTDown|TTSSynthesisFailing|SaturnGpuDriverBroken|HighErrorRate|HighToolErrorRate|HighGPUTemp"
       receiver: "pushover-quiet"
     # Standing conditions that stay until someone frees space or restarts a
     # process, so once a day instead of every 4h:
     #   DiskSpaceLow — / or a Jupiter USB disk over 90 %. A full /mnt/logging
     #     stops Prometheus + Loki writing, but it fills over days, not minutes.
-    #   HighVRAMUsage — under 1 GiB free on a Helios GPU (on GPU1 that starves
-    #     the live TTS); cached GPU memory isn't given back until a restart.
+    #   HighVRAMUsage — under 1 GiB free on a Helios GPU (the brain can fail a
+    #     vision call or a long prompt); pool memory isn't given back until a restart.
+    #   TTSGPUMemoryLow — under 1.5 GiB free on Saturn's RTX 5080, the voice card
+    #     (an unpinned experiment on it starves the TTS).
     - matchers:
-        - alertname=~"DiskSpaceLow|HighVRAMUsage"
+        - alertname=~"DiskSpaceLow|HighVRAMUsage|TTSGPUMemoryLow"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.

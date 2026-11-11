@@ -62,7 +62,7 @@ Wake beep: `wake_word_triggered.flac`. Sounds are the Home Assistant Voice PE se
 
 ### A turn
 
-1. **Helios check (D5):** `stt`, `model`, `tts` via `service_registry.check_service` (3 s each). All up → go. Nothing answering and the plug says off → wake (`HELIOS_WAKE_ENABLED`), `jess-waking`, wait ≤ `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` (180) → else `wake_timeout`. Helios on but a service down (boot, brain reload, crashed unit) → no wake, `jess-waking`, wait 90 s → else `service_down`. Wake off → `jess-asleep`. The plug is only read with `HELIOS_WAKE_ENABLED`, so with wake off a booting Helios also counts as asleep.
+1. **Helios check (D5):** `stt`, `model`, `tts` via `service_registry.check_service` (3 s each). All up → go. Nothing on the brain's host answering and the plug says off → wake (`HELIOS_WAKE_ENABLED`), `jess-waking`, wait ≤ `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` (180) → else `wake_timeout`. Only services whose URL host matches `MODEL_URL`'s count as proof that Helios is on (`Satellite._on_brain_host`), so the always-on Saturn TTS answering while Helios sleeps doesn't skip the wake. Only a different **IP literal** counts as another box: the live `.env` uses IPs for `MODEL_URL`, `STT_URL` and `TTS_URL`. Hostnames (compose DNS names, or a name against an IP) may be one machine, so they count as the brain's host, as before. If Helios is not powered and a service on another box is down too, the turn fails as `service_down` at once without a wake: waking Helios can't make the turn work. Helios on but a service down (boot, brain reload, crashed unit) → no wake, `jess-waking`, wait 90 s → else `service_down`. Wake off → `jess-asleep`. The plug is only read with `HELIOS_WAKE_ENABLED`, so with wake off a booting Helios also counts as asleep.
 2. **STT** (30 s). No words → `jess-no-speech`.
 3. **Brain:** `cloud_brain.chat(..., stream=False, is_voice=True)` with the short history (D7); 300 s backstop (`CHAT_TIMEOUT_S`). Counts in `bgw_voice_pipeline_seconds{path="buffered"}` like any buffered voice turn.
 4. **Speak:** `speakable()` keeps link text, drops URLs and markdown marks, caps at 1200 chars on a sentence end. One clip: `_announce_voice(spoken, speaker=VOICE_SATELLITE_SPEAKER, announcement_type="voice_reply", ignore_voice_session=True, ignore_dnd=True, style=current_reply_style(), allow_fallback=False, record_history=False)` (120 s).
@@ -162,11 +162,11 @@ HA's own voice pipeline, for HA Assist and for installs that flash `ha_automatio
 wake word on the device -> HA voice pipeline
     -> Wyoming Whisper STT (:10300, wyoming-faster-whisper)
     -> HA Conversation Agent -> Brain Gateway :8888
-    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> Helios TTS (`TTS_URL`)
+    -> Wyoming TTS bridge (:10301, container `wyoming-jessica-tts`) -> TTS (`TTS_URL`; gets no audio from the Saturn server)
 ```
 
 - **Known gap:** the HA Conversation Agent still points at `http://10.0.0.195:8888` (Helios); the orchestrator has lived on Jupiter (`http://10.0.0.248:8888`) since the HA migration, so HA Assist turns fail at the conversation step until the agent's base URL is repointed in the HA UI (Settings → Voice assistants → the Jess conversation agent). The ATOM Echo is not affected: it goes through the voice satellite.
-- **TTS bridge:** `wyoming-jessica-tts` (name kept for HA wiring back-compat) bridges Wyoming → the HTTP TTS server on Helios. Default voice: `TTS_VOICE` env / `user_profile.yaml` `voice:`; the live deployment uses a personal reference clone (`voice: "jessica"`).
+- **TTS bridge:** `wyoming-jessica-tts` (name kept for HA wiring back-compat) bridges Wyoming → the HTTP TTS server at `TTS_URL`. Since the Saturn move it gets no audio: the Saturn server admits Jupiter only (see VoxCPM2 on Saturn). Default voice: `TTS_VOICE` env / `user_profile.yaml` `voice:`; the live deployment uses a personal reference clone (`voice: "jessica"`).
   - **Fresh install note:** the bridge advertises a voice named `jessica` (wire ID, kept for back-compat); the compose default `--voice` is `default`. Either set `TTS_VOICE=jessica` in `.env` (matching the wire ID) AND `POST /voices/load` to register a `jessica` voice on your TTS server, OR change the advertised wire ID in `tts/wyoming_jessica_bridge.py` to match your registered voice name. Without alignment, HA TTS calls return HTTP 400 from the TTS server with no audio (silent on the HA side).
 - `ha_automations/hey_jess.json` still carries the old manifest values (`probability_cutoff` 0.5); `models/hey_jess.json` has the trainer's.
 
@@ -212,42 +212,120 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 
 ## VoxCPM2 TTS server (port 8004)
 
-Second TTS server on Helios, replacing Qwen3-TTS (:8002) as the live voice. **Status: cut over** — Jupiter `.env` has `TTS_URL=http://10.0.0.195:8004`; `qwen-tts` on :8002 is the rollback, disabled since 2026-10-24 (GPU1 now also holds part of the brain). Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
+The live voice, replacing Qwen3-TTS (:8002). It ran on Helios GPU1 from 2026-10-15 and moves to **Saturn's RTX 5080** (see VoxCPM2 on Saturn below) so the brain can use GPU1 for its 262144 context. Jupiter `.env` then has `TTS_URL=http://10.0.0.58:8004`. The Helios unit stays installed but disabled, as rollback. `qwen-tts` on :8002 is an older rollback, disabled since 2026-10-24. Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
 
 | Property | Value |
 |----------|-------|
-| Unit / source | `voxcpm-tts.service` / `tts/voxcpm_server.py` (repo copies: `tts/voxcpm-tts.service`, `tts/voxcpm_server.py`) |
+| Unit / source | `voxcpm-tts.service` / `tts/voxcpm_server.py`. Repo copies: `tts/voxcpm-tts-saturn.service` (Saturn, live), `tts/voxcpm-tts.service` (Helios, rollback), `tts/voxcpm_server.py` |
 | Model | `openbmb/VoxCPM2` (Apache-2.0, 2B), weights copied to `/home/labadmin/models/VoxCPM2`, loaded offline; HF revision + sha256s in the unit header |
-| GPU / VRAM | GPU1 RTX PRO 5000 (`CUDA_VISIBLE_DEVICES=1`), ~7.4–7.7 GiB resident. Shares GPU1 with part of the primary brain since 2026-10-24 (~92 % used together); brain decode drops to ~30–85 tok/s while it synthesizes |
-| Speed | ~0.4–1.3 s per sentence; output 24 kHz WAV (`VOXCPM_OUTPUT_SR`, same rate as Qwen) |
+| GPU / VRAM | Saturn RTX 5080 16 GB, picked by UUID in `/etc/voxcpm-tts.env`. ~7.4 GiB fresh; the PyTorch cache grows to ~9.7 GiB after long texts (measured on Helios). On Helios it shared GPU1 with part of the brain, which then decoded at ~30–85 instead of ~135–180 tok/s while it synthesized |
+| Speed | ~0.4–1.3 s per sentence on the Helios RTX PRO 5000 (Saturn: compare with the check below); output 24 kHz WAV (`VOXCPM_OUTPUT_SR`, same rate as Qwen) |
 | Startup | first-ever start ~50 s (torch.compile); warm ~27 s — compile cache in `/var/cache/voxcpm`, persists across boots |
 | API | Same as `tts/server.py`: `/health`, `/voices`, `/tts` (honors `emotion`), `/v1/audio/speech` (honors OpenAI `instructions`) |
 | Voices | Same `voices.json` as the Qwen server (`VOXCPM_VOICES_DIR`); only `ref_audio` is used — reference-only cloning keeps the timbre, not the clip's mood, so the style note can steer |
-| Logs | `journalctl -u voxcpm-tts` on Helios (not shipped to Loki; text never logged, lengths only) |
+| Logs | `journalctl -u voxcpm-tts` on Saturn (text never logged, lengths only). **Not in Loki or the self-audit:** Saturn runs no promtail. On Helios this unit's journal was shipped by promtail-helios. Follow-up: promtail on Saturn |
 
 **Style note:** `emotion` / `instructions` becomes a VoxCPM2 controllable-cloning prefix, `(calm, gentle and reassuring)text`. No note = the model infers prosody from the text.
 
 **Server guards:** `()` / `[]` and their NFKC lookalikes are stripped from body text (so text can't inject a style note); text capped at 2000 chars (`VOXCPM_MAX_CHARS`), style at 80; more than 8 pending requests → 503 (`VOXCPM_MAX_PENDING`); `/health` returns 503 when no voice is usable; refuses to start without CUDA (`VOXCPM_REQUIRE_CUDA=true`).
 
-**Sandbox** (mirrors `llama-server-primary`): nologin `llama` user, `ProtectSystem=strict`, `ProtectHome=tmpfs` + read-only binds of the venv, uv Python, voices and weights dirs, `DevicePolicy=closed`. `DeviceAllow` **must include `/dev/nvidia0`** even though it is pinned to GPU1 — CUDA opens it while enumerating, and without it torch silently falls back to CPU (~7 s/sentence). Install steps (uv-managed Python 3.11 venv, pinned `voxcpm`/torch cu128, world-readable paths): unit header.
+**Sandbox** (mirrors `llama-server-primary`). On Saturn: nologin `voxcpm` user, `IPAddressAllow` Jupiter only (no loopback), bound to the LAN address only (the server is unauthenticated and speaks in the cloned voice, and Saturn is on the tailnet), `ProtectHome=tmpfs` hides the Jess backups Saturn holds. On Helios: nologin `llama` user, `ProtectSystem=strict`, `ProtectHome=tmpfs` + read-only binds of the venv, uv Python, voices and weights dirs, `DevicePolicy=closed`. `DeviceAllow` **must include `/dev/nvidia0`** even though it is pinned to GPU1 — CUDA opens it while enumerating, and without it torch silently falls back to CPU (~7 s/sentence). Install steps (uv-managed Python 3.11 venv, pinned `voxcpm`/torch cu128, world-readable paths): unit header.
 
 Env vars: `VOXCPM_*` — `docs/ENV_VARS.md` → TTS.
 
-**Cutover (done; operator steps for reference, on Jupiter; Helios must be awake):**
+**Original cutover, Qwen3-TTS → VoxCPM2 on Helios (done, history; the Saturn move is below):**
 ```bash
 cp .env .env.bak-qwen-tts
 # set TTS_URL=http://10.0.0.195:8004 in .env
 docker compose up -d --force-recreate orchestrator
 docker logs brain-orchestrator 2>&1 | grep '\[TTS\] Backend'   # confirm :8004
 ```
-Rollback to Qwen3-TTS: only together with the 27B brain rollback (`qwen-tts` is disabled and no longer fits next to Flash-Next) — re-enable `qwen-tts`, set `TTS_URL` back to :8002, `docker compose up -d --force-recreate orchestrator`. (`.env.bak-qwen-tts` predates later `.env` changes, incl. the 2026-10-24 model names + `VOICE_THINKING_ENABLED`; don't `cp` it over a Flash-Next `.env`.) A Wyoming bridge still pointed at :8002 gets no audio now. The Wyoming bridge (`wyoming-jessica-tts`) reads `--tts-url ${TTS_URL}` from the `.env` of the compose host it runs on and is not recreated by the command above — recreate it there too if HA Assist should use VoxCPM2.
+Rollback to Qwen3-TTS: only together with the 27B brain rollback (`qwen-tts` is disabled and no longer fits next to Flash-Next) — re-enable `qwen-tts`, set `TTS_URL` back to :8002, `docker compose up -d --force-recreate orchestrator`. (`.env.bak-qwen-tts` predates later `.env` changes, incl. the 2026-10-24 model names + `VOICE_THINKING_ENABLED`; don't `cp` it over a Flash-Next `.env`.) A Wyoming bridge still pointed at :8002 gets no audio now. The Wyoming bridge (`wyoming-jessica-tts`) reads `--tts-url ${TTS_URL}` from the `.env` of the compose host it runs on. Since the Saturn move it can't reach the voice (only Jupiter is allowed, see VoxCPM2 on Saturn), so HA Assist has no Jess voice.
 
 ```bash
-ssh labadmin@10.0.0.195 'sudo systemctl restart voxcpm-tts'
-ssh labadmin@10.0.0.195 'journalctl -u voxcpm-tts -f'
+ssh labadmin@10.0.0.58 'sudo systemctl restart voxcpm-tts'    # Saturn: the live voice
+ssh labadmin@10.0.0.58 'journalctl -u voxcpm-tts -f'
+# Never start voxcpm-tts on Helios while the 262K brain unit is installed (its ExecStartPre refuses)
 ```
 
-**Monitoring:** blackbox probe `service="tts-voxcpm"` on `:8004/health` feeds `TTSDown` (quiet Pushover since 2026-10-27; counts only while Helios's node-exporter is up, so a sleeping Helios is silent — `monitoring/README.md` → Routing coverage). The Qwen3-TTS :8002 probe (`service="tts"`) was removed 2026-10-24 when `qwen-tts` was disabled — restore it in `monitoring/prometheus/prometheus.yml.template` if it is re-enabled. No server-side `/metrics` yet.
+**Monitoring:** blackbox probe `service="tts-voxcpm"` on `${NODE_SATURN_IP}:8004/health` feeds `TTSDown` (quiet Pushover; counts while Saturn's node-exporter is up; a Saturn outage pages as `NodeDown`; `monitoring/README.md` → Routing coverage). The Qwen3-TTS :8002 probe (`service="tts"`) was removed 2026-10-24 when `qwen-tts` was disabled — restore it in `monitoring/prometheus/prometheus.yml.template` if it is re-enabled. No server-side `/metrics` yet.
+
+### VoxCPM2 on Saturn (RTX 5080): move + cutover runbook
+
+**Why:** at the brain's native 262144 context, the brain needs ~42.9–43.7 GiB of Helios GPU1. VoxCPM2 (7.4 GiB fresh, up to ~9.7 GiB) no longer fits beside it (measurements: header of `tts/llama-server-primary.service`). Moving the voice also stops speech from slowing the brain's decode.
+
+**What the voice depends on afterwards:** Helios (brain, STT) **and** Saturn (TTS). STT stays on Helios's CPU, because moving it frees no VRAM.
+- A Saturn outage pages as `NodeDown`. Saturn was down for 8.75 days in the 30 days before the move (2026-10-29 → 11-07), and no Helios TTS failure happened while Helios was up.
+- **If Saturn stays down for more than ~1 h, run the rollback** (~3 min, see Rollback below) to get the voice back on Helios at 64K.
+- **Behavior change:** announcements that failed while Helios slept will now speak. That was 377 in the 30 days before the move: selfcare 218, calendar 100, routine 30, ambient 24, and others. Quiet hours and DND still apply.
+- **Alerts, all quiet:**
+  - `TTSDown`: the server doesn't answer `/health`.
+  - `TTSSynthesisFailing`: it answers, but synthesis keeps failing.
+  - `TTSGPUMemoryLow`: the 5080 is nearly full.
+  - `SaturnGpuDriverBroken`.
+- `VOXCPM_HOST=10.0.0.58` needs Saturn's DHCP reservation on the router; confirm it exists.
+
+**Only Jupiter may call the Saturn server.** Its `IPAddressAllow` is `10.0.0.248/32` alone, and the server binds the LAN address only.
+- The Wyoming bridge (`wyoming-jessica-tts`, :10301, no auth) loses TTS after the move. That breaks the HA Assist voice path, which already doesn't work (see CLAUDE.md known gaps).
+- Never "fix" this by adding Helios or the LAN to the allow-list: that turns the bridge into an open relay for the cloned voice.
+- Don't run the bridge on Jupiter either. `docker compose up -d` without service names would start it there, publishing :10301 to the LAN, and Saturn would admit its traffic.
+
+**1. Card + install (the owner, on Saturn):** swap the RTX 5080 in for the RTX 3080, then follow steps 0–7 in the header of `tts/voxcpm-tts-saturn.service`. Until the PR is merged, the two new files exist only on its branch, so step 2 takes them from there. Everything is copied from the working Helios install and checked by sha256. Packages are pinned in `tts/requirements-voxcpm.txt`.
+
+**2. Compare with Helios before cutting over** (both servers live, run on Jupiter). Generic sentences only:
+```bash
+for h in 10.0.0.195 10.0.0.58; do
+  for s in "Good morning, it is seven o'clock." "Your timer for the oven is done." \
+           "Here is a quick summary of the weather for today: mild, with some sun in the afternoon." \
+           "You have two things on the calendar tomorrow, and the first one starts at nine."; do
+    curl -s -o /dev/null -w "$h %{time_total}s\n" -H 'Content-Type: application/json' \
+      -d "{\"text\":\"$s\",\"voice\":\"jessica\"}" http://$h:8004/tts
+  done
+done
+# Long text (peak VRAM): ~2000 chars, then check memory on Saturn
+LONG=$(python3 -c 'print("This is a long test sentence for the voice server. " * 38)')
+curl -s -o /dev/null -w "long %{time_total}s\n" -H 'Content-Type: application/json' \
+  -d "{\"text\":\"$LONG\",\"voice\":\"jessica\"}" http://10.0.0.58:8004/tts
+ssh labadmin@10.0.0.58 'nvidia-smi --query-compute-apps=process_name,used_memory --format=csv'
+```
+Pass:
+- Saturn is no slower per sentence than Helios;
+- peak VRAM stays well under the 5080's 16 GB;
+- the owner listens to a styled reply and it sounds the same: `curl ... -d '{"text":"...","voice":"jessica","emotion":"calm, gentle and reassuring"}'`.
+
+**3. Cutover** (~5 min; chat and voice are offline for ~1 min while the brain restarts):
+1. Merge the PR. CI deploys Jupiter: the probe moves to Saturn, and the orchestrator is rebuilt with the satellite wake fix.
+2. Jupiter (`/home/labadmin/gateway_nerves`):
+   ```bash
+   cp .env .env.bak-tts-helios
+   # set TTS_URL=http://10.0.0.58:8004 in .env
+   docker compose up -d --force-recreate orchestrator
+   docker logs brain-orchestrator 2>&1 | grep '\[TTS\] Backend'   # confirm 10.0.0.58:8004
+   scp tts/llama-server-primary.service tts/voxcpm-tts.service labadmin@10.0.0.195:/tmp/
+   ```
+3. Helios (`ssh labadmin@10.0.0.195`; the 64K unit is already backed up as `/etc/systemd/system/llama-server-primary.service.64k.bak`):
+   ```bash
+   sudo systemctl disable --now voxcpm-tts
+   # The new voxcpm-tts.service has an ExecStartPre guard: it refuses to start while the 262K brain
+   # unit is installed, so a stray `systemctl restart voxcpm-tts` can't squeeze the brain. (`mask`
+   # doesn't work here: the unit file lives in /etc/systemd/system.)
+   sudo install -m 644 /tmp/llama-server-primary.service /tmp/voxcpm-tts.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl restart llama-server-primary
+   nvidia-smi   # expect GPU0 ~29.1 GiB, GPU1 ~42.9 GiB, no python process
+   ```
+4. Verify:
+   - **vision at 262K**, never measured with a full-size photo: send a full-resolution phone photo in dashboard chat, once at the start of a chat and once after a long one. After each, `nvidia-smi` on Helios must still show at least 1 GiB free on GPU0. If not, roll back, or try `-ub 256` (another ~1.2 GiB free on GPU0, 26 % slower long prefill);
+   - a spoken reply in dashboard chat;
+   - a test announcement;
+   - one satellite turn;
+   - `probe_success{service="tts-voxcpm"}` = 1, and `ALERTS{alertname=~"BrainFailedToStart|TTSDown|TTSSynthesisFailing"}` is empty;
+   - note a new `bgw_chat_ttft_seconds` baseline: the first turn after a Helios wake is a cold prefill, ~16 % slower on long prompts at `-ub 384`;
+   - the Grafana TTS latency panel;
+   - brain decode no longer drops while a reply is spoken.
+
+**Rollback** (~3 min): header of `tts/llama-server-primary.service`. In order: Helios 64K unit + `voxcpm-tts` back on, then Jupiter `TTS_URL` back, then point the probe back at Helios. `TTSDown` follows the probe's `node` label, so it needs no change.
+
+**Saturn experiments must stay off the 5080.** llama.cpp's auto-fit and most tools use every GPU they can see. Pin experiments to the 3090 with `export CUDA_VISIBLE_DEVICES=GPU-<3090 uuid>` (or put that in `~/.bashrc` on Saturn). Otherwise an experiment fills the voice card: synthesis fails while `/health` stays green, and only `TTSGPUMemoryLow` (quiet) says so.
 
 ## Voice style
 
@@ -330,7 +408,7 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 | Status | Trigger | UI |
 |--------|---------|----|
 | `blocked` | `NotAllowedError` | "Tap to play" |
-| `asleep` | HTTP 503 (TTS unreachable — Helios asleep) | "Jess's voice is asleep — tap to retry" |
+| `asleep` | HTTP 503 (TTS unreachable — the TTS box, Saturn, or its server is down) | "Jess's voice is asleep — tap to retry" |
 | `interrupted` | iOS paused the element (screen lock, call, Siri) | "Voice paused — tap to replay" |
 | `error` | other failure, 30 s client timeout | error text |
 
@@ -344,7 +422,7 @@ The dashboard `/chat` page speaks Jess's replies, including on iOS Safari (needs
 - Stop / 503 cancels only the browser fetch — the orchestrator + TTS server still finish up to 2 in-flight sentences.
 - TTS server has 2 worker threads: a speaking tab can delay an announcement or Telegram voice reply by ~one sentence.
 - 500 emoji (2000 bytes) still pass the server caps (the client strips emoji anyway).
-- Helios asleep: the first sentence waits for the connect failure (typically a few seconds) before "voice is asleep".
+- TTS unreachable (Saturn or its server down): the first sentence waits for the connect failure (typically a few seconds) before "voice is asleep".
 - ElevenLabs/OpenAI TTS backends: auto-spoken replies are sent to that provider.
 - iOS behaviour verified only in Chromium with an injected iOS-like per-element `play()` policy, not yet on a real iPhone.
 

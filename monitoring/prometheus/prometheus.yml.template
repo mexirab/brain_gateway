@@ -14,9 +14,9 @@
 #                                 monitoring stack — prometheus/grafana/loki/alertmanager,
 #                                 Pi-hole primary, conjure API, netdata)
 #   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM split across RTX 5090 + RTX PRO
-#                                 5000, live TTS on the PRO 5000, STT on CPU — power-tiered)
-#   Saturn:  ${NODE_SATURN_IP}  (Vision model on RTX 3080, expert model on RTX 3090,
-#                                 Pi-hole secondary)
+#                                 5000, STT on CPU — power-tiered)
+#   Saturn:  ${NODE_SATURN_IP}  (live TTS on the RTX 5080, off-box backups; RTX 3090 = owner's
+#                                 experiments)
 #   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
@@ -73,7 +73,7 @@ scrape_configs:
         labels:
           node: 'saturn'
           role: 'backup'
-          gpu: 'rtx3080+rtx3090'
+          gpu: 'rtx5080+rtx3090'
 
   # ============================================
   # GPU EXPORTERS - NVIDIA Metrics
@@ -93,7 +93,7 @@ scrape_configs:
       - targets: ['${NODE_SATURN_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'saturn'
-          gpu: 'rtx3080+rtx3090'
+          gpu: 'rtx5080+rtx3090'
 
   # ============================================
   # CONJURE API METRICS
@@ -154,11 +154,13 @@ scrape_configs:
       #   - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
       #     labels: {service: 'tts', node: 'helios'}
 
-      # TTS (VoxCPM2 on Helios GPU1, tts/voxcpm-tts.service; /health 503s with no usable voice)
-      - targets: ['http://${NODE_HELIOS_IP}:8004/health']
+      # TTS (VoxCPM2 on Saturn's RTX 5080, tts/voxcpm-tts-saturn.service; /health 503s with no usable
+      # voice). Moved off Helios GPU1 so the brain can run 262K context. Its sandbox only admits
+      # Jupiter's address, which this probe uses (the container reaches the LAN through it).
+      - targets: ['http://${NODE_SATURN_IP}:8004/health']
         labels:
           service: 'tts-voxcpm'
-          node: 'helios'
+          node: 'saturn'
 
       # STT (Parakeet ONNX on Helios CPU, stt-onnx.service)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_STT_PORT}/health']

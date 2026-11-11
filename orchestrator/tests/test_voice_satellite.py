@@ -1350,7 +1350,162 @@ def helios(monkeypatch):
     )
     monkeypatch.setattr(helios_power, "wake_helios", h.wake)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", False)
+    # Default layout: brain, STT and TTS on one host (Helios), so any of them
+    # answering proves Helios is on. Saturn-TTS tests override tts_url. IP
+    # literals: only differing IPs count as another box (_on_brain_host).
+    monkeypatch.setattr(vs._settings, "model_url", "http://10.0.0.195:8080/v1")
+    monkeypatch.setattr(vs._settings, "stt_url", "http://10.0.0.195:8003")
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.195:8004")
     return h
+
+
+TTS_ONLY = {"stt": False, "model": False, "tts": True}
+
+
+async def test_helios_asleep_tts_on_other_box_wakes(sat, helios, clock, monkeypatch):
+    """TTS on Saturn answers while Helios sleeps: that must not count as Helios
+    being on — wake it instead of failing as service_down."""
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
+    monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY, UP))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    run = vs._Run(wake_word="hey_jess")
+    assert await sat._ensure_helios(run) is None
+    assert run.helios == "woken"
+    assert helios.running.await_count == 1 and helios.wake.await_count == 1
+    assert sat._client.errors == ["jess-waking"]
+
+
+async def test_helios_asleep_tts_on_other_box_wake_disabled(sat, helios, clock, monkeypatch):
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "helios_asleep"
+    assert sat._client.errors == ["jess-asleep"]
+    assert clock.sleeps == []
+    assert helios.running.await_count == 1 and helios.wake.await_count == 0
+
+
+@pytest.mark.parametrize("wake_enabled", [True, False], ids=["wake-on", "wake-off"])
+async def test_helios_asleep_and_tts_box_down_does_not_wake(sat, helios, clock, monkeypatch, wake_enabled):
+    """Helios asleep AND the Saturn TTS down: a wake can't make the turn work (and
+    would leave Helios on), so fail as service_down at once. With wake off too:
+    "error", not "asleep" — waking Helios by hand wouldn't help either."""
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", wake_enabled)
+    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "service_down"
+    assert helios.wake.await_count == 0
+    assert sat._client.errors == ["jess-error"]
+    assert clock.sleeps == []
+
+
+async def test_helios_booting_and_tts_box_down_takes_the_grace_path(sat, helios, clock, monkeypatch):
+    """Nothing on Helios answers yet but the plug says it's on (booting), Saturn
+    TTS down too: Helios is powered, so no fail-fast — wait, and go once all answer."""
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
+    helios.running.return_value = True
+    monkeypatch.setattr(sat, "_service_status", _statuses(DOWN, UP))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    run = vs._Run(wake_word="hey_jess")
+    assert await sat._ensure_helios(run) is None
+    assert run.helios == "woken"
+    assert helios.running.await_count == 1 and helios.wake.await_count == 0
+    assert sat._client.errors == ["jess-waking"]
+    assert clock.sleeps == [5.0]
+
+
+async def test_helios_asleep_tts_box_down_turn_metric_and_log(sat, helios, clock, monkeypatch, pipeline, caplog):
+    """The fail-fast path through a whole turn: counted as service_down (helios
+    unchecked), no STT / brain / playback, one warning naming only the service."""
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
+    pipeline.status.return_value = dict(DOWN)
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    before = _turns("service_down")
+    hist_before = _turn_seconds_count("unchecked")
+    await _one_turn(sat)
+    assert _turns("service_down") == before + 1
+    assert _turn_seconds_count("unchecked") == hist_before  # only ok turns are timed
+    assert sat._client.names[-1] == ERROR and sat._client.errors == ["jess-error"]
+    assert pipeline.stt.await_count == 0 and sat._chat.calls == [] and pipeline.speak.await_count == 0
+    assert helios.wake.await_count == 0 and sat._busy is False
+    warn = [r for r in caplog.records if "not waking it" in r.getMessage()]
+    assert len(warn) == 1 and warn[0].levelno == logging.WARNING
+    assert warn[0].getMessage() == f"[SATELLITE] {NODE}: tts down off Helios; not waking it"
+
+
+async def test_helios_on_brain_reloading_tts_on_other_box(sat, helios, clock, monkeypatch):
+    """Most common case after the Saturn move: brain reloading, STT up. STT alone
+    proves Helios is on, so grace and no wake, even with wake enabled."""
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
+    monkeypatch.setattr(sat, "_service_status", _statuses(MODEL_DOWN, UP))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    run = vs._Run(wake_word="hey_jess")
+    assert await sat._ensure_helios(run) is None
+    assert run.helios == "woken"
+    assert helios.wake.await_count == 0 and helios.running.await_count == 0
+    assert clock.sleeps == [5.0]
+
+
+async def test_helios_on_tts_box_down_is_service_down(sat, helios, clock, monkeypatch):
+    """Brain + STT up, Saturn TTS down: Helios is on, so no wake — grace, then service_down."""
+    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
+    monkeypatch.setattr(sat, "_service_status", _statuses({"stt": True, "model": True, "tts": False}))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "service_down"
+    assert helios.wake.await_count == 0 and helios.running.await_count == 0
+    # the full grace wait, not the asleep-and-off-host-down fail-fast
+    assert clock.sleeps == [5.0] * int(vs.SERVICE_GRACE_S / 5)
+    assert sat._client.errors == ["jess-waking", "jess-error"]
+
+
+async def test_helios_tts_same_host_still_proves_power(sat, helios, clock, monkeypatch):
+    """Old layout (TTS on Helios): TTS answering still means Helios is on — no wake."""
+    monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
+    monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY, UP))
+    monkeypatch.setattr(sat, "_helios_running", helios.running)
+    assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) is None
+    assert helios.wake.await_count == 0 and helios.running.await_count == 0
+
+
+@pytest.mark.parametrize(
+    "name, model_url, url, expected",
+    [
+        ("stt", "http://10.0.0.195:8080/v1", "http://10.0.0.195:8003", True),
+        ("stt", "http://10.0.0.195:8080/v1", "http://10.0.0.58:8003", False),
+        ("tts", "http://10.0.0.195:8080/v1", "http://10.0.0.58:8004", False),
+        ("tts", "http://10.0.0.195:8080/v1", "http://10.0.0.195:8004", True),
+        # Names can't prove another box: compose DNS (one machine), name vs IP.
+        ("stt", "http://vllm-primary:8000/v1", "http://parakeet-stt:8003", True),
+        ("tts", "http://helios.lan:8080/v1", "http://10.0.0.58:8004", True),
+        ("tts", "http://[fd00::1]:8080/v1", "http://[fd00::2]:8004", False),
+        # Empty URLs keep the pre-Saturn behaviour (counted, so no fail-fast).
+        ("stt", "", "http://10.0.0.195:8003", True),
+        ("stt", "http://10.0.0.195:8080/v1", "", True),
+    ],
+    ids=[
+        "stt-same-ip",
+        "stt-other-ip",
+        "tts-saturn",
+        "tts-helios",
+        "compose-names",
+        "name-vs-ip",
+        "ipv6-differ",
+        "no-model-url",
+        "no-stt-url",
+    ],
+)
+def test_on_brain_host(monkeypatch, name, model_url, url, expected):
+    monkeypatch.setattr(vs._settings, "model_url", model_url)
+    monkeypatch.setattr(vs._settings, f"{name}_url", url)
+    assert vs.Satellite._on_brain_host(name) is expected
+    assert vs.Satellite._on_brain_host("model") is True
 
 
 async def test_helios_all_up(sat, helios, clock, monkeypatch):
