@@ -277,6 +277,26 @@ ssh labadmin@10.0.0.195 "sudo systemctl restart voxcpm-tts"
 ssh labadmin@10.0.0.195 "journalctl -u voxcpm-tts --no-pager -n 50"
 ```
 
+### Voice satellite (ATOM Echo → Jess; `docs/VOICE_AND_TTS.md` → Voice satellite)
+```bash
+# Is the bridge connected? Turn outcomes + stage timings (no transcript/reply in logs)
+docker logs brain-orchestrator 2>&1 | grep SATELLITE | tail -20
+
+# Connection attempts / turn outcomes from Prometheus (loopback on Jupiter)
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result)(increase(bgw_satellite_connect_total[1h]))' | jq '.data.result'
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result,wake_word)(increase(bgw_satellite_turn_total[24h]))' | jq '.data.result'
+
+# New device API key (firmware api_encryption_key = VOICE_SATELLITE_API_KEY)
+python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
+
+# Build + OTA flash the firmware (<dir> holds atom-echo-jess.yaml, hey_jess.json/.tflite, secrets.yaml)
+docker run --rm -it -v <dir>:/config -v <dir>/.cache:/cache ghcr.io/esphome/esphome:stable \
+  -s name <node> run atom-echo-jess.yaml --device <ip>
+
+# After changing any VOICE_SATELLITE_* in .env
+docker compose up -d --force-recreate orchestrator
+```
+
 ### Load a new voice clone (Qwen3-TTS rollback only — disabled; VoxCPM2 has no `/voices/load`, see `docs/VOICE_AND_TTS.md`)
 ```bash
 curl -X POST http://10.0.0.195:8002/voices/load \

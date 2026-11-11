@@ -35,6 +35,17 @@ def parse_grist_docs(raw: str) -> Dict[str, str]:
     return docs
 
 
+def voice_satellite_key_ok(key: str) -> bool:
+    """True when ``key`` is a base64 32-byte ESPHome API (noise PSK) key."""
+    import base64
+    import binascii
+
+    try:
+        return len(base64.b64decode(key or "", validate=True)) == 32
+    except (binascii.Error, ValueError):
+        return False
+
+
 class Settings(BaseSettings):
     """
     Brain Gateway configuration.
@@ -479,6 +490,22 @@ class Settings(BaseSettings):
     telegram_voice_reply_enabled: bool = True
     telegram_voice_reply_max_chars: int = 1200  # cap the spoken portion (TTS latency/size)
 
+    # -- Voice satellite (ATOM Echo → Jess, no HA voice pipeline) ---------------
+    # orchestrator/voice_satellite.py: a forever task connects OUT to one ESPHome
+    # voice device's native API (:6053), receives its mic audio after the
+    # on-device wake word ("Hey Jess" / "Okay Jess"), runs STT → one Jess voice
+    # turn → plays the reply on a Google speaker via HA. The device must be
+    # removed from HA's ESPHome integration (one voice subscriber per device).
+    voice_satellite_enabled: bool = False
+    voice_satellite_host: str = ""  # device IP (DHCP reservation); mDNS names don't resolve in the container
+    voice_satellite_port: int = 6053
+    voice_satellite_api_key: str = ""  # the device's api: encryption: key (base64, 32 bytes) — secret
+    voice_satellite_name: str = "atom-echo-jess"  # ESPHome node name; the connection refuses any other device
+    # media_player.* the reply plays on — required (replies play even in sleep
+    # mode, so they never fall back to another room's speakers)
+    voice_satellite_speaker: str = ""
+    voice_satellite_helios_timeout_seconds: int = 180  # Helios asleep: max wait after waking it (D5)
+
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
     # mirror state — Paperless owns its files and metadata. document_vault
@@ -683,6 +710,55 @@ class Settings(BaseSettings):
             object.__setattr__(self, "telegram_snooze_minutes", 1)
         elif self.telegram_snooze_minutes > 120:
             object.__setattr__(self, "telegram_snooze_minutes", 120)
+        return self
+
+    @model_validator(mode="after")
+    def validate_voice_satellite_config(self) -> "Settings":
+        """Auto-disable the voice satellite on an incomplete or malformed config.
+
+        Logs and never raises (optional-feature pattern). The host must be an IP
+        address (a .local name would make aioesphomeapi open mDNS sockets in the
+        container), the key must decode to the 32-byte noise PSK ESPHome uses
+        (an empty key would mean an UNENCRYPTED connection), and the node name +
+        speaker must be plain ids (the speaker is interpolated into an HA path).
+        A room speaker is required: replies play even in sleep mode, so they
+        must never fall back to another room's speakers.
+        """
+        import ipaddress
+        import logging
+
+        log = logging.getLogger(__name__)
+        speaker = self.voice_satellite_speaker.strip()
+        object.__setattr__(self, "voice_satellite_speaker", speaker)
+        clamped = max(0, min(600, self.voice_satellite_helios_timeout_seconds))
+        object.__setattr__(self, "voice_satellite_helios_timeout_seconds", clamped)
+        if not self.voice_satellite_enabled:
+            return self
+
+        problem = ""
+        host = self.voice_satellite_host.strip()
+        try:
+            ipaddress.ip_address(host)
+            host_ok = True
+        except ValueError:
+            host_ok = False
+        if not host_ok:
+            problem = "VOICE_SATELLITE_HOST is missing or not an IP address"
+        elif not 1 <= self.voice_satellite_port <= 65535:
+            problem = "VOICE_SATELLITE_PORT is out of range"
+        elif not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", self.voice_satellite_name):
+            problem = "VOICE_SATELLITE_NAME is not an ESPHome node name"
+        elif not re.fullmatch(r"media_player\.[a-z0-9_]+", speaker):
+            problem = "VOICE_SATELLITE_SPEAKER is missing or not a media_player entity id"
+        elif not voice_satellite_key_ok(self.voice_satellite_api_key):
+            problem = "VOICE_SATELLITE_API_KEY is missing or not a base64 32-byte key"
+        elif not (self.stt_url and self.tts_url and self.ha_url and self.ha_token):
+            problem = "STT_URL, TTS_URL, HA_URL and HA_TOKEN are not all set"
+        if problem:
+            log.error("[CONFIG] VOICE_SATELLITE_ENABLED=true but %s; disabling the voice satellite.", problem)
+            object.__setattr__(self, "voice_satellite_enabled", False)
+        else:
+            object.__setattr__(self, "voice_satellite_host", host)
         return self
 
     @model_validator(mode="after")

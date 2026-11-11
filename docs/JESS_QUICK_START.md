@@ -8,7 +8,7 @@ There are three ways to talk to it:
 
 1. **Web UI** — open the dashboard at `http://<your-box>:3001/` and use the chat panel.
 2. **API** — `POST /v1/chat/completions` with `Authorization: Bearer $API_TOKEN`. OpenAI-compatible.
-3. **Voice puck** — any ATOM Echo or other Wyoming-compatible mic. Hands-free, room-aware, multi-speaker.
+3. **Voice puck** — an ATOM Echo talking to the assistant directly (voice satellite: the answer plays on that room's speaker), or any Wyoming-compatible mic through Home Assistant. Hands-free.
 
 ---
 
@@ -199,6 +199,10 @@ Reindex when you add docs: `docker exec brain-orchestrator python scripts/reinde
 | "Good morning" | Wakes the assistant back up (auto-clears when morning briefing fires 5–11am) |
 
 Quiet hours can also be scheduled in `/settings → Quiet Hours` (with per-day-of-week control).
+
+A question you ask the voice puck (voice satellite) is still answered during quiet mode, on that room's speaker only.
+
+**Voice puck sounds** (voice satellite): a beep after the wake word; then a short sound if nothing was heard, if it's still busy with your last question, if the GPU box is waking up (the answer comes in a minute or two), or if something failed. Normal answers play on the room's speaker, not the puck.
 
 ---
 

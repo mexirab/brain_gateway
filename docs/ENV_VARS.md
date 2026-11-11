@@ -474,6 +474,22 @@ Two-way capture + reminder channel. A dedicated long-polling task inside the orc
 
 Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_latency_seconds{kind}`, `bgw_telegram_update_total{kind,result}` (`kind` includes `voice`\|`photo`), `bgw_telegram_callback_total{action,result}`, `bgw_telegram_media_total{kind,result}` (voice/photo processing outcomes — photo `vision_unreachable` = Helios asleep, not analyzed — + `voice_reply` outbound TTS reply: `ok`\|`tts_failed`\|`send_failed`).
 
+## Voice satellite (ATOM Echo)
+
+`orchestrator/voice_satellite.py`: one ESPHome voice device talks to Jess without HA's voice pipeline (how it works, decisions, setup, firmware: `docs/VOICE_AND_TTS.md` → Voice satellite). Validator `validate_voice_satellite_config` (`config.py`) logs `[CONFIG] VOICE_SATELLITE_ENABLED=true but …; disabling the voice satellite.` and turns the feature off on a bad or incomplete config; it never raises. Also needs `STT_URL`, `TTS_URL`, `HA_URL`, `HA_TOKEN`. Read at process start: any change needs `docker compose up -d --force-recreate orchestrator`. Enable only after the change is deployed (the `VoiceSatelliteDisconnected` alert ships with it).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VOICE_SATELLITE_ENABLED` | `false` | Start the bridge task (outbound connection to the device). |
+| `VOICE_SATELLITE_HOST` | (empty) | Device IP; give it a DHCP reservation. Must be an IP address: `.local` names are rejected (mDNS doesn't resolve in the container, and aioesphomeapi would open mDNS sockets). |
+| `VOICE_SATELLITE_PORT` | `6053` | ESPHome native API port (1–65535). |
+| `VOICE_SATELLITE_API_KEY` | (empty) | **Secret.** The firmware's `api: encryption: key` (`api_encryption_key` in its `secrets.yaml`): base64 of 32 bytes. Anything else disables the feature; an empty key would mean an unencrypted connection and is refused twice (validator + client build). Anyone holding it can pose as the device on the LAN: rotate (reflash + `.env`) if a device or the build box's `secrets.yaml` is lost. |
+| `VOICE_SATELLITE_NAME` | `atom-echo-jess` | ESPHome node name the device runs (`[a-z0-9][a-z0-9_-]{0,39}`). The connection refuses any other device (`wrong_device`). Also the `device` metric label. |
+| `VOICE_SATELLITE_SPEAKER` | (empty, **required**) | `media_player.*` in the device's room that plays the reply (e.g. `media_player.office_speaker`). No fallback to other rooms: replies play even under sleep mode. |
+| `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` | `180` | Helios asleep: how long a turn waits after waking it (clamped 0–600). Waking needs `HELIOS_WAKE_ENABLED`; with it off the device plays the "asleep" sound. Helios on but a service down: fixed 90 s wait, no wake. |
+
+Metrics + `VoiceSatelliteDisconnected`: `monitoring/README.md` → Voice Satellite.
+
 ## Self-audit (F-014)
 
 Daily 7am scheduled job (`orchestrator/jobs_self_audit.py`) that queries Loki for the last-24h error/warn logs, one query per source group (`orchestrator` / `jupiter_other` / `helios` / `ups`, each capped at `SELF_AUDIT_LOKI_LIMIT_PER_GROUP` lines, plus exact counts from a metric query; truncation is reported), clusters them, and has Jess diagnose them: a single no-tools `call_model` pass by default, or the read-only investigator (`orchestrator/self_investigator.py` — `list_dir`/`read_file`/`grep` over the read-only repo + `loki_query`) when `SELF_AUDIT_INVESTIGATE=true`. Saves a markdown report under `/app/data/self_audits/YYYY-MM-DD.md` (alert runs: `YYYY-MM-DD-HHMM-alert-<Name>.md`) and pushes a one-line digest to Pushover + the dashboard inbox. Read-only by design — the orchestrator never executes model output. Log text reaches the model defanged and framed as untrusted; suggested commands pass an allow-list + dangerous-pattern + secret filter. Mempalace gets a facts-only line built by code (never model prose). A failed source group makes the run `partial` and suppresses "All clean". Alertmanager can also start an investigation via `POST /api/self_audit/alert` (`TECHNICAL_REFERENCE.md` → Self-Audit). Default-OFF; needs `JESS_ADVANCED=true`. Alerting + metrics: `jess-features/F-014-self-audit.md`.

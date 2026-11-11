@@ -4,6 +4,44 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Voice satellite: ATOM Echo talks to Jess without HA's voice pipeline (2026-11-10)
+
+The ATOM Echo's HA Assist path had been broken since the HA migration (the conversation agent still points at Helios). The orchestrator now talks to the device itself. Detail, decisions D1–D12, setup, firmware runbook: `docs/VOICE_AND_TTS.md` → Voice satellite.
+
+### Upgrade action
+
+- None for the merge: default off. To enable, after the deploy: DHCP reservation for the device, remove it from HA's ESPHome integration, flash `models/atom-echo-jess.yaml` (new `secrets.yaml` incl. a new `ap_password` — the old literal is in git history), set `VOICE_SATELLITE_*` in `.env`, `docker compose up -d --force-recreate orchestrator`.
+
+### Orchestrator
+
+- New `voice_satellite.py`: forever task (started in `orchestrator.py` startup like the Telegram bot, cancelled at shutdown) that connects out to one ESPHome device's native API (:6053, noise key, node name pinned), runs an energy VAD (port of `frontend/src/lib/vad.ts`), STT on Helios, one `cloud_brain.chat(..., stream=False, is_voice=True)` turn and plays the reply on the room's speaker via `_announce_voice`. Ends a device run with `RUN_END` alone (`STT_VAD_END` first wedges ESPHome 2026.x). Device-audible outcomes as `jess-*` error codes. Helios asleep → wake + answer late; Helios on but a service down → 90 s wait, no wake.
+- Safeguards (anyone in the room can talk to it; owner decision D8 = full voice tool subset): turns never feed auto_learn (new `cloud_brain.skip_auto_learn_var`), replies not stored in `announcement_history`, replies only on `VOICE_SATELLITE_SPEAKER` (no fallback, play under DND), 6 turns / 5 min per device, RAM-only follow-up history (≤ 12 messages, reset after 5 min).
+- `reminder_manager._announce_voice`: new `ignore_dnd`, `style`, `allow_fallback`, `record_history` (defaults unchanged); `_record_announcement(..., persist=)`.
+- `service_registry.check_service` applies its `timeout` per request also with a caller's shared client (found by the new tests).
+- `log_config.DropPayloadArgsFilter`; `aioesphomeapi` / `zeroconf` loggers held at WARNING (their records can carry raw audio bytes).
+- New env vars `VOICE_SATELLITE_ENABLED`, `_HOST`, `_PORT`, `_API_KEY`, `_NAME`, `_SPEAKER`, `_HELIOS_TIMEOUT_SECONDS`; validator `validate_voice_satellite_config` (log + disable, never raises).
+- New dependency `aioesphomeapi==44.16.1` (exact: newest release accepting `cryptography<45`; bump together).
+
+### Firmware
+
+- `models/atom-echo-jess.yaml` rewritten (validated + compiled with ESPHome 2026.10.2, flashed OTA, "Hey Jess" verified on-device 7/7): no HA bits, "Hey Jess" as a local model file, slot for "Okay Jess", stock `okay_nabu` removed, wake word listens from boot, `api: reboot_timeout: 0s`, fallback-AP password from `!secret ap_password`, Voice PE sounds pinned to commit `a5429c2b` (CC BY 4.0), `on_error` maps the `jess-*` codes to sounds.
+- `models/hey_jess.json`: the trainer's manifest values (`probability_cutoff` 0.97, `tensor_arena_size` 30000; was 0.5 / 26080).
+
+### Monitoring
+
+- Metrics `bgw_satellite_connected{device}`, `bgw_satellite_connect_total{result}`, `bgw_satellite_turn_total{result,wake_word,helios}`, `bgw_satellite_turn_seconds{helios}`.
+- Quiet alert `VoiceSatelliteDisconnected` (`pushover-quiet`, 24h repeat); Grafana row "Voice Satellite". Runbook: `monitoring/README.md` → Voice Satellite.
+
+### Tests
+
+- `orchestrator/tests/test_voice_satellite.py` (needs an image built with `aioesphomeapi`).
+
+### Docs
+
+- `docs/VOICE_AND_TTS.md` (new Voice satellite section; HA Assist pipeline kept as the legacy path; `_announce_voice` flags), `docs/ENV_VARS.md`, `monitoring/README.md`, `TECHNICAL_REFERENCE.md`, `CLAUDE.md`, `COMMANDS.md`, `ROADMAP.md`, `docs/PRIVACY.md`, `docs/JESS_QUICK_START.md`, `docs/JESS_SELF_KNOWLEDGE.md`, `jess-features/README.md`.
+
+---
+
 ## [Unreleased] — off-box backup alert that could never fire + rule-evaluation alert (2026-11-06)
 
 Branch `fix/backup-offbox-alert`.

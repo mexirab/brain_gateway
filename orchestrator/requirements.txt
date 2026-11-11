@@ -41,6 +41,11 @@ cryptography>=44.0,<45.0
 pywebpush==2.0.3
 py-vapid==1.9.2
 
+# Voice satellite (ATOM Echo → Jess over the ESPHome native API).
+# Exact pin: 44.16.1 is the newest release that accepts cryptography <45
+# (44.20+ need >=46.0.7, 46.x need >=48). Bump together with the cryptography pin.
+aioesphomeapi==44.16.1
+
 # Document processing
 PyMuPDF>=1.25,<2.0
 pytesseract>=0.3,<1.0

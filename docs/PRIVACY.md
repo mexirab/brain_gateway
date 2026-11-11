@@ -117,6 +117,7 @@ If you connect Google Calendar or Gmail via the wizard:
 - **TTS (Qwen3-TTS) runs locally.** Generated speech is synthesized on the box.
   - If you switch the TTS backend to ElevenLabs or OpenAI, every spoken reply (house announcements, Telegram voice replies, dashboard chat voice replies) is sent to that provider as text.
 - **Wake-word ("Hey Jess" or your configured trigger) runs locally** on the voice puck (microWakeWord on ATOM Echo).
+- **Voice satellite (ATOM Echo talking to Jess directly, optional):** the mic audio after the wake word is held in RAM for one utterance and never written to disk; logs carry lengths and outcomes, never what was said. Anyone in the room can talk to it and gets the full voice feature set (including medication and calendar answers, spoken aloud); its turns are never auto-learned. See `docs/VOICE_AND_TTS.md` → Voice satellite.
 - The optional wake-word capture mode (`data/wakeword/`, gitignored) saves raw audio fragments to disk for retraining. **This is opt-in via env var and off by default.**
 
 ---

@@ -122,7 +122,7 @@ F-014 Daily Self-Audit (depends on F-013 Pushover for digest channel;
 | Capability | Key File |
 |------------|----------|
 | TTS announcements | `tool_handlers.py` → `_announce_voice()` |
-| Voice pipeline | "Hey Jess" → ATOM Echo → HA → STT → orchestrator |
+| Voice pipeline | "Hey Jess" → ATOM Echo → voice satellite bridge (`voice_satellite.py`) → STT → orchestrator → room speaker via HA |
 | Scheduled jobs | APScheduler in `background_jobs.py` |
 | Google Calendar | `google_calendar.py` |
 | Gmail | `google_gmail.py` |

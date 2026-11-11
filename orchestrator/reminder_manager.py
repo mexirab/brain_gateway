@@ -210,6 +210,10 @@ async def _announce_voice(
     announcement_type: str = "unknown",
     min_volume: float | None = None,
     ignore_voice_session: bool = False,
+    ignore_dnd: bool = False,
+    style: str | None = None,
+    allow_fallback: bool = True,
+    record_history: bool = True,
 ) -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
@@ -217,6 +221,23 @@ async def _announce_voice(
     ignore_voice_session: bypass the mid-conversation guard (DND still
     applies) — used once a reminder has been deferred for a voice session
     as long as deliver_reminder_job allows.
+
+    ignore_dnd: play even under Do Not Disturb. ONLY for the reply to
+    something the user just asked out loud (voice satellite, decision D4 —
+    you asked, so you want the answer); proactive announcements never set it.
+
+    style: TTS style note to use instead of the announcement-type default
+    (the voice satellite passes the reply style, as the dashboard does).
+
+    allow_fallback: when every target speaker is unavailable, try the live
+    reminder speakers (default). False = report the failure instead, like
+    "manual" — the voice satellite must never answer in another room,
+    least of all under ignore_dnd.
+
+    record_history: write the row to announcement_history (default). False =
+    metrics only. Voice-satellite replies are conversation, not announcements:
+    stored, they'd crowd the dashboard history, be replayed into /chat as Jess
+    bubbles, and make ha_intent treat Jess's own question as an announcement.
 
     Generates full audio, saves to disk, serves via HTTP, and plays on an HA media_player.
 
@@ -239,7 +260,7 @@ async def _announce_voice(
     t0 = _time.time()
 
     # Do Not Disturb — suppress all announcements when user said goodnight
-    if shared.DND_ACTIVE:
+    if shared.DND_ACTIVE and not ignore_dnd:
         logger.info(f"[DND] Suppressed announcement ({announcement_type}, {len(text)} chars)")
         return {"success": True, "suppressed": True, "reason": "dnd_active"}
 
@@ -261,7 +282,9 @@ async def _announce_voice(
     try:
         backend = shared.tts_backend
         if backend is None:
-            _record_announcement(text, announcement_type, None, False, "TTS backend not initialized", None)
+            _record_announcement(
+                text, announcement_type, None, False, "TTS backend not initialized", None, persist=record_history
+            )
             return {"success": False, "error": "TTS backend not initialized"}
 
         # =====================================================================
@@ -307,7 +330,7 @@ async def _announce_voice(
                 f"(check Speakers panel or REMINDER_SPEAKER env var)"
             )
             logger.error(err)
-            _record_announcement(text, announcement_type, None, False, err, None)
+            _record_announcement(text, announcement_type, None, False, err, None, persist=record_history)
             return {"success": False, "error": err}
 
         # Cast to all target speakers concurrently (don't stop at first
@@ -351,7 +374,7 @@ async def _announce_voice(
             # "manual" = /api/announce naming a speaker on purpose: report the
             # failure rather than playing somewhere the caller didn't ask for.
             # Routine/briefing speakers come from config, so they fall back.
-            if not broadcast_speakers and announcement_type != "manual":
+            if not broadcast_speakers and allow_fallback and announcement_type != "manual":
                 from orchestrator.announcement_routes import route_for as _route_for
 
                 tried = {s for s, _ in unavailable}
@@ -376,13 +399,16 @@ async def _announce_voice(
                     False,
                     err,
                     int((_time.time() - t0) * 1000),
+                    persist=record_history,
                 )
                 return {"success": False, "error": err, "unavailable": [s for s, _ in unavailable]}
 
             # Synthesize only once we know something can play it — a dead-only
             # route used to burn a Helios TTS call on every retry/poll.
             # Generate audio via backend
-            audio_bytes = await backend.synthesize(text, style=style_for_announcement(announcement_type))
+            audio_bytes = await backend.synthesize(
+                text, style=style if style is not None else style_for_announcement(announcement_type)
+            )
 
             # Save audio with UUID (file I/O off the event loop)
             audio_id = str(uuid.uuid4())[:8]
@@ -444,7 +470,7 @@ async def _announce_voice(
         latency_ms = int((_time.time() - t0) * 1000)
         if succeeded:
             speaker_label = ",".join(succeeded)
-            _record_announcement(text, announcement_type, speaker_label, True, None, latency_ms)
+            _record_announcement(text, announcement_type, speaker_label, True, None, latency_ms, persist=record_history)
             out: Dict[str, Any] = {"success": True, "speaker": speaker_label}
             if unavailable:
                 out["unavailable"] = [s for s, _ in unavailable]
@@ -459,6 +485,7 @@ async def _announce_voice(
             False,
             last_error,
             latency_ms,
+            persist=record_history,
         )
         return {"success": False, "error": last_error}
 
@@ -470,7 +497,7 @@ async def _announce_voice(
         # attaches the traceback so we can see which call path failed.
         err_repr = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
         logger.exception("Voice announcement failed (%s)", err_repr)
-        _record_announcement(text, announcement_type, None, False, err_repr, latency_ms)
+        _record_announcement(text, announcement_type, None, False, err_repr, latency_ms, persist=record_history)
         return {"success": False, "error": err_repr}
 
 
@@ -482,10 +509,14 @@ def _known_speakers() -> set[str]:
     """Every speaker the route config / legacy env vars can produce (metric label allow-list)."""
     try:
         from orchestrator.announcement_routes import CATEGORIES, route_for
+        from orchestrator.config import settings as _cfg
 
         known: set[str] = set()
         for cat in (*CATEGORIES, "reminder"):
             known.update(s.strip() for s in (route_for(cat) or "").split(",") if s.strip())
+        # The voice satellite names its room speaker directly (not via a route).
+        if _cfg.voice_satellite_speaker:
+            known.add(_cfg.voice_satellite_speaker)
         return known
     except Exception:  # noqa: BLE001
         return set()
@@ -575,17 +606,20 @@ def _record_announcement(
     success: bool,
     error: str | None,
     latency_ms: int | None,
+    *,
+    persist: bool = True,
 ) -> None:
-    """Record announcement to DB and metrics (fire-and-forget)."""
+    """Record announcement to DB (unless persist=False) and metrics (fire-and-forget)."""
     try:
-        state_store.record_announcement(
-            text=text,
-            announcement_type=announcement_type,
-            speaker=speaker,
-            success=success,
-            error=error,
-            latency_ms=latency_ms,
-        )
+        if persist:
+            state_store.record_announcement(
+                text=text,
+                announcement_type=announcement_type,
+                speaker=speaker,
+                success=success,
+                error=error,
+                latency_ms=latency_ms,
+            )
     except Exception as e:
         logger.warning(f"Failed to record announcement: {e}")
 

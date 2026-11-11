@@ -230,6 +230,9 @@ _http: Optional[httpx.AsyncClient] = None
 # cancelled in shutdown). Typed loosely to avoid importing asyncio here.
 telegram_task: Optional[Any] = None
 
+# Voice satellite bridge task (orchestrator/voice_satellite.py), same lifecycle.
+voice_satellite_task: Optional[Any] = None
+
 # ---------------------------------------------------------------------------
 # HA tool definition cache
 # ---------------------------------------------------------------------------
