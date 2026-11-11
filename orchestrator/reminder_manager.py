@@ -9,8 +9,8 @@ import hmac
 import logging
 import os
 import re
+import secrets
 import time
-import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -214,6 +214,7 @@ async def _announce_voice(
     style: str | None = None,
     allow_fallback: bool = True,
     record_history: bool = True,
+    progressive: bool = False,
 ) -> Dict[str, Any]:
     """
     Announce via TTS on a speaker (defaults to REMINDER_SPEAKER).
@@ -238,6 +239,12 @@ async def _announce_voice(
     metrics only. Voice-satellite replies are conversation, not announcements:
     stored, they'd crowd the dashboard history, be replayed into /chat as Jess
     bubbles, and make ha_intent treat Jess's own question as an announcement.
+
+    progressive: synthesize the first ~8 s of audio, start the speaker on a stream
+    URL, and synthesize the rest while it plays (audio_stream.py). Only for a
+    WAV backend and a text of 2+ chunks; otherwise the one-clip path. The
+    return comes after play_media, so the later sentences' TTS failures only
+    show in bgw_tts_progressive_total, never in this result.
 
     Generates full audio, saves to disk, serves via HTTP, and plays on an HA media_player.
 
@@ -344,7 +351,7 @@ async def _announce_voice(
                     json={
                         "entity_id": try_speaker,
                         "media_content_id": audio_url,
-                        "media_content_type": backend.audio_format,
+                        "media_content_type": content_type,
                     },
                     timeout=30,
                 )
@@ -405,60 +412,84 @@ async def _announce_voice(
 
             # Synthesize only once we know something can play it — a dead-only
             # route used to burn a Helios TTS call on every retry/poll.
-            # Generate audio via backend
-            audio_bytes = await backend.synthesize(
-                text, style=style if style is not None else style_for_announcement(announcement_type)
-            )
+            tts_style = style if style is not None else style_for_announcement(announcement_type)
+            stream = None
+            if progressive:
+                from orchestrator import audio_stream
 
-            # Save audio with UUID (file I/O off the event loop)
-            audio_id = str(uuid.uuid4())[:8]
-            audio_dir = "/tmp/brain_audio"
-            ext = backend.file_extension
-            audio_path = f"{audio_dir}/{audio_id}.{ext}"
+                stream = await audio_stream.start(
+                    backend, text, style=tts_style, speaker_key=",".join(sorted(broadcast_speakers))
+                )
+            try:
+                if stream is not None:
+                    audio_url = f"{ORCHESTRATOR_URL}/api/audio/{stream.filename}"
+                    content_type = "audio/wav"
+                else:
+                    audio_bytes = await backend.synthesize(text, style=tts_style)
 
-            def _write_audio() -> None:
-                os.makedirs(audio_dir, exist_ok=True)
-                with open(audio_path, "wb") as f:
-                    f.write(audio_bytes)
+                    # Save audio (file I/O off the event loop). 144-bit name: the
+                    # /api/audio/ route is tokenless (speakers can't send a bearer).
+                    audio_id = secrets.token_urlsafe(18)
+                    audio_dir = "/tmp/brain_audio"
+                    ext = backend.file_extension
+                    audio_path = f"{audio_dir}/{audio_id}.{ext}"
 
-            await asyncio.to_thread(_write_audio)
+                    def _write_audio() -> None:
+                        os.makedirs(audio_dir, exist_ok=True)
+                        with open(audio_path, "wb") as f:
+                            f.write(audio_bytes)
 
-            audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
+                    await asyncio.to_thread(_write_audio)
 
-            # Optional: bump-only volume floor for wake-time announcements.
-            # Done before play_media so the speaker wakes from `off` already at
-            # the right volume. Failures are logged and never block the play.
-            # Kept serial (best-effort, bounded) — the parallel win is the
-            # play_media cast below.
-            if min_volume is not None:
-                clamped = max(0.0, min(1.0, float(min_volume)))
-                for try_speaker in broadcast_speakers:
-                    try:
-                        cur = await client.get(
-                            f"{HA_URL}/api/states/{quote(try_speaker, safe='')}",
-                            headers=headers,
-                        )
-                        current_vol = None
-                        if cur.status_code == 200:
-                            current_vol = (cur.json().get("attributes") or {}).get("volume_level")
-                        if current_vol is None or float(current_vol) < clamped:
-                            vol_resp = await client.post(
-                                f"{HA_URL}/api/services/media_player/volume_set",
+                    audio_url = f"{ORCHESTRATOR_URL}/api/audio/{audio_id}.{ext}"
+                    content_type = backend.audio_format
+
+                # Optional: bump-only volume floor for wake-time announcements.
+                # Done before play_media so the speaker wakes from `off` already at
+                # the right volume. Failures are logged and never block the play.
+                # Kept serial (best-effort, bounded) — the parallel win is the
+                # play_media cast below.
+                if min_volume is not None:
+                    clamped = max(0.0, min(1.0, float(min_volume)))
+                    for try_speaker in broadcast_speakers:
+                        try:
+                            cur = await client.get(
+                                f"{HA_URL}/api/states/{quote(try_speaker, safe='')}",
                                 headers=headers,
-                                json={"entity_id": try_speaker, "volume_level": clamped},
                             )
-                            if vol_resp.status_code == 200:
-                                logger.info(
-                                    f"[VOLUME] Bumped {try_speaker}: "
-                                    f"{current_vol if current_vol is not None else 'unknown'} -> {clamped} "
-                                    f"({announcement_type})"
+                            current_vol = None
+                            if cur.status_code == 200:
+                                current_vol = (cur.json().get("attributes") or {}).get("volume_level")
+                            if current_vol is None or float(current_vol) < clamped:
+                                vol_resp = await client.post(
+                                    f"{HA_URL}/api/services/media_player/volume_set",
+                                    headers=headers,
+                                    json={"entity_id": try_speaker, "volume_level": clamped},
                                 )
-                            else:
-                                logger.warning(f"[VOLUME] volume_set returned {vol_resp.status_code} for {try_speaker}")
-                    except Exception as vol_err:  # noqa: BLE001
-                        logger.warning(f"[VOLUME] floor check failed for {try_speaker}: {vol_err}")
+                                if vol_resp.status_code == 200:
+                                    logger.info(
+                                        f"[VOLUME] Bumped {try_speaker}: "
+                                        f"{current_vol if current_vol is not None else 'unknown'} -> {clamped} "
+                                        f"({announcement_type})"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"[VOLUME] volume_set returned {vol_resp.status_code} for {try_speaker}"
+                                    )
+                        except Exception as vol_err:  # noqa: BLE001
+                            logger.warning(f"[VOLUME] floor check failed for {try_speaker}: {vol_err}")
 
-            cast_results = await asyncio.gather(*[_cast(client, s) for s in broadcast_speakers])
+                cast_results = await asyncio.gather(*[_cast(client, s) for s in broadcast_speakers])
+            except BaseException as exc:
+                # Nobody will fetch it: stop synthesizing the rest of the reply.
+                if stream is not None:
+                    stream.abort("cancelled" if isinstance(exc, asyncio.CancelledError) else "not_played")
+                raise
+            if stream is not None:
+                if any(spk for spk, _ in cast_results):
+                    stream.mark_cast()
+                else:
+                    stream.abort("not_played")
         finally:
             if own_client is not None:
                 await own_client.aclose()

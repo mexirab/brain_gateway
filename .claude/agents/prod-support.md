@@ -169,6 +169,7 @@ Loki keeps 30 days and the nightly self-audit (F-014) feeds WARNING+ lines to th
   - the user's name, user profile YAML content
   - mode-router distress tags (mental-state data — log a count)
 - Query strings on HTTP access logs (`log_config.StripQueryStringFilter` on `uvicorn.access` drops them — they carried `?search=`/`?query=` text)
+- `/api/audio/` clip/stream names (tokenless route: the name is the only secret and the clip is a spoken reply; the same filter logs `/api/audio/…`)
 
 **Log instead:** `len()`, ids (`reminder_id`, Google event id, Gmail message id, `quest_id`, task id), categories, counts, dict keys. For unparseable model output, log the parser error + `log_config.content_shape(text)` (content-free: code-fence / think-block / tool-call-block / json-like / text).
 
@@ -288,6 +289,8 @@ All metrics defined in `orchestrator/metrics.py`. Source of truth is that file �
 | `bgw_tts_announcements_total` | Counter | type, speaker, success | Announcements delivered |
 | `bgw_tts_latency_seconds` | Histogram | | Synthesis + delivery latency |
 | `bgw_tts_errors_total` | Counter | error_type | TTS failures |
+| `bgw_tts_progressive_total` | Counter | result | Voice-satellite replies streamed while synthesized (`audio_stream.py`), one per stream: `complete`; cut short although the turn was `ok`: `chunk_failed`/`format_mismatch`/`too_long`/`deadline`/`stalled`/`never_read` (alert `VoiceReplyCutShort`); `abandoned`/`superseded`/`not_played`/`cancelled`/`not_wav` |
+| `bgw_tts_progressive_underruns_total` | Counter | | Streamed reply: a chunk arrived with < 0.7 s left to play (speaker paused) |
 
 ### Vision
 | Metric | Type | Labels | Purpose |

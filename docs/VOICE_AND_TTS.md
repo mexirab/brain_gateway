@@ -12,6 +12,7 @@ An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **withou
   -> STT on Helios (STT_URL /v1/audio/transcriptions)
   -> cloud_brain.chat(messages, stream=False, is_voice=True)   one Jess voice turn, voice tool subset
   -> reminder_manager._announce_voice(...) -> VoxCPM2 (TTS_URL) -> HA play_media on VOICE_SATELLITE_SPEAKER
+       (reply > 200 chars: audio_stream.py streams it, the rest synthesized while it plays — Progressive replies)
 ```
 
 - **Connection:** outbound from the orchestrator to the device; no ports opened on Jupiter (`handle_start` returns port 0 = audio over the API connection). `expected_name` = `VOICE_SATELLITE_NAME` pins the node name so a DHCP reshuffle can't point it at another ESPHome device. The real device check is the noise key: anyone holding it (a lost device, the build box's `secrets.yaml`) can pose as the device on the LAN. Rotate it if lost.
@@ -65,8 +66,8 @@ Wake beep: `wake_word_triggered.flac`. Sounds are the Home Assistant Voice PE se
 1. **Helios check (D5):** `stt`, `model`, `tts` via `service_registry.check_service` (3 s each). All up → go. Nothing answering and the plug says off → wake (`HELIOS_WAKE_ENABLED`), `jess-waking`, wait ≤ `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` (180) → else `wake_timeout`. Helios on but a service down (boot, brain reload, crashed unit) → no wake, `jess-waking`, wait 90 s → else `service_down`. Wake off → `jess-asleep`. The plug is only read with `HELIOS_WAKE_ENABLED`, so with wake off a booting Helios also counts as asleep.
 2. **STT** (30 s). No words → `jess-no-speech`.
 3. **Brain:** `cloud_brain.chat(..., stream=False, is_voice=True)` with the short history (D7); 300 s backstop (`CHAT_TIMEOUT_S`). Counts in `bgw_voice_pipeline_seconds{path="buffered"}` like any buffered voice turn.
-4. **Speak:** `speakable()` keeps link text, drops URLs and markdown marks, caps at 1200 chars on a sentence end. One clip: `_announce_voice(spoken, speaker=VOICE_SATELLITE_SPEAKER, announcement_type="voice_reply", ignore_voice_session=True, ignore_dnd=True, style=current_reply_style(), allow_fallback=False, record_history=False)` (120 s).
-5. Only a turn whose reply played goes into the follow-up history.
+4. **Speak:** `speakable()` keeps link text, drops URLs and markdown marks, caps at 1200 chars on a sentence end. One `play_media`: `_announce_voice(spoken, speaker=VOICE_SATELLITE_SPEAKER, announcement_type="voice_reply", ignore_voice_session=True, ignore_dnd=True, style=current_reply_style(), allow_fallback=False, record_history=False, progressive=VOICE_SATELLITE_PROGRESSIVE_TTS)` (120 s). Over 200 chars it returns once the first ~8 s are playing (Progressive replies).
+5. Only a turn whose reply started playing goes into the follow-up history (a progressive reply cut short later is still remembered whole).
 
 One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per device (`rate_limited`, `jess-busy`). Device button: short press = push-to-talk (wake word label `button`); 10 s press = factory reset.
 
@@ -76,11 +77,11 @@ One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per 
 |---|----------|-------------------|
 | D1 | Reply plays on the room's Google speaker via HA `play_media`, not on the device | The ATOM Echo speaker is tiny and shares the I2S bus with the mic; the device plays only short sounds |
 | D2 | Turn = in-process `cloud_brain.chat(..., is_voice=True)`, not HTTP to `/v1/chat/completions` | Same brain call the dashboard makes. The route only spots voice from HA's IP or the STT beacon, so a direct call is exact. No API token in the bridge |
-| D3 | One TTS clip per reply | One `play_media` per answer. The first word waits for the whole reply plus its synthesis (≤ 1200 chars) |
+| D3 | One `play_media` per reply, synthesized in pieces (amended 2026-11-11; was "one TTS clip") | ≤ 200 chars: one clip, the first word waits for its whole synthesis. Longer (≤ 1200): one stream URL, playing once ~8 s of audio exists while the rest is synthesized (Progressive replies below) |
 | D4 | Answers even under sleep mode (`ignore_dnd`) | You asked out loud, so you want the answer. Announcements and reminders stay muted |
 | D5 | Helios asleep → wake it and answer late, capped | `jess-waking` says the answer is coming; capped by `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` |
 | D6 | Reply bypasses the mid-conversation guard (`ignore_voice_session`) | Each turn calls `shared.mark_voice_activity()` so reminders hold off while you talk; without the bypass the reply would hold itself off |
-| D7 | Short history: RAM, ≤ 12 messages, reset after 5 min of silence, only what was actually spoken | Follow-ups ("and tomorrow?") work; a restart loses it |
+| D7 | Short history: RAM, ≤ 12 messages, reset after 5 min of silence, only replies that started playing | Follow-ups ("and tomorrow?") work; a restart loses it. A progressive reply cut short is remembered whole |
 | D8 | **Full access** (owner decision 2026-11-10) | Below |
 | D9 | Privacy | Below |
 | D10 | `VOICE_SATELLITE_SPEAKER` required; no fallback to other rooms (`allow_fallback=False`) | Replies play under sleep mode, so they must never land in another room. Speaker unavailable in HA → `speaker_unavailable` + `jess-error` |
@@ -90,7 +91,53 @@ One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per 
 
 **D8 — full access.** Room voices get the same voice tool subset as dashboard voice (`tool_definitions.VOICE_TOOL_NAMES`, filtered by the usual feature flags), and anyone in the room can use it: a visitor, a TV, a radio, someone on speakerphone. That includes reading meds/projects/profile (`get_data`) and memories (`search_memory`), storing a "fact" (`update_memory`), reading and creating calendar events (`check_calendar`, `create_calendar_event`), setting and cancelling reminders, logging meds/meals as done (`selfcare_log`, `log_meal`), sleep mode (mutes announcements until morning), focus sessions, routines (`start_routine`), tasks, shopping list, pantry/meal plan, web search, and device control (`home_assistant`, still behind `ha_guard` and the `ha_intent` did-the-user-ask gate, which checks that the transcript asked, not who asked). The meds block and IDENTITY CONTEXT are in every system prompt anyway, and every answer is spoken aloud in the room. Safeguards: these turns never feed auto_learn (`cloud_brain.skip_auto_learn_var`); replies are not written to `announcement_history` (not in the dashboard history, not replayed into `/chat`, and ha_intent's yes-path to Jess's own question still works — it treats history rows as announcements); replies play only on the room speaker; 6 turns / 5 min. Known limit, accepted by the owner.
 
-**D9 — privacy.** Mic audio is held in RAM for one utterance and never written to disk. The spoken reply goes the announcement way: an audio file in `/tmp/brain_audio`, served to the Cast speaker by an unguessable URL (`/api/audio/<uuid8>.<ext>`, bearer-exempt) for up to an hour. Logs (`[SATELLITE]`) carry lengths, levels, outcomes, stage timings and the fixed wake-word label, never the transcript or the reply (`tests/test_no_user_content_in_logs.py`). The `aioesphomeapi` / `zeroconf` loggers are held at WARNING, and `log_config.DropPayloadArgsFilter` drops their arguments and exception text (their records can carry raw audio bytes).
+**D9 — privacy.** Mic audio is held in RAM for one utterance and never written to disk. The spoken reply is served to the Cast speaker by a bearer-exempt URL whose name is a 144-bit secret: a short reply as an audio file in `/tmp/brain_audio` (`/api/audio/<secrets.token_urlsafe(18)>.<ext>`, deleted after 1 h by the 15-min `audio_cleanup` job), a long one as an in-memory stream (`/api/audio/s-<token>.wav`, gone 300 s after it finishes). Access-log lines show `/api/audio/…` (`log_config.StripQueryStringFilter`), and `ha_guard` refuses a stream name in a chat-model `play_media`. Logs (`[SATELLITE]`) carry lengths, levels, outcomes, stage timings and the fixed wake-word label, never the transcript or the reply (`tests/test_no_user_content_in_logs.py`). The `aioesphomeapi` / `zeroconf` loggers are held at WARNING, and `log_config.DropPayloadArgsFilter` drops their arguments and exception text (their records can carry raw audio bytes).
+
+### Progressive replies
+
+`orchestrator/audio_stream.py` (module docstring authoritative), via `_announce_voice(..., progressive=True)`; only the satellite sets it (announcements and reminders keep one clip). Measured 2026-11-11 on a Nest Hub Max (Default Media Receiver).
+
+1. `audio_stream.start()` first stops synthesis of any older stream on the same speaker (`superseded`), also for a short reply, so "stop" → "Okay." doesn't wait behind it.
+2. One clip instead when the reply is ≤ 200 chars (`ONE_CLIP_MAX_CHARS`), splits into a single chunk, or the TTS backend doesn't return plain PCM WAV (`not_wav`).
+3. `split_for_tts()`: first chunk = whole sentences, 150–240 chars (≈ 8 s of speech; cut at a clause or space if no sentence break fits), later chunks ≤ 320 chars.
+4. Chunks are synthesized until ≥ 8 s of audio exists (`START_BUFFER_S`), then one `play_media` with `ORCHESTRATOR_URL/api/audio/s-<token>.wav`: an in-memory WAV whose RIFF and data sizes are 0xFFFFFFFF ("keep reading"), served by `api_routes.serve_audio` → `audio_stream.response()` (`ClosingStreamingResponse`; always 200 from byte 0, also for the speaker's `Range: bytes=0-`).
+5. A background producer appends the remaining chunks while the speaker plays. Per-chunk timeout 3 × (0.4 s + 16 ms/char), at least 10 s; whole reply within 240 s.
+
+**Why 8 s** (what the speaker does):
+
+| Tried | Result |
+|-------|--------|
+| Open-ended WAV, first piece 3 / 5 / 6 / 6.7 s | Sat in "buffering" until more arrived (6.7 s played once, once not) |
+| First piece 8 s | Plays at once |
+| 3 s as 48 kHz stereo (576 KB) | Stalled too: the receiver counts seconds of audio, not bytes |
+| Stream type LIVE | No change |
+| Chunked MP3 (with or without Xing frame, BUFFERED or LIVE) | Waits for the whole download: no gain, so WAV only. Non-WAV backends (ElevenLabs, OpenAI) keep one clip |
+| Once playing | Runs down to ~0.7 s of buffer, then pauses until more arrives (no audio lost). VoxCPM2 makes audio ~3× faster than it is spoken, so after the 8 s head start the rest stays ahead |
+
+**Measured:** a 445-char reply starts playing ~3.8 s after synthesis begins instead of ~8.5 s (VoxCPM2 ≈ 0.4 s + 16 ms/char per call), no stalls. Stopping the speaker mid-reply stops synthesis ~3 s later (`abandoned`; the chunk in flight is discarded).
+
+**Outcomes** — `bgw_tts_progressive_total{result}`, one per stream, counted once synthesis is over and it's known whether a speaker played it:
+
+| `result` | Means |
+|----------|-------|
+| `complete` | Synthesized to the end and fetched |
+| `chunk_failed` | **Cut short:** a later chunk's TTS failed or hung |
+| `format_mismatch` | **Cut short:** a later chunk came back in another audio format |
+| `too_long` | **Cut short:** hit the 24 MB stream cap |
+| `deadline` | **Cut short:** not synthesized within 240 s |
+| `stalled` | **Cut short:** no new audio for 30 s, or the speaker hung up after running dry |
+| `never_read` | **Cut short:** HA accepted `play_media` but the speaker never fetched within 15 s |
+| `abandoned` | The speaker hung up with audio left (stopped, or another cast replaced it) |
+| `superseded` | A newer reply on the same speaker (or a 9th stream pushed out the oldest) |
+| `not_played` | No speaker accepted `play_media`, or the announcement failed before it |
+| `cancelled` | The caller was cancelled (120 s announce timeout) or the orchestrator shut down |
+| `not_wav` | The TTS backend can't stream; one clip instead |
+
+Cut-short results still count as an `ok` turn; quiet alert `VoiceReplyCutShort` covers them. Underruns (a chunk arriving with < 0.7 s left to play): `bgw_tts_progressive_underruns_total`. Runbook: `monitoring/README.md` → Voice Satellite.
+
+**Stream limits:** name = `s-` + `secrets.token_urlsafe(18)` (144 bits; the route is tokenless because the speaker can't send a bearer); readable until 300 s after it finishes, even with a reader attached, then 404 (the 15-min `audio_cleanup` job also drops expired streams from RAM); ≤ 3 readers per stream (more → 429); ≤ 8 streams (the oldest is cancelled as `superseded`). `audio_stream.shutdown()` runs in `_shutdown_logic` before the shared HTTP client closes. `[TTS-STREAM]` logs carry lengths, counts and timings only.
+
+**Kill switch:** `VOICE_SATELLITE_PROGRESSIVE_TTS=false` + `docker compose up -d --force-recreate orchestrator` (whole reply synthesized first, one clip, slower start).
 
 ### Setup
 
@@ -147,12 +194,15 @@ First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API 
 - No follow-up listening: every question needs the wake word (or the button).
 - A turn that hits `CHAT_TIMEOUT_S` (300 s) may already have run tools (reminder set, light switched) before the device plays the error sound.
 - No error sound when nothing is connected (orchestrator down, bridge off): ESPHome logs `No API client connected`, so you hear the wake beep, then silence.
-- The reply audio sits in `/tmp/brain_audio`, reachable by its unguessable URL, like any announcement.
+- Reply audio is reachable without a token by its unguessable URL: a short reply's clip in `/tmp/brain_audio` for ≤ 1 h, a long reply's stream in RAM until 300 s after it ends.
+- Progressive replies are measured on a Nest Hub Max only. Another speaker model may need more (or less) than 8 s buffered before it plays: measure it first (play a stream, poll the HA `media_player` state) — before the living-room mic goes in.
+- An `ok` turn doesn't guarantee the whole reply was heard: `_announce_voice` returns once `play_media` is accepted, so a later chunk's failure only shows in `bgw_tts_progressive_total` (no error sound on the device).
+- A reply cut short is still remembered whole in the follow-up history (D7): a follow-up can refer to a part never heard.
 - Anyone in the room has full access (D8). `jess-asleep` and `jess-error` share a sound.
 
-**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; VAD cases built from the room levels measured 2026-11-11; the listen-end counter + log line; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown). Needs an orchestrator image built with `aioesphomeapi`.
+**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; VAD cases built from the room levels measured 2026-11-11; the listen-end counter + log line; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown). Needs an orchestrator image built with `aioesphomeapi`. Progressive replies: `tests/test_audio_stream.py` (chunking, WAV parsing, stream lifecycle, outcomes, limits) and `tests/test_announce_progressive.py` (`_announce_voice(..., progressive=True)`).
 
-**Monitoring:** metrics, `VoiceSatelliteDisconnected`, Grafana row: `monitoring/README.md` → Voice Satellite.
+**Monitoring:** metrics, `VoiceSatelliteDisconnected`, `VoiceReplyCutShort`, Grafana row: `monitoring/README.md` → Voice Satellite.
 
 ### HA Assist pipeline (Wyoming; the ATOM Echo no longer uses it)
 
@@ -194,6 +244,7 @@ Other `_announce_voice` flags (defaults keep the announcement behaviour; the voi
 | `style` | `None` | TTS style note instead of the announcement-type default |
 | `allow_fallback` | `True` | `False` = report failure when every target is unavailable instead of falling back to the reminder speakers (like `manual`) |
 | `record_history` | `True` | `False` = metrics only, no `announcement_history` row (`_record_announcement(..., persist=False)`) |
+| `progressive` | `False` | Text of 2+ chunks on a WAV backend: start the speaker on a stream URL after ~8 s of audio, synthesize the rest while it plays (`audio_stream.py`; Voice satellite → Progressive replies). Returns after `play_media`, so later chunk failures never reach the result |
 
 ### Speaker liveness (dead-speaker skip + fallback)
 

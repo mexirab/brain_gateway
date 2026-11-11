@@ -4,6 +4,49 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Voice satellite: progressive spoken replies (2026-11-11)
+
+Branch `feat/satellite-stream-reply`. A long satellite reply waited for its whole synthesis (VoxCPM2 ≈ 0.4 s + 16 ms/char) before the first word. Now a reply over 200 chars starts playing once ~8 s of audio exists and the rest is synthesized while the speaker plays. Measured on a Nest Hub Max: a 445-char reply starts at ~3.8 s instead of ~8.5 s, no stalls; stopping the speaker mid-reply stops synthesis ~3 s later. Decision D3 amended ("one TTS clip" → one `play_media` per reply, synthesized in pieces). Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Progressive replies.
+
+### Upgrade action
+
+- None: on by default with the merge. Kill switch `VOICE_SATELLITE_PROGRESSIVE_TTS=false` + `docker compose up -d --force-recreate orchestrator`.
+- After the deploy, run the one-time drill (`monitoring/README.md` → Voice Satellite): stop the speaker mid-reply → `finished abandoned` within ~3 s.
+- Before relying on it with another speaker model (e.g. a living-room speaker), measure how much audio it buffers before playing.
+
+### Orchestrator
+
+- New `audio_stream.py`: sentence chunking (first chunk 150–240 chars ≈ 8 s of speech, later ≤ 320), in-memory open-ended WAV (RIFF/data sizes 0xFFFFFFFF), background producer, outcome counting. Why 8 s: the Cast receiver plays an open-ended WAV only once ~7–8 s of audio is buffered (seconds, not bytes; LIVE stream type no help); chunked MP3 waits for the full download, so WAV only — non-WAV backends keep one clip.
+- `reminder_manager._announce_voice(..., progressive=False)`: new flag; `voice_satellite` passes `VOICE_SATELLITE_PROGRESSIVE_TTS`. Replies ≤ 200 chars keep the one-clip path. The call returns after `play_media`, so a later chunk's failure doesn't reach the turn result.
+- `api_routes.serve_audio` also serves `s-<24-char token>.wav` streams (`audio_stream.response()`, `ClosingStreamingResponse`; 200 from byte 0; 404 unknown/expired, 429 at 3 readers).
+- New env var `VOICE_SATELLITE_PROGRESSIVE_TTS` (default `true`).
+
+### Security
+
+- Stream names are 144-bit tokens; a stream is gone 300 s after it finishes (even with a reader attached); ≤ 3 readers, ≤ 8 streams.
+- One-clip TTS file names in `/tmp/brain_audio` are `secrets.token_urlsafe(18)` (were 8 hex chars); new `audio_cleanup` job (every 15 min) deletes clips older than 1 h and expired streams (before: only the weekly `db_maintenance`, so up to 7 days).
+- `log_config.StripQueryStringFilter` also replaces the name after `/api/audio/` with `…` in uvicorn access lines.
+- `ha_guard._allowed_media_url` refuses stream names: the chat model can't replay a live reply elsewhere.
+- `audio_stream.shutdown()` runs in `_shutdown_logic` before the shared HTTP client closes.
+
+### Monitoring
+
+- New counters `bgw_tts_progressive_total{result}` (`complete`; cut short: `chunk_failed`, `format_mismatch`, `too_long`, `deadline`, `stalled`, `never_read`; `abandoned`, `superseded`, `not_played`, `cancelled`, `not_wav`), counted once per stream after the cast outcome is known, and `bgw_tts_progressive_underruns_total`.
+- New quiet alert `VoiceReplyCutShort` (`pushover-quiet`, inhibited by `TTSDown`).
+- Grafana "Voice Satellite" row: new "Reply Audio Outcomes (24h)" and "Reply Stream Underruns (24h)". "Listening End → Reply Playing" now ends when the first ~8 s are ready for long replies (a step drop after the deploy is the streaming, not a faster TTS).
+- Logs `[TTS-STREAM] started: …` / `[TTS-STREAM] finished <result>: …` (WARNING for cut-short results).
+- Known limit: an `ok` satellite turn no longer guarantees the whole reply was heard; a reply cut short is still remembered whole in the follow-up history.
+
+### Tests
+
+- New `orchestrator/tests/test_audio_stream.py` (111) and `test_announce_progressive.py` (11); additions to `test_ha_guard.py`, `test_no_user_content_in_logs.py`, `test_auth_public_paths.py`, `test_voice_satellite.py`. Full suite: 7495 passed.
+
+### Docs
+
+- `docs/VOICE_AND_TTS.md` (D3, D9, A turn, Progressive replies, Known limits, `_announce_voice` flags), `docs/ENV_VARS.md`, `monitoring/README.md`, `TECHNICAL_REFERENCE.md`, `COMMANDS.md`, `docs/JESS_QUICK_START.md`, `CLAUDE.md`, `.claude/agents/prod-support.md`.
+
+---
+
 ## [Unreleased] — Voice satellite: VAD rebuilt for the real room + firmware lock-up fix (2026-11-11)
 
 Branch `fix/satellite-vad`, follow-up to PR #169 after the first live tests. Every question ran to the 15 s max-utterance cap (answers ~15 s late) or was missed as no-speech, while Grafana looked healthy (a capped run still counts as an `ok` turn). Measured on the device (per 50 ms frame, RMS 0..1): the room in silence 0.025–0.09 (median 0.042), a spoken question 0.19–0.24. The original VAD, a port of the dashboard's browser-mic VAD, capped its learned noise floor at 0.015, so its end-of-speech bar (0.027) sat below the room itself. Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Listening (VAD), D13, Firmware rules.

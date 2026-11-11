@@ -145,6 +145,11 @@ class TestCheckHaCall:
             "https://stream.example/lofi.mp3",
             "http://10.0.0.248:8888/api/audio/abc123.wav",
             "http://10.0.0.248:8888/api/audio/3f9a1c2e.mp3",
+            # secrets.token_urlsafe(18) one-clip names (reminder_manager)
+            "http://10.0.0.248:8888/api/audio/Ab3_-x9Kq2LmN0pQr7StUv8w.wav",
+            # a one-clip token can start with "s-": still 24 chars, not s-+24
+            "http://10.0.0.248:8888/api/audio/s-3_-x9Kq2LmN0pQr7StUv8w.wav",
+            "http://10.0.0.248:8888/api/audio/s-short.wav",
         ],
     )
     def test_play_media_allowed(self, media_id):
@@ -176,6 +181,9 @@ class TestCheckHaCall:
             "http://10.0.0.248:8888/api/audio/.",
             "http://10.0.0.248:8888/api/audiox/a.wav",
             "http://10.0.0.248:8888.evil.example/api/audio/a.wav",
+            # a live voice-satellite reply stream (audio_stream.py) is never replayable
+            "http://10.0.0.248:8888/api/audio/s-Ab3_-x9Kq2LmN0pQr7StUv8w.wav",
+            "http://10.0.0.248:8888/api/audio/s-------------------------.wav",
             "file:///etc/passwd",
             "media-source://tts/cloud?message=hi",
             "media-source://camera/camera.front",

@@ -22,7 +22,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from orchestrator import calendar_sources, reminder_actions, shared
+from orchestrator import audio_stream, calendar_sources, reminder_actions, shared
 from orchestrator.bearer_auth import bearer_token_matches
 from orchestrator.focus_manager import tool_start_focus, tool_stop_focus
 from orchestrator.ha_guard import HA_LISTED_DOMAINS, check_ha_call, ha_entity_allowed
@@ -768,11 +768,21 @@ async def stop_focus_api():
 
 @router.get("/api/audio/{filename}")
 async def serve_audio(filename: str):
-    """Serve audio files from /tmp/brain_audio/."""
+    """Serve audio files from /tmp/brain_audio/, or a progressive reply stream
+    (s-<token>.wav, audio_stream.py) that may still be growing."""
     # Sanitize filename to prevent path traversal
     safe_name = os.path.basename(filename)
     if safe_name != filename or ".." in filename:
         return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    if audio_stream.is_stream_name(safe_name):
+        stream = audio_stream.lookup(safe_name)
+        if stream is None:
+            return JSONResponse({"error": "Audio file not found"}, status_code=404)
+        if stream.readers >= audio_stream.MAX_READERS:  # fast path; iter_bytes enforces it too
+            return JSONResponse({"error": "Too many readers"}, status_code=429)
+        # 200 from byte 0 even for a Range request: an open-ended stream has
+        # no valid 206 for a later offset (the speaker asks for bytes=0-).
+        return audio_stream.response(stream)
     filepath = f"/tmp/brain_audio/{safe_name}"
     if os.path.exists(filepath):
         media_types = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg"}

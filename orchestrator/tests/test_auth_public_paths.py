@@ -32,7 +32,10 @@ REMINDER_IDS = [
     "mp-0123456789",  # meal_planner.REMINDER_ID_PREFIX
     "pc-abcdef0123",  # pantry_consumption.FRIDGE_CHECK_PREFIX
 ]
-AUDIO_NAMES = [f"3f9a1c2e.{ext}" for ext in ("wav", "mp3", "ogg")]  # reminder_manager: <uuid8>.<ext>
+AUDIO_NAMES = [f"3f9a1c2e.{ext}" for ext in ("wav", "mp3", "ogg")] + [  # older clips: <uuid8>.<ext>
+    "Ab3_-x9Kq2LmN0pQr7StUv8w.wav",  # reminder_manager one clip: secrets.token_urlsafe(18).<ext>
+    "s-Ab3_-x9Kq2LmN0pQr7StUv8w.wav",  # audio_stream.AudioStream.filename (progressive reply)
+]
 
 LEGIT_PUBLIC = (
     ["/health"]

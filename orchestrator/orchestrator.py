@@ -597,6 +597,12 @@ async def _shutdown_logic():
         shared.voice_satellite_task = None
         logger.info("[orchestrator] Stopped voice satellite task")
 
+    # Stop progressive reply synthesis before the shared HTTP client closes
+    # (a producer would otherwise fail on it and log a false chunk_failed).
+    from orchestrator import audio_stream
+
+    audio_stream.shutdown()
+
     if _http:
         await _http.aclose()
         _http = None
@@ -1244,6 +1250,26 @@ async def _startup_logic():
         minute=0,
         id="db_maintenance",
         name="Weekly DB maintenance",
+        replace_existing=True,
+    )
+
+    # Spoken clips in /tmp/brain_audio are fetchable without a token by name;
+    # the speaker fetches them at once, so they go after an hour (the weekly
+    # maintenance alone left them up to 7 days).
+    async def _audio_cleanup():
+        import asyncio
+
+        from orchestrator import audio_stream
+
+        audio_stream.prune_expired()  # reply streams in RAM, same idea
+        await asyncio.to_thread(_cleanup_audio_files)
+
+    scheduler.add_job(
+        _audio_cleanup,
+        trigger="interval",
+        minutes=15,
+        id="audio_cleanup",
+        name="Remove spoken clips older than 1 h",
         replace_existing=True,
     )
 

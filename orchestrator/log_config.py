@@ -97,17 +97,27 @@ def content_shape(text: Any) -> str:
 _QUERY_START_RE = re.compile(r"\?|%(?:25)*3f", re.IGNORECASE)
 
 
+# Tokenless audio URLs (/api/audio/<name>): the name is the only secret, and
+# the clip is a spoken reply. Logged, it would be fetchable from Loki.
+_AUDIO_NAME_RE = re.compile(r"(/api/audio/)[^/?#\s]+")
+
+
 class StripQueryStringFilter(logging.Filter):
-    """Uvicorn access lines: drop the query string. Search endpoints carry the
-    user's search text there (?search=, ?query=), and access lines go to Loki."""
+    """Uvicorn access lines: drop the query string (search endpoints carry the
+    user's search text there: ?search=, ?query=) and the name of a spoken
+    clip/stream under /api/audio/. Access lines go to Loki."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
         # uvicorn.access args: (client_addr, method, full_path, http_version, status_code)
         if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
-            start = _QUERY_START_RE.search(args[2])
+            path = args[2]
+            start = _QUERY_START_RE.search(path)
             if start:
-                record.args = args[:2] + (args[2][: start.start()] + "?…",) + args[3:]
+                path = path[: start.start()] + "?…"
+            path = _AUDIO_NAME_RE.sub(r"\1…", path)
+            if path != args[2]:
+                record.args = args[:2] + (path,) + args[3:]
         return True
 
 

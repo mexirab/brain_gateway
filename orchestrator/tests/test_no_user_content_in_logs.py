@@ -285,7 +285,7 @@ def test_access_log_strips_query_from_uvicorns_own_rendering(target):
     assert "/api/documents?…" in rec.getMessage()
 
 
-@pytest.mark.parametrize("full_path", ["/api/documents", "/api/audio/3f9a1c2e.wav", "/api/docs%2F3"])
+@pytest.mark.parametrize("full_path", ["/api/documents", "/api/docs%2F3", "/api/audio", "/api/audiox/3f9a1c2e.wav"])
 def test_access_log_path_without_query_untouched(full_path):
     import logging
 
@@ -295,6 +295,36 @@ def test_access_log_path_without_query_untouched(full_path):
     rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d', args, None)
     assert StripQueryStringFilter().filter(rec) is True
     assert rec.args == args
+
+
+_AUDIO_TOKEN = "Ab3_-x9Kq2LmN0pQr7StUv8w"  # secrets.token_urlsafe(18) shape
+
+
+@pytest.mark.parametrize(
+    "full_path, logged",
+    [
+        pytest.param(f"/api/audio/s-{_AUDIO_TOKEN}.wav", "/api/audio/…", id="stream"),
+        pytest.param(f"/api/audio/{_AUDIO_TOKEN}.wav", "/api/audio/…", id="clip"),
+        pytest.param("/api/audio/3f9a1c2e.mp3", "/api/audio/…", id="old-clip"),
+        pytest.param(f"/api/audio/{_AUDIO_TOKEN}.wav?x=private", "/api/audio/…?…", id="with-query"),
+        pytest.param(f"/api/audio/{_AUDIO_TOKEN}.wav%3Fx=private", "/api/audio/…?…", id="encoded-query"),
+        pytest.param(f"/api/audio/{_AUDIO_TOKEN}%2Fx", "/api/audio/…", id="encoded-slash"),
+    ],
+)
+def test_access_log_audio_name_redacted(full_path, logged):
+    """/api/audio/ is tokenless: the clip/stream name is the only secret, so
+    it never reaches an access line (Loki)."""
+    import logging
+
+    from orchestrator.log_config import StripQueryStringFilter
+
+    args = ("10.0.0.1:5000", "GET", full_path, "1.1", 200)
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d', args, None)
+    assert StripQueryStringFilter().filter(rec) is True
+    msg = rec.getMessage()
+    assert _AUDIO_TOKEN not in msg and "3f9a1c2e" not in msg and "private" not in msg
+    assert f'"GET {logged} HTTP/1.1" 200' in msg
+    assert rec.args[0] == args[0] and rec.args[3:] == args[3:]
 
 
 def test_configure_logging_attaches_access_filter_once():

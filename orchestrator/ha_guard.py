@@ -240,7 +240,14 @@ def _allowed_media_url(media_id: str) -> bool:
     prefix = f"{base}/api/audio/"
     # One clip filename, the same rule the tokenless /api/audio/ route gets:
     # "%2e%2e%2f..." or a second segment would make HA fetch another path.
-    return bool(base) and media_id.startswith(prefix) and is_public_segment(media_id[len(prefix) :])
+    if not (bool(base) and media_id.startswith(prefix) and is_public_segment(media_id[len(prefix) :])):
+        return False
+    # Never a live voice-satellite reply stream (audio_stream.py): the model has
+    # no reason to replay one, and a leaked name must not become "play my
+    # private answer in another room".
+    from orchestrator.audio_stream import is_stream_name
+
+    return not is_stream_name(media_id[len(prefix) :])
 
 
 def _check_media_data(service: str, data: Dict[str, Any]) -> Optional[str]:

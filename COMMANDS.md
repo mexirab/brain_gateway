@@ -290,6 +290,10 @@ curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result,wake_
 curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (reason)(increase(bgw_satellite_listen_end_total[24h]))' | jq '.data.result'
 docker logs brain-orchestrator 2>&1 | grep "listening ended" | tail -10
 
+# Long replies (progressive TTS): outcomes (cut short = chunk_failed/stalled/never_read/...) + start/finish lines
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result)(increase(bgw_tts_progressive_total[24h]))' | jq '.data.result'
+docker logs brain-orchestrator 2>&1 | grep TTS-STREAM | tail -10
+
 # New device API key (firmware api_encryption_key = VOICE_SATELLITE_API_KEY)
 python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
 

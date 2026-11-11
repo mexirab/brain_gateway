@@ -1604,6 +1604,7 @@ async def test_speak_kwargs(sat, announce):
         style="calm and warm",
         allow_fallback=False,
         record_history=False,
+        progressive=True,
     )
 
 

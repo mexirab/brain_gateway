@@ -487,8 +487,9 @@ Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_laten
 | `VOICE_SATELLITE_NAME` | `atom-echo-jess` | ESPHome node name the device runs (`[a-z0-9][a-z0-9_-]{0,39}`). The connection refuses any other device (`wrong_device`). Also the `device` metric label. |
 | `VOICE_SATELLITE_SPEAKER` | (empty, **required**) | `media_player.*` in the device's room that plays the reply (e.g. `media_player.office_speaker`). No fallback to other rooms: replies play even under sleep mode. |
 | `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` | `180` | Helios asleep: how long a turn waits after waking it (clamped 0–600). Waking needs `HELIOS_WAKE_ENABLED`; with it off the device plays the "asleep" sound. Helios on but a service down: fixed 90 s wait, no wake. |
+| `VOICE_SATELLITE_PROGRESSIVE_TTS` | `true` | Replies over 200 chars start playing once ~8 s of audio is synthesized; the rest streams in while the speaker plays (`docs/VOICE_AND_TTS.md` → Voice satellite → Progressive replies). `false` = synthesize the whole reply first (one clip, slower start) — the fallback if `VoiceReplyCutShort` keeps firing or a speaker model won't play the stream. |
 
-Metrics + `VoiceSatelliteDisconnected`: `monitoring/README.md` → Voice Satellite.
+Metrics + `VoiceSatelliteDisconnected` / `VoiceReplyCutShort`: `monitoring/README.md` → Voice Satellite.
 
 ## Self-audit (F-014)
 
