@@ -212,15 +212,15 @@ HA returns 200 for `play_media` on an `unavailable` Cast entity, so a dead speak
 
 ## VoxCPM2 TTS server (port 8004)
 
-The live voice, replacing Qwen3-TTS (:8002). It ran on Helios GPU1 from 2026-10-15 and moves to **Saturn's RTX 5080** (see VoxCPM2 on Saturn below) so the brain can use GPU1 for its 262144 context. Jupiter `.env` then has `TTS_URL=http://10.0.0.58:8004`. The Helios unit stays installed but disabled, as rollback. `qwen-tts` on :8002 is an older rollback, disabled since 2026-10-24. Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
+The live voice, replacing Qwen3-TTS (:8002). It ran on Helios GPU1 from 2026-10-15 and moves to **Saturn's RTX 3080**, with the RTX 3090 as the fallback (see VoxCPM2 on Saturn below) so the brain can use GPU1 for its 262144 context. Jupiter `.env` then has `TTS_URL=http://10.0.0.58:8004`. The Helios unit stays installed but disabled, as rollback. `qwen-tts` on :8002 is an older rollback, disabled since 2026-10-24. Chosen over a Qwen3-TTS clone and IndexTTS-2.5 by listening A/B; also Apache-2.0 vs IndexTTS's bilibili license.
 
 | Property | Value |
 |----------|-------|
 | Unit / source | `voxcpm-tts.service` / `tts/voxcpm_server.py`. Repo copies: `tts/voxcpm-tts-saturn.service` (Saturn, live), `tts/voxcpm-tts.service` (Helios, rollback), `tts/voxcpm_server.py` |
 | Model | `openbmb/VoxCPM2` (Apache-2.0, 2B), weights copied to `/home/labadmin/models/VoxCPM2`, loaded offline; HF revision + sha256s in the unit header |
-| GPU / VRAM | Saturn RTX 5080 16 GB, picked by UUID in `/etc/voxcpm-tts.env`. ~7.4 GiB fresh; the PyTorch cache grows to ~9.7 GiB after long texts (measured on Helios). On Helios it shared GPU1 with part of the brain, which then decoded at ~30–85 instead of ~135–180 tok/s while it synthesized |
+| GPU / VRAM | Saturn RTX 3080 10 GB (fallback: the RTX 3090 24 GB), picked by UUID in `/etc/voxcpm-tts.env`. ~7.4 GiB fresh; the PyTorch cache grows to ~9.7 GiB after long texts (measured on Helios), which is tight on the 3080: the long-text test below decides. On Helios it shared GPU1 with part of the brain, which then decoded at ~30–85 instead of ~135–180 tok/s while it synthesized |
 | Speed | ~0.4–1.3 s per sentence on the Helios RTX PRO 5000 (Saturn: compare with the check below); output 24 kHz WAV (`VOXCPM_OUTPUT_SR`, same rate as Qwen) |
-| Startup | first-ever start ~50 s (torch.compile); warm ~27 s — compile cache in `/var/cache/voxcpm`, persists across boots |
+| Startup | first-ever start ~50 s on Helios, a few minutes on a new box (torch.compile); warm ~15–30 s — compile cache in `/var/cache/voxcpm`, persists across boots |
 | API | Same as `tts/server.py`: `/health`, `/voices`, `/tts` (honors `emotion`), `/v1/audio/speech` (honors OpenAI `instructions`) |
 | Voices | Same `voices.json` as the Qwen server (`VOXCPM_VOICES_DIR`); only `ref_audio` is used — reference-only cloning keeps the timbre, not the clip's mood, so the style note can steer |
 | Logs | `journalctl -u voxcpm-tts` on Saturn (text never logged, lengths only). **Not in Loki or the self-audit:** Saturn runs no promtail. On Helios this unit's journal was shipped by promtail-helios. Follow-up: promtail on Saturn |
@@ -250,7 +250,7 @@ ssh labadmin@10.0.0.58 'journalctl -u voxcpm-tts -f'
 
 **Monitoring:** blackbox probe `service="tts-voxcpm"` on `${NODE_SATURN_IP}:8004/health` feeds `TTSDown` (quiet Pushover; counts while Saturn's node-exporter is up; a Saturn outage pages as `NodeDown`; `monitoring/README.md` → Routing coverage). The Qwen3-TTS :8002 probe (`service="tts"`) was removed 2026-10-24 when `qwen-tts` was disabled — restore it in `monitoring/prometheus/prometheus.yml.template` if it is re-enabled. No server-side `/metrics` yet.
 
-### VoxCPM2 on Saturn (RTX 5080): move + cutover runbook
+### VoxCPM2 on Saturn (RTX 3080, 3090 fallback): move + cutover runbook
 
 **Why:** at the brain's native 262144 context, the brain needs ~42.9–43.7 GiB of Helios GPU1. VoxCPM2 (7.4 GiB fresh, up to ~9.7 GiB) no longer fits beside it (measurements: header of `tts/llama-server-primary.service`). Moving the voice also stops speech from slowing the brain's decode.
 
@@ -261,7 +261,7 @@ ssh labadmin@10.0.0.58 'journalctl -u voxcpm-tts -f'
 - **Alerts, all quiet:**
   - `TTSDown`: the server doesn't answer `/health`.
   - `TTSSynthesisFailing`: it answers, but synthesis keeps failing.
-  - `TTSGPUMemoryLow`: the 5080 is nearly full.
+  - `TTSGPUMemoryLow`: the 3080 has under 1 GiB free.
   - `SaturnGpuDriverBroken`.
 - `VOXCPM_HOST=10.0.0.58` needs Saturn's DHCP reservation on the router; confirm it exists.
 
@@ -270,7 +270,7 @@ ssh labadmin@10.0.0.58 'journalctl -u voxcpm-tts -f'
 - Never "fix" this by adding Helios or the LAN to the allow-list: that turns the bridge into an open relay for the cloned voice.
 - Don't run the bridge on Jupiter either. `docker compose up -d` without service names would start it there, publishing :10301 to the LAN, and Saturn would admit its traffic.
 
-**1. Card + install (the owner, on Saturn):** swap the RTX 5080 in for the RTX 3080, then follow steps 0–7 in the header of `tts/voxcpm-tts-saturn.service`. Until the PR is merged, the two new files exist only on its branch, so step 2 takes them from there. Everything is copied from the working Helios install and checked by sha256. Packages are pinned in `tts/requirements-voxcpm.txt`.
+**1. Install (the owner, on Saturn):** no hardware change; the voice goes on the RTX 3080 already in Saturn (owner decision 2026-11-11). Follow steps 0–7 in the header of `tts/voxcpm-tts-saturn.service`. Until the PR is merged, the two new files exist only on its branch, so step 2 takes them from there. Everything is copied from the working Helios install and checked by sha256. Packages are pinned in `tts/requirements-voxcpm.txt`.
 
 **2. Compare with Helios before cutting over** (both servers live, run on Jupiter). Generic sentences only:
 ```bash
@@ -282,15 +282,23 @@ for h in 10.0.0.195 10.0.0.58; do
       -d "{\"text\":\"$s\",\"voice\":\"jessica\"}" http://$h:8004/tts
   done
 done
-# Long text (peak VRAM): ~2000 chars, then check memory on Saturn
-LONG=$(python3 -c 'print("This is a long test sentence for the voice server. " * 38)')
-curl -s -o /dev/null -w "long %{time_total}s\n" -H 'Content-Type: application/json' \
-  -d "{\"text\":\"$LONG\",\"voice\":\"jessica\"}" http://10.0.0.58:8004/tts
-ssh labadmin@10.0.0.58 'nvidia-smi --query-compute-apps=process_name,used_memory --format=csv'
+# Memory: texts of several lengths up to the server's 2000-char maximum, with and without a style
+# note (the peak grows with text length: the VAE decodes the whole clip at once), then check memory on Saturn
+S="This is a long test sentence for the voice server. "
+for n in 6 16 27 38 38; do
+  for e in "" "calm, gentle and reassuring"; do
+    T=$(python3 -c "print('$S' * $n)")
+    curl -s -o /dev/null -w "$((n*51)) chars, style='$e': HTTP %{http_code} %{time_total}s\n" \
+      -H 'Content-Type: application/json' \
+      -d "{\"text\":\"$T\",\"voice\":\"jessica\",\"emotion\":\"$e\"}" http://10.0.0.58:8004/tts
+  done
+done
+ssh -t labadmin@10.0.0.58 'nvidia-smi --query-gpu=name,memory.used,memory.free --format=csv; sudo journalctl -u voxcpm-tts --since -15min | grep -ci "out of memory"'
+# Every run must print HTTP 200 (an out-of-memory synthesis is a 500), and the count must be 0
 ```
 Pass:
-- Saturn is no slower per sentence than Helios;
-- peak VRAM stays well under the 5080's 16 GB;
+- **Speed:** each short sentence on Saturn takes at most ~1.5x its Helios time, and none over ~2 s. The 3080 has ~60 % of the RTX PRO 5000's memory bandwidth, so expect it to be somewhat slower; on Helios the voice also shared its GPU with the brain. Too slow: try the 3090 (~25 % more bandwidth than the 3080, the same `/etc/voxcpm-tts.env` switch as below), or accept it, or wait for a 5080;
+- **Memory:** after the runs above, the 3080 still has at least 1 GiB free, and the journal shows no CUDA out-of-memory error. Otherwise use the 3090 (below). An empty 3080 shows 9.64 GiB free, and on Helios the voice grew 7.3 → 9.3 GiB in one week of ordinary texts (PyTorch keeps used memory cached), so expect the fallback: check free memory again a week after cutover;
 - the owner listens to a styled reply and it sounds the same: `curl ... -d '{"text":"...","voice":"jessica","emotion":"calm, gentle and reassuring"}'`.
 
 **3. Cutover** (~5 min; chat and voice are offline for ~1 min while the brain restarts):
@@ -325,7 +333,9 @@ Pass:
 
 **Rollback** (~3 min): header of `tts/llama-server-primary.service`. In order: Helios 64K unit + `voxcpm-tts` back on, then Jupiter `TTS_URL` back, then point the probe back at Helios. `TTSDown` follows the probe's `node` label, so it needs no change.
 
-**Saturn experiments must stay off the 5080.** llama.cpp's auto-fit and most tools use every GPU they can see. Pin experiments to the 3090 with `export CUDA_VISIBLE_DEVICES=GPU-<3090 uuid>` (or put that in `~/.bashrc` on Saturn). Otherwise an experiment fills the voice card: synthesis fails while `/health` stays green, and only `TTSGPUMemoryLow` (quiet) says so.
+**Fallback to the 3090** (if the 3080 fails the long-text test, or a long reply later fails with CUDA out of memory): on Saturn put the 3090's UUID in `/etc/voxcpm-tts.env` and run `sudo systemctl restart voxcpm-tts`. Change the experiment pin in `~/.bashrc` to the 3080's UUID. Then, in a PR, edit `TTSGPUMemoryLow` (`monitoring/prometheus/alert-rules.yml`): card name 3080 → 3090 in the expr and summary, threshold 1 → 1.5 GiB. Until that merges the alert watches the wrong card. Nothing else changes. A 16 GB RTX 5080 may replace the 3080 later: it is picked the same way, and the alert changes the same way (name 5080, 1.5 GiB; a name that matches no card silently never fires).
+
+**Saturn experiments must be pinned to the other card** (the 3090, while the voice is on the 3080). llama.cpp's auto-fit and most tools use every GPU they can see. Put `export CUDA_VISIBLE_DEVICES=GPU-<other card's uuid>` in `~/.bashrc` on Saturn. That doesn't reach Docker containers or systemd units: give those `--gpus device=GPU-<uuid>` or their own `CUDA_VISIBLE_DEVICES`. An unpinned experiment fills the voice card: synthesis fails while `/health` stays green. `TTSSynthesisFailing` (quiet) needs 5 failures in 30 min, and `TTSGPUMemoryLow` may miss it on the 3080, because llama.cpp auto-fit leaves ~1 GiB free, right at its threshold.
 
 ## Voice style
 

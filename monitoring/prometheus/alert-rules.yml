@@ -264,7 +264,7 @@ groups:
           severity: warning
         annotations:
           summary: "TTS service {{ $labels.service }} ({{ $labels.node }}) is down"
-          description: "{{ $labels.service }} has not responded for 5 minutes. tts-voxcpm = VoxCPM2 :8004 on Saturn's RTX 5080, the live voice: diagnose with journalctl -u voxcpm-tts on Saturn, and run nvidia-smi there (a kernel bump can drop the NVIDIA module). tts = the Qwen3-TTS :8002 rollback on Helios, disabled since 2026-10-24 and not probed."
+          description: "{{ $labels.service }} has not responded for 5 minutes. tts-voxcpm = VoxCPM2 :8004 on Saturn (RTX 3080; the 3090 is the fallback), the live voice: diagnose with journalctl -u voxcpm-tts on Saturn, and run nvidia-smi there (a kernel bump can drop the NVIDIA module). tts = the Qwen3-TTS :8002 rollback on Helios, disabled since 2026-10-24 and not probed."
 
       - alert: STTDown
         expr: probe_success{service="stt"} == 0 and on() up{job="node-exporter", node="helios"} == 1
@@ -384,7 +384,7 @@ groups:
       # Under 1 GiB free the next TTS or vision allocation can fail; 0 minutes
       # in the 30 days before 2026-10-27. Helios only: Saturn is a learning box
       # whose experiments fill VRAM on purpose (llama.cpp auto-fit leaves ~1 GiB).
-      # Its one production card, the TTS's RTX 5080, has TTSGPUMemoryLow.
+      # Its one production card, the TTS's RTX 3080, has TTSGPUMemoryLow.
       - alert: HighVRAMUsage
         expr: nvidia_smi_memory_total_bytes{node="helios"} - nvidia_smi_memory_used_bytes{node="helios"} < 2^30
         for: 5m
@@ -394,20 +394,26 @@ groups:
           summary: "Under 1 GiB VRAM free on a Helios GPU ({{ $value | humanize1024 }}B left)"
           description: "Helios GPU {{ $labels.uuid }} has {{ $value | humanize1024 }}B of VRAM free. Both GPUs carry only the brain (the TTS runs on Saturn), so a vision call or a very long prompt can fail to allocate and abort llama-server. Run `nvidia-smi` on Helios. If anything other than llama-server is on a GPU, stop it: NEVER start voxcpm-tts on Helios while the 262K brain unit is installed. If it is the brain itself, `sudo systemctl restart llama-server-primary` returns its pool memory."
 
-      # Jess's voice card: Saturn's RTX 5080 runs only VoxCPM2 (~7.4 GiB fresh, its
-      # PyTorch cache grows to ~9.7 GiB on long texts). Saturn is also the owner's
-      # experiment box, and llama.cpp auto-fit fills every GPU it can see. An
-      # experiment not pinned to the 3090 starves the TTS: synthesis then 500s while
-      # /health stays 200, so TTSDown stays green. Picked by card name, so a swap
-      # doesn't need a uuid here.
+      # Jess's voice card: Saturn's RTX 3080 runs only VoxCPM2. nvidia-smi shows 9.64 GiB
+      # free on the empty card; VoxCPM2 is ~7.4 GiB fresh and grew 7.3 -> 9.3 GiB in one
+      # week on Helios (PyTorch keeps used memory cached). The install's memory test
+      # must leave >= 1 GiB free, so this fires once the voice grows past that margin (move
+      # it to the 3090) or something else sits on the card. nvidia_smi_memory_free_bytes,
+      # not total - used: that counts ~364 MiB of driver reserve as free, and the install
+      # check reads nvidia-smi's free. Known gap: an unpinned llama.cpp experiment
+      # (auto-fit leaves ~1 GiB) can sit right at the threshold; TTSSynthesisFailing is
+      # the other signal. Picked by card name, not uuid. If the voice moves to the 3090
+      # (the fallback, header of tts/voxcpm-tts-saturn.service), change the name in the
+      # expr to 3090 and the threshold to 1.5 * 2^30; the text below is card-neutral
+      # except the summary's card name.
       - alert: TTSGPUMemoryLow
-        expr: (nvidia_smi_memory_total_bytes{node="saturn"} - nvidia_smi_memory_used_bytes{node="saturn"} < 1.5 * 2^30) and on(uuid) nvidia_smi_gpu_info{node="saturn", name=~".*5080.*"}
+        expr: nvidia_smi_memory_free_bytes{node="saturn"} < 1 * 2^30 and on(uuid) nvidia_smi_gpu_info{node="saturn", name=~".*3080.*"}
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Jess's voice GPU (Saturn RTX 5080) has under 1.5 GiB free ({{ $value | humanize1024 }}B left)"
-          description: "Saturn's RTX 5080 runs only the TTS (voxcpm-tts, ~7.4–9.7 GiB), but it has {{ $value | humanize1024 }}B free, so long replies can fail to synthesize. Usually an experiment that wasn't pinned to the 3090: run `nvidia-smi` on Saturn and stop it, or rerun it with CUDA_VISIBLE_DEVICES set to the 3090's UUID."
+          summary: "Jess's voice GPU (Saturn RTX 3080) is nearly full ({{ $value | humanize1024 }}B free)"
+          description: "Saturn's voice card should hold only the TTS (voxcpm-tts), but it has {{ $value | humanize1024 }}B free, so long replies can fail to synthesize. Run `nvidia-smi` on Saturn. Another process on the card: an experiment that wasn't pinned to the other card, so stop it or rerun it with CUDA_VISIBLE_DEVICES (or Docker `--gpus device=`) set to the other card's UUID. Only voxcpm-tts: its PyTorch cache has filled the card. Short replies still work (PyTorch frees the cache and retries), but a long one may not fit: move the voice to the 3090 (header of tts/voxcpm-tts-saturn.service)."
 
       # The TTS server answers /health (model + voices loaded) but synthesis keeps
       # failing: a CUDA out-of-memory error, a broken CUDA context, a full card. TTSDown
@@ -422,16 +428,16 @@ groups:
             (sum(increase(bgw_dashboard_tts_total{result=~"upstream_error|timeout"}[30m])) or vector(0))
             + (sum(increase(bgw_tts_errors_total{error_type="tts_error"}[30m])) or vector(0))
           ) >= 5
-          and on() probe_success{service="tts-voxcpm"} == 1
+          and on() min_over_time(probe_success{service="tts-voxcpm"}[30m]) == 1
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Jess's voice server is up but synthesis keeps failing ({{ $value }} failures in 30 min)"
-          description: "The TTS answers /health, but dashboard sentences or announcements keep failing to synthesize. Check `journalctl -u voxcpm-tts` and `nvidia-smi` on the TTS box (Saturn): usually a CUDA out-of-memory error, often from an experiment on the 5080 (see TTSGPUMemoryLow). `sudo systemctl restart voxcpm-tts` there clears a broken CUDA context."
+          description: "The TTS answers /health, but dashboard sentences or announcements keep failing to synthesize. Check `journalctl -u voxcpm-tts` and `nvidia-smi` on the TTS box (Saturn): usually a CUDA out-of-memory error, often from an experiment on the voice card or a long text that no longer fits it (see TTSGPUMemoryLow). `sudo systemctl restart voxcpm-tts` there clears a broken CUDA context."
 
       # Saturn's NVIDIA driver broke on a kernel bump once (2026-11-07: no module for
-      # the new kernel). With the TTS on its RTX 5080 that silences Jess: VoxCPM2
+      # the new kernel). With the TTS on Saturn that silences Jess: VoxCPM2
       # refuses to run on CPU. No series while Saturn is down (NodeDown covers that).
       - alert: SaturnGpuDriverBroken
         expr: nvidia_smi_command_exit_code{job="gpu-exporter", node="saturn"} != 0

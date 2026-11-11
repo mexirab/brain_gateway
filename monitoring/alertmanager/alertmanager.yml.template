@@ -125,7 +125,7 @@ route:
     #     stops Prometheus + Loki writing, but it fills over days, not minutes.
     #   HighVRAMUsage — under 1 GiB free on a Helios GPU (the brain can fail a
     #     vision call or a long prompt); pool memory isn't given back until a restart.
-    #   TTSGPUMemoryLow — under 1.5 GiB free on Saturn's RTX 5080, the voice card
+    #   TTSGPUMemoryLow — under 1 GiB free on Saturn's RTX 3080, the voice card
     #     (an unpinned experiment on it starves the TTS).
     - matchers:
         - alertname=~"DiskSpaceLow|HighVRAMUsage|TTSGPUMemoryLow"
