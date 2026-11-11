@@ -368,7 +368,7 @@ async def tts_synthesize(request: Request) -> Response:
         logger.warning("[TTS] synthesize timed out: %s", type(e).__name__)
         return _tts_error("timeout", "TTS timed out", 504)
     except httpx.RequestError as e:
-        # Connect refused / unreachable: Helios is power-tiered and usually asleep.
+        # Connect refused / unreachable: the TTS box (Saturn) is down or its server stopped.
         logger.warning("[TTS] synthesize unreachable: %s", type(e).__name__)
         return _tts_error("unreachable", "TTS unavailable", 503)
     except Exception:

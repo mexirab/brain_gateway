@@ -192,13 +192,13 @@ Orchestrator (`.env` on Jupiter):
 | `TTS_STYLE_ENABLED` | `true` | Send a style note (`voice_style.py` preset phrase) with each synthesis. Honored by VoxCPM2; Qwen3-TTS ignores it, so `true` is harmless there. `false` = no notes anywhere. |
 | `VOICE_STYLE_PATH` | `/app/data/voice_style.yaml` | Writable YAML behind `/settings` → Voice Style. Stores only non-default per-mode / per-announcement presets. |
 
-VoxCPM2 server (`tts/voxcpm-tts.service` on Helios — set in the unit, not `.env`):
+VoxCPM2 server (live: `tts/voxcpm-tts-saturn.service` on Saturn; rollback: `tts/voxcpm-tts.service` on Helios — set in the unit, not `.env`). The Saturn unit picks its card with `CUDA_VISIBLE_DEVICES=GPU-<5080 uuid>` in `/etc/voxcpm-tts.env` (required: a missing file fails the start).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VOXCPM_MODEL` | `openbmb/VoxCPM2` | HF id or local snapshot path (unit: `/home/labadmin/models/VoxCPM2`, with `HF_HUB_OFFLINE=1`). |
 | `VOXCPM_VOICES_DIR` | `/home/labadmin/tts-voices` | Dir with `voices.json` + reference clips (same format as the Qwen server; only `ref_audio` used). |
-| `VOXCPM_HOST` | `0.0.0.0` | Bind address. |
+| `VOXCPM_HOST` | `0.0.0.0` | Bind address. Saturn unit: `10.0.0.58` (LAN only, nothing on the tailnet address; needs Saturn's DHCP reservation). |
 | `VOXCPM_PORT` | `8004` | Listen port. |
 | `VOXCPM_OUTPUT_SR` | `24000` | Output sample rate (matches Qwen for Wyoming/HA consumers); `0` = native 48 kHz. |
 | `VOXCPM_CFG` | `2.0` | Classifier-free guidance value. |
@@ -207,7 +207,7 @@ VoxCPM2 server (`tts/voxcpm-tts.service` on Helios — set in the unit, not `.en
 | `VOXCPM_MAX_PENDING` | `8` | Requests waiting for/holding the GPU worker before new ones get 503. |
 | `VOXCPM_REQUIRE_CUDA` | `true` | Refuse to start without CUDA (prevents a silent ~7 s/sentence CPU fallback). |
 
-Cutover = point `TTS_URL` at `http://<helios>:8004`. See `docs/VOICE_AND_TTS.md` → VoxCPM2 TTS server.
+Jupiter `.env`: `TTS_URL=http://10.0.0.58:8004` (Saturn). Rollback to the Helios copy = `TTS_URL=http://10.0.0.195:8004`, only together with the 64K brain rollback (header of `tts/llama-server-primary.service`). See `docs/VOICE_AND_TTS.md` → VoxCPM2 TTS server + VoxCPM2 on Saturn.
 
 ## Progress Tracking
 
@@ -312,7 +312,7 @@ A few essential vars that always need to be set. These are usually defined in `.
 
 ## Helios wake-on-demand (PT-C)
 
-Power-tier the GPU box. Helios runs only the model layer (LLM/TTS/STT) and is powered off most of the time to save electricity. Its NIC Wake-on-LAN is a dead end (Aquantia `atlantic` driver), so remote power control is a power-cycle of a TP-Link Tapo smart plug driven **through Home Assistant** — it reuses `HA_URL`/`HA_TOKEN` and adds no TP-Link credentials or `python-kasa` dependency. BIOS `AC Back = Last State` means restoring plug power auto-boots Helios only if it was running when cut, so **sleep = turn the plug OFF while running** (a hard power-cut; safe because Helios is stateless — all DBs/ChromaDB live on Jupiter, it just reloads model servers on boot). **Wake is automatic** from the brain-asleep chat path (`cloud_brain._brain_asleep_response` → fire-and-forget `helios_power.wake_helios`, debounced); **sleep is manual only** (no idle auto-sleep). Implemented in `orchestrator/helios_power.py`; exposed via `POST /api/helios/wake`, `POST /api/helios/sleep`, `GET /api/helios/power` (all bearer-gated) and the `helios_power` tool (gated behind `HELIOS_WAKE_ENABLED`). Default OFF; a `model_validator` in `config.py` auto-disables the feature (logs an error, never raises) if `HA_URL`/`HA_TOKEN` is missing **or** either plug entity id is malformed (defensive — they're interpolated into HA REST URLs). When enabled (or when `HELIOS_PLUG_MONITOR_ENABLED` is on), a 60s APScheduler job (`helios_status_poll`, registered in `orchestrator.py`) keeps the gauges fresh so dashboards/alerts don't read stale state.
+Power-tier the GPU box. Helios runs only the model layer (LLM/STT; the TTS is on the always-on Saturn) and is powered off most of the time to save electricity. Its NIC Wake-on-LAN is a dead end (Aquantia `atlantic` driver), so remote power control is a power-cycle of a TP-Link Tapo smart plug driven **through Home Assistant** — it reuses `HA_URL`/`HA_TOKEN` and adds no TP-Link credentials or `python-kasa` dependency. BIOS `AC Back = Last State` means restoring plug power auto-boots Helios only if it was running when cut, so **sleep = turn the plug OFF while running** (a hard power-cut; safe because Helios is stateless — all DBs/ChromaDB live on Jupiter, it just reloads model servers on boot). **Wake is automatic** from the brain-asleep chat path (`cloud_brain._brain_asleep_response` → fire-and-forget `helios_power.wake_helios`, debounced); **sleep is manual only** (no idle auto-sleep). Implemented in `orchestrator/helios_power.py`; exposed via `POST /api/helios/wake`, `POST /api/helios/sleep`, `GET /api/helios/power` (all bearer-gated) and the `helios_power` tool (gated behind `HELIOS_WAKE_ENABLED`). Default OFF; a `model_validator` in `config.py` auto-disables the feature (logs an error, never raises) if `HA_URL`/`HA_TOKEN` is missing **or** either plug entity id is malformed (defensive — they're interpolated into HA REST URLs). When enabled (or when `HELIOS_PLUG_MONITOR_ENABLED` is on), a 60s APScheduler job (`helios_status_poll`, registered in `orchestrator.py`) keeps the gauges fresh so dashboards/alerts don't read stale state.
 
 **Monitor-only mode:** `HELIOS_PLUG_MONITOR_ENABLED=true` runs only the read-only poll (`bgw_helios_plug_watts` / `bgw_helios_running`) while `HELIOS_WAKE_ENABLED=false` — it never turns the plug on or off. The `helios_power` tool and `/api/helios/*` stay gated on `HELIOS_WAKE_ENABLED` (`GET /api/helios/power` still 409s in monitor-only mode, deliberately). The `HeliosPoweredButUnreachable` alert — the only **paging** signal for a Helios outage (`NodeDown` excludes Helios) — needs one of the two flags on; with both off, `HeliosUnreachablePlugBlind` (quiet) fires instead (see `monitoring/README.md` → Helios Health Alerts).
 
@@ -469,7 +469,7 @@ Two-way capture + reminder channel. A dedicated long-polling task inside the orc
 | `TELEGRAM_VOICE_WAKE_HELIOS` | `true` | When STT is asleep, wake Helios and wait for it (vs fail-fast). |
 | `TELEGRAM_VOICE_MAX_SECONDS` | `300` | Reject voice notes longer than this. |
 | `TELEGRAM_STT_READY_TIMEOUT_SECONDS` | `180` | Max wait for STT to come ready after a wake. |
-| `TELEGRAM_VOICE_REPLY_ENABLED` | `true` | Speak Jess's reply back to a voice note (TTS on Helios via `TTS_URL` → `sendVoice` MP3). Voice input only — text messages stay text-only. Needs `TTS_URL` configured. |
+| `TELEGRAM_VOICE_REPLY_ENABLED` | `true` | Speak Jess's reply back to a voice note (TTS via `TTS_URL`, Saturn → `sendVoice` MP3). Voice input only — text messages stay text-only. Needs `TTS_URL` configured. |
 | `TELEGRAM_VOICE_REPLY_MAX_CHARS` | `1200` | Cap the portion of the reply that gets synthesized to speech. |
 
 Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_latency_seconds{kind}`, `bgw_telegram_update_total{kind,result}` (`kind` includes `voice`\|`photo`), `bgw_telegram_callback_total{action,result}`, `bgw_telegram_media_total{kind,result}` (voice/photo processing outcomes — photo `vision_unreachable` = Helios asleep, not analyzed — + `voice_reply` outbound TTS reply: `ok`\|`tts_failed`\|`send_failed`).
@@ -486,7 +486,7 @@ Metrics: `bgw_telegram_send_total{result,kind,reason}`, `bgw_telegram_send_laten
 | `VOICE_SATELLITE_API_KEY` | (empty) | **Secret.** The firmware's `api: encryption: key` (`api_encryption_key` in its `secrets.yaml`): base64 of 32 bytes. Anything else disables the feature; an empty key would mean an unencrypted connection and is refused twice (validator + client build). Anyone holding it can pose as the device on the LAN: rotate (reflash + `.env`) if a device or the build box's `secrets.yaml` is lost. |
 | `VOICE_SATELLITE_NAME` | `atom-echo-jess` | ESPHome node name the device runs (`[a-z0-9][a-z0-9_-]{0,39}`). The connection refuses any other device (`wrong_device`). Also the `device` metric label. |
 | `VOICE_SATELLITE_SPEAKER` | (empty, **required**) | `media_player.*` in the device's room that plays the reply (e.g. `media_player.office_speaker`). No fallback to other rooms: replies play even under sleep mode. |
-| `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` | `180` | Helios asleep: how long a turn waits after waking it (clamped 0–600). Waking needs `HELIOS_WAKE_ENABLED`; with it off the device plays the "asleep" sound. Helios on but a service down: fixed 90 s wait, no wake. |
+| `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` | `180` | Helios asleep: how long a turn waits after waking it (clamped 0–600). Waking needs `HELIOS_WAKE_ENABLED`; with it off the device plays the "asleep" sound. Helios on but a service down: fixed 90 s wait, no wake. Helios off and a service on another box (the Saturn TTS) down: fails at once as `service_down`, no wake. |
 
 Metrics + `VoiceSatelliteDisconnected`: `monitoring/README.md` → Voice Satellite.
 

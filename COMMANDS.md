@@ -229,8 +229,11 @@ ssh labadmin@10.0.0.195 "journalctl -u llama-server-primary --no-pager -n 100"
 # brain_auth from "Check via API" above, repo root on Jupiter
 curl -s -H @<(brain_auth) http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing)'
 
-# Both GPUs hold the brain; GPU1 also the live TTS (expect ~90 % / ~92 %)
+# Both GPUs hold only the brain (262K ctx; the TTS is on Saturn): expect GPU0 ~29.1 GiB, GPU1 ~42.9 GiB
+# at load, a little more after long prompts. A python process on either GPU = a stray TTS: stop it.
 ssh labadmin@10.0.0.195 "nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv"
+
+# Rollback to 64K with the TTS back on Helios GPU1 (Saturn down > ~1 h): header of tts/llama-server-primary.service
 
 # Sandbox score
 ssh labadmin@10.0.0.195 "systemd-analyze security llama-server-primary"
@@ -259,22 +262,29 @@ Garbled output / dropped tool calls: set `--spec-type none` in the unit first (d
 
 ## Voice / TTS / STT
 
-### Test TTS with Jessica voice (VoxCPM2, live)
+### Test TTS with Jessica voice (VoxCPM2 on Saturn, live)
 ```bash
-curl -X POST http://10.0.0.195:8004/tts \
+# Run on Jupiter: the Saturn server admits only Jupiter's address.
+curl -s http://10.0.0.58:8004/health
+curl -X POST http://10.0.0.58:8004/tts \
   -H "Content-Type: application/json" \
-  -d '{"text": "Good morning Nadim!", "voice": "jessica"}' \
+  -d '{"text": "Good morning!", "voice": "jessica"}' \
   --output test.wav
 ```
 
-### Manage TTS/STT services on Helios
+### Manage the TTS (Saturn) and STT (Helios)
 ```bash
-# Live TTS is voxcpm-tts (VoxCPM2, :8004, GPU1 — shared with part of the brain).
-# qwen-tts (Qwen3-TTS :8002, rollback) is DISABLED since 2026-10-24: it no longer fits on GPU1.
-# STT is stt-onnx (Parakeet v2 int8 ONNX, CPU). parakeet-stt (NeMo, GPU) is disabled.
-ssh labadmin@10.0.0.195 "sudo systemctl status voxcpm-tts stt-onnx"
-ssh labadmin@10.0.0.195 "sudo systemctl restart voxcpm-tts"
-ssh labadmin@10.0.0.195 "journalctl -u voxcpm-tts --no-pager -n 50"
+# Live TTS is voxcpm-tts (VoxCPM2, :8004) on Saturn's RTX 5080. Its journal is not in Loki.
+ssh labadmin@10.0.0.58 "sudo systemctl status voxcpm-tts"
+ssh labadmin@10.0.0.58 "sudo systemctl restart voxcpm-tts"
+ssh labadmin@10.0.0.58 "journalctl -u voxcpm-tts --no-pager -n 50"
+ssh labadmin@10.0.0.58 "nvidia-smi --query-compute-apps=process_name,used_memory --format=csv"   # TTS alone on the 5080
+
+# Helios: STT is stt-onnx (Parakeet v2 int8 ONNX, CPU). parakeet-stt (NeMo, GPU) is disabled.
+# voxcpm-tts on Helios is the disabled rollback (refuses to start next to the 262K brain);
+# qwen-tts (Qwen3-TTS :8002) is an older rollback, disabled since 2026-10-24.
+ssh labadmin@10.0.0.195 "sudo systemctl status stt-onnx"
+ssh labadmin@10.0.0.195 "journalctl -u stt-onnx --no-pager -n 50"
 ```
 
 ### Voice satellite (ATOM Echo → Jess; `docs/VOICE_AND_TTS.md` → Voice satellite)

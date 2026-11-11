@@ -39,7 +39,7 @@ groups:
           severity: critical
         annotations:
           summary: "Node {{ $labels.node }} is down"
-          description: "Node exporter on {{ $labels.node }} is unreachable for 3 minutes."
+          description: "Node exporter on {{ $labels.node }} is unreachable for 3 minutes. On saturn this also means Jess has no voice (the TTS runs there). If Saturn stays down for more than ~1 h, put the voice back on Helios: the rollback in the header of tts/llama-server-primary.service (~3 min)."
 
       # Non-paging counterpart so the excluded node is still VISIBLE on the
       # dashboard rather than silently dropped from monitoring entirely.
@@ -247,19 +247,24 @@ groups:
           summary: "Prometheus has no reachable Alertmanager"
           description: "prometheus_notifications_alertmanagers_discovered has been < 1 for 5 minutes — alerts are firing into the void. Check the alertmanager container in the monitoring compose project."
 
-      # TTSDown / STTDown only count while Helios's node-exporter answers: the
-      # probes fail whenever the power-tiered box sleeps (~20 % of Oct 2026,
-      # ~8,300 min of "down" in 30 days), which is why both sat unrouted.
-      # Guarded, the same 30 days held ~2 min of real voice-server downtime.
-      # A hung or unreachable Helios is HeliosPoweredButUnreachable's page.
+      # TTSDown / STTDown only count while the box the server runs on answers its
+      # node-exporter. For STT (and the Qwen3-TTS rollback) that is the power-tiered
+      # Helios: its probes fail whenever it sleeps (~20 % of Oct 2026, ~8,300 min of
+      # "down" in 30 days), which is why both sat unrouted. Guarded, the same 30 days
+      # held ~2 min of real voice-server downtime. A hung or unreachable Helios is
+      # HeliosPoweredButUnreachable's page. The live voice (tts-voxcpm) runs on the
+      # always-on Saturn: a Saturn outage pages as NodeDown, so TTSDown covers the
+      # server itself (a crashed unit, or a kernel bump that dropped the NVIDIA module).
+      # Each probe is gated on its own box's node-exporter (the `node` label from
+      # static_configs), so moving a TTS server between boxes only moves its probe.
       - alert: TTSDown
-        expr: probe_success{service=~"tts|tts-voxcpm"} == 0 and on() up{job="node-exporter", node="helios"} == 1
+        expr: probe_success{service=~"tts|tts-voxcpm"} == 0 and on(node) up{job="node-exporter"} == 1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "TTS service {{ $labels.service }} (Helios) is down"
-          description: "{{ $labels.service }} has not responded for 5 minutes (tts-voxcpm = VoxCPM2 :8004, the live voice; the Qwen3-TTS :8002 rollback is disabled since 2026-10-24 and no longer probed). Diagnose with journalctl -u voxcpm-tts on Helios."
+          summary: "TTS service {{ $labels.service }} ({{ $labels.node }}) is down"
+          description: "{{ $labels.service }} has not responded for 5 minutes. tts-voxcpm = VoxCPM2 :8004 on Saturn (RTX 3080; the 3090 is the fallback), the live voice: diagnose with journalctl -u voxcpm-tts on Saturn, and run nvidia-smi there (a kernel bump can drop the NVIDIA module). tts = the Qwen3-TTS :8002 rollback on Helios, disabled since 2026-10-24 and not probed."
 
       - alert: STTDown
         expr: probe_success{service="stt"} == 0 and on() up{job="node-exporter", node="helios"} == 1
@@ -368,16 +373,18 @@ groups:
           description: "{{ $labels.mountpoint }} on {{ $labels.node }} is {{ $value | humanizePercentage }} full. Find the space with `sudo du -xh --max-depth=2 {{ $labels.mountpoint }} | sort -h | tail -20` and `docker system df`. On /mnt/logging, Prometheus (30d) and Loki (720h) are time-retained only, with no size cap — if `du` points at loki/, find the noisy source in Grafana Explore with `topk(10, sum by (service_name, container, host) (bytes_over_time({service_name=~\".+\"}[24h])))`. Free space before it hits 100 %: a full /mnt/logging stops Prometheus and Loki writing, which can take all alerting down with them."
 
       # Both Helios GPUs carry the brain since 2026-10-24 (Qwen3.8-Flash-Next split
-      # across the 5090 + PRO 5000 by llama-server-primary.service). Steady state
-      # in late Oct 2026: GPU0 ~91 % (low point 1.7 GiB free), GPU1 ~95 % with
-      # voxcpm-tts (2.4 GiB free, flat). That is real allocation (weights + 64K
-      # q8_0 KV + MTP head + the TTS's PyTorch cache), not a vLLM pre-allocation,
-      # so creep is a real signal — and on GPU1 it can starve the live voice.
+      # across the 5090 + PRO 5000 by llama-server-primary.service). Since the TTS
+      # moved to Saturn, the brain alone, at 262K context: GPU0 2.3 GiB and GPU1 4.1 GiB
+      # free after a 200K-token prompt (measured 2026-11-11). Before that, at 64K
+      # with voxcpm-tts on GPU1, GPU1 sat at 1.0–2.4 GiB free. That is real allocation
+      # (weights, KV, MTP head, compute buffers, ggml's CUDA pool, which grows with the
+      # largest prompt seen), not a vLLM pre-allocation, so creep is a real signal.
       # Absolute free memory, not a ratio: the old `> 0.95` sat 11 MiB from
       # firing on GPU1, and 5 % is a different margin on a 32 and a 48 GB card.
       # Under 1 GiB free the next TTS or vision allocation can fail; 0 minutes
       # in the 30 days before 2026-10-27. Helios only: Saturn is a learning box
       # whose experiments fill VRAM on purpose (llama.cpp auto-fit leaves ~1 GiB).
+      # Its one production card, the TTS's RTX 3080, has TTSGPUMemoryLow.
       - alert: HighVRAMUsage
         expr: nvidia_smi_memory_total_bytes{node="helios"} - nvidia_smi_memory_used_bytes{node="helios"} < 2^30
         for: 5m
@@ -385,7 +392,61 @@ groups:
           severity: warning
         annotations:
           summary: "Under 1 GiB VRAM free on a Helios GPU ({{ $value | humanize1024 }}B left)"
-          description: "Helios GPU {{ $labels.uuid }} has {{ $value | humanize1024 }}B of VRAM free. Both GPUs carry the brain and GPU1 also the live TTS, so the next synthesis or vision call can fail to allocate. Run `nvidia-smi` on Helios to see which process grew; restarting voxcpm-tts returns its cached memory."
+          description: "Helios GPU {{ $labels.uuid }} has {{ $value | humanize1024 }}B of VRAM free. Both GPUs carry only the brain (the TTS runs on Saturn), so a vision call or a very long prompt can fail to allocate and abort llama-server. Run `nvidia-smi` on Helios. If anything other than llama-server is on a GPU, stop it: NEVER start voxcpm-tts on Helios while the 262K brain unit is installed. If it is the brain itself, `sudo systemctl restart llama-server-primary` returns its pool memory."
+
+      # Jess's voice card: Saturn's RTX 3080 runs only VoxCPM2. nvidia-smi shows 9.64 GiB
+      # free on the empty card; VoxCPM2 is ~7.4 GiB fresh and grew 7.3 -> 9.3 GiB in one
+      # week on Helios (PyTorch keeps used memory cached). The install's memory test
+      # must leave >= 1 GiB free, so this fires once the voice grows past that margin (move
+      # it to the 3090) or something else sits on the card. nvidia_smi_memory_free_bytes,
+      # not total - used: that counts ~364 MiB of driver reserve as free, and the install
+      # check reads nvidia-smi's free. Known gap: an unpinned llama.cpp experiment
+      # (auto-fit leaves ~1 GiB) can sit right at the threshold; TTSSynthesisFailing is
+      # the other signal. Picked by card name, not uuid. If the voice moves to the 3090
+      # (the fallback, header of tts/voxcpm-tts-saturn.service), change the name in the
+      # expr to 3090 and the threshold to 1.5 * 2^30; the text below is card-neutral
+      # except the summary's card name.
+      - alert: TTSGPUMemoryLow
+        expr: nvidia_smi_memory_free_bytes{node="saturn"} < 1 * 2^30 and on(uuid) nvidia_smi_gpu_info{node="saturn", name=~".*3080.*"}
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jess's voice GPU (Saturn RTX 3080) is nearly full ({{ $value | humanize1024 }}B free)"
+          description: "Saturn's voice card should hold only the TTS (voxcpm-tts), but it has {{ $value | humanize1024 }}B free, so long replies can fail to synthesize. Run `nvidia-smi` on Saturn. Another process on the card: an experiment that wasn't pinned to the other card, so stop it or rerun it with CUDA_VISIBLE_DEVICES (or Docker `--gpus device=`) set to the other card's UUID. Only voxcpm-tts: its PyTorch cache has filled the card. Short replies still work (PyTorch frees the cache and retries), but a long one may not fit: move the voice to the 3090 (header of tts/voxcpm-tts-saturn.service)."
+
+      # The TTS server answers /health (model + voices loaded) but synthesis keeps
+      # failing: a CUDA out-of-memory error, a broken CUDA context, a full card. TTSDown
+      # can't see that. Both counters were 0 while Helios was up in the 30 days before
+      # the Saturn move: the 419 announcement tts_errors all came from a sleeping
+      # Helios. Gated on the probe being UP, so the server being down (TTSDown) or a
+      # sleeping Helios in the rollback layout doesn't count. `or vector(0)`:
+      # bgw_tts_errors_total has no series until the first error since a restart.
+      - alert: TTSSynthesisFailing
+        expr: |
+          (
+            (sum(increase(bgw_dashboard_tts_total{result=~"upstream_error|timeout"}[30m])) or vector(0))
+            + (sum(increase(bgw_tts_errors_total{error_type="tts_error"}[30m])) or vector(0))
+          ) >= 5
+          and on() min_over_time(probe_success{service="tts-voxcpm"}[30m]) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jess's voice server is up but synthesis keeps failing ({{ $value }} failures in 30 min)"
+          description: "The TTS answers /health, but dashboard sentences or announcements keep failing to synthesize. Check `journalctl -u voxcpm-tts` and `nvidia-smi` on the TTS box (Saturn): usually a CUDA out-of-memory error, often from an experiment on the voice card or a long text that no longer fits it (see TTSGPUMemoryLow). `sudo systemctl restart voxcpm-tts` there clears a broken CUDA context."
+
+      # Saturn's NVIDIA driver broke on a kernel bump once (2026-11-07: no module for
+      # the new kernel). With the TTS on Saturn that silences Jess: VoxCPM2
+      # refuses to run on CPU. No series while Saturn is down (NodeDown covers that).
+      - alert: SaturnGpuDriverBroken
+        expr: nvidia_smi_command_exit_code{job="gpu-exporter", node="saturn"} != 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "nvidia-smi on Saturn exits {{ $value }}: Jess's voice GPU is unusable"
+          description: "The GPU exporter on Saturn can't talk to the NVIDIA driver. 18 = driver/library version mismatch (a driver package upgraded under the loaded module: reboot). After a kernel upgrade, check /lib/modules/$(uname -r)/kernel/nvidia-580-open and install linux-modules-nvidia-580-open-$(uname -r). Until fixed, the TTS can't start."
 
       # Memory offline: the embedding model can't encode (startup self-test).
       # Memory search, RAG context, palace writes and auto_learn all fail per
@@ -429,7 +490,7 @@ groups:
           severity: critical
         annotations:
           summary: "Server closet is at {{ $value | printf \"%.0f\" }}°F"
-          description: "The server closet has been at or above 95°F for 10 minutes. Check the closet door/airflow and the rack fans; shut down non-essential nodes (Saturn, Uranus) if it keeps climbing."
+          description: "The server closet has been at or above 95°F for 10 minutes. Check the closet door/airflow and the rack fans; shut down non-essential nodes (Uranus; Saturn too only if needed, since it runs Jess's voice) if it keeps climbing."
       - alert: ClosetTemperatureSensorMissing
         # The closet series is dropped whenever HA has no reading (sensor gone,
         # renamed, battery dead), so absent() catches it. It read 0 for days in

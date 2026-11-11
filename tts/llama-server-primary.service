@@ -27,16 +27,40 @@
 # The 28.8 GB n-gram table (per_layer_token_embd) is an input GET_ROWS tensor loaded
 # lazily from mmap, so it stays in host RAM / page cache, not VRAM.
 #
-# Memory: ~29 GiB on GPU0 and ~37 GiB on GPU1 (plus voxcpm-tts ~7.7 GiB there):
-# 90 % / 92 % used, peak 92.8 % on GPU1 with TTS + vision + generation at once (under the
-# 95 % HighVRAMUsage line). -c 65536 (not 131072) leaves room for the MTP head: 131072 would add
-# ~2.5–3 GiB and push GPU1 to ~98 %. Chat prompts are ~10–15K tokens, but the self-audit
-# investigator once reached ~70K (2026-10-21) — a run that large is rejected at this context and
-# the audit comes back partial. GPU1 is shared with the live TTS; After=voxcpm-tts.service only
-# orders process start (voxcpm-tts is Type=simple, no readiness), so it does NOT guarantee the
-# TTS has loaded first — at boot they can still race for GPU1. qwen-tts (rollback TTS, ~4.5 GiB)
-# must stay disabled.
-# Generation drops to ~30-85 tok/s while the TTS synthesizes on GPU1 (spoken replies).
+# Context 262144 (the model's native length) since the Saturn TTS move. Was 65536 from 2026-10-24.
+# REQUIRES GPU1 free of the TTS: voxcpm-tts runs on Saturn (tts/voxcpm-tts-saturn.service). With
+# VoxCPM2 back on GPU1 (7.4 GiB fresh, grows to ~9.7 GiB) this unit does not fit, and --fit off
+# makes the start fail (Loki alert BrainFailedToStart). Never start voxcpm-tts on Helios while this
+# unit is installed.
+# Memory, measured 2026-11-11 with these flags (synthetic prompts on a :8086 test copy):
+#   GPU0 29.1 GiB at load, 29.5 GiB after a 200K-token prompt (2.3 GiB free, 92.7 %);
+#   GPU1 42.9 GiB at load, 43.7 GiB after it (4.1 GiB free, 91.4 %).
+#   At -ts 44,56 GPU0 runs out of memory at load (on the 862 MiB mmproj), so 40,60 puts 2 more
+#   layers on GPU1. 39,61 assigns the same layers: splits move whole layers only.
+#   KV is small, because only 12 of 48 layers are full attention: q8_0 K+V 3.2 GiB at 262K, plus
+#   0.8 GiB indexer K cache and 0.3 GiB MTP-head KV. The big context-dependent part is the compute
+#   buffers (~2.8–3.0 GiB per GPU plus 1.5 GiB for the MTP head at ubatch 512), which scale with
+#   -c × -ub. -ub 384 trims them (~0.7 GiB on GPU0, ~1 GiB on GPU1) for a slower long prefill:
+#   1436 tok/s at 200K tokens vs 1701 at ubatch 512 (and 1254 at 256).
+# Long-context results: planted fact found at 100K and 200K tokens. Decode 88 tok/s at 100K and
+# 57 tok/s at 200K context. Short-prompt decode is unchanged (123–128 vs 122–125 tok/s at 64K, same
+# prompt). A cold 200K-token prompt takes ~140 s to prefill, longer than the unified loop's 120 s
+# per-round timeout. In practice only a very long dashboard chat gets there: client history has no
+# size cap. The self-audit investigator's budgets keep it near 45–60K tokens. Repeat rounds hit the
+# prompt cache, so only the new tokens are prefilled.
+#
+# Rollback to 65536 with the TTS back on Helios (~3 min). Helios keeps the old unit as
+# /etc/systemd/system/llama-server-primary.service.64k.bak (= this file before the change):
+#   1. Helios: sudo systemctl stop llama-server-primary
+#      sudo cp /etc/systemd/system/llama-server-primary.service.64k.bak /etc/systemd/system/llama-server-primary.service
+#      sudo systemctl daemon-reload && sudo systemctl enable --now voxcpm-tts
+#      (voxcpm-tts's ExecStartPre refuses to start while a " -c 262144 " unit is installed, so copy
+#      the .bak first)
+#      wait for `curl -fs http://127.0.0.1:8004/health`, then sudo systemctl start llama-server-primary
+#   2. Jupiter: TTS_URL=http://10.0.0.195:8004 in .env, then
+#      docker compose up -d --force-recreate orchestrator.
+#   3. Repo: point the tts-voxcpm probe back at ${NODE_HELIOS_IP} with node 'helios'
+#      (prometheus.yml.template). TTSDown gates on the probe's own node, so it needs no change.
 #
 # Rollback to the 27B: see the header of tts/llama-server-primary-27b-q6k.service.
 #
@@ -86,7 +110,7 @@
 # without it, not someone reading LAN traffic.
 [Unit]
 Description=llama.cpp primary — Qwen3.8-Flash-Next UD-Q3_K_XL MTP (GPU0+GPU1 split, port 8080)
-After=network-online.target nvidia-persistenced.service voxcpm-tts.service
+After=network-online.target nvidia-persistenced.service
 Wants=network-online.target
 Conflicts=vllm-primary.service
 
@@ -142,8 +166,8 @@ ExecStart=/home/labadmin/llama.cpp-mtp/build/bin/llama-server \
   --no-webui --no-slots --metrics \
   --api-key-file /etc/llama-server/api-key \
   -ngl 999 -fa on \
-  -sm layer -ts 44,56 \
-  -c 65536 --cache-type-k q8_0 --cache-type-v q8_0 \
+  -sm layer -ts 40,60 \
+  -c 262144 -ub 384 --cache-type-k q8_0 --cache-type-v q8_0 \
   --parallel 1 \
   --spec-type draft-mtp --spec-draft-n-max 2 \
   --jinja --chat-template-kwargs '{"reasoning_effort":"low"}' \

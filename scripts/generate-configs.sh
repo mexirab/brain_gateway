@@ -110,8 +110,8 @@ fi
 echo ""
 echo "Using configuration:"
 echo "  NODE_JUPITER_IP: ${NODE_JUPITER_IP}  (Pi-hole primary, monitoring stack)"
-echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}  (brain gateway, primary LLM, TTS/STT)"
-echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}  (vision, Pi-hole secondary)"
+echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}  (primary LLM, STT)"
+echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}  (TTS, off-box backups)"
 echo "  NODE_URANUS_IP:  ${NODE_URANUS_IP}  (ComfyUI)"
 echo ""
 
