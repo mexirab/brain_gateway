@@ -15,7 +15,7 @@
 #
 # Files next to this YAML: secrets.yaml (gitignored — wifi_ssid, wifi_password,
 # api_encryption_key, ota_password, ap_password), hey_jess.json + hey_jess.tflite,
-# and later okay_jess.json + okay_jess.tflite.
+# okay_jess.json + okay_jess.tflite.
 #
 # Build + flash: see docs/VOICE_AND_TTS.md → Voice satellite. The node name is
 # a substitution; the office unit keeps its existing identity with
@@ -211,10 +211,13 @@ micro_wake_word:
     # (probability_cutoff 0.97, tensor_arena_size 30000).
     - model: hey_jess.json
       id: hey_jess
-    # "Okay Jess" — drop okay_jess.json + okay_jess.tflite (e.g. from
-    # microwakeword.com) next to this file, then uncomment:
-    # - model: okay_jess.json
-    #   id: okay_jess
+    # Trained on microwakeword.com 2026-11-10, "robust" variant. Manifest as
+    # delivered: probability_cutoff 0.35 is the threshold its benchmark was
+    # measured at (recall 86.2%, 0.38 false accepts/hour); its cutoff scale
+    # differs from hey_jess's, so don't copy 0.97 across. Leave
+    # tensor_arena_size / feature_step_size as delivered.
+    - model: okay_jess.json
+      id: okay_jess
     # (The stock okay_nabu model was a bring-up control only. Removed
     # 2026-11-10 once "Hey Jess" worked on the device: it is said in many
     # public Home Assistant videos, so it's an easy false/remote trigger.)
