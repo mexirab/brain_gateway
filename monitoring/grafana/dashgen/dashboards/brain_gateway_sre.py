@@ -1546,18 +1546,24 @@ def build() -> dict:
         ),
         timeseries(
             "Connect Attempts by Result (1h)",
-            [("sum by (result) (increase(bgw_satellite_connect_total[1h]))", "{{result}}")],
+            [("sum by (device, result) (increase(bgw_satellite_connect_total[1h]))", "{{device}} {{result}}")],
             unit="none",
         ),
         timeseries(
             "Turns by Result (6h)",
-            [("sum by (result) (increase(bgw_satellite_turn_total[6h]))", "{{result}}")],
+            [("sum by (device, result) (increase(bgw_satellite_turn_total[6h]))", "{{device}} {{result}}")],
             unit="none",
+            description=(
+                "duplicate = another device heard the same wake word first and answered; this one stayed quiet."
+            ),
         ),
         timeseries(
             "Wakes vs. False Wakes by Wake Word (24h)",
             [
-                ("sum by (wake_word) (increase(bgw_satellite_turn_total[24h]))", "{{wake_word}} wakes"),
+                (
+                    'sum by (wake_word) (increase(bgw_satellite_turn_total{result!="duplicate"}[24h]))',
+                    "{{wake_word}} wakes",
+                ),
                 (
                     'sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript"}[24h]))',
                     "{{wake_word}} nothing said",
@@ -1568,11 +1574,12 @@ def build() -> dict:
         ),
         timeseries(
             "How Listening Ended (24h)",
-            [("sum by (reason) (increase(bgw_satellite_listen_end_total[24h]))", "{{reason}}")],
+            [("sum by (device, reason) (increase(bgw_satellite_listen_end_total[24h]))", "{{device}} {{reason}}")],
             unit="none",
             description=(
-                "speech_end = heard you stop (normal). max_utterance = ran to the 15 s cap: the VAD never "
-                "heard you stop (or a TV) — answers then come 15 s late. wall_timeout = audio stalled."
+                "Per device: each room has its own noise level. speech_end = heard you stop (normal). "
+                "max_utterance = ran to the 15 s cap: the VAD never heard you stop (or a TV) — answers then "
+                "come 15 s late. wall_timeout = audio stalled. duplicate = another device answered."
             ),
         ),
         timeseries(

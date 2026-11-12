@@ -102,7 +102,7 @@ Legacy flat RAG endpoints and the structured MemPalace endpoints both read/write
 | GET | `/api/announcements/history` | Recent announcement history (optional `?limit=`, `?type=`) |
 | GET | `/api/announcements/stats` | Success rates, per-speaker breakdown, latency |
 
-**Voice satellite** (ATOM Echo → Jess, `orchestrator/voice_satellite.py`, default off): no HTTP route. The orchestrator connects out to the device's ESPHome native API (:6053) and calls `cloud_brain.chat(..., stream=False, is_voice=True)` in-process. Replies go through `_announce_voice(..., announcement_type="voice_reply", record_history=False, …)`, so they never appear in `/api/announcements/history` or `/stats`; the Cast speaker fetches the reply from `/api/audio/{filename}` (a reply over 200 chars as a progressive `s-<token>.wav` stream). Flags of `_announce_voice`: `docs/VOICE_AND_TTS.md` → TTS Pacing. Everything else: `docs/VOICE_AND_TTS.md` → Voice satellite.
+**Voice satellite** (ATOM Echo → Jess, `orchestrator/voice_satellite.py`, default off): no HTTP route. The orchestrator connects out to each device's ESPHome native API (:6053; one or more devices, one per room) and calls `cloud_brain.chat(..., stream=False, is_voice=True)` in-process. Replies go through `_announce_voice(..., announcement_type="voice_reply", record_history=False, …)`, so they never appear in `/api/announcements/history` or `/stats`; the Cast speaker fetches the reply from `/api/audio/{filename}` (a reply over 200 chars as a progressive `s-<token>.wav` stream). Flags of `_announce_voice`: `docs/VOICE_AND_TTS.md` → TTS Pacing. Everything else: `docs/VOICE_AND_TTS.md` → Voice satellite.
 
 ### Reminders & Focus
 
@@ -1210,7 +1210,7 @@ See `.env.example` for full list. Key vars:
 | WIND_DOWN_SHORT_NIGHT_HOURS | Short-night threshold for the gentle morning briefing (default: 6.5) |
 | ACTUAL_* | Actual Budget sync (URL, password, budget file, interval, window, fun-money category) — see `docs/ENV_VARS.md` → Finance |
 | RESEARCH_HELPER_ENABLED, RESEARCH_CONTEXT7_API_KEY | `look_it_up` research helper — see `docs/ENV_VARS.md` → Research helper |
-| VOICE_SATELLITE_* | Voice satellite (ATOM Echo → Jess; host IP, port, API key, node name, room speaker, Helios wait) — see `docs/ENV_VARS.md` → Voice satellite |
+| VOICE_SATELLITE_* | Voice satellite (ATOM Echo → Jess; device list `name@ip=speaker,…` or single-device host IP / node name / room speaker, shared port + API key, Helios wait, progressive TTS) — see `docs/ENV_VARS.md` → Voice satellite |
 | DEPLOY_DRIFT_REPO, DEPLOY_MARKER_PATH, DEPLOY_DRIFT_GITHUB_TOKEN | Deploy drift check (`DeployDrift`; empty repo = off) — see `docs/ENV_VARS.md` → Deploy drift |
 
 ## External APIs

@@ -10555,8 +10555,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (result) (increase(bgw_satellite_connect_total[1h]))",
-          "legendFormat": "{{result}}",
+          "expr": "sum by (device, result) (increase(bgw_satellite_connect_total[1h]))",
+          "legendFormat": "{{device}} {{result}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -10640,8 +10640,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (result) (increase(bgw_satellite_turn_total[6h]))",
-          "legendFormat": "{{result}}",
+          "expr": "sum by (device, result) (increase(bgw_satellite_turn_total[6h]))",
+          "legendFormat": "{{device}} {{result}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -10703,6 +10703,7 @@
           "sort": "desc"
         }
       },
+      "description": "duplicate = another device heard the same wake word first and answered; this one stayed quiet.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -10725,7 +10726,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (wake_word) (increase(bgw_satellite_turn_total[24h]))",
+          "expr": "sum by (wake_word) (increase(bgw_satellite_turn_total{result!=\"duplicate\"}[24h]))",
           "legendFormat": "{{wake_word}} wakes",
           "range": true,
           "instant": false,
@@ -10823,8 +10824,8 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (increase(bgw_satellite_listen_end_total[24h]))",
-          "legendFormat": "{{reason}}",
+          "expr": "sum by (device, reason) (increase(bgw_satellite_listen_end_total[24h]))",
+          "legendFormat": "{{device}} {{reason}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -10886,7 +10887,7 @@
           "sort": "desc"
         }
       },
-      "description": "speech_end = heard you stop (normal). max_utterance = ran to the 15 s cap: the VAD never heard you stop (or a TV) \u2014 answers then come 15 s late. wall_timeout = audio stalled.",
+      "description": "Per device: each room has its own noise level. speech_end = heard you stop (normal). max_utterance = ran to the 15 s cap: the VAD never heard you stop (or a TV) \u2014 answers then come 15 s late. wall_timeout = audio stalled. duplicate = another device answered.",
       "gridPos": {
         "h": 8,
         "w": 8,

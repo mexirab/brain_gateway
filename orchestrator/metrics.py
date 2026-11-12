@@ -628,15 +628,22 @@ TELEGRAM_MEDIA_TOTAL = Counter(
 # -- Voice satellite (orchestrator/voice_satellite.py) -------------------------
 SATELLITE_CONNECTED = Gauge(
     "bgw_satellite_connected",
-    "1 while the voice satellite's ESPHome API connection is up (device = configured node name)",
+    "1 while a voice satellite's ESPHome API connection is up (device = configured node name)",
     ["device"],
+)
+
+SATELLITE_CONFIG_PROBLEMS = Gauge(
+    "bgw_satellite_config_problems",
+    "Voice satellite config: skipped VOICE_SATELLITE_DEVICES entries, +1 if the feature "
+    "was asked for but disabled by validation (0 = fine or off; set at startup)",
 )
 
 SATELLITE_CONNECT_TOTAL = Counter(
     "bgw_satellite_connect_total",
     "Voice satellite connection attempts",
     # result: ok | timeout | unreachable | bad_key | wrong_device | no_api_audio | error
-    ["result"],
+    # device: configured node name (VOICE_SATELLITE_DEVICES / _NAME; ≤ 8)
+    ["result", "device"],
 )
 
 SATELLITE_TURN_TOTAL = Counter(
@@ -645,12 +652,14 @@ SATELLITE_TURN_TOTAL = Counter(
     # result: ok | no_speech | no_audio | empty_transcript | busy | rate_limited |
     #         aborted | dropped | helios_asleep | wake_failed | wake_timeout |
     #         service_down | stt_failed | chat_failed | speaker_unavailable |
-    #         tts_failed | error
+    #         tts_failed | error | duplicate (another device heard the same
+    #         wake word first and answers; this one stays quiet)
     #         (no_speech + empty_transcript per wake_word ~ false wakes)
     # wake_word: hey_jess | okay_jess | okay_nabu | button | other
     # helios: unchecked (run never got that far) | awake | woken (waited for it)
     #         — "Helios booted for nothing": {helios="woken",result="empty_transcript"}
-    ["result", "wake_word", "helios"],
+    # device: configured node name
+    ["result", "wake_word", "helios", "device"],
 )
 
 SATELLITE_LISTEN_END_TOTAL = Counter(
@@ -658,8 +667,10 @@ SATELLITE_LISTEN_END_TOTAL = Counter(
     "Voice satellite: how each listening run ended",
     # reason: speech_end (heard you stop — normal) | max_utterance (15 s cap: the
     #         VAD never heard you stop, or a TV) | no_speech | device_stop |
-    #         wall_timeout (audio stalled) | no_audio | aborted (device cancelled)
-    ["reason"],
+    #         wall_timeout (audio stalled) | no_audio | aborted (device cancelled) |
+    #         duplicate (another device answers the same wake word)
+    # device: configured node name — each room has its own noise level
+    ["reason", "device"],
 )
 
 SATELLITE_TURN_SECONDS = Histogram(

@@ -545,9 +545,9 @@ def _known_speakers() -> set[str]:
         known: set[str] = set()
         for cat in (*CATEGORIES, "reminder"):
             known.update(s.strip() for s in (route_for(cat) or "").split(",") if s.strip())
-        # The voice satellite names its room speaker directly (not via a route).
-        if _cfg.voice_satellite_speaker:
-            known.add(_cfg.voice_satellite_speaker)
+        # Voice satellites name their room speakers directly (not via a route):
+        # every configured room (VOICE_SATELLITE_DEVICES, else the one speaker).
+        known.update(d.speaker for d in _cfg.voice_satellites() if d.speaker)
         return known
     except Exception:  # noqa: BLE001
         return set()

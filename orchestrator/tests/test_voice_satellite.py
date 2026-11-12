@@ -103,16 +103,17 @@ def _value(metric, labels: dict, suffix: str = "_total") -> float:
     return 0.0
 
 
-def _turns(result: str, wake: str = "hey_jess", helios: str = "unchecked") -> float:
-    return _value(metrics.SATELLITE_TURN_TOTAL, {"result": result, "wake_word": wake, "helios": helios})
+def _turns(result: str, wake: str = "hey_jess", helios: str = "unchecked", device: str = NODE) -> float:
+    labels = {"result": result, "wake_word": wake, "helios": helios, "device": device}
+    return _value(metrics.SATELLITE_TURN_TOTAL, labels)
 
 
 def _turn_seconds_count(helios: str) -> float:
     return _value(metrics.SATELLITE_TURN_SECONDS, {"helios": helios}, suffix="_count")
 
 
-def _connects(result: str) -> float:
-    return _value(metrics.SATELLITE_CONNECT_TOTAL, {"result": result})
+def _connects(result: str, device: str = NODE) -> float:
+    return _value(metrics.SATELLITE_CONNECT_TOTAL, {"result": result, "device": device})
 
 
 def _connected(device: str = NODE) -> float:
@@ -984,8 +985,10 @@ async def test_max_utterance_still_answers_with_what_was_heard(sat, pipeline):
 # ---------------------------------------------------------------------------
 
 
-def _listen_ends() -> dict[str, float]:
-    return {r: _value(metrics.SATELLITE_LISTEN_END_TOTAL, {"reason": r}) for r in vs.LISTEN_END_REASONS}
+def _listen_ends(device: str = NODE) -> dict[str, float]:
+    return {
+        r: _value(metrics.SATELLITE_LISTEN_END_TOTAL, {"reason": r, "device": device}) for r in vs.LISTEN_END_REASONS
+    }
 
 
 async def _ends_speech_end(sat):
@@ -1040,6 +1043,13 @@ async def _ends_aborted(sat):
     await sat.handle_stop(True)
 
 
+async def _ends_duplicate(sat):
+    sat._arbiter = vs.WakeArbiter()
+    sat._arbiter.claim("atom-echo-other", "hey_jess")  # the other room heard it first
+    await sat.handle_start("c", 0, None, "Hey Jess")
+    await _say(sat.handle_audio, UTTERANCE)
+
+
 _LISTEN_END_PATHS = [
     pytest.param(_ends_speech_end, "speech_end", id="speech-end"),
     pytest.param(_ends_max_utterance, "max_utterance", id="max-utterance"),
@@ -1050,6 +1060,7 @@ _LISTEN_END_PATHS = [
     pytest.param(_ends_wall_timeout_quiet, "wall_timeout", id="wall-timeout-quiet"),
     pytest.param(_ends_no_audio, "no_audio", id="no-audio"),
     pytest.param(_ends_aborted, "aborted", id="aborted"),
+    pytest.param(_ends_duplicate, "duplicate", id="duplicate"),
 ]
 
 # Everything the line may carry: the node, a fixed reason and numbers — no
@@ -2326,6 +2337,7 @@ async def test_satellite_loop_seeds_series_and_builds_from_settings(monkeypatch)
         "voice_satellite_api_key": _KEY,
         "voice_satellite_speaker": SPEAKER,
         "voice_satellite_helios_timeout_seconds": 90,
+        "voice_satellite_devices": "",
     }.items():
         monkeypatch.setattr(vs._settings, attr, value)
     built = []
@@ -2356,8 +2368,9 @@ async def test_satellite_loop_seeds_every_listen_end_reason(monkeypatch):
     """Exact, on a fresh counter (other tests increment the real one)."""
     from prometheus_client import CollectorRegistry, Counter
 
-    fresh = Counter("bgw_satellite_listen_end_total", "test copy", ["reason"], registry=CollectorRegistry())
+    fresh = Counter("bgw_satellite_listen_end_total", "test copy", ["reason", "device"], registry=CollectorRegistry())
     monkeypatch.setattr(metrics, "SATELLITE_LISTEN_END_TOTAL", fresh)
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", "")
     monkeypatch.setattr(vs._settings, "voice_satellite_name", "atom-echo-seeded")
 
     async def fake_run_forever(self):
@@ -2365,8 +2378,13 @@ async def test_satellite_loop_seeds_every_listen_end_reason(monkeypatch):
 
     monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
     await vs.satellite_loop(FakeChat())
-    seeded = {s.labels["reason"]: s.value for m in fresh.collect() for s in m.samples if s.name.endswith("_total")}
-    assert seeded == dict.fromkeys(vs.LISTEN_END_REASONS, 0.0)
+    seeded = {
+        (s.labels["reason"], s.labels["device"]): s.value
+        for m in fresh.collect()
+        for s in m.samples
+        if s.name.endswith("_total")
+    }
+    assert seeded == {(r, "atom-echo-seeded"): 0.0 for r in vs.LISTEN_END_REASONS}
 
 
 async def test_log_loop_exit(caplog):
@@ -2413,3 +2431,749 @@ def test_drop_payload_filter_strips_exception_text():
     other = logging.LogRecord("orchestrator.x", logging.ERROR, __file__, 1, "kept", None, exc_info)
     DropPayloadArgsFilter().filter(other)
     assert other.exc_info is exc_info  # other loggers untouched
+
+
+# ---------------------------------------------------------------------------
+# Several devices: VOICE_SATELLITE_DEVICES, one Satellite each, WakeArbiter
+# ---------------------------------------------------------------------------
+
+OTHER = "atom-echo-other"
+OTHER_SPEAKER = "media_player.den_test"
+TWO_DEVICES = f"{NODE}@10.0.0.50={SPEAKER},{OTHER}@10.0.0.51={OTHER_SPEAKER}"
+
+
+def test_parse_devices_two_rooms():
+    from orchestrator.config import SatelliteDevice, parse_voice_satellite_devices
+
+    raw = f" {NODE} @ 10.0.0.50 = {SPEAKER} ,, {OTHER}@fd00::51={OTHER_SPEAKER}"
+    devices, problems = parse_voice_satellite_devices(raw)
+    assert problems == []
+    assert devices == [
+        SatelliteDevice(name=NODE, host="10.0.0.50", speaker=SPEAKER),
+        SatelliteDevice(name=OTHER, host="fd00::51", speaker=OTHER_SPEAKER),
+    ]
+
+
+@pytest.mark.parametrize(
+    "entry, problem",
+    [
+        pytest.param("atom-echo-x", "is not name@host=speaker", id="no-at"),
+        pytest.param("atom-echo-x@10.0.0.60", "is not name@host=speaker", id="no-speaker"),
+        pytest.param("Atom@10.0.0.60=media_player.x", "name that is not", id="name-upper"),
+        pytest.param("@10.0.0.60=media_player.x", "name that is not", id="name-empty"),
+        pytest.param("x@echo.local=media_player.x", "host that is not", id="mdns-host"),
+        pytest.param("x@10.0.0.256=media_player.x", "host that is not", id="bad-ip"),
+        pytest.param("x@fe80::1%eth0=media_player.x", "host that is not", id="ipv6-scope-id"),
+        pytest.param("x@10.0.0.60=light.x", "speaker that is not", id="not-media"),
+        pytest.param("x@10.0.0.60=media_player.a/../b", "speaker that is not", id="speaker-path"),
+        pytest.param(f"{NODE}@10.0.0.60=media_player.x", "repeats an earlier device name", id="dup-name"),
+        pytest.param("x@10.0.0.50=media_player.x", "repeats an earlier device IP", id="dup-ip"),
+    ],
+)
+def test_parse_devices_skips_a_bad_entry(entry, problem):
+    from orchestrator.config import parse_voice_satellite_devices
+
+    devices, problems = parse_voice_satellite_devices(f"{NODE}@10.0.0.50={SPEAKER},{entry}")
+    assert [d.name for d in devices] == [NODE]
+    assert len(problems) == 1 and problems[0].startswith("entry 2 ") and problem in problems[0]
+
+
+def test_parse_devices_same_ip_written_differently_is_a_repeat():
+    from orchestrator.config import parse_voice_satellite_devices
+
+    devices, problems = parse_voice_satellite_devices("a@fd00::51=media_player.a,b@fd00:0:0::51=media_player.b")
+    assert [d.name for d in devices] == ["a"] and "repeats an earlier device IP" in problems[0]
+
+
+def test_parse_devices_limit():
+    from orchestrator.config import MAX_VOICE_SATELLITES, parse_voice_satellite_devices
+
+    raw = ",".join(f"d{i}@10.0.1.{i}=media_player.r{i}" for i in range(MAX_VOICE_SATELLITES + 1))
+    devices, problems = parse_voice_satellite_devices(raw)
+    assert len(devices) == MAX_VOICE_SATELLITES
+    assert problems == [f"entry {MAX_VOICE_SATELLITES + 1} is past the {MAX_VOICE_SATELLITES}-device limit"]
+
+
+def test_config_device_list_wins_over_the_single_device(caplog):
+    caplog.set_level(logging.WARNING, logger="orchestrator.config")
+    s = _settings(VOICE_SATELLITE_DEVICES=TWO_DEVICES)
+    assert s.voice_satellite_enabled is True
+    assert [(d.name, d.host, d.speaker) for d in s.voice_satellites()] == [
+        (NODE, "10.0.0.50", SPEAKER),
+        (OTHER, "10.0.0.51", OTHER_SPEAKER),
+    ]
+    assert "VOICE_SATELLITE_HOST/NAME/SPEAKER are ignored" in caplog.text
+
+
+def test_config_device_list_alone_needs_no_single_device_settings(caplog):
+    caplog.set_level(logging.WARNING, logger="orchestrator.config")
+    s = _settings(VOICE_SATELLITE_DEVICES=TWO_DEVICES, VOICE_SATELLITE_HOST=None, VOICE_SATELLITE_SPEAKER=None)
+    assert s.voice_satellite_enabled is True and len(s.voice_satellites()) == 2
+    assert "ignored" not in caplog.text
+
+
+def test_config_bad_entry_is_skipped_and_logged_by_position(caplog):
+    caplog.set_level(logging.ERROR, logger="orchestrator.config")
+    s = _settings(VOICE_SATELLITE_DEVICES=f"{TWO_DEVICES},secret-ish@{_KEY}=media_player.x")
+    assert s.voice_satellite_enabled is True
+    assert [d.name for d in s.voice_satellites()] == [NODE, OTHER]
+    msgs = [r.getMessage() for r in caplog.records]
+    assert msgs == [
+        "[CONFIG] VOICE_SATELLITE_DEVICES entry 3 has a host that is not an IP address; that device is skipped."
+    ]
+    assert _KEY not in caplog.text  # entries are named by position, never echoed
+
+
+def test_config_no_valid_device_disables(caplog):
+    caplog.set_level(logging.ERROR, logger="orchestrator.config")
+    s = _settings(VOICE_SATELLITE_DEVICES="x@echo.local=media_player.x")
+    assert s.voice_satellite_enabled is False
+    assert "VOICE_SATELLITE_DEVICES has no valid name@host=speaker entry" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "overrides, problem",
+    [
+        pytest.param({"VOICE_SATELLITE_API_KEY": None}, "VOICE_SATELLITE_API_KEY", id="no-key"),
+        pytest.param({"VOICE_SATELLITE_PORT": "0"}, "VOICE_SATELLITE_PORT", id="port-0"),
+        pytest.param({"HA_TOKEN": None}, "HA_TOKEN", id="no-ha-token"),
+    ],
+)
+def test_config_device_list_still_needs_the_shared_settings(overrides, problem, caplog):
+    caplog.set_level(logging.ERROR, logger="orchestrator.config")
+    s = _settings(VOICE_SATELLITE_DEVICES=TWO_DEVICES, **overrides)
+    assert s.voice_satellite_enabled is False and problem in caplog.text
+
+
+def test_config_single_device_is_the_default_list():
+    devices = _settings().voice_satellites()
+    assert [(d.name, d.host, d.speaker) for d in devices] == [("atom-echo-jess", "10.0.0.50", "media_player.kitchen")]
+
+
+@pytest.mark.parametrize(
+    "overrides, problems, enabled",
+    [
+        pytest.param({}, 0, True, id="single-ok"),
+        pytest.param({"VOICE_SATELLITE_DEVICES": TWO_DEVICES}, 0, True, id="list-ok"),
+        pytest.param({"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk,x@y=z"}, 2, True, id="two-skipped"),
+        pytest.param({"VOICE_SATELLITE_DEVICES": "junk"}, 2, False, id="list-all-bad"),
+        pytest.param({"VOICE_SATELLITE_HOST": "echo.local"}, 1, False, id="single-bad"),
+        pytest.param({"VOICE_SATELLITE_DEVICES": TWO_DEVICES, "HA_TOKEN": None}, 1, False, id="list-shared-bad"),
+        pytest.param({"VOICE_SATELLITE_ENABLED": "false", "VOICE_SATELLITE_DEVICES": "junk"}, 0, False, id="off"),
+        pytest.param({"VOICE_SATELLITE_CONFIG_PROBLEMS": "5"}, 0, True, id="not-settable"),
+    ],
+)
+def test_config_problem_count(overrides, problems, enabled):
+    s = _settings(**overrides)
+    assert (s.voice_satellite_config_problems, s.voice_satellite_enabled) == (problems, enabled)
+
+
+@pytest.mark.parametrize("host", ["fe80::1%eth0", "fe80::1%a\nINJECTED"])
+def test_config_single_device_refuses_an_ipv6_scope_id(host, caplog):
+    caplog.set_level(logging.ERROR, logger="orchestrator.config")
+    assert _settings(VOICE_SATELLITE_HOST=host).voice_satellite_enabled is False
+    assert "INJECTED" not in caplog.text
+
+
+def test_known_speakers_include_every_room(monkeypatch):
+    """bgw_announcement_speaker_unavailable_total labels each room's speaker, not "other"."""
+    from orchestrator import reminder_manager
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "voice_satellite_devices", TWO_DEVICES)
+    monkeypatch.setattr(settings, "voice_satellite_speaker", "media_player.left_over")
+    known = reminder_manager._known_speakers()
+    # the list wins: the ignored single-device speaker gets no series of its own
+    assert {SPEAKER, OTHER_SPEAKER} <= known and "media_player.left_over" not in known
+    monkeypatch.setattr(settings, "voice_satellite_devices", "")
+    assert "media_player.left_over" in reminder_manager._known_speakers()
+
+
+def test_wake_arbiter(clock):
+    arb = vs.WakeArbiter()
+    assert arb.claim(NODE, "hey_jess") is True and arb.holder == NODE
+    clock.now += vs.DUPLICATE_WAKE_S - 0.1
+    assert arb.claim(NODE, "hey_jess") is True  # the holder again: busy handles that, not the arbiter
+    assert arb.claim(OTHER, "hey_jess") is False  # the same "Hey Jess", heard twice
+    assert arb.claim(OTHER, "okay_jess") is False  # any wake word: one model can fire on the other's phrase
+    assert arb.claim(OTHER, "button") is True  # a press is deliberate
+    clock.now += 0.2  # past the window from the FIRST claim — the holder's re-wake didn't extend it
+    assert arb.claim(OTHER, "hey_jess") is True and arb.holder == OTHER
+    assert arb.claim(NODE, "hey_jess") is False
+
+
+async def test_duplicate_wake_ends_quietly(sat, pipeline, clock, caplog):
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    sat._arbiter = vs.WakeArbiter()
+    sat._arbiter.claim(OTHER, "hey_jess")
+    before = _turns("duplicate")
+
+    assert await sat.handle_start("c", 0, None, "Hey Jess") == 0
+    await _say(sat.handle_audio, UTTERANCE)
+    await _drain(sat)
+
+    # Ended at the first audio with RUN_END alone: no error code, so no sound.
+    assert sat._client.names == [RUN_START, STT_START, RUN_END]
+    assert sat._client.errors == []
+    assert sat._chat.calls == [] and pipeline.stt.await_count == 0
+    assert _turns("duplicate") == before + 1
+    assert sat._busy is False and sat._run is None
+    assert f"{NODE}: wake (hey_jess) also heard by {OTHER}, which answers" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "drive, result, code",
+    [
+        pytest.param("watchdog", "no_audio", "jess-error", id="no-audio"),
+        pytest.param("device-stop", "no_speech", "jess-no-speech", id="device-stop"),
+    ],
+)
+async def test_duplicate_that_never_streamed_gets_the_normal_end(sat, pipeline, clock, drive, result, code):
+    """RUN_END alone is only safe while the device streams; before that, the
+    ERROR is what takes it back to idle — so it gets the normal ending (and
+    its sound), and the honest result."""
+    sat._arbiter = vs.WakeArbiter()
+    sat._arbiter.claim(OTHER, "hey_jess")
+    before = (_turns(result), _turns("duplicate"))
+    await sat.handle_start("c", 0, None, "Hey Jess")
+    if drive == "watchdog":
+        await sat._run.watcher  # FIRST_AUDIO_TIMEOUT_S passes with nothing streamed
+    else:
+        await sat.handle_stop(False)
+    assert sat._client.names == [RUN_END, ERROR] and sat._client.errors == [code]
+    assert (_turns(result), _turns("duplicate")) == (before[0] + 1, before[1])
+    assert sat._busy is False
+
+
+async def test_busy_device_keeps_the_wake_word(make_sat, pipeline, later):
+    """A busy room says "busy" rather than the next room answering the question.
+    Real clock: the fake one would run the 4 s no-audio watchdog inside _tick()."""
+    arbiter = vs.WakeArbiter()
+    busy = make_sat(node_name=OTHER, arbiter=arbiter)
+    busy._busy = True  # mid-turn
+    other_room = make_sat(arbiter=arbiter)
+
+    await busy.handle_start("c1", 0, None, "Hey Jess")
+    await other_room.handle_start("c2", 0, None, "Hey Jess")
+    await _tick()
+    assert busy._client.errors == ["jess-busy"]
+    assert other_room._run is not None and other_room._run.duplicate is True
+    await other_room.handle_audio(_tone(0.1))
+    assert other_room._client.names == [RUN_START, STT_START, RUN_END] and other_room._client.errors == []
+
+
+async def test_two_devices_answer_on_their_own_speakers(make_sat, monkeypatch, clock):
+    arbiter = vs.WakeArbiter()
+    one = make_sat(arbiter=arbiter)
+    two = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
+    spoken_on = []
+
+    async def announce(text, **kw):
+        spoken_on.append(kw["speaker"])
+        return {"success": True}
+
+    monkeypatch.setattr("orchestrator.reminder_manager._announce_voice", announce)
+    for s in (one, two):
+        monkeypatch.setattr(s, "_service_status", AsyncMock(return_value=dict(UP)))
+        monkeypatch.setattr(s, "_transcribe", AsyncMock(return_value="what time is it"))
+    before = (_turns("ok", helios="awake", device=NODE), _turns("ok", helios="awake", device=OTHER))
+
+    await one.handle_start("c1", 0, None, "Hey Jess")
+    await _say(one.handle_audio, UTTERANCE)
+    clock.now += vs.DUPLICATE_WAKE_S + 1  # a separate question in the other room
+    await two.handle_start("c2", 0, None, "Hey Jess")
+    await _say(two.handle_audio, UTTERANCE)
+    await _drain(one)
+    await _drain(two)
+
+    assert spoken_on == [SPEAKER, OTHER_SPEAKER]
+    after = (_turns("ok", helios="awake", device=NODE), _turns("ok", helios="awake", device=OTHER))
+    assert (after[0] - before[0], after[1] - before[1]) == (1, 1)
+
+
+async def test_satellite_loop_runs_every_device(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", TWO_DEVICES)
+    monkeypatch.setattr(vs._settings, "voice_satellite_api_key", _KEY)
+    started = []
+
+    async def fake_run_forever(self):
+        started.append(self)
+        if self._node == OTHER:
+            raise RuntimeError("bug in one room")
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    await vs.satellite_loop(FakeChat())
+
+    assert [(s._node, s._host, s._speaker) for s in started] == [
+        (NODE, "10.0.0.50", SPEAKER),
+        (OTHER, "10.0.0.51", OTHER_SPEAKER),
+    ]
+    assert started[0]._arbiter is started[1]._arbiter is not None
+    assert _connected(NODE) == 0 and _connected(OTHER) == 0
+    assert f"Bridge started for {NODE}, {OTHER}" in caplog.text
+    assert f"{OTHER}: device loop exited unexpectedly: RuntimeError" in caplog.text
+    assert "bug in one room" not in caplog.text
+    seeded = {
+        smp.labels["device"]
+        for m in metrics.SATELLITE_TURN_TOTAL.collect()
+        for smp in m.samples
+        if smp.labels.get("result") == "duplicate"
+    }
+    assert {NODE, OTHER} <= seeded
+
+
+async def test_satellite_loop_shutdown_waits_for_every_device(monkeypatch):
+    """Cancelling the bridge returns only after EVERY device's cleanup — a bare
+    gather returned after the first, and shutdown then closed the HTTP client
+    under the other room's unwinding turn."""
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", TWO_DEVICES)
+    monkeypatch.setattr(vs._settings, "voice_satellite_api_key", _KEY)
+    running, cleaned = set(), []
+
+    async def fake_run_forever(self):
+        running.add(self._node)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            for _ in range(20 if self._node == OTHER else 1):  # OTHER unwinds slowly
+                await asyncio.sleep(0)
+            cleaned.append(self._node)
+            raise
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    task = asyncio.create_task(vs.satellite_loop(FakeChat()))
+    await _until(lambda: running == {NODE, OTHER})
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sorted(cleaned) == sorted([NODE, OTHER])
+
+
+async def test_satellite_loop_one_device_failing_keeps_the_other_running(monkeypatch):
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", TWO_DEVICES)
+    monkeypatch.setattr(vs._settings, "voice_satellite_api_key", _KEY)
+    still_running = asyncio.Event()
+
+    async def fake_run_forever(self):
+        if self._node == OTHER:
+            raise RuntimeError("x")
+        still_running.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    task = asyncio.create_task(vs.satellite_loop(FakeChat()))
+    await asyncio.wait_for(still_running.wait(), 1)
+    await _tick()
+    assert not task.done()  # the good room keeps going
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+# ---------------------------------------------------------------------------
+# Several devices: gaps — cross-device state, arbiter edges, loop + config edges
+# ---------------------------------------------------------------------------
+
+THIRD = "atom-echo-third"
+
+
+def _wire(sat, monkeypatch, transcript: str = "what time is it") -> SimpleNamespace:
+    """The ``pipeline`` fixture for any satellite: Helios up, STT words, playback ok."""
+    p = SimpleNamespace(
+        status=AsyncMock(return_value=dict(UP)),
+        stt=AsyncMock(return_value=transcript),
+        speak=AsyncMock(return_value="ok"),
+    )
+    monkeypatch.setattr(sat, "_service_status", p.status)
+    monkeypatch.setattr(sat, "_transcribe", p.stt)
+    monkeypatch.setattr(sat, "_speak", p.speak)
+    return p
+
+
+def _bytes_for(ms: int) -> int:
+    return vs.SAMPLE_RATE * vs.SAMPLE_WIDTH * ms // 1000
+
+
+@pytest.mark.parametrize(
+    "entry, problem",
+    [
+        pytest.param("a@b@10.0.0.60=media_player.x", "host that is not", id="two-at"),
+        pytest.param("x@@10.0.0.60=media_player.x", "host that is not", id="at-at"),
+        pytest.param("x@=media_player.x", "host that is not", id="empty-host"),
+        pytest.param("x@10.0.0.60=media_player.x=y", "speaker that is not", id="two-eq"),
+        pytest.param("x@10.0.0.60==media_player.x", "speaker that is not", id="eq-eq"),
+        pytest.param("x@10.0.0.60=", "speaker that is not", id="empty-speaker"),
+        pytest.param("x=y@10.0.0.60=media_player.x", "name that is not", id="eq-in-name"),
+        pytest.param("x=media_player.x@10.0.0.60", "is not name@host=speaker", id="swapped"),
+    ],
+)
+def test_parse_devices_repeated_or_misplaced_separators(entry, problem):
+    from orchestrator.config import parse_voice_satellite_devices
+
+    devices, problems = parse_voice_satellite_devices(f"{NODE}@10.0.0.50={SPEAKER},{entry}")
+    assert [d.name for d in devices] == [NODE]
+    assert len(problems) == 1 and problems[0].startswith("entry 2 ") and problem in problems[0]
+    assert "10.0.0.60" not in problems[0]  # named by position, never echoed
+
+
+@pytest.mark.parametrize(
+    "raw, enabled, problems, devices",
+    [
+        pytest.param("", True, 0, [("atom-echo-jess", "10.0.0.50", "media_player.kitchen")], id="empty"),
+        pytest.param("  \t ", True, 0, [("atom-echo-jess", "10.0.0.50", "media_player.kitchen")], id="blank"),
+        # Not blank, so the list is used — and it lists nothing: off, loudly.
+        pytest.param(" , ,", False, 1, [], id="commas-only"),
+    ],
+)
+def test_config_blank_device_list_falls_back_to_the_single_device(raw, enabled, problems, devices, caplog):
+    caplog.set_level(logging.WARNING, logger="orchestrator.config")
+    s = _settings(VOICE_SATELLITE_DEVICES=raw)
+    assert (s.voice_satellite_enabled, s.voice_satellite_config_problems) == (enabled, problems)
+    assert [(d.name, d.host, d.speaker) for d in s.voice_satellites()] == devices
+    assert "are ignored" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "overrides, problems",
+    [
+        # skipped entries AND a shared-setting failure: both counted
+        pytest.param({"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk", "HA_TOKEN": None}, 2, id="skip-and-shared"),
+        pytest.param(
+            {"VOICE_SATELLITE_DEVICES": f"{TWO_DEVICES},junk", "VOICE_SATELLITE_API_KEY": None}, 2, id="skip-and-key"
+        ),
+        pytest.param({"VOICE_SATELLITE_API_KEY": None}, 1, id="single-no-key"),
+        pytest.param({"VOICE_SATELLITE_PORT": "0"}, 1, id="single-port"),
+        pytest.param({"VOICE_SATELLITE_SPEAKER": None}, 1, id="single-no-speaker"),
+        # the env var can't set it, even with the feature off
+        pytest.param(
+            {"VOICE_SATELLITE_ENABLED": "false", "VOICE_SATELLITE_CONFIG_PROBLEMS": "5"}, 0, id="off-not-settable"
+        ),
+    ],
+)
+def test_config_problem_count_more_cases(overrides, problems):
+    s = _settings(**overrides)
+    assert s.voice_satellite_config_problems == problems
+    assert s.voice_satellite_enabled is False
+
+
+def test_known_speakers_leave_out_a_skipped_entrys_speaker(monkeypatch):
+    """Only valid entries become speaker labels: a typo'd entry's text never does."""
+    from orchestrator import reminder_manager
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "voice_satellite_devices", f"{TWO_DEVICES},x@echo.local=media_player.typo_room")
+    known = reminder_manager._known_speakers()
+    assert {SPEAKER, OTHER_SPEAKER} <= known and "media_player.typo_room" not in known
+
+
+def test_wake_arbiter_window_boundary(clock):
+    arb = vs.WakeArbiter()
+    start = clock.now
+    assert arb.claim(NODE, "hey_jess") is True
+    clock.now = start + vs.DUPLICATE_WAKE_S - 0.001
+    assert arb.claim(OTHER, "hey_jess") is False  # just inside the window
+    clock.now = start + vs.DUPLICATE_WAKE_S
+    assert arb.claim(OTHER, "hey_jess") is True  # exactly at it: a new wake word
+    assert arb.holder == OTHER
+
+
+def test_wake_arbiter_zero_window_never_holds(clock):
+    arb = vs.WakeArbiter(window_s=0)
+    assert arb.claim(NODE, "hey_jess") is True
+    assert arb.claim(OTHER, "hey_jess") is True
+    assert arb.holder == OTHER
+
+
+def test_wake_arbiter_button_does_not_take_the_claim(clock):
+    arb = vs.WakeArbiter()
+    assert arb.claim(NODE, "hey_jess") is True
+    clock.now += 1.0
+    assert arb.claim(OTHER, "button") is True
+    assert arb.holder == NODE  # the press neither steals nor restarts the claim
+    clock.now += 1.0
+    assert arb.claim(THIRD, "hey_jess") is False  # still NODE's wake word
+    assert arb.claim(NODE, "okay_jess") is True
+    clock.now += 1.0  # 3 s after NODE's claim, 2 s after the press
+    assert arb.claim(THIRD, "hey_jess") is True and arb.holder == THIRD
+
+
+async def test_duplicate_on_one_device_while_the_other_listens(make_sat, monkeypatch):
+    """B's duplicate run starts and ends while A is mid-question: no _run/_busy
+    crosses over, each device's counters land on its own label."""
+    arbiter = vs.WakeArbiter()
+    a = make_sat(arbiter=arbiter)
+    b = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
+    pa, pb = _wire(a, monkeypatch), _wire(b, monkeypatch)
+    split = _bytes_for(800)  # beep + 600 ms of speech: listening, not ended
+    before = {
+        "ok": (_turns("ok", helios="awake", device=NODE), _turns("ok", helios="awake", device=OTHER)),
+        "dup": (_turns("duplicate", device=NODE), _turns("duplicate", device=OTHER)),
+        "ends": (_listen_ends(NODE), _listen_ends(OTHER)),
+    }
+
+    await a.handle_start("c1", 0, None, "Hey Jess")
+    await _say(a.handle_audio, UTTERANCE[:split])
+    a_run = a._run
+    assert a._client.names == [RUN_START, STT_START, VAD_START] and a._busy is True
+
+    await b.handle_start("c2", 0, None, "Hey Jess")
+    assert b._run is not None and b._run.duplicate is True and b._busy is True
+    await b.handle_audio(UTTERANCE[:1024])
+    assert b._client.names == [RUN_START, STT_START, RUN_END] and b._client.errors == []
+    assert b._run is None and b._busy is False
+    assert a._run is a_run and a._busy is True and not a_run.done  # A untouched
+
+    await _say(a.handle_audio, UTTERANCE[split:])
+    await _drain(a)
+    await _drain(b)
+
+    assert a._client.names == [RUN_START, STT_START, VAD_START, RUN_END]
+    assert (pa.speak.await_count, pb.speak.await_count) == (1, 0)
+    assert (pa.stt.await_count, pb.stt.await_count) == (1, 0)
+    assert len(a._chat.calls) == 1 and b._chat.calls == []
+    assert (len(a._turn_starts), len(b._turn_starts)) == (1, 0)  # a duplicate uses no turn
+    assert a._busy is False and b._busy is False
+    ok = (_turns("ok", helios="awake", device=NODE), _turns("ok", helios="awake", device=OTHER))
+    dup = (_turns("duplicate", device=NODE), _turns("duplicate", device=OTHER))
+    assert (ok[0] - before["ok"][0], ok[1] - before["ok"][1]) == (1, 0)
+    assert (dup[0] - before["dup"][0], dup[1] - before["dup"][1]) == (0, 1)
+    ends_a, ends_b = _listen_ends(NODE), _listen_ends(OTHER)
+    assert {r: ends_a[r] - before["ends"][0][r] for r in ends_a} == {r: float(r == "speech_end") for r in ends_a}
+    assert {r: ends_b[r] - before["ends"][1][r] for r in ends_b} == {r: float(r == "duplicate") for r in ends_b}
+
+
+async def test_rate_limited_device_still_claims(make_sat, monkeypatch, later):
+    """Like a busy room: a rate-limited device says "busy" and keeps the wake
+    word — the next room doesn't answer instead."""
+    arbiter = vs.WakeArbiter()
+    limited = make_sat(arbiter=arbiter)
+    limited._turn_starts.extend([time.monotonic()] * vs.RATE_LIMIT_TURNS)
+    other_room = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
+    p_other = _wire(other_room, monkeypatch)
+    before = (_turns("rate_limited", device=NODE), _turns("duplicate", device=OTHER))
+
+    await limited.handle_start("c1", 0, None, "Hey Jess")
+    await other_room.handle_start("c2", 0, None, "Hey Jess")
+    await _tick()
+    assert limited._client.errors == ["jess-busy"] and limited._run is None
+    assert arbiter.holder == NODE
+    await _say(other_room.handle_audio, UTTERANCE)
+    await _drain(other_room)
+    assert other_room._client.names == [RUN_START, STT_START, RUN_END] and other_room._client.errors == []
+    assert p_other.speak.await_count == 0
+    assert (_turns("rate_limited", device=NODE), _turns("duplicate", device=OTHER)) == (before[0] + 1, before[1] + 1)
+
+
+async def test_button_on_another_device_during_a_claim_answers(make_sat, monkeypatch):
+    """A press is deliberate: B answers it on B's speaker even inside A's window."""
+    arbiter = vs.WakeArbiter()
+    a = make_sat(arbiter=arbiter)
+    b = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
+    for s in (a, b):
+        monkeypatch.setattr(s, "_service_status", AsyncMock(return_value=dict(UP)))
+        monkeypatch.setattr(s, "_transcribe", AsyncMock(return_value="what time is it"))
+    spoken_on = []
+
+    async def announce(text, **kw):
+        spoken_on.append(kw["speaker"])
+        return {"success": True}
+
+    monkeypatch.setattr("orchestrator.reminder_manager._announce_voice", announce)
+    before = (_turns("ok", "hey_jess", "awake", NODE), _turns("ok", "button", "awake", OTHER))
+
+    await a.handle_start("c1", 0, None, "Hey Jess")
+    await b.handle_start("c2", 0, None, None)  # button press
+    assert b._run is not None and b._run.duplicate is False
+    await _say(a.handle_audio, UTTERANCE)
+    await _say(b.handle_audio, UTTERANCE)
+    await _drain(a)
+    await _drain(b)
+
+    assert sorted(spoken_on) == sorted([SPEAKER, OTHER_SPEAKER])
+    assert b._client.names == [RUN_START, STT_START, VAD_START, RUN_END]
+    after = (_turns("ok", "hey_jess", "awake", NODE), _turns("ok", "button", "awake", OTHER))
+    assert (after[0] - before[0], after[1] - before[1]) == (1, 1)
+    assert arbiter.holder == NODE
+
+
+async def test_device_answers_its_own_wake_after_a_duplicate(make_sat, monkeypatch, clock):
+    """No duplicate state outlives its run: the next wake past the window is a turn."""
+    arbiter = vs.WakeArbiter()
+    arbiter.claim(OTHER, "hey_jess")  # the other room took this one
+    sat = make_sat(arbiter=arbiter)
+    p = _wire(sat, monkeypatch)
+
+    await sat.handle_start("c1", 0, None, "Hey Jess")
+    await sat.handle_audio(_tone(0.1))
+    assert sat._client.names == [RUN_START, STT_START, RUN_END]
+
+    sat._client.events.clear()
+    clock.now += vs.DUPLICATE_WAKE_S
+    await sat.handle_start("c2", 0, None, "Hey Jess")
+    assert sat._run is not None and sat._run.duplicate is False and arbiter.holder == NODE
+    await _say(sat.handle_audio, UTTERANCE)
+    await _drain(sat)
+    assert sat._client.names == [RUN_START, STT_START, VAD_START, RUN_END]
+    assert p.speak.await_count == 1
+
+
+async def test_duplicate_aborted_before_audio_is_just_aborted(sat, pipeline):
+    sat._arbiter = vs.WakeArbiter()
+    sat._arbiter.claim(OTHER, "hey_jess")
+    before = (_turns("aborted"), _turns("duplicate"))
+    await sat.handle_start("c", 0, None, "Hey Jess")
+    watcher = sat._run.watcher
+    await sat.handle_stop(True)
+    await asyncio.gather(watcher, return_exceptions=True)
+    assert sat._client.names == []  # the device ended its own run: nothing to send
+    assert (_turns("aborted"), _turns("duplicate")) == (before[0] + 1, before[1])
+    assert sat._busy is False and sat._run is None and watcher.cancelled()
+
+
+@pytest.mark.parametrize("refuse", ["busy", "rate_limited"])
+async def test_refusing_second_device_stays_quiet(make_sat, monkeypatch, later, refuse):
+    """Module docstring: one "Hey Jess" heard by two devices — the first to
+    report it answers (or says "busy"), the other ends its run SILENTLY once
+    it streams. A second device that is itself busy (its own turn in flight)
+    or rate-limited must not play the busy sound in its room while the first
+    room answers — and must not clear the busy flag of its own running turn."""
+    arbiter = vs.WakeArbiter()
+    first = make_sat(arbiter=arbiter)
+    _wire(first, monkeypatch)
+    second = make_sat(node_name=OTHER, speaker=OTHER_SPEAKER, arbiter=arbiter)
+    if refuse == "busy":
+        second._busy = True  # its own earlier question is still being answered
+    else:
+        second._turn_starts.extend([time.monotonic()] * vs.RATE_LIMIT_TURNS)
+
+    await first.handle_start("c1", 0, None, "Hey Jess")
+    await second.handle_start("c2", 0, None, "Hey Jess")
+    await second.handle_audio(_tone(0.1))
+    await _tick()
+
+    assert second._client.errors == []  # no busy sound for another room's wake word
+    assert second._client.names[-1:] == [RUN_END]  # its run ended, device back to idle
+    assert second._busy is (refuse == "busy")  # its own turn still owns the flag
+    await _say(first.handle_audio, UTTERANCE)
+    await _drain(first)
+    assert first._client.errors == []
+
+
+async def test_run_device_reraises_cancellation(make_sat, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="orchestrator.voice_satellite")
+    sat = make_sat()
+    monkeypatch.setattr(sat, "run_forever", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        await vs._run_device(sat)
+    assert not [m for lvl, m in _sat_logs(caplog) if lvl >= logging.ERROR]
+
+
+async def test_satellite_loop_without_devices_logs_and_returns(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="orchestrator.voice_satellite")
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", "junk")  # set, but nothing valid
+    started = []
+
+    async def fake_run_forever(self):
+        started.append(self)
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    assert await vs.satellite_loop(FakeChat()) is None
+    assert started == []
+    logs = _sat_logs(caplog)
+    assert (logging.ERROR, "[SATELLITE] No voice satellite device is configured") in logs
+    assert not any("Bridge started" in m for _, m in logs)
+
+
+async def test_satellite_loop_seeds_every_series_for_every_device(monkeypatch):
+    """Exact, on fresh metrics: each device gets its connected gauge at 0, every
+    connect result, every listen-end reason and the duplicate turn series."""
+    from prometheus_client import CollectorRegistry, Counter, Gauge
+
+    reg = CollectorRegistry()
+    fresh = {
+        "SATELLITE_CONNECTED": Gauge("bgw_satellite_connected", "t", ["device"], registry=reg),
+        "SATELLITE_CONNECT_TOTAL": Counter("bgw_satellite_connect", "t", ["result", "device"], registry=reg),
+        "SATELLITE_LISTEN_END_TOTAL": Counter("bgw_satellite_listen_end", "t", ["reason", "device"], registry=reg),
+        "SATELLITE_TURN_TOTAL": Counter(
+            "bgw_satellite_turn", "t", ["result", "wake_word", "helios", "device"], registry=reg
+        ),
+    }
+    for name, metric in fresh.items():
+        monkeypatch.setattr(metrics, name, metric)
+    monkeypatch.setattr(vs._settings, "voice_satellite_devices", TWO_DEVICES)
+
+    async def fake_run_forever(self):
+        return None
+
+    monkeypatch.setattr(vs.Satellite, "run_forever", fake_run_forever)
+    await vs.satellite_loop(FakeChat())
+
+    def samples(metric, suffix):
+        return {
+            tuple(s.labels.values()): s.value for m in metric.collect() for s in m.samples if s.name.endswith(suffix)
+        }
+
+    devs = (NODE, OTHER)
+    assert samples(fresh["SATELLITE_CONNECTED"], "connected") == {(d,): 0.0 for d in devs}
+    assert samples(fresh["SATELLITE_CONNECT_TOTAL"], "_total") == {
+        (r, d): 0.0 for r in vs._CONNECT_RESULTS for d in devs
+    }
+    assert samples(fresh["SATELLITE_LISTEN_END_TOTAL"], "_total") == {
+        (r, d): 0.0 for r in vs.LISTEN_END_REASONS for d in devs
+    }
+    assert samples(fresh["SATELLITE_TURN_TOTAL"], "_total") == {
+        ("duplicate", "hey_jess", "unchecked", d): 0.0 for d in devs
+    }
+
+
+async def test_connect_counts_land_on_their_own_device(make_sat, clock):
+    a = make_sat(client=None, client_factory=lambda: FakeConn(connect_exc=OSError(113, "x")))
+    good = FakeConn()
+    b = make_sat(node_name=OTHER, client=None, client_factory=lambda: good)
+    before = {(r, d): _connects(r, d) for r in ("unreachable", "ok") for d in (NODE, OTHER)}
+
+    clock.cancel_at = 1
+    with pytest.raises(asyncio.CancelledError):
+        await a.run_forever()
+    session = await _start_session(b, good)
+    assert (_connected(NODE), _connected(OTHER)) == (0, 1)
+    await good.on_stop(False)
+    await session
+
+    delta = {k: _connects(*k) - v for k, v in before.items()}
+    assert delta == {("unreachable", NODE): 1, ("unreachable", OTHER): 0, ("ok", NODE): 0, ("ok", OTHER): 1}
+    assert _connected(OTHER) == 0
+
+
+def test_startup_exports_the_config_problems_gauge_unconditionally():
+    """orchestrator._startup_logic sets bgw_satellite_config_problems at its own
+    top level, before (not inside) `if _cfg.voice_satellite_enabled:` — a config
+    that DISABLED the feature is exactly the case the alert exists for.
+    (Structural: running _startup_logic needs the whole app.)"""
+    src_path = os.path.join(os.path.dirname(vs.__file__), "orchestrator.py")
+    with open(src_path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    (startup,) = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_startup_logic"]
+
+    def is_gauge_set(stmt):
+        call = stmt.value if isinstance(stmt, ast.Expr) else None
+        return (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "set"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "SATELLITE_CONFIG_PROBLEMS"
+            and len(call.args) == 1
+            and ast.unparse(call.args[0]) == "_cfg.voice_satellite_config_problems"
+        )
+
+    def is_enabled_if(stmt):
+        return isinstance(stmt, ast.If) and ast.unparse(stmt.test) == "_cfg.voice_satellite_enabled"
+
+    body = startup.body
+    sets = [i for i, s in enumerate(body) if is_gauge_set(s)]
+    gates = [i for i, s in enumerate(body) if is_enabled_if(s)]
+    assert len(sets) == 1 and len(gates) == 1 and sets[0] < gates[0]
+    gauge = metrics.SATELLITE_CONFIG_PROBLEMS
+    assert gauge._labelnames == () and gauge._name == "bgw_satellite_config_problems"
