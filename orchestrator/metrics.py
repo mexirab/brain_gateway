@@ -1428,6 +1428,26 @@ TTS_STYLE_APPLIED = Counter(
     ["source", "style"],
 )
 
+TTS_PROGRESSIVE_TOTAL = Counter(
+    "bgw_tts_progressive_total",
+    "Progressive speaker replies (audio_stream.py: the first ~8 s play while the rest is synthesized), by outcome",
+    # result: complete | cut short although the turn reports ok: chunk_failed (a
+    #         later sentence's TTS failed or hung) / format_mismatch / too_long /
+    #         deadline / stalled (no new audio for 30 s, or the speaker gave up
+    #         after running dry) / never_read (play_media accepted, speaker never
+    #         fetched) | abandoned (speaker hung up with audio left) | superseded
+    #         (a newer reply took the speaker) | not_played (no speaker accepted
+    #         it) | cancelled (caller timed out, or shutdown) | not_wav (backend
+    #         can't stream — one clip instead)
+    ["result"],
+)
+
+TTS_PROGRESSIVE_UNDERRUNS_TOTAL = Counter(
+    "bgw_tts_progressive_underruns_total",
+    "Progressive replies: a sentence arrived when the speaker had < 0.7 s left to play "
+    "(it paused to re-buffer). Estimate from the first read; Cast's start-up delay makes it pessimistic",
+)
+
 DASHBOARD_TTS_TOTAL = Counter(
     "bgw_dashboard_tts_total",
     "Dashboard chat /api/tts/synthesize outcomes (one call per spoken sentence)",

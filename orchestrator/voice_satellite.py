@@ -9,7 +9,9 @@ directly, without Home Assistant's voice pipeline.
         call the dashboard's /v1/chat/completions makes)
       → reminder_manager._announce_voice(...) → VoxCPM2 → HA play_media on the
         room's Google speaker (VOICE_SATELLITE_SPEAKER, required; no fallback
-        to other rooms)
+        to other rooms). One play_media per reply; with progressive TTS
+        (default) a long reply's first ~8 s play while the rest is synthesized
+        into the same stream (audio_stream.py)
 
 Home Assistant only plays the reply; the device must NOT also be in HA's ESPHome
 integration (it accepts one voice-assistant subscriber — the two would fight).
@@ -107,7 +109,7 @@ FRAME_BYTES = SAMPLE_RATE * SAMPLE_WIDTH * FRAME_MS // 1000  # 1600
 
 HISTORY_IDLE_SECONDS = 300  # D7: a new conversation after 5 min of silence
 HISTORY_MAX_MESSAGES = 12
-MAX_REPLY_CHARS = 1200  # spoken portion cap (one TTS clip, D3)
+MAX_REPLY_CHARS = 1200  # spoken portion cap (one play_media per reply, D3)
 FIRST_AUDIO_TIMEOUT_S = 4.0  # run started but the device never streamed
 RUN_WALL_TIMEOUT_S = 30.0  # wall-clock backstop for one listening run
 CHAT_TIMEOUT_S = 300.0  # backstop only; the loop has its own per-round timeouts
@@ -359,7 +361,7 @@ _WS = re.compile(r"\s+")
 
 
 def speakable(reply: str) -> str:
-    """Plain text for one TTS clip: link text instead of links, no URLs or
+    """Plain text for the spoken reply: link text instead of links, no URLs or
     markdown marks, capped at a sentence end."""
     out = _URL.sub(" ", _MD_LINK.sub(r"\1", reply or ""))
     out = _WS.sub(" ", _MD_CHARS.sub(" ", out)).strip()
@@ -426,9 +428,11 @@ class Satellite:
         node_name: str,
         speaker: str,
         helios_timeout_s: int = 180,
+        progressive_tts: bool = True,
         client_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
         self._chat = chat
+        self._progressive_tts = progressive_tts
         self._host = host
         self._port = port
         self._api_key = api_key
@@ -678,7 +682,9 @@ class Satellite:
         if outcome != "ok":
             self._send_error(ERR_FAILED)
             return outcome
-        # Only what was actually heard goes into the follow-up history.
+        # Only a reply that started playing goes into the follow-up history.
+        # (A progressive reply whose later sentences failed to synthesize
+        # stops early but is remembered whole — bgw_tts_progressive_total.)
         self._remember(transcript, spoken)
         return "ok"
 
@@ -812,7 +818,7 @@ class Satellite:
         self._last_turn_at = time.time()
 
     async def _speak(self, spoken: str) -> str:
-        """One clip on the room's speaker, in the reply's voice style (D1, D3, D4, D6).
+        """One play_media on the room's speaker, in the reply's voice style (D1, D3, D4, D6).
 
         Returns ok | speaker_unavailable | tts_failed.
         """
@@ -830,6 +836,7 @@ class Satellite:
                     style=current_reply_style(),
                     allow_fallback=False,  # never answer in another room (D10)
                     record_history=False,  # conversation, not an announcement
+                    progressive=self._progressive_tts,  # first ~8 s play while the rest is made (D3)
                 ),
                 timeout=ANNOUNCE_TIMEOUT_S,
             )
@@ -1080,6 +1087,10 @@ async def satellite_loop(chat: ChatFn) -> None:
         SATELLITE_CONNECT_TOTAL.labels(result=result)
     for reason in LISTEN_END_REASONS:
         SATELLITE_LISTEN_END_TOTAL.labels(reason=reason)
+    if _settings.voice_satellite_progressive_tts:
+        from orchestrator import audio_stream
+
+        audio_stream.seed_metrics()
     sat = Satellite(
         chat=chat,
         host=_settings.voice_satellite_host,
@@ -1088,6 +1099,7 @@ async def satellite_loop(chat: ChatFn) -> None:
         node_name=_settings.voice_satellite_name,
         speaker=_settings.voice_satellite_speaker,
         helios_timeout_s=_settings.voice_satellite_helios_timeout_seconds,
+        progressive_tts=_settings.voice_satellite_progressive_tts,
     )
     logger.info("[SATELLITE] Bridge started for %s", _settings.voice_satellite_name)
     await sat.run_forever()

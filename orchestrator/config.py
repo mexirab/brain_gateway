@@ -505,6 +505,10 @@ class Settings(BaseSettings):
     # mode, so they never fall back to another room's speakers)
     voice_satellite_speaker: str = ""
     voice_satellite_helios_timeout_seconds: int = 180  # Helios asleep: max wait after waking it (D5)
+    # Long reply starts playing once its first ~8 s are synthesized; the rest
+    # streams in while it plays (audio_stream.py). Tested on a Nest Hub Max.
+    # false = synthesize the whole reply first (one clip, the old behavior).
+    voice_satellite_progressive_tts: bool = True
 
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't

@@ -10984,7 +10984,7 @@
           "sort": "desc"
         }
       },
-      "description": "ok turns only, from the VAD's end-of-listening decision until HA accepted play_media; the time spent listening and the Cast speaker's 1-3 s are not included.",
+      "description": "ok turns only, from the VAD's end-of-listening decision until HA accepted play_media; the time spent listening and the Cast speaker's 1-3 s are not included. Replies over 200 characters stream: this then ends when the first ~8 s of audio are ready, not the whole reply (a step drop after that change is the streaming, not a faster TTS).",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -10992,6 +10992,178 @@
         "y": 311
       },
       "id": 143
+    },
+    {
+      "type": "timeseries",
+      "title": "Reply Audio Outcomes (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum by (result) (increase(bgw_tts_progressive_total{result!=\"not_wav\"}[24h]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Long replies streamed to the speaker while the rest is synthesized. complete = played to the end. Cut short although the turn counts ok: chunk_failed (a later sentence's TTS failed or hung), stalled, never_read (speaker never fetched), format_mismatch, too_long, deadline \u2014 alert VoiceReplyCutShort. abandoned = the speaker hung up with audio left (stopped, or something else played); superseded = a newer reply took the speaker; not_played = no speaker accepted play_media. Short replies (one clip) aren't counted here.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 319
+      },
+      "id": 144
+    },
+    {
+      "type": "timeseries",
+      "title": "Reply Stream Underruns (24h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(bgw_tts_progressive_underruns_total[24h]))",
+          "legendFormat": "underruns",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": true,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "A sentence arrived when the speaker had < 0.7 s left, so it paused to re-buffer. Estimated from the speaker's first read (pessimistic by Cast's start-up delay). Rising = the TTS is slower than speech (contention with other TTS callers, or a slower voice).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 319
+      },
+      "id": 145
     },
     {
       "type": "row",
@@ -11002,9 +11174,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 319
+        "y": 327
       },
-      "id": 144
+      "id": 146
     },
     {
       "type": "timeseries",
@@ -11087,9 +11259,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 320
+        "y": 328
       },
-      "id": 145
+      "id": 147
     },
     {
       "type": "timeseries",
@@ -11173,9 +11345,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 320
+        "y": 328
       },
-      "id": 146
+      "id": 148
     },
     {
       "type": "timeseries",
@@ -11259,9 +11431,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 320
+        "y": 328
       },
-      "id": 147
+      "id": 149
     },
     {
       "type": "row",
@@ -11272,9 +11444,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 328
+        "y": 336
       },
-      "id": 148
+      "id": 150
     },
     {
       "type": "stat",
@@ -11340,9 +11512,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 329
+        "y": 337
       },
-      "id": 149
+      "id": 151
     },
     {
       "type": "stat",
@@ -11408,9 +11580,9 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 329
+        "y": 337
       },
-      "id": 150
+      "id": 152
     },
     {
       "type": "timeseries",
@@ -11494,9 +11666,9 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 329
+        "y": 337
       },
-      "id": 151
+      "id": 153
     },
     {
       "type": "stat",
@@ -11562,9 +11734,9 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 329
+        "y": 337
       },
-      "id": 152
+      "id": 154
     },
     {
       "type": "row",
@@ -11575,9 +11747,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 337
+        "y": 345
       },
-      "id": 153
+      "id": 155
     },
     {
       "type": "stat",
@@ -11647,9 +11819,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 338
+        "y": 346
       },
-      "id": 154
+      "id": 156
     },
     {
       "type": "timeseries",
@@ -11733,9 +11905,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 338
+        "y": 346
       },
-      "id": 155
+      "id": 157
     },
     {
       "type": "timeseries",
@@ -11819,9 +11991,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 338
+        "y": 346
       },
-      "id": 156
+      "id": 158
     },
     {
       "type": "logs",
@@ -11860,9 +12032,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 346
+        "y": 354
       },
-      "id": 157
+      "id": 159
     },
     {
       "type": "row",
@@ -11873,9 +12045,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 354
+        "y": 362
       },
-      "id": 158
+      "id": 160
     },
     {
       "type": "timeseries",
@@ -11959,9 +12131,9 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 355
+        "y": 363
       },
-      "id": 159
+      "id": 161
     },
     {
       "type": "timeseries",
@@ -12069,9 +12241,9 @@
         "h": 8,
         "w": 4,
         "x": 4,
-        "y": 355
+        "y": 363
       },
-      "id": 160
+      "id": 162
     },
     {
       "type": "timeseries",
@@ -12167,9 +12339,9 @@
         "h": 8,
         "w": 4,
         "x": 8,
-        "y": 355
+        "y": 363
       },
-      "id": 161
+      "id": 163
     },
     {
       "type": "logs",
@@ -12208,9 +12380,9 @@
         "h": 8,
         "w": 4,
         "x": 12,
-        "y": 355
+        "y": 363
       },
-      "id": 162
+      "id": 164
     },
     {
       "type": "timeseries",
@@ -12294,9 +12466,9 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 355
+        "y": 363
       },
-      "id": 163
+      "id": 165
     },
     {
       "type": "timeseries",
@@ -12380,9 +12552,9 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 355
+        "y": 363
       },
-      "id": 164
+      "id": 166
     },
     {
       "type": "timeseries",
@@ -12478,9 +12650,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 363
+        "y": 371
       },
-      "id": 165
+      "id": 167
     },
     {
       "type": "timeseries",
@@ -12588,9 +12760,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 363
+        "y": 371
       },
-      "id": 166
+      "id": 168
     },
     {
       "type": "stat",
@@ -12660,9 +12832,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 363
+        "y": 371
       },
-      "id": 167
+      "id": 169
     },
     {
       "type": "row",
@@ -12673,9 +12845,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 371
+        "y": 379
       },
-      "id": 168
+      "id": 170
     },
     {
       "type": "stat",
@@ -12736,9 +12908,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 372
+        "y": 380
       },
-      "id": 169
+      "id": 171
     },
     {
       "type": "timeseries",
@@ -12822,9 +12994,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 372
+        "y": 380
       },
-      "id": 170
+      "id": 172
     },
     {
       "type": "stat",
@@ -12885,9 +13057,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 372
+        "y": 380
       },
-      "id": 171
+      "id": 173
     },
     {
       "type": "timeseries",
@@ -12975,9 +13147,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 380
+        "y": 388
       },
-      "id": 172
+      "id": 174
     },
     {
       "type": "stat",
@@ -13043,9 +13215,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 380
+        "y": 388
       },
-      "id": 173
+      "id": 175
     },
     {
       "type": "stat",
@@ -13111,9 +13283,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 380
+        "y": 388
       },
-      "id": 174
+      "id": 176
     },
     {
       "type": "stat",
@@ -13179,9 +13351,9 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 388
+        "y": 396
       },
-      "id": 175
+      "id": 177
     },
     {
       "type": "timeseries",
@@ -13265,9 +13437,9 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 388
+        "y": 396
       },
-      "id": 176
+      "id": 178
     },
     {
       "type": "timeseries",
@@ -13375,9 +13547,9 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 388
+        "y": 396
       },
-      "id": 177
+      "id": 179
     },
     {
       "type": "row",
@@ -13388,9 +13560,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 396
+        "y": 404
       },
-      "id": 178
+      "id": 180
     },
     {
       "type": "stat",
@@ -13452,9 +13624,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 397
+        "y": 405
       },
-      "id": 179
+      "id": 181
     },
     {
       "type": "stat",
@@ -13526,9 +13698,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 397
+        "y": 405
       },
-      "id": 180
+      "id": 182
     },
     {
       "type": "stat",
@@ -13604,9 +13776,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 397
+        "y": 405
       },
-      "id": 181
+      "id": 183
     },
     {
       "type": "stat",
@@ -13686,9 +13858,9 @@
         "h": 6,
         "w": 4,
         "x": 12,
-        "y": 397
+        "y": 405
       },
-      "id": 182
+      "id": 184
     },
     {
       "type": "timeseries",
@@ -13772,9 +13944,9 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 397
+        "y": 405
       },
-      "id": 183
+      "id": 185
     },
     {
       "type": "row",
@@ -13785,9 +13957,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 403
+        "y": 411
       },
-      "id": 184
+      "id": 186
     },
     {
       "type": "logs",
@@ -13826,9 +13998,9 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 404
+        "y": 412
       },
-      "id": 185
+      "id": 187
     },
     {
       "type": "logs",
@@ -13867,9 +14039,9 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 404
+        "y": 412
       },
-      "id": 186
+      "id": 188
     }
   ]
 }

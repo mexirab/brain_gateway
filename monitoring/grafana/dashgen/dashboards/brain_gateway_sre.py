@@ -1532,7 +1532,9 @@ def build() -> dict:
     # ended and ends when HA accepted play_media (Cast adds 1-3 s). How listening
     # ended is its own panel: a run that hits the 15 s cap still counts as an ok
     # turn, so max_utterance is the only place the "she never heard me stop"
-    # failure of 2026-11-11 shows. No data at all = feature disabled.
+    # failure of 2026-11-11 shows. Long replies stream (audio_stream.py): the
+    # turn is ok once the first ~8 s play, so a reply cut short later only
+    # shows in Reply Audio Outcomes. No data at all = feature disabled.
     r, y = row_divider("Voice Satellite", y)
     panels.append(r)
     satellite_row = [
@@ -1588,13 +1590,40 @@ def build() -> dict:
             unit="s",
             description=(
                 "ok turns only, from the VAD's end-of-listening decision until HA accepted play_media; "
-                "the time spent listening and the Cast speaker's 1-3 s are not included."
+                "the time spent listening and the Cast speaker's 1-3 s are not included. Replies over "
+                "200 characters stream: this then ends when the first ~8 s of audio are ready, not the "
+                "whole reply (a step drop after that change is the streaming, not a faster TTS)."
+            ),
+        ),
+        timeseries(
+            "Reply Audio Outcomes (24h)",
+            [('sum by (result) (increase(bgw_tts_progressive_total{result!="not_wav"}[24h]))', "{{result}}")],
+            unit="none",
+            description=(
+                "Long replies streamed to the speaker while the rest is synthesized. complete = played to "
+                "the end. Cut short although the turn counts ok: chunk_failed (a later sentence's TTS failed "
+                "or hung), stalled, never_read (speaker never fetched), format_mismatch, too_long, deadline "
+                "— alert VoiceReplyCutShort. abandoned = the speaker hung up with audio left (stopped, or "
+                "something else played); superseded = a newer reply took the speaker; not_played = no "
+                "speaker accepted play_media. Short replies (one clip) aren't counted here."
+            ),
+        ),
+        timeseries(
+            "Reply Stream Underruns (24h)",
+            [("sum(increase(bgw_tts_progressive_underruns_total[24h]))", "underruns")],
+            unit="none",
+            description=(
+                "A sentence arrived when the speaker had < 0.7 s left, so it paused to re-buffer. "
+                "Estimated from the speaker's first read (pessimistic by Cast's start-up delay). Rising = "
+                "the TTS is slower than speech (contention with other TTS callers, or a slower voice)."
             ),
         ),
     ]
     row, y = grid_row(satellite_row[:3], y, heights=[8, 8, 8])
     panels.extend(row)
-    row, y = grid_row(satellite_row[3:], y, heights=[8, 8, 8])
+    row, y = grid_row(satellite_row[3:6], y, heights=[8, 8, 8])
+    panels.extend(row)
+    row, y = grid_row(satellite_row[6:], y, heights=[8, 8])
     panels.extend(row)
 
     # -------------------------------------------------------- Telegram Bot

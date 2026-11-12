@@ -535,6 +535,22 @@ groups:
           summary: "Voice satellite {{ $labels.device }} not connected for 30+ min"
           description: "\"Hey Jess\" on {{ $labels.device }} gets the error sound (or nothing). Check `sum by (result)(increase(bgw_satellite_connect_total[1h]))`: unreachable/timeout = device unplugged, off Wi-Fi or lost its DHCP reservation; bad_key = VOICE_SATELLITE_API_KEY doesn't match the firmware's api: encryption: key; wrong_device = that IP is another ESPHome node (VOICE_SATELLITE_NAME); no_api_audio = firmware lacks voice_assistant. `docker logs brain-orchestrator | grep SATELLITE`. Unplugged on purpose: VOICE_SATELLITE_ENABLED=false + `docker compose up -d --force-recreate orchestrator`."
 
+      # A voice-satellite reply that started playing but stopped early (or never
+      # reached the speaker) while the turn still reported ok: progressive TTS
+      # (orchestrator/audio_stream.py) synthesizes the rest of a long reply
+      # while the speaker plays, so a later sentence's TTS failure only shows
+      # in bgw_tts_progressive_total. Seeded only while the satellite runs with
+      # progressive TTS on, so silent otherwise. TTSDown inhibits it (one
+      # outage, one notice).
+      - alert: VoiceReplyCutShort
+        expr: sum(increase(bgw_tts_progressive_total{result=~"chunk_failed|format_mismatch|too_long|deadline|stalled|never_read"}[1h])) > 0
+        for: 2m
+        labels:
+          severity: info
+        annotations:
+          summary: "A spoken voice-satellite reply was cut short"
+          description: "{{ $value | humanize }} reply/replies in the last hour stopped early or never played although the turn counted ok. By result: `sum by (result)(increase(bgw_tts_progressive_total[1h]))`. chunk_failed = a later sentence's TTS failed or hung — `{service=\"voxcpm-tts\"} |= \"Synthesis failed\"` in Loki, and `docker logs brain-orchestrator | grep TTS-STREAM` (status code on the warning line); stalled = no new audio for 30 s, or the speaker gave up after running dry; never_read = HA accepted play_media but the speaker never fetched the stream (speaker asleep/rebooting, or ORCHESTRATOR_URL unreachable from it). Fallback: VOICE_SATELLITE_PROGRESSIVE_TTS=false + `docker compose up -d --force-recreate orchestrator` (whole reply synthesized first, slower start)."
+
       # The did-the-user-ask gate (orchestrator/ha_intent.py) refused chat-model
       # home_assistant calls. Nothing changed on any device — the gate worked —
       # but repeated blocks mean either the brain is acting unasked (after a
