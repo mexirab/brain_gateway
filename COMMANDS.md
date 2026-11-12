@@ -282,26 +282,33 @@ ssh labadmin@10.0.0.195 "journalctl -u voxcpm-tts --no-pager -n 50"
 # Is the bridge connected? Turn outcomes + stage timings (no transcript/reply in logs)
 docker logs brain-orchestrator 2>&1 | grep SATELLITE | tail -20
 
-# Connection attempts / turn outcomes from Prometheus (loopback on Jupiter)
-curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result)(increase(bgw_satellite_connect_total[1h]))' | jq '.data.result'
-curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result,wake_word)(increase(bgw_satellite_turn_total[24h]))' | jq '.data.result'
+# Connected per device + config problems (skipped VOICE_SATELLITE_DEVICES entries; 0 = fine)
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=max by (device)(bgw_satellite_connected)' | jq '.data.result'
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=bgw_satellite_config_problems' | jq '.data.result'
+docker logs brain-orchestrator 2>&1 | grep 'CONFIG.*VOICE_SATELLITE'
+
+# Connection attempts / turn outcomes per device from Prometheus (loopback on Jupiter); result=duplicate = another device answered
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (device,result)(increase(bgw_satellite_connect_total[1h]))' | jq '.data.result'
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (device,result,wake_word)(increase(bgw_satellite_turn_total[24h]))' | jq '.data.result'
+docker logs brain-orchestrator 2>&1 | grep "also heard by" | tail -10
 
 # How listening ended (max_utterance = answers ~15 s late) + the VAD's numbers per run
-curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (reason)(increase(bgw_satellite_listen_end_total[24h]))' | jq '.data.result'
+curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (device,reason)(increase(bgw_satellite_listen_end_total[24h]))' | jq '.data.result'
 docker logs brain-orchestrator 2>&1 | grep "listening ended" | tail -10
 
 # Long replies (progressive TTS): outcomes (cut short = chunk_failed/stalled/never_read/...) + start/finish lines
 curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (result)(increase(bgw_tts_progressive_total[24h]))' | jq '.data.result'
 docker logs brain-orchestrator 2>&1 | grep TTS-STREAM | tail -10
 
-# New device API key (firmware api_encryption_key = VOICE_SATELLITE_API_KEY)
+# New API key (firmware api_encryption_key = VOICE_SATELLITE_API_KEY; one key for every device — rotating = reflash all)
 python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
 
 # Build + OTA flash the firmware (<dir> holds atom-echo-jess.yaml, hey_jess.json/.tflite, secrets.yaml)
 docker run --rm -it -v <dir>:/config -v <dir>/.cache:/cache ghcr.io/esphome/esphome:stable \
   -s name <node> run atom-echo-jess.yaml --device <ip>
 
-# After changing any VOICE_SATELLITE_* in .env
+# After changing any VOICE_SATELLITE_* in .env (VOICE_SATELLITE_DEVICES: no spaces) — check it sources, then recreate
+bash -c 'set -euo pipefail; set -a; source .env' && echo ok
 docker compose up -d --force-recreate orchestrator
 ```
 

@@ -4,6 +4,45 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Voice satellite: several devices, one per room (2026-11-12)
+
+Branch `feat/satellite-multi-device`. The bridge served one ATOM Echo. It now runs one `Satellite` per configured device inside the one bridge task, each answering only on its own room's speaker (D10 unchanged), with a rule for one "Hey Jess" heard by two devices (D11 amended, was "no multi-device arbitration"). Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Several devices / Add a device.
+
+### Upgrade action
+
+- None for the merge: with `VOICE_SATELLITE_DEVICES` empty, the single-device settings work as before.
+- To add a device: `docs/VOICE_AND_TTS.md` → Voice satellite → Add a device (same API key, unique room-named node, one `.env` line **without spaces**, comment out the single-device lines, check `.env` still sources, `--force-recreate`), then the checks + drills in `monitoring/README.md` → Voice Satellite → Adding a device.
+
+### Orchestrator
+
+- New env var `VOICE_SATELLITE_DEVICES` = `name@host=speaker,…` (ESPHome node name, device IP — no DNS/mDNS, no IPv6 scope id — and that room's `media_player.*`; names and IPs unique; ≤ 8). Set → lists every device, and `VOICE_SATELLITE_HOST` / `_NAME` / `_SPEAKER` are ignored (WARNING if `_HOST` or `_SPEAKER` is still set). All devices share `VOICE_SATELLITE_PORT` and `VOICE_SATELLITE_API_KEY`. Parsed by `config.parse_voice_satellite_devices`; `Settings.voice_satellites()` returns the list (or the single device).
+- A bad entry is skipped with `[CONFIG] VOICE_SATELLITE_DEVICES entry N <problem>; that device is skipped.` (position only, never the text); the other rooms keep working. No valid entry → feature disabled. `voice_satellite_config_problems` is set by the validator (not a setting).
+- One `Satellite` per device (own connection, busy flag, rate limit, follow-up history) in an `asyncio.TaskGroup`: shutdown waits for every device's cleanup; a device loop that raises logs `[SATELLITE] <name>: device loop exited unexpectedly: <Type>` and the others keep running (that device stays offline until a restart).
+- `WakeArbiter` (`DUPLICATE_WAKE_S` = 3.0 s): the first device to report a non-button wake word holds the claim for 3 s from that wake; another device's wake word in the window is a duplicate, accepted and ended silently at its first audio chunk (`RUN_START`, `STT_START`, `RUN_END`, no `ERROR`), result/reason `duplicate`. A busy or rate-limited device still claims. A duplicate that never streams gets the normal ending (`RUN_END` + error sound). A duplicate during the device's own running turn leaves that turn's busy flag alone and plays no busy sound.
+- `reminder_manager._known_speakers()` covers every configured room speaker.
+- Known limits: first to report wins, not the nearest; two people (or a TV) in two rooms within 3 s get one answer; a wake report delayed > 3 s answers too; two rooms answering at once queue on the single llama slot and the one VoxCPM2 worker and share the one-reply voice style; the rate limit is per device.
+
+### Security
+
+- All devices share one noise key, stored readable in ESPHome flash (no flash encryption by default): physical access to any one device leaks it, and the holder can pose as any room's device on the LAN or talk to every device's API. Rotating = reflashing every device. Documented in the module docstring, `docs/ENV_VARS.md`, `docs/VOICE_AND_TTS.md`.
+- Name devices by room, never by a person: names land in logs, metric labels, alert text and the self-audit's LLM input.
+
+### Monitoring
+
+- `device` label added to `bgw_satellite_connect_total`, `bgw_satellite_turn_total`, `bgw_satellite_listen_end_total`; series seeded per device at startup. New result/reason `duplicate`. Old unlabelled series go stale after the deploy (cosmetic, up to 24 h).
+- New gauge `bgw_satellite_config_problems` (always exported at startup) and quiet alert `VoiceSatelliteConfigInvalid` (`> 0` for 5m, `pushover-quiet`, 24h repeat, same route as `VoiceSatelliteDisconnected`) — the only signal for a skipped device. `VoiceSatelliteDisconnected` text filters by device.
+- Grafana "Voice Satellite": connect / turn / listen-end panels split `by (device, …)`; "Wakes vs. False Wakes" excludes duplicates.
+
+### Tests
+
+- `orchestrator/tests/test_voice_satellite.py`: 39 new tests (device-list parsing and skip-by-position, config-problem count, single-device fallback, `WakeArbiter` window/button/boundary, duplicate runs streamed and never streamed, busy/rate-limited claims, per-device speakers and metric labels, TaskGroup loop: every device, shutdown, one device failing, seeding, the startup gauge).
+
+### Docs
+
+- `CLAUDE.md`, `docs/ENV_VARS.md`, `docs/VOICE_AND_TTS.md` (Several devices, Add a device, D10, D11, Known limits), `monitoring/README.md` (metrics, alerts, runbook, Adding a device), `COMMANDS.md`, `TECHNICAL_REFERENCE.md`, `ROADMAP.md`, `docs/JESS_QUICK_START.md`.
+
+---
+
 ## [Unreleased] — Voice satellite: progressive spoken replies (2026-11-11)
 
 Branch `feat/satellite-stream-reply`. A long satellite reply waited for its whole synthesis (VoxCPM2 ≈ 0.4 s + 16 ms/char) before the first word. Now a reply over 200 chars starts playing once ~8 s of audio exists and the rest is synthesized while the speaker plays. Measured on a Nest Hub Max: a 445-char reply starts at ~3.8 s instead of ~8.5 s, no stalls; stopping the speaker mid-reply stops synthesis ~3 s later. Decision D3 amended ("one TTS clip" → one `play_media` per reply, synthesized in pieces). Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Progressive replies.

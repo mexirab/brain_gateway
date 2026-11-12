@@ -533,7 +533,19 @@ groups:
           severity: warning
         annotations:
           summary: "Voice satellite {{ $labels.device }} not connected for 30+ min"
-          description: "\"Hey Jess\" on {{ $labels.device }} gets the error sound (or nothing). Check `sum by (result)(increase(bgw_satellite_connect_total[1h]))`: unreachable/timeout = device unplugged, off Wi-Fi or lost its DHCP reservation; bad_key = VOICE_SATELLITE_API_KEY doesn't match the firmware's api: encryption: key; wrong_device = that IP is another ESPHome node (VOICE_SATELLITE_NAME); no_api_audio = firmware lacks voice_assistant. `docker logs brain-orchestrator | grep SATELLITE`. Unplugged on purpose: VOICE_SATELLITE_ENABLED=false + `docker compose up -d --force-recreate orchestrator`."
+          description: "\"Hey Jess\" on {{ $labels.device }} gets the error sound (or nothing). Check `sum by (result)(increase(bgw_satellite_connect_total{device=\"{{ $labels.device }}\"}[1h]))`: unreachable/timeout = device unplugged, off Wi-Fi or lost its DHCP reservation; bad_key = VOICE_SATELLITE_API_KEY doesn't match the firmware's api: encryption: key; wrong_device = that IP is another ESPHome node (the name in VOICE_SATELLITE_DEVICES / VOICE_SATELLITE_NAME); no_api_audio = firmware lacks voice_assistant. `docker logs brain-orchestrator | grep SATELLITE`. Unplugged on purpose: take it out of VOICE_SATELLITE_DEVICES (last device: VOICE_SATELLITE_ENABLED=false) + `docker compose up -d --force-recreate orchestrator`."
+
+      # A VOICE_SATELLITE_DEVICES entry was skipped (typo), or the satellite was
+      # asked for but its config disabled it. Neither has a connection gauge,
+      # so VoiceSatelliteDisconnected can't fire for it. Set once at startup.
+      - alert: VoiceSatelliteConfigInvalid
+        expr: bgw_satellite_config_problems > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Voice satellite config has {{ $value }} problem(s): a room may not be listening"
+          description: "A device in VOICE_SATELLITE_DEVICES was skipped, or VOICE_SATELLITE_ENABLED=true was turned off by validation, so \"Hey Jess\" there gets no answer. `docker logs brain-orchestrator 2>&1 | grep 'CONFIG.*VOICE_SATELLITE'` names the entry by position and what is wrong with it (format name@host=speaker, comma-separated, no spaces; host must be an IP; speaker one media_player.* id; names and IPs unique; at most 8). Fix Jupiter .env, then `docker compose up -d --force-recreate orchestrator`."
 
       # A voice-satellite reply that started playing but stopped early (or never
       # reached the speaker) while the turn still reported ok: progressive TTS

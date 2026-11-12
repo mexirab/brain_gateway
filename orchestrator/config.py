@@ -9,6 +9,7 @@ Import `settings` to access configuration anywhere:
 """
 
 import re
+from dataclasses import dataclass
 from typing import Dict, List
 
 from dotenv import load_dotenv
@@ -44,6 +45,76 @@ def voice_satellite_key_ok(key: str) -> bool:
         return len(base64.b64decode(key or "", validate=True)) == 32
     except (binascii.Error, ValueError):
         return False
+
+
+# ESPHome node name, and the reply speaker (interpolated into an HA path).
+_SAT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
+_SAT_SPEAKER_RE = re.compile(r"media_player\.[a-z0-9_]+")
+MAX_VOICE_SATELLITES = 8
+
+
+@dataclass(frozen=True)
+class SatelliteDevice:
+    """One voice satellite: ESPHome node name, device IP, its room's reply speaker."""
+
+    name: str
+    host: str
+    speaker: str
+
+
+def _ip_or_none(host: str) -> str | None:
+    """Normalized IP address, or None. A .local / DNS name would make
+    aioesphomeapi open mDNS sockets in the container; an IPv6 scope id
+    ("fe80::1%eth0") is free text, so it's refused too."""
+    import ipaddress
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if getattr(ip, "scope_id", None):
+        return None
+    return str(ip)
+
+
+def parse_voice_satellite_devices(raw: str) -> tuple[List[SatelliteDevice], List[str]]:
+    """VOICE_SATELLITE_DEVICES ("name@host=speaker,...") → (devices, problems).
+
+    A bad entry is skipped (and named by its position in ``problems``, never by
+    its text) so one typo doesn't take the other rooms down. Names and hosts
+    must be unique; at most MAX_VOICE_SATELLITES devices.
+    """
+    devices: List[SatelliteDevice] = []
+    problems: List[str] = []
+    names: set[str] = set()
+    hosts: set[str] = set()
+    entries = [e.strip() for e in (raw or "").split(",") if e.strip()]
+    for i, entry in enumerate(entries, 1):
+        name, at, rest = entry.partition("@")
+        host, eq, speaker = rest.partition("=")
+        name, host, speaker = name.strip(), host.strip(), speaker.strip()
+        ip = _ip_or_none(host)
+        if not (at and eq):
+            problem = "is not name@host=speaker"
+        elif not _SAT_NAME_RE.fullmatch(name):
+            problem = "has a name that is not an ESPHome node name"
+        elif ip is None:
+            problem = "has a host that is not an IP address"
+        elif not _SAT_SPEAKER_RE.fullmatch(speaker):
+            problem = "has a speaker that is not one media_player entity id"
+        elif name in names:
+            problem = "repeats an earlier device name"
+        elif ip in hosts:
+            problem = "repeats an earlier device IP"
+        elif len(devices) >= MAX_VOICE_SATELLITES:
+            problem = f"is past the {MAX_VOICE_SATELLITES}-device limit"
+        else:
+            devices.append(SatelliteDevice(name=name, host=ip, speaker=speaker))
+            names.add(name)
+            hosts.add(ip)
+            continue
+        problems.append(f"entry {i} {problem}")
+    return devices, problems
 
 
 class Settings(BaseSettings):
@@ -491,24 +562,36 @@ class Settings(BaseSettings):
     telegram_voice_reply_max_chars: int = 1200  # cap the spoken portion (TTS latency/size)
 
     # -- Voice satellite (ATOM Echo → Jess, no HA voice pipeline) ---------------
-    # orchestrator/voice_satellite.py: a forever task connects OUT to one ESPHome
+    # orchestrator/voice_satellite.py: a forever task connects OUT to each ESPHome
     # voice device's native API (:6053), receives its mic audio after the
     # on-device wake word ("Hey Jess" / "Okay Jess"), runs STT → one Jess voice
-    # turn → plays the reply on a Google speaker via HA. The device must be
-    # removed from HA's ESPHome integration (one voice subscriber per device).
+    # turn → plays the reply on that room's Google speaker via HA. The devices
+    # must be removed from HA's ESPHome integration (one voice subscriber each).
     voice_satellite_enabled: bool = False
+    # Several devices: "name@host=speaker,name@host=speaker" (ESPHome node name,
+    # device IP, the room's media_player.* reply speaker; at most 8). Write it
+    # without spaces: scripts source .env with bash. When set, it lists every
+    # device and the single-device HOST/NAME/SPEAKER below are ignored. All
+    # devices share the port and API key below.
+    voice_satellite_devices: str = ""
+    # One device (used when VOICE_SATELLITE_DEVICES is empty):
     voice_satellite_host: str = ""  # device IP (DHCP reservation); mDNS names don't resolve in the container
     voice_satellite_port: int = 6053
-    voice_satellite_api_key: str = ""  # the device's api: encryption: key (base64, 32 bytes) — secret
+    voice_satellite_api_key: str = ""  # the devices' api: encryption: key (base64, 32 bytes) — secret
     voice_satellite_name: str = "atom-echo-jess"  # ESPHome node name; the connection refuses any other device
-    # media_player.* the reply plays on — required (replies play even in sleep
-    # mode, so they never fall back to another room's speakers)
+    # media_player.* the reply plays on — required in single-device mode (replies
+    # play even in sleep mode, so they never fall back to another room's speakers)
     voice_satellite_speaker: str = ""
     voice_satellite_helios_timeout_seconds: int = 180  # Helios asleep: max wait after waking it (D5)
     # Long reply starts playing once its first ~8 s are synthesized; the rest
     # streams in while it plays (audio_stream.py). Tested on a Nest Hub Max.
     # false = synthesize the whole reply first (one clip, the old behavior).
     voice_satellite_progressive_tts: bool = True
+    # Set by validate_voice_satellite_config, not a setting: skipped
+    # VOICE_SATELLITE_DEVICES entries + 1 if the feature was asked for but
+    # disabled — exported as bgw_satellite_config_problems (alert
+    # VoiceSatelliteConfigInvalid), since a skipped device has no other signal.
+    voice_satellite_config_problems: int = 0
 
     # -- Paperless bridge (F-012) ----------------------------------------------
     # Hands files off to Paperless-ngx for OCR + auto-tagging. Doesn't
@@ -727,8 +810,11 @@ class Settings(BaseSettings):
         speaker must be plain ids (the speaker is interpolated into an HA path).
         A room speaker is required: replies play even in sleep mode, so they
         must never fall back to another room's speakers.
+
+        With VOICE_SATELLITE_DEVICES set, a malformed entry is skipped with an
+        ERROR (the other rooms keep working); no valid entry at all disables
+        the feature, like a bad single-device config.
         """
-        import ipaddress
         import logging
 
         log = logging.getLogger(__name__)
@@ -736,34 +822,57 @@ class Settings(BaseSettings):
         object.__setattr__(self, "voice_satellite_speaker", speaker)
         clamped = max(0, min(600, self.voice_satellite_helios_timeout_seconds))
         object.__setattr__(self, "voice_satellite_helios_timeout_seconds", clamped)
+        object.__setattr__(self, "voice_satellite_config_problems", 0)
         if not self.voice_satellite_enabled:
             return self
 
         problem = ""
         host = self.voice_satellite_host.strip()
-        try:
-            ipaddress.ip_address(host)
-            host_ok = True
-        except ValueError:
-            host_ok = False
-        if not host_ok:
+        if self.voice_satellite_devices.strip():
+            devices, skipped = parse_voice_satellite_devices(self.voice_satellite_devices)
+            object.__setattr__(self, "voice_satellite_config_problems", len(skipped))
+            for entry_problem in skipped:
+                log.error("[CONFIG] VOICE_SATELLITE_DEVICES %s; that device is skipped.", entry_problem)
+            if not devices:
+                problem = "VOICE_SATELLITE_DEVICES has no valid name@host=speaker entry"
+            elif host or speaker:
+                log.warning(
+                    "[CONFIG] VOICE_SATELLITE_DEVICES is set, so VOICE_SATELLITE_HOST/NAME/SPEAKER are ignored."
+                )
+        elif _ip_or_none(host) is None:
             problem = "VOICE_SATELLITE_HOST is missing or not an IP address"
-        elif not 1 <= self.voice_satellite_port <= 65535:
-            problem = "VOICE_SATELLITE_PORT is out of range"
-        elif not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", self.voice_satellite_name):
+        elif not _SAT_NAME_RE.fullmatch(self.voice_satellite_name):
             problem = "VOICE_SATELLITE_NAME is not an ESPHome node name"
-        elif not re.fullmatch(r"media_player\.[a-z0-9_]+", speaker):
+        elif not _SAT_SPEAKER_RE.fullmatch(speaker):
             problem = "VOICE_SATELLITE_SPEAKER is missing or not a media_player entity id"
-        elif not voice_satellite_key_ok(self.voice_satellite_api_key):
-            problem = "VOICE_SATELLITE_API_KEY is missing or not a base64 32-byte key"
-        elif not (self.stt_url and self.tts_url and self.ha_url and self.ha_token):
-            problem = "STT_URL, TTS_URL, HA_URL and HA_TOKEN are not all set"
+        if not problem:  # checks shared by every device
+            if not 1 <= self.voice_satellite_port <= 65535:
+                problem = "VOICE_SATELLITE_PORT is out of range"
+            elif not voice_satellite_key_ok(self.voice_satellite_api_key):
+                problem = "VOICE_SATELLITE_API_KEY is missing or not a base64 32-byte key"
+            elif not (self.stt_url and self.tts_url and self.ha_url and self.ha_token):
+                problem = "STT_URL, TTS_URL, HA_URL and HA_TOKEN are not all set"
         if problem:
             log.error("[CONFIG] VOICE_SATELLITE_ENABLED=true but %s; disabling the voice satellite.", problem)
             object.__setattr__(self, "voice_satellite_enabled", False)
+            object.__setattr__(self, "voice_satellite_config_problems", self.voice_satellite_config_problems + 1)
         else:
             object.__setattr__(self, "voice_satellite_host", host)
         return self
+
+    def voice_satellites(self) -> List[SatelliteDevice]:
+        """The configured satellites: VOICE_SATELLITE_DEVICES' valid entries, or
+        the single HOST/NAME/SPEAKER device. Only meaningful while
+        voice_satellite_enabled (the validator has checked the config then)."""
+        if self.voice_satellite_devices.strip():
+            return parse_voice_satellite_devices(self.voice_satellite_devices)[0]
+        return [
+            SatelliteDevice(
+                name=self.voice_satellite_name,
+                host=self.voice_satellite_host,
+                speaker=self.voice_satellite_speaker,
+            )
+        ]
 
     @model_validator(mode="after")
     def validate_caldav_config(self) -> "Settings":

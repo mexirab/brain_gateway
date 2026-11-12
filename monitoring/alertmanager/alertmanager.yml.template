@@ -142,10 +142,10 @@ route:
         - alertname="AnnouncementSpeakerUnavailable"
       receiver: "pushover-quiet"
       repeat_interval: 24h
-    # Voice satellite offline: an unplugged device stays offline for days —
-    # once a day is enough.
+    # Voice satellite offline (an unplugged device stays offline for days) or
+    # a config problem (stays until .env is fixed) — once a day is enough.
     - matchers:
-        - alertname="VoiceSatelliteDisconnected"
+        - alertname=~"VoiceSatelliteDisconnected|VoiceSatelliteConfigInvalid"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # WebSearchFailing stays active until its failures age out of the 6h

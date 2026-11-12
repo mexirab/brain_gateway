@@ -1168,6 +1168,11 @@ async def _startup_logic():
     # Each turn is the same brain call as /v1/chat/completions with is_voice=True
     # (the route only spots voice from HA's IP or the STT beacon, so a direct
     # call is exact). Cancelled in _shutdown_logic.
+    # Exported always: a skipped device (or a config that disabled the feature)
+    # has no connection gauge, so this is its only alertable signal.
+    from orchestrator.metrics import SATELLITE_CONFIG_PROBLEMS
+
+    SATELLITE_CONFIG_PROBLEMS.set(_cfg.voice_satellite_config_problems)
     if _cfg.voice_satellite_enabled:
         import asyncio as _asyncio_sat
 

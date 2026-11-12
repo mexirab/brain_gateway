@@ -2,7 +2,7 @@
 
 ## Voice satellite (ATOM Echo → Jess)
 
-An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **without Home Assistant's voice pipeline**; HA only plays the reply. Code: `orchestrator/voice_satellite.py` (module docstring is authoritative). Firmware: `models/atom-echo-jess.yaml`. **Default off** (`VOICE_SATELLITE_ENABLED=false`). Status 2026-11-10: firmware flashed OTA to the real device, "Hey Jess" verified on-device (7/7 wakes, confidence 0.97–1.00). 2026-11-11, after the first live tests: VAD rebuilt for the measured room (below) and a firmware lock-up fixed (Firmware rules).
+ESPHome voice devices (M5Stack ATOM Echo S3R, ESP32-S3; one per room, up to 8) talk to Jess **without Home Assistant's voice pipeline**; HA only plays the reply. Code: `orchestrator/voice_satellite.py` (module docstring is authoritative). Firmware: `models/atom-echo-jess.yaml`. **Default off** (`VOICE_SATELLITE_ENABLED=false`). Status 2026-11-10: firmware flashed OTA to the real device, "Hey Jess" verified on-device (7/7 wakes, confidence 0.97–1.00). 2026-11-11, after the first live tests: VAD rebuilt for the measured room (below) and a firmware lock-up fixed (Firmware rules). 2026-11-12: several devices (Several devices; Add a device).
 
 ```
 "Hey Jess" (micro_wake_word on the device) → beep
@@ -11,13 +11,13 @@ An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **withou
   -> RUN_END to the device (it goes straight back to wake-word listening)
   -> STT on Helios (STT_URL /v1/audio/transcriptions)
   -> cloud_brain.chat(messages, stream=False, is_voice=True)   one Jess voice turn, voice tool subset
-  -> reminder_manager._announce_voice(...) -> VoxCPM2 (TTS_URL) -> HA play_media on VOICE_SATELLITE_SPEAKER
+  -> reminder_manager._announce_voice(...) -> VoxCPM2 (TTS_URL) -> HA play_media on that device's room speaker
        (reply > 200 chars: audio_stream.py streams it, the rest synthesized while it plays — Progressive replies)
 ```
 
-- **Connection:** outbound from the orchestrator to the device; no ports opened on Jupiter (`handle_start` returns port 0 = audio over the API connection). `expected_name` = `VOICE_SATELLITE_NAME` pins the node name so a DHCP reshuffle can't point it at another ESPHome device. The real device check is the noise key: anyone holding it (a lost device, the build box's `secrets.yaml`) can pose as the device on the LAN. Rotate it if lost.
-- **Lifecycle:** forever asyncio task started in `orchestrator.py` startup (like the Telegram bot; handle `shared.voice_satellite_task`), cancelled at shutdown; `log_loop_exit` logs an unexpected exit at ERROR. Reconnects with backoff 5 s → 120 s (back to 5 s after a session that stayed up > 60 s).
-- **Not in HA:** the device must NOT be added/enabled in HA's ESPHome integration. It takes one voice-assistant client; HA and Jess would fight over it.
+- **Connection:** outbound from the orchestrator to each device; no ports opened on Jupiter (`handle_start` returns port 0 = audio over the API connection). `expected_name` = the device's configured node name pins it, so a DHCP reshuffle can't point it at another ESPHome device. The real device check is the noise key, and **all devices share one** (`VOICE_SATELLITE_API_KEY`). ESPHome stores it readable in flash (no flash encryption by default): a minute of physical access to any one device (read over USB), a lost device or the build box's `secrets.yaml` leaks it, and the holder can pose as any room's device on the LAN or talk to every device's API. Rotating = reflashing every device with the new key + `.env`.
+- **Lifecycle:** one forever asyncio task started in `orchestrator.py` startup (like the Telegram bot; handle `shared.voice_satellite_task`), cancelled at shutdown; `log_loop_exit` logs an unexpected exit at ERROR. Inside it, every device's loop runs in an `asyncio.TaskGroup`: shutdown waits for each device's cleanup. A device loop that crashes logs `[SATELLITE] <name>: device loop exited unexpectedly: <Type>` and the others keep running; that device stays offline until an orchestrator restart (`VoiceSatelliteDisconnected` follows ~35 min later). Reconnects with backoff 5 s → 120 s (back to 5 s after a session that stayed up > 60 s), per device.
+- **Not in HA:** the devices must NOT be added/enabled in HA's ESPHome integration. Each takes one voice-assistant client; HA and Jess would fight over it.
 - **Hardware:** the on-device wake word needs the ESP32-S3 (not the original ATOM Echo). No programmable RGB LED on the S3R (GPIO35 conflicts with PSRAM). Mic and speaker share one I2S bus.
 
 ### Event contract (bridge → device)
@@ -27,6 +27,7 @@ An ESPHome voice device (M5Stack ATOM Echo S3R, ESP32-S3) talks to Jess **withou
 | `RUN_START` + `STT_START` | first audio chunk arrives |
 | `STT_VAD_START` | VAD confirms speech |
 | `RUN_END` **alone** | utterance captured, nothing said, no audio, or 30 s run wall clock |
+| `RUN_START` + `STT_START` + `RUN_END`, **no** `ERROR` | duplicate run (another device claimed the wake word, Several devices): ended at its first audio chunk, so no sound; the firmware's `on_end` resumes the wake word |
 | `VOICE_ASSISTANT_ERROR` `{code}` | an outcome the device should make audible (below). Also sent after the run has ended; ESPHome still fires `on_error` |
 
 **Gotcha:** never send `STT_VAD_END` before `RUN_END`. It leaves ESPHome 2026.x in STOP_MICROPHONE when `RUN_END` arrives, which ignores it; the device then sits in AWAITING_RESPONSE and never listens again (verified in ESPHome `voice_assistant.cpp`, 2026.10). From STREAMING_MICROPHONE, `RUN_END` stops the mic and goes IDLE.
@@ -66,10 +67,24 @@ Wake beep: `wake_word_triggered.flac`. Sounds are the Home Assistant Voice PE se
 1. **Helios check (D5):** `stt`, `model`, `tts` via `service_registry.check_service` (3 s each). All up → go. Nothing answering and the plug says off → wake (`HELIOS_WAKE_ENABLED`), `jess-waking`, wait ≤ `VOICE_SATELLITE_HELIOS_TIMEOUT_SECONDS` (180) → else `wake_timeout`. Helios on but a service down (boot, brain reload, crashed unit) → no wake, `jess-waking`, wait 90 s → else `service_down`. Wake off → `jess-asleep`. The plug is only read with `HELIOS_WAKE_ENABLED`, so with wake off a booting Helios also counts as asleep.
 2. **STT** (30 s). No words → `jess-no-speech`.
 3. **Brain:** `cloud_brain.chat(..., stream=False, is_voice=True)` with the short history (D7); 300 s backstop (`CHAT_TIMEOUT_S`). Counts in `bgw_voice_pipeline_seconds{path="buffered"}` like any buffered voice turn.
-4. **Speak:** `speakable()` keeps link text, drops URLs and markdown marks, caps at 1200 chars on a sentence end. One `play_media`: `_announce_voice(spoken, speaker=VOICE_SATELLITE_SPEAKER, announcement_type="voice_reply", ignore_voice_session=True, ignore_dnd=True, style=current_reply_style(), allow_fallback=False, record_history=False, progressive=VOICE_SATELLITE_PROGRESSIVE_TTS)` (120 s). Over 200 chars it returns once the first ~8 s are playing (Progressive replies).
+4. **Speak:** `speakable()` keeps link text, drops URLs and markdown marks, caps at 1200 chars on a sentence end. One `play_media`: `_announce_voice(spoken, speaker=<this device's room speaker>, announcement_type="voice_reply", ignore_voice_session=True, ignore_dnd=True, style=current_reply_style(), allow_fallback=False, record_history=False, progressive=VOICE_SATELLITE_PROGRESSIVE_TTS)` (120 s). Over 200 chars it returns once the first ~8 s are playing (Progressive replies).
 5. Only a turn whose reply started playing goes into the follow-up history (a progressive reply cut short later is still remembered whole).
 
 One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per device (`rate_limited`, `jess-busy`). Device button: short press = push-to-talk (wake word label `button`); 10 s press = factory reset.
+
+### Several devices
+
+`VOICE_SATELLITE_DEVICES=name@ip=speaker,…` (format and rules: `docs/ENV_VARS.md` → Voice satellite). One `Satellite` per device, each with its own connection, busy flag, rate limit (6 turns / 5 min) and 5-min follow-up history; each answers only on its own room speaker (D10). Name devices by room, never by a person: names land in logs, the `device` metric label, alert text and the self-audit's LLM input.
+
+**Duplicate wakes (`WakeArbiter`, `DUPLICATE_WAKE_S` = 3.0 s; D11).** One "Hey Jess" heard by two devices:
+
+- The first device to report a wake word (not the button) holds the claim for 3 s from that first wake; its own re-wakes don't extend it. Any other device's wake word in that window is a duplicate. A button press is never a duplicate and never takes the claim.
+- A busy or rate-limited device still claims: you hear "busy" in the room you're in, not an answer from the next room.
+- A duplicate run is accepted, then ended silently at its first audio chunk (`RUN_START`, `STT_START`, `RUN_END`; no `ERROR`, so no sound). Turn result and listen-end reason `duplicate`; log `[SATELLITE] <name>: wake (<label>) also heard by <holder>, which answers`.
+- A duplicate that never streams (no audio within 4 s, or the device stops first) gets the **normal** ending (`RUN_END` + `ERROR` sound, result `no_audio` / `no_speech`): `RUN_END` alone is only safe while the device streams (Event contract).
+- A duplicate on a device whose own turn is still running leaves that turn's busy flag alone and plays no busy sound.
+
+Limits: Known limits below.
 
 ### Decisions
 
@@ -84,8 +99,8 @@ One turn per device at a time (else `jess-busy`); at most 6 turns per 5 min per 
 | D7 | Short history: RAM, ≤ 12 messages, reset after 5 min of silence, only replies that started playing | Follow-ups ("and tomorrow?") work; a restart loses it. A progressive reply cut short is remembered whole |
 | D8 | **Full access** (owner decision 2026-11-10) | Below |
 | D9 | Privacy | Below |
-| D10 | `VOICE_SATELLITE_SPEAKER` required; no fallback to other rooms (`allow_fallback=False`) | Replies play under sleep mode, so they must never land in another room. Speaker unavailable in HA → `speaker_unavailable` + `jess-error` |
-| D11 | No multi-device arbitration | One device, env-configured. Two devices hearing one wake word would both answer |
+| D10 | Every device has a required room speaker (`=speaker` in its `VOICE_SATELLITE_DEVICES` entry, or `VOICE_SATELLITE_SPEAKER`); no fallback to other rooms (`allow_fallback=False`) | Replies play under sleep mode, so they must never land in another room. Speaker unavailable in HA → `speaker_unavailable` + `jess-error` |
+| D11 | Several devices: one wake word heard twice → the first device to report it answers, the other stays silent (`WakeArbiter`, 3 s; amended 2026-11-12, was "no multi-device arbitration") | First to report wins, not necessarily the nearer device. 3 s, not HA's 2 s cooldown, because the device reports the wake only after its beep, whose bus waits can add a second or more. A busy/rate-limited device keeps the claim so "busy" sounds in the room you're in. Limits in Known limits |
 | D12 | Wake words run on the device only, never server-side | "Hey Jess" = local model (`models/hey_jess.json` + `.tflite`, the trainer's manifest: `probability_cutoff` 0.97, `tensor_arena_size` 30000). On the device (2026-11-11) the Hey Jess model also fires on "Okay Jess" (0.98–0.99) and on other "-ay Jess" phrases ("Play Jess", "May Jess"); owner-accepted, so it covers both wake words alone. A dedicated "Okay Jess" model (`models/okay_jess.json` + `.tflite`, microwakeword.com 2026-11-10, "robust" variant, manifest as delivered: `probability_cutoff` 0.35 = its benchmark threshold, recall 86.2% / 0.38 false accepts per hour in hard conditions; cutoff scale not comparable with Hey Jess's) is kept in the repo but commented out in the YAML: Hey Jess always fired first, so it only added a second way to wake by accident. The stock `okay_nabu` model was a bring-up control, removed 2026-11-10: it is said in many public HA videos, an easy false/remote trigger |
 | D13 | VAD = loudness only; the room level is learned fresh every run and frozen while speaking (2026-11-11) | Rejected in review, don't re-propose: (a) a "steady level = it's the room" escape hatch — speech from this device is steady too (smoothed p90/p25 ≈ 1.3), so it cut off questions longer than ~3.5 s; (b) remembering each room's level between runs — a cut-off run, a TV, Jess's own reply or a muted run can poison it, and it didn't help in the tuning room. Telling a loud room from speech needs a spectral VAD |
 
@@ -141,15 +156,27 @@ Cut-short results still count as an `ok` turn; quiet alert `VoiceReplyCutShort` 
 
 ### Setup
 
-1. Deploy the change first (the `VoiceSatelliteDisconnected` alert and the Grafana row ship with it).
+First device (single-device settings; for more, see Add a device):
+
+1. Deploy the change first (the `VoiceSatelliteDisconnected` / `VoiceSatelliteConfigInvalid` alerts and the Grafana row ship with it).
 2. Give the device a DHCP reservation. `VOICE_SATELLITE_HOST` must be an IP; `.local` names are rejected.
 3. Remove the device from HA's ESPHome integration (or don't add it when HA discovers it).
 4. Build and flash the firmware (below) with a fresh `api_encryption_key`.
-5. Jupiter `.env`: `VOICE_SATELLITE_ENABLED=true`, `VOICE_SATELLITE_HOST`, `VOICE_SATELLITE_API_KEY` (same value as the firmware's `api_encryption_key`), `VOICE_SATELLITE_NAME` (the node name the device runs), `VOICE_SATELLITE_SPEAKER` (e.g. `media_player.office_speaker`). Also needs `STT_URL`, `TTS_URL`, `HA_URL`, `HA_TOKEN`. Full table: `docs/ENV_VARS.md` → Voice satellite.
+5. Jupiter `.env`: `VOICE_SATELLITE_ENABLED=true`, `VOICE_SATELLITE_HOST`, `VOICE_SATELLITE_API_KEY` (same value as the firmware's `api_encryption_key`), `VOICE_SATELLITE_NAME` (the node name the device runs), `VOICE_SATELLITE_SPEAKER` (e.g. `media_player.kitchen`). Also needs `STT_URL`, `TTS_URL`, `HA_URL`, `HA_TOKEN`. Full table: `docs/ENV_VARS.md` → Voice satellite.
 6. `docker compose up -d --force-recreate orchestrator`. A bad config logs `[CONFIG] VOICE_SATELLITE_ENABLED=true but …; disabling the voice satellite.` and stays off.
 7. Check: `docker logs brain-orchestrator 2>&1 | grep SATELLITE` shows `connected, listening for runs`; "Hey Jess, what time is it?" answers on the room speaker.
 
 Turn off: `VOICE_SATELLITE_ENABLED=false` + `docker compose up -d --force-recreate orchestrator`.
+
+### Add a device
+
+1. New device: out of HA's ESPHome integration, DHCP reservation, flashed with the **same** `api_encryption_key` as the others and a unique node name named after the room (`-s name <node>`, Firmware build + flash). Measure the room's levels first (Listening (VAD) → New room).
+2. Jupiter `.env`: one line listing every device, **no spaces**, e.g. `VOICE_SATELLITE_DEVICES=atom-echo-kitchen@192.168.1.50=media_player.kitchen,atom-echo-study@192.168.1.51=media_player.study` (the existing device included). Comment out the single-device `VOICE_SATELLITE_HOST` / `_NAME` / `_SPEAKER` lines; keep them for rollback.
+3. Check `.env` still sources: `bash -c 'set -euo pipefail; set -a; source .env' && echo ok` (a space breaks the monitoring render).
+4. `docker compose up -d --force-recreate orchestrator` (`restart` isn't enough).
+5. Verify + drills (both rooms alone, then both in earshot): `monitoring/README.md` → Voice Satellite → Adding a device.
+
+Rollback: comment out `VOICE_SATELLITE_DEVICES`, uncomment the single-device lines, `docker compose up -d --force-recreate orchestrator`.
 
 ### Firmware build + flash
 
@@ -165,11 +192,11 @@ python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())'
 docker run --rm -it -v <dir>:/config -v <dir>/.cache:/cache ghcr.io/esphome/esphome:stable \
   -s name <node> run atom-echo-jess.yaml --device <ip>
 
-# Keep an existing unit's identity (VOICE_SATELLITE_NAME must match the name):
-esphome -s name atom-echo-office -s friendly_name "Office Mic" run atom-echo-jess.yaml --device <ip>
+# Keep an existing unit's identity (the configured node name must match the name):
+esphome -s name atom-echo-kitchen -s friendly_name "Kitchen Mic" run atom-echo-jess.yaml --device <ip>
 ```
 
-First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API key = reflash + `.env` + recreate the orchestrator. Firmware is always flashed by hand; CI never flashes devices.
+First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API key = reflash **every** device (one shared key) + `.env` + recreate the orchestrator. Firmware is always flashed by hand; CI never flashes devices.
 
 **Firmware rules (lock-up fix, 2026-11-11).** In the first live test a second "Hey Jess" mid-run deadlocked the device: the speaker retried "Parent bus is busy" forever, and the device stayed connected (alert green) but deaf. Causes: the media player's `on_idle` restarted the wake word during the voice run, and the wake-detected automation waited for its beep with no timeout. Mic and speaker share one I2S bus, so the YAML now follows these rules (keep them when editing it):
 
@@ -181,14 +208,17 @@ First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API 
 
 ### False wakes
 
-- **Signal:** a wake followed by nothing said is almost always false. `sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript"}[24h]))` against all wakes; Grafana "Wakes vs. False Wakes by Wake Word (24h)". `{helios="woken",result="empty_transcript"}` = Helios booted for nothing.
+- **Signal:** a wake followed by nothing said is almost always false. `sum by (wake_word) (increase(bgw_satellite_turn_total{result=~"no_speech|empty_transcript"}[24h]))` against all wakes (`result!="duplicate"`: a duplicate is the same wake counted on a second device); add `device` to the `by` to compare rooms. Grafana "Wakes vs. False Wakes by Wake Word (24h)". `{helios="woken",result="empty_transcript"}` = Helios booted for nothing.
 - **Tune:** `probability_cutoff` in the wake word's manifest (`models/hey_jess.json`), useful range 0.95–0.99: higher = fewer false wakes, more missed ones. Rebuild + OTA.
 - **Still bad:** retrain the model with more negatives from the room (TV, radio).
 - The rate limit (6 turns / 5 min) caps the damage from a TV that keeps waking it.
 
 ### Known limits
 
-- One device, env-configured; no "two devices heard it" arbitration (D11).
+- Devices are env-configured (≤ 8) and share one API key, readable from any device's flash (Connection).
+- Duplicate wakes (D11): the first device to report wins, not the nearest; if it then hears nothing, nobody answers. Two people saying "Hey Jess" in two rooms within 3 s get one answer, and a TV or game false-waking one room swallows a real wake in another for that long. A device whose wake report is held up more than 3 s (beep waiting on its bus) answers too.
+- Two rooms answering at once queue on the single llama slot and the one VoxCPM2 worker (a long streamed reply can then stall → `VoiceReplyCutShort`), and share the process-wide one-reply voice style. The rate limit is per device, not bridge-wide.
+- A device whose loop crashed stays offline until the orchestrator restarts (Lifecycle). A skipped `VOICE_SATELLITE_DEVICES` entry has no connection gauge: only `VoiceSatelliteConfigInvalid` shows it.
 - Energy VAD can't tell the user from a TV or another person talking.
 - A room much louder than ~0.045 RMS (TV on ≈ 0.075) false-starts and records to the 15 s cap (`max_utterance`, answer ~15 s late): loudness alone can't separate a loud room from steady speech (D13). Before enabling a satellite in a new room, measure the room's levels first; if it is much louder than ~0.045, expect `max_utterance`.
 - No follow-up listening: every question needs the wake word (or the button).
@@ -200,9 +230,9 @@ First flash of a blank device: USB (web.esphome.io). After that, OTA. A new API 
 - A reply cut short is still remembered whole in the follow-up history (D7): a follow-up can refer to a part never heard.
 - Anyone in the room has full access (D8). `jess-asleep` and `jess-error` share a sound.
 
-**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; VAD cases built from the room levels measured 2026-11-11; the listen-end counter + log line; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown). Needs an orchestrator image built with `aioesphomeapi`. Progressive replies: `tests/test_audio_stream.py` (chunking, WAV parsing, stream lifecycle, outcomes, limits) and `tests/test_announce_progressive.py` (`_announce_voice(..., progressive=True)`).
+**Tests:** `orchestrator/tests/test_voice_satellite.py` (fake ESPHome client, respx STT/HA, injected brain; VAD cases built from the room levels measured 2026-11-11; the listen-end counter + log line; also the `_announce_voice` flags, `skip_auto_learn_var`, the config validator, `DropPayloadArgsFilter`, shutdown; several devices: `VOICE_SATELLITE_DEVICES` parsing + skip-by-position, the config-problems gauge, `WakeArbiter` + duplicate runs, per-device speakers and metric labels, the TaskGroup loop). Needs an orchestrator image built with `aioesphomeapi`. Progressive replies: `tests/test_audio_stream.py` (chunking, WAV parsing, stream lifecycle, outcomes, limits) and `tests/test_announce_progressive.py` (`_announce_voice(..., progressive=True)`).
 
-**Monitoring:** metrics, `VoiceSatelliteDisconnected`, `VoiceReplyCutShort`, Grafana row: `monitoring/README.md` → Voice Satellite.
+**Monitoring:** metrics, `VoiceSatelliteDisconnected`, `VoiceSatelliteConfigInvalid`, `VoiceReplyCutShort`, Grafana row: `monitoring/README.md` → Voice Satellite.
 
 ### HA Assist pipeline (Wyoming; the ATOM Echo no longer uses it)
 

@@ -8,15 +8,21 @@ directly, without Home Assistant's voice pipeline.
       → one Jess voice turn (cloud_brain.chat, is_voice=True — the same brain
         call the dashboard's /v1/chat/completions makes)
       → reminder_manager._announce_voice(...) → VoxCPM2 → HA play_media on the
-        room's Google speaker (VOICE_SATELLITE_SPEAKER, required; no fallback
-        to other rooms). One play_media per reply; with progressive TTS
+        device's own room speaker (required per device; no fallback to other
+        rooms). One play_media per reply; with progressive TTS
         (default) a long reply's first ~8 s play while the rest is synthesized
         into the same stream (audio_stream.py)
 
 Home Assistant only plays the reply; the device must NOT also be in HA's ESPHome
 integration (it accepts one voice-assistant subscriber — the two would fight).
 
-Connection: outbound from the orchestrator to the device (:6053), encrypted
+Several devices (VOICE_SATELLITE_DEVICES, one per room): one ``Satellite`` —
+connection, busy flag, rate limit, follow-up history — per device, all in the
+one bridge task; each answers on its own room's speaker. One "Hey Jess" heard
+by two devices: the first to report it answers (or says "busy"), the other
+ends its run silently once it streams (``WakeArbiter``, result ``duplicate``).
+
+Connection: outbound from the orchestrator to each device (:6053), encrypted
 with the device's API key (noise PSK) and pinned to the device's ESPHome node
 name (``expected_name``) so a DHCP reshuffle can't point us at another device.
 Returning port 0 from ``handle_start`` means "send audio over the API
@@ -47,8 +53,8 @@ Event contract with the firmware (``models/atom-echo-jess.yaml``):
 
 Decisions (docs/VOICE_AND_TTS.md → Voice satellite → Decisions): replies play even under
 sleep mode (D4, ``ignore_dnd``; announcements stay muted) and ONLY on the
-device's own room speaker (``VOICE_SATELLITE_SPEAKER`` is required; no
-fallback to other rooms, D10); Helios asleep → wake + answer late, capped
+device's own room speaker (required for every device; no fallback to
+other rooms, D10); Helios asleep → wake + answer late, capped
 (D5); the reply bypasses the mid-conversation guard that holds reminders off
 while you talk (D6); short per-device history, reset after 5 min of silence
 (D7); anyone in the room can talk to it (D8) — so these turns never feed
@@ -65,17 +71,30 @@ dropped (``log_config.DropPayloadArgsFilter``).
 
 The device check is the noise key: ``expected_name`` only guards against a
 DHCP mix-up. Anyone holding the key (lost device, the build box's
-secrets.yaml) can pose as the device from the LAN — rotate it if lost.
+secrets.yaml) can pose as the device from the LAN — rotate it if lost. All
+devices share ONE key (VOICE_SATELLITE_API_KEY), and ESPHome stores it
+readable in flash (no flash encryption by default): someone with physical
+access to any one device for a minute can read it over USB and then pose as
+any room's device, or talk to every device's API. Rotating means reflashing
+every device with the new key.
 
-Known limits: one device (env-configured); energy VAD — it can't tell the user
-from a TV or another person talking, and a room much louder than the tuning
-room (~0.045 RMS; TV on) can false-start and record to the 15 s cap
-(``bgw_satellite_listen_end_total{reason="max_utterance"}``; level alone can't
-separate a loud room from this device's fairly steady speech — a spectral VAD
-would); no follow-up listening
-without the wake word; no "two devices heard it" arbitration (one device); a
-turn that hits CHAT_TIMEOUT_S may already have run tools (reminder set, light
-switched) before the device plays the error sound.
+Known limits: devices are env-configured (≤ 8, one shared API key); energy
+VAD — it can't tell the user from a TV or another person talking, and a room
+much louder than the tuning room (~0.045 RMS; TV on) can false-start and
+record to the 15 s cap (``bgw_satellite_listen_end_total{reason="max_utterance"}``;
+level alone can't separate a loud room from this device's fairly steady
+speech — a spectral VAD would); no follow-up listening without the wake word;
+two devices that both hear one "Hey Jess": the FIRST to report it answers,
+not necessarily the nearer one (both beep) — if that one then hears nothing,
+nobody answers — and two people saying it in two rooms within
+DUPLICATE_WAKE_S get one answer (likewise a TV or game false-waking one room
+swallows a real "Hey Jess" in another for that long); a device that reports the wake more than
+DUPLICATE_WAKE_S after the other (beep held up on its bus) answers too; two
+rooms answering at once queue on the one brain slot and the one TTS worker,
+and share the one-reply voice style (voice_style keeps it process-wide); the
+turn rate limit is per device, not bridge-wide; a turn that hits
+CHAT_TIMEOUT_S may already have run tools (reminder set, light switched)
+before the device plays the error sound.
 """
 
 from __future__ import annotations
@@ -122,6 +141,11 @@ BACKOFF_MIN_S = 5.0
 BACKOFF_MAX_S = 120.0
 RATE_LIMIT_TURNS = 6  # turns per device per RATE_LIMIT_WINDOW_S (TV false-waking it)
 RATE_LIMIT_WINDOW_S = 300.0
+# A wake word on another device this soon after = the same utterance heard
+# twice (Home Assistant's assist pipeline uses a 2 s cooldown the same way;
+# 3 s here because the device reports the wake only after its beep, whose
+# bus waits can add a second or more).
+DUPLICATE_WAKE_S = 3.0
 LISTEN_END_REASONS = (
     "speech_end",
     "max_utterance",
@@ -130,6 +154,7 @@ LISTEN_END_REASONS = (
     "wall_timeout",
     "no_audio",
     "aborted",
+    "duplicate",
 )
 
 ERR_NO_SPEECH = "jess-no-speech"
@@ -400,9 +425,38 @@ def reply_text(response: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+class WakeArbiter:
+    """One spoken wake word, two devices in earshot: only the first answers.
+
+    Shared by every Satellite in the bridge. Any (non-button) wake word on
+    another device within ``window_s`` of the current claim is a duplicate; a
+    button press (deliberate) never is. A device that refuses (busy,
+    rate-limited) still claims: you hear "busy" in the room you're in rather
+    than an answer from the next room's speaker. The window runs from the
+    claim's FIRST wake — the holder waking again doesn't extend it.
+    """
+
+    def __init__(self, window_s: float = DUPLICATE_WAKE_S) -> None:
+        self._window = window_s
+        self._claimed_at = -math.inf
+        self.holder = ""  # device of the current claim (for the log line)
+
+    def claim(self, device: str, wake: str) -> bool:
+        """True = this device answers (or refuses) the wake word itself."""
+        if wake == "button":
+            return True
+        now = time.monotonic()
+        if now - self._claimed_at < self._window:
+            return device == self.holder
+        self._claimed_at, self.holder = now, device
+        return True
+
+
 @dataclass
 class _Run:
     wake_word: str
+    duplicate: bool = False  # another device answers this wake word: end quietly
+    owns_busy: bool = True  # False = a duplicate run during this device's own turn
     started: float = field(default_factory=time.monotonic)
     vad: EnergyVad = field(default_factory=EnergyVad)
     pcm: bytearray = field(default_factory=bytearray)
@@ -429,9 +483,11 @@ class Satellite:
         speaker: str,
         helios_timeout_s: int = 180,
         progressive_tts: bool = True,
+        arbiter: Optional[WakeArbiter] = None,
         client_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
         self._chat = chat
+        self._arbiter = arbiter  # shared by all devices; None = no duplicate check
         self._progressive_tts = progressive_tts
         self._host = host
         self._port = port
@@ -476,6 +532,13 @@ class Satellite:
         task.add_done_callback(self._tasks.discard)
         return task
 
+    def _release(self, run: _Run) -> None:
+        """A listening run ended without a turn: free the device — unless the
+        run was a duplicate during this device's own turn, which still runs
+        and still owns the flag (its _turn clears it when done)."""
+        if run.owns_busy:
+            self._busy = False
+
     def _rate_limited(self) -> bool:
         now = time.monotonic()
         while self._turn_starts and now - self._turn_starts[0] > RATE_LIMIT_WINDOW_S:
@@ -485,7 +548,7 @@ class Satellite:
     def _count(self, result: str, wake: str, started: Optional[float] = None, helios: str = "unchecked") -> None:
         from orchestrator.metrics import SATELLITE_TURN_SECONDS, SATELLITE_TURN_TOTAL
 
-        SATELLITE_TURN_TOTAL.labels(result=result, wake_word=wake, helios=helios).inc()
+        SATELLITE_TURN_TOTAL.labels(result=result, wake_word=wake, helios=helios, device=self._node).inc()
         if started is not None:
             SATELLITE_TURN_SECONDS.labels(helios=helios).observe(max(0.0, time.monotonic() - started))
 
@@ -498,8 +561,14 @@ class Satellite:
         *_extra: Any,
     ) -> Optional[int]:
         wake = wake_word_label(wake_word_phrase)
+        # Claimed before the busy check: a busy room keeps the wake word (says
+        # "busy") instead of handing the question to the next room (WakeArbiter).
+        duplicate = self._arbiter is not None and not self._arbiter.claim(self._node, wake)
         refuse = "busy" if self._busy else "rate_limited" if self._rate_limited() else ""
-        if refuse:
+        # A duplicate is ended silently even when this device would refuse:
+        # "busy" here for the next room's question would be noise. (Unless a
+        # listening run is somehow still open — that one keeps the device.)
+        if refuse and (not duplicate or self._run is not None):
             # Accept, then say "busy" once the start reply has gone out (it is
             # sent from this coroutine's done-callback; an error that overtook
             # it could leave the device streaming into a run nobody owns).
@@ -508,10 +577,19 @@ class Satellite:
             self._count(refuse, wake)
             asyncio.get_running_loop().call_later(0.2, self._send_error, ERR_BUSY)
             return 0
+        # Another device just took this wake word: accept the run, then end it
+        # silently once the device streams (handle_audio) — RUN_END alone is
+        # only safe from STREAMING_MICROPHONE (see the module docstring). On a
+        # device whose own turn is still running, the turn keeps the busy flag.
+        owns_busy = not self._busy
         self._busy = True
-        run = _Run(wake_word=wake)
+        run = _Run(wake_word=wake, duplicate=duplicate, owns_busy=owns_busy)
         self._run = run
-        logger.info("[SATELLITE] %s: run started (wake=%s)", self._node, wake)
+        if duplicate:
+            holder = self._arbiter.holder if self._arbiter is not None else ""
+            logger.info("[SATELLITE] %s: wake (%s) also heard by %s, which answers", self._node, wake, holder)
+        else:
+            logger.info("[SATELLITE] %s: run started (wake=%s)", self._node, wake)
         run.watcher = self._spawn(self._watch_run(run))
         return 0  # 0 = stream the audio over the API connection
 
@@ -523,6 +601,9 @@ class Satellite:
             run.first_audio = True
             self._send("VOICE_ASSISTANT_RUN_START")
             self._send("VOICE_ASSISTANT_STT_START")
+            if run.duplicate:
+                self._end_run(run, captured=False, reason="duplicate")
+                return
         run.pcm.extend(chunk)
         run.pending.extend(chunk)
         while len(run.pending) >= FRAME_BYTES and not run.done:
@@ -545,13 +626,13 @@ class Satellite:
             # The device cancelled (button, mute, its own timeout).
             run.done = True
             self._run = None
-            self._busy = False
+            self._release(run)
             if run.watcher is not None:
                 run.watcher.cancel()
             logger.info("[SATELLITE] %s: run aborted by the device", self._node)
             from orchestrator.metrics import SATELLITE_LISTEN_END_TOTAL
 
-            SATELLITE_LISTEN_END_TOTAL.labels(reason="aborted").inc()
+            SATELLITE_LISTEN_END_TOTAL.labels(reason="aborted", device=self._node).inc()
             self._count("aborted", run.wake_word)
             return
         # Device ended its stream before our VAD did: use what we have.
@@ -582,7 +663,7 @@ class Satellite:
         from orchestrator.metrics import SATELLITE_LISTEN_END_TOTAL
 
         vad = run.vad
-        SATELLITE_LISTEN_END_TOTAL.labels(reason=reason.replace("-", "_")).inc()
+        SATELLITE_LISTEN_END_TOTAL.labels(reason=reason.replace("-", "_"), device=self._node).inc()
         # log-safe: audio ms, RMS levels, counters and a fixed reason string —
         # everything the VAD decided on, so a mis-tune shows in Loki
         logger.info(
@@ -601,8 +682,16 @@ class Satellite:
             -1 if vad.speech_at is None else vad.speech_at,
             vad.heard_speech,
         )
+        if run.duplicate and run.first_audio:
+            # Ended at its first audio (handle_audio): no sound, no turn — the
+            # device that claimed the wake word answers. A duplicate that never
+            # streamed falls through: the ERROR below is what takes a device
+            # that isn't streaming back to idle (RUN_END alone may not).
+            self._release(run)
+            self._count("duplicate", run.wake_word)
+            return
         if not captured:
-            self._busy = False
+            self._release(run)
             self._count(result, run.wake_word)
             self._send_error(ERR_NO_SPEECH if result == "no_speech" else ERR_FAILED)
             return
@@ -911,7 +1000,7 @@ class Satellite:
                 handle_audio=self.handle_audio,
             )
             SATELLITE_CONNECTED.labels(device=self._node).set(1)
-            _count_connect("ok")
+            _count_connect("ok", self._node)
             self._log_connected()
             up_since = time.monotonic()
             await dropped.wait()
@@ -928,7 +1017,7 @@ class Satellite:
             if run is not None and not run.done:
                 run.done = True
                 self._run = None
-                self._busy = False
+                self._release(run)
                 if run.watcher is not None:
                     run.watcher.cancel()
                 self._count("dropped", run.wake_word)
@@ -997,7 +1086,7 @@ class Satellite:
                 raise
             except Exception as e:  # noqa: BLE001
                 reason = _connect_reason(e)
-                _count_connect(reason)
+                _count_connect(reason, self._node)
                 self._log_connect_failure(reason, type(e).__name__)
             # A session that stayed up a while earns a quick reconnect.
             if time.monotonic() - connected_at > 60:
@@ -1067,42 +1156,77 @@ def _connect_reason(exc: BaseException) -> str:
     return "error"
 
 
-def _count_connect(result: str) -> None:
+def _count_connect(result: str, device: str) -> None:
     from orchestrator.metrics import SATELLITE_CONNECT_TOTAL
 
-    SATELLITE_CONNECT_TOTAL.labels(result=result).inc()
+    SATELLITE_CONNECT_TOTAL.labels(result=result, device=device).inc()
 
 
 _CONNECT_RESULTS = ("ok", "timeout", "unreachable", "bad_key", "wrong_device", "no_api_audio", "error")
 
 
+async def _run_device(sat: Satellite) -> None:
+    """One device's reconnect loop. run_forever only ends on cancellation; if it
+    ever raised, the other devices must keep running (an exception escaping
+    into the TaskGroup would cancel them all), so log it and stop here."""
+    try:
+        await sat.run_forever()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001 — never take the other rooms down
+        logger.error("[SATELLITE] %s: device loop exited unexpectedly: %s", sat._node, type(e).__name__)
+
+
 async def satellite_loop(chat: ChatFn) -> None:
     """Long-running task started from orchestrator startup (like the Telegram
-    bot: a forever task, not a scheduler job). Cancelled at shutdown."""
-    from orchestrator.metrics import SATELLITE_CONNECT_TOTAL, SATELLITE_CONNECTED, SATELLITE_LISTEN_END_TOTAL
+    bot: a forever task, not a scheduler job). Runs every configured device's
+    loop side by side; cancelling this task (shutdown) cancels them all and
+    waits for each to finish its cleanup (a TaskGroup — a bare gather would
+    return when the FIRST device finished, while another room's turn still
+    unwinds after shutdown has closed the HTTP client)."""
+    from orchestrator.metrics import (
+        SATELLITE_CONNECT_TOTAL,
+        SATELLITE_CONNECTED,
+        SATELLITE_LISTEN_END_TOTAL,
+        SATELLITE_TURN_TOTAL,
+    )
 
+    devices = _settings.voice_satellites()
+    if not devices:
+        logger.error("[SATELLITE] No voice satellite device is configured")
+        return
     # Series exist from startup, so "never connected" is visible (and alertable).
-    SATELLITE_CONNECTED.labels(device=_settings.voice_satellite_name).set(0)
-    for result in _CONNECT_RESULTS:
-        SATELLITE_CONNECT_TOTAL.labels(result=result)
-    for reason in LISTEN_END_REASONS:
-        SATELLITE_LISTEN_END_TOTAL.labels(reason=reason)
+    for device in devices:
+        SATELLITE_CONNECTED.labels(device=device.name).set(0)
+        for result in _CONNECT_RESULTS:
+            SATELLITE_CONNECT_TOTAL.labels(result=result, device=device.name)
+        for reason in LISTEN_END_REASONS:
+            SATELLITE_LISTEN_END_TOTAL.labels(reason=reason, device=device.name)
+        # The new outcome: its first increase after a restart must be visible.
+        SATELLITE_TURN_TOTAL.labels(result="duplicate", wake_word="hey_jess", helios="unchecked", device=device.name)
     if _settings.voice_satellite_progressive_tts:
         from orchestrator import audio_stream
 
         audio_stream.seed_metrics()
-    sat = Satellite(
-        chat=chat,
-        host=_settings.voice_satellite_host,
-        port=_settings.voice_satellite_port,
-        api_key=_settings.voice_satellite_api_key,
-        node_name=_settings.voice_satellite_name,
-        speaker=_settings.voice_satellite_speaker,
-        helios_timeout_s=_settings.voice_satellite_helios_timeout_seconds,
-        progressive_tts=_settings.voice_satellite_progressive_tts,
-    )
-    logger.info("[SATELLITE] Bridge started for %s", _settings.voice_satellite_name)
-    await sat.run_forever()
+    arbiter = WakeArbiter()
+    satellites = [
+        Satellite(
+            chat=chat,
+            host=device.host,
+            port=_settings.voice_satellite_port,
+            api_key=_settings.voice_satellite_api_key,
+            node_name=device.name,
+            speaker=device.speaker,
+            helios_timeout_s=_settings.voice_satellite_helios_timeout_seconds,
+            progressive_tts=_settings.voice_satellite_progressive_tts,
+            arbiter=arbiter,
+        )
+        for device in devices
+    ]
+    logger.info("[SATELLITE] Bridge started for %s", ", ".join(s._node for s in satellites))
+    async with asyncio.TaskGroup() as group:
+        for sat in satellites:
+            group.create_task(_run_device(sat), name=f"voice-satellite-{sat._node}")
 
 
 def log_loop_exit(task: asyncio.Task) -> None:
