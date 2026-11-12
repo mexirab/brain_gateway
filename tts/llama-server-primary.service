@@ -61,6 +61,8 @@
 #      docker compose up -d --force-recreate orchestrator.
 #   3. Repo: point the tts-voxcpm probe back at ${NODE_HELIOS_IP} with node 'helios'
 #      (prometheus.yml.template). TTSDown gates on the probe's own node, so it needs no change.
+#      Dashboard: move 'tts' back to Helios's serviceKeys in frontend/src/lib/constants.ts
+#      (Saturn gets []), or Saturn's card shows the Helios TTS's health.
 #
 # Rollback to the 27B: see the header of tts/llama-server-primary-27b-q6k.service.
 #

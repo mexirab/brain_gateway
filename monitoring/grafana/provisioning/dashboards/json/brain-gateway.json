@@ -1796,7 +1796,7 @@
           "sort": "desc"
         }
       },
-      "description": "Per-sentence /api/tts/synthesize results per minute. unreachable = the TTS box (Saturn) down or the server stopped (chat shows 'Jess's voice is asleep'); timeout = TTS up but stuck; upstream_error = TTS returned an error.",
+      "description": "Per-sentence /api/tts/synthesize results per minute. unreachable = the TTS box (Saturn) down or the server stopped (chat shows 'Jess's voice is offline'); timeout = TTS up but stuck; upstream_error = TTS returned an error.",
       "gridPos": {
         "h": 8,
         "w": 8,

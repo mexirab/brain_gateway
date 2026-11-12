@@ -274,11 +274,11 @@ curl -X POST http://10.0.0.58:8004/tts \
 
 ### Manage the TTS (Saturn) and STT (Helios)
 ```bash
-# Live TTS is voxcpm-tts (VoxCPM2, :8004) on Saturn's RTX 5080. Its journal is not in Loki.
+# Live TTS is voxcpm-tts (VoxCPM2, :8004) on Saturn's RTX 3090. Its journal is not in Loki.
 ssh labadmin@10.0.0.58 "sudo systemctl status voxcpm-tts"
 ssh labadmin@10.0.0.58 "sudo systemctl restart voxcpm-tts"
 ssh labadmin@10.0.0.58 "journalctl -u voxcpm-tts --no-pager -n 50"
-ssh labadmin@10.0.0.58 "nvidia-smi --query-compute-apps=process_name,used_memory --format=csv"   # TTS alone on the 5080
+ssh labadmin@10.0.0.58 "nvidia-smi --query-compute-apps=gpu_name,pid,process_name,used_memory --format=csv"   # only voxcpm on the 3090
 
 # Helios: STT is stt-onnx (Parakeet v2 int8 ONNX, CPU). parakeet-stt (NeMo, GPU) is disabled.
 # voxcpm-tts on Helios is the disabled rollback (refuses to start next to the 262K brain);
@@ -370,9 +370,9 @@ curl -s http://localhost:8888/health | jq '.rag_documents'
 
 ---
 
-## Voice Clone Config (Helios)
+## Voice Clone Config (Saturn)
 
-Location on Helios: `~/tts-voices/voices.json`
+Location: `~/tts-voices/voices.json` on Saturn (live voice); Helios keeps the same file for the rollback.
 
 ```json
 {

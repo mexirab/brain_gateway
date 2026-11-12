@@ -282,7 +282,7 @@ def build() -> dict:
             description=(
                 "Per-sentence /api/tts/synthesize results per minute. unreachable = "
                 "the TTS box (Saturn) down or the server stopped (chat shows 'Jess's voice is "
-                "asleep'); timeout = TTS up but stuck; upstream_error = TTS returned an error."
+                "offline'); timeout = TTS up but stuck; upstream_error = TTS returned an error."
             ),
         ),
         stat(

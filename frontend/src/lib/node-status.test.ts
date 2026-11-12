@@ -45,9 +45,17 @@ describe('nodeStatus', () => {
   it('marks Helios ONLINE when any of its services is healthy', () => {
     const info = nodeStatus(
       HELIOS,
-      services({ model: { healthy: false }, tts: { healthy: true } }),
+      services({ model: { healthy: false }, stt: { healthy: true } }),
     );
     expect(info.status).toBe('online');
+  });
+
+  it('keeps Helios ASLEEP while the Saturn TTS is healthy', () => {
+    const info = nodeStatus(
+      HELIOS,
+      services({ model: { healthy: false }, stt: { healthy: false }, tts: { healthy: true } }),
+    );
+    expect(info.status).toBe('asleep');
   });
 
   it('marks an always-on node OFFLINE when its services are down', () => {
@@ -57,10 +65,10 @@ describe('nodeStatus', () => {
     expect(info.tone).toBe('danger');
   });
 
-  it('marks Saturn UNKNOWN — nothing the orchestrator probes runs there', () => {
-    // Vision moved to the Helios brain; Saturn is only a backup target now.
-    expect(SATURN.serviceKeys).toHaveLength(0);
-    expect(nodeStatus(SATURN, services({ vision: { healthy: true } })).status).toBe('unknown');
+  it('reflects the TTS for Saturn (the live voice runs there)', () => {
+    expect(SATURN.serviceKeys).toEqual(['tts']);
+    expect(nodeStatus(SATURN, services({ tts: { healthy: true } })).status).toBe('online');
+    expect(nodeStatus(SATURN, services({ tts: { healthy: false } })).status).toBe('offline');
   });
 
   it('counts vision as a Helios service (served by the brain)', () => {

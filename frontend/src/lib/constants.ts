@@ -67,27 +67,29 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     gpu: 'RTX 5090 + RTX PRO 5000',
     role: 'GPU model layer — asleep most of the time, woken by an HA smart plug',
     services: [
-      'Brain: Qwen3.8 TURBO on llama.cpp (RTX 5090) — also does vision',
-      'TTS: voice clone (RTX PRO 5000)',
+      'Brain: Qwen3.8-Flash-Next on llama.cpp (RTX 5090 + RTX PRO 5000) — also does vision',
       'STT: Parakeet TDT v2, int8 ONNX on CPU',
     ],
     power: 'wake-on-demand',
-    serviceKeys: ['model', 'vision', 'tts', 'stt'],
+    // The TTS moved to Saturn: an always-on box answering for it must not
+    // make a sleeping Helios look online.
+    serviceKeys: ['model', 'vision', 'stt'],
   },
   {
     id: 'saturn',
     name: 'Saturn',
     ip: '10.0.0.58',
-    gpu: 'RTX 3080 + RTX 3090',
-    role: 'Off-box nightly backup target (no runtime services)',
+    gpu: 'RTX 3090 + RTX 3080',
+    role: "Jess's voice + off-box nightly backup target",
     services: [
+      'TTS: VoxCPM2 voice clone (RTX 3090)',
       'Nightly backups: Jess state, HA config, calendars, budget',
-      'Expert model :8084 — deprecated',
+      'RTX 3080: experiments',
     ],
     power: 'always-on',
-    // Nothing the orchestrator probes runs here any more (vision moved to the
-    // Helios brain), so status is "unknown" rather than a guessed "online".
-    serviceKeys: [],
+    // The TTS is the one thing here the orchestrator probes, so its health is
+    // Saturn's status: voice down shows Saturn offline even if the box is up.
+    serviceKeys: ['tts'],
   },
   {
     id: 'uranus',

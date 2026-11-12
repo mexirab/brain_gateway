@@ -1,6 +1,6 @@
 # VoxCPM2 TTS server (cloned voice + per-utterance style notes) — Helios copy, ROLLBACK ONLY.
 #
-# The live voice runs on Saturn's RTX 5080 (tts/voxcpm-tts-saturn.service, TTS_URL
+# The live voice runs on Saturn's RTX 3090 (tts/voxcpm-tts-saturn.service, TTS_URL
 # http://10.0.0.58:8004). It moved there so the brain can use GPU1 for its 262144 context. This
 # unit stays installed on Helios but DISABLED. It does NOT fit next to the 262K brain unit, and its
 # ExecStartPre refuses to start while that unit is installed. Enable it only together with the 64K

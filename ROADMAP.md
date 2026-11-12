@@ -26,7 +26,7 @@ The list below is ordered by tier, and within each tier roughly by priority.
 
 Shipped as `orchestrator/telegram_bot.py`: long-polling (no webhook / public ingress), locked to the allow-listed chat ID, inbound text through `/v1/chat/completions` (full Jess + tools from anywhere), reminders with inline **Done / Snooze** buttons handled with the F-011 state-machine semantics. Default-OFF — **setup still needed**: BotFather token + chat ID in `.env` (see `docs/ENV_VARS.md` → Telegram Bot).
 
-Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model → same pipeline; the Qwen3.8 brain on Helios since 2026-09-28, was Saturn) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`); voice notes now also get a spoken "walkie-talkie" reply back (TTS on Helios → `sendVoice`, `TELEGRAM_VOICE_REPLY_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
+Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model → same pipeline; the Qwen3.8 brain on Helios since 2026-09-28, was Saturn) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`); voice notes now also get a spoken "walkie-talkie" reply back (TTS on Saturn → `sendVoice`, `TELEGRAM_VOICE_REPLY_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
 
 ### 2. ~~Trust layer as a feature~~ ✅ BUILT (July 2026)
 
@@ -121,7 +121,7 @@ Vision already works through the Qwen3.8 brain on Helios (meal-photo calories + 
 
 ### ~~262K context~~ ✅ DONE on llama.cpp (vLLM path moot)
 
-Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context. Delivered on llama.cpp: the live brain (Qwen3.8-Flash-Next, two GPUs) ran at 64K from 2026-10-24 while the TTS shared GPU1, and runs the full 262K since the TTS moved to Saturn's RTX 5080 (q8_0 KV; measured 2026-11-11, header of `tts/llama-server-primary.service`). Open: a size budget for client chat history, since a cold 200K-token prompt prefills in ~140 s, past the unified loop's 120 s per-round timeout.
+Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context. Delivered on llama.cpp: the live brain (Qwen3.8-Flash-Next, two GPUs) ran at 64K from 2026-10-24 while the TTS shared GPU1, and runs the full 262K since the TTS moved to Saturn's RTX 3090 (q8_0 KV; measured 2026-11-11, header of `tts/llama-server-primary.service`). Open: a size budget for client chat history, since a cold 200K-token prompt prefills in ~140 s, past the unified loop's 120 s per-round timeout.
 
 ## Dropped / superseded
 

@@ -107,7 +107,7 @@ The maintainer's deployment is a 4-node cluster centered on Helios. Brain Gatewa
 |------|-----|-----|------|
 | Helios | 10.0.0.195 | RTX 5090 + RTX PRO 5000 | GPU model layer only: primary LLM, STT (the code agent model was retired 2026-10-16 and the `code_agent` tool removed 2026-10-21). Power-tiered — asleep most of the time, woken on demand via an HA smart plug. |
 | Jupiter | 10.0.0.248 | — | Always-on hub: orchestrator (:8888), frontend (:3001, served as https://<host>.<tailnet>.ts.net via Tailscale Serve), Home Assistant (:8123), monitoring stack (Prometheus, Grafana, Loki), Pi-hole primary |
-| Saturn | 10.0.0.58 | RTX 5080 + RTX 3090 | Live TTS (VoxCPM2 on the 5080), off-box backup target; the 3090 is for experiments (the former vision and expert models are out of the runtime path) |
+| Saturn | 10.0.0.58 | RTX 3090 + RTX 3080 | Live TTS (VoxCPM2 on the 3090), off-box backup target; the 3080 is for experiments (the former vision and expert models are out of the runtime path) |
 | Uranus | 10.0.0.173 | 2× RTX 5080 | Test box; currently unreachable (not part of the runtime path) |
 
 For Helios-specific details (Tailscale cert, GPU layout, kiosk display, etc.), see [`docs/internal/HELIOS_INFRASTRUCTURE.md`](internal/HELIOS_INFRASTRUCTURE.md).

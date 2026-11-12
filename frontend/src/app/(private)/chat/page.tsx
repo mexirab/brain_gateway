@@ -38,7 +38,7 @@ interface DisplayMessage {
 // together with its text is often not announced).
 const SPEECH_ANNOUNCE: Record<string, string> = {
   blocked: 'Voice reply blocked by the browser. Use Tap to play.',
-  asleep: 'Jess’s voice is asleep.',
+  asleep: 'Jess’s voice is offline.',
   interrupted: 'Voice reply paused.',
   error: 'Couldn’t play the voice reply.',
 };

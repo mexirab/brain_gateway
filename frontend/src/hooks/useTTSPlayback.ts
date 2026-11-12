@@ -9,7 +9,7 @@ import { emitSpeechClip } from '@/lib/speech-clip-bus';
 
 const PROXY = '/api/proxy';
 const LS_KEY = 'tts_enabled';
-// Per-sentence synth normally takes 0.5–3 s; a hung TTS (e.g. Helios mid-boot)
+// Per-sentence synth normally takes 0.5–3 s; a hung TTS (e.g. its GPU out of memory)
 // must not leave the UI on "loading" forever.
 const SYNTH_TIMEOUT_MS = 30_000;
 

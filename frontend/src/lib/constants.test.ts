@@ -25,7 +25,7 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(byId.ha).toBeUndefined();
   });
 
-  it('recasts Helios as wake-on-demand primary LLM + TTS/STT (no orchestrator)', () => {
+  it('recasts Helios as wake-on-demand primary LLM + STT (no orchestrator, no TTS)', () => {
     expect(byId.helios.ip).toBe('10.0.0.195');
     expect(byId.helios.power).toBe('wake-on-demand');
     const svc = byId.helios.services.join(' ');
@@ -33,6 +33,7 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(svc).not.toMatch(/Open WebUI/i);
     expect(svc).not.toMatch(/Frontend/i);
     expect(byId.helios.serviceKeys).toContain('model');
+    expect(byId.helios.serviceKeys).not.toContain('tts');
   });
 
   it('flags Uranus as an unreachable test box', () => {
@@ -47,9 +48,12 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(svc).not.toMatch(/vLLM|Whisper/);
   });
 
-  it('keeps Saturn as a backup target only (no vision/expert probes)', () => {
-    expect(byId.saturn.serviceKeys).toHaveLength(0);
-    expect(byId.saturn.services.join(' ')).toMatch(/backup/i);
+  it('puts the live TTS on Saturn, next to the backups (no vision/expert probes)', () => {
+    expect(byId.saturn.serviceKeys).toEqual(['tts']);
+    const svc = byId.saturn.services.join(' ');
+    expect(svc).toMatch(/backup/i);
+    expect(svc).toMatch(/TTS/);
+    expect(svc).not.toMatch(/Expert/i);
   });
 
   it('does not hard-code a stale model name or RAG doc count', () => {

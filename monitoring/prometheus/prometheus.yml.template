@@ -15,8 +15,8 @@
 #                                 Pi-hole primary, conjure API, netdata)
 #   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM split across RTX 5090 + RTX PRO
 #                                 5000, STT on CPU — power-tiered)
-#   Saturn:  ${NODE_SATURN_IP}  (live TTS on the RTX 3080, off-box backups; RTX 3090 = owner's
-#                                 experiments + the TTS fallback)
+#   Saturn:  ${NODE_SATURN_IP}  (live TTS on the RTX 3090, off-box backups; RTX 3080 = owner's
+#                                 experiments)
 #   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
@@ -68,7 +68,7 @@ scrape_configs:
           role: 'comfyui'
           gpu: '2x-rtx5080'
 
-      # Saturn (off-box backup target; vision + Pi-hole retired 2026-09)
+      # Saturn (live TTS on the RTX 3090 + off-box backup target; vision + Pi-hole retired 2026-09)
       - targets: ['${NODE_SATURN_IP}:9100']
         labels:
           node: 'saturn'
@@ -154,7 +154,7 @@ scrape_configs:
       #   - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
       #     labels: {service: 'tts', node: 'helios'}
 
-      # TTS (VoxCPM2 on Saturn's RTX 3080, tts/voxcpm-tts-saturn.service; /health 503s with no usable
+      # TTS (VoxCPM2 on Saturn's RTX 3090, tts/voxcpm-tts-saturn.service; /health 503s with no usable
       # voice). Moved off Helios GPU1 so the brain can run 262K context. Its sandbox only admits
       # Jupiter's address, which this probe uses (the container reaches the LAN through it).
       - targets: ['http://${NODE_SATURN_IP}:8004/health']

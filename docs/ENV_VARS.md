@@ -91,7 +91,7 @@ An override set for **Qwen3.8-27B NVFP4 on a single RTX 5090** lives in `.env.ex
 
 ## Expert reasoning model (`ask_expert` tool)
 
-**Deprecated on the Helios deployment since 2026-09-28** (`EXPERT_ENABLED=false`, `EXPERT_MODEL_URL` blank; Jupiter backup `.env.bak-expert`) — the feature remains available for other installs. One-shot blocking delegation to Qwen3-32B Thinking (formerly on Saturn 3090, host port 8084 via the `expert-model` Docker container, image `ghcr.io/ggml-org/llama.cpp:server-cuda`). Used by `query_budget` analyze-mode synthesis and any future hard-reasoning task. Auto-disabled (handler returns a short "disabled" string) when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty.
+**Deprecated on the Helios deployment since 2026-09-28** (`EXPERT_ENABLED=false`, `EXPERT_MODEL_URL` blank; Jupiter backup `.env.bak-expert`) — the feature remains available for other installs. One-shot blocking delegation to Qwen3-32B Thinking (formerly on Saturn 3090, host port 8084 via the `expert-model` Docker container, image `ghcr.io/ggml-org/llama.cpp:server-cuda`; the 3090 now carries Jess's voice, and step 0 of the Saturn TTS install removes that container). Used by `query_budget` analyze-mode synthesis and any future hard-reasoning task. Auto-disabled (handler returns a short "disabled" string) when `EXPERT_ENABLED=false` or `EXPERT_MODEL_URL` is empty.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -192,7 +192,7 @@ Orchestrator (`.env` on Jupiter):
 | `TTS_STYLE_ENABLED` | `true` | Send a style note (`voice_style.py` preset phrase) with each synthesis. Honored by VoxCPM2; Qwen3-TTS ignores it, so `true` is harmless there. `false` = no notes anywhere. |
 | `VOICE_STYLE_PATH` | `/app/data/voice_style.yaml` | Writable YAML behind `/settings` → Voice Style. Stores only non-default per-mode / per-announcement presets. |
 
-VoxCPM2 server (live: `tts/voxcpm-tts-saturn.service` on Saturn; rollback: `tts/voxcpm-tts.service` on Helios — set in the unit, not `.env`). The Saturn unit picks its card with `CUDA_VISIBLE_DEVICES=GPU-<5080 uuid>` in `/etc/voxcpm-tts.env` (required: a missing file fails the start).
+VoxCPM2 server (live: `tts/voxcpm-tts-saturn.service` on Saturn; rollback: `tts/voxcpm-tts.service` on Helios — set in the unit, not `.env`). The Saturn unit picks its card with `CUDA_VISIBLE_DEVICES=GPU-<3090 uuid>` in `/etc/voxcpm-tts.env` (required: a missing file fails the start).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|

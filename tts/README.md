@@ -3,7 +3,7 @@
 FastAPI servers for the TTS (VoxCPM2 live; Qwen3-TTS rollback) and Parakeet STT, running as systemd services: STT on Helios (10.0.0.195), the live TTS on Saturn (10.0.0.58).
 
 **Deployment (since the Saturn TTS move):**
-- Live TTS is VoxCPM2 on **Saturn's RTX 5080**, port 8004 (`tts/voxcpm-tts-saturn.service`, installed as `voxcpm-tts.service`, + `tts/voxcpm_server.py`, same API; packages pinned in `tts/requirements-voxcpm.txt`). It admits only Jupiter. Install, cutover, rollback: `docs/VOICE_AND_TTS.md` → VoxCPM2 on Saturn. Helios's `tts/voxcpm-tts.service` (GPU1) stays installed but disabled as rollback: it refuses to start while the 262K brain unit is installed (the brain uses GPU1 for its context).
+- Live TTS is VoxCPM2 on **Saturn's RTX 3090**, port 8004 (`tts/voxcpm-tts-saturn.service`, installed as `voxcpm-tts.service`, + `tts/voxcpm_server.py`, same API; packages pinned in `tts/requirements-voxcpm.txt`). It admits only Jupiter. Install, cutover, rollback: `docs/VOICE_AND_TTS.md` → VoxCPM2 on Saturn. Helios's `tts/voxcpm-tts.service` (GPU1) stays installed but disabled as rollback: it refuses to start while the 262K brain unit is installed (the brain uses GPU1 for its context).
 - Qwen3-TTS (`Qwen3-TTS-1.7B-Base`, voice `jessica`, port 8002) is the rollback TTS and is **disabled** since 2026-10-24: its ~4.5 GiB no longer fits on GPU1 next to the brain. It only comes back with the 27B brain rollback (`tts/llama-server-primary-27b-q6k.service` header). When it runs, the unit sets `QWEN_TTS_DEVICE=cuda:0` and the GPU1 pin comes from a drop-in, `/etc/systemd/system/qwen-tts.service.d/gpu1.conf` → `Environment="CUDA_VISIBLE_DEVICES=1"`; without it TTS lands on GPU0 (RTX 5090).
 - STT on port 8003 is `stt-onnx.service` — Parakeet TDT 0.6b v2, int8 ONNX Runtime on CPU (source: `tts/stt_server_onnx.py` + `tts/stt-onnx.service`).
 - `parakeet-stt.service` (NeMo, Parakeet v3, GPU1 via `CUDA_VISIBLE_DEVICES=1`) is the **disabled** GPU alternative on the same port/API — it replaced the old Whisper HTTP STT server on 2026-04-26. See `README_PARAKEET.md`.
@@ -267,7 +267,7 @@ journalctl -u stt-onnx -f
 
 | Service | Model | VRAM | GPU |
 |---------|-------|------|-----|
-| TTS (live) | VoxCPM2 | ~7.4 GiB fresh, ~9.7 GiB after long texts | Saturn RTX 5080 (16 GB), picked by UUID in `/etc/voxcpm-tts.env` |
+| TTS (live) | VoxCPM2 | ~7.4 GiB fresh, ~9.7 GiB after long texts | Saturn RTX 3090 (24 GB), picked by UUID in `/etc/voxcpm-tts.env` |
 | TTS (rollback, disabled) | Qwen3-TTS-1.7B-Base | ~5GB | Helios GPU1 (RTX PRO 5000) |
 | STT (live) | Parakeet TDT 0.6b v2, int8 ONNX | none (CPU) | — |
 | STT (disabled alternative) | Parakeet TDT 0.6b v3, NeMo | ~6.3GB | GPU1 |
