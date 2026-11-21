@@ -86,7 +86,7 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     gpu: 'RTX 3090',
     role: 'Backup box: off-box nightly backup target (no runtime services)',
     services: [
-      'Nightly backups: Jess state, HA config, calendars, budget',
+      'Nightly backups: Jess state, HA config, calendars, budget, spreadsheets',
       'Spare RTX 3090',
     ],
     power: 'always-on',
