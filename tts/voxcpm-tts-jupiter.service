@@ -30,7 +30,7 @@
 # `--gpus device=GPU-<experiment card uuid>`. Jupiter runs all of production (HA, the orchestrator,
 # monitoring): an experiment also competes for its RAM and CPU, so keep them small, publish them on
 # 127.0.0.1 only, and stop them when done. TTSGPUMemoryLow (quiet) catches an experiment on the voice
-# card; one under ~4 GiB only shows as slower speech.
+# card; one up to ~7 GiB beside a fresh voice only shows as slower speech.
 #
 # Driver: NVIDIA's open kernel module (nvidia-580-open, prebuilt linux-modules-nvidia-580-open-*).
 # Kernel updates have dropped it on all three boxes: unattended-upgrades installs a security kernel but
