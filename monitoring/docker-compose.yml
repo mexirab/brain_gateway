@@ -261,6 +261,10 @@ services:
       - ./blackbox:/etc/blackbox_exporter:ro
     command:
       - '--config.file=/etc/blackbox_exporter/blackbox.yml'
+    # The TTS (VoxCPM2 on a Jupiter RTX 5080, tts/voxcpm-tts-jupiter.service) listens on
+    # Docker's bridge gateway only; probe it by the same name the orchestrator uses.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # frontend-probe-net: probes the dashboard as brain-frontend:3001 (it may
     # publish on loopback only). Deliberately NOT gateway-net: see the network
     # comment in the main docker-compose.yml.

@@ -1362,8 +1362,8 @@ def helios(monkeypatch):
     monkeypatch.setattr(helios_power, "wake_helios", h.wake)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", False)
     # Default layout: brain, STT and TTS on one host (Helios), so any of them
-    # answering proves Helios is on. Saturn-TTS tests override tts_url. IP
-    # literals: only differing IPs count as another box (_on_brain_host).
+    # answering proves Helios is on. Off-Helios TTS tests override tts_url
+    # (JUPITER_TTS). Another box = the orchestrator's own host or a differing IP (_on_brain_host).
     monkeypatch.setattr(vs._settings, "model_url", "http://10.0.0.195:8080/v1")
     monkeypatch.setattr(vs._settings, "stt_url", "http://10.0.0.195:8003")
     monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.195:8004")
@@ -1371,12 +1371,14 @@ def helios(monkeypatch):
 
 
 TTS_ONLY = {"stt": False, "model": False, "tts": True}
+# The live layout: the TTS on Jupiter's RTX 5080, reached through Docker's host-gateway alias.
+JUPITER_TTS = "http://host.docker.internal:8004"
 
 
 async def test_helios_asleep_tts_on_other_box_wakes(sat, helios, clock, monkeypatch):
-    """TTS on Saturn answers while Helios sleeps: that must not count as Helios
+    """TTS on Jupiter answers while Helios sleeps: that must not count as Helios
     being on — wake it instead of failing as service_down."""
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
     monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY, UP))
     monkeypatch.setattr(sat, "_helios_running", helios.running)
@@ -1388,7 +1390,7 @@ async def test_helios_asleep_tts_on_other_box_wakes(sat, helios, clock, monkeypa
 
 
 async def test_helios_asleep_tts_on_other_box_wake_disabled(sat, helios, clock, monkeypatch):
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(sat, "_service_status", _statuses(TTS_ONLY))
     monkeypatch.setattr(sat, "_helios_running", helios.running)
     assert await sat._ensure_helios(vs._Run(wake_word="hey_jess")) == "helios_asleep"
@@ -1399,10 +1401,10 @@ async def test_helios_asleep_tts_on_other_box_wake_disabled(sat, helios, clock, 
 
 @pytest.mark.parametrize("wake_enabled", [True, False], ids=["wake-on", "wake-off"])
 async def test_helios_asleep_and_tts_box_down_does_not_wake(sat, helios, clock, monkeypatch, wake_enabled):
-    """Helios asleep AND the Saturn TTS down: a wake can't make the turn work (and
+    """Helios asleep AND the Jupiter TTS down: a wake can't make the turn work (and
     would leave Helios on), so fail as service_down at once. With wake off too:
     "error", not "asleep" — waking Helios by hand wouldn't help either."""
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", wake_enabled)
     monkeypatch.setattr(sat, "_service_status", _statuses(DOWN))
     monkeypatch.setattr(sat, "_helios_running", helios.running)
@@ -1413,9 +1415,9 @@ async def test_helios_asleep_and_tts_box_down_does_not_wake(sat, helios, clock, 
 
 
 async def test_helios_booting_and_tts_box_down_takes_the_grace_path(sat, helios, clock, monkeypatch):
-    """Nothing on Helios answers yet but the plug says it's on (booting), Saturn
+    """Nothing on Helios answers yet but the plug says it's on (booting), Jupiter
     TTS down too: Helios is powered, so no fail-fast — wait, and go once all answer."""
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
     helios.running.return_value = True
     monkeypatch.setattr(sat, "_service_status", _statuses(DOWN, UP))
@@ -1431,7 +1433,7 @@ async def test_helios_booting_and_tts_box_down_takes_the_grace_path(sat, helios,
 async def test_helios_asleep_tts_box_down_turn_metric_and_log(sat, helios, clock, monkeypatch, pipeline, caplog):
     """The fail-fast path through a whole turn: counted as service_down (helios
     unchecked), no STT / brain / playback, one warning naming only the service."""
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
     pipeline.status.return_value = dict(DOWN)
     monkeypatch.setattr(sat, "_helios_running", helios.running)
@@ -1450,9 +1452,9 @@ async def test_helios_asleep_tts_box_down_turn_metric_and_log(sat, helios, clock
 
 
 async def test_helios_on_brain_reloading_tts_on_other_box(sat, helios, clock, monkeypatch):
-    """Most common case after the Saturn move: brain reloading, STT up. STT alone
+    """Most common case with the TTS off Helios: brain reloading, STT up. STT alone
     proves Helios is on, so grace and no wake, even with wake enabled."""
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
     monkeypatch.setattr(sat, "_service_status", _statuses(MODEL_DOWN, UP))
     monkeypatch.setattr(sat, "_helios_running", helios.running)
@@ -1464,8 +1466,8 @@ async def test_helios_on_brain_reloading_tts_on_other_box(sat, helios, clock, mo
 
 
 async def test_helios_on_tts_box_down_is_service_down(sat, helios, clock, monkeypatch):
-    """Brain + STT up, Saturn TTS down: Helios is on, so no wake — grace, then service_down."""
-    monkeypatch.setattr(vs._settings, "tts_url", "http://10.0.0.58:8004")
+    """Brain + STT up, Jupiter TTS down: Helios is on, so no wake — grace, then service_down."""
+    monkeypatch.setattr(vs._settings, "tts_url", JUPITER_TTS)
     monkeypatch.setattr(vs._settings, "helios_wake_enabled", True)
     monkeypatch.setattr(sat, "_service_status", _statuses({"stt": True, "model": True, "tts": False}))
     monkeypatch.setattr(sat, "_helios_running", helios.running)
@@ -1496,20 +1498,40 @@ async def test_helios_tts_same_host_still_proves_power(sat, helios, clock, monke
         ("stt", "http://vllm-primary:8000/v1", "http://parakeet-stt:8003", True),
         ("tts", "http://helios.lan:8080/v1", "http://10.0.0.58:8004", True),
         ("tts", "http://[fd00::1]:8080/v1", "http://[fd00::2]:8004", False),
-        # Empty URLs keep the pre-Saturn behaviour (counted, so no fail-fast).
+        # The orchestrator's own host (Jupiter) is never the power-tiered brain box.
+        ("tts", "http://10.0.0.195:8080/v1", "http://host.docker.internal:8004", False),
+        ("tts", "http://10.0.0.195:8080/v1", "http://HOST.docker.internal:8004", False),
+        ("tts", "http://10.0.0.195:8080/v1", "http://localhost:8004", False),
+        ("tts", "http://10.0.0.195:8080/v1", "http://127.0.0.1:8004", False),
+        ("tts", "http://vllm-primary:8000/v1", "http://host.docker.internal:8004", False),
+        ("stt", "http://localhost:8080/v1", "http://10.0.0.195:8003", False),
+        # Single-box install: everything on the orchestrator's host.
+        ("tts", "http://localhost:8080/v1", "http://host.docker.internal:8004", True),
+        ("tts", "http://127.0.0.1:8080/v1", "http://[::1]:8004", True),
+        # Empty URLs keep the old behaviour (counted, so no fail-fast).
         ("stt", "", "http://10.0.0.195:8003", True),
         ("stt", "http://10.0.0.195:8080/v1", "", True),
+        ("tts", "", "http://host.docker.internal:8004", True),
     ],
     ids=[
         "stt-same-ip",
         "stt-other-ip",
-        "tts-saturn",
+        "tts-other-ip",
         "tts-helios",
         "compose-names",
         "name-vs-ip",
         "ipv6-differ",
+        "tts-jupiter-host-gateway",
+        "host-gateway-uppercase",
+        "tts-localhost",
+        "tts-loopback-ip",
+        "compose-brain-vs-host-gateway",
+        "brain-local-stt-remote",
+        "single-box-names",
+        "single-box-loopback-ips",
         "no-model-url",
         "no-stt-url",
+        "no-model-url-host-gateway",
     ],
 )
 def test_on_brain_host(monkeypatch, name, model_url, url, expected):

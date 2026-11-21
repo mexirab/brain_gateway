@@ -1,0 +1,45 @@
+# Repo copy of Jupiter's GPU exporter unit. Install path: /etc/systemd/system/nvidia-gpu-exporter.service
+# utkuozdemir/nvidia_gpu_exporter v1.4.1, the same binary Helios runs (copied from Helios, sha256
+# ac34f6d32926110c3fb34aa8d4830f0ffd47cb6a93110592d1a9e3223f8f3f99). Scraped by Prometheus job
+# gpu-exporter as ${NODE_JUPITER_IP}:9400 (monitoring/prometheus/prometheus.yml.template), where the
+# voice card gets gpu_role="tts" from JUPITER_TTS_GPU_UUID. Feeds TTSGPUMemoryLow, TTSGPUUnmonitored,
+# JupiterGpuDriverBroken.
+# Install (as labadmin, with the binary at ~/bin/nvidia_gpu_exporter):
+#   sudo install -m 755 ~/bin/nvidia_gpu_exporter /usr/local/bin/nvidia_gpu_exporter
+#   sha256sum /usr/local/bin/nvidia_gpu_exporter     # must match the line above
+#   sudo install -m 644 monitoring/gpu-exporter/nvidia-gpu-exporter-jupiter.service /etc/systemd/system/nvidia-gpu-exporter.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nvidia-gpu-exporter
+#   curl -s http://10.0.0.248:9400/metrics | grep -c '^nvidia_smi_gpu_info'    # one line per card
+[Unit]
+Description=NVIDIA GPU Exporter (Prometheus, Jupiter)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Jupiter's LAN address only (where Prometheus scrapes node-exporter too); not the tailnet.
+ExecStart=/usr/local/bin/nvidia_gpu_exporter --web.listen-address=10.0.0.248:9400
+Restart=always
+RestartSec=10
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# nvidia-smi needs the device nodes; nothing else under /dev.
+DevicePolicy=closed
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidia1 rw
+DeviceAllow=/dev/nvidia-uvm rw
+# Prometheus (a container, leaving through the Docker bridges) and the LAN may scrape.
+IPAddressDeny=any
+IPAddressAllow=10.0.0.0/24 172.16.0.0/12 192.168.0.0/16
+
+[Install]
+WantedBy=multi-user.target

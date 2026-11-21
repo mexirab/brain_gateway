@@ -471,6 +471,21 @@ class _Run:
     stages: Dict[str, int] = field(default_factory=dict)  # stage -> ms
 
 
+# Hostnames that mean "the box the orchestrator runs on" (Jupiter): Docker's
+# host-gateway alias and loopback. A service URL naming one of these is on the
+# orchestrator's box, never on a power-tiered GPU box (_on_brain_host).
+_ORCHESTRATOR_HOST_NAMES = frozenset({"host.docker.internal", "localhost"})
+
+
+def _is_orchestrator_host(host: str) -> bool:
+    if host in _ORCHESTRATOR_HOST_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class Satellite:
     """One ESPHome voice device: connection, listening runs and Jess turns."""
 
@@ -809,12 +824,14 @@ class Satellite:
         """True unless service `name` clearly runs on another box than the brain.
 
         Only services on the brain's host (Helios) prove Helios is powered on.
-        A service on an always-on box (the TTS on Saturn) answers while Helios
-        sleeps, so counting it would skip the wake. "Clearly another box" =
-        both URLs use IP literals and the IPs differ (the live .env uses IPs).
-        Hostnames, such as compose DNS names (vllm-primary, parakeet-stt) or a
-        name against an IP, may still be one machine, so they keep counting as
-        the brain's host, as before the Saturn move. So does an empty URL.
+        A service on an always-on box (the TTS on Jupiter's RTX 5080, reached
+        as host.docker.internal) answers while Helios sleeps, so counting it
+        would skip the wake. "Clearly another box" = one URL names the
+        orchestrator's own host (host.docker.internal, localhost, a loopback
+        IP) and the other doesn't, or both URLs use IP literals and the IPs
+        differ. Other hostnames, such as compose DNS names (vllm-primary,
+        parakeet-stt) or a name against an IP, may still be one machine, so
+        they keep counting as the brain's host. So does an empty URL.
         """
         if name == "model":
             return True
@@ -822,6 +839,9 @@ class Satellite:
         own = urlsplit(getattr(_settings, f"{name}_url", "") or "").hostname
         if not brain or not own or own == brain:
             return True
+        own_local, brain_local = _is_orchestrator_host(own), _is_orchestrator_host(brain)
+        if own_local or brain_local:
+            return own_local and brain_local
         try:
             return ipaddress.ip_address(brain) == ipaddress.ip_address(own)
         except ValueError:
@@ -829,7 +849,7 @@ class Satellite:
 
     async def _ensure_helios(self, run: _Run) -> Optional[str]:
         """STT, brain and TTS must all answer (D5). The brain and STT live on
-        Helios; the TTS may live on another box (Saturn).
+        Helios; the TTS may live on another box (Jupiter's RTX 5080).
 
         All up → go. Nothing on the brain's host answering and the plug says
         off → asleep: wake it (if allowed) and wait up to
@@ -852,7 +872,7 @@ class Satellite:
         else:
             off_host_down = [n for n in needed if not status[n] and not self._on_brain_host(n)]
             if off_host_down:
-                # A service on another box (the Saturn TTS) is down too: waking Helios can't
+                # A service on another box (the Jupiter TTS) is down too: waking Helios can't
                 # make this turn work, and Helios would stay on (sleep is manual).
                 logger.warning("[SATELLITE] %s: %s down off Helios; not waking it", self._node, ",".join(off_host_down))
                 self._send_error(ERR_FAILED)

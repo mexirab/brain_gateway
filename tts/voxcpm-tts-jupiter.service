@@ -1,0 +1,204 @@
+# VoxCPM2 TTS server (cloned voice + per-utterance style notes) — JUPITER, on one of its two RTX 5080s.
+#
+# The live voice once the move is done (Jupiter .env: TTS_URL=http://host.docker.internal:8004). It
+# moved off Helios GPU1 so the brain can run its native 262144 context (header of
+# tts/llama-server-primary.service). Same server and API as before (tts/voxcpm_server.py); only the
+# box changed. tts/voxcpm-tts.service is the Helios copy, kept installed but DISABLED as rollback.
+#
+# Why Jupiter: it is always on, and since 2026-11-21 it holds two RTX 5080s (16 GB, Blackwell sm_120).
+# The first target, Saturn's RTX 3090, passed every check but speed: 1.75-2.1x Helios, GPU-bound
+# (99-100 % busy at ~1.7 GHz). Saturn stays as the backup box. Measured on the Jupiter 5080 (runbook
+# step 2, docs/VOICE_AND_TTS.md → VoxCPM2 on Jupiter): see the table there.
+#
+# Which card: the two 5080s are identical, so the voice card is picked by UUID, never by index or
+# name, in /etc/voxcpm-tts.env (step 5). The other card is for experiments and other models. The same
+# UUID goes in Jupiter's .env as JUPITER_TTS_GPU_UUID: Prometheus labels that card gpu_role="tts",
+# which TTSGPUMemoryLow selects (the cards can't be told apart by name). Change both together. A
+# missing or wrong .env value fires TTSGPUNotIdentified instead of silently disabling the alert.
+# Memory: VoxCPM2 takes ~7.4 GiB fresh and grew to 9.3-9.7 GiB on Helios with ordinary texts (PyTorch
+# keeps its peak cached and voxcpm never releases it; the VAE decodes a whole clip at once in fp32).
+# The install test caps it at 14 GiB of the card's 15.9.
+# Don't add PYTORCH_CUDA_ALLOC_CONF=expandable_segments to save memory: VoxCPM2 compiles with
+# mode="reduce-overhead" (CUDA graphs), and the two were never tested together.
+#
+# Experiments MUST be pinned to the other card, by UUID: llama.cpp auto-fit and most tools use every
+# GPU they can see, and single-GPU tools take cuda:0. Put the voice on the card with the HIGHER PCI bus
+# number, so cuda:0 (CUDA orders identical cards by bus) is the experiment card, and pin anyway:
+#   export CUDA_DEVICE_ORDER=PCI_BUS_ID
+#   export CUDA_VISIBLE_DEVICES=GPU-<experiment card uuid>
+# Docker containers need nvidia-container-toolkit (not installed on Jupiter) and then
+# `--gpus device=GPU-<experiment card uuid>`. Jupiter runs all of production (HA, the orchestrator,
+# monitoring): an experiment also competes for its RAM and CPU, so keep them small, publish them on
+# 127.0.0.1 only, and stop them when done. TTSGPUMemoryLow (quiet) catches an experiment on the voice
+# card; one under ~4 GiB only shows as slower speech.
+#
+# Driver: NVIDIA's open kernel module (nvidia-580-open, prebuilt linux-modules-nvidia-580-open-*).
+# Kernel updates have dropped it on all three boxes: unattended-upgrades installs a security kernel but
+# keeps the NVIDIA packages back whenever upgrading them means removing an old module package, so the
+# next reboot comes up with no driver. JupiterNvidiaModuleMissing (quiet) warns BEFORE that reboot (host
+# check scripts/check_nvidia_modules.py, textfile metric): fix with `sudo apt full-upgrade`, which moves
+# the kernel and its NVIDIA modules together. JupiterGpuDriverBroken (quiet) fires after the fact
+# (nvidia-smi failing). The server refuses to run on CPU (VOXCPM_REQUIRE_CUDA), so a lost driver shows
+# up as TTSDown, not as a ~7 s/sentence voice.
+#
+# Network: the server binds 172.17.0.1, Docker's default-bridge gateway, which is what host-gateway
+# (host.docker.internal) resolves to inside containers. IPAddressAllow admits only Docker's address
+# pools, so containers (the orchestrator, the blackbox probe) reach it, and nothing on the LAN or the
+# tailnet does. Jupiter's own shell can't either: a host-side `curl http://172.17.0.1:8004/health`
+# times out (measured 2026-11-21), so test from a container (step 7). It is unauthenticated and speaks in the cloned voice: NEVER bind 0.0.0.0 or the LAN
+# address, and never add the LAN or the tailnet to the allow-list. Every container on Jupiter can reach
+# it (known limit: a compromised container could synthesize speech in the cloned voice; it gets the WAV
+# back, nothing plays). If Docker's bridge address ever changes ("bip" in /etc/docker/daemon.json),
+# change VOXCPM_HOST below to match `ip -4 addr show docker0`.
+#
+# Install on Jupiter (one-time, as labadmin). Everything the server runs comes from the working Helios
+# install, checked by sha256, plus the pinned package list tts/requirements-voxcpm.txt; nothing is piped
+# from the internet into a shell. Keep /home/labadmin at mode 750: the service never needs to traverse
+# it (systemd bind-mounts the four dirs below into an otherwise empty /home).
+#   0. `nvidia-smi -L` lists both RTX 5080s. Note both UUIDs (GPU-xxxxxxxx-...) somewhere on Jupiter,
+#      never in the repo or the PR: the higher-bus card is the voice (step 5), the other the experiment
+#      pin. `nvidia-smi --query-compute-apps=gpu_bus_id,pid,process_name,used_memory --format=csv` shows
+#      nothing on the voice card. Both cards need "Above 4G Decoding" on in the BIOS (with it off the
+#      second card fails with "BAR1 is 0M" in dmesg and nvidia-smi lists one card).
+#   1. Service user (no login, no home):  sudo useradd -r -M -s /usr/sbin/nologin voxcpm
+#   2. Copy from Helios: the uv binary, uv's managed Python 3.11, the weights, and the voice config with
+#      the one clip it uses (~4.9 GB, ~45 s on the LAN). Then the server and package list from git (the PR
+#      branch until it is merged, then main). git show reads a ref without touching the live checkout:
+#        ssh labadmin@10.0.0.195 'tar -C /home/labadmin -cf - .uv-pkg/bin/uv .local/share/uv/python models/VoxCPM2 tts-voices/voices.json tts-voices/jessica_sample.wav' \
+#          | tar -C /home/labadmin -xf -
+#        cd /home/labadmin/gateway_nerves && REF=origin/main && git fetch --no-write-fetch-head origin main
+#        mkdir -p ~/voxcpm
+#        git show $REF:tts/voxcpm_server.py > ~/voxcpm/voxcpm_server.py
+#        git show $REF:tts/requirements-voxcpm.txt > ~/voxcpm/requirements-voxcpm.txt
+#        git show $REF:tts/voxcpm-tts-jupiter.service > /tmp/voxcpm-tts-jupiter.service
+#      then check the copies (must print OK three times):
+#        cd ~ && printf '%s\n' \
+#          'db919fb9428cc8ad04377ba3c898e0ec5fbee83700da5b982b1c9539f1e1b34f  .uv-pkg/bin/uv' \
+#          'f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d  models/VoxCPM2/model.safetensors' \
+#          '94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1  models/VoxCPM2/audiovae.pth' | sha256sum -c
+#   3. Python env: uv-managed Python 3.11, which uv finds in ~/.local/share/uv/python from step 2. Not
+#      the system Python: torch.compile needs Python.h. Exact versions come from Helios (~40 s):
+#        cd ~/voxcpm && ~/.uv-pkg/bin/uv venv --python-preference only-managed --python 3.11 .venv
+#        VIRTUAL_ENV=$PWD/.venv ~/.uv-pkg/bin/uv pip install --index-strategy unsafe-best-match \
+#          --extra-index-url https://download.pytorch.org/whl/cu128 -r requirements-voxcpm.txt
+#   4. Let the service user read these files and nothing else. These are per-user ACLs, not
+#      world-readable files:
+#        setfacl -R -m u:voxcpm:rX,d:u:voxcpm:rX ~/voxcpm ~/tts-voices ~/.local/share/uv/python ~/models/VoxCPM2
+#   5. Pick the card. CUDA takes a UUID, so the choice survives slot or PCI-order changes:
+#        echo 'CUDA_VISIBLE_DEVICES=GPU-<voice card UUID from step 0>' | sudo tee /etc/voxcpm-tts.env
+#      and the same UUID in Jupiter's .env (JUPITER_TTS_GPU_UUID=GPU-...), then render + reload the
+#      monitoring configs (scripts/generate-configs.sh, scripts/reload-monitoring.sh).
+#   6. sudo cp /tmp/voxcpm-tts-jupiter.service /etc/systemd/system/voxcpm-tts.service
+#      sudo systemctl daemon-reload && sudo systemctl enable --now voxcpm-tts
+#      The first start compiles kernels (torch.compile, a few minutes). They persist in
+#      /var/cache/voxcpm, so later starts take ~15-30 s. Watch: journalctl -u voxcpm-tts -f
+#      If it fails with "Permission denied" under /home/labadmin, re-run step 4.
+#   7. Checks:
+#      - The voxcpm python process (~7.4 GiB) is the only process on the voice card (query in step 0).
+#      - From the orchestrator container (what Jess uses):
+#          docker exec brain-orchestrator python -c "import urllib.request as u; print(u.urlopen('http://host.docker.internal:8004/health', timeout=5).read())"
+#        returns healthy with the voice listed.
+#      - From any other LAN device (a laptop or Helios): curl -m 3 http://10.0.0.248:8004/health fails
+#        (nothing listens there). `ss -ltn 'sport = :8004'` on Jupiter shows only 172.17.0.1:8004.
+#      - `journalctl -u voxcpm-tts | grep -i firewall` prints nothing (systemd starts WITHOUT the IP
+#        filter, and says so there, if BPF firewalling is unavailable).
+#        `systemctl show -p IPAddressAllow,IPAddressDeny voxcpm-tts` shows the two lines below.
+#      - Speed + memory comparison vs Helios: docs/VOICE_AND_TTS.md → VoxCPM2 on Jupiter, step 2.
+#        Write down the used memory, and check its 7-day peak a week after cutover (query there).
+#
+# Weights: openbmb/VoxCPM2 (Apache-2.0), HF revision 32279effe8c19989596f05d353d1447f51d9e915, at
+# /home/labadmin/models/VoxCPM2, loaded offline (sha256s in step 2).
+# Logs: journalctl -u voxcpm-tts on Jupiter. Not in Loki or the self-audit: Jupiter's promtail ships
+# Docker container logs only. Text is never logged.
+
+[Unit]
+Description=VoxCPM2 TTS Server for Brain Gateway (Jupiter)
+# docker.service creates docker0 (172.17.0.1), the address this server binds.
+After=network-online.target nvidia-persistenced.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+# Load ~15 s from a warm page cache; the first start also runs torch.compile.
+TimeoutStartSec=600
+
+# Card choice lives in /etc/voxcpm-tts.env (CUDA_VISIBLE_DEVICES=GPU-<uuid>, step 5). No `-` prefix:
+# a missing file must fail the start, not let CUDA pick whichever card comes first.
+EnvironmentFile=/etc/voxcpm-tts.env
+Environment="CUDA_DEVICE_ORDER=PCI_BUS_ID"
+Environment="HF_HUB_OFFLINE=1"
+Environment="VOXCPM_MODEL=/home/labadmin/models/VoxCPM2"
+Environment="VOXCPM_VOICES_DIR=/home/labadmin/tts-voices"
+Environment="VOXCPM_PORT=8004"
+# Docker's default-bridge gateway only (see "Network" above): containers reach it as
+# host.docker.internal; nothing listens on Jupiter's LAN or tailnet addresses.
+Environment="VOXCPM_HOST=172.17.0.1"
+Environment="VOXCPM_OUTPUT_SR=24000"
+# Writable state (torch.compile / triton kernels, any library home-dir cache) lives in
+# /var/cache/voxcpm; everything under /home is a read-only bind.
+CacheDirectory=voxcpm
+Environment="HOME=/var/cache/voxcpm"
+Environment="TORCHINDUCTOR_CACHE_DIR=/var/cache/voxcpm/inductor"
+Environment="TRITON_CACHE_DIR=/var/cache/voxcpm/triton"
+Environment="XDG_CACHE_HOME=/var/cache/voxcpm"
+# tqdm progress bars per synthesis turn the journal into "[blob data]".
+Environment="TQDM_DISABLE=1"
+# Peak RSS ~10.4 GiB during load + compile (Jupiter has 125 GiB, shared with all of production).
+MemoryMax=16G
+
+# Sandbox: as the Helios unit, with its own nologin user. ProtectHome=tmpfs hides the rest of /home,
+# including the checkout and its .env (/home/labadmin/gateway_nerves).
+User=voxcpm
+Group=voxcpm
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/labadmin/voxcpm /home/labadmin/.local/share/uv/python /home/labadmin/tts-voices /home/labadmin/models/VoxCPM2
+PrivateTmp=yes
+ProtectProc=invisible
+# Jupiter's data: Prometheus/Loki/Paperless/Immich mounts under /mnt, app data (Actual, Homepage)
+# under /opt. ProtectSystem=strict only makes them read-only; hide them.
+InaccessiblePaths=-/mnt -/media -/srv -/opt
+DevicePolicy=closed
+# CUDA opens every /dev/nvidiaN while enumerating, even with one card visible; without the node
+# torch silently falls back to CPU. CUDA_VISIBLE_DEVICES (/etc/voxcpm-tts.env) limits it to the voice card.
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidia1 rw
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+# Host-firewall substitute (ufw is inactive on Jupiter): Docker's address pools only (172.17-31.x
+# networks and the 192.168.x pool the compose networks also draw from). Calls from Jupiter's own
+# shell are dropped too (measured; test from a container). No loopback: nothing needs it, and
+# loopback would admit anything a local proxy (tailscaled, Tailscale Serve) forwards. NEVER add the LAN
+# (10.0.0.0/24) or the tailnet (100.64.0.0/10). Do NOT add MemoryDenyWriteExecute or
+# PrivateDevices: both break CUDA.
+IPAddressDeny=any
+IPAddressAllow=172.16.0.0/12 192.168.0.0/16
+
+WorkingDirectory=/home/labadmin/voxcpm
+ExecStart=/home/labadmin/voxcpm/.venv/bin/python /home/labadmin/voxcpm/voxcpm_server.py
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voxcpm-tts
+
+[Install]
+WantedBy=multi-user.target
