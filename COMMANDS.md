@@ -229,11 +229,11 @@ ssh labadmin@10.0.0.195 "journalctl -u llama-server-primary --no-pager -n 100"
 # brain_auth from "Check via API" above, repo root on Jupiter
 curl -s -H @<(brain_auth) http://10.0.0.195:8080/metrics | grep -E 'llamacpp:(requests_deferred|requests_processing)'
 
-# Both GPUs hold only the brain (262K ctx; the TTS is on Saturn): expect GPU0 ~29.1 GiB, GPU1 ~42.9 GiB
+# Both GPUs hold only the brain (262K ctx; the TTS is on a Jupiter RTX 5080): expect GPU0 ~29.1 GiB, GPU1 ~42.9 GiB
 # at load, a little more after long prompts. A python process on either GPU = a stray TTS: stop it.
 ssh labadmin@10.0.0.195 "nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv"
 
-# Rollback to 64K with the TTS back on Helios GPU1 (Saturn down > ~1 h): header of tts/llama-server-primary.service
+# Rollback to 64K with the TTS back on Helios GPU1 (Jupiter's voice card unusable): header of tts/llama-server-primary.service
 
 # Sandbox score
 ssh labadmin@10.0.0.195 "systemd-analyze security llama-server-primary"
@@ -262,23 +262,26 @@ Garbled output / dropped tool calls: set `--spec-type none` in the unit first (d
 
 ## Voice / TTS / STT
 
-### Test TTS with Jessica voice (VoxCPM2 on Saturn, live)
+### Test TTS with Jessica voice (VoxCPM2 on Jupiter, live)
 ```bash
-# Run on Jupiter: the Saturn server admits only Jupiter's address.
-curl -s http://10.0.0.58:8004/health
-curl -X POST http://10.0.0.58:8004/tts \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Good morning!", "voice": "jessica"}' \
-  --output test.wav
+# The server admits Docker networks only (a host-side curl times out): test from a container.
+docker exec brain-orchestrator python -c "import urllib.request as u; print(u.urlopen('http://host.docker.internal:8004/health', timeout=5).read())"
+# Speed / long-text / listening comparison against another server (generic text only; key from
+# /etc/voxcpm-tts/api-key): the docker run line in the docstring of scripts/tts_compare.py
 ```
 
-### Manage the TTS (Saturn) and STT (Helios)
+### Manage the TTS (Jupiter) and STT (Helios)
 ```bash
-# Live TTS is voxcpm-tts (VoxCPM2, :8004) on Saturn's RTX 3090. Its journal is not in Loki.
-ssh labadmin@10.0.0.58 "sudo systemctl status voxcpm-tts"
-ssh labadmin@10.0.0.58 "sudo systemctl restart voxcpm-tts"
-ssh labadmin@10.0.0.58 "journalctl -u voxcpm-tts --no-pager -n 50"
-ssh labadmin@10.0.0.58 "nvidia-smi --query-compute-apps=gpu_name,pid,process_name,used_memory --format=csv"   # only voxcpm on the 3090
+# Live TTS is voxcpm-tts (VoxCPM2) on one of Jupiter's RTX 5080s, socket-activated on 172.17.0.1:8004
+# (voxcpm-tts.socket). Its journal is not in Loki. On Jupiter:
+sudo systemctl status voxcpm-tts.socket voxcpm-tts
+sudo systemctl restart voxcpm-tts
+journalctl -u voxcpm-tts --no-pager -n 50
+nvidia-smi --query-compute-apps=gpu_bus_id,pid,process_name,used_memory --format=csv   # only voxcpm on the voice card
+
+# NVIDIA module for the running + next-boot kernel (hourly timer; NvidiaModuleMissing). Before any reboot:
+cat /home/labadmin/node_exporter/textfile_collector/jess_nvidia_modules.prom
+sudo apt full-upgrade && sudo systemctl start nvidia-module-check   # if a row is 0
 
 # Helios: STT is stt-onnx (Parakeet v2 int8 ONNX, CPU). parakeet-stt (NeMo, GPU) is disabled.
 # voxcpm-tts on Helios is the disabled rollback (refuses to start next to the 262K brain);
@@ -381,9 +384,9 @@ curl -s http://localhost:8888/health | jq '.rag_documents'
 
 ---
 
-## Voice Clone Config (Saturn)
+## Voice Clone Config (Jupiter)
 
-Location: `~/tts-voices/voices.json` on Saturn (live voice); Helios keeps the same file for the rollback.
+Location: `~/tts-voices/voices.json` on Jupiter (live voice); Helios keeps the same file for the rollback.
 
 ```json
 {

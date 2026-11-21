@@ -370,7 +370,7 @@ Measured 2026-11-21 on bus 0b (before the BIOS change; the two cards are identic
 | ~1200 chars, plain / styled | 21.9 s / 20.8 s (≈51–54 s of audio) |
 | ~1990 chars, plain / styled | 35.8 s / 36.6 s (≈88–90 s of audio) |
 
-Memory: 7.4 GiB fresh, 13.1 GiB peak after the long runs, no CUDA out-of-memory error. The Helios long-text column is missing: Helios GPU1 dropped off the PCIe bus (kernel `Xid 79`) at the first long request (2026-11-21 19:51), see `docs/internal/HELIOS_INFRASTRUCTURE.md`. The old test text (one sentence repeated) is not representative: the model spoke an 816-char repeat with a style note for 104 s and a 1377-char repeat took 61 s; real replies are varied, and the orchestrator's callers send ≤ 400-char sentences (dashboard), ≤ 320-char chunks (satellite) and ≤ 1200 chars (Telegram).
+Memory: 7.4 GiB fresh, 13.1 GiB peak after the long runs, no CUDA out-of-memory error. The Helios long-text column is missing: Helios GPU1 dropped off the PCIe bus (kernel `Xid 79`) at the first long request (2026-11-21 19:51), see `docs/internal/HELIOS_INFRASTRUCTURE.md` → GPU1 dropped off the bus. The old test text (one sentence repeated) is not representative: the model spoke an 816-char repeat with a style note for 104 s and a 1377-char repeat took 61 s; real replies are varied, and the orchestrator's callers send ≤ 400-char sentences (dashboard), ≤ 320-char chunks (satellite) and ≤ 1200 chars (Telegram).
 
 Pass lines:
 - **Speed:** each short sentence at most ~1.5× its Helios time, and none over ~2 s. **Borderline on the 5080:** #1 and #2 cross 1.5× in some rounds, #3 sits at ~1.9–2.2 s. The owner decides after a listening test in dashboard call mode, or keeps the voice on Helios at 64K;

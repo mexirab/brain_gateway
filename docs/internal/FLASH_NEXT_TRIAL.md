@@ -37,7 +37,7 @@ The trial began with a question about stratallm.org.
 - At 64K, as installed on 2026-10-24:
   - GPU0 ~29 GiB, 90 %;
   - GPU1 ~37 GiB of brain plus VoxCPM2. VoxCPM2 is 7.4 GiB fresh but grew to 9.7 GiB with use (GPU1 had 1.0 GiB free on 2026-11-11).
-- At 262K (`-ts 40,60 -ub 384`, with the TTS moved to Saturn), measured 2026-11-11:
+- At 262K (`-ts 40,60 -ub 384`, with the TTS off GPU1; it moves to a Jupiter RTX 5080), measured 2026-11-11:
   - GPU0 29.1 GiB at load, 29.5 GiB after a 200K-token prompt (2.3 GiB free);
   - GPU1 42.9 / 43.7 GiB (4.1 GiB free).
 - The rollback Qwen3-TTS (~4.5 GiB) had to be disabled.
@@ -55,7 +55,7 @@ The trial began with a question about stratallm.org.
     - `-ub 384` costs 16 % of long-prompt prefill: 1436 vs 1701 tok/s at 200K tokens.
     - The planted fact was found at 100K and 200K tokens.
     - Short-prompt decode is unchanged (123–128 vs 122–125 tok/s, same prompt).
-  - **Result:** 262K, with the TTS moved to Saturn (`docs/VOICE_AND_TTS.md` → VoxCPM2 on Saturn).
+  - **Result:** 262K, with the TTS moved to one of Jupiter's RTX 5080s (`docs/VOICE_AND_TTS.md` → VoxCPM2 on Jupiter; Saturn's RTX 3090, the first target, was too slow).
 - **Model names:** llama-server accepts any model name in the request. During a test window, run the trial brain on a spare port (8086) so live Jess traffic can't reach it.
 - **Restart vs recreate:** `docker compose up -d orchestrator` is a no-op for `.env` changes; use `--force-recreate`.
 - **Readiness check:** the unit's readiness loop checks that the server process is still alive. Write it as `kill -0 $$MAINPID`, so bash reads `MAINPID` from its environment. A bare `$MAINPID` is expanded to nothing by systemd itself, and the start fails on the first loop. That happened once during the permanent install.
@@ -127,7 +127,7 @@ The trial began with a question about stratallm.org.
 ## Known limits / open items
 
 - **The flag fails open:** `VOICE_THINKING_ENABLED` defaults to `false`, and nothing ties it to the running brain. Restoring an `.env` from before 2026-10-24, or one rebuilt from `.env.example`, while Flash-Next is installed silently brings the voice-turn unrequested actions back. The deterministic gate in front of `home_assistant` calls is the real control.
-- **Context:** 64K until the Saturn TTS move, which raises it to 262K. At 64K, the self-audit investigator's ~70K run (2026-10-21) was rejected and came back `partial`.
+- **Context:** 64K until the TTS moves to Jupiter, which raises it to 262K. At 64K, the self-audit investigator's ~70K run (2026-10-21) was rejected and came back `partial`.
   - At 262K, a cold 200K-token prompt takes ~140 s to prefill. That is longer than the unified loop's 120 s per-round timeout. Only a very long dashboard chat can get there (see the history point below); the investigator's budgets keep it near 45–60K tokens. Later rounds hit the prompt cache.
   - Decode slows with context depth: 88 tok/s at 100K, 57 tok/s at 200K.
   - Nothing caps client chat history any more. At 64K, an oversized conversation failed fast. Now a 64K–~170K-token history means roughly 40–110 s to first token per turn, while it holds the single llama slot (the per-turn context sits ahead of the history, so it is re-processed every turn). Follow-up: a size budget in `cloud_brain._sanitize_client_history`.
