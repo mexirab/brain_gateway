@@ -19,7 +19,7 @@ describe('SystemDiagram (current deployment)', () => {
     expect(text).not.toMatch(/Whisper|YNAB|RAG Docs|Telegram/);
   });
 
-  it('colours a down Saturn TTS red, a sleeping Helios brain amber', () => {
+  it('colours a down Jupiter TTS red, a sleeping Helios brain amber', () => {
     const info = (healthy: boolean): ServiceInfo => ({
       name: 'x', configured: true, healthy, last_check_ago: '5s', last_error: '',
       features_disabled_when_down: [],
@@ -35,9 +35,11 @@ describe('SystemDiagram (current deployment)', () => {
     expect(serviceDotColor(node('tts'), undefined)).toBeNull();
   });
 
-  it('places the TTS on Saturn', () => {
+  it('places the TTS on Jupiter', () => {
     const { container } = render(<SystemDiagram />);
-    expect(container.textContent ?? '').toContain('Voice clone · Saturn');
+    const text = container.textContent ?? '';
+    expect(text).toContain('Voice clone · Jupiter');
+    expect(text).not.toContain('Voice clone · Saturn');
   });
 
   it('marks the ATOM Echo voice path as disabled', () => {

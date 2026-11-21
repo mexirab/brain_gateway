@@ -1,5 +1,5 @@
 # Exact package set of the working VoxCPM2 venv on Helios (`uv pip freeze`, 2026-11-11), so the
-# Saturn install (tts/voxcpm-tts-saturn.service, step 3) resolves the same versions instead of a
+# Jupiter install (tts/voxcpm-tts-jupiter.service, step 3) resolves the same versions instead of a
 # fresh, months-later resolve. torch/torchaudio come from the PyTorch cu128 index (+cu128 local
 # versions); everything else from PyPI. Regenerate from the live venv when bumping voxcpm or torch:
 #   VIRTUAL_ENV=~/voxcpm/.venv ~/.uv-pkg/bin/uv pip freeze

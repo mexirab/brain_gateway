@@ -50,7 +50,7 @@ describe('nodeStatus', () => {
     expect(info.status).toBe('online');
   });
 
-  it('keeps Helios ASLEEP while the Saturn TTS is healthy', () => {
+  it('keeps Helios ASLEEP while the Jupiter TTS is healthy', () => {
     const info = nodeStatus(
       HELIOS,
       services({ model: { healthy: false }, stt: { healthy: false }, tts: { healthy: true } }),
@@ -65,10 +65,16 @@ describe('nodeStatus', () => {
     expect(info.tone).toBe('danger');
   });
 
-  it('reflects the TTS for Saturn (the live voice runs there)', () => {
-    expect(SATURN.serviceKeys).toEqual(['tts']);
-    expect(nodeStatus(SATURN, services({ tts: { healthy: true } })).status).toBe('online');
-    expect(nodeStatus(SATURN, services({ tts: { healthy: false } })).status).toBe('offline');
+  it('marks Saturn UNKNOWN — nothing the orchestrator probes runs there', () => {
+    // Saturn is a backup box; the voice runs on Jupiter, vision on the Helios brain.
+    expect(SATURN.serviceKeys).toHaveLength(0);
+    expect(nodeStatus(SATURN, services({ tts: { healthy: true } })).status).toBe('unknown');
+  });
+
+  it('keeps Jupiter ONLINE when only its TTS is down (the TTS node shows it)', () => {
+    expect(nodeStatus(JUPITER, services({ ha: { healthy: true }, tts: { healthy: false } })).status).toBe('online');
+    expect(nodeStatus(JUPITER, services({ ha: { healthy: false }, tts: { healthy: true } })).status).toBe('online');
+    expect(nodeStatus(JUPITER, services({ ha: { healthy: false }, tts: { healthy: false } })).status).toBe('offline');
   });
 
   it('counts vision as a Helios service (served by the brain)', () => {

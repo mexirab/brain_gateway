@@ -88,7 +88,7 @@ const NODES: DiagramNode[] = [
   { id: 'finance', label: 'Actual Budget', sub: 'Finance · read-only', x: 294, y: 480, w: 116, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
 
   // Output layer
-  { id: 'tts', label: 'Jessica TTS', sub: 'Voice clone · Saturn', x: 30, y: 575, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
+  { id: 'tts', label: 'Jessica TTS', sub: 'Voice clone · Jupiter', x: 30, y: 575, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
   { id: 'speakers', label: 'Speakers', sub: 'Google Home / Cast', x: 230, y: 575, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔊', group: 'output' },
   { id: 'push', label: 'Phone Push', sub: 'Pushover · ntfy', x: 420, y: 575, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '📱', group: 'output' },
 
@@ -261,7 +261,7 @@ function edgeLabelPoint(from: DiagramNode, to: DiagramNode): [number, number] {
 // don't render a misleading dot. Services on a wake-on-demand node (Helios:
 // model/vision/stt) report as amber ("configured but not healthy" = asleep)
 // rather than red. Derived from CLUSTER_NODES, so moving a service between
-// boxes (the TTS went to the always-on Saturn) moves its colour with it.
+// boxes (the TTS went to the always-on Jupiter) moves its colour with it.
 const SLEEPY_SERVICES = new Set<string>(
   CLUSTER_NODES.filter((n) => n.power === 'wake-on-demand').flatMap((n) => n.serviceKeys),
 );

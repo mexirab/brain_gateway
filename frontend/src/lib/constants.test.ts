@@ -20,6 +20,12 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(svc).toMatch(/Home Assistant/i);
   });
 
+  it('puts the live TTS on Jupiter (one of its two RTX 5080s)', () => {
+    expect(byId.jupiter.gpu).toBe('2x RTX 5080');
+    expect(byId.jupiter.serviceKeys).toEqual(['ha', 'tts']);
+    expect(byId.jupiter.services.join(' ')).toMatch(/TTS/);
+  });
+
   it('does NOT contain the dead Pi (10.0.0.106) or a standalone HA node', () => {
     for (const node of CLUSTER_NODES) expect(node.ip).not.toBe('10.0.0.106');
     expect(byId.ha).toBeUndefined();
@@ -48,12 +54,11 @@ describe('CLUSTER_NODES topology (2026-07-04 ground truth)', () => {
     expect(svc).not.toMatch(/vLLM|Whisper/);
   });
 
-  it('puts the live TTS on Saturn, next to the backups (no vision/expert probes)', () => {
-    expect(byId.saturn.serviceKeys).toEqual(['tts']);
+  it('keeps Saturn as a backup box only (no TTS, vision or expert probes)', () => {
+    expect(byId.saturn.serviceKeys).toHaveLength(0);
     const svc = byId.saturn.services.join(' ');
     expect(svc).toMatch(/backup/i);
-    expect(svc).toMatch(/TTS/);
-    expect(svc).not.toMatch(/Expert/i);
+    expect(svc).not.toMatch(/TTS|Expert/i);
   });
 
   it('does not hard-code a stale model name or RAG doc count', () => {

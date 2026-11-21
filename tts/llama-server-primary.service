@@ -27,8 +27,8 @@
 # The 28.8 GB n-gram table (per_layer_token_embd) is an input GET_ROWS tensor loaded
 # lazily from mmap, so it stays in host RAM / page cache, not VRAM.
 #
-# Context 262144 (the model's native length) since the Saturn TTS move. Was 65536 from 2026-10-24.
-# REQUIRES GPU1 free of the TTS: voxcpm-tts runs on Saturn (tts/voxcpm-tts-saturn.service). With
+# Context 262144 (the model's native length) since the TTS moved to Jupiter. Was 65536 from 2026-10-24.
+# REQUIRES GPU1 free of the TTS: voxcpm-tts runs on a Jupiter RTX 5080 (tts/voxcpm-tts-jupiter.service). With
 # VoxCPM2 back on GPU1 (7.4 GiB fresh, grows to ~9.7 GiB) this unit does not fit, and --fit off
 # makes the start fail (Loki alert BrainFailedToStart). Never start voxcpm-tts on Helios while this
 # unit is installed.
@@ -62,7 +62,8 @@
 #   3. Repo: point the tts-voxcpm probe back at ${NODE_HELIOS_IP} with node 'helios'
 #      (prometheus.yml.template). TTSDown gates on the probe's own node, so it needs no change.
 #      Dashboard: move 'tts' back to Helios's serviceKeys in frontend/src/lib/constants.ts
-#      (Saturn gets []), or Saturn's card shows the Helios TTS's health.
+#      (Jupiter keeps ['ha']), or Jupiter's card counts the Helios TTS's health.
+#   Jupiter's voxcpm-tts can keep running meanwhile (nothing calls it); stop it to free the card.
 #
 # Rollback to the 27B: see the header of tts/llama-server-primary-27b-q6k.service.
 #
