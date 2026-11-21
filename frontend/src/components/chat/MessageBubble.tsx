@@ -1,6 +1,6 @@
 'use client';
 
-import { User, Bot, Bell, Volume2, Play, MoonStar, AlertCircle } from 'lucide-react';
+import { User, Bot, Bell, Volume2, VolumeX, Play, AlertCircle } from 'lucide-react';
 import type { RoutingInfo, AnnouncementEntry } from '@/lib/types';
 import type { SpeechStatus } from '@/lib/speech-queue';
 import RoutingBadge from './RoutingBadge';
@@ -38,7 +38,9 @@ interface MessageBubbleProps {
 // non-interactive text shown while it is still arriving (nothing to tap yet).
 const SPEECH_NOTICE: Partial<Record<SpeechStatus, { icon: typeof Play; label: string; streaming: string }>> = {
   blocked: { icon: Play, label: 'Tap to play', streaming: 'Voice blocked — play it when the reply finishes' },
-  asleep: { icon: MoonStar, label: 'Jess’s voice is asleep — tap to retry', streaming: 'Jess’s voice is asleep' },
+  // `asleep` = the TTS answered 503. Since the voice moved to the always-on
+  // Saturn that means it is down, not sleeping, so the copy says offline.
+  asleep: { icon: VolumeX, label: 'Jess’s voice is offline — tap to retry', streaming: 'Jess’s voice is offline' },
   interrupted: { icon: Play, label: 'Voice paused — tap to replay', streaming: 'Voice paused' },
   error: { icon: AlertCircle, label: 'Couldn’t play voice — tap to retry', streaming: 'Couldn’t play voice' },
 };

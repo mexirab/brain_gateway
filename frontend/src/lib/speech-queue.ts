@@ -5,7 +5,8 @@
  * `maxInFlight` beyond what has finished playing (the TTS server is a single
  * GPU), and always played in push order. Failures end the session with a
  * status the UI can act on instead of failing silently:
- *   asleep  — TTS endpoint answered 503 (Helios powered down)
+ *   asleep  — TTS endpoint answered 503 (the TTS box, Saturn, or its server is down;
+ *             the name dates from when the TTS ran on the power-tiered Helios)
  *   blocked — the browser refused play() (iOS autoplay: NotAllowedError)
  *   interrupted — the OS paused playback (screen lock, call, Siri, Control
  *                 Center); the player rejects with a MediaInterrupted error

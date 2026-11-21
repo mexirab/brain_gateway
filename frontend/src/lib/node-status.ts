@@ -46,8 +46,8 @@ export function nodeStatus(
   // No live data yet → don't claim anything.
   if (!services) return INFO.unknown;
 
-  // Nothing the orchestrator probes runs on this node (e.g. Saturn, now just
-  // a backup target) → we genuinely don't know, so don't fake "online".
+  // Nothing the orchestrator probes runs on this node (e.g. the unreachable
+  // Uranus test box) → we genuinely don't know, so don't fake "online".
   if (node.serviceKeys.length === 0) return INFO.unknown;
 
   const infos = node.serviceKeys

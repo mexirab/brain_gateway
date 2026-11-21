@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui';
 import { useHealth, useServices } from '@/lib/hooks';
+import { CLUSTER_NODES } from '@/lib/constants';
 import type { ServicesResponse } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -74,7 +75,7 @@ const NODES: DiagramNode[] = [
   // AI layer — Helios is power-tiered: asleep most of the time, woken by an
   // HA-controlled smart plug when a chat needs the brain.
   { id: 'plug', label: 'Smart Plug', sub: 'via HA · wakes Helios', x: 110, y: 320, w: 150, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔌', group: 'ai' },
-  { id: 'brain', label: 'Qwen3.8 TURBO', sub: 'llama.cpp · RTX 5090 · Helios', x: 300, y: 318, w: 200, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai', service: 'model' },
+  { id: 'brain', label: 'Qwen3.8-Flash-Next', sub: 'llama.cpp · 5090 + PRO 5000 · Helios', x: 300, y: 318, w: 200, h: 56, color: '#34d399', glow: '#34d399', icon: '🧠', group: 'ai', service: 'model' },
   { id: 'vision', label: 'Vision', sub: 'Served by the brain', x: 530, y: 320, w: 130, h: 52, color: '#34d399', glow: '#34d399', icon: '👁️', group: 'ai', service: 'vision' },
 
   // Tools layer (two rows)
@@ -87,7 +88,7 @@ const NODES: DiagramNode[] = [
   { id: 'finance', label: 'Actual Budget', sub: 'Finance · read-only', x: 294, y: 480, w: 116, h: 46, color: '#34d399', glow: '#34d399', icon: '💰', group: 'tools' },
 
   // Output layer
-  { id: 'tts', label: 'Jessica TTS', sub: 'Voice clone · Helios', x: 30, y: 575, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
+  { id: 'tts', label: 'Jessica TTS', sub: 'Voice clone · Saturn', x: 30, y: 575, w: 170, h: 52, color: '#fb7185', glow: '#fb7185', icon: '🗣️', group: 'output', service: 'tts' },
   { id: 'speakers', label: 'Speakers', sub: 'Google Home / Cast', x: 230, y: 575, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '🔊', group: 'output' },
   { id: 'push', label: 'Phone Push', sub: 'Pushover · ntfy', x: 420, y: 575, w: 160, h: 52, color: '#fbbf24', glow: '#fbbf24', icon: '📱', group: 'output' },
 
@@ -257,11 +258,15 @@ function edgeLabelPoint(from: DiagramNode, to: DiagramNode): [number, number] {
 
 // LIVE health dot color for a service-backed node, from /api/services.
 // Returns null when the node isn't service-backed or health is unknown, so we
-// don't render a misleading dot. Helios services (model/vision/tts/stt) report as
-// amber ("configured but not healthy" = asleep) rather than red.
-const HELIOS_SERVICES = new Set(['model', 'vision', 'tts', 'stt']);
+// don't render a misleading dot. Services on a wake-on-demand node (Helios:
+// model/vision/stt) report as amber ("configured but not healthy" = asleep)
+// rather than red. Derived from CLUSTER_NODES, so moving a service between
+// boxes (the TTS went to the always-on Saturn) moves its colour with it.
+const SLEEPY_SERVICES = new Set<string>(
+  CLUSTER_NODES.filter((n) => n.power === 'wake-on-demand').flatMap((n) => n.serviceKeys),
+);
 
-function serviceDotColor(
+export function serviceDotColor(
   node: DiagramNode,
   services: ServicesResponse | undefined,
 ): string | null {
@@ -269,7 +274,7 @@ function serviceDotColor(
   const info = services.services[node.service];
   if (!info) return null; // unconfigured — nothing to show
   if (info.healthy) return '#34d399'; // green
-  return HELIOS_SERVICES.has(node.service) ? '#fbbf24' : '#fb7185'; // amber : red
+  return SLEEPY_SERVICES.has(node.service) ? '#fbbf24' : '#fb7185'; // amber : red
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
