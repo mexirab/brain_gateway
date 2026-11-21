@@ -17,6 +17,7 @@ Before you start (either path), confirm:
 - [ ] **OS:** Ubuntu 22.04 LTS or 24.04 LTS (see [HARDWARE.md](HARDWARE.md) for non-Ubuntu notes)
 - [ ] **GPU:** at least 20 GiB VRAM (24 GB card class). Below that, manual model selection — see [HARDWARE.md](HARDWARE.md).
 - [ ] **Driver:** none yet, or `nvidia-driver-580-open` or newer
+- [ ] **Docker:** none yet, or Engine 28 or newer (`docker version --format '{{.Server.Version}}'`). The main compose declares the `coder-net` network with `gateway_mode_ipv4: isolated`, which needs 28+. Ubuntu 24.04's `docker.io` package is new enough (29.x); if yours is older, install Docker's own packages (docs.docker.com/engine/install/ubuntu)
 - [ ] **Disk:** ~120 GiB free on the partition that holds `/var/lib/docker` and the repo
 - [ ] **RAM:** 16 GiB minimum, 32 GiB if you plan to enable the advanced profile
 - [ ] **Network:** the box can reach the public internet to pull container images and HuggingFace models (one-time)

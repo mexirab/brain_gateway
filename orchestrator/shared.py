@@ -485,6 +485,8 @@ GRIST_ENABLED = settings.grist_enabled
 # Research helper (`look_it_up`) — tool_definitions hides it when off.
 RESEARCH_HELPER_ENABLED = settings.research_helper_enabled
 RESEARCH_CONTEXT7_API_KEY = settings.research_context7_api_key
+# Coder box gate (coder_gate.py) — routes answer 404 when off.
+CODER_ENABLED = settings.coder_enabled
 
 # ---------------------------------------------------------------------------
 # Expert Model (Qwen3-32B Thinking on Saturn 3090)

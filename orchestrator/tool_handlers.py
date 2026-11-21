@@ -1856,6 +1856,11 @@ async def _reg_helios_power(arguments: dict) -> str:
             return "Done — I've cut power to Helios. It'll auto-boot next time I wake it."
         if result.get("skipped") == "disabled":
             return "Helios wake-on-demand is turned off, so I can't power the GPU box from here."
+        if result.get("skipped") == "coder_active":
+            return (
+                "A coding session is using Helios right now, so I won't cut its power. "
+                "End the session first, or ask again once it has been idle for 15 minutes."
+            )
         return f"I couldn't put Helios to sleep: {result.get('error', 'unknown error')}"
 
     # status (default)

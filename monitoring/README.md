@@ -407,6 +407,25 @@ Rollback: comment out `VOICE_SATELLITE_DEVICES`, uncomment the single-device lin
 
 **Grafana row "Voice Satellite"** (`brain_gateway_sre.py`): Connected; Connect Attempts by Result (1h), Turns by Result (6h) and How Listening Ended (24h), each split `by (device, …)`; Wakes vs. False Wakes by Wake Word (24h) (`duplicate` excluded); Listening End → Reply Playing p50 / p95 (6h) by `helios` (long replies: until the first ~8 s are ready); Reply Audio Outcomes (24h) by `result` (`not_wav` excluded); Reply Stream Underruns (24h).
 
+## Coder Gate
+
+Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_gate.py`, default off `CODER_ENABLED`; behaviour: `TECHNICAL_REFERENCE.md` → Coder Gate). **No Grafana row and no alerts yet** — they come with PR 2, before `CODER_ENABLED=true`. Series exist (most pre-seeded at 0) even while it's off.
+
+| Metric | Labels / meaning |
+|--------|------------------|
+| `bgw_coder_requests_total` | `origin` = `session` \| `job` \| `none` (no valid token yet); `result` = `ok`, `unauthorized`, `budget`, `rejected`, `busy` (admission full, byte budget, or chat kept the brain past the wait), `superseded`, `revoked`, `brain_unavailable`, `context_too_long`, `client_error` (brain 4xx), `upstream_error` (5xx / broken stream / 240 s attempt cap), `internal`, `too_large`, `disabled` (gate off, or a coder-net request not on the gate address) |
+| `bgw_coder_rejected_total` | `reason` — request-filter refusals (`coder_gate.REJECT_REASONS`). Refusals from a real Qwen Code session (e.g. after an upgrade) = its requests changed shape; the token is revoked after 20 |
+| `bgw_coder_dropped_keys_total` | `key` — request keys dropped instead of passed (names from `coder_gate.KNOWN_DROPPED_KEYS`, `non_text_part`, `bad_tool_arguments`, else `other`) |
+| `bgw_coder_requests_admitted` | gauge — requests waiting for or using the brain now (≤ 4) |
+| `bgw_coder_wait_seconds` | histogram — wait for idle chat + the one-at-a-time lock (429s included) |
+| `bgw_coder_upstream_seconds` | histogram — brain time per answered request (preempted attempts excluded) |
+| `bgw_coder_preempted_total` | attempts aborted because chat (or a photo) needed the brain; re-sent when idle |
+| `bgw_coder_brain_tokens_total` | `type` = `prompt` \| `completion` |
+| `bgw_coder_guard_blocked_total` | coder-net requests for any non-gate path (403). Any increase = something in a box is probing the API |
+| `bgw_coder_sessions_total` | `action` = `minted` \| `revoked` |
+
+Related: `bgw_helios_sleep_total{result="refused"}` = Helios sleep refused during coder use. Logs: `docker logs brain-orchestrator 2>&1 | grep '\[CODER\]'` (token ids, counts, reasons only). `Gate enabled on <addr>` at startup = on; `… is not an address of this container; coder gate OFF` = the orchestrator isn't on `coder-net` at `CODER_GATE_ADDRESS` (compose vs `.env` drift) — the guard still refuses coder-net requests.
+
 ## Deploy Drift
 
 Pushes to main deploy through the CI `deploy` job on Jupiter's self-hosted runner, which writes the commit it shipped to `.last-deployed-sha` in the live checkout. A commit can pass CI and still never deploy: GitHub keeps one pending run per concurrency group and cancels it when another arrives, a deploy can fail or time out, and a stopped runner deploys nothing. `orchestrator/jobs_deploy_drift.py` (every 10 min, first run 60 s after start; **off unless `DEPLOY_DRIFT_REPO` is set**, e.g. `mexirab/brain_gateway`) reads the marker through the read-only repo mount (`DEPLOY_MARKER_PATH`, default `/opt/gateway_mvp/.last-deployed-sha`) and lists main's latest 20 push runs of `ci.yml` from the GitHub REST API. A run passed CI when every job of its latest attempt except "Deploy to Jupiter" succeeded; a finished run with no job of that name counts as `deploy_job_missing` (rename `DEPLOY_JOB_NAME` in the module with the job). Unauthenticated (public repo, 60 req/h per public IP, shared with the LAN; the check uses ~6/h, up to ~42/h during bursts of pushes); optional `DEPLOY_DRIFT_GITHUB_TOKEN` = a fine-grained token with public-repo read-only access and no permissions — never the runner's or the owner's `gh` login. Metrics: `bgw_deployed_commit_info{commit}` (12-hex SHA, one series), `bgw_deployed_commit_timestamp_seconds` (marker mtime), `bgw_deploy_undeployed_green_commits`, `bgw_deploy_undeployed_green_since_timestamp_seconds` (CI-pass time of the OLDEST undeployed green commit; 0 = in sync, NaN = unknown), `bgw_deploy_drift_check_total{result}` (`in_sync`, `behind`, `not_on_main`; `partial` = job lookups ran out during a burst of pushes, retried next check; failures `marker_missing`, `marker_invalid`, `deploy_job_missing`, `github_error`, `rate_limited`). After a failure the drift gauges keep their values while the marker is unchanged and go NaN after a new deploy. Grafana row "Deploys (CI → Jupiter)" (`brain_gateway_sre.py`). Known limit: a deploy job that ships origin/main's tip at pull time (rather than the commit whose CI passed) can mark a commit whose own CI is still running or later fails; drift then reads `in_sync`.

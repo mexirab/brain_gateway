@@ -13,7 +13,7 @@ from typing import Optional
 
 import httpx
 
-from orchestrator import shared
+from orchestrator import brain_slot, shared
 from orchestrator.metrics import (
     TOOL_RESULT_MARKUP_NEUTRALIZED,
     VISION_IMAGE_SIZE,
@@ -318,11 +318,13 @@ async def analyze_image(
 
     t0 = time.time()
     try:
-        resp = await client.post(
-            f"{shared.VISION_MODEL_URL}/chat/completions",
-            json=payload,
-            timeout=shared.VISION_TIMEOUT,
-        )
+        # Someone is usually waiting on a photo: the coder gate yields to it.
+        with brain_slot.interactive_call():
+            resp = await client.post(
+                f"{shared.VISION_MODEL_URL}/chat/completions",
+                json=payload,
+                timeout=shared.VISION_TIMEOUT,
+            )
         resp.raise_for_status()
         result = resp.json()
         elapsed = time.time() - t0

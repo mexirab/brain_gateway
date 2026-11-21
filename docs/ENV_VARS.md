@@ -316,7 +316,7 @@ Power-tier the GPU box. Helios runs only the model layer (LLM/TTS/STT) and is po
 
 **Monitor-only mode:** `HELIOS_PLUG_MONITOR_ENABLED=true` runs only the read-only poll (`bgw_helios_plug_watts` / `bgw_helios_running`) while `HELIOS_WAKE_ENABLED=false` — it never turns the plug on or off. The `helios_power` tool and `/api/helios/*` stay gated on `HELIOS_WAKE_ENABLED` (`GET /api/helios/power` still 409s in monitor-only mode, deliberately). The `HeliosPoweredButUnreachable` alert — the only **paging** signal for a Helios outage (`NodeDown` excludes Helios) — needs one of the two flags on; with both off, `HeliosUnreachablePlugBlind` (quiet) fires instead (see `monitoring/README.md` → Helios Health Alerts).
 
-Metrics: `bgw_helios_wake_total{result}` (`ok|debounced|disabled|error`), `bgw_helios_sleep_total{result}` (`ok|disabled|error`), `bgw_helios_status_total{result}` (`ok|disabled|error`), `bgw_helios_plug_watts` gauge (NaN when the power sensor is unavailable/unknown/unparseable and at startup before the first poll; 0 when the switch reads `off`; unchanged on an HA request error), `bgw_helios_running` gauge (1=running, 0=asleep/unknown; a switch state other than `on`/`off` infers `unknown`). Note `wake_total{result=ok}` means "HA accepted `turn_on`", not "Helios finished booting" — alert on `bgw_helios_running` / `bgw_helios_plug_watts` (kept fresh by the poll job) for actual up/down, and on `rate(bgw_helios_wake_total{result="error"}[15m])` for wake-command failures.
+Metrics: `bgw_helios_wake_total{result}` (`ok|debounced|disabled|error`), `bgw_helios_sleep_total{result}` (`ok|disabled|error|refused` — refused = a coder session/job is using the brain, see Coder box gate), `bgw_helios_status_total{result}` (`ok|disabled|error`), `bgw_helios_plug_watts` gauge (NaN when the power sensor is unavailable/unknown/unparseable and at startup before the first poll; 0 when the switch reads `off`; unchanged on an HA request error), `bgw_helios_running` gauge (1=running, 0=asleep/unknown; a switch state other than `on`/`off` infers `unknown`). Note `wake_total{result=ok}` means "HA accepted `turn_on`", not "Helios finished booting" — alert on `bgw_helios_running` / `bgw_helios_plug_watts` (kept fresh by the poll job) for actual up/down, and on `rate(bgw_helios_wake_total{result="error"}[15m])` for wake-command failures.
 
 A reusable host helper `~/plug.sh on|off|state|power` (HA-based) exists on Jupiter for manual CLI use; the orchestrator does **not** shell out to it (it runs in a container) — it calls the HA REST API directly.
 
@@ -403,6 +403,27 @@ Sandboxed research helper (`orchestrator/research_helper.py`; behaviour in `TECH
 |----------|---------|---------|
 | `RESEARCH_HELPER_ENABLED` | `false` | Enable `look_it_up`. When off it is removed from the LLM schema (`RESEARCH_TOOL_NAMES`, part of the tool-cache key), the `_RESEARCH_GUIDANCE` line and the `look_it_up` mentions in IMPORTANT RULES are dropped from the prompt, and the handler (still registered) answers "turned off" (`result=disabled`). Exposed as `shared.RESEARCH_HELPER_ENABLED`. Turning it on sends technical questions off the box — see `docs/PRIVACY.md`. |
 | `RESEARCH_CONTEXT7_API_KEY` | (empty) | Optional Context7 key (`ctx7sk…`) for the `library_docs` source, sent as a bearer header to `context7.com` only. Works without one at a low rate limit (`bgw_research_source_calls_total{tool="library_docs",result="rate_limited"}`). Exposed as `shared.RESEARCH_CONTEXT7_API_KEY`. |
+
+## Coder box gate
+
+Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_gate.py`; routes + rules: `TECHNICAL_REFERENCE.md` → Coder Gate; plan: `docs/internal/CODER_PLAN.md` (PR #174)). PR 1 is dormant: nothing starts a box yet. `validate_coder_config` (`config.py`) replaces a non-finite number with the default, clamps every number below, and on a bad network layout logs `[CONFIG] …; coder gate disabled, coder-net guard stays on.` and forces `CODER_ENABLED` off (never raises). Read at process start — after changing: `docker compose up -d --force-recreate orchestrator`.
+
+`CODER_SUBNET`, `CODER_GATE_ADDRESS` and `CODER_BOX_RANGE` are read by **both** `docker-compose.yml` (`coder-net` IPAM `subnet` / `ip_range`, the orchestrator's `ipv4_address`) and `config.py`, so set them in `.env`, never on one side alone. Docker can't change an existing network's subnet: to move it, stop the orchestrator, `docker network rm gateway_nerves_coder-net`, then `docker compose up -d orchestrator`. `coder-net` uses `gateway_mode_ipv4: isolated`, which needs Docker ≥ 28.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CODER_ENABLED` | `false` | Serve the gate + session routes. Off = every `/api/coder/*` route answers 404; the coder-net guard in `BearerAuthMiddleware` is on either way. Also forced off at startup when the container doesn't own `CODER_GATE_ADDRESS` (`coder_gate.startup_check`, ERROR log). Exposed as `shared.CODER_ENABLED`. |
+| `CODER_SUBNET` | `10.213.250.0/24` | coder-net subnet. Requests from it (or arriving on the gate address) may reach only the gate paths. Must be a private IPv4 network, not loopback / link-local. Outside Docker's default pools; change only on a clash. |
+| `CODER_GATE_ADDRESS` | `10.213.250.2` | The orchestrator's fixed coder-net address. The gate serves only requests that arrived on it from the subnet. Must be a host address inside the subnet (not network / broadcast / loopback / link-local) and outside `CODER_BOX_RANGE`. |
+| `CODER_BOX_RANGE` | `10.213.250.128/25` | Where boxes get addresses, so a box started while the orchestrator is down can't take the gate address. Must sit inside the subnet and exclude the gate address. |
+| `CODER_MAX_TOKENS_PER_REQUEST` | `4096` | Cap on each request's `max_tokens` (used when the client sends none). Clamped 256–8192. |
+| `CODER_SESSION_HOURS` | `4` | Session-token lifetime; `POST /api/coder/sessions` `hours` is clamped to 0.25–this. Clamped 0.25–12. |
+| `CODER_SESSION_MAX_REQUESTS` | `2000` | Requests per session token (refused ones count). Clamped 1–10⁹. |
+| `CODER_SESSION_MAX_TOKENS` | `30000000` | Brain tokens (prompt + completion) per session token. Clamped 10 000–10¹². |
+| `CODER_IDLE_SECONDS` | `20` | A coder request starts only after chat has been idle this long. Clamped 0–300. |
+| `CODER_MAX_WAIT_SECONDS` | `90` | Longest wait for that idle window (and, separately, for the one-at-a-time lock) before 429. Clamped 5–240. |
+
+A layout problem (any of the three doesn't parse, or breaks a rule above) turns the gate off; if they don't parse, the guard watches the defaults. Fixed in code, not env: `CODER_RATE_LIMIT_MAX` = 120 requests/min per coder-net client (`orchestrator.py`, replaces `RATE_LIMIT_MAX` for them) and the gate's own limits (`coder_gate.py` constants).
 
 ## Ntfy Feedback Loop (F-011)
 

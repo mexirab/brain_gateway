@@ -622,6 +622,26 @@ class Settings(BaseSettings):
     # without one at a low rate limit.
     research_context7_api_key: str = ""
 
+    # -- Coder box gate (coder_gate.py, docs/internal/CODER_PLAN.md) --------------
+    # Model access for sandboxed Qwen Code boxes on coder-net. Off = the gate's
+    # routes answer 404; the coder-net guard in BearerAuthMiddleware stays on.
+    coder_enabled: bool = False
+    # coder-net layout. docker-compose.yml reads the same .env variables
+    # (CODER_SUBNET, CODER_GATE_ADDRESS, CODER_BOX_RANGE), so the two can't drift.
+    # Requests from the subnet or to the gate address may reach only
+    # /api/coder/v1/*; the gate serves only requests that are both.
+    coder_subnet: str = "10.213.250.0/24"
+    coder_gate_address: str = "10.213.250.2"  # the orchestrator's fixed address on coder-net
+    coder_box_range: str = "10.213.250.128/25"  # where boxes get addresses; must exclude the gate
+    coder_max_tokens_per_request: int = 4096  # clamp on each request's max_tokens
+    coder_session_hours: float = 4.0  # lifetime of a jess-coder session token
+    coder_session_max_requests: int = 2000  # per session token
+    coder_session_max_tokens: int = 30_000_000  # prompt + completion, per session token
+    # A coder request starts only after chat has been quiet this long, and
+    # waits at most coder_max_wait_seconds for that before answering 429.
+    coder_idle_seconds: float = 20.0
+    coder_max_wait_seconds: float = 90.0
+
     # -- ntfy feedback loop (F-011) ---------------------------------------------
     # Third delivery channel for reminders (alongside TTS + HA Companion push).
     # Includes HMAC-signed Done/Snooze action buttons that POST back to the
@@ -1118,6 +1138,62 @@ class Settings(BaseSettings):
                 "[CONFIG] GRIST_ENABLED=true but %s; disabling the spreadsheet tool.", problem
             )
             object.__setattr__(self, "grist_enabled", False)
+        return self
+
+    @model_validator(mode="after")
+    def validate_coder_config(self) -> "Settings":
+        """Clamp the coder-gate knobs; disable the gate on a bad network layout.
+        Loud error log, never raises (same rule as the other optional features)."""
+        import ipaddress
+        import logging
+        import math
+
+        log = logging.getLogger(__name__)
+        defaults = type(self).model_fields
+
+        def finite(field: str, lo: float, hi: float) -> None:
+            value = getattr(self, field)
+            if not math.isfinite(value):
+                log.error("[CONFIG] %s is not a finite number; using the default.", field.upper())
+                value = defaults[field].default
+            object.__setattr__(self, field, type(defaults[field].default)(min(max(value, lo), hi)))
+
+        finite("coder_max_tokens_per_request", 256, 8192)
+        finite("coder_session_hours", 0.25, 12.0)
+        finite("coder_session_max_requests", 1, 10**9)
+        finite("coder_session_max_tokens", 10_000, 10**12)
+        finite("coder_idle_seconds", 0.0, 300.0)
+        finite("coder_max_wait_seconds", 5.0, 240.0)
+
+        problem = None
+        subnet = address = None
+        try:
+            subnet = ipaddress.IPv4Network(self.coder_subnet.strip())
+            address = ipaddress.IPv4Address(self.coder_gate_address.strip())
+            box_range = ipaddress.IPv4Network(self.coder_box_range.strip())
+        except ValueError:
+            problem = "CODER_SUBNET / CODER_GATE_ADDRESS / CODER_BOX_RANGE don't parse"
+        else:
+            if not subnet.is_private or subnet.is_loopback or subnet.is_link_local:
+                problem = "CODER_SUBNET is not a private network"
+            elif address not in subnet or address in (subnet.network_address, subnet.broadcast_address):
+                problem = "CODER_GATE_ADDRESS is not a host address inside CODER_SUBNET"
+            elif address.is_loopback or address.is_unspecified or address.is_link_local:
+                problem = "CODER_GATE_ADDRESS is loopback/unspecified/link-local"
+            elif not box_range.subnet_of(subnet) or address in box_range:
+                problem = "CODER_BOX_RANGE must sit inside CODER_SUBNET and exclude CODER_GATE_ADDRESS"
+        if problem:
+            # Fail closed: the gate goes off, but the coder-net guard keeps
+            # watching the layout compose actually built from the same
+            # variables (it accepts some values we refuse, e.g. a CGNAT
+            # subnet), or the default one if they don't even parse.
+            log.error("[CONFIG] %s; coder gate disabled, coder-net guard stays on.", problem)
+            if subnet is None or address is None:
+                subnet = ipaddress.IPv4Network(defaults["coder_subnet"].default)
+                address = ipaddress.IPv4Address(defaults["coder_gate_address"].default)
+            object.__setattr__(self, "coder_enabled", False)
+        object.__setattr__(self, "coder_gate_address", str(address))
+        object.__setattr__(self, "coder_subnet", str(subnet))
         return self
 
     @model_validator(mode="after")

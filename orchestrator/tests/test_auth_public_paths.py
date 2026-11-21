@@ -420,6 +420,7 @@ LARGE_UPLOAD_PATHS = [
     "/api/paperless/upload",
     "/v1/chat/completions",
     "/chat/completions",
+    "/api/coder/v1/chat/completions",  # coder gate (coder_gate.MAX_BODY_BYTES)
 ]
 
 

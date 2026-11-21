@@ -24,6 +24,7 @@ disabled the functions no-op with a clear reason.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -188,12 +189,31 @@ async def wake_helios() -> Dict[str, Any]:
     return {"ok": True, "action": "wake", "entity": entity}
 
 
+async def _coder_using_brain() -> bool:
+    """True while a coder request is admitted (waiting or running) or a coder
+    token was used recently (coder_gate.ACTIVE_WITHIN_S). Sleep is a hard power
+    cut, so it must not land in the middle of a coding session. Errors allow
+    the sleep."""
+    try:
+        from orchestrator import brain_slot, coder_gate
+
+        if not coder_gate.gate_enabled():
+            return False
+        if brain_slot.coder_busy() or coder_gate.requests_admitted():
+            return True
+        return await asyncio.to_thread(coder_gate.active_use_exists)
+    except Exception as e:  # noqa: BLE001 — never block a sleep on a lookup error
+        logger.warning("[HELIOS] Coder activity check failed (%s); allowing sleep", type(e).__name__)
+        return False
+
+
 async def sleep_helios() -> Dict[str, Any]:
     """Power Helios off by turning the smart plug off via Home Assistant.
 
     This is a hard power-cut (see module docstring) — manual only. Returns:
       {"ok": True, "action": "sleep", "entity": "..."}
       {"ok": False, "skipped": "disabled", "reason": "..."}
+      {"ok": False, "skipped": "coder_active", "reason": "..."}
       {"ok": False, "error": "TypeName: msg"}
     """
     from orchestrator.metrics import HELIOS_SLEEP_TOTAL
@@ -204,6 +224,15 @@ async def sleep_helios() -> Dict[str, Any]:
             "ok": False,
             "skipped": "disabled",
             "reason": "HELIOS_WAKE_ENABLED is false",
+        }
+
+    if await _coder_using_brain():
+        logger.info("[HELIOS] Sleep refused: a coder session/job is using the brain")
+        HELIOS_SLEEP_TOTAL.labels(result="refused").inc()
+        return {
+            "ok": False,
+            "skipped": "coder_active",
+            "reason": "a coding session or job is using the brain",
         }
 
     entity = _settings.helios_plug_entity

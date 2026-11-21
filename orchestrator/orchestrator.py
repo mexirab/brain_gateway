@@ -28,7 +28,12 @@ from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from orchestrator.log_config import configure_logging
-from orchestrator.metrics import AUTO_LEARN_DROPPED, EMBEDDING_HEALTHY, PHONE_CALENDAR_LAST_SYNC
+from orchestrator.metrics import (
+    AUTO_LEARN_DROPPED,
+    CODER_GUARD_BLOCKED_TOTAL,
+    EMBEDDING_HEALTHY,
+    PHONE_CALENDAR_LAST_SYNC,
+)
 
 # Configure structured JSON logging
 configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
@@ -46,6 +51,7 @@ from apscheduler.events import EVENT_JOB_MISSED
 
 from orchestrator import (
     calendar_sources,
+    coder_gate,
     job_heartbeat,
     shared,
     state_store,  # REST API routes (infrastructure endpoints)
@@ -149,6 +155,20 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         return any(path.startswith(p) and is_public_segment(path[len(p) :]) for p in cls.PUBLIC_PREFIXES)
 
     async def dispatch(self, request: Request, call_next):
+        # Coder-net guard (coder_gate.py), before every exemption below
+        # (OPTIONS, /health, speaker audio): a request that arrived on the
+        # orchestrator's coder-net address, or came from the coder subnet, may
+        # reach the gate and nothing else, and the gate's paths exist only
+        # there. The gate route checks the coder token itself; API_TOKEN opens
+        # nothing from coder-net.
+        path = request.scope["path"]
+        if coder_gate.on_coder_net(request.scope):
+            if path in coder_gate.GATE_PATHS:
+                return await call_next(request)
+            CODER_GUARD_BLOCKED_TOTAL.inc()
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+        if path in coder_gate.GATE_PATHS:
+            return JSONResponse({"error": "Not found"}, status_code=404)
         # CORS preflight must pass through. Only a real one (Origin plus
         # Access-Control-Request-Method): CORSMiddleware, inside this one,
         # answers exactly those itself without calling a route. Any other
@@ -159,10 +179,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             and "access-control-request-method" in request.headers
         ):
             return await call_next(request)
-        # Decide on the string the router matches, not request.url.path: that
-        # one is rebuilt through urlsplit, which drops a decoded \t, \r or \n
-        # ("/api/au%09dio/x" would read as "/api/audio/x").
-        path = request.scope["path"]
+        # `path` is request.scope["path"], the string the router matches, not
+        # request.url.path: that one is rebuilt through urlsplit, which drops a
+        # decoded \t, \r or \n ("/api/au%09dio/x" would read as "/api/audio/x").
         # Public endpoints (health, speaker audio, HMAC-signed reminder taps)
         if self.is_public_path(path):
             return await call_next(request)
@@ -201,6 +220,8 @@ _PATH_UPLOAD_LIMITS = {
     "/api/documents/suggest-name": 16 * 1024 * 1024,
     # Alertmanager webhook: a few alerts' labels/annotations, never more.
     "/api/self_audit/alert": 64 * 1024,
+    # Coder gate: a whole coding context (the route re-checks while reading).
+    coder_gate.GATE_CHAT_PATH: coder_gate.MAX_BODY_BYTES,
 }
 
 
@@ -260,6 +281,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 # Simple sliding-window rate limiter (per-IP, in-memory)
 RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", 60))  # seconds
 RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", 30))  # requests per window
+CODER_RATE_LIMIT_MAX = 120  # per window, per coder-net client (a busy session sends ~30/min)
 _rate_limit_store: Dict[str, collections.deque] = {}
 
 
@@ -271,6 +293,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if _routed_path(request) in self.EXEMPT_PATHS:
             return await call_next(request)
+        # coder-net gets its own, higher limit: a busy coding session sends
+        # ~30 requests a minute, and the gate admits only a few at a time anyway.
+        limit = CODER_RATE_LIMIT_MAX if coder_gate.on_coder_net(request.scope) else RATE_LIMIT_MAX
 
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
@@ -290,7 +315,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             _rate_limit_store[client_ip] = collections.deque()
             window = _rate_limit_store[client_ip]
 
-        if len(window) >= RATE_LIMIT_MAX:
+        if len(window) >= limit:
             return JSONResponse(
                 {"error": "Rate limit exceeded. Try again later."},
                 status_code=429,
@@ -724,6 +749,12 @@ async def _startup_logic():
             logger.info("[SETUP] Setup wizard previously completed")
     except Exception:
         logger.warning("[SETUP] first-boot check failed (non-fatal)", exc_info=True)
+
+    # Coder gate state (and off if its address isn't this container's). Never fatal.
+    try:
+        coder_gate.startup_check()
+    except Exception:
+        logger.warning("[CODER] startup check failed (non-fatal)", exc_info=True)
 
     # Restore selfcare state from DB (must run after init_db creates tables)
     from orchestrator.selfcare_manager import _restore_state as restore_selfcare
