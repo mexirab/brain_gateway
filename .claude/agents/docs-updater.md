@@ -47,6 +47,7 @@ After code changes pass linting as the final step in the post-implementation pip
 3. **Be concise** — tables over paragraphs, bullet points over prose.
 4. **No speculative docs** — only document what exists and works, not planned features.
 5. **Preserve existing structure** — update sections in place, don't reorganize unless necessary.
+6. **Keep `QWEN.md` in sync** — when a CLAUDE.md change touches what `QWEN.md` (the compact Qwen Code briefing) says (load-bearing files, hard rules, test command, section names it points to), update `QWEN.md` too. Keep it ≤10,000 chars; `orchestrator/tests/test_qwen_md.py` enforces the budget and that every path it names exists.
 
 ## Output format
 
