@@ -776,9 +776,11 @@ def test_tts_synthesize_passes_style(vision_client):
 class _TgClient:
     def __init__(self):
         self.bodies = []
+        self.headers = []
 
-    async def post(self, url, json=None, timeout=None):
+    async def post(self, url, json=None, headers=None, timeout=None):
         self.bodies.append(json)
+        self.headers.append(headers or {})
 
         class R:
             status_code = 200
@@ -940,3 +942,16 @@ def test_cloud_brain_applies_detector_after_clearing():
 
     src = inspect.getsource(cloud_brain)
     assert src.index("record_reply_style(intent.mode)") < src.index("apply_tone_request(user_text)")
+
+
+async def test_telegram_speech_sends_tts_key_only_when_set(tg, monkeypatch):
+    """Telegram's own client has no ModelServerAuth hook: TTS_API_KEY travels explicitly."""
+    from orchestrator import shared
+
+    monkeypatch.setattr(shared, "TTS_API_KEY", "")
+    client = _TgClient()
+    await tg._synthesize_speech(client, "hello")
+    assert "Authorization" not in client.headers[-1]
+    monkeypatch.setattr(shared, "TTS_API_KEY", "tts-key-test-0123456789ab")
+    await tg._synthesize_speech(client, "hello")
+    assert client.headers[-1] == {"Authorization": "Bearer tts-key-test-0123456789ab"}
