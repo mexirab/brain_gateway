@@ -26,4 +26,6 @@ ProtectKernelTunables=yes
 CapabilityBoundingSet=
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX
+# labadmin is in the docker group; this check has no business with the socket.
+InaccessiblePaths=-/run/docker.sock
 IPAddressDeny=any

@@ -12,8 +12,10 @@
 #   curl -s http://10.0.0.248:9400/metrics | grep -c '^nvidia_smi_gpu_info'    # one line per card
 [Unit]
 Description=NVIDIA GPU Exporter (Prometheus, Jupiter)
+# DeviceAllow paths resolve when the unit starts: wait for nvidia-persistenced (it creates the
+# /dev/nvidia* nodes), or nvidia-smi fails at boot and keeps failing (Restart= never fires).
 After=network-online.target nvidia-persistenced.service
-Wants=network-online.target
+Wants=network-online.target nvidia-persistenced.service
 
 [Service]
 Type=simple
@@ -31,15 +33,24 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 # nvidia-smi needs the device nodes; nothing else under /dev.
 DevicePolicy=closed
 DeviceAllow=/dev/nvidiactl rw
 DeviceAllow=/dev/nvidia0 rw
 DeviceAllow=/dev/nvidia1 rw
 DeviceAllow=/dev/nvidia-uvm rw
-# Prometheus (a container, leaving through the Docker bridges) and the LAN may scrape.
+# Prometheus (a container, leaving through the Docker bridges) and Jupiter itself (the install
+# check) may scrape; not the rest of the LAN: the metrics carry GPU UUIDs and serial numbers.
 IPAddressDeny=any
-IPAddressAllow=10.0.0.0/24 172.16.0.0/12 192.168.0.0/16
+IPAddressAllow=10.0.0.248/32 172.16.0.0/12 192.168.0.0/16
 
 [Install]
 WantedBy=multi-user.target

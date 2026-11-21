@@ -16,11 +16,24 @@ own mood, which is what lets the style note steer).
 Env: VOXCPM_MODEL (HF id or local snapshot path), VOXCPM_VOICES_DIR,
 VOXCPM_HOST/VOXCPM_PORT (0.0.0.0:8004), VOXCPM_OUTPUT_SR (24000 — matches the
 Qwen server so Wyoming/HA consumers see the same rate; 0 = native 48 kHz),
-VOXCPM_CFG (2.0), VOXCPM_STEPS (10), VOXCPM_MAX_CHARS (2000).
-Unit: tts/voxcpm-tts.service. Text is never logged — lengths only.
+VOXCPM_CFG (2.0), VOXCPM_STEPS (10), VOXCPM_MAX_CHARS (2000),
+VOXCPM_API_KEY_FILE (empty = no key), VOXCPM_MAX_BODY_BYTES (65536).
+Units: tts/voxcpm-tts-jupiter.service (live), tts/voxcpm-tts.service (Helios
+rollback). Text is never logged — lengths only.
+
+Access control (_Guard, pure ASGI, outermost): with VOXCPM_API_KEY_FILE set,
+every path except /health needs `Authorization: Bearer <key>` (constant-time
+compare; the orchestrator sends TTS_API_KEY, see orchestrator/model_auth.py).
+The server speaks in a cloned voice, so on the Jupiter hub, where every
+container can route to it, the key is what limits it to Jess. A missing,
+unreadable or short key file fails the start. Bodies over
+VOXCPM_MAX_BODY_BYTES get 413 before they are read (a declared
+Content-Length) or once they pass the cap (chunked); uvicorn's
+limit_concurrency caps open connections.
 """
 
 import asyncio
+import hmac
 import io
 import json
 import logging
@@ -55,6 +68,13 @@ REQUIRE_CUDA = os.getenv("VOXCPM_REQUIRE_CUDA", "true").lower() == "true"
 # Requests waiting for (or holding) the GPU worker before new ones get 503 —
 # one flooding client must not delay every reminder by minutes.
 MAX_PENDING = int(os.getenv("VOXCPM_MAX_PENDING", "8"))
+API_KEY_FILE = os.getenv("VOXCPM_API_KEY_FILE", "")
+# Real requests are a few KB (text <= 2000 chars, JSON-escaped). Anything far bigger
+# is not a TTS request, and reading it would only cost memory.
+MAX_BODY_BYTES = int(os.getenv("VOXCPM_MAX_BODY_BYTES", "65536"))
+MAX_CONNECTIONS = int(os.getenv("VOXCPM_MAX_CONNECTIONS", "32"))
+MAX_NAME_CHARS = 64
+MIN_KEY_CHARS = 24
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("voxcpm-tts")
@@ -71,12 +91,34 @@ MEDIA_TYPES = {"wav": "audio/wav", "mp3": "audio/mpeg", "ogg": "audio/ogg", "fla
 # VoxCPM2 reads a leading "(...)" as a style instruction. Parentheses in the
 # spoken text would let an LLM reply (or an injected one) steer the voice, so
 # they're stripped from the body; the style note is the only parenthetical.
-# NFKC first: lookalikes such as ﹙ ⁽ ₍ normalise to "(".
-_PARENS = re.compile(r"[()（）\[\]【】⦅⦆❨❩〔〕]")
+# NFKC first (lookalikes such as ﹙ ⁽ ₍ normalise to "("), then every opening or
+# closing bracket by Unicode category (Ps/Pe), not a hand-written list: glyphs such
+# as ❪ ⸨ ﴾ ⟮ don't fold under NFKC but still look like a parenthesis.
+_BRACKET_CATEGORIES = frozenset({"Ps", "Pe"})
 
 
 def _strip_brackets(text: str) -> str:
-    return re.sub(r"\s+", " ", _PARENS.sub(" ", unicodedata.normalize("NFKC", text))).strip()
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(" " if unicodedata.category(ch) in _BRACKET_CATEGORIES else ch for ch in text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _load_api_key(path: str) -> bytes:
+    """The bearer key from VOXCPM_API_KEY_FILE, or b"" when no file is configured.
+
+    Raises on a missing, unreadable or short file: an unusable key must fail the
+    start (TTSDown), not quietly leave the server open.
+    """
+    if not path:
+        return b""
+    with open(path, "rb") as f:
+        key = f.read().strip()
+    if len(key) < MIN_KEY_CHARS or b"\n" in key:
+        raise RuntimeError(f"{path} must hold one key of at least {MIN_KEY_CHARS} characters")
+    return key
+
+
+API_KEY = _load_api_key(API_KEY_FILE)
 
 
 def clean_text(text: str) -> str:
@@ -158,22 +200,94 @@ async def lifespan(_app: FastAPI):
     executor.shutdown(wait=False)
 
 
-app = FastAPI(title="VoxCPM2 TTS", lifespan=lifespan)
+async def _reply(send, status: int, detail: str) -> None:
+    body = json.dumps({"detail": detail}).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+class _Guard:
+    """Pure ASGI: bearer key (all paths but /health) and a request-body cap.
+
+    The body is read here, up to MAX_BODY_BYTES, and replayed to the app, so an
+    oversized or never-ending body never reaches FastAPI's parser.
+    """
+
+    def __init__(self, app, api_key: bytes = b"", max_body: int = MAX_BODY_BYTES):
+        self.app = app
+        self.api_key = api_key
+        self.max_body = max_body
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        if self.api_key and scope.get("path") != "/health":
+            auth = headers.get(b"authorization", b"")
+            scheme, _, token = auth.partition(b" ")
+            if scheme.lower() != b"bearer" or not hmac.compare_digest(token.strip(), self.api_key):
+                await _reply(send, 401, "Unauthorized")
+                return
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                too_big = int(declared) > self.max_body
+            except ValueError:
+                await _reply(send, 400, "Bad Content-Length")
+                return
+            if too_big:
+                await _reply(send, 413, "Request body too large")
+                return
+        body = b""
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body += message.get("body", b"")
+            if len(body) > self.max_body:
+                await _reply(send, 413, "Request body too large")
+                return
+            if not message.get("more_body", False):
+                break
+        replayed = False
+
+        async def replay():
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+
+# No /docs, /redoc or /openapi.json: nothing needs them, and they map the API for anyone who can reach it.
+app = FastAPI(title="VoxCPM2 TTS", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(_Guard, api_key=API_KEY)
 
 
 class TTSRequest(BaseModel):
     text: str = Field(..., max_length=MAX_CHARS * 2, description="Text to synthesize")
-    voice: str = Field(default="default", description="Voice name (see /voices)")
-    language: str = Field(default="English", description="Accepted for API parity; VoxCPM2 detects language")
+    voice: str = Field(default="default", max_length=MAX_NAME_CHARS, description="Voice name (see /voices)")
+    language: str = Field(
+        default="English", max_length=MAX_NAME_CHARS, description="Accepted for API parity; VoxCPM2 detects language"
+    )
     emotion: str = Field(default="", max_length=200, description="Style note, e.g. 'calm, gentle and reassuring'")
-    format: str = Field(default="wav", description="wav, mp3, ogg or flac")
+    format: str = Field(default="wav", max_length=MAX_NAME_CHARS, description="wav, mp3, ogg or flac")
 
 
 class OpenAITTSRequest(BaseModel):
-    model: str = Field(default="tts-1")
+    model: str = Field(default="tts-1", max_length=MAX_NAME_CHARS)
     input: str = Field(..., max_length=MAX_CHARS * 2)
-    voice: str = Field(default="default")
-    response_format: str = Field(default="wav")
+    voice: str = Field(default="default", max_length=MAX_NAME_CHARS)
+    response_format: str = Field(default="wav", max_length=MAX_NAME_CHARS)
     instructions: str = Field(default="", max_length=200, description="Style note (OpenAI field name)")
     speed: float = Field(default=1.0, description="Ignored")
 
@@ -183,7 +297,8 @@ async def health():
     ok = model is not None and bool(VOICES)
     body = {
         "status": "healthy" if ok else "unhealthy",
-        "model": MODEL_ID,
+        # Base name only: the full path shows the install's user and layout.
+        "model": os.path.basename(MODEL_ID.rstrip("/")),
         "model_loaded": model is not None,
         "voices": len(VOICES),
     }
@@ -200,7 +315,7 @@ async def text_to_speech(request: TTSRequest):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     if request.voice not in VOICES:
-        raise HTTPException(status_code=400, detail=f"Voice '{request.voice}' not loaded. Available: {sorted(VOICES)}")
+        raise HTTPException(status_code=400, detail="Voice not loaded (see /voices)")
     fmt = request.format.lower()
     if fmt not in MEDIA_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported format. Use one of {sorted(MEDIA_TYPES)}")
@@ -222,8 +337,8 @@ async def text_to_speech(request: TTSRequest):
         wav = await loop.run_in_executor(executor, generate_sync, text, request.voice, style)
         audio = await asyncio.to_thread(encode, wav, fmt)
     except Exception as e:
-        # Exception text is torch/CUDA detail (e.g. OOM), never the request text.
-        logger.error("Synthesis failed: %s: %s", type(e).__name__, str(e)[:120])
+        # The type only: exception text from deep in voxcpm could in principle quote the input.
+        logger.error("Synthesis failed: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="TTS generation failed") from e
     finally:
         _pending -= 1
@@ -243,4 +358,11 @@ async def openai_compatible_tts(request: OpenAITTSRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=HOST, port=PORT)
+    if not API_KEY:
+        logger.warning("No VOXCPM_API_KEY_FILE: every caller that can reach this server can synthesize")
+    # Socket activation (tts/voxcpm-tts-jupiter.socket): systemd hands over the listening socket as fd 3,
+    # so the allow-list lives on the socket unit and this process can run with IPAddressDeny=any.
+    if os.environ.get("LISTEN_FDS") == "1" and os.environ.get("LISTEN_PID") == str(os.getpid()):
+        uvicorn.run(app, fd=3, limit_concurrency=MAX_CONNECTIONS)
+    else:
+        uvicorn.run(app, host=HOST, port=PORT, limit_concurrency=MAX_CONNECTIONS)

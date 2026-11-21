@@ -14,7 +14,7 @@
 # name, in /etc/voxcpm-tts.env (step 5). The other card is for experiments and other models. The same
 # UUID goes in Jupiter's .env as JUPITER_TTS_GPU_UUID: Prometheus labels that card gpu_role="tts",
 # which TTSGPUMemoryLow selects (the cards can't be told apart by name). Change both together. A
-# missing or wrong .env value fires TTSGPUNotIdentified instead of silently disabling the alert.
+# missing or wrong .env value fires TTSGPUUnmonitored instead of silently disabling the alert.
 # Memory: VoxCPM2 takes ~7.4 GiB fresh and grew to 9.3-9.7 GiB on Helios with ordinary texts (PyTorch
 # keeps its peak cached and voxcpm never releases it; the VAE decodes a whole clip at once in fp32).
 # The install test caps it at 14 GiB of the card's 15.9.
@@ -35,21 +35,26 @@
 # Driver: NVIDIA's open kernel module (nvidia-580-open, prebuilt linux-modules-nvidia-580-open-*).
 # Kernel updates have dropped it on all three boxes: unattended-upgrades installs a security kernel but
 # keeps the NVIDIA packages back whenever upgrading them means removing an old module package, so the
-# next reboot comes up with no driver. JupiterNvidiaModuleMissing (quiet) warns BEFORE that reboot (host
+# next reboot comes up with no driver. NvidiaModuleMissing (quiet) warns BEFORE that reboot (host
 # check scripts/check_nvidia_modules.py, textfile metric): fix with `sudo apt full-upgrade`, which moves
 # the kernel and its NVIDIA modules together. JupiterGpuDriverBroken (quiet) fires after the fact
 # (nvidia-smi failing). The server refuses to run on CPU (VOXCPM_REQUIRE_CUDA), so a lost driver shows
 # up as TTSDown, not as a ~7 s/sentence voice.
 #
-# Network: the server binds 172.17.0.1, Docker's default-bridge gateway, which is what host-gateway
-# (host.docker.internal) resolves to inside containers. IPAddressAllow admits only Docker's address
-# pools, so containers (the orchestrator, the blackbox probe) reach it, and nothing on the LAN or the
-# tailnet does. Jupiter's own shell can't either: a host-side `curl http://172.17.0.1:8004/health`
-# times out (measured 2026-11-21), so test from a container (step 7). It is unauthenticated and speaks in the cloned voice: NEVER bind 0.0.0.0 or the LAN
-# address, and never add the LAN or the tailnet to the allow-list. Every container on Jupiter can reach
-# it (known limit: a compromised container could synthesize speech in the cloned voice; it gets the WAV
-# back, nothing plays). If Docker's bridge address ever changes ("bip" in /etc/docker/daemon.json),
-# change VOXCPM_HOST below to match `ip -4 addr show docker0`.
+# Network: systemd listens for it (tts/voxcpm-tts-jupiter.socket, socket activation) on 172.17.0.1:8004,
+# Docker's default-bridge gateway, which is what host-gateway (host.docker.internal) resolves to inside
+# containers. The socket admits only Docker's address pools, so containers reach it and nothing on the
+# LAN or the tailnet does; this service itself runs with IPAddressDeny=any, so the server can't open
+# connections of its own (to other containers' internal ports, say). It speaks in a cloned voice, and
+# Cast speakers play audio from any LAN host, so a caller that can synthesize can make Jess "say" things
+# on the house speakers. Hence the bearer key: every path but /health needs
+# `Authorization: Bearer <key>` from /etc/voxcpm-tts/api-key (step 5b); Jupiter's .env carries the same
+# value as TTS_API_KEY, which the orchestrator sends only to TTS_URL's origin (orchestrator/model_auth.py).
+# NEVER listen on 0.0.0.0 or the LAN address, and never add the LAN or the tailnet to the socket's
+# allow-list. If Docker's bridge address ever changes ("bip" in /etc/docker/daemon.json), change
+# ListenStream in the socket unit to match `ip -4 addr show docker0`.
+# Jupiter's TTS_URL must be http://host.docker.internal:8004: the voice satellite treats that name as
+# "not Helios" (so a sleeping Helios still gets woken).
 #
 # Install on Jupiter (one-time, as labadmin). Everything the server runs comes from the working Helios
 # install, checked by sha256, plus the pinned package list tts/requirements-voxcpm.txt; nothing is piped
@@ -88,8 +93,15 @@
 #        echo 'CUDA_VISIBLE_DEVICES=GPU-<voice card UUID from step 0>' | sudo tee /etc/voxcpm-tts.env
 #      and the same UUID in Jupiter's .env (JUPITER_TTS_GPU_UUID=GPU-...), then render + reload the
 #      monitoring configs (scripts/generate-configs.sh, scripts/reload-monitoring.sh).
-#   6. sudo cp /tmp/voxcpm-tts-jupiter.service /etc/systemd/system/voxcpm-tts.service
-#      sudo systemctl daemon-reload && sudo systemctl enable --now voxcpm-tts
+#   5b. The bearer key (readable by root and the service user only), and the same value in Jupiter's
+#      .env as TTS_API_KEY (at cutover; `sudo cat /etc/voxcpm-tts/api-key`):
+#        sudo install -d -m 750 -o root -g voxcpm /etc/voxcpm-tts
+#        python3 -c 'import secrets; print(secrets.token_hex(32))' | sudo install -m 640 -o root -g voxcpm /dev/stdin /etc/voxcpm-tts/api-key
+#      A missing, unreadable or short key file fails the start (the server never runs open).
+#   6. git show $REF:tts/voxcpm-tts-jupiter.socket > /tmp/voxcpm-tts-jupiter.socket
+#      sudo cp /tmp/voxcpm-tts-jupiter.service /etc/systemd/system/voxcpm-tts.service
+#      sudo cp /tmp/voxcpm-tts-jupiter.socket /etc/systemd/system/voxcpm-tts.socket
+#      sudo systemctl daemon-reload && sudo systemctl enable --now voxcpm-tts.socket voxcpm-tts
 #      The first start compiles kernels (torch.compile, a few minutes). They persist in
 #      /var/cache/voxcpm, so later starts take ~15-30 s. Watch: journalctl -u voxcpm-tts -f
 #      If it fails with "Permission denied" under /home/labadmin, re-run step 4.
@@ -97,12 +109,13 @@
 #      - The voxcpm python process (~7.4 GiB) is the only process on the voice card (query in step 0).
 #      - From the orchestrator container (what Jess uses):
 #          docker exec brain-orchestrator python -c "import urllib.request as u; print(u.urlopen('http://host.docker.internal:8004/health', timeout=5).read())"
-#        returns healthy with the voice listed.
+#        returns healthy; the same for /voices answers 401 (no key).
 #      - From any other LAN device (a laptop or Helios): curl -m 3 http://10.0.0.248:8004/health fails
 #        (nothing listens there). `ss -ltn 'sport = :8004'` on Jupiter shows only 172.17.0.1:8004.
-#      - `journalctl -u voxcpm-tts | grep -i firewall` prints nothing (systemd starts WITHOUT the IP
-#        filter, and says so there, if BPF firewalling is unavailable).
-#        `systemctl show -p IPAddressAllow,IPAddressDeny voxcpm-tts` shows the two lines below.
+#      - `journalctl -u voxcpm-tts -u voxcpm-tts.socket | grep -i firewall` prints nothing (systemd
+#        starts WITHOUT the IP filter, and says so there, if BPF firewalling is unavailable).
+#        `systemctl show -p IPAddressAllow,IPAddressDeny voxcpm-tts.socket voxcpm-tts` shows the
+#        Docker pools on the socket and deny-all on the service.
 #      - Speed + memory comparison vs Helios: docs/VOICE_AND_TTS.md → VoxCPM2 on Jupiter, step 2.
 #        Write down the used memory, and check its 7-day peak a week after cutover (query there).
 #
@@ -113,8 +126,9 @@
 
 [Unit]
 Description=VoxCPM2 TTS Server for Brain Gateway (Jupiter)
-# docker.service creates docker0 (172.17.0.1), the address this server binds.
-After=network-online.target nvidia-persistenced.service docker.service
+# The listening socket comes from voxcpm-tts.socket (socket activation, see "Network").
+Requires=voxcpm-tts.socket
+After=voxcpm-tts.socket network-online.target nvidia-persistenced.service
 Wants=network-online.target
 
 [Service]
@@ -132,9 +146,8 @@ Environment="HF_HUB_OFFLINE=1"
 Environment="VOXCPM_MODEL=/home/labadmin/models/VoxCPM2"
 Environment="VOXCPM_VOICES_DIR=/home/labadmin/tts-voices"
 Environment="VOXCPM_PORT=8004"
-# Docker's default-bridge gateway only (see "Network" above): containers reach it as
-# host.docker.internal; nothing listens on Jupiter's LAN or tailnet addresses.
-Environment="VOXCPM_HOST=172.17.0.1"
+# The listening socket is inherited from voxcpm-tts.socket (LISTEN_FDS); VOXCPM_HOST/PORT are unused.
+Environment="VOXCPM_API_KEY_FILE=/etc/voxcpm-tts/api-key"
 Environment="VOXCPM_OUTPUT_SR=24000"
 # Writable state (torch.compile / triton kernels, any library home-dir cache) lives in
 # /var/cache/voxcpm; everything under /home is a read-only bind.
@@ -184,14 +197,11 @@ AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallArchitectures=native
 UMask=0077
-# Host-firewall substitute (ufw is inactive on Jupiter): Docker's address pools only (172.17-31.x
-# networks and the 192.168.x pool the compose networks also draw from). Calls from Jupiter's own
-# shell are dropped too (measured; test from a container). No loopback: nothing needs it, and
-# loopback would admit anything a local proxy (tailscaled, Tailscale Serve) forwards. NEVER add the LAN
-# (10.0.0.0/24) or the tailnet (100.64.0.0/10). Do NOT add MemoryDenyWriteExecute or
-# PrivateDevices: both break CUDA.
+# Host-firewall substitute (ufw is inactive on Jupiter): no IP traffic at all for the server process.
+# Inbound connections come through voxcpm-tts.socket, whose allow-list (Docker's pools) applies to the
+# connections it accepts. NEVER add an IPAddressAllow here: it would also let the server connect out
+# to every container. Do NOT add MemoryDenyWriteExecute or PrivateDevices: both break CUDA.
 IPAddressDeny=any
-IPAddressAllow=172.16.0.0/12 192.168.0.0/16
 
 WorkingDirectory=/home/labadmin/voxcpm
 ExecStart=/home/labadmin/voxcpm/.venv/bin/python /home/labadmin/voxcpm/voxcpm_server.py

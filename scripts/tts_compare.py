@@ -4,9 +4,13 @@ Generic text only: never put personal data in a test sentence. Stdlib only, so i
 throwaway container from the orchestrator image, which is how it must run on Jupiter: the Jupiter
 TTS admits Docker networks only, and a host-side request times out.
 
-  docker run --rm --network bridge --add-host host.docker.internal:host-gateway \\
+  docker run --rm --network bridge --add-host host.docker.internal:host-gateway -e TTS_VOICE=jessica \\
+    -e TTS_API_KEY="$(sudo cat /etc/voxcpm-tts/api-key)" \\
     -v "$PWD/scripts/tts_compare.py:/tts_compare.py:ro" --entrypoint python \\
-    gateway_nerves-orchestrator -I /tts_compare.py short
+    gateway_nerves-orchestrator -I /tts_compare.py short --ref http://10.0.0.195:8004
+
+TTS_VOICE = the voice name the servers load (the live deployment's is in .env). --ref is the
+server to compare against (Helios before the move); --cand defaults to the Jupiter server.
 
 Modes:
   short   4 short sentences, 3 rounds on each server; prints the median per sentence and the ratio
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -54,19 +59,30 @@ STYLE = "calm, gentle and reassuring"
 BYTES_PER_AUDIO_SECOND = 48000
 
 
-def tts(base: str, text: str, emotion: str = "", timeout: float = 180.0) -> tuple[int, float, bytes]:
-    body = {"text": text, "voice": "jessica"}
+VOICE = os.getenv("TTS_VOICE", "default")
+# The Jupiter server needs its bearer key (/etc/voxcpm-tts/api-key); the Helios rollback has none.
+# Sent to the candidate only, never to --ref.
+CAND_KEY = os.getenv("TTS_API_KEY", "")
+
+
+def tts(base: str, text: str, emotion: str = "", timeout: float = 180.0, key: str = "") -> tuple[int, float, bytes]:
+    """(HTTP status, seconds, body). Status 0 = no HTTP answer (refused, timed out)."""
+    body = {"text": text, "voice": VOICE}
     if emotion:
         body["emotion"] = emotion
-    req = urllib.request.Request(
-        base.rstrip("/") + "/tts", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(base.rstrip("/") + "/tts", data=json.dumps(body).encode(), headers=headers)
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data, code = r.read(), r.status
     except urllib.error.HTTPError as e:
         data, code = b"", e.code
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        print(f"{base}: no answer ({type(e).__name__})", file=sys.stderr)
+        data, code = b"", 0
     return code, time.monotonic() - t0, data
 
 
@@ -74,13 +90,13 @@ def run_short(ref: str, cand: str) -> int:
     servers = {"ref": ref, "cand": cand}
     times: dict[str, dict[str, list[float]]] = {k: {s: [] for s in SHORT} for k in servers}
     for _ in range(3):
-        for key, base in servers.items():
+        for which, base in servers.items():
             for s in SHORT:
-                code, dt, _ = tts(base, s, timeout=60)
+                code, dt, _ = tts(base, s, timeout=60, key=CAND_KEY if which == "cand" else "")
                 if code != 200:
-                    print(f"{key} ({base}): HTTP {code}", file=sys.stderr)
+                    print(f"{which} ({base}): HTTP {code}", file=sys.stderr)
                     return 1
-                times[key][s].append(dt)
+                times[which][s].append(dt)
     print(f"{'sentence':<14} {'reference':>9} {'candidate':>9} {'ratio':>6}   candidate runs")
     for i, s in enumerate(SHORT, 1):
         r, c = statistics.median(times["ref"][s]), statistics.median(times["cand"][s])
@@ -94,7 +110,7 @@ def run_long(cand: str) -> int:
     for target in (600, 1200, 2000):
         text = (PARAGRAPH * 3)[:target].rsplit(" ", 1)[0]
         for emotion in ("", STYLE):
-            code, dt, data = tts(cand, text, emotion, timeout=180)
+            code, dt, data = tts(cand, text, emotion, timeout=180, key=CAND_KEY)
             failed += code != 200
             print(
                 f"{len(text):>5} ch style={'yes' if emotion else 'no '}: HTTP {code} {dt:6.1f}s "
@@ -106,7 +122,7 @@ def run_long(cand: str) -> int:
 def run_listen(servers: dict[str, str], out: str) -> int:
     text = "Hi, it's Jess. Your appointment is tomorrow at ten, so leave by nine thirty. You've got this."
     for name, base in servers.items():
-        code, _, data = tts(base, text, STYLE, timeout=60)
+        code, _, data = tts(base, text, STYLE, timeout=60, key=CAND_KEY if name == "candidate" else "")
         if code != 200:
             print(f"{name}: HTTP {code}", file=sys.stderr)
             return 1
@@ -119,10 +135,12 @@ def run_listen(servers: dict[str, str], out: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("mode", choices=("short", "long", "listen"))
-    ap.add_argument("--ref", default="http://10.0.0.195:8004", help="reference server (Helios)")
+    ap.add_argument("--ref", help="reference server, e.g. http://10.0.0.195:8004 (needed for short / listen)")
     ap.add_argument("--cand", default="http://host.docker.internal:8004", help="candidate server (Jupiter)")
     ap.add_argument("--out", default="/out", help="listen mode: directory for the WAV files")
     args = ap.parse_args(argv)
+    if args.mode in ("short", "listen") and not args.ref:
+        ap.error(f"{args.mode} needs --ref")
     if args.mode == "short":
         return run_short(args.ref, args.cand)
     if args.mode == "long":

@@ -53,9 +53,10 @@ from pathlib import Path
 
 METRICS_FILE = "jess_nvidia_modules.prom"
 MODULE_NAMES = ("nvidia.ko", "nvidia.ko.zst", "nvidia.ko.xz", "nvidia.ko.gz")
-# Kernel release strings as Ubuntu names them: 6.8.0-151-generic. Anything else in
-# /boot (vmlinuz, vmlinuz.old symlinks, *.efi.signed) is skipped.
-_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+-\d+[-.\w]*$")
+# Kernel release strings as Ubuntu names them: 6.8.0-151-generic (flavour suffixes such as
+# -generic, -lowlatency, -generic-64k). Anything else in /boot (vmlinuz, vmlinuz.old
+# symlinks, *.efi.signed, dpkg temp files) is skipped, so it can't pose as the next kernel.
+_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+-\d+(-[a-z0-9]+)+$")
 # Label values go into the exposition format; a release string never needs more.
 _LABEL_SAFE_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
 
@@ -68,7 +69,7 @@ def _version_key(release: str) -> tuple[int, ...]:
 def installed_kernels(boot_dir: Path) -> list[str]:
     releases = []
     for entry in boot_dir.glob("vmlinuz-*"):
-        release = entry.name[len("vmlinuz-"):]
+        release = entry.name[len("vmlinuz-") :]
         if _RELEASE_RE.match(release) and not entry.is_symlink():
             releases.append(release)
     return sorted(releases, key=_version_key)
@@ -78,10 +79,7 @@ def module_present(modules_dir: Path, release: str) -> bool:
     root = modules_dir / release
     if not root.is_dir():
         return False
-    for _dirpath, _dirnames, filenames in os.walk(root):
-        if any(name in MODULE_NAMES for name in filenames):
-            return True
-    return False
+    return any(name in MODULE_NAMES for _dirpath, _dirnames, filenames in os.walk(root) for name in filenames)
 
 
 def check(boot_dir: Path, modules_dir: Path, running: str) -> list[tuple[str, str, bool]]:
@@ -147,7 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     missing = [kernel for kernel, _boot, present in rows if not present]
     if missing:
         print(
-            "check-nvidia-modules: no NVIDIA module for " + ", ".join(sorted(set(missing)))
+            "check-nvidia-modules: no NVIDIA module for "
+            + ", ".join(sorted(set(missing)))
             + ". Before rebooting run: sudo apt full-upgrade",
             file=sys.stderr,
         )

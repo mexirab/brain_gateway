@@ -198,9 +198,11 @@ groups:
       # scripts/check_nvidia_modules.py via nvidia-module-check.timer (hourly), textfile
       # metrics through node-exporter. boot="next" = the newest installed kernel, which
       # GRUB boots next: fix it BEFORE rebooting.
+      # for: 70m = two hourly checks in a row, so a sample taken mid-`apt` (kernel unpacked,
+      # its NVIDIA module not yet) can't fire it.
       - alert: NvidiaModuleMissing
         expr: jess_nvidia_module_present == 0
-        for: 15m
+        for: 70m
         labels:
           severity: warning
         annotations:
@@ -215,7 +217,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "The NVIDIA module check on Jupiter has not run for over 3 hours"
+          summary: "The NVIDIA module check on {{ $labels.node }} has not run for over 3 hours"
           description: "nvidia-module-check.timer should refresh jess_nvidia_module_check_timestamp_seconds every hour; without it a kernel update that drops the GPU driver goes unnoticed until the next reboot. `systemctl status nvidia-module-check.timer nvidia-module-check.service` and `journalctl -u nvidia-module-check -n 20`. Install steps: docstring of scripts/check_nvidia_modules.py."
 
       # FYI: the enclosure dropped and automatic recovery worked. Still worth a

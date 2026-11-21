@@ -251,6 +251,10 @@ class Settings(BaseSettings):
     # -- TTS (empty = disabled) --------------------------------------------------
     tts_url: str = ""
     tts_voice: str = "default"
+    # Bearer key for the VoxCPM2 server at TTS_URL (its VOXCPM_API_KEY_FILE). Sent by
+    # model_auth only to requests for TTS_URL's origin. Empty = no header (the
+    # Helios rollback unit has no key).
+    tts_api_key: str = ""
     # Send a style note ("calm, gentle and reassuring") with each synthesis,
     # chosen from the mode_router mode / announcement type (voice_style.py).
     # Honored by the VoxCPM2 server (tts/voxcpm_server.py); the Qwen3-TTS

@@ -29,7 +29,19 @@ inhibit_rules:
   - source_matchers:
       - alertname="PrometheusNotIngesting"
     target_matchers:
-      - alertname="ClosetTemperatureSensorMissing"
+      - alertname=~"ClosetTemperatureSensorMissing|TTSGPUUnmonitored|NvidiaModuleCheckStale"
+  # A broken NVIDIA driver on Jupiter explains the voice card vanishing from the
+  # exporter (TTSGPUUnmonitored); one notice, not two.
+  - source_matchers:
+      - alertname="JupiterGpuDriverBroken"
+    target_matchers:
+      - alertname="TTSGPUUnmonitored"
+  # A node that is down can't run its module check.
+  - source_matchers:
+      - alertname="NodeDown"
+    target_matchers:
+      - alertname="NvidiaModuleCheckStale"
+    equal: ["node"]
   # The TTS server down explains replies cut short by failed sentences.
   - source_matchers:
       - alertname="TTSDown"
