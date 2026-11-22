@@ -239,6 +239,12 @@ services:
       - PUSHOVER_DEFAULT_PRIORITY=${PUSHOVER_DEFAULT_PRIORITY:-0}
       - PUSHOVER_UPLOAD_TIMEOUT_SECONDS=${PUSHOVER_UPLOAD_TIMEOUT_SECONDS:-10}
     networks:
+      # host-access carries the default route (gw_priority), so the orchestrator's
+      # traffic to Jupiter host services (HA, Pi-hole, VoxCPM) arrives on its bridge,
+      # the one the host firewall allows (scripts/container-firewall/). Without
+      # gw_priority Docker picks the network whose name sorts first.
+      host-access:
+        gw_priority: 1
       gateway-net: {}
       grist-net: {}
       searxng-net: {}
@@ -656,6 +662,15 @@ services:
 networks:
   gateway-net:
     driver: bridge
+  # Only the orchestrator, as its default route. The host firewall
+  # (jess-docker-input, scripts/container-firewall/) lets this bridge alone reach
+  # Jupiter's HA 8123, Pi-hole 8053, VoxCPM 8004 and the 8888 hairpin; every other
+  # container network gets nothing on the host. Fixed bridge name = stable rule.
+  host-access:
+    name: gateway_nerves_host-access
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-jess-hostacc
   # Only brain-frontend + the monitoring stack's blackbox-exporter, so the
   # unauthenticated /probe proxy can check the dashboard without joining
   # gateway-net (which would let every container there drive /probe, and

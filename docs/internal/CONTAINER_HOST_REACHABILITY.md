@@ -1,6 +1,12 @@
 # Container → host reachability on Jupiter (2026-11-21)
 
-**Status:** measured; change **proposed, not applied**. Applying it is a manual host step that needs the owner's OK.
+**Status (2026-11-22):** option 2 is **installed on Jupiter in observe mode**: it logs and blocks nothing.
+- **Enforce waits for three things,** listed in `monitoring/README.md` → Container → host firewall → Observe:
+  - monitoring back: done 2026-11-24, after the data disks moved into Jupiter;
+  - the compose change below deployed;
+  - a day of observe logs.
+- **Files:** `scripts/container-firewall/` (script, config, unit, probe).
+- **Operations runbook:** `monitoring/README.md`. Install record: [below](#installed-2026-11-22).
 
 Follow-up to [`CODER_SPIKE.md`](CODER_SPIKE.md) §1 (PR #174), which found that a plain `internal: true` network reaches Jupiter's host services through its bridge address. This note asks the same about every Docker network on Jupiter.
 
@@ -14,7 +20,8 @@ Follow-up to [`CODER_SPIKE.md`](CODER_SPIKE.md) §1 (PR #174), which found that 
 - **Network design alone can't fix this for the containers that matter.**
   - `gateway_mode_ipv4: isolated` is refused on a non-internal network. Docker 29.1.3 says: *"gateway mode 'isolated' can only be used for an internal network"*.
   - Every container that handles outside content sits on at least one NAT network, because it needs the internet: searxng, Immich, Audiobookshelf, Paperless, Grist and Homepage.
-- **Recommended fix:** a small host `INPUT` chain for traffic that arrives *from Docker bridges only*. It allows the few (network, port) pairs that are really needed and rejects the rest. LAN, tailnet and loopback traffic never enters the chain, so it cannot lock out SSH.
+- **IPv6 too.** A container with `NET_RAW` (in Docker's default capability set, so root containers have it) reaches the same services through the bridges' IPv6 link-local addresses, by sending hand-made packets. Its own IPv6 being disabled doesn't stop that.
+- **Recommended fix:** a small host `INPUT` chain per IP family for traffic that arrives *from Docker bridges only*. It allows the few (network, port) pairs that are really needed and rejects the rest. LAN, tailnet and loopback traffic never enters the chains, so they cannot lock out SSH.
 
 ## Method
 
@@ -22,11 +29,16 @@ A throwaway probe container ran on each of the 18 bridge networks:
 - orchestrator image, `--cap-drop ALL`, `no-new-privileges`, `--rm`;
 - a stdlib Python TCP-connect script (1.5 s timeout), plus a real DNS query (`example.com A`) on UDP 53.
 
+The probe is `scripts/container-firewall/probe_host_ports.py`; its docstring has the loop that runs it on every network.
+
 **Targets:**
 - **addresses:** the network's own gateway, the LAN IP `10.0.0.248`, `docker0` `172.17.0.1` and the tailnet IP;
 - **ports:** every TCP port from `ss -ltnp`, plus the Tailscale Serve and loopback-only ones, to confirm they stay closed.
 
-IPv6 needs no test: no network has IPv6 enabled, and containers have IPv6 disabled on `eth0`.
+IPv6: no network has IPv6 enabled, and containers have IPv6 disabled on `eth0`. So the probe is IPv4 only. But the host's bridges have link-local IPv6 addresses, and the services listen on `[::]`.
+- **Test (security review, 2026-11-22):** a root container with only `NET_RAW` sent raw IPv6 SYNs to `docker0`'s link-local address.
+- **Result:** SSH, SMB, HA and Netdata answered.
+- **Coverage:** `JESS-DOCKER-IN6` now counts and logs exactly these packets. Enforce mode drops them.
 
 ## Findings: host services
 
@@ -37,14 +49,14 @@ IPv6 needs no test: no network has IPv6 enabled, and containers have IPv6 disabl
 | SSH | 22 | all | **open** | **open** | no |
 | Pi-hole DNS (recursive, forwards to the internet) | 53 tcp+udp | all | **open, answers** | **open, answers** | no: containers use Docker's resolver, which forwards to the router `10.0.0.1` |
 | SMB | 139, 445 | all | **open** | **open** | no |
-| Conjure API | 5050 | all | **open** | **open** | Prometheus scrape + blackbox `/health` (monitoring-net) |
+| Conjure API | 5050 | all | **open** | **open** | Prometheus scrape + blackbox `/health` |
 | VoxCPM TTS | 8004 | `172.17.0.1` only | **open** (via `172.17.0.1`) | no | orchestrator, via `host.docker.internal`, once TTS moves to Jupiter |
 | Pi-hole admin/API | 8053 | all | **open** | **open** | orchestrator (`PIHOLE_URLS`) |
 | Home Assistant | 8123 | all (host network) | **open** | **open** | orchestrator (`HA_URL=http://10.0.0.248:8123`) |
-| node-exporter | 9100 | all | **open** | **open** | Prometheus (monitoring-net) |
+| node-exporter | 9100 | all | **open** | **open** | Prometheus |
 | NVIDIA GPU exporter | 9400 | LAN IP only | **open** (via LAN IP) | no | Prometheus, once a Jupiter GPU job exists |
 | go2rtc (inside HA) | 18555 | all | **open** | **open** | no |
-| Netdata | 19999 | all | **open** | **open** | Prometheus (monitoring-net) |
+| Netdata | 19999 | all | **open** | **open** | Prometheus |
 | Published `0.0.0.0` ports: orchestrator 8888, Immich 2283, Audiobookshelf 13378 | — | docker-proxy | open | timeout | Prometheus, blackbox and Alertmanager → orchestrator. These go through Docker's DNAT + `FORWARD` path, not `INPUT` (see below) |
 | Loopback publishes (3001, 5006, 5232, 7575, 8090, 8484, 9115), Tailscale Serve ports, Netdata statsd 8125 | — | `127.0.0.1` / `tailscale0` | refused | refused | — |
 
@@ -70,6 +82,8 @@ IPv6 needs no test: no network has IPv6 enabled, and containers have IPv6 disabl
 | `paperless_default` | NAT | Paperless (stopped at measurement time) |
 | `bridge` (`docker0`) | NAT | ad-hoc `docker run` only |
 | `actual_default`, `radicale_default`, `gateway_nerves_default`, `gateway_mvp_default`, `gateway_mvp_gateway-net` | NAT | none (left over) |
+| `gateway_nerves_host-access` (new, PR #176) | NAT | orchestrator only (its default route) |
+| `monitoring_host-scrape` (new, PR #176) | NAT | prometheus, blackbox-exporter (their default route) |
 
 ## What containers need from the host
 
@@ -77,11 +91,16 @@ Only these use the `INPUT` path, i.e. connect to a process on Jupiter itself:
 
 | From | To | Why |
 |---|---|---|
-| orchestrator (gateway-net) | 8123 | `HA_URL` is the LAN IP. `ip route get 10.0.0.248 from 172.26.0.2 iif br-…` gives `local`, so the packet arrives on the gateway-net bridge. |
-| orchestrator (gateway-net) | 8053 | Pi-hole client (`PIHOLE_URLS`) |
-| orchestrator (gateway-net) | 8004 | VoxCPM via `host.docker.internal` (= `172.17.0.1`), once `TTS_URL` points at Jupiter |
-| gateway-net members | 8888 | A call to `10.0.0.248:8888` from the orchestrator's own network is not DNAT'd. It hairpins through docker-proxy on `INPUT`. |
-| Prometheus, blackbox (monitoring-net) | 5050, 9100, 19999, (9400) | scrape jobs `node-exporter`, `conjure` and `netdata`, plus the blackbox `conjure` probe; 9400 for a future Jupiter GPU job |
+| orchestrator | 8123 | `HA_URL` is the LAN IP. `ip route get 10.0.0.248 from 172.26.0.2 iif br-…` gives `local`, so the packet arrives on the bridge the orchestrator left through. |
+| orchestrator | 8053 | Pi-hole client (`PIHOLE_URLS`) |
+| orchestrator | 8004 | VoxCPM via `host.docker.internal` (= `172.17.0.1`), once `TTS_URL` points at Jupiter |
+| orchestrator | 8888 | A call to `10.0.0.248:8888` from the orchestrator's publishing network is not DNAT'd. It hairpins through docker-proxy on `INPUT`. |
+| Prometheus, blackbox | 5050, 8004, 9100, 9400, 19999 | scrape jobs `node-exporter`, `conjure`, `netdata` and the Jupiter GPU exporter; blackbox `conjure` probe and `tts-voxcpm` probe (`http://host.docker.internal:8004/health`, since VoxCPM moved to Jupiter in PR #172) |
+
+**Which bridge a packet arrives on.** It is the bridge of the container's **default-route** network, not of "its" network.
+- With no `gw_priority`, Docker picks the non-internal network whose name sorts first.
+- Live on 2026-11-22, blackbox-exporter left through `frontend-probe-net`, not monitoring-net. The orchestrator left through gateway-net only because that name sorts before grist-net and searxng-net.
+- That is why the allow lines name two dedicated networks, each the `gw_priority` default route of its only members (below).
 
 Everything else goes container-to-container by name, or reaches a **published** port. From another network, Docker DNATs that connection in `PREROUTING` and sends it through `FORWARD`, so `INPUT` rules don't touch it. Examples: Prometheus, blackbox and Alertmanager → `10.0.0.248:8888`, and blackbox → Paperless `:8777`.
 
@@ -100,7 +119,7 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
 
 ### 2. Host `INPUT` allow-list for Docker bridges (recommended)
 
-- **Closes:** everything not in the table above, for all 18 networks, including UDP.
+- **Closes:** everything not in the table above, for all 18 networks, including UDP and (with the IPv6 chain) raw IPv6.
 - **Can't lock out SSH:** the chain only sees packets that arrive on `br-*` or `docker0`. SSH from the LAN (`enp7s0`) or tailnet (`tailscale0`) never enters it.
 - **Cost:** a short script plus a systemd unit installed on Jupiter by hand, like `scripts/usb-storage/`.
 
@@ -112,78 +131,95 @@ Host-side jobs are also outside the chain: backups, CI runner, Tailscale Serve, 
 - **Can't use it for:** SSH, SMB, HA, Netdata or node-exporter. They must stay on the LAN, or are scraped from a container.
 - **Verdict:** not a fix. At most a small extra once option 2 is in.
 
-## Recommended change (option 2)
+## Recommended change (option 2) — what is installed
 
 ### Rules
 
-- **Chain:** `JESS-DOCKER-IN`, inserted at the top of `INPUT` for `-i br-+` and `-i docker0` only.
-- **Return, not accept:** allowed packets `RETURN`, so they fall through to the existing chain (`ts-input`) and the `ACCEPT` policy.
+`sudo jess-docker-input render` prints the exact rules for the current config and networks.
 
-```text
--A INPUT -i br-+    -j JESS-DOCKER-IN
--A INPUT -i docker0 -j JESS-DOCKER-IN
+- **Chains:** `JESS-DOCKER-IN` (iptables) and `JESS-DOCKER-IN6` (ip6tables), each jumped from INPUT positions 1–2 for `-i br-+` and `-i docker0` only.
+- **IPv4 order:**
+  1. Replies to connections the **host** opened (`--ctdir REPLY`) pass. The host calling a container (`OUTPUT`) gets its answers back through `INPUT` from the bridge.
+  2. Conntrack `INVALID` and non-unicast packets: dropped silently in enforce, passed in observe.
+  3. The `allow` lines: `-i <bridge> -p tcp -m multiport --dports … -j RETURN`.
+     - They are checked on **every** packet of a container-opened connection, not only the first.
+     - So a connection opened during observe mode, or to a port later removed from the list, is cut once enforce is on.
+  4. A counting rule, then a `LOG` rule:
+     - rate-limited per flow (2/min per source, destination and port) and 30/min overall;
+     - kernel header fields only: addresses, ports, MACs.
+  5. Enforce mode only: `REJECT --reject-with tcp-reset` for TCP, `DROP` for the rest.
+- **IPv6:** host replies pass; everything else is counted, logged and (enforce) dropped. There are no allow lines, because no container uses IPv6.
+- **Return, not accept:** allowed packets `RETURN` to INPUT, which still runs `ts-input` and has policy `ACCEPT`.
 
--A JESS-DOCKER-IN -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
--A JESS-DOCKER-IN -i <br of gateway_nerves_gateway-net> -p tcp -m multiport --dports 8004,8053,8123,8888 -j RETURN
--A JESS-DOCKER-IN -i <br of monitoring_monitoring-net>  -p tcp -m multiport --dports 5050,9100,9400,19999 -j RETURN
--A JESS-DOCKER-IN -m limit --limit 6/min -j LOG --log-prefix "jess-docker-in: "
--A JESS-DOCKER-IN -p tcp -j REJECT --reject-with tcp-reset      # fail fast instead of hanging
--A JESS-DOCKER-IN -j DROP
-```
+### The allowed networks
 
-The `ESTABLISHED,RELATED` rule keeps replies working: the host calling a container (`OUTPUT`) gets its answers back through `INPUT` from the bridge.
+| Network | Members | Fixed bridge | Allowed host ports |
+|---|---|---|---|
+| `gateway_nerves_host-access` | orchestrator (`gw_priority: 1`) | `br-jess-hostacc` | 8004, 8053, 8123, 8888 |
+| `monitoring_host-scrape` | prometheus, blackbox-exporter (`gw_priority: 1`) | `br-jess-scrape` | 5050, 8004, 9100, 9400, 19999 |
 
-**Observe mode** swaps the last two lines for `-j RETURN`, so nothing is blocked and only the `LOG` line fires. The log lines carry addresses and ports only, never content.
+- **Why dedicated networks:**
+  - Only the containers that need host access get it. On gateway-net, radicale, actual-budget, loki and the frontend would have got HA too.
+  - The orchestrator's plain-HTTP HA traffic no longer shares a bridge (L2) with other containers.
+- **A fixed bridge name** keeps the rule valid if the network is ever recreated.
+- **Until the compose change is deployed,** the config also carries two `TRANSITION` lines for gateway-net and monitoring-net. Delete them before enforce.
 
 ### How it is applied
 
-- **Resolved at apply time:** the bridge names (`br-<first 12 hex of the network id>`) come from the network names.
-  - A network keeps its bridge name until it is recreated. The gateway-net bridge dates from 2026-06, monitoring-net from 2026-04.
-- **A recreated network fails closed** (reject) until the next apply. To keep that short, the unit re-applies at boot and on every Docker network `create`/`destroy` event (`docker events` watcher, `Restart=always`).
-- **Atomic:** the chain is refilled with one `iptables-restore --noflush` transaction.
-- **Survives reboots** without iptables-persistent: the unit rebuilds the chain at boot.
-- **Nothing else rewrites it:** Docker doesn't touch `INPUT`, and Tailscale only manages `ts-input`.
-- **Small boot window:** the chain is in place a few seconds after `docker.service` starts.
+- **Watcher:** `jess-docker-input watch` (unit `jess-docker-input.service`) resolves the bridge names from the network names at apply time.
+  - It refills each chain with one `*-restore --noflush` transaction.
+  - It re-checks every 60 s and on every Docker network `create`/`destroy`.
+- **Drift is repaired without touching a healthy chain:** a chain whose digest or rule count is wrong, a deleted jump, a jump pushed down by a tailscaled restart, a recreated network.
+- **Failure handling:**
+  - A bad config or an unreachable dockerd leaves the chains as they are.
+  - `systemctl reload` validates first and fails loudly on a bad config.
+  - A clean stop removes the chains (that is the rollback); a crash keeps them for the restart.
+- **Survives reboots** without iptables-persistent: the unit rebuilds the chains at boot.
+- **Nothing else rewrites them:** Docker doesn't touch `INPUT`, and Tailscale only manages `ts-input`.
+- **Small boot window:** the chains are in place a few seconds after `docker.service` starts.
 
-### Rollout
+### Rollout, rollback, alerts
 
-1. Owner OK.
-2. Install in **observe mode**. Leave it for a day, covering a night of jobs and backups, then read `journalctl -k -g jess-docker-in`. Any legitimate (network, port) pair goes into the allow-list.
-3. Switch to **enforce**.
-4. Re-run the probe. Expected result:
-   - gateway-net reaches only 8004/8053/8123/8888;
-   - monitoring-net reaches only 5050/9100/9400/19999;
-   - every other network reaches nothing on the host;
-   - DNS from containers still resolves (Docker resolver → router).
-5. Verify the real paths:
-   - orchestrator → HA (`/api/` with the token → 200, and one light command from chat);
-   - Prometheus targets `node-exporter` (Jupiter), `netdata` and `conjure` up;
-   - blackbox probes green;
-   - Alertmanager → orchestrator webhook;
-   - the next nightly backups;
-   - a CI deploy;
-   - a `docker compose build`.
+See `monitoring/README.md` → Container → host firewall. In short:
+1. **Observe** (now).
+2. **Gates:** monitoring healthy 24 h; compose change deployed and `TRANSITION` lines gone; 24 h of observe covering backups, the self-audit, a CI deploy and Paperless; `summary` clean; alerts loaded.
+3. **Enforce:** `mode enforce` + reload, then re-probe with new connections.
 
-### Rollback (any time, seconds)
+Rollback is `sudo systemctl disable --now jess-docker-input`.
 
-```bash
-sudo systemctl disable --now jess-docker-input.service   # ExecStopPost removes the jumps and the chain
-```
+## Installed (2026-11-22)
 
-Without the unit:
+- **First version (observe):** installed 04:13 UTC. The reviews found:
+  - the IPv6 gap;
+  - the default-route bridge issue;
+  - gaps in drift, metrics and failure handling.
+- **Current version:** reinstalled 04:34–04:37.
+- **Checked on Jupiter:**
+  - **Other rules untouched:** every rule outside the two chains is identical to the pre-install `iptables-save`/`ip6tables-save`, Docker's included.
+  - **Observe blocks nothing:** probe containers on `immich_default`, `gateway_nerves_gateway-net` and `searxng-probe-net` reach the same ports as before.
+  - **Logging works:** the unmatched packets are logged. `summary` lists them by network, address and port.
+  - **IPv6 is now visible:** the raw IPv6 SYNs from a root `NET_RAW` container are counted (0 → 9) and logged by `JESS-DOCKER-IN6`. They still get through in observe, as designed.
+  - **Allowed paths work:** orchestrator → HA `/api/` returns 200, and → VoxCPM via `host.docker.internal` returns 200, both through the allow rule.
+  - **Drift repair works:** a foreign rule inserted at INPUT 1 and a deleted IPv6 jump were put back within 60 s. The jump-only repair leaves the chain's counters alone.
+  - **Bad config:** `systemctl reload` failed and the rules stayed. A good reload then succeeded.
+  - **Crash:** after `kill -9`, the unit kept the chains ("keeping the chains for the restart") and re-applied them.
+  - **Metrics:** the textfile metrics appear on node-exporter `:9100/metrics`.
+- **Still to check, once host-scrape exists:** Prometheus scrapes and the blackbox probes through host-scrape, and the Alertmanager webhook.
 
-```bash
-sudo iptables -D INPUT -i br-+ -j JESS-DOCKER-IN
-sudo iptables -D INPUT -i docker0 -j JESS-DOCKER-IN
-```
-
-A reboot with the unit disabled also clears it.
+**2026-11-24 (after the reboot at 00:35 UTC):**
+- **Reboot survived:** the unit re-applied both chains, jumps on top, observe mode.
+- **Monitoring back:** all Jupiter scrapes (`node-exporter`, `netdata`, `conjure`) and `probe_success{service="conjure"}` = 1. The `jess_docker_input_*` metrics reach Prometheus.
+- **The first 16 minutes of observe logs confirm the default-route problem in real traffic.**
+  - blackbox-exporter's Conjure probe (`10.0.0.248:5050`) and its new TTS probe (`host.docker.internal:8004`, since VoxCPM moved to Jupiter) both left through `frontend-probe-net`. In enforce mode both would have been rejected.
+  - Fix: `host-scrape` carries blackbox's default route, and its allow line gained 8004.
+- **Ignore the self-port hits** (`immich_default` → :2283, `audiobookshelf_default` → :13378, `paperless_default` → :8777, `monitoring_loki-push-net` → :3101). They came from throwaway probe containers another session started at 00:49–00:51, not from the apps.
 
 ## Not covered by this change
 
-- **The allow-list is per network, not per container.** Every gateway-net member (frontend, radicale, actual-budget, redis, loki) gets the same four ports as the orchestrator. Narrowing it to the orchestrator needs a fixed orchestrator address (`ipv4_address` in compose). That can come later.
+- **The allow-list is per network, not per container.** That is why the two allowed networks hold only the containers that need them. Adding a container to host-access or host-scrape gives it those ports.
 - **Published `0.0.0.0` ports** (8888, 2283, 13378) stay reachable from every container, through DNAT and `FORWARD`. They are LAN-facing by design anyway.
 - **Container → LAN and container → internet** (`FORWARD`) are untouched. Any container can still reach Helios, the router and IoT devices. `DOCKER-USER` rules would be the next step, as a separate task.
 - **The LAN and the tailnet still reach these host services**, since ufw is inactive. This change is about containers only.
 - **promtail and Homepage mount the Docker socket.** A `:ro` bind does not stop API calls (tested: `GET /version` → 200 through a read-only mount), so both are root-equivalent on Jupiter. No firewall rule contains them.
-- **`coder-net`** (see `CODER_PLAN.md`) is `isolated`, so it has no host address. It still needs its fixed bridge name to start with `br-`, so the chain covers it as the backstop the spike asks for.
+- **`coder-net`** (see `CODER_PLAN.md`) is `isolated`, so it has no host address. It still needs its fixed bridge name to start with `br-`, so the chains cover it as the backstop the spike asks for. A bridge outside `br-*`/`docker0` shows up as `jess_docker_input_networks_uncovered` → `ContainerFirewallCheckFailing`.
+- **`NET_RAW` stays in Docker's default capabilities.** brain-frontend and blackbox-exporter (http probes only) could drop it. The IPv6 chain covers the host side either way.

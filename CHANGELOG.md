@@ -4,6 +4,42 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Container → host firewall on Jupiter (2026-11-22)
+
+Branch `docs/container-host-reachability` (PR #176). Measured 2026-11-21: every Docker container on Jupiter reached every host service listening on all interfaces (ufw is inactive). A host unit now limits container → host traffic to an allow-list of (network, port) pairs. Installed on Jupiter in observe mode (logs, blocks nothing) since 2026-11-22. Design + measurements: `docs/internal/CONTAINER_HOST_REACHABILITY.md`; runbook: `monitoring/README.md` → Container → host firewall.
+
+### Upgrade action
+
+- The unit is already installed (observe). CI never deploys it; re-run the `install` lines in the runbook after a script or unit change.
+- After the compose change deploys: confirm both networks exist and carry `GwPriority` 1, then delete the two `TRANSITION` allow lines from `/etc/jess-docker-input.conf` and the repo copy and `sudo systemctl reload jess-docker-input`.
+- Switching to enforce is a manual owner step, behind the gates in the runbook (Observe).
+
+### Host tooling
+
+- New `scripts/container-firewall/`: `jess_docker_input.py` (stdlib, root; installed copy `/usr/local/sbin/jess-docker-input`; docstring = spec; `render`/`check`/`apply`/`watch`/`remove`/`status`/`summary`), `jess-docker-input.conf` (repo copy of `/etc/jess-docker-input.conf`, stays `mode observe`), `jess-docker-input.service`, `probe_host_ports.py` (read-only probe for a throwaway one-network container).
+- Chains `JESS-DOCKER-IN` (iptables) and `JESS-DOCKER-IN6` (ip6tables), jumped from INPUT for `-i br-+` / `-i docker0` only; LAN, tailnet and loopback never enter them. IPv6 is covered by `JESS-DOCKER-IN6` (no allow lines). Chains refilled with `*-restore --noflush`; drift checked every 60 s and on Docker network events.
+
+### Compose
+
+- `docker-compose.yml`: new network `host-access` (`gateway_nerves_host-access`, bridge `br-jess-hostacc`), orchestrator only, its default route via `gw_priority: 1`. Allowed host ports: HA 8123, Pi-hole 8053, VoxCPM 8004, 8888 hairpin.
+- `monitoring/docker-compose.yml`: new network `host-scrape` (`monitoring_host-scrape`, bridge `br-jess-scrape`), prometheus + blackbox-exporter only, their default route via `gw_priority: 1`. Allowed host ports: Conjure 5050, VoxCPM 8004 (blackbox TTS probe), node-exporter 9100, GPU exporter 9400, Netdata 19999.
+- A container's packet to the host arrives on the bridge of its default-route network; without `gw_priority` Docker picks the network whose name sorts first.
+
+### Monitoring
+
+- Textfile metrics `jess_docker_input.prom` (`jess_docker_input_*`, every 60 s).
+- New group `container_firewall`, all `pushover-quiet` with a 24 h repeat: `ContainerFirewallNotRunning`, `ContainerFirewallCheckFailing`, `ContainerFirewallRejecting` (enforce only), `ContainerFirewallStillObserving` (72 h in observe; drop once enforce is permanent).
+
+### Tests
+
+- New `orchestrator/tests/test_jess_docker_input.py` (fake host, no real iptables/docker) and `orchestrator/tests/test_container_firewall_layout.py` (compose layout + conf guard; compose tests skip when the compose files aren't mounted).
+
+### Docs
+
+- `CLAUDE.md`, `COMMANDS.md`, `monitoring/README.md` (new Container → host firewall section; Alertmanager tier list; network-exposure line), `docs/internal/CONTAINER_HOST_REACHABILITY.md`, `docs/internal/README.md`.
+
+---
+
 ## [Unreleased] — Coder box: sandboxed Qwen Code on Jupiter (`jess-coder`) (2026-11-23)
 
 Branch `feat/coder-box`, PR 2 of `docs/internal/CODER_PLAN.md` (the PR 1 coder gate is unchanged). An interactive Qwen Code in a disposable, offline container that uses Jess's brain through the coder gate and hands back a checked patch; it never commits, pushes or deploys. Default off. Authoritative doc: `docs/CODER.md`; deviations from the plan: `CODER_PLAN.md` → PR 2 as built.

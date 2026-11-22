@@ -1552,3 +1552,64 @@ groups:
         annotations:
           summary: "The off-box dead-man's switch on Saturn is not armed"
           description: "Jupiter can't scrape the switch on Saturn (:9466), its checker has not run for 5 minutes, or DEADMAN_DRY_RUN is still on — so a Jupiter outage would page nobody. On Saturn: `systemctl status jupiter-deadman`, `journalctl -u jupiter-deadman -n 50`, `curl -s localhost:9466/metrics | grep dry_run`. See monitoring/deadman/README.md."
+
+  # Container -> host firewall on Jupiter (jess-docker-input, scripts/container-firewall/;
+  # docs/internal/CONTAINER_HOST_REACHABILITY.md). Host unit installed by hand (CI never
+  # deploys it); it rewrites the node_exporter textfile jess_docker_input.prom every 60 s.
+  # Absent metrics (never installed, or the .prom removed after a deliberate rollback)
+  # = none of these fire. All quiet: a dead watcher is the pre-2026-11-22 "containers
+  # reach every host port" state, not an outage; a rejection is a container poking at
+  # the host or an allow-list gap — a morning job. Runbook: monitoring/README.md ->
+  # Container -> host firewall.
+  - name: container_firewall
+    rules:
+      # A clean stop removes the chains (ExecStopPost), so stale = no filtering. A hung
+      # watcher leaves the chains frozen instead (a recreated allow-listed network then
+      # fails closed in enforce mode).
+      - alert: ContainerFirewallNotRunning
+        expr: time() - jess_docker_input_last_check_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jupiter's container firewall watcher (jess-docker-input) last reported {{ $value | humanizeDuration }} ago"
+          description: "jess-docker-input.service rewrites jess_docker_input.prom every 60 s. Stale = the service stopped (containers reach every Jupiter host port again) or the watcher hung (chains frozen as they were). `systemctl status jess-docker-input`, `journalctl -u jess-docker-input -n 30`; fix with `sudo systemctl restart jess-docker-input`, then `sudo jess-docker-input status` lists both chains. Rolled back on purpose? `sudo rm /home/labadmin/node_exporter/textfile_collector/jess_docker_input.prom` clears this."
+
+      # The chains are left as they were on a failed sync, so a network recreated since
+      # then has no allow rule. networks_missing only matters in enforce mode (observe
+      # blocks nothing); an uncovered bridge (custom bridge name not br-*, or IPv6 on) is
+      # a hole in either mode.
+      - alert: ContainerFirewallCheckFailing
+        expr: >-
+          jess_docker_input_check_ok == 0
+          or jess_docker_input_networks_uncovered > 0
+          or (jess_docker_input_networks_missing > 0 and on(instance) jess_docker_input_enforcing == 1)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jupiter's container firewall can't apply its rules, misses an allow-listed network, or can't see a bridge"
+          description: "One of: the last sync failed (bad /etc/jess-docker-input.conf, dockerd unreachable, iptables failed); in enforce mode an allow-listed network no longer exists (its containers' host traffic, e.g. orchestrator -> Home Assistant, is rejected); or a Docker bridge network is outside the jumps (bridge name not br-*/docker0, or IPv6 enabled). `journalctl -u jess-docker-input -n 30` names the cause; `sudo jess-docker-input render` shows what it would load; `docker network ls` for the real names. Fix the conf, then `sudo systemctl reload jess-docker-input` (the reload fails loudly on a bad config)."
+
+      # min_over_time keeps packets counted in observe mode just before a switch to
+      # enforce from firing this. Expected once after a probe_host_ports.py run.
+      - alert: ContainerFirewallRejecting
+        expr: >-
+          sum by (instance, family) (increase(jess_docker_input_unmatched_packets_total[15m])) > 0
+          and on(instance) min_over_time(jess_docker_input_enforcing[15m]) == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "Jupiter's container firewall blocked {{ $value | humanize }} {{ $labels.family }} packet(s) from containers to host ports in 15 min"
+          description: "In enforce mode JESS-DOCKER-IN(6) blocked traffic from a container to a Jupiter host port. Either a container is poking at host services (SSH, SMB, ...) or a legitimate path is missing from the allow-list (then something is broken). `sudo jess-docker-input summary --hours 1` lists network, address and port; `docker network inspect <network>` shows its containers. Legitimate: add an `allow` line to /etc/jess-docker-input.conf and the repo copy, then `sudo systemctl reload jess-docker-input`."
+
+      # Nudge so the rollout doesn't stall in observe mode (the plan is about a day of
+      # observe logs with monitoring healthy). Drop this rule once enforce is on for good.
+      - alert: ContainerFirewallStillObserving
+        expr: jess_docker_input_enforcing == 0
+        for: 72h
+        labels:
+          severity: info
+        annotations:
+          summary: "Jupiter's container firewall has been in observe mode for 3+ days"
+          description: "Observe mode logs but blocks nothing. Read `sudo jess-docker-input summary --hours 72`, then follow monitoring/README.md -> Container -> host firewall -> Switch to enforce."

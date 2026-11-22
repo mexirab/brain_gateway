@@ -13,7 +13,7 @@ docker compose -f monitoring/docker-compose.yml --env-file .env -p monitoring up
 - **Every** compose command for this project needs the env file (`--env-file .env` from the repo root, `--env-file ../.env` from `monitoring/`) — `GF_SECURITY_ADMIN_PASSWORD` is required (`:?`) and compose refuses to start without it.
 - Bring the main stack up first: Loki joins the external `gateway_nerves_gateway-net` network and blackbox-exporter the external `gateway_nerves_frontend-probe-net` + `gateway_nerves_searxng-probe-net` (all created by the main compose). This project in turn creates `monitoring_grist-probe-net`, which `grist/` joins as external — start Grist after it. If the main stack was `down`'d (network deleted/recreated), re-run `up -d` here.
 
-**Network exposure:** ufw is inactive on Jupiter, so the publish address is the only control. Grafana, Prometheus, Loki, Alertmanager and Blackbox all bind `127.0.0.1` only, and so does SearXNG (main compose, since 2026-10-25); the dashboard too once `FRONTEND_BIND_ADDR=127.0.0.1` (served via Tailscale Serve HTTPS).
+**Network exposure:** ufw is inactive on Jupiter, so the publish address is the only control against the LAN and tailnet (container → host traffic: see Container → host firewall below). Grafana, Prometheus, Loki, Alertmanager and Blackbox all bind `127.0.0.1` only, and so does SearXNG (main compose, since 2026-10-25); the dashboard too once `FRONTEND_BIND_ADDR=127.0.0.1` (served via Tailscale Serve HTTPS).
 
 **`frontend-probe-net`:** holds only `brain-frontend` and `blackbox-exporter`. Deliberately not `gateway-net`: blackbox `/probe` is an unauthenticated request proxy, and on `gateway-net` every container there (redis, orchestrator, …) could drive it.
 
@@ -176,7 +176,7 @@ Before reloading, `reload-monitoring.sh` also **fails if `alertmanager.yml` or `
 
 ## Alertmanager
 
-Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes `Watchdog` to the off-box `deadman` webhook first (see Dead-man's switch below), and everything else to Pushover in two tiers by alertname **allow-list** (the `severity` label routes nothing; a rule not named in a matcher falls through to the `null` receiver and notifies nobody): paging alerts (e.g. `OrchestratorDown`, `NodeDown` (excludes `helios` — power-tiered, asleep by design — and the dead `uranus`), the briefing/backup staleness alerts, mount-missing alerts, `PrometheusNotIngesting` (inhibits `ClosetTemperatureSensorMissing`, which an empty TSDB fires falsely via `absent()` — see USB Storage below), `EmbeddingModelBroken`, `ClosetTemperatureCritical`, `HeliosPoweredButUnreachable`, `UPSOnBattery`, `UPSLowBattery`) hit the `pushover` receiver (priority 1), while non-paging alerts (`WindDownNudgeStale`, `JessBackupOffboxFailing` (one alert per `backup` label — state, HA, calendar, Actual Budget, Grist; see Off-box backup alert below), `RuleEvaluationFailing` (see Rule-evaluation failures below), `RadicaleDown`, `ActualDown`, `PaperlessDown`, `GristDown`, `FrontendDown`, `CalendarSourceFailing`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `BudgetSyncFailing`, `BudgetHistoryRefreshFailing`, `SelfAuditStale`, `SelfAuditFailing`, `SelfInvestigatorFailing`, `HeliosHardwareFault`, `BrainCudaInitFailed`, `BrainFailedToStart`, `BrainOnCPU`, `HeliosGpuDriverBroken`, `HeliosLogsSilent`, `HeliosLogCheckFailing`, `EmbeddingErrors`, `AutoLearnFailing`, `ClosetTemperatureSensorMissing`, `WebPushFailing`, `ResearchHelperFailing`, `ResearchSourceFailing`, `SearXNGDown`, `UPSExporterDown`, `UPSReplaceBattery`, `UPSOverload`, `HAUnrequestedCallsBlocked`, `VoiceReplyCutShort` (inhibited by `TTSDown`), `StaleMountContainers`, `StaleMountRestartFailed`, `StaleMountCheckNotRunning`, `StaleMountContainersRestarted`, `DeployDrift`, `DeployDriftCheckFailing`, `DeadmanSwitchBroken`, `BrainAuthRejected`, `BrainMetricsScrapeRejected` (own matcher) — see the matcher in `alertmanager/alertmanager.yml.template`) route to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). `AnnouncementSpeakerUnavailable` (per-`speaker` `increase(bgw_announcement_speaker_unavailable_total[24h]) > 0`, `for: 15m` — HA reports a routed speaker `unavailable`, so announcements skip it) has its own route: `pushover-quiet` with `repeat_interval: 24h` (a dead speaker stays dead for days and is hit all day; the default 4h repeat would nag several times daily). See `docs/VOICE_AND_TTS.md` → Speaker liveness. `ExchangeCalendarSyncStale` has the same `pushover-quiet` + `repeat_interval: 24h` route (the fix is the owner's iPhone Shortcut). So does `HeliosUnreachablePlugBlind` (the outage detector is blind — a config/HA fix). So does `WebSearchFailing` (it stays active until the failures age out of its 6h window, so the default 4h repeat would re-notify after the fix). So does `BudgetSyncDegraded` (each reason needs an owner fix that can take days). So do `VoiceSatelliteDisconnected` (an unplugged device stays offline for days) and `VoiceSatelliteConfigInvalid` (stays until `.env` is fixed); see Voice Satellite below. So does `MovementSensorFailing` (the fix is `.env` or the HA iPhone app; see Prometheus Targets → Movement from the phone). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
+Compose-managed since 2026-07-06 (digest-pinned image, `cap_drop: ALL`, `no-new-privileges`; replaced a hand-run container that bind-mounted a stale root-owned render from the abandoned `/opt/gateway_mvp` checkout — repo template changes were inert). Routes `Watchdog` to the off-box `deadman` webhook first (see Dead-man's switch below), and everything else to Pushover in two tiers by alertname **allow-list** (the `severity` label routes nothing; a rule not named in a matcher falls through to the `null` receiver and notifies nobody): paging alerts (e.g. `OrchestratorDown`, `NodeDown` (excludes `helios` — power-tiered, asleep by design — and the dead `uranus`), the briefing/backup staleness alerts, mount-missing alerts, `PrometheusNotIngesting` (inhibits `ClosetTemperatureSensorMissing`, which an empty TSDB fires falsely via `absent()` — see USB Storage below), `EmbeddingModelBroken`, `ClosetTemperatureCritical`, `HeliosPoweredButUnreachable`, `UPSOnBattery`, `UPSLowBattery`) hit the `pushover` receiver (priority 1), while non-paging alerts (`WindDownNudgeStale`, `JessBackupOffboxFailing` (one alert per `backup` label — state, HA, calendar, Actual Budget, Grist; see Off-box backup alert below), `RuleEvaluationFailing` (see Rule-evaluation failures below), `RadicaleDown`, `ActualDown`, `PaperlessDown`, `GristDown`, `FrontendDown`, `CalendarSourceFailing`, `ChatStreamTruncating`, `EmptyRepliesReachingUsers`, `ToolCallsSilentlyDropped`, `BudgetSyncFailing`, `BudgetHistoryRefreshFailing`, `SelfAuditStale`, `SelfAuditFailing`, `SelfInvestigatorFailing`, `HeliosHardwareFault`, `BrainCudaInitFailed`, `BrainFailedToStart`, `BrainOnCPU`, `HeliosGpuDriverBroken`, `HeliosLogsSilent`, `HeliosLogCheckFailing`, `EmbeddingErrors`, `AutoLearnFailing`, `ClosetTemperatureSensorMissing`, `WebPushFailing`, `ResearchHelperFailing`, `ResearchSourceFailing`, `SearXNGDown`, `UPSExporterDown`, `UPSReplaceBattery`, `UPSOverload`, `HAUnrequestedCallsBlocked`, `VoiceReplyCutShort` (inhibited by `TTSDown`), `StaleMountContainers`, `StaleMountRestartFailed`, `StaleMountCheckNotRunning`, `StaleMountContainersRestarted`, `DeployDrift`, `DeployDriftCheckFailing`, `DeadmanSwitchBroken`, `BrainAuthRejected`, `BrainMetricsScrapeRejected` (own matcher) — see the matcher in `alertmanager/alertmanager.yml.template`) route to `pushover-quiet` (priority 0 — respects Pushover quiet hours, no emergency retry, so a midnight fire surfaces in the morning instead of waking anyone). `AnnouncementSpeakerUnavailable` (per-`speaker` `increase(bgw_announcement_speaker_unavailable_total[24h]) > 0`, `for: 15m` — HA reports a routed speaker `unavailable`, so announcements skip it) has its own route: `pushover-quiet` with `repeat_interval: 24h` (a dead speaker stays dead for days and is hit all day; the default 4h repeat would nag several times daily). See `docs/VOICE_AND_TTS.md` → Speaker liveness. `ExchangeCalendarSyncStale` has the same `pushover-quiet` + `repeat_interval: 24h` route (the fix is the owner's iPhone Shortcut). So does `HeliosUnreachablePlugBlind` (the outage detector is blind — a config/HA fix). So does `WebSearchFailing` (it stays active until the failures age out of its 6h window, so the default 4h repeat would re-notify after the fix). So does `BudgetSyncDegraded` (each reason needs an owner fix that can take days). So do `VoiceSatelliteDisconnected` (an unplugged device stays offline for days) and `VoiceSatelliteConfigInvalid` (stays until `.env` is fixed); see Voice Satellite below. So does `MovementSensorFailing` (the fix is `.env` or the HA iPhone app; see Prometheus Targets → Movement from the phone). So do the four `ContainerFirewall*` alerts (see Container → host firewall below). Storage at `/mnt/logging/alertmanager` (owned `65534:65534`).
 
 **Routing coverage: every rule notifies someone or is listed as Grafana-only.** `orchestrator/tests/test_alert_routing.py` (runs in CI; on the host: `python3 -m pytest --noconftest orchestrator/tests/test_alert_routing.py`) reads every rule file (`rule_files` in `prometheus/prometheus.yml.template`, plus `loki/rules/`) and walks this route tree the way Alertmanager does. It walks it twice: with every optional `BEGIN/END` block, and with them all stripped. It gave the same receivers as `amtool config routes test` for all 77 alerts on 2026-11-03. It fails CI when:
 - an alert reaches only `null` / `self-investigator` and isn't in the test's `GRAFANA_ONLY` dict. That dict holds `UranusDown`, `AlertmanagerUnreachable`, `HighRequestLatency`, `AppDown` (every `tier="app"` target has its own routed `*Down` alert) and `RoutineAutoEnded` (the force-end is the designed recovery for an ignored routine step, not a fault);
@@ -529,6 +529,148 @@ journalctl -u usb-storage-stale-check -n 5               # expect "done: 0 stale
 ```
 
 Re-run the `install` lines after any change to the script or units. The udev rule is unchanged; `scripts/usb-storage/99-usb-storage-remount.rules.example` shows its shape (UUIDs must match `/etc/fstab`; `sudo udevadm control --reload` after editing).
+
+## Container → host firewall (Jupiter)
+
+A host unit limits which Jupiter host ports Docker containers can reach. Installed 2026-11-22 in **observe** mode (logs, blocks nothing); switching to enforce is a manual owner step behind the gates in Observe below. Before it, every container on an ordinary network reached SSH, SMB, Pi-hole, HA, Netdata, node-exporter and the rest; over IPv6 link-local, so did a container with `NET_RAW`. ufw is inactive.
+- Design and measurements: `docs/internal/CONTAINER_HOST_REACHABILITY.md`.
+- Code: `scripts/container-firewall/`. The script's docstring is the spec.
+
+**How it works.**
+- **Chains:** `JESS-DOCKER-IN` (IPv4) and `JESS-DOCKER-IN6` (IPv6). Both are jumped from the top of INPUT for `-i br-+` and `-i docker0` **only**. LAN, tailnet and loopback traffic never enters them, so SSH can't be locked out.
+- **What passes:**
+  - replies to connections the host opened;
+  - the `allow` lines in `/etc/jess-docker-input.conf`, checked on every packet, so a connection opened before enforce, or to a port later removed, is cut.
+- **IPv6:** the IPv6 chain has no allow lines.
+- **Everything else:** counted and logged (rate-limited, kernel header fields only), then:
+  - **observe:** passed;
+  - **enforce:** rejected (TCP) or dropped.
+- **Source bridge:** a packet arrives on the bridge of its container's **default-route** network. So the allowed networks are dedicated ones that carry their members' default route through compose `gw_priority`:
+
+  | Network | Members | Fixed bridge | Allowed host ports |
+  |---|---|---|---|
+  | `gateway_nerves_host-access` | orchestrator | `br-jess-hostacc` | HA 8123, Pi-hole 8053, VoxCPM 8004, 8888 hairpin |
+  | `monitoring_host-scrape` | prometheus, blackbox-exporter | `br-jess-scrape` | Conjure 5050, VoxCPM 8004 (TTS probe), node-exporter 9100, GPU exporter 9400, Netdata 19999 |
+
+  - Container-to-container traffic and published ports reached from another network (Docker DNAT → FORWARD) never enter the chains.
+  - A one-network `scripts/container-firewall/probe_host_ports.py` container shows what each network reaches.
+- **Watcher** (`jess-docker-input watch`, unit `jess-docker-input.service`):
+  - refills each chain atomically (`*-restore --noflush`);
+  - re-checks every 60 s and on Docker network create/destroy: a recreated network, an edited chain, or a jump displaced by a tailscaled restart is repaired;
+  - on a bad config or an unreachable dockerd, leaves the chains as they are;
+  - a clean stop removes the chains; a crash keeps them for the restart.
+
+**Metrics** (textfile `jess_docker_input.prom` in `/home/labadmin/node_exporter/textfile_collector`, every 60 s):
+
+| Metric | Meaning |
+|---|---|
+| `jess_docker_input_last_check_timestamp_seconds` | heartbeat |
+| `jess_docker_input_last_apply_timestamp_seconds` | last chain reload |
+| `jess_docker_input_started_timestamp_seconds` | watcher start |
+| `jess_docker_input_check_ok` | last sync succeeded |
+| `jess_docker_input_enforcing` | 1 = enforce |
+| `jess_docker_input_networks_missing` | allow-listed networks that don't exist |
+| `jess_docker_input_networks_uncovered` | bridges outside the jumps: bridge name not `br-*`/`docker0`, or IPv6 on |
+| `jess_docker_input_unmatched_packets_total{family}` | packets no rule allowed (resets on a chain reload) |
+| `jess_docker_input_logged_packets_total{family}` | of those, the ones that were logged |
+| `jess_docker_input_info{sha256}` | which script revision is installed |
+
+**Alerts** (group `container_firewall`, all `pushover-quiet` with a 24 h repeat):
+
+| Alert | Fires when | First check |
+|-------|-----------|-------------|
+| `ContainerFirewallNotRunning` | heartbeat > 5 min old, for 5 m | `systemctl status jess-docker-input`, `journalctl -u jess-docker-input -n 30` |
+| `ContainerFirewallCheckFailing` | `check_ok == 0`, or an uncovered bridge, or (enforce) a missing allow-listed network, for 15 m | the journal names the cause; `sudo jess-docker-input render` |
+| `ContainerFirewallRejecting` | enforce mode blocked packets in the last 15 m | `sudo jess-docker-input summary --hours 1` |
+| `ContainerFirewallStillObserving` | still in observe after 72 h | nudge to finish the rollout; drop the rule once enforce is on for good |
+
+### Install or upgrade
+
+Run on Jupiter, from the live checkout, after the merge:
+
+```bash
+sudo install -m 0755 scripts/container-firewall/jess_docker_input.py /usr/local/sbin/jess-docker-input
+sudo install -m 0644 scripts/container-firewall/jess-docker-input.service /etc/systemd/system/
+# first install only (the /etc copy is the live config; don't overwrite it on an upgrade):
+sudo install -m 0644 scripts/container-firewall/jess-docker-input.conf /etc/jess-docker-input.conf
+sudo systemctl daemon-reload && sudo systemctl enable jess-docker-input && sudo systemctl restart jess-docker-input
+```
+
+Expected output:
+- `sudo jess-docker-input status`: the first line `script sha256:` equals `sha256sum scripts/container-firewall/jess_docker_input.py`, followed by both chains.
+- `journalctl -u jess-docker-input -n 3`: `applied ipv4+ipv6 mode=observe ...`.
+- `sudo iptables -S INPUT | head -3` and `sudo ip6tables -S INPUT | head -3`: the two `jess-docker-input` jumps first.
+
+### Observe (gates before enforce)
+
+1. **Monitoring healthy for 24 h first.** Observe mode can't see flows that aren't happening. Wait for:
+   - `up{job=~"node-exporter|netdata|conjure"}` = 1 (Jupiter targets);
+   - `probe_success{service="conjure"}` = 1;
+   - Alertmanager running.
+2. **Compose change deployed** (PR #176): `docker network ls | grep -E 'host-access|host-scrape'` lists both networks.
+   - `docker inspect -f '{{json .NetworkSettings.Networks}}' brain-orchestrator` shows `host-access` with `GwPriority` 1.
+   - The same holds for `prometheus` and `blackbox-exporter` with `host-scrape`.
+   - Then **delete the two `TRANSITION` allow lines** from `/etc/jess-docker-input.conf` and the repo copy, and run `sudo systemctl reload jess-docker-input`.
+3. **Observe for 24 h** with all of these inside the window: the 03:30–04:05 backups, the 07:00 self-audit plus one alert webhook, one CI deploy, and Paperless running.
+4. **Read the summary:**
+   - `sudo jess-docker-input summary --hours 24`: every row is either a known probe or something to explain. A legitimate (network, port) pair goes into the allow-list.
+   - `sudo jess-docker-input status`: both allow rules show packets.
+5. **Alerts deployed:** `ContainerFirewall*` appear in Prometheus `/api/v1/rules`.
+
+### Switch to enforce
+
+```bash
+sudo sed -i 's/^mode observe$/mode enforce/' /etc/jess-docker-input.conf
+sudo systemctl reload jess-docker-input     # fails loudly on a bad config, old rules stay
+sudo jess-docker-input status | grep -E 'REJECT|DROP'
+```
+
+Check with **new** connections (an established one is not a test):
+
+```bash
+# orchestrator -> HA: 401 without a token proves the port is reachable (no token used or printed)
+docker exec brain-orchestrator python -c "import httpx;print(httpx.get('http://10.0.0.248:8123/api/').status_code)"
+# a network with no allow line: expect 'refused' everywhere
+docker run --rm --cap-drop ALL --network homepage_default \
+  -v "$PWD/scripts/container-firewall/probe_host_ports.py:/probe.py:ro" \
+  --entrypoint python gateway_nerves-orchestrator -I /probe.py --label homepage_default
+```
+
+Expected results:
+- The HA check prints `401`.
+- The probe shows `"open": []` for every address, and DNS answers `timeout`. Container DNS still works through Docker's resolver to the router.
+- One `ContainerFirewallRejecting` notice follows; that one is expected.
+- Prometheus targets `node-exporter` (Jupiter), `netdata` and `conjure` stay up, and `probe_success{service="conjure"}` stays 1.
+
+### Rollback
+
+- **Soft:** set `mode observe` and run `sudo systemctl reload jess-docker-input`.
+- **Off:** run these, then check that `sudo iptables -S INPUT | grep -c jess-docker-input` prints `0`:
+
+  ```bash
+  sudo systemctl disable --now jess-docker-input
+  sudo rm /home/labadmin/node_exporter/textfile_collector/jess_docker_input.prom
+  ```
+
+- **Emergency (unit broken):** `sudo /usr/local/sbin/jess-docker-input remove`. Or by hand (the comment match is part of the rule):
+
+  ```bash
+  sudo iptables -D INPUT -i br-+ -m comment --comment jess-docker-input -j JESS-DOCKER-IN
+  sudo iptables -D INPUT -i docker0 -m comment --comment jess-docker-input -j JESS-DOCKER-IN
+  sudo ip6tables -D INPUT -i br-+ -m comment --comment jess-docker-input -j JESS-DOCKER-IN6
+  sudo ip6tables -D INPUT -i docker0 -m comment --comment jess-docker-input -j JESS-DOCKER-IN6
+  ```
+
+  Stop the unit first, or its drift check puts the jumps back within 60 s.
+
+### Known limits
+
+- **Allow-list granularity:** per network, not per container. That is why the allowed networks hold only the containers that need them.
+- **FORWARD is untouched:** container → LAN and container → internet still work for every container. `DOCKER-USER` rules would be a separate change.
+- **The LAN and the tailnet** still reach the host services (ufw inactive).
+- **Containers holding the Docker socket** (promtail, Homepage) are root-equivalent. No firewall rule contains them.
+- **Fail-open windows of seconds:** at boot (containers start before the first apply) and at shutdown.
+- **Kernel log lines** are not shipped to Loki (Jupiter promtail collects Docker and Conjure logs only), so read them with `summary`.
 
 ## Architecture
 
