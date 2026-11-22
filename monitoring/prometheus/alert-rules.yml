@@ -425,7 +425,7 @@ groups:
 
       # Jess's voice card: one of Jupiter's two identical RTX 5080s (15.9 GiB). It should hold
       # only VoxCPM2: ~7.4 GiB fresh, ~9.3-9.7 GiB after a week of ordinary texts on Helios,
-      # 13.1 GiB after the install's long-text test (2000-char maximum; PyTorch keeps its
+      # 13.1–13.8 GiB after the install's long-text tests (2000-char maximum; PyTorch keeps its
       # peak cached and never releases it). So more than 14.5 GiB used (~1.4 GiB free) means
       # another process is on the card, or the voice has grown past anything measured and
       # the next long text may not fit. Used, not free: an experiment that fits BESIDE the

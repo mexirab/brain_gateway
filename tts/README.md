@@ -267,7 +267,7 @@ journalctl -u stt-onnx -f
 
 | Service | Model | VRAM | GPU |
 |---------|-------|------|-----|
-| TTS (live) | VoxCPM2 | ~7.4 GiB fresh, 13.1 GiB peak after ~2000-char texts | Jupiter RTX 5080 (16 GB), picked by UUID in `/etc/voxcpm-tts.env` |
+| TTS (live) | VoxCPM2 | ~7.4 GiB fresh, 13.1–13.8 GiB peak after ~2000-char texts | Jupiter RTX 5080 (16 GB), picked by UUID in `/etc/voxcpm-tts.env` |
 | TTS (rollback, disabled) | Qwen3-TTS-1.7B-Base | ~5GB | Helios GPU1 (RTX PRO 5000) |
 | STT (live) | Parakeet TDT 0.6b v2, int8 ONNX | none (CPU) | — |
 | STT (disabled alternative) | Parakeet TDT 0.6b v3, NeMo | ~6.3GB | GPU1 |
