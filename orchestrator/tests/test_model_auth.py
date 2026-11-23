@@ -578,3 +578,85 @@ async def test_service_registry_check_all_keys_only_the_model_origin(cfg, regist
     assert all(c.request.headers["authorization"] == f"Bearer {KEY}" for c in brain.calls)
     for route in (ha, sx):
         assert all("authorization" not in c.request.headers for c in route.calls)
+
+
+# ---------------------------------------------------------------------------
+# TTS_API_KEY: the VoxCPM2 server's own key, only for TTS_URL's origin
+# ---------------------------------------------------------------------------
+
+TTS_KEY = "tts-key-0c41d7e2a9f3b6"
+TTS = "http://host.docker.internal:8004"
+
+
+@pytest.fixture
+def tts(monkeypatch, cfg):
+    """The live layout: brain on Helios with KEY, TTS on Jupiter with TTS_KEY, no TTS backend object."""
+    monkeypatch.setattr(shared.settings, "tts_url", TTS)
+    monkeypatch.setattr(shared, "TTS_API_KEY", TTS_KEY)
+    monkeypatch.setattr(shared, "tts_backend", None)
+    monkeypatch.setattr(model_auth, "_last_tts_reject_log", 0.0)
+    return monkeypatch
+
+
+async def test_tts_key_only_for_tts_origin(tts):
+    client, seen = _recording_client()
+    async with client:
+        await client.post(f"{TTS}/tts", json={"text": "x"})
+        await client.post(f"{TTS}/v1/audio/speech", json={"input": "x"})
+        await client.get(f"{TTS}/health")
+        await client.get("http://10.0.0.195:8080/v1/models")  # the brain: its own key
+        await client.get("http://host.docker.internal:8005/x")  # same host, other port
+        await client.get("http://10.0.0.248:8123/api/states")  # Home Assistant
+    assert [r.headers.get("authorization") for r in seen] == [
+        f"Bearer {TTS_KEY}",
+        f"Bearer {TTS_KEY}",
+        f"Bearer {TTS_KEY}",
+        f"Bearer {KEY}",
+        None,
+        None,
+    ]
+
+
+def test_no_tts_key_configured_sends_nothing(tts):
+    tts.setattr(shared, "TTS_API_KEY", "")
+    assert model_auth.tts_key_for_url(f"{TTS}/tts") == ""
+    assert model_auth.auth_headers(f"{TTS}/tts") == {}
+
+
+def test_tts_backend_url_counts_only_for_local_http(tts):
+    tts.setattr(shared.settings, "tts_url", "")
+    tts.setattr(shared, "tts_backend", SimpleNamespace(config=SimpleNamespace(backend="local_http", url=TTS)))
+    assert model_auth.tts_key_for_url(f"{TTS}/tts") == TTS_KEY
+    tts.setattr(shared, "tts_backend", SimpleNamespace(config=SimpleNamespace(backend="elevenlabs", url=TTS)))
+    assert model_auth.tts_key_for_url(f"{TTS}/tts") == ""
+
+
+def test_tts_and_brain_keys_never_swap(tts):
+    """The brain's key on the brain's origin, the TTS key on the TTS origin, nothing crosses."""
+    assert key_for_url(f"{TTS}/tts") == ""
+    assert model_auth.tts_key_for_url("http://10.0.0.195:8080/v1/chat/completions") == ""
+    assert model_auth.auth_headers(f"{TTS}/v1/audio/speech") == {"Authorization": f"Bearer {TTS_KEY}"}
+    assert model_auth.auth_headers("http://10.0.0.195:8080/v1/models") == {"Authorization": f"Bearer {KEY}"}
+    assert model_auth.auth_headers("https://api.telegram.org/bot/x") == {}
+    assert model_auth.auth_headers("not a url") == {}
+
+
+async def test_tts_existing_auth_header_left_untouched(tts):
+    client, seen = _recording_client()
+    async with client:
+        await client.post(f"{TTS}/tts", json={"text": "x"}, headers={"Authorization": "Bearer caller"})
+    assert seen[0].headers["authorization"] == "Bearer caller"
+
+
+def test_tts_401_logs_once_per_window_and_not_as_brain(tts, clock, caplog):
+    tts.setattr(model_auth, "_last_tts_reject_log", 0.0)
+    client, _ = _recording_client(_status_by_host({"host.docker.internal": 401}), sync=True)
+    before = _rejected(401)
+    with client, caplog.at_level(logging.WARNING, logger="orchestrator.model_auth"):
+        client.post(f"{TTS}/tts", json={"text": "x"})
+        clock[0] += 10
+        client.post(f"{TTS}/tts", json={"text": "x"})
+    warns = _auth_warnings(caplog)
+    assert len(warns) == 1 and warns[0].getMessage().startswith("[TTS_AUTH]")
+    assert _rejected(401) == before  # bgw_model_auth_rejected_total is the brain's key only
+    assert TTS_KEY not in caplog.text

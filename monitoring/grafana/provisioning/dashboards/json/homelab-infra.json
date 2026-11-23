@@ -288,7 +288,7 @@
           },
           "editorMode": "code",
           "expr": "nvidia_smi_temperature_gpu * on (uuid) group_left(name) nvidia_smi_gpu_info",
-          "legendFormat": "{{node}} {{name}}",
+          "legendFormat": "{{node}} {{name}} {{gpu_role}}",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -381,7 +381,7 @@
           },
           "editorMode": "code",
           "expr": "nvidia_smi_utilization_gpu_ratio * on (uuid) group_left(name) nvidia_smi_gpu_info",
-          "legendFormat": "{{node}} {{name}}",
+          "legendFormat": "{{node}} {{name}} {{gpu_role}}",
           "range": true,
           "instant": false,
           "refId": "A"

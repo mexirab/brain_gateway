@@ -13,7 +13,7 @@ The guiding principle: **if it requires opening an app, I won't do it.** Everyth
 - **Durable task backlog** shipped July 2026 (PRs #44/#45/#46): `tasks` table + `backlog_manager` + voice tools (`add_task`, `what_now`, …) + `/tasks` page + dashboard TasksCard + brain-dump capture routing + `decompose_task` auto-linking + weekly Sunday review + Grafana row. The missing spine now exists.
 - **Qwen3.8 brain** shipped 2026-09-28: `RadixArk/Qwen3.8-27B-NVFP4` on vLLM 0.27.1 (5090, 131K context, MTP, ~111 tok/s — 2× Qwen3.6), and it now serves vision too (Saturn Qwen3-VL-8B out of the runtime path). See CHANGELOG.
 - **llama.cpp brain** shipped 2026-10-02: DavidAU Qwen3.8-27B TURBO Fable Q6_K MTP GGUF on llama.cpp (`llama-server-primary.service`, sandboxed, 131K ctx, MTP, 106–122 tok/s, ~4 s warm start, llama.cpp `/metrics` scraped) replaced the vLLM NVFP4 unit, which stays on disk as an older rollback. See CHANGELOG.
-- **Qwen3.8-Flash-Next brain** shipped 2026-10-24: 125B MoE (~6B active) Unsloth UD-Q3_K_XL MTP GGUF on llama.cpp, split across the 5090 + PRO 5000 (64K ctx, ~135–180 tok/s, ~0.5 s warm TTFT, 27 s cold load; A/B 66/66 vs 64/66). Needs `VOICE_THINKING_ENABLED=true` (PR #141). The 27B unit is the rollback; Qwen3-TTS rollback disabled to make room on GPU1. See CHANGELOG + `docs/internal/FLASH_NEXT_TRIAL.md`.
+- **Qwen3.8-Flash-Next brain** shipped 2026-10-24: 125B MoE (~6B active) Unsloth UD-Q3_K_XL MTP GGUF on llama.cpp, split across the 5090 + PRO 5000 (64K ctx at launch, 262K since the TTS moved to a Jupiter RTX 5080; ~135–180 tok/s, ~0.5 s warm TTFT, 27 s cold load; A/B 66/66 vs 64/66). Needs `VOICE_THINKING_ENABLED=true` (PR #141). The 27B unit is the rollback; Qwen3-TTS rollback disabled to make room on GPU1. See CHANGELOG + `docs/internal/FLASH_NEXT_TRIAL.md`.
 - **`code_agent` removed** 2026-10-21: the tool (shell + file writes + git commits on a local coder model) is gone; its Qwen3-Coder-Next model was retired 2026-10-16. Self-troubleshooting is the read-only self-audit / self-investigator. See CHANGELOG.
 
 The list below is ordered by tier, and within each tier roughly by priority.
@@ -26,7 +26,7 @@ The list below is ordered by tier, and within each tier roughly by priority.
 
 Shipped as `orchestrator/telegram_bot.py`: long-polling (no webhook / public ingress), locked to the allow-listed chat ID, inbound text through `/v1/chat/completions` (full Jess + tools from anywhere), reminders with inline **Done / Snooze** buttons handled with the F-011 state-machine semantics. Default-OFF — **setup still needed**: BotFather token + chat ID in `.env` (see `docs/ENV_VARS.md` → Telegram Bot).
 
-Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model → same pipeline; the Qwen3.8 brain on Helios since 2026-09-28, was Saturn) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`); voice notes now also get a spoken "walkie-talkie" reply back (TTS on Helios → `sendVoice`, `TELEGRAM_VOICE_REPLY_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
+Voice notes (→ STT on Helios → same pipeline) and photos (→ vision model → same pipeline; the Qwen3.8 brain on Helios since 2026-09-28, was Saturn) shipped July 2026 (`TELEGRAM_VOICE_ENABLED`/`TELEGRAM_PHOTO_ENABLED`); voice notes now also get a spoken "walkie-talkie" reply back (TTS on Jupiter → `sendVoice`, `TELEGRAM_VOICE_REPLY_ENABLED`). Stretch goal still open: morning briefing as a Telegram digest.
 
 ### 2. ~~Trust layer as a feature~~ ✅ BUILT (July 2026)
 
@@ -119,9 +119,9 @@ Vision already works through the Qwen3.8 brain on Helios (meal-photo calories + 
 | Speaker for the record player | Frees the Google Max aux input — the root cause of `all_speakers` HTTP 500s and TTS group failures |
 | ATOM Echo #2 (bedroom), #3 (kitchen) | Whole-house wake word. The bridge supports several devices since 2026-11-12 (`VOICE_SATELLITE_DEVICES`, duplicate-wake rule D11); left: buy + flash the devices, measure each room's levels, add them (`docs/VOICE_AND_TTS.md` → Voice satellite → Add a device) |
 
-### vLLM 262K context ⬜ (when worth it)
+### ~~262K context~~ ✅ DONE on llama.cpp (vLLM path moot)
 
-Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context. Since 2026-10-24 the live brain (Qwen3.8-Flash-Next on llama.cpp, two GPUs) runs at 64K — 131K doesn't fit next to the TTS on GPU1. The self-audit investigator has hit ~70K once, so it is the first thing a bigger context (or a size cap in `self_investigator.py`) would fix.
+Partly delivered: the Qwen3.8 cutover (2026-09-28) took live context from 16K to 131K on the 5090 (fp8 KV + MTP). The model's full 262K needs 4-bit KV, which needs unmerged vLLM PR #40914, and TurboQuant KV + speculative decoding currently corrupts output on stock vLLM (issue #53180). Revisit when both land and a use case actually needs >131K context. Delivered on llama.cpp: the live brain (Qwen3.8-Flash-Next, two GPUs) ran at 64K from 2026-10-24 while the TTS shared GPU1, and runs the full 262K since the TTS moved to one of Jupiter's RTX 5080s (q8_0 KV; measured 2026-11-11, header of `tts/llama-server-primary.service`). Open: a size budget for client chat history, since a cold 200K-token prompt prefills in ~140 s, past the unified loop's 120 s per-round timeout.
 
 ## Dropped / superseded
 

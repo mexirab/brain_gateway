@@ -46,19 +46,23 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     id: 'jupiter',
     name: 'Jupiter',
     ip: '10.0.0.248',
-    gpu: null,
-    role: 'Always-on hub: orchestrator, dashboard, Home Assistant, budget, calendar & monitoring',
+    gpu: '2x RTX 5080',
+    role: "Always-on hub: orchestrator, dashboard, Home Assistant, budget, calendar, monitoring & Jess's voice",
     services: [
       'Orchestrator :8888',
       'Dashboard (HTTPS via Tailscale)',
       'Home Assistant :8123',
+      'TTS: VoxCPM2 voice clone (one RTX 5080)',
       'Actual Budget',
       'Radicale CalDAV',
       'Grafana / Prometheus / Loki / Alertmanager',
+      'Second RTX 5080: experiments',
     ],
     power: 'always-on',
-    // Orchestrator + HA both live here. HA is probe-able via /api/services.
-    serviceKeys: ['ha'],
+    // Orchestrator, HA and the TTS live here; HA and the TTS are probe-able via
+    // /api/services. Online while either is healthy, so a stopped voice shows on
+    // the diagram's TTS node (red), not as the whole hub offline.
+    serviceKeys: ['ha', 'tts'],
   },
   {
     id: 'helios',
@@ -67,26 +71,27 @@ export const CLUSTER_NODES: readonly ClusterNode[] = [
     gpu: 'RTX 5090 + RTX PRO 5000',
     role: 'GPU model layer — asleep most of the time, woken by an HA smart plug',
     services: [
-      'Brain: Qwen3.8 TURBO on llama.cpp (RTX 5090) — also does vision',
-      'TTS: voice clone (RTX PRO 5000)',
+      'Brain: Qwen3.8-Flash-Next on llama.cpp (RTX 5090 + RTX PRO 5000) — also does vision',
       'STT: Parakeet TDT v2, int8 ONNX on CPU',
     ],
     power: 'wake-on-demand',
-    serviceKeys: ['model', 'vision', 'tts', 'stt'],
+    // The TTS moved to Jupiter: an always-on box answering for it must not
+    // make a sleeping Helios look online.
+    serviceKeys: ['model', 'vision', 'stt'],
   },
   {
     id: 'saturn',
     name: 'Saturn',
     ip: '10.0.0.58',
-    gpu: 'RTX 3080 + RTX 3090',
-    role: 'Off-box nightly backup target (no runtime services)',
+    gpu: 'RTX 3090',
+    role: 'Backup box: off-box nightly backup target (no runtime services)',
     services: [
-      'Nightly backups: Jess state, HA config, calendars, budget',
-      'Expert model :8084 — deprecated',
+      'Nightly backups: Jess state, HA config, calendars, budget, spreadsheets',
+      'Spare RTX 3090',
     ],
     power: 'always-on',
-    // Nothing the orchestrator probes runs here any more (vision moved to the
-    // Helios brain), so status is "unknown" rather than a guessed "online".
+    // Nothing the orchestrator probes runs here (the voice is on Jupiter, vision
+    // on the Helios brain), so status is "unknown" rather than a guessed "online".
     serviceKeys: [],
   },
   {

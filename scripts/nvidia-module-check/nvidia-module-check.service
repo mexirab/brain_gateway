@@ -1,0 +1,31 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/nvidia-module-check.service
+# Install steps: docstring of scripts/check_nvidia_modules.py.
+#
+# Read-only check, hourly via nvidia-module-check.timer and 2 min after boot: does the running
+# kernel, and the newest installed kernel (what the next boot picks), have an NVIDIA module? Writes
+# jess_nvidia_modules.prom for the NvidiaModuleMissing / NvidiaModuleCheckStale alerts. Exit 1 = a
+# module is missing (the unit shows failed); fix with `sudo apt full-upgrade` before rebooting.
+[Unit]
+Description=Check that the running and the next-boot kernel have an NVIDIA module
+
+[Service]
+Type=oneshot
+User=labadmin
+ExecStart=/usr/bin/python3 -I -u /usr/local/sbin/check-nvidia-modules --metrics-dir /home/labadmin/node_exporter/textfile_collector
+TimeoutStartSec=2min
+# Reads /boot and /lib/modules, writes one file in the textfile directory, nothing else.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/labadmin/node_exporter/textfile_collector
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+# No ProtectKernelModules: it hides /lib/modules, which this check reads. As labadmin without
+# capabilities it can't load modules anyway.
+CapabilityBoundingSet=
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+# labadmin is in the docker group; this check has no business with the socket.
+InaccessiblePaths=-/run/docker.sock
+IPAddressDeny=any

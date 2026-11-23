@@ -12,11 +12,11 @@
 #
 #   Jupiter: ${NODE_JUPITER_IP} (Always-on hub: orchestrator, frontend, Home Assistant,
 #                                 monitoring stack — prometheus/grafana/loki/alertmanager,
-#                                 Pi-hole primary, conjure API, netdata)
+#                                 Pi-hole primary, conjure API, netdata; 2x RTX 5080: the live
+#                                 TTS on one, experiments on the other)
 #   Helios:  ${NODE_HELIOS_IP}  (GPU model layer: primary LLM split across RTX 5090 + RTX PRO
-#                                 5000, live TTS on the PRO 5000, STT on CPU — power-tiered)
-#   Saturn:  ${NODE_SATURN_IP}  (Vision model on RTX 3080, expert model on RTX 3090,
-#                                 Pi-hole secondary)
+#                                 5000, STT on CPU — power-tiered)
+#   Saturn:  ${NODE_SATURN_IP}  (backup box: off-box backups, spare RTX 3090)
 #   Uranus:  ${NODE_URANUS_IP}  (ComfyUI/Conjure on 2x RTX 5080)
 
 global:
@@ -48,11 +48,12 @@ scrape_configs:
   # ============================================
   - job_name: 'node-exporter'
     static_configs:
-      # Jupiter (always-on hub: orchestrator, HA, monitoring stack; no GPU)
+      # Jupiter (always-on hub: orchestrator, HA, monitoring stack; 2x RTX 5080, the live TTS on one)
       - targets: ['${NODE_JUPITER_IP}:9100']
         labels:
           node: 'jupiter'
           role: 'monitoring'
+          gpu: '2x-rtx5080'
 
       # Helios (Gateway + primary LLM + TTS/STT)
       - targets: ['${NODE_HELIOS_IP}:9100']
@@ -68,18 +69,25 @@ scrape_configs:
           role: 'comfyui'
           gpu: '2x-rtx5080'
 
-      # Saturn (off-box backup target; vision + Pi-hole retired 2026-09)
+      # Saturn (backup box: off-box backup target, spare RTX 3090; vision + Pi-hole retired 2026-09)
       - targets: ['${NODE_SATURN_IP}:9100']
         labels:
           node: 'saturn'
           role: 'backup'
-          gpu: 'rtx3080+rtx3090'
+          gpu: 'rtx3090'
 
   # ============================================
   # GPU EXPORTERS - NVIDIA Metrics
   # ============================================
   - job_name: 'gpu-exporter'
     static_configs:
+      # Jupiter: nvidia-gpu-exporter.service on the LAN address
+      # (monitoring/gpu-exporter/nvidia-gpu-exporter-jupiter.service).
+      - targets: ['${NODE_JUPITER_IP}:${MONITORING_GPU_EXPORTER_PORT}']
+        labels:
+          node: 'jupiter'
+          gpu: '2x-rtx5080'
+
       - targets: ['${NODE_HELIOS_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'helios'
@@ -93,7 +101,17 @@ scrape_configs:
       - targets: ['${NODE_SATURN_IP}:${MONITORING_GPU_EXPORTER_PORT}']
         labels:
           node: 'saturn'
-          gpu: 'rtx3080+rtx3090'
+          gpu: 'rtx3090'
+    # Jupiter's two RTX 5080s are identical, so the voice card can't be picked by name: label the
+    # one whose UUID is JUPITER_TTS_GPU_UUID (.env, same value as /etc/voxcpm-tts.env) as
+    # gpu_role="tts" for TTSGPUMemoryLow. The exporter's uuid label has no "GPU-" prefix;
+    # generate-configs.sh strips it and renders a never-matching value when the variable is unset,
+    # which TTSGPUUnmonitored reports. Matched with node so another box can't collide.
+    metric_relabel_configs:
+      - source_labels: [node, uuid]
+        regex: 'jupiter;${JUPITER_TTS_GPU_UUID_BARE}'
+        target_label: gpu_role
+        replacement: 'tts'
 
   # ============================================
   # CONJURE API METRICS
@@ -154,11 +172,14 @@ scrape_configs:
       #   - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_TTS_PORT}/health']
       #     labels: {service: 'tts', node: 'helios'}
 
-      # TTS (VoxCPM2 on Helios GPU1, tts/voxcpm-tts.service; /health 503s with no usable voice)
-      - targets: ['http://${NODE_HELIOS_IP}:8004/health']
+      # TTS (VoxCPM2 on one of Jupiter's RTX 5080s, tts/voxcpm-tts-jupiter.service; /health 503s
+      # with no usable voice). Moved off Helios GPU1 so the brain can run 262K context. It binds
+      # Docker's bridge gateway and admits only Docker networks, so the probe uses the same
+      # host-gateway name as the orchestrator (blackbox has extra_hosts for it).
+      - targets: ['http://host.docker.internal:8004/health']
         labels:
           service: 'tts-voxcpm'
-          node: 'helios'
+          node: 'jupiter'
 
       # STT (Parakeet ONNX on Helios CPU, stt-onnx.service)
       - targets: ['http://${NODE_HELIOS_IP}:${SERVICE_STT_PORT}/health']

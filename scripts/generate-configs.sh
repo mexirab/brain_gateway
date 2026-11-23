@@ -72,6 +72,20 @@ export MONITORING_GPU_EXPORTER_PORT="${MONITORING_GPU_EXPORTER_PORT:-9400}"
 # Off-box dead-man's switch (monitoring/deadman/, runs on Saturn).
 export DEADMAN_HOST="${DEADMAN_HOST:-${NODE_SATURN_IP}}"
 export DEADMAN_PORT="${DEADMAN_PORT:-9466}"
+# Jess's voice card on Jupiter (one of two identical RTX 5080s), the same GPU-<uuid> as
+# /etc/voxcpm-tts.env. Prometheus labels that card gpu_role="tts" for TTSGPUMemoryLow. The exporter's
+# uuid label has no "GPU-" prefix. Unset → a value no card has, so nothing gets the label and
+# TTSGPUUnmonitored says so. A malformed value fails the render: it would go into a relabel regex.
+if [[ -n "${JUPITER_TTS_GPU_UUID:-}" ]]; then
+    if [[ ! "$JUPITER_TTS_GPU_UUID" =~ ^GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        echo -e "  ${RED}FAIL${NC}: JUPITER_TTS_GPU_UUID must look like GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (nvidia-smi -L)"
+        exit 1
+    fi
+    export JUPITER_TTS_GPU_UUID_BARE="${JUPITER_TTS_GPU_UUID#GPU-}"
+else
+    echo -e "  ${YELLOW}WARN${NC}: JUPITER_TTS_GPU_UUID is not set — TTSGPUMemoryLow can't find the voice card (TTSGPUUnmonitored fires)"
+    export JUPITER_TTS_GPU_UUID_BARE="unset"
+fi
 
 # Temp templates (BEGIN/END blocks stripped) — removed on any exit.
 TMP_TEMPLATES=()
@@ -109,9 +123,9 @@ fi
 
 echo ""
 echo "Using configuration:"
-echo "  NODE_JUPITER_IP: ${NODE_JUPITER_IP}  (Pi-hole primary, monitoring stack)"
-echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}  (brain gateway, primary LLM, TTS/STT)"
-echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}  (vision, Pi-hole secondary)"
+echo "  NODE_JUPITER_IP: ${NODE_JUPITER_IP}  (hub, monitoring stack, TTS on an RTX 5080)"
+echo "  NODE_HELIOS_IP:  ${NODE_HELIOS_IP}  (primary LLM, STT)"
+echo "  NODE_SATURN_IP:  ${NODE_SATURN_IP}  (off-box backups, dead-man's switch)"
 echo "  NODE_URANUS_IP:  ${NODE_URANUS_IP}  (ComfyUI)"
 echo ""
 
@@ -269,7 +283,7 @@ prom_rc=0
 render_template \
     "$prom_template" \
     "${PROJECT_DIR}/monitoring/prometheus/prometheus.yml" \
-    '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT} ${DEADMAN_HOST} ${DEADMAN_PORT}' \
+    '${NODE_JUPITER_IP} ${NODE_SATURN_IP} ${NODE_URANUS_IP} ${NODE_HELIOS_IP} ${NODE_HA_IP} ${SERVICE_ORCHESTRATOR_PORT} ${SERVICE_TTS_PORT} ${SERVICE_STT_PORT} ${MONITORING_GPU_EXPORTER_PORT} ${DEADMAN_HOST} ${DEADMAN_PORT} ${JUPITER_TTS_GPU_UUID_BARE}' \
     "" \
     prometheus \
     prometheus.yml.template || prom_rc=$?

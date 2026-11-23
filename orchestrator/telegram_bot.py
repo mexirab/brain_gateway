@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from orchestrator.config import settings as _settings
+from orchestrator.model_auth import auth_headers
 from orchestrator.voice_style import current_reply_style
 
 logger = logging.getLogger(__name__)
@@ -480,7 +481,7 @@ async def _relay_locked(client: httpx.AsyncClient, chat_id: str, jess_input: str
 
 
 async def _synthesize_speech(client: httpx.AsyncClient, text: str) -> Optional[bytes]:
-    """Synthesize `text` to MP3 via the OpenAI-compatible TTS endpoint (Helios).
+    """Synthesize `text` to MP3 via the OpenAI-compatible TTS endpoint (TTS_URL).
 
     MP3 (not the server's WAV/OGG-Vorbis) because Telegram's sendVoice accepts
     MP3 and renders it as a proper voice message. Returns None on any failure —
@@ -496,11 +497,9 @@ async def _synthesize_speech(client: httpx.AsyncClient, text: str) -> Optional[b
     if style:
         body["instructions"] = style  # VoxCPM2 style note; Qwen3-TTS ignores it
     try:
-        resp = await client.post(
-            f"{_settings.tts_url.rstrip('/')}/v1/audio/speech",
-            json=body,
-            timeout=60.0,
-        )
+        url = f"{_settings.tts_url.rstrip('/')}/v1/audio/speech"
+        # This client has no ModelServerAuth hook: the TTS key travels explicitly.
+        resp = await client.post(url, json=body, headers=auth_headers(url), timeout=60.0)
         if resp.status_code != 200:
             # log-safe: Telegram API / our own route's error body, not the user's message
             logger.warning("[TELEGRAM] TTS -> %s: %s", resp.status_code, str(resp.text)[:200])

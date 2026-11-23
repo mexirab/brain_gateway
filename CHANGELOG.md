@@ -86,6 +86,80 @@ Branch `feat/satellite-stream-reply`. A long satellite reply waited for its whol
 
 ---
 
+## [Unreleased] — Brain at 262K context; live TTS moves to a Jupiter RTX 5080 (2026-11-21)
+
+PR #172 (draft; branch `claude/optimistic-dewdney-e34379`, which squashes the earlier Saturn version from `claude/upbeat-wescoff-4617d8`), merged at cutover. At its native 262144 context the brain needs ~43 GiB of Helios GPU1, where VoxCPM2 (7.4 GiB fresh, ~9.7 GiB after ordinary texts) no longer fits, so the voice moves to one of two RTX 5080s installed in Jupiter (the always-on hub) on 2026-11-21. The first target, Saturn's RTX 3090, failed only the speed bar (1.75–2.1× Helios, GPU-bound); Saturn stays the backup box. Runbook (install, compare, cutover, rollback): `docs/VOICE_AND_TTS.md` → VoxCPM2 on Jupiter.
+
+### Upgrade / cutover action (owner, in order)
+
+- Done 2026-11-21 on Jupiter: TTS install (steps 0–7 in the header of `tts/voxcpm-tts-jupiter.service`), the GPU exporter (`monitoring/gpu-exporter/nvidia-gpu-exporter-jupiter.service`), the NVIDIA module check (docstring of `scripts/check_nvidia_modules.py`), the Helios-vs-Jupiter comparison (runbook step 2).
+- Still open: "Above 4G Decoding" in Jupiter's BIOS (without it the second 5080's BAR1 doesn't fit and `nvidia-smi` lists one card); the speed decision (borderline, see TTS server below) after a listening test in dashboard call mode; Helios healthy again after the GPU1 drop (Known limits).
+- **Before the merge**, Jupiter `.env`: `JUPITER_TTS_GPU_UUID=GPU-<voice card uuid>` (the value in `/etc/voxcpm-tts.env`; else `TTSGPUUnmonitored` fires after the deploy) and `TTS_API_KEY=<value of /etc/voxcpm-tts/api-key>` (else every synthesis 401s once `TTS_URL` points at Jupiter). The key goes only to `TTS_URL`'s origin, so adding it while `TTS_URL` still points at Helios is harmless.
+- Merge. CI deploys the probe move to `host.docker.internal`, blackbox's host-gateway entry, the alerts and Prometheus relabel, the dashboard change, and the orchestrator (TTS key, satellite wake fix).
+- Jupiter: `cp .env .env.bak-tts-helios`, set `TTS_URL=http://host.docker.internal:8004`, `docker compose up -d --force-recreate orchestrator`, confirm `[TTS] Backend` in the logs.
+- Helios: `systemctl disable --now voxcpm-tts`, install the new `llama-server-primary.service` + `voxcpm-tts.service`, restart the brain (the 64K unit is kept as `llama-server-primary.service.64k.bak`).
+- Verify: a full-size vision photo at 262K (GPU0 keeps ≥ 1 GiB free), a spoken reply, an announcement, a satellite turn, `probe_success{service="tts-voxcpm"}` = 1, no `BrainFailedToStart|TTSDown|TTSSynthesisFailing|TTSGPUUnmonitored`; a week later, the voice card's 7-day memory peak.
+
+### Brain (Helios, `tts/llama-server-primary.service`)
+
+- `-c 65536 -ts 44,56` → `-c 262144 -ts 40,60 -ub 384`; `After=voxcpm-tts.service` dropped. Measured 2026-11-11 with the TTS off GPU1: GPU0 29.1 GiB at load / 29.5 GiB after a 200K-token prompt (2.3 GiB free), GPU1 42.9 / 43.7 GiB (4.1 GiB free); planted fact found at 100K and 200K; short-prompt decode unchanged and no longer slowed by speech; prefill 1436 tok/s at 200K (−16 % vs ubatch 512). The unit header is authoritative and carries the ~3 min 64K rollback (TTS back on Helios GPU1).
+- Known limits: decode 88 tok/s at 100K, 57 at 200K; a cold 200K-token prompt prefills in ~140 s, past the unified loop's 120 s per-round timeout; client chat history has no size cap (follow-up: a budget in `cloud_brain._sanitize_client_history`).
+
+### TTS server (Jupiter)
+
+- New `tts/voxcpm-tts-jupiter.service` + `tts/voxcpm-tts-jupiter.socket` (installed as `voxcpm-tts.service` / `.socket`). Socket activation on `172.17.0.1:8004` (Docker's bridge gateway, `FreeBind`), socket `IPAddressAllow=172.16.0.0/12 192.168.0.0/16` (Docker's pools; no loopback, LAN or tailnet); the service runs `IPAddressDeny=any`, so the server can't open connections of its own. Containers call it as `http://host.docker.internal:8004`; a host-side curl times out. Nologin `voxcpm` user, card by UUID in `/etc/voxcpm-tts.env` (`CUDA_DEVICE_ORDER=PCI_BUS_ID`; voice on the higher PCI bus so `cuda:0` is the experiment card), `ProtectHome=tmpfs`, `/mnt` `/media` `/srv` `/opt` inaccessible, compile cache in `/var/cache/voxcpm`.
+- `tts/voxcpm_server.py`: bearer key from `VOXCPM_API_KEY_FILE` (every path but `/health`, constant-time compare; a missing, unreadable or short file fails the start); `VOXCPM_MAX_BODY_BYTES` (65536 → 413 before the body is read, declared or chunked); `VOXCPM_MAX_CONNECTIONS` (32, uvicorn `limit_concurrency`); 64-char name fields; bracket stripping by Unicode category (Ps/Pe, after NFKC); no `/docs` / `/openapi.json`; `/health` shows the model's base name only; synthesis errors log the type only; socket activation (fd 3 via `LISTEN_FDS`).
+- New `tts/requirements-voxcpm.txt` pins the Helios venv's package set; new `scripts/tts_compare.py` (stdlib, runs in a throwaway container from the orchestrator image) does the runbook's short / long / listen comparison. `scripts/saturn_gpu_lock.py` (the expert era's "exclusive 3090" lock, unused) is deleted.
+- Measured 2026-11-21 on one 5080: short sentences 1.3–1.7× Helios (pooled 1.36–1.68×, +0.3–0.5 s per sentence; card 97 % busy) — **borderline** against the 1.5× / 2 s bar, so the owner decides after a listening test, or keeps the voice on Helios at 64K; ~2000-char text in ~36 s (pass, < 45 s); memory 7.4 GiB fresh, 13.1 GiB peak (pass, ≤ 14 GiB).
+- Helios `tts/voxcpm-tts.service` stays installed but disabled as rollback; its `ExecStartPre` refuses to start while the 262K brain unit is installed.
+- STT stays on Helios's CPU. The voice depends on Helios **and** Jupiter (always on). Announcements that failed while Helios slept now speak (377 in the 30 days before the move); quiet hours and DND still apply. The voice process holds ~4 GiB of RAM and one CPU thread on the box that runs all of production.
+
+### Orchestrator
+
+- New env var `TTS_API_KEY` (`config.py`, `shared.TTS_API_KEY`). `model_auth.py` adds it only to requests for `TTS_URL`'s origin (or the `local_http` TTS backend's URL), never to the model server or other hosts; `auth_headers(url)` gives clients without the auth hook the same header (the Telegram bot's `_synthesize_speech`). A keyed 401/403 logs `[TTS_AUTH]` (rate-limited, 5 min); synthesis then fails, which `TTSSynthesisFailing` reports.
+- `voice_satellite.Satellite._on_brain_host`: a service counts as another box than the brain when exactly one of the two URLs names the orchestrator's own host (`host.docker.internal`, `localhost`, a loopback IP), or both are differing IP literals; other hostnames still count as the brain's host. Only brain-host services prove Helios is on (the Jupiter TTS answering used to skip the wake). Helios not powered + an off-box service down → `service_down` at once, no wake.
+- Comment/prompt text: `routes_vision.py` (unreachable TTS = `voxcpm-tts` on Jupiter stopped), `self_investigator.py` system prompt (TTS = systemd unit on Jupiter, journal not in Loki; Saturn = backup box).
+
+### Dashboard
+
+- `frontend/src/lib/constants.ts`: Jupiter = `2x RTX 5080` with `serviceKeys: ['ha', 'tts']` (online while either is healthy; a stopped voice shows on the diagram's TTS node, not as the whole hub offline). Helios drops `tts` (an always-on box answering must not make a sleeping Helios look online); node text says Flash-Next on both GPUs. Saturn = backup box, `RTX 3090`, no service keys (status `unknown`).
+- `SystemDiagram.tsx`: "Voice clone · Jupiter", brain node "Qwen3.8-Flash-Next"; the amber "asleep" dot set comes from the wake-on-demand nodes in `CLUSTER_NODES`, so a down TTS dot is red. Chat: a TTS 503 reads "Jess's voice is offline" (was "asleep"; the `asleep` status name is unchanged). Rollback step 3 in `tts/llama-server-primary.service` moves `'tts'` back to Helios. Tests: `constants.test.ts`, `node-status.test.ts`, `SystemDiagram.test.tsx`.
+
+### Monitoring
+
+- Blackbox probe `tts-voxcpm` → `http://host.docker.internal:8004/health`, `node: jupiter` (blackbox gets `extra_hosts: host.docker.internal:host-gateway`). `TTSDown` = `probe_success{service=~"tts|tts-voxcpm"} == 0 and on(node) up{job="node-exporter"} == 1`.
+- New `gpu-exporter` target `${NODE_JUPITER_IP}:9400` (nvidia_gpu_exporter v1.4.1, LAN address, scrape allowed from Jupiter + Docker pools only: the metrics carry GPU UUIDs and serials) + a `metric_relabel_configs` rule that labels the card whose UUID is `JUPITER_TTS_GPU_UUID` `gpu_role="tts"` (new env var; `generate-configs.sh` validates it, strips `GPU-`, renders a never-matching value when unset).
+- New `scripts/check_nvidia_modules.py` + `scripts/nvidia-module-check/` (hourly timer, host-installed): textfile metrics `jess_nvidia_module_present{kernel,boot="running|next"}` and `jess_nvidia_module_check_timestamp_seconds` in `jess_nvidia_modules.prom`.
+- Quiet alerts (`pushover-quiet`): `TTSSynthesisFailing` (≥ 5 synthesis errors in 30 min while the probe is up), `TTSGPUMemoryLow` (> 14.5 GiB used on the `gpu_role="tts"` card, 24h repeat), new `TTSGPUUnmonitored` (no `gpu_role="tts"` series for 30 m, 24h repeat), `JupiterGpuDriverBroken` (replaces `SaturnGpuDriverBroken`, which is gone), new `NvidiaModuleMissing` (for 70 m = two hourly checks, 24h repeat) and `NvidiaModuleCheckStale` (> 3 h or absent on Jupiter). Inhibits: `PrometheusNotIngesting` → `TTSGPUUnmonitored` + `NvidiaModuleCheckStale`; `JupiterGpuDriverBroken` → `TTSGPUUnmonitored`; `NodeDown` → `NvidiaModuleCheckStale` (same node).
+- `HighVRAMUsage` text: Helios GPUs carry the brain only. `BrainFailedToStart` text names `voxcpm-tts`/`qwen-tts` on Helios. Grafana: TTS panel descriptions point at Jupiter; homelab GPU legend shows `gpu_role`. Runbook: `monitoring/README.md` → TTS on Jupiter.
+
+### Security
+
+- The server speaks in a cloned voice and Cast speakers play audio from any LAN host, so whoever can synthesize can make Jess "say" things in the house. Controls: socket on Docker's bridge gateway admitting Docker pools only, bearer key on every path but `/health` (every container on Jupiter can route to it), `IPAddressDeny=any` on the service (an allow-list there would also have let it reach every container's internal ports), body / connection / field caps, no API docs. The key travels as plain HTTP on the Docker bridge.
+- The Wyoming bridge (`wyoming-jessica-tts`, no auth) sends no key, so it gets no audio; it can't become an open relay for the cloned voice. Never "fix" HA Assist by binding the server to the LAN or widening the socket's allow-list.
+- Jupiter experiments must be pinned to the other 5080 by UUID (`CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=GPU-…`; Docker needs nvidia-container-toolkit, not installed) and publish on `127.0.0.1` only. No GPU UUIDs or keys in the repo (`.env.example` placeholders only).
+
+### Tests
+
+- New `orchestrator/tests/test_check_nvidia_modules.py` (33: kernel ordering, files that must not pose as the next kernel, `nvidia.ko` in any compression/subdirectory, exit codes 0/1/2, exact metrics text, atomic 0644 write) and `test_voxcpm_server.py` (56, skip when `tts/` isn't mounted: key guard, 413/400 paths, key loading, bracket stripping over every code point, field caps, docs off, `/health`, text never logged, the `LISTEN_FDS` branch).
+- `test_model_auth.py` (+6 TTS key cases), `test_voice_satellite.py` (+9: `_on_brain_host` with `host.docker.internal` / loopback / IP literals / hostnames / empty URLs, and the wake paths with the TTS on another box), `test_generate_configs.py` (+4: the `JUPITER_TTS_GPU_UUID` relabel render, unset, malformed keeps the live render, the probe's host-gateway name), `test_voice_style.py` (+1: the Telegram synthesis sends the TTS key only when set).
+
+### Docs
+
+- `docs/VOICE_AND_TTS.md` (VoxCPM2 server section, VoxCPM2 on Jupiter runbook with the measurements, D5, Wyoming bridge), `monitoring/README.md` (TTS on Jupiter, GPU exporter, routing lists, probe), `docs/ENV_VARS.md` (`TTS_URL`, `TTS_API_KEY`, `JUPITER_TTS_GPU_UUID`, `VOXCPM_*`), `CLAUDE.md`, `COMMANDS.md`, `tts/README.md`, `TECHNICAL_REFERENCE.md`, `ROADMAP.md`, `docs/DEV.md`, `docs/FRONTEND.md`, `docs/HARDWARE.md`, `docs/JESS_SELF_KNOWLEDGE.md`, `docs/internal/FLASH_NEXT_TRIAL.md`, `docs/internal/HELIOS_INFRASTRUCTURE.md` (GPU layout, flags, context, the 2026-11-21 GPU1 Xid 79 note), `.claude/agents/{prod-support,model-scout,hacker}.md`, `.env.example`.
+
+### Known limits / follow-ups (not in this PR)
+
+- Helios GPU1 (RTX PRO 5000) fell off the PCIe bus (kernel `Xid 79`) at 19:51 UTC 2026-11-21 under a long TTS request during the comparison; owner power-cycling. Cause unknown; `docs/internal/HELIOS_INFRASTRUCTURE.md` → GPU1 dropped off the bus.
+- Jupiter's journal (`voxcpm-tts`, kernel `Xid` lines) is not in Loki or the self-audit: Jupiter's promtail ships container logs only, so there is no Jupiter equivalent of `HeliosHardwareFault`; a GPU fault there shows only through `JupiterGpuDriverBroken` / `TTSDown` / `TTSSynthesisFailing`.
+- The Wyoming bridge compose service has no profile and publishes `:10301` on all interfaces: a bare `docker compose up -d` on Jupiter starts it there. The TTS key keeps it from relaying the voice; gating it behind a profile is a follow-up.
+- The off-box dead-man's switch is still not installed (Saturn down since 2026-11-13).
+- Uranus still shows 2× RTX 5080 (dashboard `constants.ts`, Prometheus template comments, `CLAUDE.md`); those are probably the cards now in Jupiter — to confirm with the owner.
+- `tts/requirements-voxcpm.txt` pins versions, not hashes: `--require-hashes` for the venv install is a follow-up.
+- A co-tenant under ~7 GiB beside a fresh voice stays below `TTSGPUMemoryLow` and only shows as slower speech.
+
+---
+
 ## [Unreleased] — Voice satellite: VAD rebuilt for the real room + firmware lock-up fix (2026-11-11)
 
 Branch `fix/satellite-vad`, follow-up to PR #169 after the first live tests. Every question ran to the 15 s max-utterance cap (answers ~15 s late) or was missed as no-speech, while Grafana looked healthy (a capped run still counts as an `ok` turn). Measured on the device (per 50 ms frame, RMS 0..1): the room in silence 0.025–0.09 (median 0.042), a spoken question 0.19–0.24. The original VAD, a port of the dashboard's browser-mic VAD, capped its learned noise floor at 0.015, so its end-of-speech bar (0.027) sat below the room itself. Detail: `docs/VOICE_AND_TTS.md` → Voice satellite → Listening (VAD), D13, Firmware rules.

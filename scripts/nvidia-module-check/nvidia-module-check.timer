@@ -1,0 +1,12 @@
+# Repo copy of the Jupiter unit. Install path: /etc/systemd/system/nvidia-module-check.timer
+# Install steps: docstring of scripts/check_nvidia_modules.py.
+# Hourly: unattended-upgrades installs kernels around 06:00, and a reboot is rarely within the hour.
+[Unit]
+Description=Hourly check for NVIDIA kernel modules (running + next-boot kernel)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target

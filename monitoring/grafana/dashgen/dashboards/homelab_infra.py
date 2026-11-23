@@ -72,7 +72,7 @@ def build() -> dict:
             [
                 (
                     "nvidia_smi_temperature_gpu * on (uuid) group_left(name) nvidia_smi_gpu_info",
-                    "{{node}} {{name}}",
+                    "{{node}} {{name}} {{gpu_role}}",
                 )
             ],
             unit="celsius",
@@ -83,7 +83,7 @@ def build() -> dict:
             [
                 (
                     "nvidia_smi_utilization_gpu_ratio * on (uuid) group_left(name) nvidia_smi_gpu_info",
-                    "{{node}} {{name}}",
+                    "{{node}} {{name}} {{gpu_role}}",
                 )
             ],
             unit="percentunit",  # ratio is 0-1, percentunit handles the *100 + % suffix

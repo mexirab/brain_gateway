@@ -48,6 +48,7 @@ FALLBACK_MODEL_BACKEND = settings.fallback_model_backend
 FALLBACK_MODEL_URL = settings.fallback_model_url
 FALLBACK_MODEL_NAME = settings.fallback_model_name
 FALLBACK_MODEL_API_KEY = settings.fallback_model_api_key
+TTS_API_KEY = settings.tts_api_key
 EMBEDDING_MODEL_NAME = settings.embedding_model
 
 # ---------------------------------------------------------------------------

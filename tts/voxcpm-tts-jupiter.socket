@@ -1,0 +1,26 @@
+# Listening socket for the VoxCPM2 TTS on Jupiter (pairs with tts/voxcpm-tts-jupiter.service).
+# Install path: /etc/systemd/system/voxcpm-tts.socket (install steps: header of the service unit).
+#
+# Why a socket unit: systemd's IP filter works both ways, so an allow-list on the service would
+# also let the TTS process open connections to every container (Grist, Loki, Redis... on their
+# internal addresses). Here the allow-list is on the socket, which only accepts connections
+# (accepted connections keep this unit's filter), and the service runs with IPAddressDeny=any,
+# so nothing the server process opens itself gets out.
+#
+# 172.17.0.1 = Docker's default-bridge gateway, what host.docker.internal resolves to in
+# containers. FreeBind lets systemd bind it at boot before dockerd has created docker0.
+# NEVER listen on 0.0.0.0 or the LAN/tailnet address, and never add the LAN (10.0.0.0/24) or the
+# tailnet (100.64.0.0/10) here: the server speaks in a cloned voice.
+[Unit]
+Description=VoxCPM2 TTS socket (Jupiter, Docker bridge only)
+
+[Socket]
+ListenStream=172.17.0.1:8004
+FreeBind=yes
+Backlog=64
+# Docker's address pools: 172.17-31.x and the 192.168.x pool the compose networks draw from.
+IPAddressDeny=any
+IPAddressAllow=172.16.0.0/12 192.168.0.0/16
+
+[Install]
+WantedBy=sockets.target

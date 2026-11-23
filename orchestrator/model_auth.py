@@ -1,4 +1,4 @@
-"""Bearer key for requests to the local model server.
+"""Bearer keys for requests to the local model server and the TTS server.
 
 llama-server on Helios requires an API key (``--api-key-file``) once
 ``MODEL_API_KEY`` is set: every path except ``/health`` answers 401 without
@@ -23,6 +23,14 @@ like the brain being asleep.
 
 The key travels as plain HTTP on the LAN/tailnet: it stops callers that don't
 have it, not someone who can read that traffic.
+
+The VoxCPM2 TTS server on Jupiter takes its own key (``TTS_API_KEY`` here,
+``VOXCPM_API_KEY_FILE`` there; every path but ``/health`` needs it). The same
+rule applies: the TTS key goes only to ``TTS_URL``'s origin (or the TTS
+backend's configured URL), never to the model server or anywhere else. Clients
+without this auth hook (the Telegram bot's own client) take the header from
+``auth_headers()``. A keyed TTS request answered 401/403 is logged
+(rate-limited); synthesis then fails, which ``TTSSynthesisFailing`` reports.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _REJECT_LOG_INTERVAL_S = 300.0
 _last_reject_log = 0.0
+_last_tts_reject_log = 0.0
 
 
 def _origin(url: httpx.URL | str) -> tuple[str, str, int] | None:
@@ -102,10 +111,44 @@ def key_for_url(url: httpx.URL | str) -> str:
     return ""
 
 
-def _note_rejected(status: int) -> None:
-    global _last_reject_log
-    MODEL_AUTH_REJECTED.labels(status=str(status)).inc()
+def _tts_urls() -> list[str]:
+    urls = [shared.settings.tts_url]
+    cfg = getattr(getattr(shared, "tts_backend", None), "config", None)
+    if cfg is not None and getattr(cfg, "backend", "") == "local_http":
+        urls.append(getattr(cfg, "url", "") or "")
+    return [u for u in urls if u]
+
+
+def tts_key_for_url(url: httpx.URL | str) -> str:
+    """TTS_API_KEY for ``url``'s origin when that is the configured TTS server, else ""."""
+    key = shared.TTS_API_KEY
+    if not key:
+        return ""
+    origin = _origin(url)
+    if origin is None:
+        return ""
+    return key if any(_origin(u) == origin for u in _tts_urls()) else ""
+
+
+def auth_headers(url: httpx.URL | str) -> dict[str, str]:
+    """The Authorization header ModelServerAuth would add for ``url`` (for clients without it)."""
+    key = key_for_url(url) or tts_key_for_url(url)
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
+def _note_rejected(status: int, *, tts: bool = False) -> None:
+    global _last_reject_log, _last_tts_reject_log
     now = time.monotonic()
+    if tts:
+        if now - _last_tts_reject_log >= _REJECT_LOG_INTERVAL_S:
+            _last_tts_reject_log = now
+            logger.warning(
+                "[TTS_AUTH] TTS server rejected TTS_API_KEY (HTTP %d): the key in .env and "
+                "the server's VOXCPM_API_KEY_FILE disagree; synthesis fails until they match",
+                status,
+            )
+        return
+    MODEL_AUTH_REJECTED.labels(status=str(status)).inc()
     if now - _last_reject_log >= _REJECT_LOG_INTERVAL_S:
         _last_reject_log = now
         logger.warning(
@@ -116,13 +159,17 @@ def _note_rejected(status: int) -> None:
 
 
 class ModelServerAuth(httpx.Auth):
-    """httpx auth that adds the model server's bearer key, and nothing else."""
+    """httpx auth that adds the model server's or the TTS server's bearer key, and nothing else."""
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
         if "authorization" in request.headers or "x-api-key" in request.headers:
             yield request
             return
         key = key_for_url(request.url)
+        tts = False
+        if not key:
+            key = tts_key_for_url(request.url)
+            tts = bool(key)
         if not key:
             # A client-level auth stops httpx from turning URL userinfo
             # (http://user:pass@host) into Basic auth itself; keep that working.
@@ -136,7 +183,7 @@ class ModelServerAuth(httpx.Auth):
         # The flow sees the final response after any redirects: only a 401/403
         # from the model server itself means the key was refused.
         if response.status_code in (401, 403) and _origin(response.request.url) == _origin(request.url):
-            _note_rejected(response.status_code)
+            _note_rejected(response.status_code, tts=tts)
 
 
 MODEL_SERVER_AUTH = ModelServerAuth()

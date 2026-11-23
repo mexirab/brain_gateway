@@ -29,7 +29,19 @@ inhibit_rules:
   - source_matchers:
       - alertname="PrometheusNotIngesting"
     target_matchers:
-      - alertname="ClosetTemperatureSensorMissing"
+      - alertname=~"ClosetTemperatureSensorMissing|TTSGPUUnmonitored|NvidiaModuleCheckStale"
+  # A broken NVIDIA driver on Jupiter explains the voice card vanishing from the
+  # exporter (TTSGPUUnmonitored); one notice, not two.
+  - source_matchers:
+      - alertname="JupiterGpuDriverBroken"
+    target_matchers:
+      - alertname="TTSGPUUnmonitored"
+  # A node that is down can't run its module check.
+  - source_matchers:
+      - alertname="NodeDown"
+    target_matchers:
+      - alertname="NvidiaModuleCheckStale"
+    equal: ["node"]
   # The TTS server down explains replies cut short by failed sentences.
   - source_matchers:
       - alertname="TTSDown"
@@ -106,29 +118,37 @@ route:
     # redundancy is down) is informational, so it surfaces here rather than
     # paging.
     - matchers:
-        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|VoiceReplyCutShort|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|StaleMountContainers|StaleMountRestartFailed|StaleMountCheckNotRunning|StaleMountContainersRestarted|DeadmanSwitchBroken|DeployDrift|DeployDriftCheckFailing"
+        - alertname=~"WindDownNudgeStale|JessBackupOffboxFailing|ChatStreamTruncating|EmptyRepliesReachingUsers|ToolCallsSilentlyDropped|BudgetSyncFailing|BudgetHistoryRefreshFailing|RadicaleDown|ActualDown|GristDown|FrontendDown|CalendarSourceFailing|SelfAuditStale|SelfAuditFailing|SelfInvestigatorFailing|HeliosHardwareFault|BrainCudaInitFailed|BrainFailedToStart|BrainOnCPU|HeliosGpuDriverBroken|HeliosLogsSilent|HeliosLogCheckFailing|EmbeddingErrors|AutoLearnFailing|ClosetTemperatureSensorMissing|WebPushFailing|SearXNGDown|UPSExporterDown|UPSReplaceBattery|UPSOverload|HAUnrequestedCallsBlocked|VoiceReplyCutShort|ResearchHelperFailing|ResearchSourceFailing|PaperlessDown|StaleMountContainers|StaleMountRestartFailed|StaleMountCheckNotRunning|StaleMountContainersRestarted|NvidiaModuleCheckStale|DeadmanSwitchBroken|DeployDrift|DeployDriftCheckFailing"
       receiver: "pushover-quiet"
     # Also non-paging. All of these fell through to "null" until the
     # 2026-10-27 routing audit; kept in their own lists so each reason sits
     # next to it:
     #   RuleEvaluationFailing — a Prometheus rule errors at evaluation, so it
     #     can't fire; nothing else says so.
-    #   TTSDown / STTDown — Jess can't speak / hear while Helios is awake
+    #   TTSSynthesisFailing / JupiterGpuDriverBroken — the voice server answers
+    #     /health but can't synthesize, or Jupiter's NVIDIA driver is broken.
+    #   TTSDown / STTDown — Jess can't speak / hear. STT: while Helios is awake
     #     (asleep doesn't count; a hung Helios pages as HeliosPoweredButUnreachable).
+    #     TTS: while Jupiter is up (it runs on one of Jupiter's RTX 5080s).
     #   HighErrorRate — chat turns failing in the brain (asleep doesn't count).
     #   HighToolErrorRate — one tool failing over 20 % of its calls, 2+ times.
     #   HighGPUTemp — a GPU over 85 °C for 5 min.
     - matchers:
-        - alertname=~"RuleEvaluationFailing|TTSDown|STTDown|HighErrorRate|HighToolErrorRate|HighGPUTemp"
+        - alertname=~"RuleEvaluationFailing|TTSDown|STTDown|TTSSynthesisFailing|JupiterGpuDriverBroken|HighErrorRate|HighToolErrorRate|HighGPUTemp"
       receiver: "pushover-quiet"
     # Standing conditions that stay until someone frees space or restarts a
     # process, so once a day instead of every 4h:
     #   DiskSpaceLow — / or a Jupiter USB disk over 90 %. A full /mnt/logging
     #     stops Prometheus + Loki writing, but it fills over days, not minutes.
-    #   HighVRAMUsage — under 1 GiB free on a Helios GPU (on GPU1 that starves
-    #     the live TTS); cached GPU memory isn't given back until a restart.
+    #   HighVRAMUsage — under 1 GiB free on a Helios GPU (the brain can fail a
+    #     vision call or a long prompt); pool memory isn't given back until a restart.
+    #   TTSGPUMemoryLow — over 14.5 GiB used on Jupiter's voice RTX 5080 (an
+    #     unpinned experiment on it starves the TTS); TTSGPUUnmonitored — Prometheus
+    #     can't tell which card that is (JUPITER_TTS_GPU_UUID, exporter down).
+    #   NvidiaModuleMissing — a kernel with no NVIDIA module is installed: stays
+    #     until `sudo apt full-upgrade`, and matters at the next reboot.
     - matchers:
-        - alertname=~"DiskSpaceLow|HighVRAMUsage"
+        - alertname=~"DiskSpaceLow|HighVRAMUsage|TTSGPUMemoryLow|TTSGPUUnmonitored|NvidiaModuleMissing"
       receiver: "pushover-quiet"
       repeat_interval: 24h
     # Brain API-key mismatch (llama-server --api-key-file): quiet, actionable.

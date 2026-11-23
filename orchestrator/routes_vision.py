@@ -336,7 +336,7 @@ async def tts_synthesize(request: Request) -> Response:
 
     Status codes the frontend relies on: 400 bad/empty/unencodable text, 413
     over the caps, 503 TTS unreachable or not configured (shown as "Jess's
-    voice is asleep"), 504 TTS timed out, 502 TTS answered with an error.
+    voice is offline"), 504 TTS timed out, 502 TTS answered with an error.
     Validation is manual (not a Pydantic model) to keep that 400/413 contract.
     """
     try:
@@ -368,7 +368,7 @@ async def tts_synthesize(request: Request) -> Response:
         logger.warning("[TTS] synthesize timed out: %s", type(e).__name__)
         return _tts_error("timeout", "TTS timed out", 504)
     except httpx.RequestError as e:
-        # Connect refused / unreachable: Helios is power-tiered and usually asleep.
+        # Connect refused / unreachable: the TTS server (voxcpm-tts on Jupiter) is stopped.
         logger.warning("[TTS] synthesize unreachable: %s", type(e).__name__)
         return _tts_error("unreachable", "TTS unavailable", 503)
     except Exception:

@@ -515,3 +515,71 @@ def test_failed_strip_keeps_the_live_render_and_cleans_temp_files(project, tmp_p
     assert "'# BEGIN self-investigator' and 1 '# END self-investigator' markers — they must pair up" in r.stdout
     assert out.read_text() == before and out.stat().st_ino == inode
     assert list(tmpdir.iterdir()) == []
+
+
+# -- Jupiter voice card (JUPITER_TTS_GPU_UUID) -----------------------------------
+# Jupiter's two RTX 5080s are identical, so TTSGPUMemoryLow finds the voice card by
+# a gpu_role="tts" label that a metric relabel adds by UUID. The exporter's uuid
+# label has no "GPU-" prefix; the value lands in a regex, so a malformed one must
+# fail the render rather than match the wrong card (or every card).
+
+FAKE_UUID = "GPU-12345678-abcd-ef01-2345-6789abcdef01"  # not a real card
+
+
+def _tts_relabels(rendered: str) -> list[dict]:
+    job = _prom_jobs(rendered)["gpu-exporter"]
+    return [r for r in job.get("metric_relabel_configs", []) if r.get("target_label") == "gpu_role"]
+
+
+def test_tts_gpu_uuid_renders_the_relabel(project):
+    r = _run(project, {"JUPITER_TTS_GPU_UUID": FAKE_UUID})
+    assert r.returncode == 0, r.stdout + r.stderr
+    rendered, _ = _prom(project)
+    (relabel,) = _tts_relabels(rendered)
+    assert relabel["source_labels"] == ["node", "uuid"]
+    assert relabel["regex"] == "jupiter;12345678-abcd-ef01-2345-6789abcdef01"
+    assert relabel["replacement"] == "tts"
+    targets = {sc["labels"]["node"]: sc["targets"] for sc in _prom_jobs(rendered)["gpu-exporter"]["static_configs"]}
+    assert targets["jupiter"] == ["10.0.0.248:9400"]
+    assert "JUPITER_TTS_GPU_UUID is not set" not in r.stdout
+
+
+def test_tts_gpu_uuid_unset_renders_a_value_no_card_has(project):
+    r = _run(project, {})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "JUPITER_TTS_GPU_UUID is not set" in r.stdout
+    rendered, _ = _prom(project)
+    (relabel,) = _tts_relabels(rendered)
+    # Never empty: an empty regex would match series with no uuid label at all.
+    assert relabel["regex"] == "jupiter;unset"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("12345678-abcd-ef01-2345-6789abcdef01", id="no-GPU-prefix"),
+        pytest.param("GPU-12345678-ABCD-EF01-2345-6789ABCDEF01", id="uppercase"),
+        pytest.param("GPU-1234", id="short"),
+        pytest.param("GPU-12345678-abcd-ef01-2345-6789abcdef01|.*", id="regex-injection"),
+        pytest.param("GPU-12345678-abcd-ef01-2345-6789abcdef01 ", id="trailing-space"),
+    ],
+)
+def test_tts_gpu_uuid_malformed_fails_and_keeps_the_live_render(project, value):
+    root, _ = project
+    out = root / "monitoring" / "prometheus" / "prometheus.yml"
+    out.write_text("previous render\n")
+    r = _run(project, {"JUPITER_TTS_GPU_UUID": f"'{value}'"})
+    assert r.returncode != 0
+    assert "JUPITER_TTS_GPU_UUID must look like GPU-" in r.stdout
+    assert out.read_text() == "previous render\n"
+
+
+def test_tts_probe_uses_the_host_gateway_name(project):
+    r = _run(project, {})
+    assert r.returncode == 0, r.stdout + r.stderr
+    rendered, _ = _prom(project)
+    bb = _prom_jobs(rendered)["blackbox-http"]
+    tts = [sc for sc in bb["static_configs"] if sc["labels"].get("service") == "tts-voxcpm"]
+    assert len(tts) == 1
+    assert tts[0]["targets"] == ["http://host.docker.internal:8004/health"]
+    assert tts[0]["labels"]["node"] == "jupiter"
