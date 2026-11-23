@@ -137,8 +137,34 @@ jobs:
     needs: [lint-python, test-python]
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Build orchestrator image
         run: docker build -t brain-orchestrator:test orchestrator/
+      # The coder box image (coder/, docs/CODER.md) is built FROM the
+      # orchestrator image. Only when its inputs changed: it downloads Node and
+      # the embedding model. Smoke checks only; the isolation self-test needs
+      # coder-net and the gate, so it runs in the Jupiter deploy instead.
+      - name: Build coder box image (when it changed)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          inputs=(coder/ orchestrator/Dockerfile orchestrator/requirements.txt orchestrator/embedding_pin.py)
+          if [ -n "${BASE//0/}" ] && git cat-file -e "${BASE}^{commit}" 2>/dev/null \
+              && git diff --quiet "$BASE" HEAD -- "${inputs[@]}"; then
+            echo "coder box inputs unchanged; not building it"
+            exit 0
+          fi
+          docker build -t jess-coder:test \
+            --build-context jess-orchestrator-base=docker-image://brain-orchestrator:test coder/
+          docker run --rm --network none --entrypoint sh jess-coder:test -c '
+            set -e
+            test "$(id -u)" = 61001
+            qwen --version
+            python3 -I -c "import json; s = json.load(open(\"/etc/qwen-code/settings.json\")); assert s[\"memory\"][\"enableManagedAutoMemory\"] is False"
+            test ! -e /app/orchestrator
+            python3 -I /opt/jess-coder/selftest.py --help > /dev/null'
 
   deploy:
     name: Deploy to Jupiter
@@ -513,6 +539,27 @@ jobs:
 
             echo "::group::Reloading + verifying Prometheus, Alertmanager and Blackbox"
             bash scripts/reload-monitoring.sh
+            echo "::endgroup::"
+          fi
+
+          # Coder box (docs/CODER.md), only while the gate is on: rebuild the
+          # build-only image when its inputs changed (or it doesn't exist yet),
+          # then run the isolation self-test from a real box on coder-net on
+          # every deploy. A failing self-test fails the deploy; jess-coder
+          # refuses to open boxes until it passes. Never starts a long-lived
+          # container (COMPOSE_PROFILES stays empty).
+          if grep -qE '^CODER_ENABLED=(true|1|yes|on)$' .env; then
+            if grep -qE "^coder/|^docker-compose\.yml$|^orchestrator/(Dockerfile|requirements\.txt|embedding_pin\.py)$" <<<"$CHANGED" \
+                || ! docker image inspect jess-coder:current >/dev/null 2>&1; then
+              echo "::group::Building the coder box image"
+              docker compose --profile coder build coder
+              echo "::endgroup::"
+            fi
+            echo "::group::Coder box isolation self-test"
+            if ! python3 -I scripts/jess-coder selftest --metrics; then
+              echo "::error::The coder box isolation self-test failed: from a box on coder-net something answered that must not, or the gate misbehaved. jess-coder refuses to open boxes until it passes. Run 'jess-coder selftest' on Jupiter; docs/CODER.md -> Self-test."
+              exit 1
+            fi
             echo "::endgroup::"
           fi
 
