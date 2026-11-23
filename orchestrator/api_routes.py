@@ -41,6 +41,7 @@ from orchestrator.prompt_builder import rag_context
 from orchestrator.reminder_manager import _announce_voice, list_pending_reminders, mark_reminder_completed
 from orchestrator.routes_calendar import router as calendar_router
 from orchestrator.routes_chat import router as chat_router
+from orchestrator.routes_coder import router as coder_router
 from orchestrator.routes_documents import router as documents_router
 from orchestrator.routes_inbox import router as inbox_router
 from orchestrator.routes_meals import router as meals_router
@@ -111,6 +112,7 @@ def _fire_and_forget(coro) -> None:
 # Include domain-specific sub-routers
 router.include_router(calendar_router)
 router.include_router(chat_router)
+router.include_router(coder_router)
 router.include_router(documents_router)
 router.include_router(inbox_router)
 router.include_router(webpush_router)
@@ -1217,14 +1219,15 @@ async def helios_wake():
 async def helios_sleep():
     """Power Helios off (smart-plug turn_off via HA — a hard cut). Bearer-gated.
 
-    Returns 409 when the feature is disabled, 502 on an HA error.
+    Returns 409 when the feature is disabled or a coder session/job is using
+    the brain (coder_gate), 502 on an HA error.
     """
     from orchestrator.helios_power import sleep_helios
 
     result = await sleep_helios()
     if result.get("ok"):
         return JSONResponse(result, status_code=200)
-    status_code = 409 if result.get("skipped") == "disabled" else 502
+    status_code = 409 if result.get("skipped") in ("disabled", "coder_active") else 502
     return JSONResponse(result, status_code=status_code)
 
 

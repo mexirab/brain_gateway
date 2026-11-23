@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from orchestrator import setup_env, shared, welcome
+from orchestrator import brain_slot, setup_env, shared, welcome
 from orchestrator.metrics import (
     ACTIVE_REQUESTS,
     AUTO_LEARN_DEFERRED,
@@ -479,6 +479,7 @@ class CloudBrain:
         """Unified v7 chat flow — single model handles conversation + tools."""
         _t0 = time.time()
         ACTIVE_REQUESTS.inc()
+        brain_slot.note_chat_activity()
         user_text = self._last_user_text(messages)
 
         routing_info = {
@@ -500,6 +501,7 @@ class CloudBrain:
         finally:
             elapsed = time.time() - _t0
             ACTIVE_REQUESTS.dec()
+            brain_slot.note_chat_activity()
             # A real-streamed turn returns before the loop has run; its
             # generator counts it as active and records the request and voice
             # latency when the stream ends.
@@ -1122,6 +1124,7 @@ class CloudBrain:
             # carried over, so a stream that never starts (client gone before
             # the first chunk) can't leave the gauge stuck high.
             ACTIVE_REQUESTS.inc()
+            brain_slot.note_chat_activity()
             try:
                 while True:
                     kind, payload = await queue.get()
@@ -1162,6 +1165,7 @@ class CloudBrain:
                     # turn, tool rounds included.
                     elapsed = time.time() - (started_at if started_at is not None else t0)
                     ACTIVE_REQUESTS.dec()
+                    brain_slot.note_chat_activity()
                     REQUEST_LATENCY.labels(mode="unified").observe(elapsed)
                     if is_voice:
                         VOICE_PIPELINE_LATENCY.labels(path="streamed").observe(elapsed)

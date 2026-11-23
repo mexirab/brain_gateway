@@ -342,13 +342,15 @@ def asleep_message() -> str:
 async def _wait_for_idle_chat() -> None:
     """Interactive chat and the planner share one model slot. Let any chat
     request in flight finish first (bounded) so a planner call never makes the
-    user wait — including the chat turn that asked for the plan."""
+    user wait — including the chat turn that asked for the plan. A coder-gate
+    request in flight counts as busy too (brain_slot)."""
+    from orchestrator.brain_slot import coder_busy
     from orchestrator.research_helper import lookup_active
 
     deadline = time.monotonic() + CHAT_IDLE_WAIT_S
     while time.monotonic() < deadline:
         try:
-            if ACTIVE_REQUESTS._value.get() <= 0 and not lookup_active():
+            if ACTIVE_REQUESTS._value.get() <= 0 and not lookup_active() and not coder_busy():
                 return
         except Exception:
             return

@@ -152,6 +152,14 @@ bash scripts/orchestrator_state_perms.sh --apply    # again: files the old conta
 - A key mounted via `SSH_KEY_PATH` must be readable by `ORCHESTRATOR_UID`.
 - `docker exec brain-orchestrator …` now runs as `jess`; `pip install` goes to the user site.
 
+## `coder-net` network (one-time)
+
+The main compose now creates `gateway_nerves_coder-net` and attaches the orchestrator to it at a fixed address, for the coder gate (default off; `TECHNICAL_REFERENCE.md` → Coder Gate). Before the upgrade:
+
+- Docker Engine 28 or newer (`docker version --format '{{.Server.Version}}'`) — the network uses `gateway_mode_ipv4: isolated`.
+- If `10.213.250.0/24` clashes with a network you use, set `CODER_SUBNET` / `CODER_GATE_ADDRESS` / `CODER_BOX_RANGE` in `.env` first (`docs/ENV_VARS.md` → Coder box gate).
+- After the orchestrator is recreated, `docker logs brain-orchestrator 2>&1 | grep '\[CODER\]'` should read `Gate disabled; coder-net guard active on <address>`.
+
 ---
 
 ## Rolling back

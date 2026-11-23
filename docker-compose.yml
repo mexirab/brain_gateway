@@ -239,9 +239,13 @@ services:
       - PUSHOVER_DEFAULT_PRIORITY=${PUSHOVER_DEFAULT_PRIORITY:-0}
       - PUSHOVER_UPLOAD_TIMEOUT_SECONDS=${PUSHOVER_UPLOAD_TIMEOUT_SECONDS:-10}
     networks:
-      - gateway-net
-      - grist-net
-      - searxng-net
+      gateway-net: {}
+      grist-net: {}
+      searxng-net: {}
+      # Fixed address: the coder gate (orchestrator/coder_gate.py) serves only
+      # requests that arrive on it. The orchestrator reads the same variable.
+      coder-net:
+        ipv4_address: ${CODER_GATE_ADDRESS:-10.213.250.2}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
@@ -649,6 +653,29 @@ networks:
   searxng-net:
     name: gateway_nerves_searxng-net
     driver: bridge
+  # Coder boxes (sandboxed Qwen Code, docs/internal/CODER_PLAN.md) + the
+  # orchestrator, whose coder gate is a box's only way to the brain. Boxes join
+  # with `docker run --network gateway_nerves_coder-net`; the orchestrator is
+  # the only compose member. internal + gateway_mode_ipv4=isolated (Docker
+  # >= 28): no host address on the bridge, so a box reaches nothing else — not
+  # Jupiter's own services (a plain internal network does reach those through
+  # its bridge address), the LAN, Helios or the internet. Measured 2026-11-20,
+  # docs/internal/CODER_SPIKE.md section 1. Subnet outside Docker's default pools.
+  coder-net:
+    name: gateway_nerves_coder-net
+    driver: bridge
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: br-jesscoder
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    # Same .env variables as the orchestrator's coder gate (config.py). Boxes
+    # get addresses from the upper half only, so a box started while the
+    # orchestrator is down can never take the gate address.
+    ipam:
+      config:
+        - subnet: ${CODER_SUBNET:-10.213.250.0/24}
+          ip_range: ${CODER_BOX_RANGE:-10.213.250.128/25}
 
 volumes:
   redis-data:

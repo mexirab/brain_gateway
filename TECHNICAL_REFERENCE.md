@@ -6,9 +6,9 @@ API specs and schemas for implementation.
 
 All orchestrator endpoints live on port 8888. Many endpoints require `Authorization: Bearer $API_TOKEN` when `API_TOKEN` is set in `.env` — if you get a 401, that's why. The check (`orchestrator/bearer_auth.py` `bearer_token_matches`, shared by `BearerAuthMiddleware` and the `/health` detail gate) accepts the scheme in any case (`bearer`/`Bearer`, RFC 7235), compares the token in constant time, and never matches an empty `API_TOKEN`. `/health` reads the token from `settings.api_token` (includes the setup-wizard overlay), same as the middleware.
 
-**Tokenless paths.** `BearerAuthMiddleware.is_public_path` exempts exact `/health` plus exactly ONE segment after each `PUBLIC_PREFIXES` entry (`/api/audio/`, `/api/reminder/ack/`, `/api/reminder/snooze/`). The segment must pass `bearer_auth.is_public_segment`: fullmatch `[A-Za-z0-9._-]+`, not `.`/`..`. Everything else needs the token: nested segments, encoded or double-encoded traversal (uvicorn percent-decodes, so `..%2f` arrives as `../`), backslash, NUL, whitespace/control chars, non-ASCII. The middleware decides on the routed `request.scope["path"]`, not `request.url.path` (rebuilt via urlsplit, which drops a decoded `\t`/`\r`/`\n`); the `WEBHOOK_TOKEN_PATHS` scoped-token check uses the same string. `OPTIONS` is tokenless only as a real CORS preflight (both `Origin` and `Access-Control-Request-Method` headers, the case Starlette's `CORSMiddleware`, inside `BearerAuthMiddleware`, answers itself without running a route); any other `OPTIONS` gets 401 without a token. Constraint on new code: a new reminder-id or audio-filename format, or a nested / `{x:path}` route under a public prefix, must fit this rule or its tokenless callers (speakers, ntfy/Pushover taps) get 401. `reminder_manager._build_callback_url` logs a WARNING when it mints a non-conforming id. `tests/test_auth_public_paths.py` pins the prefix set, fails if a real route serves more than one segment under a public prefix, and fails on any route the middleware never checks (OPTIONS-accepting, websocket, mounted sub-app).
+**Tokenless paths.** `BearerAuthMiddleware.is_public_path` exempts exact `/health` plus exactly ONE segment after each `PUBLIC_PREFIXES` entry (`/api/audio/`, `/api/reminder/ack/`, `/api/reminder/snooze/`). The segment must pass `bearer_auth.is_public_segment`: fullmatch `[A-Za-z0-9._-]+`, not `.`/`..`. Everything else needs the token: nested segments, encoded or double-encoded traversal (uvicorn percent-decodes, so `..%2f` arrives as `../`), backslash, NUL, whitespace/control chars, non-ASCII. The middleware decides on the routed `request.scope["path"]`, not `request.url.path` (rebuilt via urlsplit, which drops a decoded `\t`/`\r`/`\n`); the `WEBHOOK_TOKEN_PATHS` scoped-token check uses the same string. `OPTIONS` is tokenless only as a real CORS preflight (both `Origin` and `Access-Control-Request-Method` headers, the case Starlette's `CORSMiddleware`, inside `BearerAuthMiddleware`, answers itself without running a route); any other `OPTIONS` gets 401 without a token. Constraint on new code: a new reminder-id or audio-filename format, or a nested / `{x:path}` route under a public prefix, must fit this rule or its tokenless callers (speakers, ntfy/Pushover taps) get 401. `reminder_manager._build_callback_url` logs a WARNING when it mints a non-conforming id. `tests/test_auth_public_paths.py` pins the prefix set, fails if a real route serves more than one segment under a public prefix, and fails on any route the middleware never checks (OPTIONS-accepting, websocket, mounted sub-app). The coder-net guard runs first, before all of these exemptions: a request from `coder-net` reaches only the two coder-gate paths (see Coder Gate).
 
-**Body-size + rate limits.** `RequestSizeLimitMiddleware` caps bodies on Content-Length at `MAX_BODY_SIZE` (default 1 MB). POST only: `_PATH_UPLOAD_LIMITS` (16 MB `/api/documents/suggest-name`, 64 KB `/api/self_audit/alert`), else `_LARGE_UPLOAD_PATHS` (`DOCUMENT_MAX_SIZE_MB`, default 100 MB); a length-less POST to `_LENGTH_REQUIRED_PATHS` gets 411. Other methods get 1 MB, or a smaller per-path cap (every upload route is POST-only; `PUT /api/documents/suggest-name` is really `PUT /api/documents/{doc_id}`). `RateLimitMiddleware`: `RATE_LIMIT_MAX` (default 30) requests per `RATE_LIMIT_WINDOW` (default 60 s) per client IP, then 429; exact `/health` + `/metrics` exempt. Both look up `orchestrator._routed_path()` = `scope["path"]` minus ONE trailing `\n` (route regexes end in `$`, which matches before a final newline, so `/api/self_audit/alert%0a` is served by the alert handler and keeps its 411 + 64 KB cap), not `request.url.path` (`/metrics%09` used to read as the exempt `/metrics`). Assumes uvicorn runs without `--root-path`, like the bearer check.
+**Body-size + rate limits.** `RequestSizeLimitMiddleware` caps bodies on Content-Length at `MAX_BODY_SIZE` (default 1 MB). POST only: `_PATH_UPLOAD_LIMITS` (16 MB `/api/documents/suggest-name`, 64 KB `/api/self_audit/alert`, 2 MB `/api/coder/v1/chat/completions`), else `_LARGE_UPLOAD_PATHS` (`DOCUMENT_MAX_SIZE_MB`, default 100 MB); a length-less POST to `_LENGTH_REQUIRED_PATHS` gets 411. Other methods get 1 MB, or a smaller per-path cap (every upload route is POST-only; `PUT /api/documents/suggest-name` is really `PUT /api/documents/{doc_id}`). `RateLimitMiddleware`: `RATE_LIMIT_MAX` (default 30) requests per `RATE_LIMIT_WINDOW` (default 60 s) per client IP, then 429 (coder-net clients: `CODER_RATE_LIMIT_MAX` = 120, fixed in `orchestrator.py`); exact `/health` + `/metrics` exempt. Both look up `orchestrator._routed_path()` = `scope["path"]` minus ONE trailing `\n` (route regexes end in `$`, which matches before a final newline, so `/api/self_audit/alert%0a` is served by the alert handler and keeps its 411 + 64 KB cap), not `request.url.path` (`/metrics%09` used to read as the exempt `/metrics`). Assumes uvicorn runs without `--root-path`, like the bearer check.
 
 ### Core
 
@@ -249,7 +249,7 @@ Both need `SELF_AUDIT_ENABLED` + `JESS_ADVANCED`. Spec: `jess-features/F-014-sel
 
 ### Helios Power (PT-C)
 
-All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, skipped:"disabled", reason}`), 502 on HA error (`{ok:false, error}`). All control runs through Home Assistant `switch.turn_on`/`switch.turn_off` on the Helios smart plug — see `orchestrator/helios_power.py`.
+All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, skipped:"disabled", reason}`) or, for sleep only, while a coder session/job is using the brain (`skipped:"coder_active"`, see Coder Gate → Helios sleep refusal), 502 on HA error (`{ok:false, error}`). All control runs through Home Assistant `switch.turn_on`/`switch.turn_off` on the Helios smart plug — see `orchestrator/helios_power.py`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -257,7 +257,11 @@ All bearer-gated. Return 409 when `HELIOS_WAKE_ENABLED` is false (`{ok:false, sk
 | POST | `/api/helios/sleep` | Power Helios off (`switch.turn_off` — a hard cut; safe, Helios is stateless). 200 `{ok:true, action:"sleep", entity}`. |
 | GET | `/api/helios/power` | Read plug switch state + power draw, infer running/asleep. 200 `{ok:true, switch:"on\|off\|unknown", watts:float\|null, inferred:"running\|asleep\|unknown", entity}`. Only switch `off` infers `asleep`; any switch state other than `on`/`off`, or unreadable watts while `on`, infers `unknown`. |
 
-Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bgw_helios_sleep_total{result}` (`ok\|disabled\|error`), `bgw_helios_status_total{result}` (`ok\|disabled\|error`), `bgw_helios_plug_watts` gauge (NaN = plug/sensor unreadable or not yet polled), `bgw_helios_running` gauge. The `helios_status_poll` scheduler job (60s, when `HELIOS_WAKE_ENABLED` or `HELIOS_PLUG_MONITOR_ENABLED`) refreshes the gauges. Monitor-only mode (`HELIOS_PLUG_MONITOR_ENABLED=true`, wake off) polls read-only but these routes still return 409 — deliberate. Auto-wake also fires from the brain-asleep chat path (`cloud_brain._maybe_wake_helios`).
+Metrics: `bgw_helios_wake_total{result}` (`ok\|debounced\|disabled\|error`), `bgw_helios_sleep_total{result}` (`ok\|disabled\|error\|refused`), `bgw_helios_status_total{result}` (`ok\|disabled\|error`), `bgw_helios_plug_watts` gauge (NaN = plug/sensor unreadable or not yet polled), `bgw_helios_running` gauge. The `helios_status_poll` scheduler job (60s, when `HELIOS_WAKE_ENABLED` or `HELIOS_PLUG_MONITOR_ENABLED`) refreshes the gauges. Monitor-only mode (`HELIOS_PLUG_MONITOR_ENABLED=true`, wake off) polls read-only but these routes still return 409 — deliberate. Auto-wake also fires from the brain-asleep chat path (`cloud_brain._maybe_wake_helios`).
+
+### Coder Gate (`/api/coder/*`)
+
+Default off (`CODER_ENABLED=false` → all 404). Gate routes `POST /api/coder/v1/chat/completions` + `GET /api/coder/v1/models` (coder token, served only on the coder-net gate address) and session routes `POST/GET /api/coder/sessions`, `DELETE /api/coder/sessions/{id}` (`API_TOKEN`). Shapes, statuses and rules: [Coder Gate](#coder-gate).
 
 ### Workouts
 
@@ -615,6 +619,85 @@ Also refused: empty question, >400 chars, unknown topic (`bad_request`).
 Alerts (quiet `pushover-quiet`): `ResearchHelperFailing` (≥3 failed lookups in 24h, none answered, `for: 30m`), `ResearchSourceFailing` (per `tool`: ≥5 `error|timeout` in 24h, no `ok`, `for: 30m`). Both silent when unused. Grafana row **"Research Helper (look_it_up)"** (`brain_gateway_sre.py`). Tests: `orchestrator/tests/test_research_helper.py`.
 
 **Known limits:** answers can still be wrong in details (codemod command names varied between runs on the same question); the stream shows nothing during a lookup; only the `coding` topic exists.
+
+## Coder Gate
+
+`orchestrator/coder_gate.py` (module docstring = the guarantees), `routes_coder.py`, `brain_slot.py`. The only way a sandboxed Qwen Code box on `coder-net` reaches the brain. Default off (`CODER_ENABLED`; env: `docs/ENV_VARS.md` → Coder box gate). Plan + measurements: `docs/internal/CODER_PLAN.md`, `docs/internal/CODER_SPIKE.md` (PR #174). PR 1 is dormant: no box image and no `scripts/jess-coder` yet (PR 2).
+
+**Network.** `coder-net` (`gateway_nerves_coder-net`, bridge `br-jesscoder`, main compose): `internal: true`, IPv6 off, `gateway_mode_ipv4: isolated` (Docker ≥ 28) — no host address on the bridge, so a box reaches only the orchestrator at `CODER_GATE_ADDRESS`: not Jupiter's host ports, the LAN, Helios or the internet (a plain internal network still reaches host services through its bridge address; CODER_SPIKE §1). Boxes get addresses from `CODER_BOX_RANGE` and join with `docker run --network gateway_nerves_coder-net`; the orchestrator is the only compose member (`tests/test_coder_hardening.py`).
+
+**Reach.** Two checks on the ASGI scope (uvicorn trusts `X-Forwarded-For` only from 127.0.0.1, so a box can fake neither):
+
+| Check | Condition | Effect |
+|-------|-----------|--------|
+| `on_coder_net` | local socket is the gate address **or** TCP peer is in `CODER_SUBNET` | `BearerAuthMiddleware` guard, before every exemption (OPTIONS, `/health`, public prefixes): only the two gate paths pass, anything else → 403 `{"error":"Forbidden"}` (`bgw_coder_guard_blocked_total`). `RateLimitMiddleware` uses `CODER_RATE_LIMIT_MAX` (120/min per client IP) |
+| `arrived_on_gate` | gate address **and** peer in subnet | the gate routes serve only then (else 404); the middleware 404s the gate paths for every request not on coder-net |
+
+Compose/`.env` drift fails closed. `API_TOKEN` opens nothing from coder-net; a coder token is useless from the LAN. The guard is a `BaseHTTPMiddleware`, which websocket connections skip, so the app must have **no websocket routes** (`test_app_has_no_websocket_routes`). `startup_check()` binds a socket to the gate address; if the container doesn't own it, the gate goes off (ERROR log).
+
+**Routes** (all 404 while off):
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/coder/v1/chat/completions` | coder token, gate only | OpenAI-compatible chat, filtered both ways (below). `stream: true` → the finished reply as one `text/event-stream` body (chunks + `data: [DONE]`); otherwise one `chat.completion` |
+| GET | `/api/coder/v1/models` | coder token, gate only | `{object:"list", data:[{id: MODEL_NAME, object:"model", owned_by:"jess"}]}` |
+| POST | `/api/coder/sessions` | `API_TOKEN` | Mint a session token. Body `{label?, hours?}`: extra keys refused, label empty or `^[a-z0-9][a-z0-9-]{0,39}$`, `hours` a finite number > 0, clamped 0.25–`CODER_SESSION_HOURS`. **201** `{ok:true, id, token, kind:"session", label, expires_at}` — the only time the token is returned. 400 `{ok:false, error}` |
+| GET | `/api/coder/sessions` | `API_TOKEN` | `{ok:true, sessions:[{id, kind, label, created_at, expires_at, revoked_at, last_used_at, requests, prompt_tokens, completion_tokens, max_requests, max_tokens}]}` — live sessions, newest first, no hashes |
+| DELETE | `/api/coder/sessions/{id}` | `API_TOKEN` | Revoke. 200 `{ok:true, revoked:id}`; 400 id not 32 hex; 404 no live session with that id |
+
+Session routes are for the host-side `scripts/jess-coder` (PR 2) and are refused from coder-net by the guard. Token kind `job` (`jcj_…`, PR 3 coder jobs) exists in the table; nothing mints it yet.
+
+**Gate errors.** OpenAI shape `{"error": {"message", "type"}}` (Qwen Code reads it), fixed messages only — upstream error text never reaches the box:
+
+| Status | `type` | When |
+|--------|--------|------|
+| 401 | `unauthorized` | token unknown, expired or revoked; or revoked / out of budget while the request waited |
+| 403 | `budget_exhausted` | token used up `max_requests` or `max_tokens` |
+| 429 | `rate_limit_error` | 4 requests already admitted (`Retry-After: 15`); token sent > 32 MB of body this minute (`Retry-After: 30`); chat kept the brain past the wait budget, or > 6 preemptions (`Retry-After: 15`) |
+| 413 | `too_large` | body > 2 MB, counted while reading (chunked bodies too). A Content-Length over 2 MB is refused earlier by `RequestSizeLimitMiddleware` (`{"error": …}` shape) |
+| 400 | `invalid_request_error` | request filter refused it (message names the reason: `bad_json`, `bad_messages`, `bad_role`, `bad_tools`, `too_many_tools`, `schema_too_large`, `schema_bounds`, `schema_keyword`, `bad_params`), or the brain answered 4xx |
+| 400 | `exceed_context_size_error` | llama-server's context-full error, passed with a fixed message so Qwen Code compacts its history |
+| 409 | `superseded` | the same token sent a newer request |
+| 503 | `brain_unavailable` | llama-server unreachable or answering 503 (loading, Helios asleep); `Retry-After: 30`. The gate never wakes Helios |
+| 502 | `upstream_error` | brain 5xx, a stream that broke or stopped without finishing, or an attempt over 240 s |
+| 502 | `internal` | unexpected gate error (logged with exception type + file:line only) |
+
+**Tokens + budgets.** A token is `jcs_` (session) / `jcj_` (job) + 32 random bytes (urlsafe); only its sha256 is stored. Checked at admission and again before every brain attempt. Every admitted request counts toward `max_requests`, refused ones too; prompt + completion tokens are added after each answer. Per token, RAM-only: a body budget of 32 MB/min (JSON parsing runs on Jess's event loop), and after 20 filter refusals the token is revoked (WARNING log; real Qwen Code never trips it).
+
+`coder_tokens` (`brain_state.db`, `state_store.SCHEMA_SQL`):
+
+| Column | Notes |
+|--------|-------|
+| `id` | TEXT PRIMARY KEY, 32 hex (uuid4) |
+| `kind` | `session` \| `job` |
+| `label` | `[a-z0-9-]`, ≤ 40 chars, may be empty |
+| `token_sha256` | TEXT NOT NULL UNIQUE |
+| `created_at` / `expires_at` | ISO 8601 UTC, seconds |
+| `revoked_at` / `last_used_at` | nullable, same format |
+| `requests`, `prompt_tokens`, `completion_tokens` | usage counters, default 0 |
+| `max_requests`, `max_tokens` | budgets (session defaults `CODER_SESSION_MAX_REQUESTS` / `CODER_SESSION_MAX_TOKENS`) |
+
+Rows expired, or revoked, more than 30 days ago are pruned on each mint.
+
+**Admission.** `admit()` runs before the body is read, so a flood can't pile bodies up in RAM: ≤ 4 requests admitted at once (all tokens together), one per token. A token's new request **supersedes** its older one (cancelled → 409): behind this middleware stack Starlette can't see a client hang up, and Qwen Code sends one request at a time per session.
+
+**Request filter** (`sanitize_request`; the upstream body is rebuilt from an allow-list):
+
+- **Keys passed:** `messages`, `tools`, `tool_choice`, `max_tokens` / `max_completion_tokens`, `temperature`, `top_p`, `stop`, `stream`. All others are dropped and counted (`bgw_coder_dropped_keys_total{key}`) — incl. `chat_template_kwargs` (llama-server's default `reasoning_effort` low applies), `grammar`, `json_schema`, `response_format`, `cache_prompt`, `id_slot`, `n_probs`, `logit_bias`, `samplers`, `lora`.
+- **Forced / clamped:** `model` = `MODEL_NAME`; upstream always streams with `include_usage`; `repeat_penalty` 1.0 (MTP acceptance); `max_tokens` 1–`CODER_MAX_TOKENS_PER_REQUEST` (that value when absent); `temperature` 0–1; `top_p` 0.01–1; NaN / Infinity / booleans / huge integers refused; `stop` ≤ 4 strings of 1–64 chars.
+- **Messages:** 1–4000; roles `system|user|assistant|tool`; content a string or text parts — any other part (image, audio, …) becomes a fixed `[non-text content removed by the coder gate …]` note (llama-server fetches image URLs: SSRF from Helios). `name` / `tool_call_id` ≤ 256 chars. `tool_calls` only on assistant turns, ≤ 64 per message, names `[A-Za-z0-9_.-]{1,64}`; arguments re-serialized, and anything that isn't a JSON object ≤ 512 KB and ≤ 32 deep becomes `{}` (llama-server's template engine parses them recursively; 100 KB of brackets segfaults it).
+- **Tools:** ≤ 32, `type: function`, `parameters.type: object`, each ≤ 16 000 chars serialized, all ≤ 64 000. Schema keyword **allow-list**: `type`, `properties`, `required`, `items` (one schema, not a tuple), `enum` (≤ 64 scalars), `description`, `title`, `default` (scalar), `minimum`, `maximum`, `additionalProperties` (boolean only), `minItems`/`maxItems`/`minLength`/`maxLength`/`minProperties`/`maxProperties` (integers 0–1000). Every node needs a `type` from `string|number|integer|boolean|object|array|null`; depth ≤ 24; property names 1–64 chars. So `$ref`, `$defs`, `anyOf`, `oneOf`, `allOf`, `not`, `pattern`, `format` and untyped nodes are refused (`schema_keyword`): llama-server compiles schemas into a grammar whose matcher goes exponential on them and wedges the brain Jess shares. Qwen Code 0.25.3's tools use only `type`/`properties`/`required`/`description`/`minimum`/`maximum`. `tool_choice`: `auto|none|required` or one named function.
+- **Headers:** none forwarded; `model_auth` adds `MODEL_API_KEY` on `shared._http`.
+
+**Response filter** (`strip_chunk`, allow-list, so a new llama-server field can't leak): chunk `id, object, created, model, system_fingerprint, choices, usage`; choice `index, delta, message, finish_reason`; delta `role, content, reasoning_content, tool_calls` (each `index, id, type, function.{name, arguments}`); usage `prompt_tokens, completion_tokens, total_tokens` only. `timings` and `usage.prompt_tokens_details` never pass — cached-token counts would let a box probe Jess's cached prompt (memories, meds) one token at a time. Only a cleanly finished upstream stream (`[DONE]` or a `finish_reason`) counts as a reply.
+
+**Scheduling** (`brain_slot.py`; chat always first on the single `--parallel 1` slot): one coder request at a time. It starts only after chat has been idle `CODER_IDLE_SECONDS` (each wait ≤ `CODER_MAX_WAIT_SECONDS`, ≤ 300 s holding in total), then streams from llama-server into a buffer and sends the box the finished reply in one burst. "Chat busy" = `bgw_active_requests` > 0, a `look_it_up` lookup, or a `brain_slot.interactive_call()` in flight (wraps `vision_handler.analyze_image`'s brain call, e.g. a meal, document or pantry photo). When chat starts mid-attempt the attempt is aborted (connection closed; llama.cpp frees the slot in ~0.2 s and `--cache-ram` restores Jess's prompt cache in ~0.3 s, CODER_SPIKE §3) and re-sent once chat is idle again; > 6 preemptions → 429. Each attempt ≤ 240 s, so the first byte can arrive ~465 s after the request — the box's Qwen Code `streamIdleTimeoutMs` must be larger. `auto_learn._wait_for_idle_chat`, `meal_planner._wait_for_idle_chat` and `self_investigator._slot_busy` treat an in-flight coder request as busy (`brain_slot.coder_busy()`).
+
+**Helios sleep refusal.** While the gate is on, `helios_power.sleep_helios()` (route + `helios_power` tool) refuses when a coder request is admitted or running, or a live coder token was used in the last 15 min (`coder_gate.ACTIVE_WITHIN_S`): `{ok:false, skipped:"coder_active", reason}`, `POST /api/helios/sleep` → 409, `bgw_helios_sleep_total{result="refused"}`. Sleep is a hard power cut. A failed check allows the sleep (WARNING log).
+
+**Logs:** `[CODER] …` — token ids, counts, reasons, exception types; never request or response content. **Metrics** (`bgw_coder_*`): `monitoring/README.md` → Coder Gate.
+
+**Known limits:** total latency still says a little about prompt-cache hits (timing channel, accepted); a websocket route would bypass the guard (test-enforced: none may exist); no Grafana row or alerts until PR 2, which comes before `CODER_ENABLED=true`. Tests: `tests/test_coder_gate.py`, `tests/test_coder_gate_extra.py`, `tests/test_brain_slot.py`, `tests/test_coder_hardening.py` (static compose checks; needs a full checkout). An integration lab (throwaway networks, stub brain, branch orchestrator, a box) passed 39/39 attack probes.
 
 ## Tool Schemas
 
@@ -1051,7 +1134,7 @@ Returns the plan as text (location, program day "Label (n of N)", reasoning incl
 ```json
 {"action": "status"}
 ```
-- `action` (enum, required): `wake | sleep | status`. `wake` = power Helios on (HA `switch.turn_on`, debounced), `sleep` = power off (HA `switch.turn_off`, a hard cut), `status` = report inferred running/asleep from switch state + power draw.
+- `action` (enum, required): `wake | sleep | status`. `wake` = power Helios on (HA `switch.turn_on`, debounced), `sleep` = power off (HA `switch.turn_off`, a hard cut; refused during coder use — the handler tells the user to end the session first), `status` = report inferred running/asleep from switch state + power draw.
 - Only exposed to the LLM when `HELIOS_WAKE_ENABLED=true` (filtered via `HELIOS_TOOL_NAMES` in `get_all_tools()`); the handler stays registered and self-gates. Routes through `orchestrator/helios_power.py` — same dicts as `POST /api/helios/{wake,sleep}` + `GET /api/helios/power`.
 
 ### voice_style
@@ -1210,6 +1293,7 @@ See `.env.example` for full list. Key vars:
 | WIND_DOWN_SHORT_NIGHT_HOURS | Short-night threshold for the gentle morning briefing (default: 6.5) |
 | ACTUAL_* | Actual Budget sync (URL, password, budget file, interval, window, fun-money category) — see `docs/ENV_VARS.md` → Finance |
 | RESEARCH_HELPER_ENABLED, RESEARCH_CONTEXT7_API_KEY | `look_it_up` research helper — see `docs/ENV_VARS.md` → Research helper |
+| CODER_* | Coder box gate (default off; `CODER_SUBNET`/`CODER_GATE_ADDRESS`/`CODER_BOX_RANGE` also read by compose) — see `docs/ENV_VARS.md` → Coder box gate |
 | VOICE_SATELLITE_* | Voice satellite (ATOM Echo → Jess; device list `name@ip=speaker,…` or single-device host IP / node name / room speaker, shared port + API key, Helios wait, progressive TTS) — see `docs/ENV_VARS.md` → Voice satellite |
 | DEPLOY_DRIFT_REPO, DEPLOY_MARKER_PATH, DEPLOY_DRIFT_GITHUB_TOKEN | Deploy drift check (`DeployDrift`; empty repo = off) — see `docs/ENV_VARS.md` → Deploy drift |
 

@@ -477,6 +477,25 @@ CREATE TABLE IF NOT EXISTS barcode_cache (
     payload_json TEXT,
     fetched_at TEXT NOT NULL
 );
+
+-- Coder-gate tokens (orchestrator/coder_gate.py): one per jess-coder session
+-- or coder job. Only the sha256 of the token is stored. Budgets are per token;
+-- expired/revoked rows are pruned 30 days later.
+CREATE TABLE IF NOT EXISTS coder_tokens (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    token_sha256 TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    last_used_at TEXT,
+    requests INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    max_requests INTEGER NOT NULL,
+    max_tokens INTEGER NOT NULL
+);
 """
 
 

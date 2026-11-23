@@ -277,3 +277,25 @@ class ReclassifyTransactionRequest(BaseModel):
 
     id: StrictInt = Field(ge=1, le=2**63 - 1)  # SQLite INTEGER range; larger → 422, not a bind OverflowError
     is_discretionary: StrictBool
+
+
+# ---------------------------------------------------------------------------
+# Coder gate sessions (routes_coder.py)
+# ---------------------------------------------------------------------------
+
+
+class CoderSessionRequest(BaseModel):
+    """POST /api/coder/sessions body (scripts/jess-coder). ``hours`` is clamped to
+    CODER_SESSION_HOURS by the route; NaN/Infinity are refused (allow_inf_nan)."""
+
+    model_config = {"extra": "forbid"}
+
+    label: str = Field(default="", max_length=40, pattern=r"^$|^[a-z0-9][a-z0-9-]{0,39}$")
+    hours: Optional[float] = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
+
+    @field_validator("hours", mode="before")
+    @classmethod
+    def _hours_is_a_number(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError("hours must be a number")
+        return v

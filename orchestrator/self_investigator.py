@@ -568,9 +568,12 @@ async def _slot_busy() -> bool:
             return True
     except Exception:
         pass
+    from orchestrator.brain_slot import coder_busy
     from orchestrator.research_helper import lookup_active
 
     if lookup_active():  # between a lookup's rounds llama-server looks idle
+        return True
+    if coder_busy():  # a coder-gate request (docs/internal/CODER_PLAN.md)
         return True
     client = shared._http
     if client is None:

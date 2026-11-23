@@ -381,11 +381,14 @@ async def extract_facts(messages: List[Dict]) -> List[Dict]:
 async def _wait_for_idle_chat() -> None:
     """Extraction and interactive chat share one model slot (--parallel 1). Let a
     chat request in flight finish first (bounded), so a long conversation's
-    several extraction calls never make the user wait."""
+    several extraction calls never make the user wait. A coder-gate request in
+    flight counts as busy too (brain_slot)."""
+    from orchestrator.brain_slot import coder_busy
+
     deadline = time.monotonic() + _CHAT_IDLE_WAIT_S
     while time.monotonic() < deadline:
         try:
-            if ACTIVE_REQUESTS._value.get() <= 0:
+            if ACTIVE_REQUESTS._value.get() <= 0 and not coder_busy():
                 return
         except Exception:
             return

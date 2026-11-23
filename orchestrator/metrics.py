@@ -813,7 +813,7 @@ HELIOS_WAKE_TOTAL = Counter(
 HELIOS_SLEEP_TOTAL = Counter(
     "bgw_helios_sleep_total",
     "Helios power-cut (plug turn_off) attempts via Home Assistant",
-    # result: ok | disabled | error
+    # result: ok | disabled | error | refused (a coder session/job is using the brain)
     ["result"],
 )
 
@@ -1926,3 +1926,74 @@ RESEARCH_SOURCE_CALLS_TOTAL = Counter(
     "Source-tool calls made by the research helper",
     ["tool", "result"],
 )
+
+# -- Coder box gate (orchestrator/coder_gate.py) ------------------------------
+# One per request to /api/coder/v1/chat/completions. origin: session | job
+# (none = no valid token yet). result: ok | unauthorized | budget | rejected |
+#   busy (admission full, or chat kept the brain past the wait) | superseded
+#   (the token's next request replaced it) | revoked (token died while waiting)
+#   | brain_unavailable | context_too_long | client_error (brain refused, 4xx)
+#   | upstream_error (5xx / broken stream) | internal | too_large | disabled
+CODER_REQUESTS_TOTAL = Counter(
+    "bgw_coder_requests_total",
+    "Coder-gate chat requests, by token kind and outcome",
+    ["origin", "result"],
+)
+for _o in ("session", "job"):
+    for _r in (
+        "ok", "budget", "rejected", "busy", "superseded", "revoked", "brain_unavailable",
+        "context_too_long", "client_error", "upstream_error", "internal", "too_large",
+    ):  # fmt: skip
+        CODER_REQUESTS_TOTAL.labels(origin=_o, result=_r)
+for _r in ("unauthorized", "disabled"):
+    CODER_REQUESTS_TOTAL.labels(origin="none", result=_r)
+# Why the gate refused a request body (bounded set, coder_gate.REJECT_REASONS).
+CODER_REJECTED_TOTAL = Counter(
+    "bgw_coder_rejected_total",
+    "Coder-gate requests refused by the request filter",
+    ["reason"],
+)
+# Request keys the filter dropped instead of passing on (bounded: only names
+# from coder_gate.KNOWN_DROPPED_KEYS, everything else counts as "other").
+CODER_DROPPED_KEYS_TOTAL = Counter(
+    "bgw_coder_dropped_keys_total",
+    "Request keys the coder gate dropped",
+    ["key"],
+)
+CODER_ADMITTED = Gauge(
+    "bgw_coder_requests_admitted",
+    "Coder-gate requests admitted right now (waiting for the brain or running)",
+)
+CODER_WAIT_SECONDS = Histogram(
+    "bgw_coder_wait_seconds",
+    "Time a coder request waited for idle chat and the one-at-a-time lock (429s included)",
+    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 90, 180, 300),
+)
+CODER_UPSTREAM_SECONDS = Histogram(
+    "bgw_coder_upstream_seconds",
+    "Brain time for one coder request (prefill + generation, buffered), preempted attempts excluded",
+    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300),
+)
+CODER_PREEMPTED_TOTAL = Counter(
+    "bgw_coder_preempted_total",
+    "Coder requests aborted mid-flight because a chat turn started (re-sent once chat was idle)",
+)
+CODER_BRAIN_TOKENS_TOTAL = Counter(
+    "bgw_coder_brain_tokens_total",
+    "Brain (LLM) tokens used by coder-gate requests",
+    ["type"],  # prompt | completion
+)
+CODER_BRAIN_TOKENS_TOTAL.labels(type="prompt")
+CODER_BRAIN_TOKENS_TOTAL.labels(type="completion")
+CODER_GUARD_BLOCKED_TOTAL = Counter(
+    "bgw_coder_guard_blocked_total",
+    "Requests from coder-net for a path other than the gate (refused 403)",
+)
+# action: minted | revoked
+CODER_SESSIONS_TOTAL = Counter(
+    "bgw_coder_sessions_total",
+    "jess-coder session tokens minted / revoked",
+    ["action"],
+)
+CODER_SESSIONS_TOTAL.labels(action="minted")
+CODER_SESSIONS_TOTAL.labels(action="revoked")
