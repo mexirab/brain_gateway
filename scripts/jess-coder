@@ -39,13 +39,16 @@ What this script guarantees (the box itself is the boundary; docs/CODER.md):
 from __future__ import annotations
 
 import argparse
+import codecs
 import datetime as dt
 import hashlib
 import ipaddress
 import json
 import os
 import re
+import resource
 import selectors
+import shlex
 import shutil
 import signal
 import subprocess
@@ -160,13 +163,16 @@ REFUSED_PATTERNS = (
     re.compile(r"(^|/)[^/]*\.(config|setup)\.[cm]?[jt]sx?$"),
     re.compile(r"(^|/)\.(eslintrc|prettierrc|babelrc|stylelintrc|swcrc)[^/]*$"),
 )
-SAFE_PATH_RE = re.compile(r"[A-Za-z0-9._@+/-]+")  # anything else: refused unless allowed
+SAFE_PATH_RE = re.compile(r"[A-Za-z0-9._@+/()\[\]-]+")  # anything else: refused unless allowed
+MAX_HEADLESS_OUTPUT = 16 * 1024 * 1024  # what a --task run may print; the rest is dropped
+HOST_GIT_TIMEOUT_S = 120
+HOST_GIT_FILE_LIMIT = 256 * 1024 * 1024  # biggest file a patch check may write (RLIMIT_FSIZE)
 
 _BIDI = {chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200E, 0x200F, 0x061C)}
 # Line/paragraph separators end // comments in JS; Hangul fillers are invisible
 # but valid in identifiers.
-_INVISIBLE = {" ", " ", "ᅟ", "ᅠ", "ㅤ", "ﾠ"}
-_FORMAT_OK = {"‌", "‍"}  # ZWNJ / ZWJ: emoji sequences, Persian
+_INVISIBLE = {"\u2028", "\u2029", "\u115f", "\u1160", "\u3164", "\uffa0"}
+_FORMAT_OK = {"\u200c", "\u200d"}  # ZWNJ / ZWJ: emoji sequences, Persian
 
 
 class Fatal(Exception):
@@ -442,6 +448,8 @@ def selftest_env(cfg: Config) -> Dict[str, str]:
 
 
 def write_selftest_metric(cfg: Config, ok: bool) -> None:
+    if cfg.lab and "JESS_CODER_METRICS_DIR" not in os.environ:
+        return  # a lab run must not set (or clear) the production alert
     if not cfg.metrics_dir.is_dir():
         return
     body = (
@@ -676,6 +684,25 @@ def list_session_names(cfg: Config) -> List[str]:
     return sorted(p.name for p in cfg.sessions.iterdir() if p.is_dir() and NAME_RE.fullmatch(p.name))
 
 
+def relay_headless_output(fd: int) -> None:
+    """Copy a --task box's output to the terminal in bounded chunks, made
+    terminal-safe (no whole-line buffering: a box can print without newlines)."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    shown = 0
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        if shown >= MAX_HEADLESS_OUTPUT:
+            continue  # keep draining so the box doesn't block, show nothing more
+        shown += len(chunk)
+        sys.stdout.write(sanitize_for_terminal(decoder.decode(chunk)))
+        if shown >= MAX_HEADLESS_OUTPUT:
+            sys.stdout.write(f"\n[jess-coder: output over {MAX_HEADLESS_OUTPUT // (1024 * 1024)} MB, not shown]\n")
+        sys.stdout.flush()
+    sys.stdout.write(sanitize_for_terminal(decoder.decode(b"", final=True)))
+
+
 def _ignore_signals() -> None:
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, signal.SIG_IGN)
@@ -772,6 +799,7 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
         proc = subprocess.Popen(
             cmd, env=child_env, stdin=subprocess.PIPE if headless else None,
             stdout=subprocess.PIPE if headless else None,
+            stderr=subprocess.STDOUT if headless else None,
         )  # fmt: skip
         timer = threading.Timer(expires_in + KILL_GRACE_S, kill_cid, args=(cidfile,))
         timer.daemon = True
@@ -782,9 +810,7 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
                 proc.stdin.close()
             except BrokenPipeError:  # the box ended early (e.g. self-test failed)
                 pass
-            for raw in iter(proc.stdout.readline, b""):  # the box's output, made terminal-safe
-                sys.stdout.write(sanitize_for_terminal(raw.decode("utf-8", "replace")))
-                sys.stdout.flush()
+            relay_headless_output(proc.stdout.fileno())
         while True:
             try:
                 code = proc.wait()
@@ -800,14 +826,15 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
         try:
             revoke_session_tokens(cfg, name, token_id)
         except Fatal:
-            say(f"warning: token not revoked (orchestrator unreachable); it expires at {expires or '?'}")
+            if token_id:
+                say(f"warning: token not revoked (orchestrator unreachable); it expires at {expires}")
         flush_terminal_input()
     if code in (0, SELFTEST_FAILED):  # other codes: the box never got that far, or Qwen Code failed
         write_selftest_metric(cfg, code == 0)
     if code == SELFTEST_FAILED:
         say("the isolation self-test FAILED: the box did not open. See the lines above; docs/CODER.md -> Self-test")
         return 1
-    if code == 124:
+    if code in (124, 137) and expires and dt.datetime.now(dt.UTC) >= dt.datetime.fromisoformat(expires):
         say(f"session {name} reached its token's expiry and was closed. Changes: jess-coder patch {name}")
         return 1
     if code != 0:
@@ -956,16 +983,22 @@ def review_changes(
         reason = refused_reason(path)
         if reason and not is_allowed(path, allows):
             verb = "deletes" if status == "D" else "changes"
-            problems.append(f"{shown}: refused, {verb} a protected file ({reason}); --allow {shown} if you mean it")
+            problems.append(
+                f"{shown}: refused, {verb} a protected file ({reason}); --allow {shlex.quote(shown)} if you mean it"
+            )
         if status != "D" and new_mode != "100644" and not is_allowed(path, allows):
             what = {"100755": "executable", "120000": "symlink", "160000": "submodule"}.get(new_mode, new_mode)
-            problems.append(f"{shown}: {what} (refused); --allow {shown} if you mean it")
+            problems.append(f"{shown}: {what} (refused); --allow {shlex.quote(shown)} if you mean it")
         if status not in ("A", "M", "D", "T"):
             problems.append(f"{shown}: unexpected change type {status}")
     return problems
 
 
-def check_box_diff(bundle: Path, base: str, raw: bytes, allows: Sequence[str]):
+def _limit_host_git() -> None:  # preexec_fn: cmd_patch runs no threads
+    resource.setrlimit(resource.RLIMIT_FSIZE, (HOST_GIT_FILE_LIMIT, HOST_GIT_FILE_LIMIT))
+
+
+def check_box_diff(bundle: Path, base: str, raw: bytes, allows: Sequence[str], workdir: Optional[Path] = None):
     """Judge a box's (untrusted) diff by what trusted git makes of it.
 
     The text is applied to a clean clone of ``base`` from our own bundle; the
@@ -974,29 +1007,37 @@ def check_box_diff(bundle: Path, base: str, raw: bytes, allows: Sequence[str]):
     lines or "no newline" tricks the text holds, what you review is exactly
     what will apply. Returns (entries, numstat, diff text, diff bytes, problems).
     """
-    with tempfile.TemporaryDirectory(prefix="jess-coder-check-") as tmp:
+    # The box never emits binary patches (no --binary); one in its output is forged,
+    # and git would expand it (to any declared size) before we could refuse it.
+    if re.search(rb"(?m)^GIT binary patch", raw):
+        raise Fatal("the diff holds a binary patch (the box never makes one): refused")
+    with tempfile.TemporaryDirectory(prefix="jess-coder-check-", dir=workdir) as tmp:
         genv = _clean_git_env(tmp)
         boxfile = Path(tmp) / "from-box.patch"
         boxfile.write_bytes(raw)
         clone = Path(tmp) / "repo"
-        run([*HOST_GIT, "clone", "--quiet", "--no-checkout", str(bundle), str(clone)], cwd=tmp, env=genv)
-        run([*HOST_GIT, "-C", str(clone), "checkout", "--quiet", base], env=genv)
-        applied = subprocess.run(
-            [*HOST_GIT, "-C", str(clone), "apply", "--index", "--whitespace=nowarn", str(boxfile)],
-            env=genv, capture_output=True, text=True, errors="replace",
-        )  # fmt: skip
-        if applied.returncode != 0:
-            raise Fatal("the patch does not apply to its base: " + sanitize_for_terminal(applied.stderr)[:300])
-        diff_args = ["diff", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
+        limits = {"env": genv, "timeout": HOST_GIT_TIMEOUT_S, "preexec_fn": _limit_host_git}
+        try:
+            run([*HOST_GIT, "clone", "--quiet", "--no-checkout", str(bundle), str(clone)], cwd=tmp, **limits)
+            run([*HOST_GIT, "-C", str(clone), "checkout", "--quiet", base], **limits)
+            applied = subprocess.run(
+                [*HOST_GIT, "-C", str(clone), "apply", "--index", "--whitespace=nowarn", str(boxfile)],
+                capture_output=True, text=True, errors="replace", **limits,
+            )  # fmt: skip
+            if applied.returncode != 0:
+                raise Fatal("the patch does not apply to its base: " + sanitize_for_terminal(applied.stderr)[:300])
+            diff_args = ["diff", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
 
-        def git_out(*extra: str) -> bytes:
-            return subprocess.run(
-                [*HOST_GIT, "-C", str(clone), *diff_args, *extra, base], env=genv, capture_output=True, check=True
-            ).stdout
+            def git_out(*extra: str) -> bytes:
+                return subprocess.run(
+                    [*HOST_GIT, "-C", str(clone), *diff_args, *extra, base], capture_output=True, check=True, **limits
+                ).stdout
 
-        raw_entries = git_out("--raw", "-z", "--no-abbrev")
-        numstat = git_out("--numstat", "-z")
-        canonical = git_out("--full-index", "--src-prefix=a/", "--dst-prefix=b/")
+            raw_entries = git_out("--raw", "-z", "--no-abbrev")
+            numstat = git_out("--numstat", "-z")
+            canonical = git_out("--full-index", "--src-prefix=a/", "--dst-prefix=b/")
+        except subprocess.TimeoutExpired:
+            raise Fatal(f"checking the patch took over {HOST_GIT_TIMEOUT_S} s: refused") from None
     try:
         entries = parse_raw(raw_entries)
         text = canonical.decode("utf-8")
@@ -1041,8 +1082,11 @@ def cmd_patch(cfg: Config, args: argparse.Namespace) -> int:
         if not raw.strip():
             say(f"session {name} has no changes against {base[:12]}")
             return 0
-        review = check_box_diff(bundle, base, raw, args.allow)
+        review = check_box_diff(bundle, base, raw, args.allow, workdir=cfg.home)
     entries, stats, text, canonical, problems = review
+    if not entries:
+        say(f"session {name} has no changes against {base[:12]} (the edits cancel out)")
+        return 0
 
     print(f"Session {name}: {len(entries)} file(s) changed against main @ {base[:12]}")
     for added, deleted, path in stats:

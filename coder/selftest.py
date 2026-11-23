@@ -63,8 +63,12 @@ DNS_NAMES = ("example.com", "github.com", "registry.npmjs.org", "pypi.org")
 CONNECT_TIMEOUT_S = 4.0
 DNS_TIMEOUT_S = 15.0
 MAX_HOSTS = 256
-# Connect errors that prove "no route at all" (so no port on that address).
-NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT}
+# Connect errors the kernel gives locally when there is no route at all (so no
+# port on that address). EHOSTUNREACH is NOT one for an off-subnet address: it
+# means a router or host answered with ICMP host-unreachable, so packets left.
+NO_ROUTE = {errno.ENETUNREACH, errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT}
+# An empty address inside the subnet: the ARP lookup fails (EHOSTUNREACH) or times out.
+ABSENT = NO_ROUTE | {errno.EHOSTUNREACH}
 DEFAULT_RW = ("/work", "/tmp", "/home/coder", "/app/data")
 # Kernel/runtime mounts Docker always makes writable for the container.
 RUNTIME_RW_PREFIXES = ("/proc", "/dev", "/sys/fs/cgroup")
@@ -230,9 +234,8 @@ def _tcp_reach(target: Tuple[str, int, int, str]) -> Optional[str]:
     except TimeoutError:
         return None if expect == "absent" else f"{where} timed out (packets left the box)"
     except OSError as exc:
-        if exc.errno in NO_ROUTE:
-            return None
-        if exc.errno == errno.ECONNREFUSED and expect == "closed":
+        ok = {"no_route": NO_ROUTE, "absent": ABSENT, "closed": NO_ROUTE | {errno.ECONNREFUSED}}[expect]
+        if exc.errno in ok:
             return None
         return f"{where} {errno.errorcode.get(exc.errno, exc.errno)}"
     return f"{where} connected"
