@@ -4,6 +4,58 @@ All notable changes to Brain Gateway are documented in this file. The format is 
 
 ---
 
+## [Unreleased] — Coder box: sandboxed Qwen Code on Jupiter (`jess-coder`) (2026-11-23)
+
+Branch `feat/coder-box`, PR 2 of `docs/internal/CODER_PLAN.md` (the PR 1 coder gate is unchanged). An interactive Qwen Code in a disposable, offline container that uses Jess's brain through the coder gate and hands back a checked patch; it never commits, pushes or deploys. Default off. Authoritative doc: `docs/CODER.md`; deviations from the plan: `CODER_PLAN.md` → PR 2 as built.
+
+### Upgrade action
+
+- None for the merge: with `CODER_ENABLED` off the new deploy step does nothing and no box can start.
+- To use it (owner, one time, `docs/CODER.md` → Setup): 20 GB loop filesystem at `/srv/jess-coder` (`nosuid,nodev,nofail`), `CODER_ENABLED=true` in Jupiter `.env` + `docker compose up -d --force-recreate orchestrator`, `python3 scripts/jess-coder build`, `ln -sf ~/gateway_nerves/scripts/jess-coder ~/.local/bin/jess-coder`, then `jess-coder selftest` must PASS. From then on every deploy rebuilds a stale image and re-runs the self-test.
+
+### Box image (`coder/`)
+
+- `Dockerfile`: the orchestrator's dependency lines (shared build cache, none of Jess's code; only `requirements.txt` + `embedding_pin.py` come in through the compose build context `orchestrator`), the pinned embedding model baked in (offline tests), Node 22 sha256-pinned, Qwen Code 0.25.3 from `package-lock.json` (`npm ci --ignore-scripts`), git, pytest/pytest-asyncio/respx, uid 61001 (no host account).
+- `settings.json` (system scope, read-only): gate URL + `CODER_CONTEXT_WINDOW` rendered at build; telemetry, update checks, auto-memory, hooks, MCP off. `system-prompt.md` (lean). `entrypoint.py`: modes `selftest`/`session`/`patch`/`clean`, `EXCLUDE_TOOLS` (incl. interactive-only `propose_goal`, `artifact`, `display_image`).
+- `docker-compose.yml`: build-only service `coder` (profile `coder`, image `jess-coder:current`, label `jess.coder.inputs`); if ever started it runs `true` with no network.
+- New env var `CODER_CONTEXT_WINDOW` (default 131072; compose build arg + the launcher's input hash, not read by `config.py`).
+
+### Launcher (`scripts/jess-coder`, stdlib Python)
+
+- `start`/`patch`/`ls`/`rm`/`selftest`/`build [--if-stale]`/`enabled`. A session: token minted per session (environment only, revoked at the end), git bundle of `main`, coder-net checked (internal, isolated gateway, no IPv6, no foreign members), self-test, then one hardened `docker run --rm` (`box_command()`). At most 2 open sessions. Refuses an unmounted `/srv/jess-coder` or an image whose input label no longer matches. Boxes past their `jess-coder.expires` label, or without a readable one, are killed.
+- `patch`: the diff comes from a second, offline box on a fresh git dir and is re-applied to a clean clone of the base; the file list, modes and the diff you review are what git regenerates there. Refused by default (`--allow` overrides): agent/editor/hook folders at any depth, `scripts/`, `coder/`, `tts/`, `monitoring/`… at the root, instruction files, build/test/tool configs, symlinks, executables, submodules, binary changes, terminal/Trojan-Source characters. Caps 8 MB / 10 min.
+- Lab-only overrides `JESS_GATEWAY_ROOT`, `JESS_CODER_HOME`, `JESS_CODER_ALLOW_UNMOUNTED`, `JESS_CODER_NETWORK`, `JESS_CODER_IMAGE`, `JESS_CODER_GATE_CONTAINER`, `JESS_CODER_METRICS_DIR` (`docs/CODER.md` → Testing against a lab gate).
+
+### Isolation self-test (`coder/selftest.py`)
+
+- Inside a box on coder-net, at every session start and every deploy while enabled: uid, no capabilities, `no_new_privs`, seccomp; read-only root and the four writable mounts; only `lo` + `eth0`, no default route; every Jupiter address, Helios, Saturn, the router, public resolvers and the bridge's IPv6 link-local must answer an immediate "no route" (a refusal or a timeout counts as reach); no DNS; IPv6 off; all other 65534 gate-host ports refused; gate 403 / 401 / 200. Negative controls: on Docker's default bridge it fails 6 checks; with IPv6 forced on, the IPv6 checks.
+
+### CI
+
+- `lint-python` also runs ruff on `coder/` and `scripts/jess-coder`.
+- `docker-build`: builds the coder image plus offline smoke checks when its inputs changed (`fetch-depth: 0` for the diff).
+- `deploy`: new last step "Coder box image + isolation self-test (when enabled)", after the deploy marker; the public log shows only the names of failed checks.
+
+### Monitoring
+
+- Textfile gauges `jess_coder_selftest_ok` + `jess_coder_selftest_last_run_timestamp_seconds` (`jess_coder_selftest.prom`, written by the launcher; not by lab runs).
+- Quiet alerts (`app_server`, `pushover-quiet`): `CoderSelfTestFailing` (last self-test failed, < 7 days old), `CoderGuardBlocked` (> 15 coder-net hits on non-gate paths in 10 min; each self-test makes 3), `CoderUpstreamErrors` (≥ 3 `upstream_error|internal` in 1 h; inhibited by `BrainFailedToStart|BrainCudaInitFailed|BrainOnCPU|HeliosPoweredButUnreachable`).
+- Grafana row "Coder Box (jess-coder)" (two panel rows, before Voice Satellite): gate results, wait/brain time, preemptions/guard blocks/refusals, tokens, self-test, box requests vs brain queue, chat TTFT, self-test age.
+
+### Known limits
+
+- `docs/CODER.md` → Known limits: a hostile box can write escape sequences to your terminal; boxes on coder-net can reach each other (≤ 2 open); IPv6 isolation rests on Docker's default (the self-test catches a change); the workspace persists between runs of one session; a coding burst slows Jess's background jobs (never chat); no internet inside.
+
+### Tests
+
+- New `orchestrator/tests/test_coder_box.py` (~420: static guards, launcher, entrypoint, self-test, the patch check against hostile diffs). Lab run: real `routes_coder` + guard, real brain, a planted one-character bug — fixed, tests inside the box 7 failed → 44 passed, patch applied cleanly, ~21 s.
+
+### Docs
+
+- New `docs/CODER.md`. `CLAUDE.md`, `monitoring/README.md`, `docs/ENV_VARS.md`, `TECHNICAL_REFERENCE.md`, `docs/DEV.md`, `COMMANDS.md`, `docs/internal/CODER_PLAN.md`, `docs/internal/README.md`.
+
+---
+
 ## [Unreleased] — Movement nudges: movement the phone saw counts; the night no longer counts as sitting (2026-11-23)
 
 Branch `feat/movement-from-health`. The movement nudge only knew about movement someone logged, so it nagged after a walk, and the midnight reset parked the sitting clock at ~00:00, so the first nudge of the day said "about 546 minutes". Now Jess can read the HA iPhone app's Apple Health sensors (default off), and the sitting clock starts with the movement hours (everyone). Detail: `jess-features/F-008-selfcare-nudges.md` → Sitting clock / Movement seen by the phone.

@@ -32,15 +32,14 @@ Assume the model inside the box is hostile: prompt-injected by a file it read, o
 | **Host side of the patch.** The host never runs git inside a box's folder. The box's files belong to its uid, so host git refuses them as "dubious ownership" instead of running a planted `.git/config` hook or fsmonitor. `jess-coder patch` gets the diff from a second, **offline**, read-only box, which uses a fresh git dir, so the workspace's own config, filter drivers and attributes never run. The host still treats that text as hostile: it applies it to a clean clone of the base (from its own bundle) and takes the file list, the modes and the diff you review and save from **what git shows there**, never the box's bytes. So odd mode lines, decoy hunk lines, "no newline" joins or forged renames can't make what you read differ from what applies. It then refuses files that would run before you review them (deleting one too), symlinks, executables, submodules, binary changes and terminal/Trojan-Source characters on added lines. The output is capped at 8 MB and 10 min. | `check_box_diff` / `review_changes` | `test_coder_box.py` (incl. the reviewers' hostile patches) |
 
 **Refused by default** (`--allow PATH` overrides one, `--allow dir/` a prefix). These would run on Jupiter, in CI, or in your next Claude Code or Qwen Code session before a human read them:
-- `.github/`, `.claude/`, `.qwen/`, `.vscode/`, `.idea/`, `.devcontainer/`
-- `scripts/`, `coder/`, `tts/`, `monitoring/`, `homeassistant/`, `radicale/`, `actual/`, `grist/`, `models/`
-- other agents' and editors' folders: `.gemini/`, `.codex/`, `.cursor/`, `.continue/`, `.zed/`, `.husky/`, `.githooks/`
+- agent, editor and hook folders **at any depth** (`frontend/.claude/skills/…` too: Claude Code loads a nested `.claude/`): `.github/`, `.claude/`, `.qwen/`, `.gemini/`, `.codex/`, `.cursor/`, `.continue/`, `.zed/`, `.vscode/`, `.idea/`, `.devcontainer/`, `.husky/`, `.githooks/`
+- at the repo root only: `scripts/`, `coder/`, `tts/`, `monitoring/`, `homeassistant/`, `radicale/`, `actual/`, `grist/`, `models/`
 - `CLAUDE*.md` (incl. `CLAUDE.local.md`), `QWEN*.md`, `AGENTS.md`, `.mcp.json`, `.cursorrules` and the like
 - `install.sh`, `Makefile`, `conftest.py`, `pyproject.toml`, `setup.py`, `noxfile.py`, `mypy.ini`, `.pylintrc`, `.coveragerc`
 - any `docker-compose*.yml`, `Dockerfile*`, `requirements*.txt`, `*.service`/`*.socket`/`*.timer`/`*.sh`, `.env*`
 - JS/TS tool configs that run on lint/test/build: `*.config.{js,mjs,cjs,ts}`, `*.setup.ts`, `.eslintrc*`, `.prettierrc*`, `.babelrc*`
 - `package.json`, `package-lock.json`, `.npmrc`, `.yarnrc*`, `.gitattributes`, `.gitmodules`, `.gitignore`, `.lfsconfig`
-- any path with characters outside `A-Z a-z 0-9 . _ @ + / -`
+- any path with characters outside `A-Z a-z 0-9 . _ @ + / - ( ) [ ]` (the brackets are for Next.js route folders like `(private)` and `[id]`)
 
 Matching ignores case (a macOS checkout folds `.Claude/` into `.claude/`).
 
@@ -145,7 +144,7 @@ The change then goes through the normal pipeline: CLAUDE.md's review agents and 
 
 **Sessions start from `main` as deployed** (the live checkout's `main`), not from your feature branch. A session keeps its base commit until you `rm` it.
 
-**The brain asleep?** `jess-coder` checks the brain's `/health` first and wakes Helios (through the orchestrator, when `HELIOS_WAKE_ENABLED`) and waits up to 6 min. A session ends itself at its token's expiry (4 h by default), even if `jess-coder` is gone, and every box carries its deadline as a label: `jess-coder ls`, `start` and `selftest` kill any box past it (so stopping the in-box timer from inside doesn't keep a box alive).
+**The brain asleep?** `jess-coder` checks the brain's `/health` first and wakes Helios (through the orchestrator, when `HELIOS_WAKE_ENABLED`) and waits up to 6 min. A session ends itself at its token's expiry (4 h by default), even if `jess-coder` is gone, and every box carries its deadline as a label: `jess-coder ls`, `start` and `selftest` kill any box past it, or with no readable deadline (so stopping the in-box timer from inside doesn't keep a box alive).
 
 ## Self-test
 
@@ -247,4 +246,4 @@ Qwen Code found it, ran the test file inside the box (7 failed → 44 passed) an
 | `coder/entrypoint.py` | In-box modes: `selftest`, `session`, `patch`, `clean` |
 | `coder/selftest.py` | The isolation self-test |
 | `scripts/jess-coder` | Host launcher (stdlib Python): `box_command()` is the only `docker run`; `check_box_diff()` the patch check |
-| `orchestrator/tests/test_coder_box.py` | Static guards + launcher logic |
+| `orchestrator/tests/test_coder_box.py` | Static guards; launcher, entrypoint and self-test logic; the patch check against hostile diffs |

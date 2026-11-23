@@ -339,6 +339,20 @@ curl -X POST http://10.0.0.195:8002/voices/load \
 
 ---
 
+## Coder box (`jess-coder`; `docs/CODER.md`)
+
+```bash
+# Default off; one-time owner setup first: docs/CODER.md -> Setup
+jess-coder selftest                 # isolation self-test; must end "selftest: PASS"
+jess-coder <name>                   # open/resume a session (Qwen Code, auto-approve inside the box)
+jess-coder patch <name> --show      # checked patch + the whole diff; prints the worktree apply commands
+jess-coder ls                       # sessions, open boxes, live tokens
+cd ~/gateway_nerves && python3 scripts/jess-coder build --if-stale   # rebuild the box image if its inputs changed
+docker ps --filter label=jess-coder=1   # open boxes (CoderGuardBlocked: docker kill <name>)
+```
+
+---
+
 ## HTTPS (Tailscale Serve)
 
 ### Check status

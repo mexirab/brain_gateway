@@ -416,9 +416,9 @@ Sandboxed research helper (`orchestrator/research_helper.py`; behaviour in `TECH
 
 ## Coder box gate
 
-Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_gate.py`; routes + rules: `TECHNICAL_REFERENCE.md` → Coder Gate; plan: `docs/internal/CODER_PLAN.md` (PR #174)). PR 1 is dormant: nothing starts a box yet. `validate_coder_config` (`config.py`) replaces a non-finite number with the default, clamps every number below, and on a bad network layout logs `[CONFIG] …; coder gate disabled, coder-net guard stays on.` and forces `CODER_ENABLED` off (never raises). Read at process start — after changing: `docker compose up -d --force-recreate orchestrator`.
+Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_gate.py`; routes + rules: `TECHNICAL_REFERENCE.md` → Coder Gate; the box itself: `docs/CODER.md`; plan: `docs/internal/CODER_PLAN.md`). Off by default; turning it on is part of the box setup (`docs/CODER.md` → Setup). `validate_coder_config` (`config.py`) replaces a non-finite number with the default, clamps every number below, and on a bad network layout logs `[CONFIG] …; coder gate disabled, coder-net guard stays on.` and forces `CODER_ENABLED` off (never raises). Read at process start — after changing: `docker compose up -d --force-recreate orchestrator`.
 
-`CODER_SUBNET`, `CODER_GATE_ADDRESS` and `CODER_BOX_RANGE` are read by **both** `docker-compose.yml` (`coder-net` IPAM `subnet` / `ip_range`, the orchestrator's `ipv4_address`) and `config.py`, so set them in `.env`, never on one side alone. Docker can't change an existing network's subnet: to move it, stop the orchestrator, `docker network rm gateway_nerves_coder-net`, then `docker compose up -d orchestrator`. `coder-net` uses `gateway_mode_ipv4: isolated`, which needs Docker ≥ 28.
+`CODER_SUBNET`, `CODER_GATE_ADDRESS` and `CODER_BOX_RANGE` are read by `docker-compose.yml` (`coder-net` IPAM `subnet` / `ip_range`, the orchestrator's `ipv4_address`, the box image's `GATE_URL`), `config.py` **and** `scripts/jess-coder` (network checks, self-test), so set them in `.env`, never on one side alone. Docker can't change an existing network's subnet: to move it, stop the orchestrator, `docker network rm gateway_nerves_coder-net`, then `docker compose up -d orchestrator`. `coder-net` uses `gateway_mode_ipv4: isolated`, which needs Docker ≥ 28.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -432,8 +432,11 @@ Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_g
 | `CODER_SESSION_MAX_TOKENS` | `30000000` | Brain tokens (prompt + completion) per session token. Clamped 10 000–10¹². |
 | `CODER_IDLE_SECONDS` | `20` | A coder request starts only after chat has been idle this long. Clamped 0–300. |
 | `CODER_MAX_WAIT_SECONDS` | `90` | Longest wait for that idle window (and, separately, for the one-at-a-time lock) before 429. Clamped 5–240. |
+| `CODER_CONTEXT_WINDOW` | `131072` | Qwen Code's `contextWindowSize` in the box: it compacts its conversation before this many tokens. **Not read by `config.py`:** compose bakes it into the image at build time, and `jess-coder` hashes it into the image's input label, so after a change run `jess-coder build` (or let the next deploy rebuild it). Never above the brain's real `-c` (262144 now; 65536 after a 64K rollback). Why 128K: `docs/CODER.md` → Context window. |
 
 A layout problem (any of the three doesn't parse, or breaks a rule above) turns the gate off; if they don't parse, the guard watches the defaults. Fixed in code, not env: `CODER_RATE_LIMIT_MAX` = 120 requests/min per coder-net client (`orchestrator.py`, replaces `RATE_LIMIT_MAX` for them) and the gate's own limits (`coder_gate.py` constants).
+
+**Launcher-only overrides** (shell environment of `jess-coder`, never `.env`): `JESS_GATEWAY_ROOT`, `JESS_CODER_HOME`, `JESS_CODER_ALLOW_UNMOUNTED`, `JESS_CODER_NETWORK`, `JESS_CODER_IMAGE`, `JESS_CODER_GATE_CONTAINER`, `JESS_CODER_METRICS_DIR` point it at a throwaway lab gate instead of the live one — `docs/CODER.md` → Testing against a lab gate. `JESS_CODER_INPUTS` is set by `jess-coder build` itself (the image label); don't set it.
 
 ## Ntfy Feedback Loop (F-011)
 

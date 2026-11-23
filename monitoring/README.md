@@ -431,7 +431,7 @@ Rollback: comment out `VOICE_SATELLITE_DEVICES`, uncomment the single-device lin
 
 ## Coder Gate
 
-Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_gate.py`, default off `CODER_ENABLED`; behaviour: `TECHNICAL_REFERENCE.md` → Coder Gate). **No Grafana row and no alerts yet** — they come with PR 2, before `CODER_ENABLED=true`. Series exist (most pre-seeded at 0) even while it's off.
+Brain access for the sandboxed Qwen Code boxes (`jess-coder`, `docs/CODER.md`) on `coder-net` (`orchestrator/coder_gate.py`, default off `CODER_ENABLED`; behaviour: `TECHNICAL_REFERENCE.md` → Coder Gate). The `bgw_coder_*` series exist (most pre-seeded at 0) even while it's off; the `jess_coder_selftest_*` ones only after a self-test ran on this box.
 
 | Metric | Labels / meaning |
 |--------|------------------|
@@ -443,10 +443,20 @@ Brain access for sandboxed Qwen Code boxes on `coder-net` (`orchestrator/coder_g
 | `bgw_coder_upstream_seconds` | histogram — brain time per answered request (preempted attempts excluded) |
 | `bgw_coder_preempted_total` | attempts aborted because chat (or a photo) needed the brain; re-sent when idle |
 | `bgw_coder_brain_tokens_total` | `type` = `prompt` \| `completion` |
-| `bgw_coder_guard_blocked_total` | coder-net requests for any non-gate path (403). Any increase = something in a box is probing the API |
+| `bgw_coder_guard_blocked_total` | coder-net requests for any non-gate path (403). Each self-test adds 3 on purpose; anything beyond = something in a box is probing the API |
 | `bgw_coder_sessions_total` | `action` = `minted` \| `revoked` |
+| `jess_coder_selftest_ok` | textfile gauge (`jess_coder_selftest.prom` in `/home/labadmin/node_exporter/textfile_collector`, written by `scripts/jess-coder` at every session start, `jess-coder selftest` and the CI deploy step): 1 = the last box isolation self-test passed, 0 = it failed or the launcher refused coder-net before running it. Not written when the directory is missing, nor by lab runs (`JESS_CODER_IMAGE` / `JESS_CODER_NETWORK` overrides) unless `JESS_CODER_METRICS_DIR` is set |
+| `jess_coder_selftest_last_run_timestamp_seconds` | textfile gauge, same file: when that self-test ran |
 
 Related: `bgw_helios_sleep_total{result="refused"}` = Helios sleep refused during coder use. Logs: `docker logs brain-orchestrator 2>&1 | grep '\[CODER\]'` (token ids, counts, reasons only). `Gate enabled on <addr>` at startup = on; `… is not an address of this container; coder gate OFF` = the orchestrator isn't on `coder-net` at `CODER_GATE_ADDRESS` (compose vs `.env` drift) — the guard still refuses coder-net requests.
+
+**Grafana row "Coder Box (jess-coder)"** (`brain_gateway_sre.py`, before Voice Satellite): Gate Requests by Result (6h, `by (origin, result)`); Wait for Chat / Brain Time p95 (6h); Preempted / Guard Blocked / Refused (1h, refusals `by (reason)`); Brain Tokens for Boxes (1h); Isolation Self-Test (PASS / FAILED). Second row, "does a session slow Jess down?": Box Requests In Flight vs Brain Queue (`bgw_coder_requests_admitted` vs `llamacpp:requests_deferred`); Chat TTFT p95 (15m), which should stay flat while boxes run; Self-Test Age (yellow after 7 days). No data = `CODER_ENABLED` off or no box has run.
+
+| Alert | Source | Fires when | First check |
+|-------|--------|-----------|-------------|
+| `CoderSelfTestFailing` | Prometheus `app_server` | `jess_coder_selftest_ok == 0` and the run is < 7 days old, for 1 m. `pushover-quiet`. `jess-coder` opens no boxes meanwhile | `jess-coder selftest` on Jupiter, read the FAIL lines: `docs/CODER.md` → Self-test (gate off, coder-net recreated without isolation, a foreign container on coder-net, IPv6 on in endpoints) |
+| `CoderGuardBlocked` | Prometheus `app_server` | `sum(increase(bgw_coder_guard_blocked_total[10m])) > 15` (above five self-tests' worth). `pushover-quiet` | `docker ps --filter label=jess-coder=1` (open boxes); close the session or `docker kill <name>`, then read its workspace with `jess-coder patch <name> --show`. `docs/CODER.md` → Threat model |
+| `CoderUpstreamErrors` | Prometheus `app_server` | ≥ 3 gate requests with `result=~"upstream_error\|internal"` in 1 h. `pushover-quiet`; inhibited by `BrainFailedToStart`, `BrainCudaInitFailed`, `BrainOnCPU`, `HeliosPoweredButUnreachable` | `sum by (result) (increase(bgw_coder_requests_total[1h]))` and the `[CODER]` log lines. `upstream_error` = the brain answered with an error (check Jess's chat too); `internal` = a gate bug |
 
 ## Deploy Drift
 
