@@ -298,11 +298,11 @@ def _parse_link_local(raw: str) -> List[str]:
     return out
 
 
-def _run_all(fn: Callable, items: Iterable, timeout: float) -> Tuple[List[str], int]:
+def _run_all(fn: Callable, items: Iterable, timeout: float, workers: int = 64) -> Tuple[List[str], int]:
     """Run ``fn`` over ``items`` in threads. Returns (hits, how many never finished)."""
     items = list(items)
     hits: List[str] = []
-    pool = cf.ThreadPoolExecutor(max_workers=64)
+    pool = cf.ThreadPoolExecutor(max_workers=workers)
     futures = [pool.submit(fn, i) for i in items]
     done, pending = cf.wait(futures, timeout=timeout)
     for f in done:
@@ -347,6 +347,15 @@ def check_reach(res: Results, gate_host: str, gate_port: int) -> None:
     hits, pending = _run_all(_tcp_reach, targets, 60.0)
     res.check(
         f"no TCP reach ({len(targets)} address:port pairs)",
+        not hits and not pending,
+        ", ".join(hits[:10]) or f"{pending} probes did not finish",
+    )
+
+    # Every other port of the gate host must refuse (~4 s for all 65534).
+    gate_ports = [(gate_host, p, socket.AF_INET, "closed") for p in range(1, 65536) if p != gate_port]
+    hits, pending = _run_all(_tcp_reach, gate_ports, 60.0, workers=128)
+    res.check(
+        f"gate host: only port {gate_port} open",
         not hits and not pending,
         ", ".join(hits[:10]) or f"{pending} probes did not finish",
     )

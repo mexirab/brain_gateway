@@ -49,7 +49,7 @@ Matching ignores case (a macOS checkout folds `.Claude/` into `.claude/`).
 - Run its tests **offline**, in a box-like container, never on the default bridge (which reaches the LAN, the internet and host services):
 
   ```bash
-  docker run --rm --network none --read-only --cap-drop ALL --user 61001:61001 --tmpfs /tmp --tmpfs /home/coder:uid=61001,gid=61001 --tmpfs /app/data:uid=61001,gid=61001 -v "$PWD":/w:ro -w /w --entrypoint python3 jess-coder:current -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --memory 8g --pids-limit 1024 --user 61001:61001 --tmpfs /tmp --tmpfs /home/coder:uid=61001,gid=61001 --tmpfs /app/data:uid=61001,gid=61001 -v "$PWD":/w:ro -w /w --entrypoint python3 jess-coder:current -m pytest -o asyncio_mode=auto -p no:cacheprovider orchestrator/tests -q
   ```
 
 - Frontend changes: `frontend/` configs are refused, but the repo's Claude Code lint hook runs `eslint` in a worktree that has `node_modules`. Read the patch first.
@@ -145,7 +145,7 @@ The change then goes through the normal pipeline: CLAUDE.md's review agents and 
 
 **Sessions start from `main` as deployed** (the live checkout's `main`), not from your feature branch. A session keeps its base commit until you `rm` it.
 
-**The brain asleep?** `jess-coder` checks the brain's `/health` first and wakes Helios (through the orchestrator, when `HELIOS_WAKE_ENABLED`) and waits up to 6 min. A session ends itself at its token's expiry (4 h by default), even if `jess-coder` is gone.
+**The brain asleep?** `jess-coder` checks the brain's `/health` first and wakes Helios (through the orchestrator, when `HELIOS_WAKE_ENABLED`) and waits up to 6 min. A session ends itself at its token's expiry (4 h by default), even if `jess-coder` is gone, and every box carries its deadline as a label: `jess-coder ls`, `start` and `selftest` kill any box past it (so stopping the in-box timer from inside doesn't keep a box alive).
 
 ## Self-test
 
@@ -159,6 +159,7 @@ The change then goes through the normal pipeline: CLAUDE.md's review agents and 
   - every Jupiter address (each interface, each Docker bridge gateway, given by the launcher), Helios, Saturn, the router, public resolvers, public IPv6 and the bridge's own IPv6 link-local must answer a TCP connect with an immediate **"no route"**. That proves no port is reachable, not just the 18 probed: a refusal (something answered) or a timeout (packets left) counts as reach. The gate host may refuse its other ports; the bridge's `.1` may only be absent;
   - UDP DNS gets no answer.
 - **IPv6:** off on `eth0`, no address but `::1`.
+- **Gate host:** every port but the orchestrator's refuses (all 65534, ~4 s).
 - **Gate:** 403 on other paths (`/health`, `/v1/chat/completions`, a `..` path: 3 guard hits per run), 401 without a valid token, 200 with the session's token.
 
 It writes `jess_coder_selftest_ok` + `jess_coder_selftest_last_run_timestamp_seconds` (node_exporter textfile) on every run, also when `jess-coder` refuses coder-net before running it. A failure in the last 7 days fires `CoderSelfTestFailing`.

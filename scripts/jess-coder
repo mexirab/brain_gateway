@@ -166,6 +166,12 @@ REFUSED_PATTERNS = (
 SAFE_PATH_RE = re.compile(r"[A-Za-z0-9._@+/()\[\]-]+")  # anything else: refused unless allowed
 MAX_HEADLESS_OUTPUT = 16 * 1024 * 1024  # what a --task run may print; the rest is dropped
 HOST_GIT_TIMEOUT_S = 120
+# Lines the patch box's diff never has (--no-renames, no --binary). Forged ones
+# would make git pull base content in (copy) or inflate data (binary) before
+# anything could be refused.
+FORGED_HEADER_RE = re.compile(
+    rb"(?m)^(copy from|copy to|rename from|rename to|similarity index|dissimilarity index|GIT binary patch|literal \d|delta \d)"
+)
 HOST_GIT_FILE_LIMIT = 256 * 1024 * 1024  # biggest file a patch check may write (RLIMIT_FSIZE)
 
 _BIDI = {chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200E, 0x200F, 0x061C)}
@@ -286,6 +292,29 @@ def running_boxes(kind: Optional[str] = None) -> List[str]:
     label = f"jess-coder.kind={kind}" if kind else "jess-coder=1"
     out = run(["docker", "ps", "--filter", f"label={label}", "--format", "{{.Names}}"], check=False).stdout
     return [n for n in out.split() if n.startswith(CONTAINER_PREFIX)]
+
+
+def reap_overdue() -> List[str]:
+    """Kill boxes past their jess-coder.expires label (plus grace). Returns their names."""
+    out = run(
+        ["docker", "ps", "--filter", "label=jess-coder=1", "--format", '{{.ID}} {{.Names}} {{.Label "jess-coder.expires"}}'],
+        check=False,
+    ).stdout  # fmt: skip
+    reaped = []
+    now = time.time()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 3 or not parts[1].startswith(CONTAINER_PREFIX):
+            continue
+        cid, name, expires = parts
+        try:
+            overdue = now > float(expires) + KILL_GRACE_S
+        except ValueError:
+            overdue = True  # a box without a readable deadline is not ours to keep
+        if overdue and re.fullmatch(r"[0-9a-f]{12,64}", cid):
+            run(["docker", "kill", cid], check=False)
+            reaped.append(name)
+    return reaped
 
 
 def kill_cid(cidfile: Path) -> None:
@@ -547,8 +576,13 @@ def box_command(
     bundle: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
     secret_env: Iterable[str] = (),
+    expires: Optional[float] = None,
 ) -> List[str]:
-    """The ONE place box containers are started from. Hardening flags live here."""
+    """The ONE place box containers are started from. Hardening flags live here.
+
+    Every box carries a jess-coder.expires label (epoch seconds): reap_overdue()
+    kills any box past it, even if its own deadline was stopped from inside.
+    """
     cmd = [
         "docker", "run", "--rm", "--init", "--pull", "never",
         "--name", container_name(name),
@@ -557,6 +591,7 @@ def box_command(
         "--label", "jess-coder=1",
         "--label", f"jess-coder.kind={kind}",
         "--label", f"jess-coder.session={name}",
+        "--label", f"jess-coder.expires={int(expires if expires is not None else time.time() + 3600)}",
         "--user", f"{BOX_UID}:{BOX_UID}",
         "--read-only",
         "--cap-drop", "ALL",
@@ -588,13 +623,18 @@ def box_command(
     return cmd + [cfg.image, *mode]
 
 
-def run_captured(cmd: List[str], cidfile: Path, *, limit: int, timeout: float) -> Tuple[int, bytes, bytes, str]:
-    """Run a helper box, keeping at most ``limit`` bytes of stdout and 4 KB of stderr.
+def run_captured(
+    cmd: List[str], cidfile: Optional[Path], *, limit: int, timeout: float, **popen_kw
+) -> Tuple[int, bytes, bytes, str]:
+    """Run a helper box (or host git), keeping at most ``limit`` bytes of stdout
+    and 4 KB of stderr.
 
     Returns (exit code, stdout, stderr tail, problem) where problem is "",
     "too_large" or "timeout"; the box is killed in the last two cases.
     """
-    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kw
+    )  # fmt: skip
     out, err = bytearray(), bytearray()
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ, "out")
@@ -623,9 +663,17 @@ def run_captured(cmd: List[str], cidfile: Path, *, limit: int, timeout: float) -
     finally:
         sel.close()
         if problem:
-            kill_cid(cidfile)
+            if cidfile is not None:
+                kill_cid(cidfile)
             proc.kill()
-        code = proc.wait()
+        try:
+            code = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            if cidfile is not None:
+                kill_cid(cidfile)
+            proc.kill()
+            code = proc.wait()
+            problem = problem or "timeout"
         proc.stdout.close()
         proc.stderr.close()
     return code, bytes(out), bytes(err), problem
@@ -717,6 +765,8 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
     check_home(cfg)
     check_image(cfg)
     checked_network(cfg)
+    for gone in reap_overdue():
+        say(f"killed {gone}: past its token's expiry")
     running = running_boxes("session")
     if container_name(name) in running:
         raise Fatal(f"session {name} is already open in another terminal")
@@ -790,6 +840,7 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
             cfg, name=name, kind="session", mode=mode, network=cfg.network, cidfile=cidfile,
             tty=not headless, stdin=headless, workspace=sdir / "box",
             bundle=bundle if bundle.is_file() else None, env=env, secret_env=["JESS_BRAIN_KEY"],
+            expires=expiry.timestamp(),
         )  # fmt: skip
         expires_in = max(60.0, (expiry - dt.datetime.now(dt.UTC)).total_seconds())
         say(
@@ -864,12 +915,13 @@ def cmd_selftest(cfg: Config, args: argparse.Namespace) -> int:
         wait_for_orchestrator(cfg, args.wait_health)
     check_image(cfg)
     checked_network(cfg)
+    reap_overdue()
     name = f"selftest-{os.getpid()}"
     with tempfile.TemporaryDirectory(prefix="jess-coder-") as tmp:
         cidfile = Path(tmp) / "cid"
         cmd = box_command(
             cfg, name=name, kind="selftest", mode=["selftest"], network=cfg.network, cidfile=cidfile,
-            env=selftest_env(cfg),
+            env=selftest_env(cfg), expires=time.time() + SELFTEST_TIMEOUT_S,
         )  # fmt: skip
         code, out, err, problem = run_captured(cmd, cidfile, limit=256 * 1024, timeout=SELFTEST_TIMEOUT_S)
     sys.stdout.write(sanitize_for_terminal(out.decode("utf-8", "replace")))
@@ -942,7 +994,9 @@ def text_problems(diff: str) -> List[str]:
             if ch in _BIDI:
                 out.append(f"line {lineno}: bidirectional control U+{o:04X}")
                 break
-            if (o < 0x20 and ch not in "\t\r") or o == 0x7F or 0x80 <= o <= 0x9F:
+            if ch == "\r" and line.endswith("\r") and line.index("\r") == len(line) - 1:
+                continue  # a CRLF line end (Windows file) is fine; a CR elsewhere hides code
+            if (o < 0x20 and ch != "\t") or o == 0x7F or 0x80 <= o <= 0x9F:
                 out.append(f"line {lineno}: control character 0x{o:02x}")
                 break
             if ch in _INVISIBLE or (unicodedata.category(ch) == "Cf" and ch not in _FORMAT_OK):
@@ -1009,8 +1063,10 @@ def check_box_diff(bundle: Path, base: str, raw: bytes, allows: Sequence[str], w
     """
     # The box never emits binary patches (no --binary); one in its output is forged,
     # and git would expand it (to any declared size) before we could refuse it.
-    if re.search(rb"(?m)^GIT binary patch", raw):
-        raise Fatal("the diff holds a binary patch (the box never makes one): refused")
+    forged = re.search(FORGED_HEADER_RE, raw)
+    if forged:
+        what = forged.group(1).decode("ascii", "replace")
+        raise Fatal(f"the diff has a '{what}' line, which the box never makes (forged or tampered): refused")
     with tempfile.TemporaryDirectory(prefix="jess-coder-check-", dir=workdir) as tmp:
         genv = _clean_git_env(tmp)
         boxfile = Path(tmp) / "from-box.patch"
@@ -1029,9 +1085,13 @@ def check_box_diff(bundle: Path, base: str, raw: bytes, allows: Sequence[str], w
             diff_args = ["diff", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
 
             def git_out(*extra: str) -> bytes:
-                return subprocess.run(
-                    [*HOST_GIT, "-C", str(clone), *diff_args, *extra, base], capture_output=True, check=True, **limits
-                ).stdout
+                code, out, _err, problem = run_captured(
+                    [*HOST_GIT, "-C", str(clone), *diff_args, *extra, base],
+                    None, limit=2 * MAX_PATCH_BYTES, timeout=HOST_GIT_TIMEOUT_S, env=genv, preexec_fn=_limit_host_git,
+                )  # fmt: skip
+                if problem or code != 0:
+                    raise Fatal(f"git could not show the applied change ({problem or f'exit {code}'}): refused")
+                return out
 
             raw_entries = git_out("--raw", "-z", "--no-abbrev")
             numstat = git_out("--numstat", "-z")
@@ -1069,7 +1129,7 @@ def cmd_patch(cfg: Config, args: argparse.Namespace) -> int:
         cidfile = Path(tmp) / "cid"
         cmd = box_command(
             cfg, name=f"{name}-patch", kind="patch", mode=["patch", base], network="none", cidfile=cidfile,
-            workspace=session_dir(cfg, name) / "box", workspace_ro=True,
+            workspace=session_dir(cfg, name) / "box", workspace_ro=True, expires=time.time() + PATCH_TIMEOUT_S,
         )  # fmt: skip
         code, raw, err, problem = run_captured(cmd, cidfile, limit=MAX_PATCH_BYTES, timeout=PATCH_TIMEOUT_S)
         if problem == "too_large":
@@ -1119,6 +1179,8 @@ def cmd_patch(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_ls(cfg: Config, _args: argparse.Namespace) -> int:
+    for gone in reap_overdue():
+        print(f"killed {gone}: past its token's expiry")
     running = set(running_boxes())
     tokens: List[dict] = []
     if cfg.enabled:
@@ -1164,7 +1226,7 @@ def cmd_rm(cfg: Config, args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="jess-coder-") as tmp:
             cidfile = Path(tmp) / "cid"
             cmd = box_command(cfg, name=f"{name}-rm", kind="rm", mode=["clean"], network="none", cidfile=cidfile,
-                              workspace=box)  # fmt: skip
+                              workspace=box, expires=time.time() + PATCH_TIMEOUT_S)  # fmt: skip
             code, _out, err, problem = run_captured(cmd, cidfile, limit=64 * 1024, timeout=PATCH_TIMEOUT_S)
         if code != 0 or problem:
             sys.stderr.write(sanitize_for_terminal(err.decode("utf-8", "replace")))
