@@ -1145,7 +1145,13 @@ async def _startup_logic():
             name="Self-care nudge check",
             replace_existing=True,
         )
-        logger.info("[SCHEDULER] Self-care nudges every 15 min")
+        _movement_kinds = [
+            k for k, e in (("steps", shared.MOVEMENT_STEPS_ENTITY), ("stand", shared.MOVEMENT_STAND_ENTITY)) if e
+        ]
+        logger.info(
+            "[SCHEDULER] Self-care nudges every 15 min%s",
+            f" (movement from the phone: {', '.join(_movement_kinds)})" if _movement_kinds else "",
+        )
 
     # Schedule presence polling
     if shared.PRESENCE_ENABLED:

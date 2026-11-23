@@ -175,6 +175,8 @@ Bearer-gated, via `/api/proxy`. `orchestrator/webpush_manager.py` + `routes_webp
 
 On exception → 500 `{ok: false, error: "Selfcare read failed"}` and a `logger.error`. Powers the dashboard `SelfcareTodayCard` (polls every 30s).
 
+Movement entries with `detail` `health:steps` / `health:stand` come from phone-sensor detection (`MOVEMENT_STEPS_ENTITY` / `MOVEMENT_STAND_ENTITY`, at most one per 30 min, no counts); their `logged_at` is when Jess noticed, not when the walk happened. See `jess-features/F-008-selfcare-nudges.md` → Movement seen by the phone.
+
 ### Calendar & Email
 
 | Method | Path | Purpose |

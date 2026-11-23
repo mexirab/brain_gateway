@@ -168,6 +168,12 @@ route:
         - alertname=~"VoiceSatelliteDisconnected|VoiceSatelliteConfigInvalid"
       receiver: "pushover-quiet"
       repeat_interval: 24h
+    # MovementSensorFailing: the phone's movement sensor can't be read — a
+    # config fix (.env, the HA app) that stays until done. Once a day.
+    - matchers:
+        - alertname="MovementSensorFailing"
+      receiver: "pushover-quiet"
+      repeat_interval: 24h
     # WebSearchFailing stays active until its failures age out of the 6h
     # window, so the default 4h repeat would re-notify after the fix.
     - matchers:

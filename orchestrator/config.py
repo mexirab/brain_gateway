@@ -441,6 +441,14 @@ class Settings(BaseSettings):
     meal_nudge_hours: int = 4
     hydration_interval: int = 90
     movement_interval: int = 90
+    # Movement seen by the phone resets the sitting clock (selfcare_manager.
+    # _refresh_movement_from_health). Entity ids of Home Assistant iPhone-app
+    # sensors: a "steps since midnight" sensor (Apple Health steps include the
+    # Watch) and an optional Apple Watch stand-hours sensor. Empty = off.
+    movement_steps_entity: str = ""
+    movement_stand_entity: str = ""
+    # Steps gained between two 15-min checks that count as "got up and moved".
+    movement_steps_threshold: int = 150
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
 
@@ -1102,6 +1110,49 @@ class Settings(BaseSettings):
         if self.pantry_barcode_lookup_enabled and not self.pantry_off_url.startswith(("https://", "http://")):
             log.error("[CONFIG] PANTRY_OFF_URL must be an http(s) URL; disabling barcode lookup")
             object.__setattr__(self, "pantry_barcode_lookup_enabled", False)
+        return self
+
+    @field_validator("movement_steps_threshold", mode="before")
+    @classmethod
+    def _movement_threshold_parse(cls, v):
+        """An empty or non-integer value falls back to 150 instead of failing
+        startup (optional-feature config logs, never raises)."""
+        if isinstance(v, int) and not isinstance(v, bool):
+            return v
+        try:
+            return int(str(v).strip())
+        except (TypeError, ValueError):
+            import logging
+
+            logging.getLogger(__name__).error("[CONFIG] MOVEMENT_STEPS_THRESHOLD is not a whole number; using 150")
+            return 150
+
+    @model_validator(mode="after")
+    def validate_movement_sensors(self) -> "Settings":
+        """Drop a malformed movement sensor id; reset an out-of-range steps
+        threshold to 150.
+
+        The ids are interpolated into an HA REST path, so only `sensor.<slug>`
+        is accepted. Logs, never raises (optional-feature config).
+        """
+        import logging
+
+        log = logging.getLogger(__name__)
+        for field_name in ("movement_steps_entity", "movement_stand_entity"):
+            value = getattr(self, field_name).strip()
+            if value and not re.fullmatch(r"sensor\.[a-z0-9_]+", value):
+                log.error(
+                    "[CONFIG] %s is not a sensor.<name> entity id; movement detection from it is off",
+                    field_name.upper(),
+                )
+                value = ""
+            object.__setattr__(self, field_name, value)
+        if not 20 <= self.movement_steps_threshold <= 5000:
+            log.error(
+                "[CONFIG] MOVEMENT_STEPS_THRESHOLD=%s out of range 20-5000; using 150",
+                self.movement_steps_threshold,
+            )
+            object.__setattr__(self, "movement_steps_threshold", 150)
         return self
 
     @model_validator(mode="after")
